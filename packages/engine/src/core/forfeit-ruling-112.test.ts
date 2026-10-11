@@ -199,16 +199,17 @@ describe("ruling 112: the stored shapes, every sport (X-RS-1 as amended)", () =>
     expect(checked).toBe(4 * builtinModules.length);
   });
 
-  it("X-RS-1 (ruling 112): retired and disqualified stay recordable from the start — nothing the dialog offered is withdrawn", () => {
+  it("X-RS-1 (ruling 112, amended by 113): a disqualification stays recordable from the start; a retirement after a bare start is refused until something is played", () => {
+    // Ruling 112 kept both from the Start; ruling 113 (2026-10-11) withdraws the retirement: nobody retires from a match
+    // never played. core/forfeit-ruling-113.test.ts sweeps every declared cfg; this is the 112 row, re-pinned.
     let checked = 0;
     forEachSport(({ module: m }) => {
       const cfg = firstCfg(m);
       const l = defaultLineupPair(m.positions);
-      for (const reason of ["retired", "disqualified"] as const) {
-        const f = fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason })]);
-        expect(outcomeOf(m as never, f as never), `${m.key} ${reason}`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason });
-        checked++;
-      }
+      const dq = fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "disqualified" })]);
+      expect(outcomeOf(m as never, dq as never), `${m.key} disqualified`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "disqualified" });
+      expect(codeOf(() => fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "retired" })])), `${m.key} retired`).toBe("FORFEIT_REASON_WRONG_PHASE");
+      checked += 2;
     });
     expect(checked).toBe(2 * builtinModules.length);
   });
@@ -248,14 +249,15 @@ describe("ruling 112: the console's answer agrees with the guard (forfeitAdmissi
     expect(admitted).toBeLessThan(judged);
   });
 
-  it("X-RS-1 (ruling 112): the admission after a bare start is the ruling's — walkover, retired, disqualified, withdrew, and Neither; after play, the module's own phase", () => {
-    // Typed from the ruling: a walkover reads "pre" while nothing is played (both sides too), and retired /
-    // disqualified are recordable once Start is pressed (R4, unchanged); withdrew in every phase (R5).
+  it("X-RS-1 (rulings 112, 113): the admission after a bare start is the rulings' — walkover, disqualified, withdrew, and Neither; after play, the module's own phase", () => {
+    // Typed from the rulings: a walkover reads "pre" while nothing is played (both sides too), a disqualification is
+    // recordable once Start is pressed (R4), a retirement only once something is played (ruling 113); withdrew in every
+    // phase (R5).
     let checked = 0;
     forEachSport(({ module: m }) => {
       const { cfg, l, played } = playedScene(m);
       const bare = forfeitAdmission(m as never, fold(m, cfg, l, [START()]).state, { playRecorded: false });
-      expect(bare, `${m.key} bare start`).toEqual({ phase: "play", reasons: ["walkover", "retired", "disqualified", "withdrew"], both: true });
+      expect(bare, `${m.key} bare start`).toEqual({ phase: "play", reasons: ["walkover", "disqualified", "withdrew"], both: true });
       const state = fold(m, cfg, l, [START(), played]).state;
       const phase = m.forfeitPhase(state);
       const after = forfeitAdmission(m as never, state, { playRecorded: true });

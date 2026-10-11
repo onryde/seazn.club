@@ -6,6 +6,7 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
 
 describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score, out of every ratio", () => {
   it("X-DW-1: both sides absent folds to the double walkover outcome in every sport (empty case: nothing else decided it)", () => {
@@ -42,17 +43,25 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
     expect(checked).toBeGreaterThanOrEqual(11);
   });
 
-  it("sequence: after a double walkover, a walkover or a retirement the fixture is over — a second walkover is refused, every sport", () => {
+  it("sequence: after a double walkover, a walkover, a disqualification or a retirement the fixture is over — a second walkover is refused, every sport", () => {
     // spec §5.1: a forfeit decides the fixture — the module reads its phase as "over" (D3 R0) and the kernel refuses a
-    // further walkover ALREADY_DECIDED (spec 03 §2 guarantee 4).
+    // further walkover ALREADY_DECIDED (spec 03 §2 guarantee 4). Ruling 113: a retirement needs the sport's own play
+    // first (its generator's, `onePlayEvent`); chess under a plain cfg has none short of its result, counted below.
     let checked = 0;
+    let noPlay = 0;
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
         const l = defaultLineupPair(m.positions);
+        const start = makeEnvelope(1, { type: "core.start", payload: {} });
+        const play = onePlayEvent(m, cfg, l, [start]);
+        if (play === null) noPlay++;
         const streams: Array<[string, Array<[string, unknown]>]> = [
           ["double walkover", [["core.forfeit", { by: "both", reason: "walkover" }]]],
           ["walkover", [["core.forfeit", { by: l.away.entrantId, reason: "walkover" }]]],
-          ["retirement", [["core.start", {}], ["core.forfeit", { by: l.home.entrantId, reason: "retired" }]]],
+          ["disqualification", [["core.start", {}], ["core.forfeit", { by: l.home.entrantId, reason: "disqualified" }]]],
+          ...(play === null
+            ? []
+            : [["retirement", [["core.start", {}], [play.type, play.payload], ["core.forfeit", { by: l.home.entrantId, reason: "retired" }]]]] as Array<[string, Array<[string, unknown]>]>),
         ];
         for (const [label, spec] of streams) {
           const events = spec.map(([type, payload], i) => makeEnvelope(i + 1, { type, payload }));
@@ -66,7 +75,8 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
         }
       }
     });
-    expect(checked).toBeGreaterThanOrEqual(33);
+    expect(checked).toBeGreaterThanOrEqual(44 - noPlay);
+    expect(noPlay, "only chess's plain cfgs have no play short of the result").toBe(declaredCfgs(builtinModules.find((x) => x.key === "boardgame")! as never).length);
   });
 
   it("sequence: an awarded abandon decides the fixture whether a side leads or it is level (D8, FB-AB-1) — the goal sports", () => {

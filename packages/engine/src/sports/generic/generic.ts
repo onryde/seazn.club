@@ -763,8 +763,10 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     const roll = rng();
     if (roll < 0.08) {
       const by = rng() < 0.5 ? state.entrants.home : state.entrants.away;
-      // W2b D3: a walkover only before play; once started, a retirement or a disqualification (from the roll taken).
-      return { type: "core.forfeit", payload: { by, reason: state.phase === "pre" ? "walkover" : roll < 0.04 ? "retired" : "disqualified" } };
+      // W2b D3 + ruling 113: a walkover only before play; once started, a disqualification — or a retirement once a
+      // score is on the running tally (nobody retires from a match never played) — from the roll taken.
+      const played = state.running !== undefined;
+      return { type: "core.forfeit", payload: { by, reason: state.phase === "pre" ? "walkover" : roll < 0.04 && played ? "retired" : "disqualified" } };
     }
     if (roll < 0.15) return { type: "core.abandon", payload: { reason: "rain" } };
     // W4 — a scoring action on the running tally. Person ids follow the
@@ -780,7 +782,9 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         },
       };
     };
-    if (roll < 0.55) return tallyOne();
+    // Ruling 113: the generator scores nothing before the Start (the band starts the match instead), so a running tally
+    // is play after it and the retirement above may read it. A result-only card before the Start is still drawn below.
+    if (roll < 0.55) return state.phase === "pre" ? { type: "core.start", payload: {} } : tallyOne();
 
     const running = state.running;
     if (running !== undefined) {

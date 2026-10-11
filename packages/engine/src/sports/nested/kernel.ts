@@ -2436,8 +2436,10 @@ export function makeNestedModule(
       }
       const roll = rng();
       if (roll < 0.02) {
-        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
-        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 ? "retired" : "disqualified" } };
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a point, game or set is
+        // on the board (nobody retires from a match never played) — never a walkover, from the roll taken.
+        const played = state.sets.length > 0 || state.games.home + state.games.away > 0 || state.pointsWon.home + state.pointsWon.away > 0;
+        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
       }
       if (roll < 0.04) return { type: "core.abandon", payload: { reason: "rain" } };
       if (roll < 0.14) return { type: pointType, payload: pointPayload() };

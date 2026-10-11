@@ -1068,9 +1068,11 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     if (state.phase !== "live") return null;
     const roll = rng();
     if (roll < 0.05) {
-      // W2b D3: a legal reason for the phase (chess admits a walkover after the session starts), drawn from the
-      // roll already taken so the generator's rng stream is unchanged.
-      const reason = roll < 0.02 ? "walkover" : roll < 0.035 ? "retired" : "disqualified";
+      // W2b D3 + ruling 113: a legal reason for the phase (chess admits a walkover after the session starts), drawn
+      // from the roll already taken so the generator's rng stream is unchanged. Never a retirement here: in phase live
+      // a chess game has no play short of its result, and nobody retires from a game never played (ruling 113) — the
+      // retirement band reads as a disqualification.
+      const reason = roll < 0.02 ? "walkover" : "disqualified";
       return { type: "core.forfeit", payload: { by: state.entrants[rng() < 0.5 ? "home" : "away"], reason } };
     }
     if (roll < 0.1) {

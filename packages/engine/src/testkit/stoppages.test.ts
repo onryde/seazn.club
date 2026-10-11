@@ -83,9 +83,10 @@ const enders = (c: Case) => [
   { type: "core.abandon", payload: { reason: "storm" } },
   {
     type: "core.forfeit",
-    // W2b D3: a stoppage reads as the phase it interrupted (play), where a walkover is refused (R2) — a retirement is
-    // the forfeit that is legal there in every sport (review M-1: "walkover" was refused in 10/11 and swallowed below).
-    payload: { by: c.lineups.home.entrantId, reason: "retired" },
+    // W2b D3: a stoppage reads as the phase it interrupted (play), where a walkover is refused once something is played
+    // (R2, ruling 112) — a disqualification is the forfeit that is legal there in every sport (review M-1: "walkover"
+    // was refused in 10/11 and swallowed below; ruling 113: a retirement too wherever nothing was played, as in chess).
+    payload: { by: c.lineups.home.entrantId, reason: "disqualified" },
   },
 ];
 

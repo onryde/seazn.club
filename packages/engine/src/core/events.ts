@@ -360,17 +360,24 @@ export function playRecorded(ledger: readonly { readonly id: string; readonly ty
   return false;
 }
 
-/** W2b (plan D3 R2, R4, R5; ruling 112) — the forfeit reasons a phase admits, in FORFEIT_REASONS order: a walkover only
- *  in the module's walkover phases (R2) — judged in "pre" while nothing is played (ruling 112: a Start with no sport
- *  event after it), else in the module's phase — a retirement or disqualification only once play started (R4: the
- *  module's phase, so from the Start on), a withdrawal in any phase (R5). Never asked of "over" (the type says so): the
- *  module's own done/final guard and guarantee 4 answer for it (R0). The one list the guard judges by AND the refusal
- *  names, so the copy can never offer a reason the guard refuses. */
+/** W2b (plan D3 R2, R4, R5; rulings 112, 113) — the forfeit reasons a phase admits, in FORFEIT_REASONS order. `played`
+ *  is `playRecorded` of the ledger ("nothing played means not started, for every forfeit reason", ruling 113):
+ *  - a walkover only in the module's walkover phases (R2), judged in "pre" while nothing is played (ruling 112: a Start
+ *    with no sport event after it), else in the module's phase;
+ *  - a retirement only once something is played (ruling 113: nobody retires from a match never played);
+ *  - a disqualification once play started (R4: the module's phase, so from the Start on — misconduct before play is
+ *    real, ruling 113);
+ *  - a withdrawal in any phase (R5).
+ *  Never asked of "over" (the type says so): the module's own done/final guard and guarantee 4 answer for it (R0). The
+ *  one list the guard judges by AND the refusal names, so the copy can never offer a reason the guard refuses. */
 function forfeitReasonsAllowed(phase: Exclude<ForfeitPhase, "over">, walkoverPhases: readonly ForfeitPhase[], played: boolean): ForfeitReason[] {
   const walkoverPhase = played ? phase : "pre";
-  return FORFEIT_REASONS.filter((reason) =>
-    reason === "walkover" ? walkoverPhases.includes(walkoverPhase) : reason === "withdrew" ? true : phase !== "pre",
-  );
+  return FORFEIT_REASONS.filter((reason) => {
+    if (reason === "walkover") return walkoverPhases.includes(walkoverPhase);
+    if (reason === "withdrew") return true;
+    if (reason === "retired") return played && phase !== "pre";
+    return phase !== "pre";
+  });
 }
 
 /** W2b (C17) — the phase the D3 guard judges a forfeit in. A SportModule must declare `forfeitPhase`; a hand-built

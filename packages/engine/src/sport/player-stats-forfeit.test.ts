@@ -151,10 +151,20 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     // not from whatever was recorded last.
     let checked = 0;
     let credited = 0;
+    let refused = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       for (const reason of ["retired", "disqualified"]) {
         const spec: Spec = [...(PRE[m.key] ?? []), ["core.start"], ...PLAYED[m.key]!, ["core.forfeit", { by: H, reason }]];
+        if (reason === "retired" && PLAYED[m.key]!.length === 0) {
+          // Ruling 113: chess has nothing played short of its result, so no retirement after a bare start — counted.
+          const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+          expect(() => foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), evs(spec)), `${m.key} ${reason}`).toThrowError(
+            expect.objectContaining({ code: "FORFEIT_REASON_WRONG_PHASE" }),
+          );
+          refused++;
+          continue;
+        }
         const after: Spec = [...spec, ["core.note", { text: "arbiter signed the scoresheet" }], ["core.finalize"]];
         // the scene is one the kernel admits: a note and the finalize on a decided match
         const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
@@ -165,9 +175,10 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
         checked++;
       }
     });
-    expect(checked).toBeGreaterThanOrEqual(22);
+    expect(checked + refused).toBeGreaterThanOrEqual(22);
+    expect(refused, "chess's retirement after a bare start (ruling 113)").toBe(1);
     // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket)
-    expect(credited).toBeGreaterThanOrEqual(20);
+    expect(credited).toBeGreaterThanOrEqual(19);
   });
 
   it("a player-stat key carries one label wherever its model declares it, and no label is empty — every sport", () => {

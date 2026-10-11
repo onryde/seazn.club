@@ -115,7 +115,8 @@ describe("generic — score mode (v1 parity)", () => {
 
 describe("generic — core event mapping (spec 03 §2 table)", () => {
   it("maps core.forfeit to an award for the other side", () => {
-    const state = fold(winLossCfg, stream(["core.start"], ["core.forfeit", { by: "H", reason: "retired" }]));
+    // Ruling 113: a retirement needs something played — one score on the tally first.
+    const state = fold(winLossCfg, stream(["core.start"], ["generic.score", { by: "A", points: 1 }], ["core.forfeit", { by: "H", reason: "retired" }]));
     expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "retired" });
     const [home, away] = generic.standingsDelta(state.outcome!, winLossCfg, league, state);
     expect(home).toMatchObject({ lost: 1, points: 0 });

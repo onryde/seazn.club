@@ -2843,8 +2843,11 @@ export function makePeriodModule(
 
       const roll = rng();
       if (roll < 0.02) {
-        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
-        return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: roll < 0.01 ? "retired" : "disqualified" } };
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a goal is on the board
+        // (nobody retires from a match never played; this generator scores nothing before the Start) — never a
+        // walkover, from the roll taken.
+        const played = state.goals.home + state.goals.away > 0;
+        return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
       }
       if (roll < 0.03) return { type: "core.abandon", payload: { reason: "conditions" } };
       if (roll < 0.13 && state.cfg.suspensions !== null) {

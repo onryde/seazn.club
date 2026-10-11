@@ -4169,8 +4169,13 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     if (roll < 0.006) {
       return {
         type: "core.forfeit",
-        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
-        payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: roll < 0.005 ? "retired" : "disqualified" },
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once an innings holds a ball,
+        // a run or a wicket (nobody retires from a match never played; before the Start this generator draws only the
+        // toss) — never a walkover, from the roll taken.
+        payload: {
+          by: rng() < 0.5 ? state.entrants.home : state.entrants.away,
+          reason: roll < 0.005 && state.innings.some((i) => i.legalBalls > 0 || i.runs > 0 || i.wickets > 0) ? "retired" : "disqualified",
+        },
       };
     }
     if (roll < 0.012 && state.quota !== null && state.cfg.inningsPerSide === 1) {

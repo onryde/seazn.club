@@ -535,8 +535,10 @@ describe("X-WO-1: one credited score — the goal sports' headline shows it (spe
     const l = defaultLineupPair(m.positions);
     const wo = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: H, reason: "walkover" })]);
     expect(m.summary(wo.state as never).headline, "walkover by H").toBe("0 — 1");
-    const rt = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "retired" })]);
-    expect(m.summary(rt.state as never).headline, "retirement by A").toBe("1 — 0");
+    // Ruling 113: nothing is played in a chess game short of its result, so after the start the forfeit is a
+    // disqualification (a retirement is refused until something is played).
+    const dq = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "disqualified" })]);
+    expect(m.summary(dq.state as never).headline, "disqualification by A after the start").toBe("1 — 0");
     const dw = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
     expect(m.summary(dw.state as never).headline, "double walkover: nobody scores").toBe("0 — 0");
   });
@@ -737,7 +739,10 @@ describe("X-RS-1: every arbitraryEvent forfeit is one the phase guard admits (sp
         });
       }
       const walkoverInPlay = (m.walkoverPhases ?? ["pre"]).includes("play");
-      expect([...reasons].sort(), `${m.key}: the reasons drawn in play`).toEqual(["disqualified", "retired", ...(walkoverInPlay ? ["walkover"] : [])]);
+      // Ruling 113: a retirement needs something played, so it is drawn in play only where the sport has play short
+      // of its result — the module's own generator says (`onePlayEvent`; chess's one event in play decides the game).
+      const retiredInPlay = onePlayEvent(m, cfg, l, [ev(1, "core.start")]) !== null;
+      expect([...reasons].sort(), `${m.key}: the reasons drawn in play`).toEqual(["disqualified", ...(retiredInPlay ? ["retired"] : []), ...(walkoverInPlay ? ["walkover"] : [])]);
       expect([...offenders].sort(), `${m.key}: the offenders drawn`).toEqual([A, H]);
       sports++;
     });
@@ -881,8 +886,9 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     expect(bye.map((d) => d.points)).toEqual([...pointsMapOf(partial)!["3-0"]!]);
   });
 
-  it("every pointsMap sport × every declared cfg and a configured sets-dependent table × every credited score × both seats × every reason: the cfg's own pair, inside declaredPointsSets", () => {
+  it("every pointsMap sport × every declared cfg and a configured sets-dependent table × every credited score × both seats × every reason: the cfg's own pair, inside declaredPointsSets (ruling 113: no retirement at 0 sets)", () => {
     let checked = 0;
+    let retiredRefused = 0;
     const perSport: Record<string, number> = {};
     const witnessed = new Map<string, number>();
     forEachSport(({ module: m }) => {
@@ -910,7 +916,17 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
           for (let k = 0; k < need; k++) {
             // the side at fault wins k sets setTo-0 (never the deciding set: k < need), then forfeits between sets
             const won: Spec = Array.from({ length: k }, (): [string, unknown] => [setSummaryType(m.key), atFault === H ? { home: cfg.setTo, away: 0 } : { home: 0, away: cfg.setTo }]);
-            for (const reason of ["retired", "disqualified", "withdrew"]) cases.push({ k, reason, spec: [["core.start"], ...won, ["core.forfeit", { by: atFault, reason }]] });
+            for (const reason of ["retired", "disqualified", "withdrew"]) {
+              const spec: Spec = [["core.start"], ...won, ["core.forfeit", { by: atFault, reason }]];
+              // Ruling 113: at 0 sets nothing is played, so a retirement is refused (nobody retires from a match never
+              // played) — counted, and its pair (k ≥ 1) is priced below.
+              if (reason === "retired" && k === 0) {
+                expect(() => deltasOf(m.key, cfg, spec), `${m.key}/${name} · retired by ${atFault} after a bare start`).toThrowError(expect.objectContaining({ code: "FORFEIT_REASON_WRONG_PHASE" }));
+                retiredRefused++;
+                continue;
+              }
+              cases.push({ k, reason, spec });
+            }
           }
           for (const c of cases) {
             const tag = `${m.key}/${name} · ${c.reason} by ${atFault} · credited ${need}-${c.k}`;
@@ -931,10 +947,13 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     expect(witnessed.size, `pointsMap sports swept: ${[...witnessed.keys()].join(", ")}`).toBeGreaterThanOrEqual(3);
     for (const [key, n] of witnessed) expect(n, `${key}: cases whose credited pair is not the clean sweep`).toBeGreaterThan(0);
     // Pinned (reproduced independently in review). Per cfg: 2 seats × (2 pre-start cases + 3 reasons × ⌈bestOf/2⌉
-    // credited scores), so a best-of-3 cfg is 16, a best-of-5 22 and a best-of-7 28. A declared cfg added, dropped or re-shaped moves these,
-    // and that is a change to read, not to absorb.
-    expect(perSport, `cases checked per sport (${checked} in all)`).toEqual({ volleyball: 82, badminton: 64, tabletennis: 116 });
-    expect(checked).toBe(262);
+    // credited scores − the retirement at 0 sets, ruling 113), so a best-of-3 cfg is 14, a best-of-5 20 and a best-of-7
+    // 26: two cases fewer per cfg than before the ruling (volleyball 4 cfgs, badminton 4 and table tennis 5 — 13, each
+    // with the configured table). A declared cfg added, dropped or re-shaped moves these, and that is a change to read,
+    // not to absorb.
+    expect(perSport, `cases checked per sport (${checked} in all)`).toEqual({ volleyball: 74, badminton: 56, tabletennis: 106 });
+    expect(checked).toBe(236);
+    expect(retiredRefused, "one refused retirement per seat per cfg").toBe(2 * 13);
   });
 });
 

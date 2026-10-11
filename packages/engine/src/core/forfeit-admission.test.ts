@@ -29,7 +29,8 @@ function scenes(key: string) {
     { name: "before play", cfg: firstCfg(m), ledger: [], phase: "pre" },
     { name: "after the start", cfg: firstCfg(m), ledger: [ev(1, "core.start")], phase: "play" },
     { name: "after the start is voided", cfg: firstCfg(m), ledger: [ev(1, "core.start"), ev(2, "core.void", {}, "e-1")], phase: "pre" },
-    { name: "decided", cfg: firstCfg(m), ledger: [ev(1, "core.start"), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "retired" })], phase: "over" },
+    // Ruling 113: a disqualification decides a bare-started match (a retirement needs something played).
+    { name: "decided", cfg: firstCfg(m), ledger: [ev(1, "core.start"), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "disqualified" })], phase: "over" },
   ];
   if (key === "boardgame") out.push({ name: "tie-break pending", cfg: chessKoCfg(), ledger: [ev(1, "core.start"), ev(2, DRAWN.type, DRAWN.payload)], phase: "tiebreak" });
   return { m, l, out };
@@ -45,12 +46,13 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     expect(forfeitAdmission(m, state, { playRecorded: true })).toEqual({ phase: "over", reasons: [], both: false });
   });
 
-  it("X-RS-1 (ruling 112) / D3 R2, R4, R5: a module with the default walkover phases admits walkover and withdrew before play; after a bare start the walkover too, beside retired, disqualified and withdrew; once its own event is played, retired, disqualified and withdrew; a double walkover until something is played", () => {
+  it("X-RS-1 (rulings 112, 113) / D3 R2, R4, R5: a module with the default walkover phases admits walkover and withdrew before play; after a bare start the walkover too, beside disqualified and withdrew (never retired); once its own event is played, retired, disqualified and withdrew; a double walkover until something is played", () => {
     // Rule rows, typed: R2 walkover only in the walkover phases (default ["pre"]) — ruling 112: the phase reads "pre"
-    // for a walkover while nothing is played after the start; R4 retired/disqualified once play started (the Start);
-    // R5 withdrew in any phase; R1/R3 "both" is a walkover, never in a tie-break.
+    // for a walkover while nothing is played after the start; R4 disqualified once play started (the Start); ruling
+    // 113: retired only once something is played; R5 withdrew in any phase; R1/R3 "both" is a walkover, never in a
+    // tie-break.
     const PRE: ForfeitReason[] = ["walkover", "withdrew"];
-    const STARTED: ForfeitReason[] = ["walkover", "retired", "disqualified", "withdrew"];
+    const STARTED: ForfeitReason[] = ["walkover", "disqualified", "withdrew"];
     const PLAYED: ForfeitReason[] = ["retired", "disqualified", "withdrew"];
     let checked = 0;
     const sports = forEachSport(({ module: m }) => {
@@ -71,12 +73,13 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     expect(checked, `default-phase rows checked: ${checked}`).toBe(3 * (builtinModules.length - 1));
   });
 
-  it("BG-WO-3 / W2b-R14: chess admits a one-side walkover before play, in play and in a pending tie-break; a double walkover never in the tie-break", () => {
-    // Single-sport: boardgame is the only module that widens walkoverPhases (FIDE Laws 6.7.1; R14).
+  it("BG-WO-3 / W2b-R14 + ruling 113: chess admits a one-side walkover before play, in play and in a pending tie-break; a double walkover never in the tie-break; a retirement only in the tie-break, once the game is played", () => {
+    // Single-sport: boardgame is the only module that widens walkoverPhases (FIDE Laws 6.7.1; R14). Ruling 113: in
+    // phase play nothing is played short of the game's result, so a retirement waits for the tie-break.
     const { m, l, out } = scenes("boardgame");
     const want: Record<string, { phase: ForfeitPhase; reasons: ForfeitReason[]; both: boolean }> = {
       "before play": { phase: "pre", reasons: ["walkover", "withdrew"], both: true },
-      "after the start": { phase: "play", reasons: ["walkover", "retired", "disqualified", "withdrew"], both: true },
+      "after the start": { phase: "play", reasons: ["walkover", "disqualified", "withdrew"], both: true },
       "tie-break pending": { phase: "tiebreak", reasons: ["walkover", "retired", "disqualified", "withdrew"], both: false },
     };
     let checked = 0;

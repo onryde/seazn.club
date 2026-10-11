@@ -303,9 +303,9 @@ describe("foldMatch", () => {
   });
 
   it("maps core.forfeit to an award and core.abandon to no_result", () => {
-    // W2b: the award names its loser and the closed reason (a retirement — play has started, so a walkover is
-    // refused by the kernel's phase guard; core/forfeit-guard.test.ts owns that).
-    expect(fold(stream(START, ["core.forfeit", { by: "H", reason: "retired" }])).outcome).toEqual({
+    // W2b: the award names its loser and the closed reason (a retirement — a flip is played, so a walkover is refused
+    // by the kernel's phase guard and a retirement admitted, rulings 112 and 113; core/forfeit-guard.test.ts owns that).
+    expect(fold(stream(START, FLIP_A, ["core.forfeit", { by: "H", reason: "retired" }])).outcome).toEqual({
       kind: "award",
       winner: "A",
       loser: "H",
