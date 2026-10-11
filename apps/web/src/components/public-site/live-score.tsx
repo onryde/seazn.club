@@ -191,15 +191,21 @@ export function LiveScoreBody({
   // locales); `beforeStart` is untouched and still serves genuinely
   // not-started fixtures. Three facts, three sentences: this will fill in and
   // has not begun / this will fill in and is happening now / this never will.
+  //
+  // W2b T13 review C3 — the not-started sentence is for a match that WILL start. The ladder used to send every status
+  // that was neither in play nor decided to it, so a walked-over, abandoned, cancelled or held match centre promised
+  // "…once the match starts" under a sentence saying it never would. Only scheduled (and the hub's legacy postponed)
+  // will start; every other status is over, or held, and gets `noDetail`.
   const hasSecondaryContent =
     (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
+  const willStart = data.status === "scheduled" || data.status === "postponed";
   const emptyStateKey = hasSecondaryContent
     ? null
-    : decided || data.status === "finalized"
-      ? "matchCentre.empty.noDetail"
-      : inPlay
-        ? "matchCentre.empty.inPlay"
-        : "matchCentre.empty.beforeStart";
+    : inPlay
+      ? "matchCentre.empty.inPlay"
+      : willStart
+        ? "matchCentre.empty.beforeStart"
+        : "matchCentre.empty.noDetail";
 
   return (
     <div className="space-y-4">

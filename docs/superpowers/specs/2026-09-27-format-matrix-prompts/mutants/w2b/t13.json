@@ -418,5 +418,42 @@
         "name": "the summary is the credit, and the retiree never leads"
       }
     ]
+  },
+  {
+    "id": "c3-every-unstarted-status-will-start",
+    "file": "apps/web/src/components/public-site/live-score.tsx",
+    "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
+    "replace": "const willStart = !inPlay;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/live-score.test.tsx"
+        ],
+        "name": "forfeited: noDetail, and no other empty-state sentence"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/live-score.test.tsx"
+        ],
+        "name": "needs_decision: noDetail, and no other empty-state sentence"
+      }
+    ]
+  },
+  {
+    "id": "c3-postponed-dropped",
+    "file": "apps/web/src/components/public-site/live-score.tsx",
+    "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
+    "replace": "const willStart = data.status === \"scheduled\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/live-score.test.tsx"
+        ],
+        "name": "postponed: beforeStart, and no other empty-state sentence"
+      }
+    ]
   }
 ]
