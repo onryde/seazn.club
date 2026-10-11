@@ -5,11 +5,12 @@
 // agree with it.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { foldMatch, forfeitAdmission, type EventEnvelope } from "./events.ts";
+import { foldMatch, forfeitAdmission, playRecorded, type EventEnvelope } from "./events.ts";
 import { FORFEIT_REASONS, type ForfeitPhase, type ForfeitReason } from "./types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload }, voids);
 const codeOf = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return EngineError.is(e) ? e.code : String(e); } };
@@ -39,27 +40,35 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     const { m, l, out } = scenes("generic");
     const decided = out.find((s) => s.name === "decided")!;
     const state = foldMatch(m, decided.cfg as never, l, decided.ledger);
-    expect(forfeitAdmission(m, state)).toEqual({ phase: "over", reasons: [], both: false });
+    expect(forfeitAdmission(m, state, { playRecorded: playRecorded(decided.ledger) })).toEqual({ phase: "over", reasons: [], both: false });
+    // Ruling 112's fact cannot reopen a decided match: "over" admits nothing whatever was played.
+    expect(forfeitAdmission(m, state, { playRecorded: true })).toEqual({ phase: "over", reasons: [], both: false });
   });
 
-  it("X-RS-1 / D3 R2, R4, R5: a module with the default walkover phases admits walkover and withdrew before play, retired, disqualified and withdrew after; a double walkover only before play", () => {
-    // Rule rows, typed: R2 walkover only in the walkover phases (default ["pre"]); R4 retired/disqualified once play
-    // started; R5 withdrew in any phase; R1/R3 "both" is a walkover, never in a tie-break.
+  it("X-RS-1 (ruling 112) / D3 R2, R4, R5: a module with the default walkover phases admits walkover and withdrew before play; after a bare start the walkover too, beside retired, disqualified and withdrew; once its own event is played, retired, disqualified and withdrew; a double walkover until something is played", () => {
+    // Rule rows, typed: R2 walkover only in the walkover phases (default ["pre"]) — ruling 112: the phase reads "pre"
+    // for a walkover while nothing is played after the start; R4 retired/disqualified once play started (the Start);
+    // R5 withdrew in any phase; R1/R3 "both" is a walkover, never in a tie-break.
     const PRE: ForfeitReason[] = ["walkover", "withdrew"];
-    const PLAY: ForfeitReason[] = ["retired", "disqualified", "withdrew"];
+    const STARTED: ForfeitReason[] = ["walkover", "retired", "disqualified", "withdrew"];
+    const PLAYED: ForfeitReason[] = ["retired", "disqualified", "withdrew"];
     let checked = 0;
     const sports = forEachSport(({ module: m }) => {
       if (m.key === "boardgame") return; // chess widens the walkover phases (FIDE 6.7.1, R14) — its own rows below
       const l = defaultLineupPair(m.positions);
       const cfg = firstCfg(m);
-      const pre = foldMatch(m, cfg as never, l, []);
-      const play = foldMatch(m, cfg as never, l, [ev(1, "core.start")]);
-      expect(forfeitAdmission(m, pre), `${m.key} before play`).toEqual({ phase: "pre", reasons: PRE, both: true });
-      expect(forfeitAdmission(m, play), `${m.key} after the start`).toEqual({ phase: "play", reasons: PLAY, both: false });
-      checked += 2;
+      const started = [ev(1, "core.start")];
+      const played = onePlayEvent(m, cfg, l, started);
+      if (played === null) throw new Error(`${m.key}: its generator draws no sport event after the start`);
+      const ledgers = { pre: [], started, played: [...started, played] };
+      const admitted = (ledger: EventEnvelope[]) => forfeitAdmission(m, foldMatch(m, cfg as never, l, ledger), { playRecorded: playRecorded(ledger) });
+      expect(admitted(ledgers.pre), `${m.key} before play`).toEqual({ phase: "pre", reasons: PRE, both: true });
+      expect(admitted(ledgers.started), `${m.key} after a bare start`).toEqual({ phase: "play", reasons: STARTED, both: true });
+      expect(admitted(ledgers.played), `${m.key} after ${played.type}`).toEqual({ phase: "play", reasons: PLAYED, both: false });
+      checked += 3;
     });
     expect(sports).toBe(builtinModules.length);
-    expect(checked, `default-phase rows checked: ${checked}`).toBe(2 * (builtinModules.length - 1));
+    expect(checked, `default-phase rows checked: ${checked}`).toBe(3 * (builtinModules.length - 1));
   });
 
   it("BG-WO-3 / W2b-R14: chess admits a one-side walkover before play, in play and in a pending tie-break; a double walkover never in the tie-break", () => {
@@ -73,7 +82,7 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     let checked = 0;
     for (const s of out) {
       if (want[s.name] === undefined) continue;
-      expect(forfeitAdmission(m, foldMatch(m, s.cfg as never, l, s.ledger)), s.name).toEqual(want[s.name]);
+      expect(forfeitAdmission(m, foldMatch(m, s.cfg as never, l, s.ledger), { playRecorded: playRecorded(s.ledger) }), s.name).toEqual(want[s.name]);
       checked++;
     }
     expect(checked).toBe(3);
@@ -86,7 +95,7 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
       const { l, out } = scenes(m.key);
       for (const s of out) {
         const state = foldMatch(m, s.cfg as never, l, s.ledger);
-        const a = forfeitAdmission(m, state);
+        const a = forfeitAdmission(m, state, { playRecorded: playRecorded(s.ledger) });
         expect(a.phase, `${m.key} ${s.name}`).toBe(s.phase);
         const next = s.ledger.length + 1;
         for (const by of [l.away.entrantId, "both"] as const) {

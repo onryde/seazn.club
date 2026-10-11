@@ -333,17 +333,43 @@ export function kernelOwnsEvent<State>(
 }
 
 /** W2b (plan D3) — a module that declares no `walkoverPhases` records a walkover only before play (Appendix A
- *  X-RS-1). */
+ *  X-RS-1; ruling 112: a Start with nothing played after it is still before play). */
 const DEFAULT_WALKOVER_PHASES: readonly ForfeitPhase[] = ["pre"];
 
-/** W2b (plan D3 R2, R4, R5) — the forfeit reasons a phase admits, in FORFEIT_REASONS order: a walkover only in the
- *  module's walkover phases (R2), a retirement or disqualification only once play started (R4), a withdrawal in any
- *  phase (R5). Never asked of "over" (the type says so): the module's own done/final guard and guarantee 4 answer for
- *  it (R0). The one list the guard judges by AND the refusal names, so the copy can never offer a reason the guard
- *  refuses. */
-function forfeitReasonsAllowed(phase: Exclude<ForfeitPhase, "over">, walkoverPhases: readonly ForfeitPhase[]): ForfeitReason[] {
+/**
+ * W2b ruling 112 (amends Appendix A X-RS-1) — has anything been PLAYED: an active module-owned (sport) event after an
+ * active `core.start`. THE one reading: the fold's phase guard asks it of the active ledger before each forfeit, and the
+ * console's forfeit dialog asks it of the fixture's ledger through `forfeitAdmission`'s `playRecorded`.
+ *  - Every type the kernel registers (CORE_EVENT_SCHEMAS: start, void, forfeit, abandon, finalize, note, award,
+ *    suspend, resume, settle and the five `core.lineup.*` types) is the kernel's own or an annotation — never play. Any
+ *    other type is the module's namespace (`<sport>.*`, validated by its own schema) and is play.
+ *  - A sport event BEFORE the start (a pre-kick-off card, a hockey suspension, a generic score) is not play: the ruling
+ *    counts what follows Start, as every module's own phase does (each still reads "pre" there).
+ *  - A voided event never counts. `ledger` is in seq order; a `core.void` names its target in `voids` (an envelope's
+ *    field; the console maps its `voids_event_id` onto it). Voids are not themselves voidable (`resolveVoids`).
+ */
+export function playRecorded(ledger: readonly { readonly id: string; readonly type: string; readonly voids?: string | null }[]): boolean {
+  const voided = new Set<string>();
+  for (const e of ledger) if (e.type === "core.void" && typeof e.voids === "string") voided.add(e.voids);
+  let started = false;
+  for (const e of ledger) {
+    if (voided.has(e.id)) continue;
+    if (e.type === "core.start") started = true;
+    else if (started && !isCoreEventType(e.type)) return true;
+  }
+  return false;
+}
+
+/** W2b (plan D3 R2, R4, R5; ruling 112) — the forfeit reasons a phase admits, in FORFEIT_REASONS order: a walkover only
+ *  in the module's walkover phases (R2) — judged in "pre" while nothing is played (ruling 112: a Start with no sport
+ *  event after it), else in the module's phase — a retirement or disqualification only once play started (R4: the
+ *  module's phase, so from the Start on), a withdrawal in any phase (R5). Never asked of "over" (the type says so): the
+ *  module's own done/final guard and guarantee 4 answer for it (R0). The one list the guard judges by AND the refusal
+ *  names, so the copy can never offer a reason the guard refuses. */
+function forfeitReasonsAllowed(phase: Exclude<ForfeitPhase, "over">, walkoverPhases: readonly ForfeitPhase[], played: boolean): ForfeitReason[] {
+  const walkoverPhase = played ? phase : "pre";
   return FORFEIT_REASONS.filter((reason) =>
-    reason === "walkover" ? walkoverPhases.includes(phase) : reason === "withdrew" ? true : phase !== "pre",
+    reason === "walkover" ? walkoverPhases.includes(walkoverPhase) : reason === "withdrew" ? true : phase !== "pre",
   );
 }
 
@@ -372,14 +398,17 @@ function doubleWalkoverAdmitted(phase: Exclude<ForfeitPhase, "over">, allowed: r
  * a double walkover is admitted. "over" admits nothing (R0: the module's own guard refuses there). The organiser
  * console's forfeit dialog offers exactly this — less PF-2's cascade-only reasons, which the SERVER refuses — so it can
  * never offer what the guard refuses (core/forfeit-admission.test.ts runs the guard to prove the two agree).
+ * Ruling 112: `playRecorded` is `playRecorded(ledger)` of the ledger `state` was folded from — the fact the guard reads
+ * beside the state, since no module keeps it — so a walkover stays offered after a Start until something is played.
  */
 export function forfeitAdmission<State>(
   module: { forfeitPhase(state: State): ForfeitPhase; walkoverPhases?: readonly ForfeitPhase[] },
   state: State,
+  facts: { readonly playRecorded: boolean },
 ): { phase: ForfeitPhase; reasons: ForfeitReason[]; both: boolean } {
   const phase = module.forfeitPhase(state);
   if (phase === "over") return { phase, reasons: [], both: false };
-  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);
+  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);
   return { phase, reasons, both: doubleWalkoverAdmitted(phase, reasons) };
 }
 
@@ -593,7 +622,8 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // hand-built fakes, which are judged from the stream (forfeitPhaseOf).
   forfeitPhase?(state: State): ForfeitPhase;
   // W2b (plan D3 R2) — the phases a walkover (one side or both) may be recorded in. Absent ⇒ ["pre"]. Only
-  // boardgame widens it (FIDE Laws 6.7.1: a no-show after the session starts; R14: a tie-break no-show).
+  // boardgame widens it (FIDE Laws 6.7.1: a no-show after the session starts; R14: a tie-break no-show). Ruling 112:
+  // the kernel judges a walkover in "pre" while nothing is played after the start (`playRecorded`), whatever the phase.
   walkoverPhases?: readonly ForfeitPhase[];
   // W4a (#425) §7 — every phase in which a STAMPED event may legally occur, in
   // the order they occur, for this cfg. Wider than "the phases where play is
@@ -853,7 +883,7 @@ export function foldMatchWithStoppage<Cfg, State>(
   const phaseOrder: string[] = declaredPhases === undefined ? [] : [...declaredPhases];
   let highWater: GameTime | null = null;
 
-  for (const event of active) {
+  for (const [index, event] of active.entries()) {
     // §3.3 seam. Everything below whose verdict a cfg edit can move is gated on
     // this. `validateCoreEvent` is not: it is a payload-schema check on the
     // stream alone, and no config edit can change its answer.
@@ -885,7 +915,8 @@ export function foldMatchWithStoppage<Cfg, State>(
     // W2b D4 (X-AB-4) — a forfeit while an unvoided abandon is active. ABOVE guarantee 4 on purpose: a football
     // award-policy abandon DECIDES the match, so guarantee 4 would answer ALREADY_DECIDED first and hide the guidance
     // the organiser needs (settle to decide; void the abandon to replay). Voids resolve first, so void-then-forfeit
-    // reaches the phase guard below instead (play started: retired, disqualified or withdrew). Once a settle decided
+    // reaches the phase guard below instead (play started: retired, disqualified or withdrew — and a walkover while
+    // nothing was played, ruling 112: an abandon is the kernel's, not play). Once a settle decided
     // the abandoned match there is nothing left to settle or replay, so it falls to guarantee 4: ALREADY_DECIDED
     // (review M-6).
     if (event.type === "core.forfeit" && abandonActive && settlement === null) {
@@ -921,11 +952,13 @@ export function foldMatchWithStoppage<Cfg, State>(
     // streams are migrated, Task 5). The phase is the module's own reading of its state, so a stoppage reads as the
     // phase it interrupted: retired, disqualified and withdrew stay admitted there, a walkover follows R2. R0: in
     // phase "over" nothing is judged here — the module's done/final guard and guarantee 4 answer as before.
+    // Ruling 112: a walkover is judged in "pre" while nothing is played — `playRecorded` of the active ledger before
+    // this event (`active` is void-resolved, so a voided sport event never counts).
     if (event.type === "core.forfeit") {
       const phase = forfeitPhaseOf(module, state, started, decided);
       if (phase !== "over") {
         const { by, reason } = forfeitOf(event.payload);
-        const allowed = forfeitReasonsAllowed(phase, walkoverPhases);
+        const allowed = forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)));
         // R3 (W2b-R14): never both sides in a tie-break — the classical game was played.
         const bothRefused = by === "both" && phase === "tiebreak";
         if (!allowed.includes(reason) || bothRefused) {

@@ -13,6 +13,7 @@ import { aggregatePlayerStats, forfeitStatsRole, type PlayerStatsFoldCtx, type P
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}): EventEnvelope => makeEnvelope(seq, { type, payload });
 const errOf = (f: () => unknown): EngineError => {
@@ -48,12 +49,16 @@ const ALLOWED = {
 };
 
 describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the reason, both sides and what is allowed", () => {
-  it("D3: a walkover after the start, a retirement before it, and a double walkover after it — code, copy and data", () => {
+  it("D3 (ruling 112): a walkover once something is played, a retirement before the start, and a double walkover once something is played — code, copy and data", () => {
     const cfg = firstCfg("football");
+    // Ruling 112: a bare start is still before play for a walkover, so the refusal needs the sport's own play — the
+    // module's generator draws it, never a typed event.
+    const played = onePlayEvent(mod("football"), cfg, defaultLineupPair(mod("football").positions), [ev(1, "core.start")]);
+    if (played === null) throw new Error("football: its generator draws no sport event after the start");
     const rows = [
-      { label: "walkover in play", events: [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "walkover" })], phase: "play", reason: "walkover", both: false, bothAllowed: false },
+      { label: "walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: A, reason: "walkover" })], phase: "play", reason: "walkover", both: false, bothAllowed: false },
       { label: "retired before play", events: [ev(1, "core.forfeit", { by: A, reason: "retired" })], phase: "pre", reason: "retired", both: false, bothAllowed: true },
-      { label: "double walkover in play", events: [ev(1, "core.start"), ev(2, "core.forfeit", { by: "both", reason: "walkover" })], phase: "play", reason: "walkover", both: true, bothAllowed: false },
+      { label: "double walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: "both", reason: "walkover" })], phase: "play", reason: "walkover", both: true, bothAllowed: false },
     ] as const;
     let checked = 0;
     for (const row of rows) {
@@ -77,7 +82,7 @@ describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the r
     expect(e.data).toEqual({ eventId: "e-3", phase: "tiebreak", reason: "walkover", both: true, allowed: [...FORFEIT_REASONS], bothAllowed: false });
   });
 
-  it("C17: a fold of a module that declares no forfeitPhase judges the phase from the stream — play after an active core.start", () => {
+  it("C17 (ruling 112): a fold of a module that declares no forfeitPhase judges the phase from the stream — play after an active core.start, a walkover refused once its own event is played", () => {
     interface S { started: boolean }
     const fake: FoldableModule<unknown, S> = {
       init: () => ({ started: false }),
@@ -85,7 +90,7 @@ describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the r
       outcome: () => null,
     };
     const lineups: LineupPair = { home: { entrantId: "H", slots: [] }, away: { entrantId: A, slots: [] } };
-    const play = errOf(() => foldMatchWithStoppage(fake, {}, lineups, [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "walkover" })]));
+    const play = errOf(() => foldMatchWithStoppage(fake, {}, lineups, [ev(1, "core.start"), ev(2, "fake.point"), ev(3, "core.forfeit", { by: A, reason: "walkover" })]));
     expect(play.data).toMatchObject({ phase: "play", allowed: ALLOWED.play });
     const pre = errOf(() => foldMatchWithStoppage(fake, {}, lineups, [ev(1, "core.forfeit", { by: A, reason: "retired" })]));
     expect(pre.data).toMatchObject({ phase: "pre", allowed: ALLOWED.pre });

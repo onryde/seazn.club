@@ -9,14 +9,27 @@ import { FORFEIT_REASONS, OUTCOME_KINDS, type ForfeitPhase, type MatchOutcome } 
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload }, voids);
 const codeOf = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return EngineError.is(e) ? e.code : String(e); } };
 const errOf = (f: () => unknown): EngineError => { try { f(); } catch (e) { if (EngineError.is(e)) return e; throw e; } throw new Error("expected an EngineError, got none"); };
 const firstCfg = (m: (typeof builtinModules)[number]) => m.configSchema.parse(Object.values(m.variants)[0] ?? {});
 const mod = (key: string) => { const m = builtinModules.find((x) => x.key === key); if (!m) throw new Error(`no module ${key}`); return m; };
-/** Appendix A X-RS-1: a walkover is "before play started", and chess also after the session starts (FIDE Laws 6.7.1). */
-const walkoverAfterStartAllowed = (key: string) => key === "boardgame";
+/** Appendix A X-RS-1 as amended by ruling 112: a walkover is "before anything is played" — a Start with no sport event
+ *  after it is still before play — and chess also once its game is under way (FIDE Laws 6.7.1). */
+const walkoverAfterPlayAllowed = (key: string) => key === "boardgame";
+/** The sport's own play after the start: its generator's first undecided sport event, under the first cfg or the bracket
+ *  deciders over it (chess: a plain game's one event decides it; under the deciders a draw is held for its tie-break). */
+const playedScene = (m: (typeof builtinModules)[number]) => {
+  const l = defaultLineupPair(m.positions);
+  const base = firstCfg(m);
+  for (const cfg of [base, m.configSchema.parse({ ...(base as object), ...m.bracketDeciders(base as never) })]) {
+    const played = onePlayEvent(m, cfg, l, [ev(1, "core.start")]);
+    if (played !== null) return { cfg, l, played };
+  }
+  throw new Error(`${m.key}: its generator draws no undecided sport event after the start`);
+};
 
 /** Task 3's table ("Each module's forfeitPhase"), written out per sport — never read back from the module. The period
  *  kernel's phase is a free label, so it is sampled (two play labels per sport plus the shoot-out). Ruling 102 Q5: a
@@ -68,42 +81,48 @@ describe("X-RS-1 phase guard (spec §5.1; D3)", () => {
     expect(checked).toBe(11);
   });
 
-  it("X-RS-1: 11 sports × 4 reasons × {before, after start}, plus both sides — each refusal and each acceptance", () => {
+  it("X-RS-1 (ruling 112): 11 sports × 4 reasons × {before the start, after a bare start, after the sport's own play}, plus both sides — each refusal and each acceptance", () => {
+    // Ruling 112: a walkover (and a double walkover) reads "pre" while nothing is played after the start; once the
+    // sport's own event is played it is refused, except where the module declares a walkover in that phase (chess,
+    // whose tie-break phase never takes both sides, R3). Retired and disqualified: once the Start is pressed (R4).
     let checked = 0;
     forEachSport(({ module: m }) => {
-      const cfg = firstCfg(m);
-      const l = defaultLineupPair(m.positions);
+      const { cfg, l, played } = playedScene(m);
       const A = l.away.entrantId;
-      for (const started of [false, true]) {
-        const prefix = started ? [ev(1, "core.start")] : [];
+      const phaseAfterPlay = m.forfeitPhase(foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), played]).state);
+      for (const at of ["before", "bare start", "after play"] as const) {
+        const prefix = at === "before" ? [] : at === "bare start" ? [ev(1, "core.start")] : [ev(1, "core.start"), played];
         const n = prefix.length + 1;
+        const walkoverAllowed = at !== "after play" || walkoverAfterPlayAllowed(m.key);
         for (const reason of FORFEIT_REASONS) {
-          const allowed = reason === "withdrew" || (reason === "walkover" ? !started || walkoverAfterStartAllowed(m.key) : started);
+          const allowed = reason === "withdrew" || (reason === "walkover" ? walkoverAllowed : at !== "before");
           const run = () => foldMatchWithStoppage(m as never, cfg as never, l, [...prefix, ev(n, "core.forfeit", { by: A, reason })]);
-          expect(codeOf(run), `${m.key} ${reason} ${started ? "after" : "before"} start`).toBe(allowed ? null : "FORFEIT_REASON_WRONG_PHASE");
-          if (allowed) expect(outcomeOf(m as never, run() as never), `${m.key} ${reason}`).toEqual({ kind: "award", winner: l.home.entrantId, loser: A, reason });
+          expect(codeOf(run), `${m.key} ${reason} ${at}`).toBe(allowed ? null : "FORFEIT_REASON_WRONG_PHASE");
+          if (allowed) expect(outcomeOf(m as never, run() as never), `${m.key} ${reason} ${at}`).toEqual({ kind: "award", winner: l.home.entrantId, loser: A, reason });
           checked++;
         }
         const both = () => foldMatchWithStoppage(m as never, cfg as never, l, [...prefix, ev(n, "core.forfeit", { by: "both", reason: "walkover" })]);
-        const bothAllowed = !started || walkoverAfterStartAllowed(m.key);
-        expect(codeOf(both), `${m.key} both ${started ? "after" : "before"} start`).toBe(bothAllowed ? null : "FORFEIT_REASON_WRONG_PHASE");
-        if (bothAllowed) expect(outcomeOf(m as never, both() as never)).toEqual({ kind: "double_walkover" });
+        const bothAllowed = walkoverAllowed && !(at === "after play" && phaseAfterPlay === "tiebreak");
+        expect(codeOf(both), `${m.key} both ${at}`).toBe(bothAllowed ? null : "FORFEIT_REASON_WRONG_PHASE");
+        if (bothAllowed) expect(outcomeOf(m as never, both() as never), `${m.key} both ${at}`).toEqual({ kind: "double_walkover" });
         checked++;
       }
     });
-    expect(checked).toBe(11 * 2 * (FORFEIT_REASONS.length + 1));
+    expect(checked).toBe(11 * 3 * (FORFEIT_REASONS.length + 1));
   });
 
-  it("X-RS-1: the refusal names the phase and the reasons that phase allows (the §7 copy reads EngineError.data)", () => {
+  it("X-RS-1 (ruling 112): the refusal names the phase and the reasons that phase allows — a double walkover once something is played (the §7 copy reads EngineError.data)", () => {
     // Generic stands for every sport here: the data shape is the kernel's, and the sweep above proves each sport's
-    // phase. The allowed list is Appendix A X-RS-1's, in FORFEIT_REASONS order.
+    // phase. The allowed list is Appendix A X-RS-1's as amended by ruling 112, in FORFEIT_REASONS order.
     const m = mod("generic");
-    const l = defaultLineupPair(m.positions);
-    const before = errOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [ev(1, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]));
+    const { cfg, l, played } = playedScene(m);
+    const before = errOf(() => foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]));
     expect(before.code).toBe("FORFEIT_REASON_WRONG_PHASE");
     expect(before.data).toMatchObject({ eventId: "e-1", phase: "pre", reason: "retired", allowed: ["walkover", "withdrew"] });
-    const after = errOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: "both", reason: "walkover" })]));
-    expect(after.data).toMatchObject({ eventId: "e-2", phase: "play", reason: "walkover", allowed: ["retired", "disqualified", "withdrew"] });
+    const after = errOf(() => foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: "both", reason: "walkover" })]));
+    expect(after.data).toMatchObject({ eventId: "e-3", phase: "play", reason: "walkover", allowed: ["retired", "disqualified", "withdrew"] });
+    // The positive pair (ruling 112): the same double walkover after a bare start is recorded, not refused.
+    expect(codeOf(() => foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: "both", reason: "walkover" })]))).toBeNull();
   });
 
   it("X-RS-1: free text, an unknown reason, and both with a non-walkover reason are INVALID_EVENT (schema; W2b-FP-1)", () => {
@@ -126,7 +145,7 @@ describe("X-RS-1 phase guard (spec §5.1; D3)", () => {
     expect(codeOf(() => foldMatchWithStoppage(m as never, cfg as never, l, [...drawn, ev(3, "core.forfeit", { by: "both", reason: "walkover" })]))).toBe("FORFEIT_REASON_WRONG_PHASE");
   });
 
-  it("C17: a FoldableModule that declares no forfeitPhase is judged from the stream — pre until core.start, play after", () => {
+  it("C17 + ruling 112: a FoldableModule that declares no forfeitPhase is judged from the stream — pre until core.start, play after, and a walkover until something is played", () => {
     // A hand-built fake (the core tests' shape), not a sport: the fallback exists only for modules outside the
     // registry, since SportModule makes the hook required. Without it a fake would escape D3 silently.
     interface S { started: boolean; outcome: MatchOutcome | null }
@@ -146,7 +165,9 @@ describe("X-RS-1 phase guard (spec §5.1; D3)", () => {
     const run = (events: EventEnvelope[]) => codeOf(() => foldMatchWithStoppage(fake, {}, l, events));
     expect(run([ev(1, "core.forfeit", { by: "A", reason: "walkover" })])).toBeNull();
     expect(run([ev(1, "core.forfeit", { by: "A", reason: "retired" })])).toBe("FORFEIT_REASON_WRONG_PHASE");
-    expect(run([ev(1, "core.start"), ev(2, "core.forfeit", { by: "A", reason: "walkover" })])).toBe("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 112: a bare start is still before play for a walkover; the fake's own (non-core) event is play.
+    expect(run([ev(1, "core.start"), ev(2, "core.forfeit", { by: "A", reason: "walkover" })])).toBeNull();
+    expect(run([ev(1, "core.start"), ev(2, "fake.point"), ev(3, "core.forfeit", { by: "A", reason: "walkover" })])).toBe("FORFEIT_REASON_WRONG_PHASE");
     expect(run([ev(1, "core.start"), ev(2, "core.forfeit", { by: "A", reason: "retired" })])).toBeNull();
     // A voided start is no start (voids resolve first).
     expect(run([ev(1, "core.start"), ev(2, "core.void", {}, "e-1"), ev(3, "core.forfeit", { by: "A", reason: "walkover" })])).toBeNull();
@@ -191,13 +212,18 @@ describe("X-AB-4 abandon guard (D4)", () => {
     });
     expect(checked).toBe(44);
   });
-  it("X-AB-4: void-then-forfeit is allowed and credited as a retirement; a walkover after the void is refused (play started)", () => {
+  it("X-AB-4: void-then-forfeit is allowed and credited as a retirement; a walkover after the void is admitted while nothing was played (ruling 112) and refused once something was", () => {
     const m = builtinModules.find((x) => x.key === "generic")!;
-    const l = defaultLineupPair(m.positions);
+    const { cfg, l, played } = playedScene(m);
     const base = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" }), ev(3, "core.void", {}, "e-2")];
-    const ok = foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [...base, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]);
+    const ok = foldMatchWithStoppage(m as never, cfg as never, l, [...base, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]);
     expect(outcomeOf(m as never, ok as never)).toMatchObject({ kind: "award", reason: "retired" });
-    expect(codeOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [...base, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })]))).toBe("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 112: the abandon is the kernel's, not play — with it voided, nothing was played.
+    const walkover = foldMatchWithStoppage(m as never, cfg as never, l, [...base, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })]);
+    expect(outcomeOf(m as never, walkover as never)).toMatchObject({ kind: "award", reason: "walkover" });
+    // The pair: the sport's own event before the abandon is play, so the same walkover is refused.
+    const playedBase = [ev(1, "core.start"), { ...played, seq: 2, id: "e-2" }, ev(3, "core.abandon", { reason: "rain" }), ev(4, "core.void", {}, "e-3")];
+    expect(codeOf(() => foldMatchWithStoppage(m as never, cfg as never, l, [...playedBase, ev(5, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })]))).toBe("FORFEIT_REASON_WRONG_PHASE");
   });
 });
 
@@ -314,7 +340,8 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
   it("every accepted prefix keeps the invariants; refused writes never enter the ledger", () => {
     // The alphabet reaches every sequence Global Constraints names for the fold: forfeit after abandon, void then
     // forfeit, double walkover then void, a second forfeit, withdrew over a held level result (`level` then a
-    // `withdrew` forfeit), and settle/finalize after each. Three sports: one with a decider phase (boardgame), one
+    // `withdrew` forfeit), settle/finalize after each, and (ruling 112) a walkover after a bare start and after the
+    // sport's own play. Three sports: one with a decider phase (boardgame), one
     // with an award-policy abandon and periods (football), and the fallback module (generic) — each can end level.
     const keys = ["generic", "boardgame", "football"] as const;
     const step = fc.oneof(
@@ -325,6 +352,8 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
       fc.record({ t: fc.constant("settle" as const), who: fc.constantFrom("H", "A") }),
       fc.constant({ t: "level" as const }),
       fc.constant({ t: "finalize" as const }),
+      // Ruling 112: the sport's own play, undecided — its generator's, after whatever the ledger holds.
+      fc.constant({ t: "play" as const }),
     );
     let accepted = 0;
     let forfeitsAccepted = 0;
@@ -332,6 +361,14 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
     let doubleWalkovers = 0;
     let awards = 0;
     let walkoversChecked = 0;
+    let walkoversAfterBareStart = 0;
+    let walkoversRefusedAfterPlay = 0;
+    let playsAccepted = 0;
+    /** Ruling 112, read here from the ACTIVE ledger: a module-owned (non-`core.`) event after an active start. */
+    const playedIn = (active: readonly EventEnvelope[]) => {
+      const at = active.findIndex((x) => x.type === "core.start");
+      return at >= 0 && active.slice(at + 1).some((x) => !x.type.startsWith("core."));
+    };
     fc.assert(fc.property(fc.constantFrom(...keys), fc.array(step, { maxLength: 8 }), (key, steps) => {
       const m = builtinModules.find((x) => x.key === key)!;
       const cfg = m.configSchema.parse(LEVEL[key]!.cfg);
@@ -346,15 +383,21 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
           : s.t === "settle" ? [ev(seq, "core.settle", { winner: id(s.who), method: "lot" })]
           : s.t === "level" ? LEVEL[key]!.events(seq)
           : s.t === "finalize" ? [ev(seq, "core.finalize")]
+          : s.t === "play" ? (() => { try { const p = onePlayEvent(m, cfg, l, ledger); return p === null ? [] : [p]; } catch { return []; } })()
           : ledger.length > 0 ? [ev(seq, "core.void", {}, ledger[ledger.length - 1]!.id)] : [];
         for (const candidate of candidates) {
           const e = { ...candidate, seq: ledger.length + 1, id: `e-${ledger.length + 1}` };
           const before = ledger.length > 0 ? outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, ledger) as never) : null;
           const activeBefore = resolveVoids(ledger);
           let f;
-          try { f = foldMatchWithStoppage(m as never, cfg as never, l, [...ledger, e], { strictFromSeq: e.seq }); } catch (err) { if (EngineError.is(err)) break; throw err; }
+          try { f = foldMatchWithStoppage(m as never, cfg as never, l, [...ledger, e], { strictFromSeq: e.seq }); } catch (err) {
+            if (!EngineError.is(err)) throw err;
+            if (err.code === "FORFEIT_REASON_WRONG_PHASE" && (e.payload as { reason?: string }).reason === "walkover" && playedIn(activeBefore)) walkoversRefusedAfterPlay++;
+            break;
+          }
           ledger.push(e);
           accepted++;
+          if (!e.type.startsWith("core.")) playsAccepted++;
           const o = outcomeOf(m as never, f as never);
           if (o !== null) expect(OUTCOME_KINDS).toContain(o.kind);
           // The ACTIVE forfeit (the last unvoided one) is the one that decides (M-3): a double walkover is its "both",
@@ -370,11 +413,13 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
             const p = e.payload as { reason: string };
             // M-3: an accepted forfeit never sits on an active abandon (D4; a settled one is ALREADY_DECIDED, M-6) …
             expect(activeBefore.some((x) => x.type === "core.abandon"), `forfeit over an active abandon: ${JSON.stringify(ledger.map((x) => x.type))}`).toBe(false);
-            // … and an accepted walkover never follows an active start, unless the module declares a walkover phase
-            // past "pre" (chess, FIDE Laws 6.7.1).
+            // … and an accepted walkover never follows the sport's own play after an active start (ruling 112: a bare
+            // start, or one followed only by kernel events, is still before play), unless the module declares a walkover
+            // phase past "pre" (chess, FIDE Laws 6.7.1).
             if (p.reason === "walkover" && m.walkoverPhases === undefined) {
-              expect(activeBefore.some((x) => x.type === "core.start"), `walkover after start: ${JSON.stringify(ledger.map((x) => x.type))}`).toBe(false);
+              expect(playedIn(activeBefore), `walkover after play: ${JSON.stringify(ledger.map((x) => x.type))}`).toBe(false);
               walkoversChecked++;
+              if (activeBefore.some((x) => x.type === "core.start")) walkoversAfterBareStart++;
             }
             if (p.reason === "withdrew" && before !== null && ["draw", "tie", "no_result"].includes(before.kind)) {
               levelWithdrawals++;
@@ -383,11 +428,22 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
           }
         }
       }
-    }), { numRuns: 400, seed: 20261009 });
+    }), {
+      numRuns: 400,
+      seed: 20261009,
+      // Ruling 112's two sequences, in every sport, whatever the random draw reaches: a walkover after a bare start, and
+      // one after the sport's own play (refused, but chess) — then the random runs.
+      examples: keys.flatMap((k) => [
+        [k, [{ t: "start" }, { t: "forfeit", by: "A", reason: "walkover" }]],
+        [k, [{ t: "start" }, { t: "play" }, { t: "forfeit", by: "A", reason: "walkover" }]],
+      ] as const).map(([k, s]) => [k, [...s]] as never),
+    });
     expect(accepted).toBeGreaterThan(0);
     expect(forfeitsAccepted).toBeGreaterThan(0);
     expect(levelWithdrawals).toBeGreaterThan(0); // the PF-1 path is reached, not just declared
     expect([doubleWalkovers, awards, walkoversChecked].every((n) => n > 0), `dw ${doubleWalkovers} awards ${awards} walkovers ${walkoversChecked}`).toBe(true);
+    // Ruling 112's two sides are both reached: a walkover recorded after a bare start, and one refused after play.
+    expect([walkoversAfterBareStart, walkoversRefusedAfterPlay].every((n) => n > 0), `after a bare start ${walkoversAfterBareStart}, refused after play ${walkoversRefusedAfterPlay}, sport events accepted ${playsAccepted}`).toBe(true);
   });
 
   it("Review Focus 2 oracle: forfeit A, void it, forfeit H — the loser is H, every sport (the void restores the undecided match)", () => {
