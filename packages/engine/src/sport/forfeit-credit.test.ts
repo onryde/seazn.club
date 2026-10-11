@@ -9,6 +9,7 @@ import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { buildStream, buildWalk, defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}): EventEnvelope => makeEnvelope(seq, { type, payload });
 const mod = (k: string) => {
@@ -433,6 +434,38 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     }
     expect(before).toBe(11);
     expect(after).toBe(ROWS.length);
+  });
+  it("X-WD-6 (PF-7, ruling 112): a withdrawal after a bare Start — nothing played — credits the walkover, as before the start; so does one whose only play was voided, and so does a walkover there — every sport", () => {
+    // Ruling 112: a Start with no sport event after it is still "before play" for a walkover, and the credit follows the
+    // same fact. The expected credit is Appendix A's walkover row, from the cfg (EXPECTED_WALKOVER) — never the module's.
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const cfg = parsed(m.key);
+      const l = defaultLineupPair(m.positions);
+      const start = ev(1, "core.start");
+      // The sport's own play, from its generator (chess's one event decides a plain game: its bracket deciders hold a
+      // draw instead) — then voided, so nothing is played again.
+      const playCfg = [cfg, m.configSchema.parse({ ...cfg, ...m.bracketDeciders(cfg as never) })].find((c) => onePlayEvent(m, c, l, [start]) !== null);
+      if (playCfg === undefined) throw new Error(`${m.key}: its generator draws no sport event after the start`);
+      const play = onePlayEvent(m, playCfg, l, [start])!;
+      const want = EXPECTED_WALKOVER[m.key]!(cfg);
+      const scenes: { name: string; cfg: unknown; ledger: EventEnvelope[]; reason: "withdrew" | "walkover" }[] = [
+        { name: "withdrew after a bare start", cfg, ledger: [start], reason: "withdrew" },
+        { name: "walkover after a bare start", cfg, ledger: [start], reason: "walkover" },
+        { name: "withdrew after its one play was voided", cfg: playCfg, ledger: [start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id)], reason: "withdrew" },
+      ];
+      for (const s of scenes) {
+        const f = foldMatchWithStoppage(m as never, s.cfg as never, l, [...s.ledger, ev(s.ledger.length + 1, "core.forfeit", { by: A, reason: s.reason })]);
+        const o = outcomeOf(m as never, f as never);
+        expect(o, `${m.key} ${s.name}`).toMatchObject({ kind: "award", winner: H, loser: A, reason: s.reason });
+        const [home, away] = m.standingsDelta(o!, s.cfg, { kind: "league" } as never, f.state);
+        expect(home.metrics, `${m.key} ${s.name}: winner`).toMatchObject(want.winner);
+        expect(away.metrics, `${m.key} ${s.name}: withdrawn side`).toMatchObject(want.loser);
+        expect([home.won, home.lost, away.won, away.lost], `${m.key} ${s.name}`).toEqual([1, 0, 0, 1]);
+        checked++;
+      }
+    });
+    expect(checked).toBe(11 * 3);
   });
 });
 
