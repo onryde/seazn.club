@@ -214,9 +214,10 @@ function flagDue(g: BoardGameFull): boolean {
 }
 
 /** A Lichess id the stream reports for a seat agrees with the one T9
- *  recorded. Lichess ids are lowercase; an absent id (lila's light-user
- *  cache can miss) cannot be checked, and is not read as a mismatch. */
-const samePlayer = (read: string | null, onFile: string) => read === null || read.toLowerCase() === onFile.toLowerCase();
+ *  recorded (both are Lichess's own lowercase ids). An absent id (lila
+ *  writes none when its light-user cache misses) cannot be checked, and is
+ *  not read as a mismatch. */
+const samePlayer = (read: string | null, onFile: string) => read === null || read === onFile;
 
 type Game = {
   fixture: OnlinePlayFixture;
