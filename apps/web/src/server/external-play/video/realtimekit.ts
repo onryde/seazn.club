@@ -757,9 +757,11 @@ export async function listMeetingSessions(meetingId: string, deps: RealtimeKitDe
   if (!Array.isArray(data.sessions)) throw malformedSessions("no sessions list");
   const rows = data.sessions as unknown[];
   const total = (body.paging as { total_count?: unknown } | null | undefined)?.total_count;
-  if (typeof total !== "number" || !Number.isInteger(total) || total < 0) {
+  if (typeof total !== "number") {
     throw malformedSessions("no paging.total_count; the session list is not provable whole");
   }
+  // Exactly the rows: more is a page cut short, fewer an envelope that
+  // contradicts itself (and a fraction or a negative is neither).
   if (total !== rows.length) {
     throw malformedSessions(`${rows.length} rows of a total_count ${total}; the session list is not provable whole`);
   }

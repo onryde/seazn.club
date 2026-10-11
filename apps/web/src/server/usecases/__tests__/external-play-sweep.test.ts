@@ -3084,6 +3084,17 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 1]);
   });
 
+  it("M4: a stage's OWN policy wins over any division change (the stage has no writer: set as data)", async () => {
+    const m = await playedMatch();
+    homeGap(m);
+    // Stands for a stage policy present in the data — no product path writes one.
+    await sql`update stages set camera_policy = 'optional' where id = ${m.b.stageId}`;
+    await relax(m, "off"); // a division change after the match: beside the point
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect(rtkReads(), "the stage says optional: nothing to read").toEqual([]);
+  });
+
   it("M4: an audit row whose policy cannot be read is never guessed — a failure, nothing settled, read again next pass", async () => {
     const m = await playedMatch();
     homeGap(m);
