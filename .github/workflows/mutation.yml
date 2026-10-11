@@ -262,7 +262,7 @@ jobs:
       # (MUTATION.md section 9). Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
-      # The key is `stryker-<group>@<cut>@<sha>` and the restore key stops after the second '@': a group name is lowercase
+      # The key is `stryker-<group>@<cut>@<runner>@<sha>` and the restore key stops after the third '@': a group name is lowercase
       # letters, digits and hyphens, and its number is the last part (`sports-cricket-1`, `sports-cricket-10`), so a restore key
       # that stopped at the name would also match `stryker-sports-cricket-10@...` and the wrong group's file could be the one
       # restored. The first '@' ends the name (matrix-workflow.test.ts derives that collision from the real group names).
@@ -270,8 +270,10 @@ jobs:
       # of the parts it takes, never an entry's text alone, since `cricket.ts#10` stayed `cricket.ts#10` while its range halved,
       # and the sorted files its globs resolve to, since a file added, removed or renamed inside a glob changes what the leg holds
       # under the same entries). The second '@' ends the cut, so a restore key can only ever reach a file this SAME cut wrote, and
-      # an unchanged leg still carries last week's results forward. Nothing here hashes anything: the plan step does, before any
-      # install.
+      # an unchanged leg still carries last week's results forward. The cut is hashed by the plan step, before any install. The one
+      # hash here is the test runner's (engine mutation-debt P0): scripts/stryker-vitest-runner.mjs decides verdicts, and Stryker
+      # reuses a cached Survived result unless a test covering the mutant was added, so a runner edit must start every leg cold
+      # once. The third '@' ends that fingerprint.
       # The save follows a CHECK, not Survivors: `--check-selection` is the first thing Survivors does (every mutant inside the leg's
       # files and line ranges), run on the incremental file itself, so a file Survivors would refuse is never cached and cannot be
       # restored into next week's run. It is not Survivors itself because an interrupted Stryker (the timeout, a cancel) writes a
@@ -281,9 +283,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ hashFiles('packages/engine/scripts/stryker-vitest-runner.mjs') }}@${{ github.sha }}
           restore-keys: |
-            stryker-${{ matrix.group }}@${{ matrix.cut }}@
+            stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ hashFiles('packages/engine/scripts/stryker-vitest-runner.mjs') }}@
       - name: Run Stryker
         working-directory: packages/engine
         run: |
@@ -303,7 +305,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ hashFiles('packages/engine/scripts/stryker-vitest-runner.mjs') }}@${{ github.sha }}
       # One leg's evidence; the floor is judged per family, by the `floors` job once every leg has reported.
       - name: Survivors
         if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)

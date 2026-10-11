@@ -1257,8 +1257,14 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
       .map((e) => [e.group, { timeout: e.timeout, cut: e.cut }]));
     return planned;
   };
-  const keyOf = (g: string, cut = plannedLegs()[g]!.cut) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut).replace("${{ github.sha }}", "0123abc");
-  const restoreOf = (g: string, cut = plannedLegs()[g]!.cut) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut);
+  /** The test runner's fingerprint, as the keys spell it (engine mutation-debt P0, review I1): the runner decides verdicts
+   *  (scripts/stryker-vitest-runner.mjs turns a test file that fails to load into a kill), and Stryker reuses a cached Survived
+   *  result unless a test covering the mutant was ADDED, so a runner edit must start its legs cold once. `runner` stands for the
+   *  value the expression takes. */
+  const RUNNER = "packages/engine/scripts/stryker-vitest-runner.mjs";
+  const RUNNER_HASH = `\${{ hashFiles('${RUNNER}') }}`;
+  const keyOf = (g: string, cut = plannedLegs()[g]!.cut, runner = "r1") => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut).replace(RUNNER_HASH, runner).replace("${{ github.sha }}", "0123abc");
+  const restoreOf = (g: string, cut = plannedLegs()[g]!.cut, runner = "r1") => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut).replace(RUNNER_HASH, runner);
 
   it("the cached path is the group's own incremental file, the one stryker.config.mjs writes", () => {
     expect(cache).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
@@ -1348,14 +1354,29 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(colliding, "the numbered legs are the ones that collide").toContain("sports-cricket-1 -> sports-cricket-10");
   });
 
-  it("the cut is in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's file", () => {
+  it("the cut and the runner's fingerprint are in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's or another runner's file", () => {
     const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
-    expect(cache).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
-    expect(save).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
-    // exactly one restore key, and it stops AFTER the cut: `stryker-${{ matrix.group }}@` alone is the defect (T20)
+    const key = `key: stryker-\${{ matrix.group }}@\${{ matrix.cut }}@${RUNNER_HASH}@\${{ github.sha }}`;
+    expect(cache).toContain(key);
+    expect(save).toContain(key);
+    // exactly one restore key, and it stops AFTER the runner's fingerprint: `stryker-${{ matrix.group }}@` alone is the defect
+    // (T20), and one that stopped after the cut would restore a file a different runner judged (I1)
     const block = /restore-keys: \|\n((?: {12}\S.*\n?)+)/.exec(cache);
     expect(block, "a restore-keys block").not.toBeNull();
-    expect(block![1]!.split("\n").filter((l) => l.trim() !== "").map((l) => l.trim())).toEqual(["stryker-${{ matrix.group }}@${{ matrix.cut }}@"]);
+    expect(block![1]!.split("\n").filter((l) => l.trim() !== "").map((l) => l.trim())).toEqual([`stryker-\${{ matrix.group }}@\${{ matrix.cut }}@${RUNNER_HASH}@`]);
+  });
+
+  it("a runner edit starts every leg cold once: a file saved under another runner fingerprint, or under the key before the runner was in it, is never restored, and a file this runner saved still is (each group, its own cut)", () => {
+    let checked = 0;
+    for (const g of Object.keys(STRYKER_GROUPS)) {
+      const own = plannedLegs()[g]!.cut;
+      expect(keyOf(g, own, "r1").startsWith(restoreOf(g, own, "r1")), `${g} restores the file the same runner saved`).toBe(true);
+      expect(keyOf(g, own, "r2").startsWith(restoreOf(g, own, "r1")), `${g} would restore a file another runner judged`).toBe(false);
+      // the key before the runner was in it: `stryker-<group>@<cut>@<sha>` (judged by the plain vitest runner)
+      expect(`stryker-${g}@${own}@0123abc`.startsWith(restoreOf(g, own, "r1")), `${g} would restore the pre-fix key`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(10);
   });
 
   it("a leg that is cut again never restores the file another cut wrote, and one that is not still restores its own (each group, the cut the plan step gives it)", () => {
@@ -1387,8 +1408,16 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     for (const f of read) expect(emitted.has(f), `matrix.${f} is not in the plan step's output (${[...emitted].join(", ")})`).toBe(true);
   });
 
-  it("the workflow hashes nothing itself: the fingerprint comes from the plan step, not from inline shell over source", () => {
-    expect(MUT).not.toMatch(/sha\d*sum|shasum|md5|openssl|hashFiles|\bcksum\b/);
+  it("the workflow hashes ONE thing itself, the test runner, in the three keys only, and it is the runner the engine's Stryker config loads; the cut's fingerprint still comes from the plan step, never from inline shell over source", () => {
+    expect([...MUT.matchAll(/hashFiles\(([^)]*)\)/g)].map((m) => m[1])).toEqual([`'${RUNNER}'`, `'${RUNNER}'`, `'${RUNNER}'`]);
+    const code = MUT.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n").replaceAll(RUNNER_HASH, "");
+    expect(code).not.toMatch(/sha\d*sum|shasum|md5|openssl|hashFiles|\bcksum\b/);
+    // hashFiles of a path that matches nothing is '' (no error), so the fingerprint would silently stop moving: the path must be
+    // the file stryker.config.mjs names as its plugin (resolved, as Stryker does, against packages/engine)
+    expect(existsSync(join(REPO, RUNNER)), RUNNER).toBe(true);
+    const plugins = /plugins: \[([^\]]*)\]/.exec(readFileSync(join(REPO, "packages/engine/stryker.config.mjs"), "utf8"))![1]!;
+    const local = [...plugins.matchAll(/"(\.[^"]+)"/g)].map((m) => resolve(REPO, "packages/engine", m[1]!));
+    expect(local).toEqual([join(REPO, RUNNER)]);
   });
 });
 
