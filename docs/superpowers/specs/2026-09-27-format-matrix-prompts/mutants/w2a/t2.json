@@ -77,8 +77,8 @@
   {
     "id": "enforced-at-path-missing",
     "file": "packages/engine/rules/carrom.md",
-    "find": "packages/engine/src/sports/carrom/carrom.ts",
-    "replace": "packages/engine/src/sports/carrom/caron.ts",
+    "find": "signed 74 2026-10-08 | `packages/engine/src/sports/carrom/carrom.ts`",
+    "replace": "signed 74 2026-10-08 | `packages/engine/src/sports/carrom/caron.ts`",
     "killers": [
       {
         "cwd": "packages/engine",

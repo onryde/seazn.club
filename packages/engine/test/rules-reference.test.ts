@@ -67,17 +67,8 @@ const X_BR_1 = {
 } as const;
 const w2bIds = (): string[] => Object.values(W2B_ROWS).flatMap((ids) => Object.keys(ids));
 
-/** A row's test paths: each is one TypeScript parse inside `proofProblems` (`testTitles` builds an AST per path). */
+/** A row's test paths (matrix cases excluded). */
 const testPaths = (r: RuleRow): number => r.provedBy.filter((p) => !isMatrixCase(p)).length;
-/** The parses the proof check makes: every signed or deviation row's test paths. W2b took this from about 25 to about
- *  265 (66 distinct files), measured at 2.6 s on an idle 12-core box and 11 s at load 69, past the 5 s vitest default
- *  the engine suite runs this file at (ci.yml's own rules step passes 30 s). AGENTS.md class 20: a flat timeout beside a
- *  derived cost is a latent red, so the budget is stated from the parses, at 100 ms each (about twice the loaded rate). */
-const PROOF_PARSES = (() => {
-  // A rules file the parser refuses must fail the tests that read it (they name the line), not the file's collection.
-  try { return allRows().reduce((n, r) => n + (r.status.startsWith("⬜") || AWAITING_PROOF.has(r.id) ? 0 : testPaths(r)), 0); } catch { return 0; }
-})();
-const proofBudget = (parses: number): number => Math.max(5_000, parses * 100);
 
 /** Everything the parsed rows owe W2b, as data: each pinned id present, in its file, with its status; X-BR-1 amended. */
 function w2bProblems(rows: readonly RuleRow[]): string[] {
@@ -97,6 +88,128 @@ function w2bProblems(rows: readonly RuleRow[]): string[] {
   if (br.status !== X_BR_1.status) out.push(`X-BR-1: status "${br.status}", not "${X_BR_1.status}"`);
   if (!br.provedBy.includes(X_BR_1.proof)) out.push(`X-BR-1: proved by does not name ${X_BR_1.proof}`);
   return out;
+}
+
+/** The approved W2b spec. Its Appendix A is the W2b rows' written source, read at test time (review M-2), so a row whose
+ *  text drifts from the spec — "3-0" becoming "5-0" — is a failure, and a spec amendment moves the pin with it. */
+const W2B_SPEC = join(REPO, "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md");
+/** "### `cricket.md`", or "### `football.md (new)`" for a file W2b creates. */
+const APPENDIX_SECTION = /^### `([a-z-]+\.md)(?: \(new\))?`/;
+interface AppendixA {
+  /** Each row's id, rule text and the rules file its `### \`<file>.md\`` subsection names. */
+  readonly rows: readonly { id: string; rule: string; file: string }[];
+  /** Row-shaped lines whose id cell is not an id: "X-BR-1 (amend)". */
+  readonly amendments: readonly string[];
+  /** The total the appendix states of itself ("54 rows: …"). */
+  readonly stated: number;
+}
+/** Appendix A of the W2b spec, from its heading to the next `## ` heading. A row outside a file subsection, a row that is
+ *  not 6 cells, a missing stated total and an appendix with no row are refusals, never an empty answer. */
+function readAppendixA(text: string): AppendixA {
+  const at = text.indexOf("\n## Appendix A");
+  if (at < 0) throw new Error('W2b spec: no "## Appendix A" section');
+  const lines = text.slice(at + 1).split("\n");
+  const end = lines.findIndex((l, i) => i > 0 && l.startsWith("## "));
+  const body = end < 0 ? lines : lines.slice(0, end);
+  const stated = /^(\d+) rows: /m.exec(body.join("\n"));
+  if (stated?.[1] === undefined) throw new Error('W2b spec: Appendix A no longer states its own total ("N rows: …")');
+  let file: string | undefined;
+  const rows: { id: string; rule: string; file: string }[] = [];
+  const amendments: string[] = [];
+  for (const line of body) {
+    const h = APPENDIX_SECTION.exec(line);
+    if (h?.[1] !== undefined) { file = h[1]; continue; }
+    if (!line.startsWith("| ")) continue; // prose, and the |---| separator
+    const cells = line.slice(2, -2).split(" | ").map((c) => c.trim());
+    if (cells[0] === "id") continue; // the header
+    if (cells.length !== 6) throw new Error(`W2b spec: an Appendix A row has ${cells.length} cells, not 6: ${line.slice(0, 48)}`);
+    const [id, rule] = cells as [string, string];
+    if (!ID.test(id)) { amendments.push(id); continue; }
+    if (file === undefined) throw new Error(`W2b spec: Appendix A row ${id} sits before any \`<file>.md\` subsection`);
+    rows.push({ id, rule, file });
+  }
+  if (rows.length === 0) throw new Error("W2b spec: no row parsed from Appendix A");
+  return { rows, amendments, stated: Number(stated[1]) };
+}
+/** The W2b rows whose text is NOT Appendix A's, each with its whole expected text and what changed it. Every entry must
+ *  differ from Appendix A (or, for X-BR-1, have Appendix A's amend line): a stale entry is a failure. Every other W2b id
+ *  carries Appendix A's text exactly. */
+const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
+  "X-BR-1": {
+    says: "In a bracket kind, a fixture is decided only by a win or a double walkover (from play, a decider, a forfeit or settle); `draw`, `tie` and `no_result` are never a decided result.",
+    by: "Appendix A's own amend line (ruling 84): \"a win\" became \"a win or a double walkover\"",
+  },
+  "X-RS-1": {
+    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover (and double walkover) = before anything is played, which includes after `core.start` while no sport (module-owned) event is active, kernel admin events not counting as play (chess keeps its wider walkover phases, FIDE 6.7.1); retired/disqualified = after.",
+    by: "owner ruling 112 (2026-10-11): a walkover stays recordable after the start until something is played",
+  },
+  "X-WO-1": {
+    says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
+    by: "owner ruling 108 (2026-10-11): a credited result pays the table points of its credited score",
+  },
+  "VB-RT-1": {
+    says: "Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won, and both sides take the table points of that credited set score (retiring at two sets all is a 3-2 loss).",
+    by: "owner ruling 108 (2026-10-11): retiring at two sets all is the 3-2 loss's point",
+  },
+  "X-WD-1": {
+    says: "When a side withdraws from a held (needs_decision) bracket fixture, the fixture is walked over to the remaining side, reason \"withdrew\", with the sport's retirement credit.",
+    by: "W2b ledger I-1 and Task 15 review M-6: the sport's own retirement credit",
+  },
+  "BD-RT-1": {
+    says: "Badminton retirement = points played stand, the current game completed for the winner to its legal end (21, or two clear up to the 30 cap), remaining games 21-0 (until W5's 16.2.5).",
+    by: "Task 15 review M-6, owner Q2: the current game runs to its legal end, not a flat 21",
+  },
+  "FB-AB-1": {
+    says: "Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds; in brackets a level abandon stays abandoned for the desk to settle, never needs_decision.",
+    by: "Task 14 fix round 1 M-1: spec §5.4 rule 2, a level abandon in a bracket stays abandoned (HK-AB-1 and IH-AB-1 say \"Same as FB-AB-1\", so they take it by reference and keep Appendix A's text)",
+  },
+};
+/** The two W2b rows Appendix A does not hold (orchestrator rulings PF-6, PF-7), pinned here by their whole text. */
+const NOT_IN_APPENDIX_A: Readonly<Record<string, { says: string; by: string }>> = {
+  "CK-WO-2": {
+    says: "Unlimited-overs (Test, first-class) cricket walkover credits the result and its table points only: no runs or overs are credited, and the match is out of NRR (with no quota, NRR is undefined).",
+    by: "plan PF-6",
+  },
+  "X-WD-6": {
+    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit when the match never started, and the sport's retirement credit once play started (a held level result included, X-WD-1).",
+    by: "plan PF-7",
+  },
+};
+interface TextCheck { problems: string[]; fromAppendix: number; amended: number; added: number }
+/** Each W2b row's text against Appendix A, its recorded amendment or its recorded addition, and every Appendix A row
+ *  owed as a W2b id. A missing row is w2bProblems' to report; this counts what it compared, so zero compared shows. */
+function w2bTextProblems(rows: readonly RuleRow[], appendix: AppendixA): TextCheck {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const inAppendix = new Map(appendix.rows.map((a) => [a.id, a]));
+  const owed = [...w2bIds(), "X-BR-1"];
+  const check: TextCheck = { problems: [], fromAppendix: 0, amended: 0, added: 0 };
+  const p = check.problems;
+  for (const id of owed) {
+    const r = byId.get(id);
+    if (r === undefined) continue;
+    const a = inAppendix.get(id);
+    if (a !== undefined && a.file !== r.file) p.push(`${id}: Appendix A files it in ${a.file}, the rows in ${r.file}`);
+    const amended = AMENDED_TEXT[id];
+    const added = NOT_IN_APPENDIX_A[id];
+    if (amended !== undefined) {
+      if (r.rule !== amended.says) p.push(`${id}: the text is not its amendment (${amended.by}): ${r.rule}`);
+      if (a === undefined && !appendix.amendments.includes(`${id} (amend)`)) p.push(`${id}: recorded as amended, but Appendix A has no amend line for it`);
+      if (a !== undefined && a.rule === amended.says) p.push(`${id}: recorded as amended, but Appendix A already says it`);
+      check.amended++;
+    } else if (added !== undefined) {
+      if (a !== undefined) p.push(`${id}: Appendix A holds it now (${added.by}); pin it from there`);
+      if (r.rule !== added.says) p.push(`${id}: the text is not ${added.by}'s: ${r.rule}`);
+      check.added++;
+    } else if (a === undefined) {
+      p.push(`${id}: not in Appendix A, and recorded as neither amended nor added`);
+    } else {
+      if (r.rule !== a.rule) p.push(`${id}: the text is not Appendix A's: "${r.rule}" (Appendix A: "${a.rule}")`);
+      check.fromAppendix++;
+    }
+  }
+  const owedSet = new Set(owed);
+  for (const a of appendix.rows) if (!owedSet.has(a.id)) p.push(`${a.id}: in Appendix A but owed by no W2b pin`);
+  return check;
 }
 
 /** In-memory files for synthetic rows: no synthetic row borrows a real file as its proof. Every path is repo-relative. */
@@ -185,9 +298,8 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(refused).toBe(7);
   });
 
-  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)", (ctx) => {
+  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)", () => {
     let checked = 0;
-    let parses = 0;
     for (const r of allRows()) {
       if (r.status.startsWith("⬜")) continue;
       if (AWAITING_PROOF.has(r.id)) {
@@ -196,13 +308,10 @@ describe("rules reference (ruling 75, spec §6)", () => {
         continue;
       }
       expect(proofProblems(r), r.id).toEqual([]);
-      parses += testPaths(r);
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
-    expect(parses, "the parses the budget was derived from are the parses made").toBe(PROOF_PARSES);
-    expect(ctx.task.timeout, "the timeout vitest applied is the one derived from those parses, not a default").toBe(proofBudget(PROOF_PARSES));
-  }, proofBudget(PROOF_PARSES));
+  });
 
   it("the proof checks catch a row with no test, a missing file and a file that does not name the id (synthetic signed rows)", () => {
     expect(proofProblems(row([]), read)).toEqual(["X-ZZ-1 names no proving test"]);
@@ -307,6 +416,18 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(testTitles("p.test.ts", body("describe.skipIf(!HAS_DB)"))).toEqual(["db group", "X-ZZ-1: inside"]);
   });
 
+  it("the title memo (M-3) keys on the source, not just the path: one path, two sources, back again; a caller's edit never reaches the memo", () => {
+    const path = "memo.test.ts";
+    const a = 'it("X-ZZ-1: first source", () => {});';
+    const b = 'it("X-ZZ-2: second source", () => {});';
+    const seen: string[][] = [];
+    for (const source of [a, b, a, a]) seen.push(testTitles(path, source));
+    expect(seen).toEqual([["X-ZZ-1: first source"], ["X-ZZ-2: second source"], ["X-ZZ-1: first source"], ["X-ZZ-1: first source"]]);
+    // The list handed out is the caller's own: pushing into it must not change the next answer for the same source.
+    seen[3]!.push("X-ZZ-9: smuggled");
+    expect(testTitles(path, a)).toEqual(["X-ZZ-1: first source"]);
+  });
+
   it("an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof (synthetic titles)", () => {
     const cases: Array<[string, boolean]> = [
       ["X-ZZ-1: a title", true], ["(X-ZZ-1)", true], ["X-ZZ-1", true], ["covers X-ZZ-1.", true],
@@ -382,6 +503,8 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     const problems = w2bProblems([]);
     expect(problems).toHaveLength(56);
     expect(problems.filter((p) => !/: missing/.test(p))).toEqual([]);
+    // The text pin compares nothing and says so (its counts are zero), and never mistakes a missing row for a match.
+    expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
   });
 
   it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108 or 112 where that ruling changed the text; PF-6/PF-7 open), and X-BR-1's text says 'a win or a double walkover'", () => {
@@ -409,6 +532,78 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     const old = (br?.rule ?? "").replace(X_BR_1.says, "decided only by a win");
     expect(w2bProblems(edit("X-BR-1", { rule: old }))).toHaveLength(1);
     expect(w2bProblems(edit("X-BR-1", { provedBy: ["apps/web/src/server/engine-db/__tests__/settle-seating.test.ts"] }))).toHaveLength(1);
+  });
+
+  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112; ledger I-1; Task 15 M-6; Task 14 M-1) or addition (PF-6, PF-7)", () => {
+    const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
+    expect(appendix.rows.length + appendix.amendments.length, "Appendix A parses to the total it states").toBe(appendix.stated);
+    expect(appendix.amendments).toEqual(["X-BR-1 (amend)"]);
+    const check = w2bTextProblems(allRows(), appendix);
+    expect(check.problems).toEqual([]);
+    // Anti-vacuity: every W2b id and X-BR-1 was compared, each through exactly one of the three branches.
+    const amendedInAppendix = Object.keys(AMENDED_TEXT).filter((id) => appendix.rows.some((a) => a.id === id)).length;
+    expect(check).toEqual({
+      problems: [],
+      fromAppendix: appendix.rows.length - amendedInAppendix,
+      amended: Object.keys(AMENDED_TEXT).length,
+      added: Object.keys(NOT_IN_APPENDIX_A).length,
+    });
+    expect(check.fromAppendix + check.amended + check.added).toBe(w2bIds().length + 1);
+    expect(check.fromAppendix).toBeGreaterThan(0);
+  });
+
+  it("the text pin sees a changed number, an amendment reverted, a stale amendment, a lost amend line, an added row edited or moved into Appendix A, a row in another file and an Appendix A row nobody owes (synthetic edits)", () => {
+    const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
+    const rows = allRows();
+    const edit = (id: string, patch: Partial<RuleRow>) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    const problems = (rs: readonly RuleRow[], app: AppendixA = appendix) => w2bTextProblems(rs, app).problems;
+    const fb = rows.find((r) => r.id === "FB-WO-1");
+    expect(fb?.rule).toContain("3-0");
+    const seen: string[][] = [];
+    seen.push(problems(edit("FB-WO-1", { rule: (fb?.rule ?? "").replace("3-0", "5-0") })));
+    const wasAppendix = appendix.rows.find((a) => a.id === "X-WO-1")?.rule;
+    expect(wasAppendix).toBeDefined();
+    seen.push(problems(edit("X-WO-1", { rule: wasAppendix ?? "" })));
+    const caughtUp = appendix.rows.map((a) => (a.id === "FB-AB-1" ? { ...a, rule: AMENDED_TEXT["FB-AB-1"]?.says ?? "" } : a));
+    seen.push(problems(rows, { ...appendix, rows: caughtUp }));
+    seen.push(problems(rows, { ...appendix, amendments: [] }));
+    seen.push(problems(edit("CK-WO-2", { rule: "Unlimited-overs cricket walkover = 1-0." })));
+    seen.push(problems(rows, { ...appendix, rows: [...appendix.rows, { id: "X-WD-6", rule: NOT_IN_APPENDIX_A["X-WD-6"]?.says ?? "", file: "cross-sport.md" }] }));
+    seen.push(problems(edit("FB-WO-1", { file: "hockey.md" })));
+    seen.push(problems(rows, { ...appendix, rows: [...appendix.rows, { id: "X-ZZ-9", rule: "r", file: "cross-sport.md" }] }));
+    const want = [
+      /^FB-WO-1: the text is not Appendix A's: ".*5-0/,
+      /^X-WO-1: the text is not its amendment \(owner ruling 108/,
+      /^FB-AB-1: recorded as amended, but Appendix A already says it$/,
+      /^X-BR-1: recorded as amended, but Appendix A has no amend line for it$/,
+      /^CK-WO-2: the text is not plan PF-6's: /,
+      /^X-WD-6: Appendix A holds it now \(plan PF-7\)/,
+      /^FB-WO-1: Appendix A files it in football\.md, the rows in hockey\.md$/,
+      /^X-ZZ-9: in Appendix A but owed by no W2b pin$/,
+    ];
+    expect(seen).toHaveLength(want.length);
+    for (const [i, got] of seen.entries()) {
+      expect(got, String(want[i])).toHaveLength(1);
+      expect(got[0], String(want[i])).toMatch(want[i]!);
+    }
+  });
+
+  it("Appendix A's reader refuses no section, no stated total, a row before any file subsection, a 5-cell row and a table with no row; a new file's \"(new)\" heading counts and the next ## heading ends it (synthetic spec text)", () => {
+    const head = "\n## Appendix A — rows\n\n1 rows: x.md 1.\n\n";
+    const table = "| id | rule | citation | status | enforced at | proved by |\n|---|---|---|---|---|---|\n";
+    expect(() => readAppendixA("# a spec\n")).toThrow(/no "## Appendix A" section/);
+    expect(() => readAppendixA("\n## Appendix A\n\n### `x.md`\n" + table + "| X-ZZ-1 | r | c | s | — | — |\n")).toThrow(/states its own total/);
+    expect(() => readAppendixA(head + table + "| X-ZZ-1 | r | c | s | — | — |\n")).toThrow(/X-ZZ-1 sits before any/);
+    expect(() => readAppendixA(head + "### `x.md`\n" + table + "| X-ZZ-1 | r | c | s | — |\n")).toThrow(/5 cells, not 6/);
+    expect(() => readAppendixA(head + "### `x.md`\n" + table)).toThrow(/no row parsed/);
+    // The positive pair: one row read, and a row under the next ## heading is not Appendix A's.
+    const next = "## Appendix B\n\n### `y.md`\n" + table + "| X-ZZ-2 | r2 | c | s | — | — |\n";
+    const two = "### `z.md (new)`\n" + table + "| X-ZZ-3 | r3 | c | s | — | — |\n";
+    expect(readAppendixA(head + "### `x.md`\n" + table + "| X-ZZ-1 | r | c | s | — | — |\n| X-ZZ-1 (amend) | a | c | s | — | — |\n" + two + next)).toEqual({
+      rows: [{ id: "X-ZZ-1", rule: "r", file: "x.md" }, { id: "X-ZZ-3", rule: "r3", file: "z.md" }],
+      amendments: ["X-ZZ-1 (amend)"],
+      stated: 1,
+    });
   });
 
   it("every W2b row names a proving test and an enforcement site, and the two open rows' proofs prove them too, so no listed proof is unchecked evidence (the signed rows' are proved by the check above)", () => {
