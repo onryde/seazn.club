@@ -144,7 +144,8 @@ export function levelKindOf(sport: string, cfg: unknown, home: string, away: str
 }
 
 /** W2b: the play a forfeit was recorded on, from the LIVE stream the harness posted, ending in its core.forfeit: no
- *  START before it is a bare forfeit (before play, X-RS-1), and START with nothing decided is a match under way. The
+ *  START before it is a bare forfeit (before play, X-RS-1); START with no sport event after it is a match started with
+ *  nothing played (ruling 112), and START then sport events with nothing decided is a match under way. The
  *  harness forfeits nothing that has a result, and no drawn chess game (BG-KO-1's tie-break phase, which the oracle
  *  reads as a level play, D3 R3): either is refused by name rather than read as under way. */
 export function forfeitPlayOf(sport: string, cfg: unknown, home: string, away: string, live: readonly StreamEvent[]): PlayResult {
@@ -154,7 +155,9 @@ export function forfeitPlayOf(sport: string, cfg: unknown, home: string, away: s
   if (before.some((e) => e.type === "boardgame.result")) throw new ForfeitPlayUnread(sport, "it follows a drawn chess game's result (BG-KO-1): a tie-break-phase forfeit is not a request the harness makes");
   const decided = foldStream(sportModule(sport), cfg, home, away, before).outcome;
   if (decided !== null) throw new ForfeitPlayUnread(sport, `the play before it already folds to '${decided.kind}'`);
-  return { kind: "in_progress" };
+  // Ruling 112: something is played once a sport (non-`core.`) event follows the START.
+  const startAt = before.findIndex((e) => e.type === "core.start");
+  return before.slice(startAt + 1).some((e) => !e.type.startsWith("core.")) ? { kind: "in_progress" } : { kind: "started" };
 }
 
 /** The oracle's case for one drive, or the reason the oracle has no vocabulary for it. The mapping is by REQUEST kind:

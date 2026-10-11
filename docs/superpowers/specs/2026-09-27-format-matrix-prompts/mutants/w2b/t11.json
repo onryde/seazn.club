@@ -10,7 +10,7 @@
     "files": [
      "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
     ],
-    "name": "after play started"
+    "name": "once the sport's own event is played — no Neither"
    },
    {
     "cwd": "apps/web",
@@ -306,8 +306,8 @@
  {
   "id": "admission-over-admits",
   "file": "packages/engine/src/core/events.ts",
-  "find": "  if (phase === \"over\") return { phase, reasons: [], both: false };\n  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);",
-  "replace": "  const reasons = forfeitReasonsAllowed(phase as Exclude<ForfeitPhase, \"over\">, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);",
+  "find": "  if (phase === \"over\") return { phase, reasons: [], both: false };\n  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);",
+  "replace": "  const reasons = forfeitReasonsAllowed(phase as Exclude<ForfeitPhase, \"over\">, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);",
   "killers": [
    {
     "cwd": "packages/engine",

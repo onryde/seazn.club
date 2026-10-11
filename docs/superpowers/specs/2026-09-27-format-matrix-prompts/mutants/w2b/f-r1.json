@@ -340,7 +340,7 @@
     "files": [
      "src/server/api-v1/__tests__/http.test.ts"
     ],
-    "name": "every sport, before the start and once play started"
+    "name": "every sport, before the start, after a bare start and once something is played"
    }
   ]
  },

@@ -25,7 +25,9 @@ export interface CreditCase {
   /** The stage's own cfg (X-WO-1) — only the keys the sport's credit row reads (walkover-credit-cfgs.ts). */
   cfg: Record<string, unknown>;
   reason: CreditReason;
-  /** Present once play started: each side's score per unit (period, set, game), the last unit possibly unfinished. */
+  /** Present once play started (the Start pressed): each side's score per unit (period, set, game), the last unit
+   *  possibly unfinished. EMPTY (no unit) is a Start with nothing played yet — ruling 112: still before play for a
+   *  walkover. */
   played?: { home: number[]; away: number[] };
   /** ADDITIVE (not in the plan's frozen interface): the side at fault. It is what "worse for the offender" (FB-RT-1)
    *  and "the retiring side keeps what it won" (VB-RT-1) read `played` against, so it is REQUIRED with a scoresheet:
@@ -59,7 +61,7 @@ export const CREDIT_REFUSALS = {
   "unknown-sport": "no rule row credits a forfeit in this sport",
   "unknown-reason": "X-RS-1: a forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), or is a double walkover (X-DW-1)",
   "cfg-invalid": "X-WO-1: the credit is derived from the stage's own cfg, and the cfg lacks a value the row reads",
-  "played-before-start": "X-RS-1: a walkover (and a double walkover) is recorded before play starts — only chess also after the session starts (FIDE 6.7.1, BG-WO-2)",
+  "played-before-start": "X-RS-1 (ruling 112): a walkover (and a double walkover) is recorded until something is played — a Start with an empty scoresheet is still before play; only chess also once play is under way (FIDE 6.7.1, BG-WO-2)",
   "not-started": "X-RS-1: retired and disqualified are recorded after play started, so they carry the scoresheet so far",
   "played-malformed": "the scoresheet so far is not two equal-length lists of whole, non-negative unit scores the sport can reach",
   "unit-unfinished": "only the last unit of the scoresheet so far may be unfinished",
@@ -300,8 +302,12 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   if (!(CREDIT_REASONS as readonly string[]).includes(c.reason)) throw new CreditRefused("unknown-reason", `reason ${JSON.stringify(c.reason)}`);
   const chess = c.sport === CHESS;
   const started = c.played !== undefined;
-  // X-RS-1: walkover before play started (chess also after the session starts); retired / disqualified after.
-  if ((c.reason === "walkover" || c.reason === "double_walkover") && started && !chess) throw new CreditRefused("played-before-start", `${c.sport} ${c.reason} with a scoresheet`);
+  // Ruling 112 (amends X-RS-1): something is played once the scoresheet holds a unit; a Start with an empty one is not.
+  const sheet = c.played;
+  const playedAny = sheet !== undefined && [sheet.home, sheet.away].some((xs) => Array.isArray(xs) && xs.length > 0);
+  // X-RS-1: walkover until something is played (chess also once play is under way); retired / disqualified after the
+  // Start.
+  if ((c.reason === "walkover" || c.reason === "double_walkover") && playedAny && !chess) throw new CreditRefused("played-before-start", `${c.sport} ${c.reason} with a scoresheet holding play`);
   if ((c.reason === "retired" || c.reason === "disqualified") && !started) throw new CreditRefused("not-started", `${c.sport} ${c.reason} with no scoresheet`);
   // The scoresheet is read from the side at fault's view, so a forfeit with one names that side — never a silent
   // default. A double walkover's sides are both at fault: its sheet (chess only) is read for its shape alone.

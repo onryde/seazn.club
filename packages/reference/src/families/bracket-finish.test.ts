@@ -754,6 +754,8 @@ describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every reg
 
 const NONE: PlayResult = { kind: "none" };
 const LIVE: PlayResult = { kind: "in_progress" };
+/** Ruling 112: the Start pressed, nothing played. */
+const STARTED: PlayResult = { kind: "started" };
 const fo = (offender: Side | "both", reason: (typeof FORFEIT_REASONS)[number], by: "organiser" | "scorer" | "device" | "cascade" = "organiser"): Action => ({ kind: "forfeit", offender, reason, by });
 const otherSide = (s: Side): Side => (s === "home" ? "away" : "home");
 const forfeitWin = (winner: Side, method: string): BracketExpect => ({ status: "forfeited", advances: { winner, loser: null, method } as BracketExpect["advances"], refused: [] });
@@ -767,8 +769,9 @@ describe("bracket-finish W2b: the empty case first", () => {
     for (const hasNextMatch of [true, false]) {
       expect(expectBracketFinish({ ...base, play: NONE, deadSeats: [], hasNextMatch }), String(hasNextMatch)).toEqual({ status: "scheduled", advances: null, refused: [] });
     }
-    // a match under way with nothing decided is in play
+    // a match under way with nothing decided is in play — and so is one whose Start was pressed with nothing played
     expect(expectBracketFinish({ ...base, sport: "football", play: LIVE })).toEqual({ status: "in_play", advances: null, refused: [] });
+    expect(expectBracketFinish({ ...base, sport: "football", play: STARTED })).toEqual({ status: "in_play", advances: null, refused: [] });
   });
 });
 
@@ -1035,7 +1038,7 @@ describe("bracket-finish W2b: who may record a forfeit, and when (X-RS-1, X-RS-3
     expect(checked).toBe(11 * 8);
   });
 
-  it("X-RS-1 + D3 (R2, R4, R5): a walkover before play starts, retired and disqualified only after it — FORFEIT_REASON_WRONG_PHASE otherwise; withdrew in any phase; every sport but chess", () => {
+  it("X-RS-1 (ruling 112) + D3 (R2, R4, R5): a walkover until something is played — before the Start and after a bare Start — retired and disqualified only once the Start is pressed; FORFEIT_REASON_WRONG_PHASE otherwise; withdrew in any phase; every sport but chess", () => {
     let checked = 0;
     const sports = forEachSport(({ key }) => {
       if (key === CHESS) return; // BG-WO-2: chess differs, its own test below
@@ -1046,6 +1049,11 @@ describe("bracket-finish W2b: who may record a forfeit, and when (X-RS-1, X-RS-3
         [NONE, fo("away", "retired"), "FORFEIT_REASON_WRONG_PHASE"],
         [NONE, fo("away", "disqualified"), "FORFEIT_REASON_WRONG_PHASE"],
         [NONE, fo("away", "withdrew", "cascade"), "accepted"],
+        [STARTED, fo("away", "walkover"), "accepted"],
+        [STARTED, fo("both", "walkover"), "accepted"],
+        [STARTED, fo("away", "retired"), "accepted"],
+        [STARTED, fo("away", "disqualified"), "accepted"],
+        [STARTED, fo("away", "withdrew", "cascade"), "accepted"],
         [LIVE, fo("away", "walkover"), "FORFEIT_REASON_WRONG_PHASE"],
         [LIVE, fo("both", "walkover"), "FORFEIT_REASON_WRONG_PHASE"],
         [LIVE, fo("away", "retired"), "accepted"],
@@ -1053,9 +1061,11 @@ describe("bracket-finish W2b: who may record a forfeit, and when (X-RS-1, X-RS-3
         [LIVE, fo("away", "withdrew", "cascade"), "accepted"],
       ];
       for (const [play, a, want] of TABLE) { expect(at(play, a), `${key} ${play.kind} ${JSON.stringify(a)}`).toBe(want); checked++; }
+      // an accepted walkover after a bare Start is the walkover itself: the other side advances by walkover
+      expect(expectBracketFinish({ ...base, sport: key, play: STARTED, actions: [fo("away", "walkover")] }), key).toEqual(forfeitWin("home", "walkover"));
     });
     expect(sports).toBe(11);
-    expect(checked).toBe(10 * 10);
+    expect(checked).toBe(10 * 15);
   });
 
   it("BG-WO-2 + FIDE 6.7.1: a chess walkover is recordable before the game starts AND during play (a double forfeit too); retired and disqualified still only after the start", () => {
@@ -1142,7 +1152,7 @@ describe("bracket-finish W2b rows (Appendix A)", () => {
 // writes plus the W2a actions they interact with, its roots add a match under way, the chess double forfeit, a missing
 // next match and the dead seats. Every expected answer is restated from the rows — never read off the family.
 
-const W2B_PLAYS: readonly PlayResult[] = [NONE, LIVE, { kind: "win", winner: "away" }, DRAW, HELD, { kind: "double_walkover" }];
+const W2B_PLAYS: readonly PlayResult[] = [NONE, STARTED, LIVE, { kind: "win", winner: "away" }, DRAW, HELD, { kind: "double_walkover" }];
 const W2B_ALPHABET: readonly Action[] = [
   fo("away", "walkover"),
   fo("home", "retired"),
@@ -1181,7 +1191,8 @@ function forfeitAnswer(c: BracketCase, a: Extract<Action, { kind: "forfeit" }>, 
   if (parent.status === "in_play") {
     const tiebreakPhase = chess && c.play.kind === "level" && c.play.as === DRAWN;
     if (tiebreakPhase) return a.offender === "both" ? "FORFEIT_REASON_WRONG_PHASE" : "accepted"; // R3; BG-WO-3
-    return a.reason === "walkover" && !chess ? "FORFEIT_REASON_WRONG_PHASE" : "accepted"; // R2 (chess: FIDE 6.7.1); R4/R5 admit
+    // R2 (chess: FIDE 6.7.1) — ruling 112: a walkover after a bare Start is still before play; R4/R5 admit
+    return a.reason === "walkover" && !chess && c.play.kind !== "started" ? "FORFEIT_REASON_WRONG_PHASE" : "accepted";
   }
   // scheduled: phase pre
   return a.reason === "retired" || a.reason === "disqualified" ? "FORFEIT_REASON_WRONG_PHASE" : "accepted"; // R4; R2/R5 admit
@@ -1209,7 +1220,7 @@ function walkW2b(c: BracketCase, parent: BracketExpect, standing: readonly Snap[
           || (e.reason === "abandon-decided" && a.kind === "abandon" && !abandonActive && (parent.status === "decided" || parent.status === "forfeited"))
           || (e.reason === "abandon-twice" && a.kind === "abandon" && abandonActive)
           || (e.reason === "void-nothing" && a.kind === "void-last" && standing.length === 0)
-          || (e.reason === "finalize-unplayed" && a.kind === "finalize" && (parent.status === "scheduled" || (parent.status === "in_play" && c.play.kind === "in_progress")))));
+          || (e.reason === "finalize-unplayed" && a.kind === "finalize" && (parent.status === "scheduled" || (parent.status === "in_play" && (c.play.kind === "in_progress" || c.play.kind === "started"))))));
       if (!ok) fail(t, next, `unanswered (${e.reason}) where the parent (${parent.status}) owes an answer`);
       continue;
     }

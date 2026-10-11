@@ -38,9 +38,11 @@ export type ForfeitReason = (typeof FORFEIT_REASONS)[number];
 
 /** One bracket fixture, described in the RULEBOOK's terms — what was played and what the organiser or scorer did —
  *  never as engine events. A level result names its X-BR-1 kind. W2b: `in_progress` is a match under way with nothing
- *  decided (play started, so a forfeit there is a retirement, X-RS-1); `double_walkover` is chess's double forfeit
- *  result (BG-DW-1), the one play result that is a double walkover. */
-export type PlayResult = { kind: "win"; winner: Side } | { kind: "level"; as: LevelKind } | { kind: "none" } | { kind: "in_progress" } | { kind: "double_walkover" };
+ *  decided — something played, so a forfeit there is a retirement (X-RS-1); `started` (ruling 112) is a match whose
+ *  Start was pressed with nothing played yet — in play for a retirement or a disqualification (R4), still before play
+ *  for a walkover; `double_walkover` is chess's double forfeit result (BG-DW-1), the one play result that is a double
+ *  walkover. */
+export type PlayResult = { kind: "win"; winner: Side } | { kind: "level"; as: LevelKind } | { kind: "none" } | { kind: "started" } | { kind: "in_progress" } | { kind: "double_walkover" };
 export type Action =
   | { kind: "abandon" }
   | { kind: "settle"; winner: Side; method: SettleMethod; by: "organiser" | "scorer" | "device" }
@@ -217,7 +219,7 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
     if (s.forfeit !== null || doubleWalkover(s)) return "forfeited"; // W2b §5.4 (4)
     if (win(s) !== null) return "decided";
     if (drawnChess(s)) return "in_play"; // C12 in_play
-    if (s.play.kind === "in_progress") return "in_play"; // W2b: under way, nothing decided
+    if (s.play.kind === "in_progress" || s.play.kind === "started") return "in_play"; // W2b: under way, nothing decided; ruling 112: Start pressed
     return "scheduled";
   };
   /** Plan D3's phase, from the fixture as it stands: before play, during it, a chess game awaiting its tie-break, or
@@ -225,7 +227,7 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
   const phaseOf = (s: State): "pre" | "play" | "tiebreak" | "over" => {
     if (win(s) !== null || doubleWalkover(s) || levelPlay(s)) return "over";
     if (drawnChess(s)) return "tiebreak";
-    return s.play.kind === "in_progress" ? "play" : "pre";
+    return s.play.kind === "in_progress" || s.play.kind === "started" ? "play" : "pre";
   };
   /** The refusal a forfeit write meets, in the plan's order — or null: accepted. */
   const forfeitRefusal = (s: State, a: Extract<Action, { kind: "forfeit" }>): RefusalCode | null => {
@@ -241,7 +243,9 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
       const heldWithdrawal = levelPlay(s) && win(s) === null && a.reason === "withdrew" && a.offender !== "both";
       return heldWithdrawal ? null : "ALREADY_DECIDED";
     }
-    if (a.reason === "walkover" && !(phase === "pre" || (chess && (phase === "play" || phase === "tiebreak")))) return "FORFEIT_REASON_WRONG_PHASE"; // D3 R2; X-RS-1, BG-WO-2, BG-WO-3
+    // Ruling 112 (amends X-RS-1): a walkover is judged before play while nothing is played — a bare Start included.
+    const walkoverPhase = s.play.kind === "started" ? "pre" : phase;
+    if (a.reason === "walkover" && !(walkoverPhase === "pre" || (chess && (phase === "play" || phase === "tiebreak")))) return "FORFEIT_REASON_WRONG_PHASE"; // D3 R2; X-RS-1, BG-WO-2, BG-WO-3
     if (a.offender === "both" && phase === "tiebreak") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R3: the classical game was played
     if ((a.reason === "retired" || a.reason === "disqualified") && phase === "pre") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R4; X-RS-1
     return null; // D3 R5: withdrew in any phase but over

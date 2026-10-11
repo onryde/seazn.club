@@ -10,7 +10,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ],
     "note": "R0 (the kernel does not judge a forfeit in phase \"over\") has no row: it is EQUIVALENT. Every \"over\" state is either decided — guarantee 4 answers ALREADY_DECIDED before the phase guard — or under an active abandon — D4 answers first (and a settled abandon is decided, M-6) — so judging \"over\" here could never change a verdict. The dead `phase === \"over\"` arm in forfeitReasonsAllowed was deleted in 8cd0ee392 (its type now excludes \"over\")."
@@ -18,7 +18,7 @@
   {
     "id": "walkover-any-phase",
     "file": "packages/engine/src/core/events.ts",
-    "find": "reason === \"walkover\" ? walkoverPhases.includes(phase) :",
+    "find": "reason === \"walkover\" ? walkoverPhases.includes(walkoverPhase) :",
     "replace": "reason === \"walkover\" ? true :",
     "killers": [
       {
@@ -26,7 +26,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ]
   },
@@ -41,7 +41,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ]
   },
@@ -78,7 +78,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ]
   },
@@ -407,7 +407,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "C17: a FoldableModule that declares no forfeitPhase"
+        "name": "C17 \\+ ruling 112: a FoldableModule that declares no forfeitPhase"
       }
     ]
   },
@@ -422,7 +422,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "C17: a FoldableModule that declares no forfeitPhase"
+        "name": "C17 \\+ ruling 112: a FoldableModule that declares no forfeitPhase"
       }
     ]
   },
@@ -437,7 +437,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ]
   },
@@ -497,7 +497,7 @@
         "files": [
           "src/core/forfeit-guard.test.ts"
         ],
-        "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+        "name": "X-RS-1 \\(ruling 112\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
       }
     ]
   },

@@ -63,9 +63,13 @@ describe("walkover-credit: the empty case first", () => {
     expect(checked).toBe(44); // 5+5+4+3+2+4+4+4+5+3+5 cfg entries in walkover-credit-cfgs.ts
   });
 
-  it("X-RS-1: an empty scoresheet is still a scoresheet — a walkover with one is refused outside chess (play started)", () => {
-    // single-sport: football stands for the rule; the registry sweep below refuses it in every non-chess sport
-    expect(refusalOf({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] } })).toBe("played-before-start");
+  it("X-RS-1 (ruling 112): an empty scoresheet is a Start with nothing played — a walkover with one is the walkover credit; one with a unit played is refused outside chess", () => {
+    // single-sport: football stands for the rule; the registry sweep below covers every sport
+    const empty = { sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] }, by: "away" } as const;
+    expect(walkoverCredit({ ...empty, played: { home: [], away: [] } })).toEqual(wo("football"));
+    expect(refusalOf({ ...empty, played: { home: [0], away: [1] } })).toBe("played-before-start");
+    // The sheet is read from the side at fault (offender-unknown) even when it is empty: a Start was pressed.
+    expect(refusalOf({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] } })).toBe("offender-unknown");
   });
 
   it("the enumeration is never empty: 11 × 5 = 55 base cases first, then every other cfg and played scenario — 210 in all", () => {
@@ -290,14 +294,24 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
     expect(walkoverCredit({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "withdrew" }).winner).toEqual(goals(3, 0));
   });
 
-  it("X-RS-1: a walkover or a double walkover with a scoresheet is refused in every sport but chess; retired or disqualified with none is refused in every sport", () => {
+  it("X-RS-1 (ruling 112): a walkover or a double walkover with a scoresheet holding play is refused in every sport but chess, and with an EMPTY one (a Start, nothing played) is credited as before the start; retired or disqualified with none is refused in every sport", () => {
     let refused = 0;
+    let emptyCredited = 0;
     const sports = forEachSport(({ key }) => {
-      const cfg = cfgOf(key, WALKOVER_CREDIT_DATA[key]?.cfgs[0]?.name ?? "");
+      const name = WALKOVER_CREDIT_DATA[key]?.cfgs[0]?.name ?? "";
+      const cfg = cfgOf(key, name);
+      // Something played: the sport's own first played scenario from the rulebook data (at least one unit) — but chess,
+      // whose game is no unit (its scenario sheet is empty) and whose walkover stands in play anyway (BG-WO-2).
+      const scene = WALKOVER_CREDIT_DATA[key]?.played[0];
+      if (scene === undefined || (scene.home.length === 0 && key !== "boardgame")) throw new Error(`${key}: no played scenario with a unit`);
       for (const reason of ["walkover", "double_walkover"] as const) {
-        const r = refusalOf({ sport: key, cfg, reason, played: { home: [], away: [] }, by: "away" });
-        expect(r, `${key} ${reason}`).toBe(key === "boardgame" ? "answered" : "played-before-start");
+        const r = refusalOf({ sport: key, cfg: cfgOf(key, scene.cfg), reason, played: { home: [...scene.home], away: [...scene.away] }, by: "away" });
+        expect(r, `${key} ${reason} after play`).toBe(key === "boardgame" ? "answered" : "played-before-start");
         if (r !== "answered") refused++;
+        // Ruling 112: a Start with nothing played answers exactly what no Start answers.
+        const empty = walkoverCredit({ sport: key, cfg, reason, played: { home: [], away: [] }, by: "away" });
+        expect(empty, `${key} ${reason} after a bare start`).toEqual(walkoverCredit({ sport: key, cfg, reason }));
+        emptyCredited++;
       }
       for (const reason of ["retired", "disqualified"] as const) {
         expect(refusalOf({ sport: key, cfg, reason }), `${key} ${reason}`).toBe("not-started");
@@ -306,6 +320,7 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
     });
     expect(sports).toBe(11);
     expect(refused).toBe(10 * 2 + 11 * 2);
+    expect(emptyCredited).toBe(11 * 2);
   });
 
   it("X-WO-1: the credit follows the stage's own cfg — the same sport under two cfgs credits two scores (no constant)", () => {

@@ -472,7 +472,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     expect(reds).toBe(wrong.length);
   });
 
-  it("forfeitPlayOf reads the play from the stream the harness posted, over every sport: a walkover is bare (none), a retirement follows START (in_progress); a stream that is not a forfeit, or follows a result, is refused by name", () => {
+  it("forfeitPlayOf reads the play from the stream the harness posted, over every sport: a walkover is bare (none), a retirement follows START (in_progress once a sport event is played, started on a bare START — ruling 112); a stream that is not a forfeit, or follows a result, is refused by name", () => {
     let walkovers = 0;
     let retirements = 0;
     let unbuilt = 0;
@@ -490,7 +490,10 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
         unbuilt++;
         continue;
       }
-      expect(forfeitPlayOf(sport, cfg, "h", "a", retired), sport).toEqual({ kind: "in_progress" });
+      const playedAny = retired.slice(retired.findIndex((e) => e.type === "core.start") + 1, -1).some((e) => !e.type.startsWith("core."));
+      expect(forfeitPlayOf(sport, cfg, "h", "a", retired), sport).toEqual({ kind: playedAny ? "in_progress" : "started" });
+      // Ruling 112: the same forfeit on a bare START — nothing played — reads as started.
+      expect(forfeitPlayOf(sport, cfg, "h", "a", [{ type: "core.start", payload: {} }, retired.at(-1)!]), `${sport} bare start`).toEqual({ kind: "started" });
       retirements++;
     }
     expect(walkovers).toBe(SPORT_KEYS.length);
