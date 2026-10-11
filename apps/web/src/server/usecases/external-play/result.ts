@@ -31,7 +31,7 @@ import { mintOrgOwnerAuth } from "./auth";
 import { effectiveBridge, loadOnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 
-/** The reasons a caller may hold a fixture for. Each is a V432/V434
+/** The reasons a caller may hold a fixture for. Each is a V433/V435
  *  `needs_reason` (the `satisfies` keeps them inside NEEDS_REASONS); no
  *  no-show is among them — spec §3.6: a revoked token is not a no-show. */
 export const HOLD_REASONS = [

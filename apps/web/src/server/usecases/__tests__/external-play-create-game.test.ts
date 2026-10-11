@@ -210,7 +210,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Review Focus 5 — there is no perso
  *  helpers break one requirement at a time so each guard is individually
  *  killable. */
 async function clearConsent(userId: string) {
-  // V432's consent/token CHECK forbids a stored token without a consent stamp,
+  // V433's consent/token CHECK forbids a stored token without a consent stamp,
   // so an identity-only (legacy) row is modelled the way one really looks: no
   // stamp AND no token.
   await sql`

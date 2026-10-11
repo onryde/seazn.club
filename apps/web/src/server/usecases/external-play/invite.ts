@@ -5,7 +5,7 @@ import "server-only";
 //
 // The record that an invite went out is the per-SEAT stamp on the bridge row —
 // `fixture_external_play.white_emailed_at` / `black_emailed_at` (V405, kept by
-// V432). There is no second invite stamp. A stamp may only be set on a row
+// V433). There is no second invite stamp. A stamp may only be set on a row
 // that names its round's open (`round_open_id`, CHECK
 // fixture_external_play_invite_needs_open_round_check), and the binding
 // trigger refuses a `round_open_id` that names another round, stage or org.

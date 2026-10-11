@@ -1437,7 +1437,7 @@ describe("publishRoomBroadcast", () => {
         expect(calls.length).toBe(1);
         expect(calls[0]!.url).toBe("https://stub.supabase.test/realtime/v1/api/broadcast");
         expect(calls[0]!.init.headers).toMatchObject({ Authorization: "Bearer svc", apikey: "svc" });
-        // V433's policy matches `external-play:{lobby_fixture_id}`, so riding
+        // V434's policy matches `external-play:{lobby_fixture_id}`, so riding
         // this topic needs NO new realtime policy for players.
         expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
           messages: [{ topic: externalPlayLobbyTopic("fix-1"), event: "room_state", payload: BODY, private: true }],

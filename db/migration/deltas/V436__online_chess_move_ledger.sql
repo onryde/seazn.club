@@ -1,4 +1,4 @@
--- V435 — the move ledger on fixture_external_play (chess design §3.4, Task 10).
+-- V436 — the move ledger on fixture_external_play (chess design §3.4, Task 10).
 --
 -- Our server is the only mover: a player posts an intended move to us, we
 -- submit it with THAT player's Lichess token, and only an accepted move is

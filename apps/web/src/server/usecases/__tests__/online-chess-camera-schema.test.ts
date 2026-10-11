@@ -1,4 +1,4 @@
-// V432 camera policy: a column on competitions, divisions and stages, never a
+// V433 camera policy: a column on competitions, divisions and stages, never a
 // config key (divisions.config / stages.config are sport-module-validated
 // snapshots that strip foreign keys — V209's own note). Competition is NOT NULL
 // with 'off' for all existing data (design §5.1); division and stage are
@@ -39,7 +39,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("camera policy columns (V432)", () => {
+describe.skipIf(!HAS_DB)("camera policy columns (V433)", () => {
   let orgId = "";
   let divisionId = "";
   let stageId = "";

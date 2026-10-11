@@ -319,7 +319,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       clock: { limit: 900, increment: 10 },
       expiresAt: windowFor(T).deadline,
     });
-    // V434 dropped the per-colour lichess.org links (D3); colour is what is left.
+    // V435 dropped the per-colour lichess.org links (D3); colour is what is left.
     expect(v.you.colour).toBe("black"); // away is Black by default
     const homeView = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
     expect(homeView.you.colour).toBe("white");
