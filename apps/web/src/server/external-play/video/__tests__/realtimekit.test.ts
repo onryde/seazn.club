@@ -1230,7 +1230,12 @@ describe("listMeetingSessions", () => {
     started_at: o.started ?? "2026-10-11T10:00:00.000Z",
     ...(o.ended === null ? {} : { ended_at: o.ended ?? "2026-10-11T10:30:00.000Z" }),
   });
-  const page = (rows: unknown[]) => ({ status: 200, body: { success: true, data: { sessions: rows } } });
+  /** The OpenAPI envelope: `paging.total_count` beside `data` (review M5) —
+   *  the count of every session the query matched, on every page. */
+  const page = (rows: unknown[], total: unknown = rows.length) => ({
+    status: 200,
+    body: { success: true, data: { sessions: rows }, paging: { total_count: total, start_offset: 0, end_offset: rows.length } },
+  });
 
   it("returns this meeting's sessions in the API's order, asked by associated_id", async () => {
     configure();
@@ -1272,7 +1277,13 @@ describe("listMeetingSessions", () => {
       { name: "OUR row with a status outside LIVE | ENDED", first: page([session({ id: "s-1", status: "PAUSED" })]), code: "unavailable" },
       { name: "OUR row with no started_at", first: page([{ ...session({ id: "s-1" }), started_at: undefined }]), code: "unavailable" },
       { name: "OUR row with an ended_at that is not a date", first: page([session({ id: "s-1", ended: "later" })]), code: "unavailable" },
-      { name: "a FULL page (100 rows): more sessions may be on page 2", first: page(full), code: "unavailable" },
+      // Review M5: completeness is the envelope's own count, never a guess.
+      { name: "no paging at all", first: { status: 200, body: { success: true, data: { sessions: [session({ id: "s-1" })] } } }, code: "unavailable" },
+      { name: "a total_count that is not a count", first: page([session({ id: "s-1" })], "1"), code: "unavailable" },
+      { name: "a negative total_count", first: page([], -1), code: "unavailable" },
+      { name: "MORE sessions than the page holds (a server cap under per_page)", first: page(full.slice(0, 40), 41), code: "unavailable" },
+      { name: "a full page with more behind it", first: page(full, 101), code: "unavailable" },
+      { name: "FEWER sessions than the page holds (an envelope that contradicts itself)", first: page(full.slice(0, 3), 2), code: "unavailable" },
       {
         name: "RealtimeKit's own 404 — never read as 'no sessions'",
         first: { status: 404, body: { success: false, error: { code: 404, message: "not found" } } },
@@ -1288,8 +1299,10 @@ describe("listMeetingSessions", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity").toBe(cases.length);
-    // Positive control for the full page: 99 rows is complete.
-    expect((await listMeetingSessions(M, { fetch: stubFetch([page(full.slice(0, 99))]).fetch })).length).toBe(99);
+    // Positive controls: a page whose count says it is the whole list — a
+    // short one, and a FULL one (the count, not the page size, decides).
+    expect((await listMeetingSessions(M, { fetch: stubFetch([page(full.slice(0, 40))]).fetch })).length).toBe(40);
+    expect((await listMeetingSessions(M, { fetch: stubFetch([page(full)]).fetch })).length).toBe(100);
   });
 
   it("refuses an empty meeting id, and an unconfigured process, before any call", async () => {
