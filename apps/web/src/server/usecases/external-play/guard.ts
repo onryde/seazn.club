@@ -50,6 +50,10 @@ export type BridgeRow = {
   draw_offer_by: "white" | "black" | null;
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
+  /** V436 (T11 fix round 1, ruling M7): the seat a `token_revoked` hold
+   *  froze; null on any other row, and on a token_revoked hold whose seat
+   *  nobody recorded (both frozen). */
+  revoked_seat: "white" | "black" | "both" | null;
 };
 
 export type OnlinePlayFixture = {
@@ -99,6 +103,7 @@ type RawBridge = {
   draw_offer_by: "white" | "black" | null;
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
+  revoked_seat: "white" | "black" | "both" | null;
 };
 
 function reviveBridge(raw: RawBridge): BridgeRow {
@@ -127,6 +132,7 @@ function reviveBridge(raw: RawBridge): BridgeRow {
     draw_offer_by: raw.draw_offer_by,
     white_draw_offer_ply: raw.white_draw_offer_ply,
     black_draw_offer_ply: raw.black_draw_offer_ply,
+    revoked_seat: raw.revoked_seat,
   };
 }
 

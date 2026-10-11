@@ -181,6 +181,19 @@ function dispositionOf(s: GameSnapshot): Disposition {
 
 type Held = { held: false } | { held: true; reason: NeedsReason };
 
+/** The seat a `token_revoked` hold froze (V436 `revoked_seat`; controller
+ *  ruling M7): the other player keeps playing. */
+export type RevokedSeat = "white" | "black" | "both";
+
+/** Two records of revoked seats as one. An unknown seat on file (null —
+ *  both frozen already) stays unknown; a hold that names no seat adds
+ *  nothing; two different seats are both. */
+function widenSeat(stored: RevokedSeat | null, seat: RevokedSeat | null): RevokedSeat | null {
+  if (stored === null) return null;
+  if (seat === null || seat === stored) return stored;
+  return "both";
+}
+
 /** Hold the fixture for the organiser — or say why not. Under the fixture's
  *  append lock (append-event.ts), so no result or settle lands between the
  *  read of the fixture's status and the hold:
@@ -201,11 +214,12 @@ async function hold(
   reason: "aborted" | HoldReason | SnapshotOnlyReason,
   detail: string | null,
   final: boolean,
+  seat: RevokedSeat | null = null,
 ): Promise<Held> {
   return sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
-    const [row] = await tx<{ status: string; needs_reason: unknown; fixture_status: string }[]>`
-      select ep.status, ep.needs_reason, f.status as fixture_status
+    const [row] = await tx<{ status: string; needs_reason: unknown; revoked_seat: RevokedSeat | null; fixture_status: string }[]>`
+      select ep.status, ep.needs_reason, ep.revoked_seat, f.status as fixture_status
         from fixture_external_play ep join fixtures f on f.id = ep.fixture_id
        where ep.fixture_id = ${fixtureId}
          for update of ep`;
@@ -216,11 +230,24 @@ async function hold(
     if (row.needs_reason !== null) {
       const stored = readNeedsReason(row.needs_reason);
       const replaces = final && (stored === reason || (MID_GAME_REASONS as readonly NeedsReason[]).includes(stored));
-      if (!replaces) return { held: true, reason: stored };
+      if (!replaces) {
+        // A second revoked seat is new information, not a new diagnosis: the
+        // record widens (ruling M7), and nothing else on the row is touched.
+        if (stored === "token_revoked" && reason === "token_revoked") {
+          const widened = widenSeat(row.revoked_seat, seat);
+          if (widened !== row.revoked_seat) {
+            await tx`update fixture_external_play set revoked_seat = ${widened}, updated_at = now() where fixture_id = ${fixtureId}`;
+          }
+        }
+        return { held: true, reason: stored };
+      }
     }
+    // The seat belongs to a token_revoked hold only (V436's CHECK): any other
+    // reason that lands here clears it.
     await tx`
       update fixture_external_play
          set status = 'needs_organiser', needs_reason = ${reason},
+             revoked_seat = ${reason === "token_revoked" ? seat : null},
              last_error = coalesce(${detail}, last_error), updated_at = now()
        where fixture_id = ${fixtureId}`;
     return { held: true, reason };
@@ -239,12 +266,23 @@ function heldAnswer(reason: NeedsReason): ResultWrite {
  *  recorded, or the fixture settled — is not held at all: `none`. `detail`
  *  (e.g. "401 on move 7") becomes `last_error`; without one the row's
  *  earlier `last_error` stands. Answers the STORED reason. */
-export async function holdForOrganiser(a: { fixtureId: string; reason: HoldReason; detail?: string }): Promise<ResultWrite> {
+export async function holdForOrganiser(a: {
+  fixtureId: string;
+  reason: HoldReason;
+  detail?: string;
+  /** token_revoked only: the seat whose token Lichess refused (ruling M7).
+   *  Absent ⇒ unknown, and both seats are frozen. */
+  seat?: RevokedSeat;
+}): Promise<ResultWrite> {
   // The union is the contract, and a cast must not smuggle a no-show past it.
   if (!(HOLD_REASONS as readonly string[]).includes(a.reason)) {
     throw new HttpError(500, `not a hold reason: ${JSON.stringify(a.reason)}`, "HOLD_REASON_UNKNOWN");
   }
-  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false);
+  // A seat on another reason is a caller's mistake, never silently dropped.
+  if (a.seat !== undefined && a.reason !== "token_revoked") {
+    throw new HttpError(500, `a seat is recorded only for token_revoked, not ${a.reason}`, "HOLD_SEAT_WITHOUT_REVOKE");
+  }
+  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false, a.seat ?? null);
   return h.held ? heldAnswer(h.reason) : NONE;
 }
 

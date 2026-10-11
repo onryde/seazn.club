@@ -1228,6 +1228,64 @@ describe.runIf(HAS_DB)("I1 — a game's final outcome replaces a mid-game hold, 
   });
 });
 
+describe.runIf(HAS_DB)("M7 — a token_revoked hold records the seat it froze (controller ruling, T11 fix round 1)", () => {
+  async function seatOf(fixtureId: string) {
+    const [r] = await sql<{ needs_reason: string | null; revoked_seat: string | null; last_error: string | null }[]>`
+      select needs_reason, revoked_seat, last_error from fixture_external_play where fixture_id = ${fixtureId}`;
+    return r!;
+  }
+
+  it("records the seat; the OTHER seat widens it to both, and nothing else on the row moves — both orders, counted", async () => {
+    let checked = 0;
+    for (const [first, second] of [["white", "black"], ["black", "white"]] as const) {
+      const g = await liveGame();
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: first, detail: `401 for ${first}` }))
+        .toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
+      expect(await seatOf(g.fixtureId), first).toEqual({ needs_reason: "token_revoked", revoked_seat: first, last_error: `401 for ${first}` });
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: first, detail: "again" });
+      expect((await seatOf(g.fixtureId)).revoked_seat, "the same seat again: unchanged").toBe(first);
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: second, detail: `401 for ${second}` }))
+        .toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
+      expect(await seatOf(g.fixtureId), `${first} then ${second}`)
+        .toEqual({ needs_reason: "token_revoked", revoked_seat: "both", last_error: `401 for ${first}` });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a hold that names no seat records none (both frozen); it never narrows a recorded seat, nor widens one", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+    expect((await seatOf(g.fixtureId)).revoked_seat).toBeNull();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "white" });
+    expect((await seatOf(g.fixtureId)).revoked_seat, "an unknown seat stays unknown").toBeNull();
+    const h = await liveGame();
+    await holdForOrganiser({ fixtureId: h.fixtureId, reason: "token_revoked", seat: "black" });
+    await holdForOrganiser({ fixtureId: h.fixtureId, reason: "token_revoked" });
+    expect((await seatOf(h.fixtureId)).revoked_seat, "a seat-less hold adds nothing").toBe("black");
+  });
+
+  it("a seat on any OTHER reason is refused by name before anything is written — counted over HOLD_REASONS", async () => {
+    let checked = 0;
+    for (const reason of HOLD_REASONS.filter((r) => r !== "token_revoked")) {
+      const g = await liveGame();
+      await expect(holdForOrganiser({ fixtureId: g.fixtureId, reason, seat: "white" }), reason)
+        .rejects.toMatchObject({ code: "HOLD_SEAT_WITHOUT_REVOKE" });
+      expect((await bridgeOf(g.fixtureId))!.status, reason).toBe("live");
+      checked++;
+    }
+    expect(checked).toBe(HOLD_REASONS.length - 1);
+  });
+
+  it("the game's FINAL hold replaces a token_revoked hold and clears its seat (V436: a seat belongs to token_revoked only)", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "white" });
+    // M9: Lichess's `aborted`, no winner — T12's own final hold.
+    expect(await writeResultFrom(snap(g, { status: "aborted", winner: null }), g.fixtureId)).toEqual({ wrote: "aborted" });
+    expect(await seatOf(g.fixtureId)).toMatchObject({ needs_reason: "aborted", revoked_seat: null });
+  });
+});
+
 describe.runIf(HAS_DB)("M5 — holdForOrganiser keeps last_error unless it brings its own", () => {
   it("no detail: the row's earlier last_error survives the hold", async () => {
     const g = await liveGame();
