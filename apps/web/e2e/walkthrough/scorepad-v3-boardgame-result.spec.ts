@@ -12,8 +12,10 @@
 //
 // Two branches, two tests (`buildDock`'s own DISJOINT-BY-INTENT
 // vocabularies, boardgame.ts:378-385 — DECISIVE_METHODS after a half tap,
-// DRAWN_METHODS after the "Draw / no result" tile, never one flat 13-value
-// list, R7-10): a decisive half tap, and the draw tile. Both are terminal —
+// DRAWN_METHODS after the "Draw / no result" tile, never one flat list,
+// R7-10; since W2b D15 neither holds a forfeit method — a chess forfeit is the
+// console's Forfeit dialog, core.forfeit with its reason): a decisive half
+// tap, and the draw tile. Both are terminal —
 // `decideResult` sets `phase: "done"` unconditionally for either branch, so
 // EITHER tap alone already reaches the match's own terminal state; there is
 // no multi-phase transition to drive through first, unlike carrom's or
@@ -33,6 +35,17 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "../helpers";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** The en ui dictionary: a method chip's label is read from it, never typed (W2b Task 12's D15 checks). */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const label = (key: string): string => {
+  expect(UI_EN[key], `ui.json has ${key}`).toBeTruthy();
+  return UI_EN[key]!;
+};
 
 test.describe.configure({ mode: "parallel" });
 
@@ -157,6 +170,13 @@ test("R7/A2 — boardgame: a half tap commits the result immediately, and a Meth
     "a decisive tap's dock must not offer the DRAWN-only method set (R7-10)",
   ).not.toContainText("Stalemate");
   await expect(dock(page)).not.toContainText("Draw by agreement");
+  // W2b D15: chess's forfeit method is retired on write for every writer, the organiser included, so the dock offers
+  // no chip for it — the positive pair first, so a dock that rendered no chips at all cannot pass.
+  await expect(dock(page).getByRole("button", { name: label("method.checkmate"), exact: true })).toBeVisible();
+  await expect(
+    dock(page).getByRole("button", { name: label("method.forfeit"), exact: true }),
+    "D15: no Forfeit method chip — a chess forfeit is core.forfeit, from the console's dialog",
+  ).toHaveCount(0);
   await shot(page, "committed-immediately");
 
   // ---- A METHOD CHIP ENRICHES THE HELD ROW, never posts a second event ----
@@ -240,6 +260,12 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
   ).not.toContainText("Checkmate");
   await expect(dock(page)).not.toContainText("Resignation");
   await expect(dock(page)).not.toContainText("Flag fall");
+  // W2b D15: no Double forfeit chip either — a double walkover is core.forfeit{by: "both"}, from the console's dialog.
+  await expect(dock(page).getByRole("button", { name: label("method.stalemate"), exact: true })).toBeVisible();
+  await expect(
+    dock(page).getByRole("button", { name: label("method.double_forfeit"), exact: true }),
+    "D15: no Double forfeit method chip",
+  ).toHaveCount(0);
 
   // The scorebug must already read the official half-point score — off the
   // engine's own `summary()`, folded optimistically, not re-derived here
@@ -269,7 +295,7 @@ test("R7/A2 — boardgame: the Draw / no result tile opens the DRAWN method set,
     "decided",
   );
   expect(decided.outcome, "a decided draw carries no outcome").not.toBeNull();
-  expect(decided.outcome!.kind, "a winner: null result with no double_forfeit method must read as a draw").toBe(
+  expect(decided.outcome!.kind, "a winner: null result (no drawn method is a forfeit since W2b D15) must read as a draw").toBe(
     "draw",
   );
 

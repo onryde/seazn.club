@@ -3,6 +3,7 @@ import { TAG, activeOrg, apiJson, addEntrantsViaApi, createStageAndGenerate, exp
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
+import { forfeitAdmission, type ForfeitPhase } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -280,20 +281,35 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
   });
 
   test("a refused settle closes the dialog, shows its reason, and changes nothing; the remaining entrant then settles (spec §7; ruling C17)", async ({ page, request }) => {
-    // Deterministic (preflight C23): the refusal is a real server one that cannot race the live poll — the named
-    // winner has withdrawn before the page loads (ruling C17: SETTLE_NOT_APPLICABLE, reason withdrawn).
+    // Deterministic (preflight C23): the refusal is a real server one that cannot race the live poll (ruling C17:
+    // SETTLE_NOT_APPLICABLE, reason withdrawn — the named winner has left the field).
+    //
+    // W2b ruling T11-C1 — the route changed twice under this test, both by design:
+    //  - loop F (68b6338f6): `POST /entrants/{id}/withdraw` cascades — it voids the held abandon and walks the remaining
+    //    entrant through, so no held fixture is left to settle;
+    //  - D-R9: the settle dialog never OFFERS a departed side (`DEPARTED_STATUSES`, read when the page renders).
+    // So the product route to this refusal is the one the server guard exists for: a STALE console. The page renders
+    // with both sides in the field, the dialog offers both, and only then is the away entrant disqualified — through API
+    // v1's entrant patch (`status: "disqualified"`, the one route that sets it; no cascade, no withdrawal), so the
+    // fixture stays held. Nothing refreshes the page's entrant props until a write succeeds (fixture-console `post`),
+    // so the dialog still offers the departed side, and the server refuses it.
     const { sf } = await knockout(request, "generic", "score");
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "core.abandon", { reason: "rain" });
-    expect((await apiJson(request, `/api/v1/entrants/${sf.away_entrant_id}/withdraw`, "POST")).status).toBeLessThan(300);
     await page.goto(await fixturePath(request, sf.id));
     await page.getByTestId("settle-open").click();
     await page.getByTestId(`settle-winner-${sf.away_entrant_id}`).click();
     await page.getByTestId("settle-method-lot").check();
+    const left = await apiJson<{ status: string }>(request, `/api/v1/entrants/${sf.away_entrant_id}`, "PATCH", { status: "disqualified" });
+    expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
+    expect(left.data?.status, "the named winner is out of the field").toBe("disqualified");
+    expect((await read(request, sf.id)).status, "and the fixture is still held — nothing walked it over").toBe("abandoned");
     await page.getByTestId("settle-confirm").click();
     await expect(page.getByRole("dialog")).toHaveCount(0); // the dialog closed
     await expect(page.getByTestId("settle-error")).toBeVisible(); // and the reason shows in the block
     await expect(page.getByTestId("settle-error")).not.toBeEmpty();
+    // …and it is THIS refusal (C17's own copy), not any other the server could have sent.
+    await expect(page.getByTestId("settle-error")).toContainText(ui("engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"));
     await expect(page.getByTestId("needs-decision")).toBeVisible();
     const before = await read(request, sf.id);
     expect(before.status).toBe("abandoned");
@@ -432,6 +448,17 @@ const option = (page: Page, id: string) => pad(page).locator(`[data-choice-optio
 const tappableHalves = (page: Page) => pad(page).locator('button[data-role="v3-scorebug-half"]');
 const half = (page: Page, side: "home" | "away") => pad(page).locator(`button[data-role="v3-scorebug-half"][data-side="${side}"]`);
 const chip = (page: Page, id: string) => page.getByTestId(`pad-dock-chip-${id}`);
+/** The open dock's chip ids, in DOM order (`pad-dock-chip-<id>`). */
+const dockChipIds = (page: Page) =>
+  page.locator('[data-testid^="pad-dock-chip-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("pad-dock-chip-".length)));
+/** The point at the element's centre hits the element (or something inside it): `boundingBox()` measures paint, not a tap. */
+const hitsItself = (loc: Locator) =>
+  loc.evaluate((el) => {
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return at !== null && (at === el || el.contains(at) || (el instanceof HTMLInputElement && el.labels?.[0]?.contains(at) === true));
+  });
 const ARMAGEDDON_HINT = "In Armageddon a draw means Black advances.";
 const LOTS_HINT = "Decided by lot? Ask the organiser to settle the match.";
 const back = (page: Page) => pad(page).getByRole("button", { name: "Back", exact: true });
@@ -613,39 +640,100 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     expect(checked).toBe(2);
   });
 
-  test("D-O1 (addendum 2): an official scorer's chess dock offers no forfeit; the organiser's does", async ({ browser, page, request }) => {
-    const EIGHT = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di", "W2a Eve", "W2a Fay", "W2a Gus", "W2a Hal"];
-    const { ready } = await knockout(request, "boardgame", "classical", EIGHT);
-    expect(ready.length, "four first-round games: one for the organiser, three for the scorer's three widths").toBe(4);
-    for (const f of ready) await post(request, f.id, "core.start");
-    // The organiser — the positive pair: same sport, same tap, the forfeit chip is offered.
+  test("D-O1 / W2b D15: no chess dock offers a forfeit method — organiser or official scorer; the organiser forfeits a chess game through the console's dialog, which records core.forfeit with its reason", async ({ browser, page, request }) => {
+    // W2b D15 retired chess's `boardgame.result{method: forfeit | double_forfeit}` on write for EVERY writer, so the
+    // dock offers neither to anyone (a chip the server refuses for everybody is a dead tap). A chess forfeit is a
+    // core.forfeit with its reason, through the console's forfeit dialog like every other sport's (UI-1, Task 11).
+    const SIXTEEN = Array.from({ length: 16 }, (_, i) => `W2b Chess ${String.fromCharCode(65 + i)}`);
+    const { ready } = await knockout(request, "boardgame", "classical", SIXTEEN);
+    expect(ready.length, "eight first-round games: the organiser's dock, the organiser's forfeit, three scorer widths").toBe(8);
+    for (const f of ready.slice(0, 5)) await post(request, f.id, "core.start");
+    // The organiser — the same tap a scorer makes opens the same dock, with no forfeit method in it.
     await page.goto(await fixturePath(request, ready[0]!.id));
     await half(page, "home").click();
-    await expect(chip(page, "method:checkmate")).toBeVisible();
-    await expect(chip(page, "method:forfeit")).toBeVisible();
-    const official = await officialScorerPage(browser, ready[1]!.id);
+    await expect(chip(page, "method:checkmate"), "the dock opened").toBeVisible();
+    await expect(chip(page, "method:forfeit"), "D15: retired for every writer, the organiser too").toHaveCount(0);
+    const organiserChips = await dockChipIds(page);
+    expect(organiserChips.length, "the organiser's dock offers methods").toBeGreaterThan(0);
+    await crop(pad(page), "pad-chess-dock-organiser", 1280);
+
+    // The organiser's chess forfeit: the console's dialog, at every width. Its reasons are the engine's own for a game
+    // in play (chess's `walkoverPhases`, read through `forfeitAdmission`), less PF-2's cascade-only `withdrew`.
+    const chess = builtinModules.find((m) => m.key === "boardgame")! as unknown as { walkoverPhases?: readonly ForfeitPhase[] };
+    const admitted = forfeitAdmission({ forfeitPhase: () => "play" as const, walkoverPhases: chess.walkoverPhases }, null);
+    const wantReasons = admitted.reasons.filter((r) => r !== "withdrew");
+    expect(wantReasons.length, "the engine admits a reason for a chess game in play").toBeGreaterThan(0);
+    const fx = ready[1]!;
+    await page.goto(await fixturePath(request, fx.id));
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
+      const d = page.getByTestId("forfeit-dialog");
+      await expect(d).toBeVisible();
+      // A first-round game feeds the next round, so Neither is the server's to take (D19) when the engine admits it.
+      const sides = await d.locator('[data-testid^="forfeit-who-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("forfeit-who-".length)));
+      expect(sides, `${w}: who`).toEqual(admitted.both ? ["home", "away", "both"] : ["home", "away"]);
+      await d.getByTestId("forfeit-who-away").click();
+      const reasons = await d.locator('[data-testid^="forfeit-why-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("forfeit-why-".length)));
+      expect(reasons, `${w}: why — the engine's reasons in play, never the cascade's withdrew`).toEqual(wantReasons);
+      // Every control is really tappable at this width: the point at its centre lands on it (paint is not a hit).
+      const controls = [...sides.map((x) => `forfeit-who-${x}`), ...reasons.map((x) => `forfeit-why-${x}`), "forfeit-confirm"];
+      for (const id of controls) expect(await hitsItself(d.getByTestId(id)), `${w}: ${id} is hit-testable`).toBe(true);
+      // The probe's negative pair: the pad half under the open dialog's overlay is NOT hit (a probe that always said
+      // "hit" would pass every line above).
+      expect(await hitsItself(half(page, "home")), `${w}: a control under the modal is not hit`).toBe(false);
+      await expectNoHorizontalScroll(page);
+      await crop(d, "console-chess-forfeit-dialog", w);
+      if (w !== 320) {
+        await page.keyboard.press("Escape");
+        await expect(d).toHaveCount(0);
+      }
+      widths++;
+    }
+    expect(widths).toBe(3);
+    // Record it: the away player retired mid-game.
+    const d = page.getByTestId("forfeit-dialog");
+    await d.getByTestId("forfeit-why-retired").check();
+    await d.getByTestId("forfeit-confirm").click();
+    await expect.poll(async () => (await read(request, fx.id)).status, { timeout: 20_000 }).not.toBe("in_play");
+    const events = (await apiJson<{ type: string; payload: unknown }[]>(request, `/api/v1/fixtures/${fx.id}/events`)).data!;
+    expect(events.filter((e) => e.type === "core.forfeit").map((e) => e.payload)).toEqual([{ by: fx.away_entrant_id, reason: "retired" }]);
+    expect(events.filter((e) => e.type === "boardgame.result"), "no chess method stands in for the forfeit").toEqual([]);
+    expect((await read(request, fx.id)).outcome).toMatchObject({ kind: "award", winner: fx.home_entrant_id });
+
+    // The official scorer: the same dock at three widths, no forfeit method, and no Forfeit control at all (X-RS-3).
+    const official = await officialScorerPage(browser, ready[2]!.id);
     try {
       const p = official.page;
-      let widths = 0;
-      for (const [i, w] of [[1, 1280], [2, 768], [3, 320]] as const) {
-        if (i > 1) {
+      let scorerWidths = 0;
+      let wide: string[] | undefined;
+      for (const [i, w] of [[2, 1280], [3, 768], [4, 320]] as const) {
+        if (i > 2) {
           await withDb(async (sql) => {
             await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
-                      select org_id, ${ready[i]!.id}, official_id, role_key, response from fixture_officials where fixture_id = ${ready[1]!.id}`;
+                      select org_id, ${ready[i]!.id}, official_id, role_key, response from fixture_officials where fixture_id = ${ready[2]!.id}`;
           });
         }
         await p.setViewportSize({ width: w, height: 900 });
         await p.goto(await fixturePath(request, ready[i]!.id));
         await dismissCookieBanner(p); // the banner would sit over the dock in the crop
         await expect(p.getByText("Void last entry"), `${w}: the official is scoring here`).toBeVisible();
+        await expect(p.getByTestId("score-forfeit"), `${w}: no Forfeit control for a scorer`).toHaveCount(0);
         await half(p, "home").click();
         await expect(chip(p, "method:checkmate"), `${w}: the dock opened`).toBeVisible();
-        await expect(chip(p, "method:forfeit"), `${w}: forfeit is the organiser's`).toHaveCount(0);
+        await expect(chip(p, "method:forfeit"), `${w}: no forfeit method`).toHaveCount(0);
+        // Control-set diff from the live DOM: the same chips, in the same order, at every width — and the organiser's.
+        const ids = await dockChipIds(p);
+        wide ??= ids;
+        expect(ids, `${w}: the scorer's dock is the 1280 dock`).toEqual(wide);
+        expect(ids, `${w}: the scorer's dock is the organiser's (D15: no chess method is organiser-only)`).toEqual(organiserChips);
+        for (const id of ids) expect(await hitsItself(p.getByTestId(`pad-dock-chip-${id}`)), `${w}: ${id} is hit-testable`).toBe(true);
         await expectNoHorizontalScroll(p);
         await crop(pad(p), "pad-chess-dock-scorer", w);
-        widths++;
+        scorerWidths++;
       }
-      expect(widths).toBe(3);
+      expect(scorerWidths).toBe(3);
     } finally {
       await official.close();
     }
