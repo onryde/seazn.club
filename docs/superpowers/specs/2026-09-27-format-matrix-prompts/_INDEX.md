@@ -1189,8 +1189,7 @@ Elsewhere the text is the controller's record.
      `--mutate` with line ranges limited to the lines W2b added or changed in engine files, never group=all locally.
      It classifies each Survived/NoCoverage mutant there: A-real gets a test, A-msg gets one line, B-equivalent goes
      into `stryker-equivalent.json`, C-dead needs a caller search. The PR body carries per-file counts and the score
-     before and after. Older survivors in the same files belong to W2e. Orchestrator ruling, not the owner's: W2b also
-     excludes the `arbitraryEvent` test-data generators in its engine files from mutation.
+     before and after. Older survivors in the same files belong to W2e. The owner also approved ("yes") that W2b excludes the `arbitraryEvent` test-data generators in its engine files from mutation.
 
 ## Recommendations (mine — not rulings)
 
