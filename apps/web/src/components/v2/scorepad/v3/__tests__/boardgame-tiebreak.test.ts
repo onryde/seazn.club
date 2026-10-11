@@ -348,6 +348,7 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
   });
 
   it("the dock the host RENDERS is the filtered one (resolveDockSpec reads dockFor)", () => {
+    // single-sport: a chassis witness — the sport only supplies a view; the dock under test is a stub (every sport's real dock is swept in the last test of this describe)
     // W2b: no shipped skin's dock carries an organiser-only chip any more (the sweep below), so the chassis filter is
     // witnessed on a skin built for it — a dock held over an organiser-only TYPE (core.settle, the server's predicate),
     // whose every chip is that write. The filter must still drop them for a non-organiser and keep them for an organiser.

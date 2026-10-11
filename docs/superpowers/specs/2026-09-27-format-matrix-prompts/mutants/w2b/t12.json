@@ -1,0 +1,296 @@
+[
+ {
+  "id": "dock-forfeit-method-back",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "  \"illegal_move\",\n];",
+  "replace": "  \"illegal_move\",\n  \"forfeit\",\n];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-forfeit-dock.test.ts"
+    ],
+    "name": "writes a method the server retires on write"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/skins/__tests__/boardgame.test.ts"
+    ],
+    "name": "are the engine's own field values"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "the organiser's and the scorer's docks are the same chips"
+   }
+  ]
+ },
+ {
+  "id": "dock-double-forfeit-back",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "  \"dead_position\",\n];",
+  "replace": "  \"dead_position\",\n  \"double_forfeit\",\n];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-forfeit-dock.test.ts"
+    ],
+    "name": "writes a method the server retires on write"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "its dock holds no double forfeit"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   }
+  ]
+ },
+ {
+  "id": "dock-not-organiser-only",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (spec === null || view.canOrganise) return spec;",
+  "replace": "  return spec;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+    ],
+    "name": "the dock the host RENDERS is the filtered one"
+   }
+  ]
+ },
+ {
+  "id": "xrs3-draw-tile-writes-forfeit",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "action: { event: { type: RESULT_TYPE, payload: { winner: null } } },",
+  "replace": "action: { event: { type: \"core.forfeit\", payload: { by: \"both\", reason: \"walkover\" } } },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-forfeit-dock.test.ts"
+    ],
+    "name": "a non-organiser's chess pad offers no organiser-only write"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/boardgame-forfeit-dock.test.ts"
+    ],
+    "name": "writes a method the server retires on write"
+   }
+  ]
+ },
+ {
+  "id": "generic-abandoned-phase",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+  "find": "const POST_PHASES = new Set([\"done\", \"final\", \"abandoned\"]);",
+  "replace": "const POST_PHASES = new Set([\"done\", \"final\"]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/skins/__tests__/generic.test.ts"
+    ],
+    "name": "GN-AB-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/skins/__tests__/generic.test.ts"
+    ],
+    "name": "exactly the module's own over phases"
+   }
+  ]
+ },
+ {
+  "id": "copy-reason-collapsed",
+  "file": "apps/web/src/lib/forfeit-copy-kind.ts",
+  "find": "AWARD.has(payload.reason) ? (payload.reason as AwardReason) : null;",
+  "replace": "AWARD.has(payload.reason) ? (\"walkover\" as AwardReason) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "each reason is its own kind"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "a forfeit line says its reason"
+   }
+  ]
+ },
+ {
+  "id": "copy-both-not-double-walkover",
+  "file": "apps/web/src/lib/forfeit-copy-kind.ts",
+  "find": "  if (payload.by === \"both\") return \"double_walkover\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "a forfeit line says its reason"
+   }
+  ]
+ },
+ {
+  "id": "event-copy-table-collapsed",
+  "file": "apps/web/src/lib/event-copy.ts",
+  "find": "  retired: \"eventCopy.forfeit.retired\",",
+  "replace": "  retired: \"eventCopy.forfeit.walkover\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   }
+  ]
+ },
+ {
+  "id": "event-copy-expunge-ignored",
+  "file": "apps/web/src/lib/event-copy.ts",
+  "find": "      return isExpungeAbandon(p)",
+  "replace": "      return false",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "an expunge abandon is not a plain abandon"
+   }
+  ]
+ },
+ {
+  "id": "ribbon-table-collapsed",
+  "file": "apps/web/src/components/v2/scorepad/v3/ribbon.ts",
+  "find": "  disqualified: \"pad.ribbon.core.forfeit.disqualified\",",
+  "replace": "  disqualified: \"pad.ribbon.core.forfeit.retired\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   }
+  ]
+ },
+ {
+  "id": "ribbon-kind-ignored",
+  "file": "apps/web/src/components/v2/scorepad/v3/ribbon.ts",
+  "find": "    if (kind !== null) return FORFEIT_RIBBON_KEY[kind];",
+  "replace": "    if (kind !== null) return CORE_RIBBON_KEY[eventType];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   }
+  ]
+ },
+ {
+  "id": "ribbon-expunge-ignored",
+  "file": "apps/web/src/components/v2/scorepad/v3/ribbon.ts",
+  "find": "  if (eventType === \"core.abandon\" && isExpungeAbandon(payload)) return \"pad.ribbon.core.abandon.expunge\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "an expunge abandon is not a plain abandon"
+   }
+  ]
+ },
+ {
+  "id": "timeline-forfeit-override-dropped",
+  "file": "apps/web/src/server/public-site/timeline.ts",
+  "find": "    return kind === null || kind === \"bye\" ? null : TIMELINE_FORFEIT_KEY[kind];",
+  "replace": "    return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "a forfeit line says its reason"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "every KEY_OVERRIDE branch returns a key the gates know about"
+   }
+  ]
+ },
+ {
+  "id": "timeline-expunge-dropped",
+  "file": "apps/web/src/server/public-site/timeline.ts",
+  "find": "(isExpungeAbandon(payload) ? TIMELINE_EXPUNGE_KEY : null)",
+  "replace": "(null)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "a forfeit line says its reason"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "every KEY_OVERRIDE branch returns a key the gates know about"
+   }
+  ]
+ }
+]
