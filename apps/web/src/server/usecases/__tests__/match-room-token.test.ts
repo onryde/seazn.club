@@ -5,7 +5,7 @@
 // Pure — no DB. Task 8's room resolver owns the "other pid" / "stale sat"
 // comparisons against a fixture row; this file only proves verify hands
 // claims back verbatim.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SignJWT } from "jose";
 import { mintMatchRoomToken, verifyMatchRoomToken } from "../match-room-token";
 import { mintCheckinToken } from "../checkin-token";
@@ -15,6 +15,17 @@ import { MATCH_ROOM_TOKEN_TTL_MS } from "@/server/external-play/window";
 const claims = { fixtureId: "f1", personId: "p1", scheduledAt: "2026-10-01T19:00:00.000Z" };
 
 describe("match room token", () => {
+  // The token expires scheduled_at + 24h, so a fixed scheduledAt against the
+  // real clock turns every test into a time bomb (this file went red on
+  // 2026-10-02). Pin "now" to the match start; expiry tests move it themselves.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(claims.scheduledAt));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("round-trips fid/pid/sat", async () => {
     expect(await verifyMatchRoomToken(await mintMatchRoomToken(claims))).toEqual(claims);
   });
