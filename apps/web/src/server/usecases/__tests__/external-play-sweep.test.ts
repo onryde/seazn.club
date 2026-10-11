@@ -70,7 +70,7 @@ import {
   type SweepDeps,
   type SweepReport,
 } from "../external-play/sweep";
-import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
+import { seedOnlineChessFixture, seedPlayer, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -2777,6 +2777,44 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     checked++;
     expect(checked).toBe(3);
+  });
+
+  // Review M2: "the players" are the guard's — each side's ONE member with a
+  // user account (loadSides) — never every entrant member.
+  /** Roster data as registration can leave it (SQL stands in for it): a
+   *  member on `side`'s entrant, with a user account or without. */
+  async function addMember(m: Match, side: Side, withUser: boolean): Promise<string> {
+    const entrantId = (await sql<{ id: string }[]>`
+      select ${side === "home" ? sql`home_entrant_id` : sql`away_entrant_id`} as id from fixtures where id = ${m.b.fixtureId}`)[0]!.id;
+    const personId = withUser
+      ? (await seedPlayer(m.b.orgId, "Second member", `extra-${randomUUID().slice(0, 6)}`, false)).personId
+      : (await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${m.b.orgId}, 'Club volunteer') returning id`)[0]!.id;
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${personId}, ${m.b.orgId})`;
+    return personId;
+  }
+
+  it("M2: an entrant member with no user account is not a player — both on camera all match is NO flag", async () => {
+    const m = await playedMatch();
+    const extra = await addMember(m, "home", false);
+    bothOnThroughout(m);
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect((await flagsOf(m.b.fixtureId)).filter((f) => f.person_id === extra)).toEqual([]);
+  });
+
+  it("M2: a side the guard cannot name ONE player for (two members with accounts) is judged for nobody; the other side still is", async () => {
+    const m = await playedMatch();
+    const second = await addMember(m, "home", true);
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    const gaps: [number, number][] = [[m.startedAt + 200_000, m.startedAt + 400_000]];
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, gaps });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    const flagged = (await flagsOf(m.b.fixtureId)).filter((f) => f.kind === "camera_lost").map((f) => f.person_id);
+    expect(flagged, "away only: home's player is ambiguous").toEqual([m.b.away.personId]);
+    expect(flagged).not.toContain(second);
   });
 
   it("an organiser's video override (D11): nothing read, nothing stored", async () => {
