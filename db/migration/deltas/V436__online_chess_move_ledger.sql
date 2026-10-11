@@ -33,6 +33,14 @@
 --   a token_revoked hold is a seat nobody recorded (T9's create/accept
 --   refusal, before a game ran): both seats are frozen.
 --
+-- sweep_no_truth_reads — how many CONSECUTIVE reads by the external-play sweep
+--   (T13) told it nothing about this game: no stream line, no terminal export.
+--   Counted only past the game's expected end; reset to 0 by any read that
+--   brings the truth. It backs the sweep's re-read off, and at a small N puts
+--   a ready/live board in the organiser's queue as provider_error (T11 review
+--   M4: a board read forever with no signal blocks the next round). Written
+--   by the sweep alone; `last_polled_at` (V433) is when it last read.
+--
 -- Additive and nullable/defaulted, so every existing row (pending, ready,
 -- needs_organiser) is valid as it stands: an empty ledger.
 alter table fixture_external_play
@@ -45,7 +53,8 @@ alter table fixture_external_play
   add column draw_offer_by        text        null,
   add column white_draw_offer_ply integer     null,
   add column black_draw_offer_ply integer     null,
-  add column revoked_seat         text        null;
+  add column revoked_seat         text        null,
+  add column sweep_no_truth_reads integer     not null default 0;
 
 -- One constraint per guarded fact, each named so a test can assert it by
 -- SQLSTATE + name (never by clause text).
@@ -80,4 +89,7 @@ alter table fixture_external_play
   add constraint fixture_external_play_revoked_seat_check
     check (revoked_seat is null
            or (revoked_seat in ('white', 'black', 'both')
-               and needs_reason is not distinct from 'token_revoked'));
+               and needs_reason is not distinct from 'token_revoked')),
+  -- A count of reads: never negative.
+  add constraint fixture_external_play_sweep_no_truth_reads_check
+    check (sweep_no_truth_reads >= 0);

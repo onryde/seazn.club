@@ -190,14 +190,15 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     // durable "a create was sent" marker (fix round 1, I2). V436 adds T10's
     // move ledger: the seven columns of the plan's §3.4 contract plus the two
     // per-side offer plies lila's 20-ply re-offer rule needs, and (T11 fix
-    // round 1, ruling M7) the seat a token_revoked hold froze.
+    // round 1, ruling M7) the seat a token_revoked hold froze, and (T13,
+    // carry M4) the sweep's count of consecutive reads that told it nothing.
     expect(await columns("fixture_external_play")).toEqual([
       "black_draw_offer_ply", "black_emailed_at", "black_lichess_id", "black_ms",
       "challenge_id", "clock_increment_s", "create_sent_at", "created_at",
       "draw_offer_by", "expires_at", "finished_at", "fixture_id", "last_error",
       "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
       "needs_reason", "org_id", "provider", "revoked_seat", "round_open_id",
-      "scheduled_at_basis", "started_at", "status", "updated_at",
+      "scheduled_at_basis", "started_at", "status", "sweep_no_truth_reads", "updated_at",
       "video_override_at", "white_draw_offer_ply", "white_emailed_at", "white_lichess_id",
       "white_ms", "white_side",
     ]);
@@ -609,5 +610,45 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
 
   it("V436 (M7): a seat outside white/black/both is refused", async () => {
     expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "home" })).toEqual(seatRefused);
+  });
+
+  // ---------------------------------------------------------------------------
+  // V436, T13 (carry M4): the sweep's count of consecutive no-truth reads.
+  const NO_TRUTH_CHECK = "fixture_external_play_sweep_no_truth_reads_check";
+  async function tryNoTruth(reads: number | undefined): Promise<
+    { accepted: true; reads: number } | { accepted: false; code: string | undefined; constraint: string | undefined }
+  > {
+    const rollback = new Error("rollback");
+    let got: number | undefined;
+    try {
+      await sql.begin(async (tx) => {
+        const values: Record<string, unknown> = { fixture_id: fixtureId, org_id: orgId, status: "live", scheduled_at_basis: new Date() };
+        if (reads !== undefined) values.sweep_no_truth_reads = reads;
+        await tx`insert into fixture_external_play ${tx(values as never)}`;
+        [{ sweep_no_truth_reads: got }] = await tx<{ sweep_no_truth_reads: number }[]>`
+          select sweep_no_truth_reads from fixture_external_play where fixture_id = ${fixtureId}`;
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && got !== undefined) return { accepted: true, reads: got };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+
+  it("V436 (T13 M4): a new row has read nothing yet — zero, never null — and zero and up are counts", async () => {
+    expect(await tryNoTruth(undefined), "the default").toEqual({ accepted: true, reads: 0 });
+    let checked = 0;
+    for (const n of [0, 1, 3, 40]) {
+      expect(await tryNoTruth(n), String(n)).toEqual({ accepted: true, reads: n });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("V436 (T13 M4): a NEGATIVE count is refused by its own CHECK; NULL by NOT NULL", async () => {
+    expect(await tryNoTruth(-1)).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: NO_TRUTH_CHECK });
+    expect(await tryNoTruth(null as never)).toMatchObject({ accepted: false, code: "23502" });
   });
 });
