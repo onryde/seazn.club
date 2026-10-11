@@ -2439,6 +2439,7 @@
   "divset.camera.saved": "Camera setting saved.",
   "divset.err.cameraPolicyLocked": "A round has already been opened for this division — the camera requirement can only be relaxed from here, not tightened.",
   "divset.err.timeControlUnsupported": "Online play needs one of the supported time controls: {controls}.",
+  "divset.err.onlineChessDisabled": "Online chess is not available for this club right now, so online play was not turned on.",
   "onlineChess.camera.playerNotice": "Your camera must stay on for the whole game. If it turns off, or you leave the frame, we record it for the organiser, who decides what happens. Nothing is decided automatically.",
   "divset.variant": "Variant",
   "divset.standingsPoints": "Standings points",

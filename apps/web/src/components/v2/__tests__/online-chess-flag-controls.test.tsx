@@ -21,13 +21,14 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => vi.fn(async () => false),
 }));
-const net = vi.hoisted(() => ({ calls: [] as { url: string; json?: unknown }[] }));
+const net = vi.hoisted(() => ({ calls: [] as { url: string; json?: unknown }[], refuseDivisionPatch: null as Error | null }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual,
     apiV1: async (url: string, options?: { json?: unknown }) => {
       net.calls.push({ url, json: options?.json });
+      if (net.refuseDivisionPatch && url === "/api/v1/divisions/d1") throw net.refuseDivisionPatch;
       return {};
     },
   };
@@ -42,6 +43,9 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   return { ...actual, useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars) };
 });
 
+import { ApiV1Error } from "@/lib/client-v1";
+import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
+import { onlineChessDisabled } from "@/server/usecases/external-play/online-chess-flag";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { LichessLinkCard } from "@/components/lichess-link-card";
@@ -91,6 +95,7 @@ const byTestId = (tree: ReactElement[], id: string) => tree.filter((n) => propsO
 
 beforeEach(() => {
   net.calls.length = 0;
+  net.refuseDivisionPatch = null;
 });
 
 describe("division Settings: the online-play controls follow the club's flag", () => {
@@ -128,6 +133,48 @@ describe("division Settings: the online-play controls follow the club's flag", (
     (propsOf(save!).onClick as () => void)();
     await vi.waitFor(() => expect(saves()).toHaveLength(1));
     expect((saves()[0]!.json as { config: Record<string, unknown> }).config.onlinePlay).toBe("lichess");
+  });
+});
+
+// Fix round 1, m6: a save the server refuses 403 ONLINE_CHESS_DISABLED (a save racing a flag change, a kept answer
+// gone stale, PostHog down) reads in the organiser's language — the code is localised, the server's English sentence
+// never shown. The sentence comes from the dictionaries; the code is the server's own constant, re-exported.
+describe("division Settings: a save refused because the club is not offered online chess", () => {
+  const LOCALES = ["en", "es", "fr", "nl"] as const;
+  const DICTS = Object.fromEntries(
+    LOCALES.map((l) => [l, JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Dict]),
+  ) as Record<(typeof LOCALES)[number], Dict>;
+  const KEY = "divset.err.onlineChessDisabled";
+  const SERVER_SENTENCE = "Online chess is not available for this organisation";
+
+  it("renders the localised refusal, never the server's English text", async () => {
+    net.refuseDivisionPatch = new ApiV1Error(SERVER_SENTENCE, 403, ONLINE_CHESS_DISABLED_CODE);
+    const island = renderIsland(
+      DivisionSettings,
+      settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } }, true),
+    );
+    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    expect(save, "premise: the save is there").toBeDefined();
+    (propsOf(save!).onClick as () => void)();
+    // useMsg falls back to the English catalog outside a provider: the sentence a customer reads in English.
+    const want = EN_UI[KEY] as string;
+    expect(typeof want === "string" && want.length > 0, "premise: the English sentence exists").toBe(true);
+    await vi.waitFor(() => expect(island.text()).toContain(want));
+    expect(island.text(), "the server's sentence is never shown").not.toContain(SERVER_SENTENCE);
+  });
+
+  it("the sentence exists in all four locales, and each locale says it in its own words", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const text = DICTS[loc][KEY];
+      expect(typeof text === "string" && text.trim().length > 0, `${loc} ${KEY}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(new Set(LOCALES.map((l) => DICTS[l][KEY])).size).toBe(LOCALES.length);
+    // The code the island matches on is the one the server's gates actually throw.
+    expect(onlineChessDisabled().code).toBe(ONLINE_CHESS_DISABLED_CODE);
+    expect(onlineChessDisabled().status).toBe(403);
   });
 });
 

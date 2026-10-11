@@ -15,12 +15,14 @@ import "server-only";
 // m3: create-game.ts gates only a NEW send) — so a club whose flag goes off mid-round never strands a live game.
 // (Owner 2026-10-11: the flag is never switched off mid-round, and there is no kill switch.)
 import { HttpError } from "@/lib/errors";
+import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 export const ONLINE_CHESS_FLAG = "online-chess";
-/** The refusal every server-side start gate answers with the flag off (403). */
-export const ONLINE_CHESS_DISABLED_CODE = "ONLINE_CHESS_DISABLED";
+/** The refusal every server-side start gate answers with the flag off (403) — declared client-safe in lib/online-chess.ts
+ *  so division Settings can localise it (fix round 1, m6), re-exported here for the gates. */
+export { ONLINE_CHESS_DISABLED_CODE };
 
 /** Who is asking: the club, and the person when there is one (an API key or a system path has none). */
 export type OnlineChessAsker = Pick<AuthCtx, "orgId" | "userId">;
