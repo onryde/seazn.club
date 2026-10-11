@@ -23,7 +23,7 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_DIALOG_TESTID, FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID, FORFEIT_NEITHER_TESTID, ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
@@ -924,6 +924,10 @@ describe("the console, the run sheet and the public page", () => {
     expect(dialog).toContain("data-testid={`forfeit-who-${w}`}");
     expect(dialog).toContain("data-testid={`forfeit-why-${r}`}");
     expect(dialog).toContain('data-testid="forfeit-confirm"');
+    // Re-review N-1: forfeitUi waits on the panel and counts the guidance that stands in for a withheld Neither.
+    expect(dialog).toContain(`data-testid="${FORFEIT_DIALOG_TESTID}"`);
+    expect(dialog).toContain(`data-testid="${FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID}"`);
+    expect(forfeitSteps(fx, "both", "walkover")[1], "the Neither chip forfeitUi counts is the one organiserStepsFor taps").toEqual({ kind: "testid", testid: FORFEIT_NEITHER_TESTID });
     expect(src(`${V2}/fixture-console.tsx`)).toContain('data-testid="score-forfeit"');
     expect([FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, FORFEIT_CONFIRM_TESTID]).toEqual(["forfeit-who-", "forfeit-why-", "forfeit-confirm"]);
   });
@@ -1415,8 +1419,10 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
   const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
 
-  function forfeitPage(started: boolean) {
+  /** `absent`: testids the page does not render — counted 0, and a wait on one times out as Playwright's would. */
+  function forfeitPage(started: boolean, absent: readonly string[] = []) {
     const log: string[] = [];
+    const missing = (d: string) => absent.some((t) => d === `testid:${t}` || d === `[data-testid="${t}"]`);
     let screen = 0;
     let deliver: (() => void) | null = null;
     const answer = { seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" };
@@ -1428,8 +1434,11 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
       first: () => loc(d),
       or: (o) => loc(`${d}|${o.d}`),
       // Start is mounted while scheduled, and only then; every other control the console shows.
-      count: async () => (d === `testid:${START_MATCH_TESTID}` ? (started ? 0 : 1) : 1),
-      waitFor: async (w) => { log.push(`wait ${w?.state} ${d}`); },
+      count: async () => (d === `testid:${START_MATCH_TESTID}` ? (started ? 0 : 1) : missing(d) ? 0 : 1),
+      waitFor: async (w) => {
+        log.push(`wait ${w?.state} ${d}`);
+        if (missing(d)) { const e = new Error(`Timeout waiting for ${d}`); e.name = "TimeoutError"; throw e; }
+      },
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
       click: async () => { log.push(`click ${d}`); screen++; if (d === submit) deliver?.(); },
       fill: async (v) => { log.push(`fill ${d} ${v}`); screen++; },
@@ -1439,6 +1448,7 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
       getByTestId: (id: string) => loc(`testid:${id}`),
       locator: (sel: string) => loc(sel),
       waitForResponse: (pred: (r: Resp) => boolean, o: { timeout: number }): Promise<Resp> => new Promise((resolve, reject) => {
+        log.push("await the events POST");
         const timer = setTimeout(() => { const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, o.timeout);
         deliver = () => { if (pred(response)) { clearTimeout(timer); resolve(response); } };
       }),
@@ -1472,6 +1482,28 @@ describe("forfeitUi: the dialog's four taps on a console scheduled or under way 
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("re-review N-1: Neither withheld (D19, the guidance in its place) is ConsoleChoiceNotOffered by name — counted, never waited for; nothing tapped past the opener, nothing posted", async () => {
+    const g = forfeitPage(false, [FORFEIT_NEITHER_TESTID]);
+    const e = await forfeitUi(g.ctx, fx, "both", "walkover").then(() => null, (x: unknown) => x);
+    // A wait on the absent chip would have thrown the page's TimeoutError instead.
+    expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
+    expect({ testid: (e as ConsoleChoiceNotOffered).testid, guidance: (e as ConsoleChoiceNotOffered).guidance, fixtureId: (e as ConsoleChoiceNotOffered).fixtureId }).toEqual({ testid: FORFEIT_NEITHER_TESTID, guidance: true, fixtureId: "fx-1" });
+    expect(g.log.filter((l) => l.startsWith("wait") && l.includes(FORFEIT_NEITHER_TESTID)), "never waited on").toEqual([]);
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([`click [data-testid="${FORFEIT_TESTID}"]`]);
+    expect(g.log, "the dialog's panel was up before the count").toContain(`wait undefined testid:${FORFEIT_DIALOG_TESTID}`);
+    expect(g.log).not.toContain("await the events POST");
+  });
+
+  it("re-review N-1: a reason the phase does not admit is ConsoleChoiceNotOffered for its chip, after the side was picked; no guidance shown", async () => {
+    const g = forfeitPage(true, [`${FORFEIT_WHY_TESTID_PREFIX}walkover`, FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID]);
+    const e = await forfeitUi(g.ctx, fx, "e-away", "walkover").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
+    expect([(e as ConsoleChoiceNotOffered).testid, (e as ConsoleChoiceNotOffered).guidance]).toEqual([`${FORFEIT_WHY_TESTID_PREFIX}walkover`, false]);
+    const steps = forfeitSteps(fx, "e-away", "walkover");
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual(steps.slice(0, 2).map((st) => `click [data-testid="${(st as { testid: string }).testid}"]`));
+    expect(g.log).not.toContain("await the events POST");
   });
 
   it("under way (no Start): the four Forfeit steps are tapped and the console's answer is the core.forfeit's alone (the positive pair)", async () => {

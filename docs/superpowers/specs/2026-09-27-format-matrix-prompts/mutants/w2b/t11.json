@@ -542,5 +542,140 @@
     "name": "forfeitUi: the dialog's four taps on a console scheduled or under way"
    }
   ]
+ },
+ {
+  "id": "po-neither-not-counted",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await requireOffered(page, fixture.id, who);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "forfeitUi: the dialog's four taps on a console scheduled or under way .* re-review N-1: Neither withheld"
+   }
+  ]
+ },
+ {
+  "id": "po-reason-not-counted",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await requireOffered(page, fixture.id, why);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "re-review N-1: a reason the phase does not admit"
+   }
+  ]
+ },
+ {
+  "id": "po-guidance-never-read",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  const guidance = (await page.getByTestId(FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID).count()) > 0;\n",
+  "replace": "  const guidance = false;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld"
+   }
+  ]
+ },
+ {
+  "id": "driver-neither-no-fallback",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-any-choice",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(e instanceof ConsoleChoiceNotOffered)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-ignores-guidance",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-ignores-testid",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.guidance)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-recorded-browser",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      via = \"http\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-not-exempt",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    this.#ledger.exempt(\"forfeit\", NEITHER_WITHHELD_ROUTE);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
  }
 ]

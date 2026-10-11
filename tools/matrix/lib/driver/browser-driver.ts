@@ -37,7 +37,7 @@ import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/comp
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
-import { abandonUi, finalizeUi, forfeitUi, voidLastUi, type ForfeitReason } from "../browser/pages/fixture-console.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_NEITHER_TESTID, abandonUi, finalizeUi, forfeitUi, voidLastUi, type ForfeitReason } from "../browser/pages/fixture-console.ts";
 import { settleUi, type SettleMethodId } from "../browser/pages/needs-decision.ts";
 import { startUi } from "../browser/pages/launch.ts";
 import { readPublicUi } from "../browser/pages/public-division.ts";
@@ -142,10 +142,20 @@ export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in t
  *  retirement or a disqualification follows some of the sport's play, D3 R4). The dialog posts the bare core.forfeit, and
  *  this driver's direct forfeit() does not tap that play on the pad first, so it goes over http — HttpDriver.forfeit's own
  *  composition, streams/index.ts forfeitPosting — exempt by this route; an http forfeit does not use the browser's turn.
- *  Since W2b Task 11 the dialog records everything else: a walkover or Neither before Start, and a forfeit under way
- *  (review I-1). A stream that carries its play beside the forfeit is cut by segmentStream (play on the pad, the forfeit
- *  on the console) and never reaches this route. */
+ *  Since W2b Task 11 the dialog records a walkover before Start, Neither before Start on a match that feeds a next
+ *  match, and a forfeit under way (review I-1); Neither where the match feeds NO next match is not offered at all, which
+ *  is NEITHER_WITHHELD_ROUTE's. A stream that carries its play beside the forfeit is cut by segmentStream (play on the
+ *  pad, the forfeit on the console) and never reaches this route. */
 export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "a forfeit with generated play to post first is posted over http: the console's forfeit dialog records the forfeit alone, and the play is not tapped on the pad first");
+/** D19 (X-DW-3): on a match that feeds no next match the dialog does not offer Neither — it shows the no-next-match
+ *  guidance in its place, by design — so a double walkover asked of the console there (DW-ALL's refusal probe at a
+ *  final or a third-place match) cannot be tapped. The page object says so by name (ConsoleChoiceNotOffered, with the
+ *  guidance shown), and the driver posts that ONE request over http so the server answers it: its 409
+ *  DOUBLE_WALKOVER_NO_NEXT_MATCH is the RefusedCall the scenario records and judges (Task 11 re-review N-1). Any other
+ *  choice the dialog withholds is the product's finding and propagates. A case that needed both this route and
+ *  FORFEIT_DIALOG_ROUTE would be refused by MixedLedger.exempt (one route per type); no scenario does: the refusal
+ *  probe is DW-ALL's, which posts no play. */
+export const NEITHER_WITHHELD_ROUTE = routeTo("W2", "a double walkover on a match that feeds no next match is posted over http: the console's forfeit dialog withholds Neither there and shows its guidance instead, so the refusal is the server's to answer");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -987,7 +997,9 @@ export class BrowserDriver implements OrganiserDriver {
   /** The console's forfeit dialog while the type's browser turn is open and there is no play to post first: a walkover
    *  or Neither on a match not yet started (the dialog offers both before Start, D3 R2 — Start is never tapped), and a
    *  forfeit on a match under way (review I-1). Generated play first is HttpDriver.forfeit, exempt by
-   *  FORFEIT_DIALOG_ROUTE while the browser's turn was open (the dialog would have dropped the play). */
+   *  FORFEIT_DIALOG_ROUTE while the browser's turn was open (the dialog would have dropped the play). Neither on a match
+   *  that feeds no next match is withheld by the dialog (ConsoleChoiceNotOffered with its guidance): that one request
+   *  goes over http, exempt by NEITHER_WITHHELD_ROUTE, and the browser's turn stays open (re-review N-1). */
   async #forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[]): Promise<{ posted: PostedEvent[]; via: "browser" | "http" }> {
     const wanted = this.#wants("forfeit");
     const onConsole = wanted && play.length === 0;
@@ -997,9 +1009,19 @@ export class BrowserDriver implements OrganiserDriver {
       return { posted: await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play)), via: "http" };
     }
     const { where, row, no } = await this.#findFixture(fixtureId);
-    this.#ledger.record("forfeit", "browser");
-    await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
-    return { posted: await this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, by, reason))), via: "browser" };
+    // Recorded once the console has answered or failed: a withheld Neither never reached the product, so it is http.
+    let via: "browser" | "http" = "browser";
+    try {
+      await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
+      return { posted: await this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, by, reason))), via };
+    } catch (e) {
+      if (!(by === "both" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;
+      via = "http";
+    } finally {
+      this.#ledger.record("forfeit", via);
+    }
+    this.#ledger.exempt("forfeit", NEITHER_WITHHELD_ROUTE);
+    return { posted: await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play)), via: "http" };
   }
 
   /** The fixture's ledger rows after `sinceSeq`: a read, always HTTP (a scenario that needs to prove a void asks). */

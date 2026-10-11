@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../apps/web/src/lib/forfeit-phase-refusal.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_NEITHER_TESTID } from "../lib/browser/pages/fixture-console.ts";
 import { FORFEIT_REASONS as ENGINE_FORFEIT_REASONS } from "@seazn/engine/core";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
@@ -25,7 +26,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -2259,6 +2260,71 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
       const cov = only(driver, "mixed-driver-coverage");
       expect(cov.verdict, c.name).toBe("pass");
       expect(cov.evidence.join("\n"), c.name).not.toContain("forfeit: exempt");
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // Re-review N-1: DW-ALL's refusal probe asks for Neither at a match that feeds no next match (a final, a third-place
+  // match) while the console's turn is open. The dialog withholds Neither there by design (D19) and the page object says
+  // so by name; the driver answers that ONE request over http so the server's 409 is the scenario's RefusedCall.
+  const N1_REFUSAL = () => new RefusedCall("POST", "/api/v1/fixtures/f1/events", 409, "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a match with no next match can't be a double walkover");
+  const n1Http = (forfeits: unknown[][]) => stubHttp({
+    listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+    fixtureState: async () => ({ status: "scheduled", last_seq: 0, outcome: null }),
+    ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
+    forfeit: async (...a: never[]) => { forfeits.push(a); if (a[1] === "both") throw N1_REFUSAL(); return [answer(2, "forfeited")]; },
+    listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+  });
+
+  it("re-review N-1: Neither withheld at a match with no next match is ONE http forfeit, exempt by its own route — the server's 409 propagates as the RefusedCall, and the console's turn stays open", async () => {
+    const forfeits: unknown[][] = [];
+    const asked: string[] = [];
+    const h = n1Http(forfeits);
+    const { driver, pageCalls } = make({
+      http: h, pads: PADS, replay: replayOf([]).fn,
+      pages: { forfeitUi: async (_c, row, by) => { asked.push(by); if (by === "both") throw new ConsoleChoiceNotOffered(row.id, FORFEIT_NEITHER_TESTID, true); return [answer(3, "forfeited")]; } },
+    });
+    await built(driver, spec("knockout"));
+    expect(driver.paths.forfeit).toBeUndefined(); // the empty case first
+    // Two probes (a final and a third-place match): each is the dialog's first, then the server's refusal.
+    let refused = 0;
+    for (const prefix of ["final", "third"]) {
+      const e = await driver.forfeit("f1", "both", "walkover", prefix).then(() => null, (x: unknown) => x);
+      expect(e, prefix).toBeInstanceOf(RefusedCall);
+      expect([(e as RefusedCall).status, (e as RefusedCall).code], prefix).toEqual([409, "DOUBLE_WALKOVER_NO_NEXT_MATCH"]);
+      refused++;
+    }
+    expect(refused).toBe(2);
+    expect(asked, "the console was asked first, each time").toEqual(["both", "both"]);
+    expect(forfeits.map((a) => a.slice(0, 5)), "the same request over http, no play").toEqual([["f1", "both", "walkover", "final", []], ["f1", "both", "walkover", "third", []]]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 2 });
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence).toContain(`forfeit: exempt — → ${NEITHER_WITHHELD_ROUTE.wave}: ${NEITHER_WITHHELD_ROUTE.why}`);
+    // The turn was never used: the next forfeit the dialog offers is the console's.
+    await driver.forfeit("f1", "e2", "walkover", "next");
+    expect(asked).toEqual(["both", "both", "e2"]);
+    expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(3);
+    expect(driver.paths.forfeit).toEqual({ browser: 1, http: 2 });
+    expect(forfeits).toHaveLength(2);
+  });
+
+  it("re-review N-1: only Neither withheld WITH the no-next-match guidance falls back — any other withheld choice is the product's finding and propagates by name, with nothing posted over http", async () => {
+    const cases: readonly { name: string; by: string; reason: "walkover" | "retired"; err: ConsoleChoiceNotOffered }[] = [
+      { name: "Neither withheld with no guidance", by: "both", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", FORFEIT_NEITHER_TESTID, false) },
+      { name: "a reason chip withheld beside the guidance", by: "both", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", "forfeit-why-walkover", true) },
+      { name: "a side withheld", by: "e2", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", "forfeit-who-away", true) },
+      { name: "a reason the phase does not admit", by: "e2", reason: "retired", err: new ConsoleChoiceNotOffered("f1", "forfeit-why-retired", false) },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const forfeits: unknown[][] = [];
+      const { driver } = make({ http: n1Http(forfeits), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => { throw c.err; } } });
+      await built(driver, spec("knockout"));
+      await expect(driver.forfeit("f1", c.by, c.reason, "p"), c.name).rejects.toBe(c.err);
+      expect(forfeits, `${c.name}: nothing over http`).toEqual([]);
+      expect(driver.paths.forfeit, c.name).toEqual({ browser: 1, http: 0 });
       checked++;
     }
     expect(checked).toBe(cases.length);
