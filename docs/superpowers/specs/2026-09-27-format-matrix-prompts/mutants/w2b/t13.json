@@ -731,5 +731,116 @@
         "name": "every outcome kind an abandon can leave reads it"
       }
     ]
+  },
+  {
+    "id": "m4-page-sentence-ignored",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+    "find": "if (line !== null && (FORFEIT_SENTENCE_KEYS as readonly string[]).includes(line.key)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "a walkover: the description and the title carry the sentence"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "a double walkover says so — and never prints"
+      }
+    ]
+  },
+  {
+    "id": "m4-page-forfeited-not-a-result",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+    "find": "new Set([\"decided\", \"finalized\", \"forfeited\"])",
+    "replace": "new Set([\"decided\", \"finalized\"])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "a walkover's share text is a result's"
+      }
+    ]
+  },
+  {
+    "id": "m4-page-dw-prints-score",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+    "find": "  return fixture.outcome?.kind === \"double_walkover\";",
+    "replace": "  return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "a double walkover says so — and never prints"
+      }
+    ]
+  },
+  {
+    "id": "m4-overlay-model-no-tag",
+    "file": "apps/web/src/lib/overlay-model.ts",
+    "find": "forfeitTag(data.outcome, NO_LEDGER);",
+    "replace": "null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/overlay-model.test.ts"
+        ],
+        "name": "every forfeit reason, the AWAY side at fault"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/overlay-model.test.ts"
+        ],
+        "name": "a double walkover says so \\(it said nothing\\)"
+      }
+    ]
+  },
+  {
+    "id": "m4-overlay-model-short-uses-full-names",
+    "file": "apps/web/src/lib/overlay-model.ts",
+    "find": "forfeitLine({ [sides[0].id]: codes[0], [sides[1].id]: codes[1] }) ??",
+    "replace": "forfeitLine({ [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name }) ??",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/overlay-model.test.ts"
+        ],
+        "name": "every forfeit reason, the AWAY side at fault"
+      }
+    ]
+  },
+  {
+    "id": "m4-overlay-stage-no-copy",
+    "file": "apps/web/src/components/overlay/overlay-stage.tsx",
+    "find": "    forfeitCopy: forfeitCopyOf((key) => props.dict[key] ?? key),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
+        ],
+        "name": "a walkover: the sentence naming the side that did not show"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
+        ],
+        "name": "a double walkover says so"
+      }
+    ]
   }
 ]

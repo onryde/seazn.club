@@ -24,6 +24,7 @@ import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 import { msgFor } from "@/lib/messages-i18n";
+import { t } from "@/lib/i18n-runtime";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -671,6 +672,73 @@ describe("FixturePage generateMetadata — W2a chess tie-break description", () 
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
     });
     expect(m.description).toBe("½ — ½ — Bela Nakamura won on rapid tie-break (1½–½)");
+  });
+});
+
+// W2b Task 13 fix round 1 (review M-4) — the share/search text of a credited result. It said "{winner} won" for a
+// walkover (and, the fixture being `forfeited` rather than `decided`, the share text invited the reader to "follow it
+// live") and nothing at all for a double walkover. It now reads the match centre's OWN sentence — the document's
+// status line, which the builder words from `forfeitTag` (match-centre-forfeit.test.ts) — so one match is described
+// one way on the page, in the preview and in the share.
+describe("FixturePage — a credited result's share and search text (W2b T13 review M-4)", () => {
+  const forfeitDoc = (statusLine: { key: string; params?: Record<string, string> }, scoreLines: [string, string]): MatchCentreDocT => {
+    const doc = cricketDocFor("decided");
+    return { ...doc, header: { ...doc.header, status: "other", statusLine, scoreLines } };
+  };
+  const meta = async (fixtureOver: Record<string, unknown>, doc: MatchCentreDocT) => {
+    getPublicFixture.mockResolvedValue(baseDataWithMC("en", doc, { home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver }, { home: "Home XI", away: "Away XI" }));
+    const { generateMetadata } = await import("../page");
+    return generateMetadata({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }) });
+  };
+  /** The ShareButton's `text` — a client prop that never reaches markup, read off the page's own element tree. */
+  const shareText = async (fixtureOver: Record<string, unknown>, doc: MatchCentreDocT): Promise<string> => {
+    const { ShareButton } = await import("@/components/share-button");
+    const find = (node: unknown): string | null => {
+      if (Array.isArray(node)) {
+        for (const c of node) {
+          const hit = find(c);
+          if (hit !== null) return hit;
+        }
+        return null;
+      }
+      if (!isValidElement(node)) return null;
+      const props = node.props as { children?: unknown; text?: string };
+      if (node.type === ShareButton) return props.text ?? null;
+      return find(props.children);
+    };
+    const text = find(await render({ home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver }, doc, { home: "Home XI", away: "Away XI" }));
+    expect(text, "the page mounts a ShareButton").not.toBeNull();
+    return text!;
+  };
+  const say = (key: string, params?: Record<string, string>) => t(publicEn as never, key, params);
+  const WALKOVER = { status: "forfeited", outcome: { kind: "award", winner: "home", loser: "away", reason: "walkover" }, summary: { headline: "3 — 0" } };
+  const DW = { status: "forfeited", outcome: { kind: "double_walkover" }, summary: { headline: "0 — 0" } };
+
+  it("a walkover: the description and the title carry the sentence naming the side that did not show, never \"won\"", async () => {
+    const sentence = say("forfeit.sentence.walkover", { loser: "Away XI" });
+    const m = await meta(WALKOVER, forfeitDoc({ key: "forfeit.sentence.walkover", params: { loser: "Away XI" } }, ["3", "0"]));
+    expect(m.description).toBe(`3 — 0 — ${sentence}`);
+    expect(String(m.title)).toContain(sentence);
+    expect(String(m.description)).not.toMatch(/ won\b/);
+  });
+
+  it("a walkover's share text is a result's, with the sentence — never \"follow it live\"", async () => {
+    const sentence = say("forfeit.sentence.walkover", { loser: "Away XI" });
+    const text = await shareText(WALKOVER, forfeitDoc({ key: "forfeit.sentence.walkover", params: { loser: "Away XI" } }, ["3", "0"]));
+    expect(text).toContain(sentence);
+    expect(text).not.toContain(t(uiEn as never, "fixture.share.live", { home: "Home XI", away: "Away XI", division: "Open", competition: "Test Comp" }));
+  });
+
+  it("a double walkover says so — and never prints its unplayed 0 — 0", async () => {
+    const sentence = say("forfeit.sentence.doubleWalkover");
+    const doc = forfeitDoc({ key: "forfeit.sentence.doubleWalkover" }, ["0", "0"]);
+    const m = await meta(DW, doc);
+    expect(m.description).toBe(sentence);
+    expect(String(m.title)).toContain(sentence);
+    expect(String(m.title)).not.toContain("HOM 0");
+    const text = await shareText(DW, doc);
+    expect(text).toContain(sentence);
+    expect(text).not.toContain("0 — 0");
   });
 });
 
