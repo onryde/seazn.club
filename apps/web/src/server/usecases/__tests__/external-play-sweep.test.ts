@@ -945,9 +945,19 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
   });
 
-  it("a T9 record landing between the sweep's read and its hold wins: a READY game is never held (staged on the bridge row's lock) — x3", async () => {
+  it("a T9 write landing between the sweep's read and its hold wins — a READY game, or a 429 that proved nothing exists, is never held create_outcome_unknown (staged on the bridge row's lock) — x3 each", async () => {
+    // T9's two writes that can still land on a stale claim's row
+    // (create-game.ts): its record, and a release after Lichess's 429.
+    const WRITES = {
+      record: (gameId: string, b: Board) => sql`set status = 'ready', challenge_id = ${gameId}, white_side = 'home',
+                   white_lichess_id = ${b.home.lichessId}, black_lichess_id = ${b.away.lichessId},
+                   mint_claimed_at = null, create_sent_at = null`,
+      released_429: () => sql`set mint_claimed_at = null, create_sent_at = null, last_error = 'create:rate_limited: 429'`,
+    } as const;
+    const AFTER = { record: { status: "ready", needs_reason: null }, released_429: { status: "pending", needs_reason: null } } as const;
     let checked = 0;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
+      const write = i % 2 === 0 ? "record" : "released_429";
       const b = await openedBoard({ checkedIn: ["home", "away"] });
       const { deadline } = playableWindow(b.opened);
       // Stands for a slow T9: marker sent, claim gone stale, its record late.
@@ -963,10 +973,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
         await tx`select fixture_id from fixture_external_play where fixture_id = ${b.fixtureId} for update`;
         signalHeld(pid);
         await released;
-        // T9's record (create-game.ts: ready, the game, the claim and marker cleared).
-        await tx`update fixture_external_play set status = 'ready', challenge_id = ${gameId}, white_side = 'home',
-                   white_lichess_id = ${b.home.lichessId}, black_lichess_id = ${b.away.lichessId},
-                   mint_claimed_at = null, create_sent_at = null where fixture_id = ${b.fixtureId}`;
+        await tx`update fixture_external_play ${WRITES[write](gameId, b)} where fixture_id = ${b.fixtureId}`;
       });
       const holderPid = await held;
       const pass = sweep(b, { now: new Date(deadline.getTime() + 5 * 60_000) });
@@ -981,13 +988,13 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
       release();
       await holder;
       const r = await pass;
-      expect(r.failures, `run ${i}`).toEqual([]);
-      expect(r.heldForOrganiser, `run ${i}: nothing held`).toBe(0);
-      expect(await bridgeOf(b.fixtureId), `run ${i}: T9's game stands`).toEqual({ status: "ready", needs_reason: null });
+      expect(r.failures, `${write} run ${i}`).toEqual([]);
+      expect(r.heldForOrganiser, `${write} run ${i}: nothing held`).toBe(0);
+      expect(await bridgeOf(b.fixtureId), `${write} run ${i}: T9's write stands`).toEqual(AFTER[write]);
       checked++;
     }
-    expect(checked).toBe(3);
-  }, 120_000);
+    expect(checked).toBe(6);
+  }, 180_000);
 });
 
 // ---------------------------------------------------------------------------

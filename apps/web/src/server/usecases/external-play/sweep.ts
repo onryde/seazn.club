@@ -134,16 +134,17 @@ function orgScope(pass: Pass) {
 
 // ─── A game that is, or may be, on file (review M1, ruling I3) ─────────────
 //
-// ONE predicate for job 1 (never a no-show) and job 3 (keep the room):
+// ONE predicate for job 1 (never a no-show) and job 3 (keep the room), asked
+// only PAST the deadline — before it neither job rules on anything, so a sent
+// marker T9's next caller can still recover (findSentGame) is never judged:
 //   - a challenge is recorded: a game is on file;
 //   - a `pending` row under a LIVE mint claim: T9 is in flight, and its create
-//     may land past the deadline (it judged the window at its claim);
-//   - a `pending` row with T9's sent marker (`create_sent_at`, T9 I2) BEFORE
-//     the deadline: T9's next caller recovers it (findSentGame).
-// Past the deadline a sent marker under a stale (or no) claim is nobody's —
-// T9 refuses on the window BEFORE it would claim and recover — so job 1
-// holds it `create_outcome_unknown` (T9's own reason for that state), and job
-// 3 then takes its room down. A held row with no challenge is no game.
+//     may land past the deadline (it judged the window at its claim).
+// Past the deadline a sent marker (`create_sent_at`, T9 I2) under a stale (or
+// no) claim is nobody's — T9 refuses on the window BEFORE it would claim and
+// recover — so job 1 holds it `create_outcome_unknown` (T9's own reason for
+// that state), and job 3 takes its room down. A held row with no challenge
+// is no game.
 
 type BridgeFacts = {
   bridgeStatus: string | null;
@@ -156,11 +157,9 @@ function claimIsLive(pass: Pass, claimedAt: Date | null): boolean {
   return claimedAt !== null && claimedAt.getTime() >= pass.now.getTime() - MINT_CLAIM_STALE_MS;
 }
 
-function gameMayBeOnFile(pass: Pass, r: BridgeFacts, deadline: Date): boolean {
+function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
   if (r.challengeId !== null) return true;
-  if (r.bridgeStatus !== "pending") return false;
-  if (claimIsLive(pass, r.mintClaimedAt)) return true;
-  return r.createSentAt !== null && pass.now.getTime() < deadline.getTime();
+  return r.bridgeStatus === "pending" && claimIsLive(pass, r.mintClaimedAt);
 }
 
 // ─── Job 1: the T+20 no-show ───────────────────────────────────────────────
@@ -198,7 +197,7 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
 async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   const { deadline } = playableWindow(c.openedAt);
   if (pass.now.getTime() < deadline.getTime()) return;
-  if (gameMayBeOnFile(pass, c, deadline)) return;
+  if (gameMayBeOnFile(pass, c)) return;
   // THE guard (spec §6): online play still on, a boardgame, both entrants.
   // An organiser who switched online play off after the open has taken the
   // board back to the table.
@@ -251,9 +250,11 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
 
 /** Ruling I3: a create T9 sent and never recorded, past the deadline. T9's
  *  claim is taken over FIRST, conditionally on the very row judged: a record
- *  T9 lands meanwhile (a ready game) wins and nothing is held; after it no T9
- *  write can land (each is conditional on its own claim) and no new claim
- *  can be taken (T9 refuses past the deadline before claiming). */
+ *  T9 lands meanwhile (a ready game) wins and nothing is held, and so does a
+ *  release that PROVED nothing exists (a 429 clears the marker — then it is
+ *  a board with no game, the next pass's no-show or not_started). After the
+ *  takeover no T9 write can land (each is conditional on its own claim) and
+ *  no new claim can be taken (T9 refuses past the deadline before claiming). */
 async function holdUnknownCreate(pass: Pass, c: NoShowCandidate, deadline: Date): Promise<void> {
   const taken = await sql`
     update fixture_external_play set mint_claimed_at = null, updated_at = now()
@@ -363,7 +364,7 @@ function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
   if (!isPlayableFixtureStatus(c.fixtureStatus)) return true;
   if (c.openedAt === null) return false;
   const { deadline } = playableWindow(c.openedAt);
-  return pass.now.getTime() >= deadline.getTime() && !gameMayBeOnFile(pass, c, deadline);
+  return pass.now.getTime() >= deadline.getTime() && !gameMayBeOnFile(pass, c);
 }
 
 async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {
