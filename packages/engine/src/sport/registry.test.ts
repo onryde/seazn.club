@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { generic } from "../sports/generic/generic.ts";
+import { builtinModules } from "../sports/index.ts";
+import { forEachSport } from "../testkit/for-each-sport.ts";
 import type { AnySportModule } from "./module.ts";
 import { compareSemver, createRegistry, parseSemver, registry } from "./registry.ts";
 
@@ -99,3 +101,141 @@ function catchErr(fn: () => unknown): unknown {
     return error;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Engine mutation debt (Stryker leg modules-7, registry.ts). Expected values come from the semver rule (numeric x.y.z)
+// and from the engine's own declaration of what ships (sports/index.ts builtinModules) — never from a list of sports typed
+// here, so a sport added or re-versioned is swept without editing this file.
+//
+// A refusal's `message` is wire-visible: apps/web's v1 envelope sends `err.message` verbatim (server/api-v1/http.ts,
+// `errorResponse(..., err.code, err.message, extra)`) and the overlay logs the whole error (server/overlay/load.ts,
+// foldOrNull) — so each refusal must NAME what it refused. Its `data` is the machine-readable twin: pino's err serializer
+// writes it into the log line beside the message.
+// ---------------------------------------------------------------------------
+
+/** The EngineError `fn` throws; fails the test if it returns or throws anything else. */
+function refusal(fn: () => unknown): EngineError {
+  const err = catchErr(fn);
+  expect(err).toBeInstanceOf(EngineError);
+  return err as EngineError;
+}
+
+/** Semver precedence (semver.org §11): major, then minor, then patch, each compared numerically. The test's own oracle. */
+function semverAbove(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => v.split(".").map(Number)) as [number[], number[]];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i]! > y[i]!;
+  return false;
+}
+
+describe("parseSemver / compareSemver — every part is a whole number of any length", () => {
+  it("parses a multi-digit major, minor and patch", () => {
+    expect(parseSemver("10.0.0")).toEqual({ major: 10, minor: 0, patch: 0 });
+    expect(parseSemver("123.45.678")).toEqual({ major: 123, minor: 45, patch: 678 });
+  });
+
+  it("ranks 10.0.0 above 9.0.0 (numeric, where a string compare would say the opposite)", () => {
+    expect("10.0.0" < "9.0.0").toBe(true); // the wrong answer this case exists to tell apart
+    expect(compareSemver("10.0.0", "9.0.0")).toBeGreaterThan(0);
+    expect(compareSemver("9.0.0", "10.0.0")).toBeLessThan(0);
+  });
+
+  it("a refused version is CONFIG_INVALID naming the version, with the version as data", () => {
+    for (const bad of ["1.0", "v1.0.0", "1.0.0-beta", ""]) {
+      const err = refusal(() => parseSemver(bad));
+      expect(err.code).toBe("CONFIG_INVALID");
+      expect(err.message, JSON.stringify(bad)).toContain(`"${bad}"`);
+      expect(err.message, JSON.stringify(bad)).not.toBe(`"${bad}"`); // says what is wrong, not only what
+      expect(err.data).toStrictEqual({ version: bad });
+    }
+  });
+});
+
+describe("registry refusals name what they refused", () => {
+  it("an empty key is CONFIG_INVALID with a message that says the key is the problem", () => {
+    const err = refusal(() => createRegistry().register({ ...generic, key: "" }));
+    expect(err.code).toBe("CONFIG_INVALID");
+    expect(err.message).toMatch(/\bkey\b/);
+  });
+});
+
+describe("every shipped sport module through a fresh registry (sports/index.ts builtinModules)", () => {
+  it("each registers, resolves by its exact key and version, and a second get returns the same module", () => {
+    const reg = createRegistry();
+    for (const module of builtinModules) reg.register(module);
+    const visited = forEachSport(({ key, module }) => {
+      expect(reg.get(key, module.version)).toBe(module);
+      expect(reg.get(key, module.version)).toBe(module);
+    });
+    expect(visited).toBe(builtinModules.length);
+    expect(visited).toBeGreaterThan(0);
+  });
+
+  it("latest(key) is the highest-ranking shipped version of that key", () => {
+    const reg = createRegistry();
+    for (const module of builtinModules) reg.register(module);
+    const keys = new Set(builtinModules.map((m) => m.key));
+    let checked = 0;
+    for (const key of keys) {
+      const shipped = builtinModules.filter((m) => m.key === key);
+      const top = shipped.find((m) => shipped.every((o) => o === m || semverAbove(m.version, o.version)));
+      expect(top, `${key}: one shipped version ranks above the rest`).toBeDefined();
+      expect(reg.latest(key), key).toBe(top);
+      checked++;
+    }
+    expect(checked).toBe(keys.size);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a second registration of a shipped module is MODULE_DUPLICATE naming key@version, and the first stays registered", () => {
+    const reg = createRegistry();
+    for (const module of builtinModules) reg.register(module);
+    const visited = forEachSport(({ key, module }) => {
+      const err = refusal(() => reg.register({ ...module }));
+      expect(err.code).toBe("MODULE_DUPLICATE");
+      expect(err.message).toContain(`${key}@${module.version}`);
+      expect(err.data).toStrictEqual({ key, version: module.version });
+      expect(reg.get(key, module.version)).toBe(module);
+    });
+    expect(visited).toBe(builtinModules.length);
+  });
+
+  it("lookup is by the exact key and version: a near miss is MODULE_NOT_FOUND naming what was asked for", () => {
+    const reg = createRegistry();
+    for (const module of builtinModules) reg.register(module);
+    let misses = 0;
+    const visited = forEachSport(({ key, module }) => {
+      const { major, minor, patch } = parseSemver(module.version);
+      const unshipped = `${major}.${minor}.${patch + 1000}`;
+      const nearMisses: [string, string][] = [
+        [key, `v${module.version}`],
+        [key, unshipped],
+        [`${key} `, module.version],
+        [key.toUpperCase() === key ? `${key}_` : key.toUpperCase(), module.version],
+      ];
+      for (const [k, v] of nearMisses) {
+        const err = refusal(() => reg.get(k, v));
+        expect(err.code).toBe("MODULE_NOT_FOUND");
+        expect(err.message).toContain(`${k}@${v}`);
+        expect(err.data).toStrictEqual({ key: k, version: v });
+        misses++;
+      }
+      const err = refusal(() => reg.latest(`${key}_unshipped`));
+      expect(err.code).toBe("MODULE_NOT_FOUND");
+      expect(err.message).toContain(`"${key}_unshipped"`);
+      expect(err.data).toStrictEqual({ key: `${key}_unshipped` });
+    });
+    expect(visited).toBe(builtinModules.length);
+    expect(misses).toBe(visited * 4);
+  });
+
+  it("an empty registry resolves nothing: get and latest of every shipped key are MODULE_NOT_FOUND", () => {
+    const reg = createRegistry();
+    const visited = forEachSport(({ key, module }) => {
+      expect(refusal(() => reg.get(key, module.version)).data).toStrictEqual({ key, version: module.version });
+      const err = refusal(() => reg.latest(key));
+      expect(err.code).toBe("MODULE_NOT_FOUND");
+      expect(err.data).toStrictEqual({ key });
+    });
+    expect(visited).toBe(builtinModules.length);
+  });
+});
