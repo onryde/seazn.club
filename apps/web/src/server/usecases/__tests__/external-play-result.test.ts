@@ -194,7 +194,7 @@ const ORGANISER: Expect = { wrote: "needs_organiser", reason: "provider_error" }
 function rulebook(status: string, winner: Colour | null, bracket: boolean): Expect {
   const decidedOr = (method: BoardgameMethod, otherwise: Expect): Expect =>
     winner ? { wrote: "decided", method } : otherwise;
-  const drawUnlessWinner = (method: BoardgameMethod): Expect => (winner ? ORGANISER : { wrote: "draw", method });
+  const drawUnlessWinner = (method: BoardgameMethod | null): Expect => (winner ? ORGANISER : { wrote: "draw", method });
   const base = ((): Expect => {
     switch (status) {
       // §3.5: only a status other than created/started is terminal.
@@ -226,8 +226,14 @@ function rulebook(status: string, winner: Colour | null, bracket: boolean): Expe
       // draw. Lichess records no reason, so no method is recorded either.
       case "timeout":
         return decidedOr("time", { wrote: "draw", method: null });
+      // Spec §3.6 maps `draw` to "draw" and names NO method (controller
+      // ruling, fix round 1). Lichess's `draw` covers agreement, a threefold
+      // claim, scalachess autoDraw (insufficient material, the fifty-move
+      // rule, fivefold — Variant.scala:146-147 → Position.scala:120) and a
+      // flag with a draw offer pending (Finisher.scala:52-53): no single
+      // method is true of all of them, so none is recorded.
       case "draw":
-        return drawUnlessWinner("agreement");
+        return drawUnlessWinner(null);
       case "stalemate":
         return drawUnlessWinner("stalemate");
       // Addendum 1 → draw. Status.scala: "the side that cannot lose claims a
@@ -367,16 +373,24 @@ describe.runIf(HAS_DB)("writeResultFrom — every terminal status (spec §3.6)",
   /** Spec §3.6's table, hand-encoded from the RULEBOOK — not read back out
    *  of the code under test. `winnerIsNull` is the load-bearing column: M9's
    *  early resign differs from a real resign by having no winner at all. */
+  // ONLY what spec §3.6 itself says — its table rows and its timeout
+  // sentence. The spec names NO method for any status, so this table has no
+  // method column (review M3: it used to carry the brief's methods, which the
+  // brief had copied from the code's own table). Methods are pinned by the
+  // rulebook above, each citing Lichess's source, never by this table.
   const SPEC_3_6 = [
-    { status: "mate", winner: "white", wrote: "decided", event: "boardgame.result", method: "checkmate", winnerIsNull: false },
-    { status: "resign", winner: "black", wrote: "decided", event: "boardgame.result", method: "resign", winnerIsNull: false },
-    { status: "outoftime", winner: "black", wrote: "decided", event: "boardgame.result", method: "time", winnerIsNull: false },
-    { status: "timeout", winner: "white", wrote: "decided", event: "boardgame.result", method: "time", winnerIsNull: false },
-    { status: "draw", winner: null, wrote: "draw", event: "boardgame.result", method: "agreement", winnerIsNull: true },
-    { status: "stalemate", winner: null, wrote: "draw", event: "boardgame.result", method: "stalemate", winnerIsNull: true },
-    // M9. Resigning after ONE move reports status=aborted winner=None. The
-    // wrong answer here is "someone won"; the right one is "there was no game".
-    { status: "aborted", winner: null, wrote: "aborted", event: null, method: null, winnerIsNull: true },
+    // "`mate`, `resign`, `outoftime` | decided result, winner as reported"
+    { status: "mate", winner: "white", wrote: "decided", event: "boardgame.result", winnerIsNull: false },
+    { status: "resign", winner: "black", wrote: "decided", event: "boardgame.result", winnerIsNull: false },
+    { status: "outoftime", winner: "black", wrote: "decided", event: "boardgame.result", winnerIsNull: false },
+    // "A Lichess timeout is a normal win, not a forfeit."
+    { status: "timeout", winner: "white", wrote: "decided", event: "boardgame.result", winnerIsNull: false },
+    // "`draw`, `stalemate` | draw"
+    { status: "draw", winner: null, wrote: "draw", event: "boardgame.result", winnerIsNull: true },
+    { status: "stalemate", winner: null, wrote: "draw", event: "boardgame.result", winnerIsNull: true },
+    // "`aborted` | no result. Note M9: an early resign lands here with no
+    // winner." The wrong answer is "someone won"; the right one is "no game".
+    { status: "aborted", winner: null, wrote: "aborted", event: null, winnerIsNull: true },
   ] as const;
 
   it("the rulebook oracle agrees with the spec's own table on every row it names — counted", () => {
@@ -386,13 +400,12 @@ describe.runIf(HAS_DB)("writeResultFrom — every terminal status (spec §3.6)",
     for (const row of SPEC_3_6) {
       const e = rulebook(row.status, row.winner, false);
       expect(e.wrote, row.status).toBe(row.wrote);
-      if (e.wrote === "decided" || e.wrote === "draw") expect(e.method, row.status).toBe(row.method);
       checked++;
     }
     expect(checked, "spec rows checked").toBe(SPEC_3_6.length);
   });
 
-  it("maps each terminal status to the event and method the spec names, and reports the count", async () => {
+  it("maps each terminal status to the outcome and event the spec names, and reports the count", async () => {
     let checked = 0;
     for (const row of SPEC_3_6) {
       const g = await readyGame(); // league: a draw is legal there
@@ -404,7 +417,6 @@ describe.runIf(HAS_DB)("writeResultFrom — every terminal status (spec §3.6)",
       } else {
         expect(events.length, row.status).toBe(1);
         expect(events[0]!.type).toBe(row.event);
-        expect(events[0]!.payload.method).toBe(row.method);
         expect(events[0]!.payload.winner === null, `${row.status} winner-is-null`).toBe(row.winnerIsNull);
       }
       checked++;
@@ -694,7 +706,7 @@ describe.runIf(HAS_DB)("writeResultFrom — a draw is legal in Swiss and league,
   // packages/engine/src/competition/progression.ts) and the rest are every
   // other StageKind (schemas.ts) — so a fifth bracket kind moves both lists.
   const DRAWS = [
-    { status: "draw" as const, method: "agreement" },
+    { status: "draw" as const, method: null }, // spec §3.6 names no method; see the rulebook
     { status: "stalemate" as const, method: "stalemate" },
   ];
   const BRACKETS = StageKind.options.filter((k) => BRACKET_STAGE_KINDS.has(k));
@@ -718,7 +730,7 @@ describe.runIf(HAS_DB)("writeResultFrom — a draw is legal in Swiss and league,
         const [ev] = await resultEvents(g.fixtureId);
         expect(ev!.type).toBe("boardgame.result");
         expect(ev!.payload.winner).toBeNull();
-        expect(ev!.payload.method).toBe(d.method);
+        expect(ev!.payload.method ?? null).toBe(d.method);
         checked++;
       }
     }
