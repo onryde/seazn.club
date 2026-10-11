@@ -50,6 +50,10 @@ import { checkIns } from "./room";
 export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence";
 
 export type SweepReport = {
+  /** Review M8: another pass held the lock, so this one did nothing — every
+   *  count below is zero because nothing was looked at, not because nothing
+   *  was due. */
+  skipped: boolean;
   noShows: number;
   mintRetries: number;
   meetingsEnded: number;
@@ -82,6 +86,10 @@ export type SweepDeps = {
    *  sweeps every org; the shared test database holds other suites' opened
    *  rounds, which an unscoped sweep would act on. */
   orgIds?: readonly string[];
+  /** TEST SEAM — `false` runs the pass without the one-pass-at-a-time lock
+   *  (M8), so a test can overlap two passes and prove a job's own row claim
+   *  on its own. Production never passes it. */
+  serialise?: false;
 };
 
 /** The window a board is playable in, anchored on the ROUND being opened
@@ -121,7 +129,22 @@ async function each<T extends { fixtureId: string }>(
     } catch (err) {
       const code = codeOf(err);
       pass.report.failures.push({ job, fixtureId: row.fixtureId, code });
-      log.warn({ job, fixtureId: row.fixtureId, code }, "external-play sweep: a fixture's action failed");
+      // Review M7: the report stays code-only (it is returned to the cron
+      // caller); the server log carries what diagnoses it — the message, and
+      // the stack of anything that is not a named refusal (a TypeError is a
+      // bug, and its name alone says nothing). Every message our adapters
+      // build is token-free by construction (realtimekit.ts, board-api.ts).
+      const named = err instanceof HttpError || err instanceof EngineError;
+      log.warn(
+        {
+          job,
+          fixtureId: row.fixtureId,
+          code,
+          message: err instanceof Error ? err.message : String(err),
+          ...(err instanceof Error && !named ? { stack: err.stack } : {}),
+        },
+        "external-play sweep: a fixture's action failed",
+      );
     }
   }
 }
@@ -842,8 +865,23 @@ async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDe
 
 // ─── The pass ──────────────────────────────────────────────────────────────
 
-export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
-  const report: SweepReport = {
+// Review M8 (controller ruling): one pass at a time. Under a Lichess outage a
+// pass can outlast the 5-minute cadence (job 4 reads serially), and an
+// overlapping pass would repeat every claimless job's RealtimeKit and Lichess
+// calls. A NON-BLOCKING, TRANSACTION-scoped advisory lock: the pass runs
+// inside the transaction that holds it, so it is released however the pass
+// ends — commit, a throw, a dropped connection — and a transaction-mode
+// pooler cannot strand it on a backend the way a session lock can (the
+// reason event-import retired its session lock). The transaction only holds
+// the lock: every job's own statements run on their own connections, so it
+// sits idle, holding no snapshot. A pass that finds the lock taken returns
+// at once, `skipped`. The jobs' row claims stay: they are what makes an
+// overlap harmless, the lock is what makes it rare.
+const SWEEP_LOCK = "external-play-sweep";
+
+function emptyReport(skipped: boolean): SweepReport {
+  return {
+    skipped,
     noShows: 0,
     mintRetries: 0,
     meetingsEnded: 0,
@@ -854,6 +892,29 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
     scanned: 0,
     failures: [],
   };
+}
+
+export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
+  if (deps.serialise === false) return runPass(deps);
+  let report: SweepReport | null = null;
+  try {
+    await sql.begin(async (tx) => {
+      const [lock] = await tx<{ got: boolean }[]>`select pg_try_advisory_xact_lock(hashtext(${SWEEP_LOCK})) as got`;
+      if (!lock?.got) return;
+      report = await runPass(deps);
+    });
+  } catch (err) {
+    // The pass itself threw: the caller hears it. A pass that FINISHED and
+    // whose lock transaction then failed to end cleanly still ran — its
+    // report stands; the lock went with the transaction either way.
+    if (report === null) throw err;
+    log.warn({ message: err instanceof Error ? err.message : String(err) }, "external-play sweep: the pass lock's transaction ended badly");
+  }
+  return report ?? emptyReport(true);
+}
+
+async function runPass(deps: SweepDeps): Promise<SweepReport> {
+  const report = emptyReport(false);
   const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
 
   // FIRST: a game on file is brought to the truth before anything rules on
