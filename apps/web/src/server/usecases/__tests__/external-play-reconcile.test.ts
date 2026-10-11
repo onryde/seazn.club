@@ -1195,7 +1195,7 @@ describe.runIf(HAS_DB)("reconcile — the move T10 is submitting is ours, never 
     expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining(`plies 3-${LINE.length} `)]);
   });
 
-  it("a submission recorded AFTER the read loaded the row still excuses its move — judged under the row's lock, not as loaded (staged in each read: stream, export)", async () => {
+  it("a submission recorded AFTER the read loaded the row still excuses its move — judged by the submission on file AFTER Lichess was read, not as loaded (staged in each read: stream, export)", async () => {
     let checked = 0;
     for (const path of ["stream", "export"] as const) {
       const g = await liveGame();
