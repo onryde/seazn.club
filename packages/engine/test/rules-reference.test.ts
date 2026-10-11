@@ -14,6 +14,91 @@ const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
 /** The ten ids W2a seeds, typed from spec §6 (2026-10-08-format-matrix-w2a-design.md, "W2a seeds only"). */
 const SEEDED = ["X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1"];
 
+const W2B_DATE = "2026-10-08";
+const signed = (ruling: number, date = W2B_DATE) => `signed ${ruling} ${date}`;
+const deviation = (ruling: number) => `deviation ${ruling} ${W2B_DATE}`;
+/** Orchestrator pre-flight rulings are no owner signature (AGENTS.md class 17): their rows stay open until the owner signs. */
+const OPEN = "⬜ open";
+/** The rows W2b adds, by rules file, each with the status it must carry. Typed from spec
+ *  2026-10-08-format-matrix-w2b-design.md §6 and Appendix A — the spec is the source here, never the parsed files — as the
+ *  W2b ledger's rulings amend it (plan PF-13: "53 new ids + CK-WO-2 + X-WD-6, plus the X-BR-1 amendment"):
+ *  - Appendix A's 53 new ids, with Appendix A's status (`signed <ruling>` from _INDEX rulings 83–99; BD-WO-2 and BD-RT-1
+ *    are recorded deviations);
+ *  - CK-WO-2 (plan PF-6) and X-WD-6 (plan PF-7): orchestrator rulings the ledger reports to the owner, so OPEN;
+ *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
+ *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
+ *  - X-RS-1 carries owner ruling 112 (2026-10-11), which changed its text: a walkover stays recordable after the start
+ *    until something is played. */
+const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "cross-sport.md": {
+    "X-RS-1": signed(112, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
+    "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
+    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(87),
+    "X-AB-1": signed(88), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
+    "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
+    "X-PS-1": signed(91), "X-PS-2": signed(91), "X-DE-1": signed(93), "X-WD-5": signed(90),
+    "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": OPEN,
+  },
+  "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
+  "hockey.md": { "HK-WO-1": signed(86), "HK-RT-1": signed(87), "HK-AB-1": signed(88) },
+  "icehockey.md": { "IH-WO-1": signed(86), "IH-RT-1": signed(87), "IH-AB-1": signed(88) },
+  "volleyball.md": { "VB-WO-1": signed(86), "VB-RT-1": signed(108, "2026-10-11") },
+  "tabletennis.md": { "TT-WO-1": signed(86), "TT-RT-1": signed(87) },
+  "tennis.md": { "TN-WO-1": signed(86), "TN-RT-1": signed(87) },
+  "badminton.md": { "BD-WO-1": signed(86), "BD-WO-2": deviation(86), "BD-RT-1": deviation(87) },
+  "cricket.md": { "CK-WO-1": signed(86), "CK-AB-1": signed(88), "CK-AB-2": signed(88), "CK-WO-2": OPEN },
+  "boardgame.md": { "BG-WO-1": signed(86), "BG-DW-1": signed(84), "BG-WO-2": signed(90), "BG-WO-3": signed(99, "2026-10-09") },
+  "carrom.md": { "CA-WO-1": signed(86), "CA-RT-1": signed(87), "CA-AB-1": signed(88) },
+  "generic.md": { "GN-WO-1": signed(86), "GN-RT-1": signed(87), "GN-AB-1": signed(88) },
+};
+/** Appendix A's own per-file count ("54 rows: cross-sport.md 23, football.md 3, …"), less the X-BR-1 amendment it counts
+ *  in cross-sport, plus PF-7's X-WD-6 (cross-sport) and PF-6's CK-WO-2 (cricket). Pins W2B_ROWS against a dropped entry. */
+const W2B_PER_FILE: Readonly<Record<string, number>> = {
+  "cross-sport.md": 23 - 1 + 1, "football.md": 3, "hockey.md": 3, "icehockey.md": 3, "volleyball.md": 2, "tabletennis.md": 2,
+  "tennis.md": 2, "badminton.md": 3, "cricket.md": 3 + 1, "boardgame.md": 4, "carrom.md": 3, "generic.md": 3,
+};
+/** X-BR-1, amended by owner ruling 84 (W2b-R2): "decided only by a win" → "decided only by a win or a double walkover".
+ *  W2b's proof of the amended text sits beside W2a's (plan, Task 7: "added to X-BR-1's proved by"). */
+const X_BR_1 = {
+  says: "decided only by a win or a double walkover",
+  saidBefore: "decided only by a win (",
+  status: signed(84),
+  proof: "apps/web/src/server/engine-db/__tests__/double-walkover-seating.test.ts",
+} as const;
+const w2bIds = (): string[] => Object.values(W2B_ROWS).flatMap((ids) => Object.keys(ids));
+
+/** A row's test paths: each is one TypeScript parse inside `proofProblems` (`testTitles` builds an AST per path). */
+const testPaths = (r: RuleRow): number => r.provedBy.filter((p) => !isMatrixCase(p)).length;
+/** The parses the proof check makes: every signed or deviation row's test paths. W2b took this from about 25 to about
+ *  265 (66 distinct files), measured at 2.6 s on an idle 12-core box and 11 s at load 69, past the 5 s vitest default
+ *  the engine suite runs this file at (ci.yml's own rules step passes 30 s). AGENTS.md class 20: a flat timeout beside a
+ *  derived cost is a latent red, so the budget is stated from the parses, at 100 ms each (about twice the loaded rate). */
+const PROOF_PARSES = (() => {
+  // A rules file the parser refuses must fail the tests that read it (they name the line), not the file's collection.
+  try { return allRows().reduce((n, r) => n + (r.status.startsWith("⬜") || AWAITING_PROOF.has(r.id) ? 0 : testPaths(r)), 0); } catch { return 0; }
+})();
+const proofBudget = (parses: number): number => Math.max(5_000, parses * 100);
+
+/** Everything the parsed rows owe W2b, as data: each pinned id present, in its file, with its status; X-BR-1 amended. */
+function w2bProblems(rows: readonly RuleRow[]): string[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out: string[] = [];
+  for (const [file, ids] of Object.entries(W2B_ROWS)) {
+    for (const [id, status] of Object.entries(ids)) {
+      const r = byId.get(id);
+      if (r === undefined) { out.push(`${id}: missing (owed in ${file})`); continue; }
+      if (r.file !== file) out.push(`${id}: in ${r.file}, not ${file}`);
+      if (r.status !== status) out.push(`${id}: status "${r.status}", not "${status}"`);
+    }
+  }
+  const br = byId.get("X-BR-1");
+  if (br === undefined) return [...out, "X-BR-1: missing"];
+  if (!br.rule.includes(X_BR_1.says) || br.rule.includes(X_BR_1.saidBefore)) out.push(`X-BR-1: the rule does not say "${X_BR_1.says}": ${br.rule}`);
+  if (br.status !== X_BR_1.status) out.push(`X-BR-1: status "${br.status}", not "${X_BR_1.status}"`);
+  if (!br.provedBy.includes(X_BR_1.proof)) out.push(`X-BR-1: proved by does not name ${X_BR_1.proof}`);
+  return out;
+}
+
 /** In-memory files for synthetic rows: no synthetic row borrows a real file as its proof. Every path is repo-relative. */
 const PROVES_TS = "apps/web/src/server/__tests__/proves.test.ts";
 const PROVES_SPEC = "apps/web/e2e/proves.spec.ts";
@@ -100,8 +185,9 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(refused).toBe(7);
   });
 
-  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)", () => {
+  it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)", (ctx) => {
     let checked = 0;
+    let parses = 0;
     for (const r of allRows()) {
       if (r.status.startsWith("⬜")) continue;
       if (AWAITING_PROOF.has(r.id)) {
@@ -110,10 +196,13 @@ describe("rules reference (ruling 75, spec §6)", () => {
         continue;
       }
       expect(proofProblems(r), r.id).toEqual([]);
+      parses += testPaths(r);
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
-  });
+    expect(parses, "the parses the budget was derived from are the parses made").toBe(PROOF_PARSES);
+    expect(ctx.task.timeout, "the timeout vitest applied is the one derived from those parses, not a default").toBe(proofBudget(PROOF_PARSES));
+  }, proofBudget(PROOF_PARSES));
 
   it("the proof checks catch a row with no test, a missing file and a file that does not name the id (synthetic signed rows)", () => {
     expect(proofProblems(row([]), read)).toEqual(["X-ZZ-1 names no proving test"]);
@@ -285,6 +374,60 @@ describe("rules reference (ruling 75, spec §6)", () => {
     let checked = 0;
     for (const r of allRows()) for (const p of r.enforcedAt) { expect(fileExists(p), `${r.id}: ${p}`).toBe(true); checked++; }
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112)", () => {
+  it("empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing", () => {
+    const problems = w2bProblems([]);
+    expect(problems).toHaveLength(56);
+    expect(problems.filter((p) => !/: missing/.test(p))).toEqual([]);
+  });
+
+  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108 or 112 where that ruling changed the text; PF-6/PF-7 open), and X-BR-1's text says 'a win or a double walkover'", () => {
+    const ids = w2bIds();
+    expect(ids).toHaveLength(55);
+    expect(new Set(ids).size).toBe(55); // no id pinned twice
+    expect(ids.filter((id) => SEEDED.includes(id))).toEqual([]); // spec §6: new and unique against the W2a seed
+    for (const [file, n] of Object.entries(W2B_PER_FILE)) expect(Object.keys(W2B_ROWS[file] ?? {}), file).toHaveLength(n);
+    expect(Object.keys(W2B_ROWS).sort()).toEqual(Object.keys(W2B_PER_FILE).sort());
+    expect(Object.values(W2B_PER_FILE).reduce((a, b) => a + b, 0)).toBe(55);
+    // Appendix A's 53 are signed or deviation; only the two orchestrator rows are open.
+    const open = Object.values(W2B_ROWS).flatMap((ids) => Object.entries(ids)).filter(([, s]) => s === OPEN).map(([id]) => id);
+    expect(open.sort()).toEqual(["CK-WO-2", "X-WD-6"]);
+    expect(w2bProblems(allRows())).toEqual([]);
+  });
+
+  it("the W2b pin sees a dropped row, a row in the wrong file, a wrong status and X-BR-1's old text (synthetic edits of the real rows)", () => {
+    const rows = allRows();
+    const edit = (id: string, patch: Partial<RuleRow>) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    expect(w2bProblems(rows.filter((r) => r.id !== "HK-WO-1"))).toEqual(["HK-WO-1: missing (owed in hockey.md)"]);
+    expect(w2bProblems(edit("CK-AB-2", { file: "cross-sport.md" }))).toEqual(["CK-AB-2: in cross-sport.md, not cricket.md"]);
+    expect(w2bProblems(edit("X-WO-1", { status: signed(86) }))).toEqual([`X-WO-1: status "${signed(86)}", not "${signed(108, "2026-10-11")}"`]);
+    const br = rows.find((r) => r.id === "X-BR-1");
+    expect(br).toBeDefined();
+    const old = (br?.rule ?? "").replace(X_BR_1.says, "decided only by a win");
+    expect(w2bProblems(edit("X-BR-1", { rule: old }))).toHaveLength(1);
+    expect(w2bProblems(edit("X-BR-1", { provedBy: ["apps/web/src/server/engine-db/__tests__/settle-seating.test.ts"] }))).toHaveLength(1);
+  });
+
+  it("every W2b row names a proving test and an enforcement site, and the two open rows' proofs prove them too, so no listed proof is unchecked evidence (the signed rows' are proved by the check above)", () => {
+    const byId = new Map(allRows().map((r) => [r.id, r]));
+    let named = 0;
+    let openProved = 0;
+    for (const id of [...w2bIds(), "X-BR-1"]) {
+      const r = byId.get(id);
+      expect(r, id).toBeDefined();
+      if (r === undefined) continue;
+      expect(testPaths(r), `${id} lists no proving test`).toBeGreaterThan(0);
+      expect(r.enforcedAt.length, `${id} names no enforcement site`).toBeGreaterThan(0);
+      named++;
+      if (r.status !== OPEN) continue;
+      expect(proofProblems(r), id).toEqual([]);
+      openProved++;
+    }
+    expect(named).toBe(56);
+    expect(openProved).toBe(2);
   });
 });
 
