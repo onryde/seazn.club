@@ -1483,9 +1483,10 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves, Lichess's answers, withdrawals and passes in any order", () => {
   type Truth = "silent" | "running" | "ended" | "aborted";
+  type CreateOutcome = "ok" | "throttled" | "acceptFails";
   type Act =
     | { kind: "checkIn"; side: Side }
-    | { kind: "create"; outcome: "ok" | "throttled" | "acceptFails" }
+    | { kind: "create"; outcome: CreateOutcome }
     | { kind: "move" }
     | { kind: "truth"; truth: Truth }
     | { kind: "withdraw" }
@@ -1519,7 +1520,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
   const actArb: fc.Arbitrary<Act> = fc.oneof(
     { arbitrary: fc.constantFrom<Side>("home", "away").map((side): Act => ({ kind: "checkIn", side })), weight: 2 },
     {
-      arbitrary: fc.constantFrom("ok", "throttled", "acceptFails").map((outcome): Act => ({ kind: "create", outcome })),
+      arbitrary: fc.constantFrom<CreateOutcome>("ok", "throttled", "acceptFails").map((outcome): Act => ({ kind: "create", outcome })),
       weight: 2,
     },
     { arbitrary: fc.constant<Act>({ kind: "move" }), weight: 1 },
@@ -1547,6 +1548,10 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     m4_held: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5)],
     m4_held_read_again: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5), S(25)],
     m4_ready_held: [C("home"), C("away"), CREATE, S(25), S(10), S(5), S(10)],
+    held_then_withdrawn: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5), { kind: "withdraw" }, S(25)],
+    tick_jitter_read: [C("home"), C("away"), CREATE, { kind: "move" }, S(3), S(3)],
+    inside_increment: [C("home"), C("away"), CREATE, { kind: "move" }, S(13)],
+    at_end_not_past: [C("home"), C("away"), CREATE, { kind: "move" }, S(14)],
     ended_finishes: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "truth", truth: "ended" }, S(3)],
     withdrawn_closes_unread: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "withdraw" }, S(3)],
     truth_resets: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), { kind: "truth", truth: "running" }, S(5)],
@@ -1667,6 +1672,15 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "m4_held": return last?.held === 1 && m.reason === "provider_error";
       case "m4_held_read_again": return last?.reconciled === 1 && last.held === 0 && m.bridge === "held" && m.emptyReads === N + 1;
       case "m4_ready_held": return last?.held === 1 && m.heldBy === "sweep" && m.startedAt === null;
+      case "held_then_withdrawn": return last?.reconciled === 0 && m.bridge === "held" && !m.playable;
+      // Three minutes after a read: inside half a tick of the cadence, so read.
+      case "tick_jitter_read": return last?.reconciled === 1 && m.lastRead === m.t && m.emptyReads === 0;
+      // Past both base clocks, but not past the increments the game earned.
+      case "inside_increment": {
+        const s0 = m.startedAt ?? Number.NaN;
+        return last?.reconciled === 1 && m.emptyReads === 0 && m.t > s0 + (2 * SEED_CLOCK.base) / 60 && m.t < s0 + SPAN;
+      }
+      case "at_end_not_past": return last?.reconciled === 1 && m.emptyReads === 0 && m.t === (m.startedAt ?? Number.NaN) + SPAN;
       case "ended_finishes": return last?.reconciled === 1 && m.bridge === "finished" && !m.playable;
       case "withdrawn_closes_unread": return last?.reconciled === 1 && !last.readLichess && m.bridge === "finished";
       case "truth_resets": return last?.reconciled === 1 && last.readLichess && m.emptyReads === 0;
