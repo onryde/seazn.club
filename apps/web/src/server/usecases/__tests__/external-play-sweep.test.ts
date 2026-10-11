@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { EngineError, foldMatch } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { sql } from "@/lib/db";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
@@ -55,7 +56,10 @@ import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
 import { reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
+import { organiserOverrideVideo } from "../external-play/preflight";
 import {
+  CAMERA_EVIDENCE_AFTER_MS,
+  CAMERA_EVIDENCE_GIVE_UP_MS,
   SWEEP_CADENCE_MS,
   SWEEP_MOVE_BUDGET,
   SWEEP_NO_TRUTH_HOLD_AFTER,
@@ -141,13 +145,35 @@ vi.mock("@/server/external-play/lichess/board-api", async (importOriginal) => {
 // RealtimeKit: the REAL adapter (ensureMeeting / endMeeting) over this fake
 // fetch, passed through the adapter's own `deps.fetch` seam. `patchFails`
 // answers the deactivate with a 500 that many times.
+//
+// Job 5 (C1) also needs a camera WORLD: the participants T8's seat adds (the
+// seat's active session answers LIVE with every one of them present), and,
+// after the match, the meeting's SESSIONS with their participant rows and
+// peer events, and each peer's report — the measured shapes (adapter tests).
+// `sessionsFail` answers GET /sessions with a 503 that many times.
+type FakeSession = {
+  id: string;
+  meetingId: string;
+  status: "LIVE" | "ENDED";
+  started_at: string;
+  ended_at: string | null;
+  rows: { id: string; user_id: string; left_at: string | null; peer_events: { event_name: string; peer_id: string }[] }[];
+};
 const rtk = vi.hoisted(() => {
   const state = {
     calls: [] as { method: string; path: string }[],
     patchFails: 0,
+    sessionsFail: 0,
+    participants: new Map<string, string[]>(),
+    sessions: [] as FakeSession[],
+    reports: new Map<string, () => unknown>(),
     reset() {
       state.calls = [];
       state.patchFails = 0;
+      state.sessionsFail = 0;
+      state.participants = new Map();
+      state.sessions = [];
+      state.reports = new Map();
     },
     async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
       const u = new URL(String(input));
@@ -156,7 +182,55 @@ const rtk = vi.hoisted(() => {
       state.calls.push({ method, path });
       const json = (status: number, body: unknown) =>
         new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-      if (method === "POST" && path === "/meetings") return json(201, { success: true, data: { id: `mtg-${crypto.randomUUID()}` } });
+      const ok = (data: unknown) => json(200, { success: true, data });
+      if (method === "POST" && path === "/meetings") {
+        const id = `mtg-${crypto.randomUUID()}`;
+        state.participants.set(id, []);
+        return json(201, { success: true, data: { id } });
+      }
+      const added = /^\/meetings\/([^/]+)\/participants$/.exec(path);
+      if (method === "POST" && added) {
+        const id = `part-${crypto.randomUUID()}`;
+        state.participants.get(decodeURIComponent(added[1]!))?.push(id);
+        return json(201, { success: true, data: { id, token: `rtk-tok-${id}` } });
+      }
+      if (method === "POST" && /^\/meetings\/[^/]+\/participants\/[^/]+\/token$/.test(path)) {
+        return ok({ token: `rtk-tok-${crypto.randomUUID()}` });
+      }
+      const active = /^\/meetings\/([^/]+)\/active-session$/.exec(path);
+      if (method === "GET" && active) return ok({ id: `seat-${active[1]}`, status: "LIVE" });
+      const seat = /^\/sessions\/seat-([^/]+)\/participants$/.exec(path);
+      if (method === "GET" && seat) {
+        const ids = state.participants.get(decodeURIComponent(seat[1]!)) ?? [];
+        return ok({ participants: ids.map((id) => ({ id: `row-${id}`, user_id: id, left_at: null })) });
+      }
+      if (method === "GET" && path === "/sessions") {
+        if (state.sessionsFail > 0) {
+          state.sessionsFail--;
+          return json(503, { success: false });
+        }
+        const m = u.searchParams.get("associated_id");
+        return ok({
+          sessions: state.sessions
+            .filter((x) => x.meetingId === m)
+            .map((x) => ({
+              id: x.id, associated_id: x.meetingId, status: x.status, started_at: x.started_at,
+              ...(x.ended_at === null ? {} : { ended_at: x.ended_at }),
+            })),
+        });
+      }
+      const report = /^\/sessions\/peer-report\/([^/]+)$/.exec(path);
+      if (method === "GET" && report) {
+        const r = state.reports.get(decodeURIComponent(report[1]!));
+        if (!r) return json(404, { success: false, error: { code: 404, message: "No peer event exists" } });
+        return ok(r());
+      }
+      const rows = /^\/sessions\/([^/]+)\/participants$/.exec(path);
+      if (method === "GET" && rows) {
+        const x = state.sessions.find((y) => y.id === decodeURIComponent(rows[1]!));
+        if (!x) return json(404, { success: false, error: { code: 404, message: "no such session" } });
+        return ok({ participants: x.rows });
+      }
       if (method === "POST" && path.endsWith("/active-session/kick-all")) {
         // Nobody in the room: RealtimeKit's not-found envelope (adapter tests).
         return json(404, { success: false, error: { code: 404, message: "no active session" } });
@@ -281,7 +355,9 @@ type Board = SeedOnlineChessFixtureResult & {
  *  through T19's REAL action. The TIMETABLE says three hours from now, so a
  *  sweep that anchored on `scheduled_at` would see a different window. */
 async function openedBoard(
-  o: { checkedIn: readonly Side[]; kind?: string; openedMinutesAgo?: number } = { checkedIn: [] },
+  o: { checkedIn: readonly Side[]; kind?: string; openedMinutesAgo?: number; cameraPolicy?: CameraPolicy } = {
+    checkedIn: [],
+  },
 ): Promise<Board> {
   const opened = new Date(Date.now() - (o.openedMinutesAgo ?? 1) * 60_000);
   const s = await seedOnlineChessFixture({
@@ -290,6 +366,7 @@ async function openedBoard(
     scheduledAt: new Date(opened.getTime() + 3 * 60 * 60_000),
     linked: true,
     clock: SEED_CLOCK,
+    ...(o.cameraPolicy ? { cameraPolicy: o.cameraPolicy } : {}),
   });
   if (o.kind) await sql`update stages set kind = ${o.kind} where id = ${s.stageId}`;
   const res = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }, { now: opened });
@@ -1724,7 +1801,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
           m.emptyReads = 0;
           if (m.truth === "ended") {
             m.playable = false; // T12 wrote Lichess's result
-            if (m.bridge !== "held") m.bridge = "finished"; // a held row keeps its reason
+            m.bridge = "finished"; // a held row never reaches here (C3's branch above)
             counters.finished_by_truth++;
           } else if (m.truth === "aborted") {
             m.bridge = "held";
@@ -1963,6 +2040,429 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     }
     // fd 1 directly: the JSON reporter drops console output.
     writeSync(1, `sweep property: ${JSON.stringify({ runs: run, claims, counters })}\n`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job 5 — the camera evidence after the match (controller ruling C1;
+// design §5.2: "fetched once, at least 2 minutes after the player leaves or
+// the match ends, retrying until left_at is set and duration > 0").
+// RealtimeKit is the fake world above, through the REAL adapter; never live.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () => {
+  type Match = {
+    b: Board;
+    meetingId: string;
+    part: Record<Side, string>;
+    /** The match window as the DB holds it: the first move, the room's end
+     *  (as a JS Date reads them — milliseconds, what the sweep computes on). */
+    startedAt: number;
+    endedAt: number;
+    /** The room's end rounded UP to the millisecond: `ended_at` is stamped
+     *  by the DB's now(), which carries microseconds a JS Date drops, so a
+     *  clock of `endedAt + 2 min` would sit a few microseconds BEFORE the
+     *  rule's boundary. */
+    endedCeil: number;
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const SAMPLE_MS = 7_000; // the spike's measured cadence
+
+  /** A board played under `policy` through the REAL producers: both players
+   *  check in; T9's create seats both through T8's REAL seat (the global
+   *  fetch is the RealtimeKit fake for the create only — T8 passes no deps);
+   *  T10's first move starts it (unless `start: false`); T7's REAL endMeeting
+   *  ends the room. Opened 19 minutes ago so the first move, at T+6, is in
+   *  the PAST of the DB's own clock that stamps the room's end. */
+  async function playedMatch(o: { policy?: CameraPolicy; start?: boolean } = {}): Promise<Match> {
+    const b = await openedBoard({ checkedIn: ["home", "away"], openedMinutesAgo: 19, cameraPolicy: o.policy ?? "required" });
+    vi.stubGlobal("fetch", RTK.fetch);
+    try {
+      if (o.start === false) await readyGame(b, 5);
+      else await liveGame(b, 6);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const [m] = await sql<{ meeting_id: string }[]>`
+      select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId}`;
+    expect(m, "premise: T8's seat opened the room").toBeDefined();
+    const parts = await sql<{ person_id: string; participant_id: string }[]>`
+      select person_id, participant_id from fixture_video_participants
+       where fixture_id = ${b.fixtureId} and preset = 'player'`;
+    const of = (side: Side) => parts.find((p) => p.person_id === b[side].personId)?.participant_id;
+    const part = { home: of("home"), away: of("away") };
+    expect(part.home && part.away, "premise: T8 gave each player a camera participant").toBeTruthy();
+    await endMeeting(m!.meeting_id, RTK);
+    const [t] = await sql<{ started_at: Date | null; ended_at: Date; ended_ceil: number }[]>`
+      select ep.started_at, vm.ended_at,
+             ceil(extract(epoch from vm.ended_at) * 1000)::float8 as ended_ceil
+        from fixture_video_meetings vm
+        join fixture_external_play ep on ep.fixture_id = vm.fixture_id
+       where vm.fixture_id = ${b.fixtureId}`;
+    expect(t!.ended_at, "premise: T7 ended the room").not.toBeNull();
+    if (o.start !== false) {
+      expect(t!.started_at, "premise: T10 started the game").not.toBeNull();
+      expect(t!.started_at!.getTime(), "premise: the match began before the room ended").toBeLessThan(t!.ended_at.getTime());
+    }
+    rtk.calls = [];
+    return {
+      b,
+      meetingId: m!.meeting_id,
+      part: part as Record<Side, string>,
+      startedAt: t!.started_at?.getTime() ?? Number.NaN,
+      endedAt: t!.ended_at.getTime(),
+      endedCeil: Number(t!.ended_ceil),
+    };
+  }
+
+  /** A session of the match's meeting, `from`/`to` in ms. */
+  function session(m: Match, from: number, to: number | null, status: "LIVE" | "ENDED" = "ENDED"): FakeSession {
+    const x: FakeSession = {
+      id: `sess-${randomUUID().slice(0, 8)}`, meetingId: m.meetingId, status,
+      started_at: iso(from), ended_at: to === null ? null : iso(to), rows: [],
+    };
+    rtk.sessions.push(x);
+    return x;
+  }
+
+  /** One camera connection (a PEER) of `side` in `x`, on from `joined` to
+   *  `left` except over `gaps` (absolute ms), sampled every 7 s. `ready` is
+   *  read at every fetch: false is a report not final yet (left_at null,
+   *  duration 0 — the measured frozen snapshot). Returns its samples. */
+  function connect(
+    m: Match, x: FakeSession, side: Side,
+    o: { joined: number; left: number; gaps?: [number, number][]; events?: [string, number][]; ready?: { now: boolean } },
+  ): number[] {
+    const peer = `peer-${randomUUID().slice(0, 8)}`;
+    const samples: number[] = [];
+    for (let t = o.joined; t <= o.left; t += SAMPLE_MS) {
+      if (!(o.gaps ?? []).some(([a, b]) => t > a && t < b)) samples.push(t);
+    }
+    let row = x.rows.find((r) => r.user_id === m.part[side]);
+    if (!row) {
+      row = { id: `row-${randomUUID().slice(0, 8)}`, user_id: m.part[side], left_at: iso(o.left), peer_events: [] };
+      x.rows.push(row);
+    }
+    row.peer_events.push({ event_name: "PEER_JOINING", peer_id: peer }, { event_name: "PEER_LEAVING", peer_id: peer });
+    const ready = o.ready ?? { now: true };
+    rtk.reports.set(peer, () => ({
+      participant: {
+        joined_at: iso(o.joined),
+        left_at: ready.now ? iso(o.left) : null,
+        duration: ready.now ? (o.left - o.joined) / 60_000 : 0,
+        peer_report: {
+          metadata: { events: (o.events ?? []).map(([name, at]) => ({ name, timestamp: iso(at) })) },
+          quality: { video_producer: (ready.now ? samples : samples.slice(0, 1)).map((t) => ({ timestamp: iso(t), frames_encoded: 140 })) },
+        },
+      },
+    }));
+    return samples;
+  }
+
+  /** Both players on camera from before the first move to the room's end. */
+  function bothOnThroughout(m: Match, x = session(m, m.startedAt - 120_000, m.endedAt)) {
+    for (const side of ["home", "away"] as const) connect(m, x, side, { joined: m.startedAt - 90_000, left: m.endedAt });
+    return x;
+  }
+
+  const flagsOf = (fixtureId: string) =>
+    sql<{ kind: string; person_id: string | null; note: string | null; closed_at: Date | null }[]>`
+      select kind, person_id, note, closed_at from fixture_play_flags where fixture_id = ${fixtureId} order by opened_at, id`;
+  const settledAt = async (fixtureId: string) =>
+    (await sql<{ camera_evidence_at: Date | null }[]>`
+      select camera_evidence_at from fixture_video_meetings where fixture_id = ${fixtureId}`)[0]!.camera_evidence_at;
+  const cameraFailures = (r: SweepReport) => r.failures.filter((f) => f.job === "camera_evidence");
+  const rtkReads = () => rtk.calls.filter((c) => c.method === "GET" && c.path.startsWith("/sessions"));
+  /** `ms` after the room ended — the sweep's clock. */
+  const after = (m: Match, ms: number) => new Date(m.endedCeil + ms);
+  const pass = (m: Match, now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK });
+
+  it("the rulebook's timing: at least 2 minutes after the room ends; a day to give up", () => {
+    expect(CAMERA_EVIDENCE_AFTER_MS, "spec §5.2: at least 2 minutes").toBe(2 * 60_000);
+    expect(CAMERA_EVIDENCE_GIVE_UP_MS).toBe(24 * 60 * 60_000);
+  });
+
+  it("camera on throughout: settled, NO flag — and every report was read (counted)", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(r.cameraSettled).toBe(1);
+    expect(r.cameraFlags).toBe(0);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    expect(await settledAt(m.b.fixtureId)).not.toBeNull();
+    // Anti-vacuity: the session list, one participant list per player, one report per peer.
+    expect(rtkReads().map((c) => c.path.replace(/sess-[0-9a-f]{8}/, "*").replace(/peer-[0-9a-f]{8}/, "*"))).toEqual([
+      "/sessions", "/sessions/*/participants", "/sessions/peer-report/*", "/sessions/*/participants", "/sessions/peer-report/*",
+    ]);
+  });
+
+  it("the camera OFF mid-match: one camera_lost flag for THAT player, the interval in its note; never a sanction", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    const gap: [number, number] = [m.startedAt + 200_000, m.startedAt + 400_000];
+    const samples = connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [gap] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    const before = await fixtureRow(m.b.fixtureId);
+    const bridge = await bridgeOf(m.b.fixtureId);
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(r.cameraFlags).toBe(1);
+    // Expected from the scenario: the off interval brackets the gap by the
+    // last sample before it and the first after it (spec §5.2).
+    const from = Math.max(...samples.filter((t) => t <= gap[0]));
+    const to = Math.min(...samples.filter((t) => t >= gap[1]));
+    const flags = await flagsOf(m.b.fixtureId);
+    expect(flags.map((f) => [f.kind, f.person_id, f.closed_at])).toEqual([["camera_lost", m.b.home.personId, null]]);
+    expect(flags[0]!.note).toContain(`camera off ${Math.round((to - from) / 1000)} s of ${Math.round((m.endedAt - m.startedAt) / 1000)} s`);
+    expect(flags[0]!.note).toContain(`${iso(from)} to ${iso(to)}`);
+    expect(flags[0]!.note).toContain("camera required");
+    // D10: the organiser decides — nothing about the match moved.
+    expect(await fixtureRow(m.b.fixtureId)).toEqual(before);
+    expect(await bridgeOf(m.b.fixtureId)).toEqual(bridge);
+  });
+
+  it("a RELOAD (two peers in one session) is one camera, not a loss", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    const mid = m.startedAt + 300_000;
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: mid });
+    connect(m, x, "home", { joined: mid + 5_000, left: m.endedAt });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    expect(x.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(r.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "every peer read").toBe(3);
+  });
+
+  it("a REJOIN (two sessions) is one camera, not a loss — and a second session is read", async () => {
+    const m = await playedMatch();
+    const mid = m.startedAt + 300_000;
+    const s1 = session(m, m.startedAt - 120_000, mid);
+    const s2 = session(m, mid + 3_000, m.endedAt);
+    for (const side of ["home", "away"] as const) {
+      connect(m, s1, side, { joined: m.startedAt - 90_000, left: mid });
+      connect(m, s2, side, { joined: mid + 3_000, left: m.endedAt });
+    }
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "4 peers over 2 sessions").toBe(4);
+  });
+
+  it("a rejoin that left the match UNCOVERED is a loss, from the leave to the return", async () => {
+    const m = await playedMatch();
+    const mid = m.startedAt + 300_000;
+    const s1 = session(m, m.startedAt - 120_000, mid);
+    const s2 = session(m, mid + 60_000, m.endedAt);
+    connect(m, s1, "home", { joined: m.startedAt - 90_000, left: mid });
+    connect(m, s2, "home", { joined: mid + 60_000, left: m.endedAt });
+    connect(m, s1, "away", { joined: m.startedAt - 90_000, left: mid });
+    connect(m, s2, "away", { joined: mid + 60_000, left: m.endedAt });
+    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    const flags = await flagsOf(m.b.fixtureId);
+    expect(flags.map((f) => f.person_id).sort()).toEqual([m.b.home.personId, m.b.away.personId].sort());
+    for (const f of flags) expect(f.note).toContain(`${iso(mid)} to ${iso(mid + 60_000)}`);
+  });
+
+  it("a report NOT READY yet: nothing stored; the next pass, once final, settles it (the retry)", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    const ready = { now: false };
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]], ready });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    const first = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(first)).toEqual([]);
+    expect(first.cameraSettled).toBe(0);
+    expect(await settledAt(m.b.fixtureId), "not settled: the report is not final").toBeNull();
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    expect(rtkReads().some((c) => c.path.startsWith("/sessions/peer-report/")), "premise: the report WAS read").toBe(true);
+    ready.now = true;
+    const second = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
+    expect(second.cameraSettled).toBe(1);
+    expect((await flagsOf(m.b.fixtureId)).map((f) => f.person_id)).toEqual([m.b.home.personId]);
+  });
+
+  it("a session still LIVE is not ready either: nothing stored, retried", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, null, "LIVE");
+    for (const side of ["home", "away"] as const) connect(m, x, side, { joined: m.startedAt - 90_000, left: m.endedAt });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(r.cameraSettled).toBe(0);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+  });
+
+  it("a re-run writes NO second flag and reads nothing", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect((await flagsOf(m.b.fixtureId)).length, "premise: flagged once").toBe(1);
+    rtk.calls = [];
+    const again = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
+    expect(again.cameraSettled).toBe(0);
+    expect(again.cameraFlags).toBe(0);
+    expect(rtkReads()).toEqual([]);
+    expect((await flagsOf(m.b.fixtureId)).length).toBe(1);
+  });
+
+  it("two passes RACING the settle write one flag between them (staged on the meeting row) — x3", async () => {
+    let checked = 0;
+    for (let i = 0; i < 3; i++) {
+      const m = await playedMatch();
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let signalHeld!: (pid: number) => void;
+      const held = new Promise<number>((resolve) => (signalHeld = resolve));
+      const holder = sql.begin(async (tx) => {
+        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        await tx`select fixture_id from fixture_video_meetings where fixture_id = ${m.b.fixtureId} for update`;
+        signalHeld(pid);
+        await released;
+      });
+      const holderPid = await held;
+      const now = after(m, CAMERA_EVIDENCE_AFTER_MS);
+      const a = pass(m, now);
+      const b = pass(m, now);
+      // Both settles parked: the first behind the holder, the second behind
+      // the first (a row lock's second waiter is blocked by the tuple lock's
+      // holder, not by the transaction holding the row).
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const [{ n }] = await sql<{ n: number }[]>`
+          with recursive behind(pid) as (
+            select pid from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))
+            union
+            select a.pid from pg_stat_activity a join behind b on b.pid = any(pg_blocking_pids(a.pid))
+          ) select count(*)::int as n from behind`;
+        if (n >= 2) break;
+        if (Date.now() > deadline) throw new Error(`premise: only ${n} settle(s) parked behind the holder`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      release();
+      await holder;
+      const [ra, rb] = await Promise.all([a, b]);
+      expect([...cameraFailures(ra), ...cameraFailures(rb)]).toEqual([]);
+      expect(ra.cameraSettled + rb.cameraSettled, "exactly one pass settled").toBe(1);
+      expect((await flagsOf(m.b.fixtureId)).length, "one flag").toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, 180_000);
+
+  it("under 2 minutes after the room ended nothing is read; AT 2 minutes it is", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    const early = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS - 1));
+    expect(early.cameraSettled).toBe(0);
+    expect(rtkReads()).toEqual([]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    const at = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(at.cameraSettled).toBe(1);
+  });
+
+  it("nothing is stored, and RealtimeKit never asked, when the policy is not Required — off, optional — counted", async () => {
+    let checked = 0;
+    for (const relaxTo of ["off", "optional"] as const) {
+      const m = await playedMatch();
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+      // D9: after the open an organiser may only RELAX — here at the stage,
+      // the nearest level (a settings write; the PATCH is not under test).
+      await sql`update stages set camera_policy = ${relaxTo} where id = ${m.b.stageId}`;
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(r.cameraFlags, relaxTo).toBe(0);
+      expect(await flagsOf(m.b.fixtureId), relaxTo).toEqual([]);
+      expect(rtkReads(), `${relaxTo}: no read`).toEqual([]);
+      expect(await settledAt(m.b.fixtureId), `${relaxTo}: settled, so never re-read`).not.toBeNull();
+      checked++;
+    }
+    // …and a board that was OPTIONAL all along (T8 seats it with a camera too).
+    const m = await playedMatch({ policy: "optional" });
+    bothOnThroughout(m);
+    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(rtkReads()).toEqual([]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    checked++;
+    expect(checked).toBe(3);
+  });
+
+  it("an organiser's video override (D11): nothing read, nothing stored", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    await organiserOverrideVideo({ fixtureId: m.b.fixtureId, actorUserId: m.b.ownerUserId, note: "RealtimeKit down" });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(rtkReads()).toEqual([]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    expect(r.cameraSettled).toBe(1);
+  });
+
+  it("a game that never STARTED has no match to evidence: settled, nothing read", async () => {
+    const m = await playedMatch({ start: false });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(rtkReads()).toEqual([]);
+    expect(r.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("only the MATCH counts: the camera off before the first move is not a loss", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 300_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 280_000, left: m.endedAt, gaps: [[m.startedAt - 250_000, m.startedAt - 10_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 280_000, left: m.endedAt });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(r.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("a player with NO camera connection in any session is off for the whole match", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
+    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    const flags = await flagsOf(m.b.fixtureId);
+    expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
+    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.endedAt)}`);
+    expect(flags[0]!.note).toContain("from 0 camera connections");
+  });
+
+  it("RealtimeKit down: a failure, nothing stored, read again next pass", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    rtk.sessionsFail = 1;
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "unavailable" }]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    const next = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
+    expect(cameraFailures(next)).toEqual([]);
+    expect(next.cameraSettled).toBe(1);
+  });
+
+  it("evidence never ready after a day: settled with no flag, and SAID so (no endless re-read)", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    for (const side of ["home", "away"] as const) {
+      connect(m, x, side, { joined: m.startedAt - 90_000, left: m.endedAt, ready: { now: false } });
+    }
+    // On the millisecond clock the sweep judges with (`ended_at` as a Date).
+    const before = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS));
+    expect(before.cameraSettled, "AT the day: still retrying").toBe(0);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
+    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
+    expect(late.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    rtk.calls = [];
+    await pass(m, after(m, CAMERA_EVIDENCE_GIVE_UP_MS + SWEEP_CADENCE_MS));
+    expect(rtkReads(), "settled: never read again").toEqual([]);
   });
 });
 

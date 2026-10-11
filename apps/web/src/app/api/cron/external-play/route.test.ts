@@ -42,6 +42,8 @@ describe("POST /api/cron/external-play", () => {
       meetingsEnded: 3,
       reconciled: 4,
       heldForOrganiser: 5,
+      cameraSettled: 6,
+      cameraFlags: 7,
       scanned: 15,
       failures: [
         {

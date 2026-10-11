@@ -1,14 +1,16 @@
 import "server-only";
 // The external-play sweep (chess in-page board design §3.5, §3.6, §4; Task 13).
 //
-// The 5-minute cron's FOUR jobs, every one of which happens when no page is
+// The 5-minute cron's FIVE jobs, every one of which happens when no page is
 // open (spec §4):
 //   1. the T+20 no-show      → `core.forfeit {by, reason: "walkover"}`;
 //   2. the mint retry         for a create that hit Lichess's 429 wall (M3);
 //   3. meeting teardown       at the result, or at T+20 when nobody played;
 //   4. the reconcile sweep    every game on file, read from the BOARD STREAM by
 //                             T11's reconcile — the abandoned-board sweep and
-//                             the main detector of moves made at Lichess.
+//                             the main detector of moves made at Lichess;
+//   5. the camera evidence    after an ended room, every player's peer reports
+//                             → a camera_lost flag (controller ruling C1).
 // The T-10 notice is NOT here: under D12 the organiser's open-round action
 // sends the invites and stamps the window (T19).
 //
@@ -23,9 +25,17 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
+import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
-import { endMeeting } from "@/server/external-play/video/realtimekit";
+import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
+import {
+  endMeeting,
+  fetchVideoOffCoverage,
+  listMeetingSessions,
+  listPeerIds,
+  type RealtimeKitDeps,
+} from "@/server/external-play/video/realtimekit";
 import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
@@ -37,7 +47,7 @@ import { RECONCILED_WHILE_HELD, reconcile, type ReconcileOutcome } from "./recon
 import { holdForOrganiser } from "./result";
 import { checkIns } from "./room";
 
-export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile";
+export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence";
 
 export type SweepReport = {
   noShows: number;
@@ -45,6 +55,10 @@ export type SweepReport = {
   meetingsEnded: number;
   reconciled: number;
   heldForOrganiser: number;
+  /** Ended rooms whose camera evidence was settled this pass (job 5). */
+  cameraSettled: number;
+  /** camera_lost flags written this pass (job 5). */
+  cameraFlags: number;
   /** Candidates examined across every job — a pass that looked at nothing
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
@@ -62,6 +76,8 @@ export type SweepDeps = {
   createGameIfReady?: (fixtureId: string, deps: { now: Date }) => Promise<CreateOutcome>;
   /** T11's reconcile (`reconcile(fixtureId, "sweep")`), on the sweep's clock. */
   reconcile?: (a: { fixtureId: string; trigger: "sweep" }) => Promise<ReconcileOutcome | null>;
+  /** The RealtimeKit transport job 5 reads the peer reports through. */
+  realtimeKit?: RealtimeKitDeps;
   /** TEST SEAM — scope every job to these orgs. Production passes none and
    *  sweeps every org; the shared test database holds other suites' opened
    *  rounds, which an unscoped sweep would act on. */
@@ -487,6 +503,163 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
   if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
 }
 
+// ─── Job 5: the camera evidence after the match (controller ruling C1) ─────
+//
+// Design §5.2: the peer report is SDK telemetry, frozen while the player is
+// in the room and final ~70 s after they leave — so it is read once, at
+// least 2 minutes after the room ended (T7's endMeeting kicks everyone, so
+// every player has left by `ended_at`), retrying while any report is not
+// final. Every session of the meeting (a rejoin opens a new one) and every
+// peer of each (a reload is a new one) is unioned per player over the MATCH
+// — the first move to the result, or the room's end — by matchCameraOff.
+//
+// Under Required only: Off and Optional store nothing and ask RealtimeKit
+// nothing, and an organiser's video override (D11) is "proceed without
+// video" — nothing to evidence. Evidence for the organiser, NEVER a
+// sanction (D10): a fixture_play_flags row, and nothing else moves.
+//
+// One settle per room: `camera_evidence_at` is stamped, conditionally on
+// null, in the SAME transaction as the flags — a re-run, or a pass racing
+// this one, writes no second flag (V436). A room whose reports never become
+// readable is settled after a day with no flag and REPORTED, never re-read
+// forever.
+
+export const CAMERA_EVIDENCE_AFTER_MS = 2 * 60_000;
+export const CAMERA_EVIDENCE_GIVE_UP_MS = 24 * 60 * 60_000;
+
+type CameraCandidate = {
+  fixtureId: string;
+  orgId: string;
+  meetingId: string;
+  endedAt: Date;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  overrideAt: Date | null;
+};
+
+async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
+  const readable = new Date(pass.now.getTime() - CAMERA_EVIDENCE_AFTER_MS);
+  return sql<CameraCandidate[]>`
+    select m.fixture_id as "fixtureId", m.org_id as "orgId", m.meeting_id as "meetingId",
+           m.ended_at as "endedAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
+           ep.video_override_at as "overrideAt"
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+      left join fixture_external_play ep on ep.fixture_id = m.fixture_id
+     where m.ended_at is not null
+       and m.camera_evidence_at is null
+       and m.ended_at <= ${readable}
+       ${orgScope(pass)}
+     order by m.ended_at, m.fixture_id`;
+}
+
+type CameraFlag = { personId: string; note: string };
+
+/** Every player's camera over the window, or `not_ready` while any session
+ *  is live or any report is not final. A RealtimeKit failure THROWS. */
+async function readCameraEvidence(
+  c: CameraCandidate,
+  window: { from: Date; to: Date },
+  rtk: RealtimeKitDeps,
+): Promise<CameraFlag[] | "not_ready"> {
+  // The players are the fixture's two sides; their cameras are the player
+  // participants T8 added. A player with none had no camera in the match.
+  const rows = await sql<{ personId: string; participantId: string | null }[]>`
+    select em.person_id as "personId", vp.participant_id as "participantId"
+      from fixtures f
+      join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+      join persons p on p.id = em.person_id and p.merged_into is null
+      left join fixture_video_participants vp
+        on vp.fixture_id = f.id and vp.person_id = em.person_id and vp.preset = 'player'
+     where f.id = ${c.fixtureId}
+     order by em.person_id, vp.participant_id`;
+  const players = new Map<string, string[]>();
+  for (const r of rows) {
+    const ids = players.get(r.personId) ?? [];
+    if (r.participantId !== null) ids.push(r.participantId);
+    players.set(r.personId, ids);
+  }
+
+  const from = window.from.getTime();
+  const to = window.to.getTime();
+  const sessions = (await listMeetingSessions(c.meetingId, rtk)).filter(
+    (s) => Date.parse(s.startedAt) < to && (s.endedAt === null || Date.parse(s.endedAt) > from),
+  );
+  if (sessions.some((s) => s.status === "LIVE")) return "not_ready";
+
+  const flags: CameraFlag[] = [];
+  for (const [personId, participantIds] of players) {
+    const reports: CompleteCoverage[] = [];
+    for (const participantId of participantIds) {
+      for (const s of sessions) {
+        for (const peer of await listPeerIds(s.id, participantId, rtk)) {
+          const coverage = await fetchVideoOffCoverage(peer, rtk);
+          if (coverage.incomplete) return "not_ready";
+          reports.push(coverage);
+        }
+      }
+    }
+    const off = matchCameraOff(window, reports);
+    if (off.offIntervals.length === 0) continue;
+    const intervals = off.offIntervals
+      .map((iv) => `${iv.from} to ${iv.to}${iv.confirmedByEvents ? " (its own off/on events agree)" : ""}`)
+      .join("; ");
+    const connections = `${off.connections} camera connection${off.connections === 1 ? "" : "s"}`;
+    flags.push({
+      personId,
+      note:
+        `camera off ${Math.round(off.offSeconds)} s of ${Math.round(off.windowSeconds)} s in the match: ${intervals}; ` +
+        `from ${connections} over ${sessions.length} session${sessions.length === 1 ? "" : "s"}; camera required`,
+    });
+  }
+  return flags;
+}
+
+async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly CameraFlag[]): Promise<void> {
+  const written = await sql.begin(async (tx) => {
+    const claimed = await tx`
+      update fixture_video_meetings set camera_evidence_at = ${pass.now}
+       where fixture_id = ${c.fixtureId} and camera_evidence_at is null
+       returning fixture_id`;
+    if (claimed.length === 0) return null; // another pass settled it first
+    for (const f of flags) {
+      await tx`
+        insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note)
+        values (${c.fixtureId}, ${c.orgId}, 'camera_lost', ${f.personId}, ${f.note})`;
+    }
+    return flags.length;
+  });
+  if (written === null) return;
+  pass.report.cameraSettled++;
+  pass.report.cameraFlags += written;
+}
+
+async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
+  // No first move: no match to evidence. Override: no video expected.
+  if (c.startedAt === null || c.overrideAt !== null || (await fixtureCameraPolicy(c.fixtureId)) !== "required") {
+    await settleCamera(pass, c, []);
+    return;
+  }
+  const window = { from: c.startedAt, to: c.finishedAt ?? c.endedAt };
+  const givenUp = pass.now.getTime() - c.endedAt.getTime() > CAMERA_EVIDENCE_GIVE_UP_MS;
+  let read: CameraFlag[] | "not_ready";
+  try {
+    read = await readCameraEvidence(c, window, rtk);
+  } catch (err) {
+    if (!givenUp) throw err; // reported by `each`; read again next pass
+    read = "not_ready";
+  }
+  if (read !== "not_ready") {
+    await settleCamera(pass, c, read);
+    return;
+  }
+  if (!givenUp) return;
+  await settleCamera(pass, c, []);
+  const code = "CAMERA_EVIDENCE_UNREAD";
+  pass.report.failures.push({ job: "camera_evidence", fixtureId: c.fixtureId, code });
+  log.error({ fixtureId: c.fixtureId, code }, "external-play sweep: camera evidence never became readable; settled with no flag");
+}
+
 // ─── The pass ──────────────────────────────────────────────────────────────
 
 export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
@@ -496,6 +669,8 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
     meetingsEnded: 0,
     reconciled: 0,
     heldForOrganiser: 0,
+    cameraSettled: 0,
+    cameraFlags: 0,
     scanned: 0,
     failures: [],
   };
@@ -513,5 +688,8 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
   // torn down in it.
   const end = deps.endMeeting ?? ((m) => endMeeting(m));
   await each(pass, "teardown", await teardownCandidates(pass), (c) => teardown(pass, c, end));
+  // After the teardown: a room ended in THIS pass is not readable for 2 minutes.
+  const rtk = deps.realtimeKit ?? {};
+  await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));
   return report;
 }
