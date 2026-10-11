@@ -26,6 +26,17 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { fmtPublicDateTime } from "@/lib/format";
 import { BRACKET_CREST_CLASS } from "./matches-hub/bracket-crest";
 import type { ScheduleCopy } from "./schedule";
+import { ForfeitTagChip } from "./forfeit-tag-chip";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
+import {
+  doubleWalkoverNextWinner,
+  forfeitCopyLookup,
+  forfeitLedgerOfReason,
+  forfeitTag,
+  forfeitWords,
+  type ForfeitCopy,
+  type ForfeitWords,
+} from "@/lib/forfeit-tag";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -78,8 +89,44 @@ interface Props {
   locale: string;
 }
 
-/** The two schedule-rail words a bracket card's footer shows. */
-export type BracketCopy = Pick<ScheduleCopy, "live" | "tbd" | "held">;
+/** The two schedule-rail words a bracket card's footer shows — plus, W2b Task 13 (UI-2 option A), the forfeit tags
+ *  and sentences (`forfeitCopyOf` over the caller's public dictionary). Optional: a caller that passes none shows no
+ *  tag, exactly as before. `forfeitWords` is `Bracket`'s own, built once from `forfeit` — callers never pass it. */
+export type BracketCopy = Pick<ScheduleCopy, "live" | "tbd" | "held"> & {
+  forfeit?: ForfeitCopy;
+  forfeitWords?: ReadonlyMap<string, ForfeitWords>;
+};
+
+/**
+ * W2b Task 13 — each bracket card's tag and sentence, by fixture id: `forfeitTag` over the fixture's outcome and the
+ * ledger the public read carries (`abandon_reason`), worded from the pre-resolved copy. A double walkover names the
+ * side its next match was walked over to when the line feeds one (`feedsNextMatch`, `doubleWalkoverNextWinner`) —
+ * the stage's own fixtures are all here. An abandon has no result sentence on a tile, so it names its reason alone.
+ */
+export function bracketForfeitWords(
+  fixtures: readonly PublicFixture[],
+  entrantNames: Readonly<Record<string, string>>,
+  copy: ForfeitCopy | undefined,
+): ReadonlyMap<string, ForfeitWords> {
+  const out = new Map<string, ForfeitWords>();
+  if (copy === undefined) return out;
+  const lookup = forfeitCopyLookup(copy);
+  const byId = new Map(fixtures.map((f) => [f.id, f]));
+  const nameOf = (id: string) => entrantNames[id] ?? "?";
+  for (const f of fixtures) {
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));
+    if (tag === null) continue;
+    const next =
+      tag.kind === "double_walkover"
+        ? doubleWalkoverNextWinner(
+            feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),
+            f.winner_to_fixture ? byId.get(f.winner_to_fixture) : null,
+          )
+        : null;
+    out.set(f.id, forfeitWords(tag, lookup, nameOf, { next: next === null ? null : nameOf(next) }));
+  }
+  return out;
+}
 
 function sideLabel(
   entrantId: string | null,
@@ -148,6 +195,7 @@ function FixtureCard({
     );
   };
   const live = fixture.status === "in_play";
+  const forfeit = copy.forfeitWords?.get(fixture.id) ?? null;
   return (
     <Link
       href={href}
@@ -168,6 +216,17 @@ function FixtureCard({
             {/* `shrink-0`: the rail's dot's squeeze class (N1h h1, review-n1g G1). */}
             <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
             {copy.live}
+          </span>
+        ) : forfeit ? (
+          // W2b Task 13 (UI-2 option A): the credited score and its tag on ONE row that never wraps — a 188px tile at
+          // 320 has no room for a second line. The sentence is the tag's tooltip and accessible name.
+          <span data-testid="bracket-forfeit" className="flex min-w-0 items-center gap-1.5">
+            {fixture.summary?.headline ? (
+              <span className="min-w-0 truncate font-display text-sm font-semibold tabular-nums text-accent-strong">
+                {fixture.summary.headline}
+              </span>
+            ) : null}
+            <ForfeitTagChip tag={forfeit.tag} sentence={forfeit.sentence} testId="bracket-forfeit-tag" />
           </span>
         ) : held ? (
           // The held note, and the level score the board recorded beside it — the score stays; only the verdict waits.
@@ -534,7 +593,10 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy, tz, locale }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy: callerCopy, tz, locale }: Props) {
+  // W2b Task 13: every card's forfeit words, built once for the whole stage (a double walkover's clause reads its
+  // next fixture), then carried down with the rest of the copy.
+  const copy: BracketCopy = { ...callerCopy, forfeitWords: bracketForfeitWords(fixtures, entrantNames, callerCopy.forfeit) };
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);

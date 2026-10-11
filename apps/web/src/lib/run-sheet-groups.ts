@@ -62,6 +62,8 @@ export type RunSheetFixture = Pick<
   | "third_place"
   | "conditional"
   | "ext_key"
+  // W2b Task 13: the active abandon's reason, the run sheet's abandon tag read (`outcomeText`'s ledger).
+  | "abandon_reason"
 >;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };

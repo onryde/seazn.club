@@ -831,33 +831,46 @@ describe("KnockoutTab — the champion banner", () => {
     }
   });
 
-  it("a final won by FORFEIT says so — 'Won the Final by walkover against Dev', never 'Beat Dev'", () => {
-    // The builder's own forfeited final carries exactly this status line
-    // (`competition-hub.test.ts` witnesses it on the real producer).
-    const forfeited = DONE_MATCHES.map((x) =>
-      x.fixtureId === "f1"
-        ? {
-            ...x,
-            header: {
-              ...x.header,
-              status: "other" as const,
-              statusLine: { key: "matchCentre.status.forfeited" },
-            },
-          }
-        : x,
-    );
-    const h = render(
-      hubDoc({
-        matches: forfeited,
-        knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
-      }),
-    );
+  // W2b Task 13: the banner reads the final's FORFEIT KIND (`HubMatch.forfeit`, `forfeitTag`'s), not the status line —
+  // the status cannot tell a walkover (never played) from a retirement (played, then abandoned by one side).
+  const forfeitFinal = (kind: string) =>
+    hubDoc({
+      matches: DONE_MATCHES.map((x) =>
+        x.fixtureId === "f1"
+          ? {
+              ...x,
+              header: { ...x.header, status: "other" as const, statusLine: { key: "matchCentre.status.forfeited" } },
+              forfeit: { kind, tag: kind === "retired" ? "ret." : "w/o", sentence: "Dev — the sentence" },
+            }
+          : x,
+      ),
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
+    });
+  const bannerOf = (h: string) => {
     const at = h.indexOf(`data-testid="mh-knockout-champion-${VIEW}"`);
     expect(at).toBeGreaterThan(-1);
-    const banner = h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
-    expect(banner).toContain(">Eli<");
-    expect(banner).toContain(">Won the Final by walkover against Dev<");
-    expect(banner).not.toContain("Beat Dev");
+    return h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
+  };
+  it("a final won by WALKOVER (or a withdrawal) says so — 'Won the Final by walkover against Dev', never 'Beat Dev'", () => {
+    let checked = 0;
+    for (const kind of ["walkover", "withdrew"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      expect(banner).toContain(">Eli<");
+      expect(banner, kind).toContain(">Won the Final by walkover against Dev<");
+      expect(banner, kind).not.toContain("Beat Dev");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("…a final won on a RETIREMENT or a disqualification was played: 'Beat Dev', not the walkover line", () => {
+    let checked = 0;
+    for (const kind of ["retired", "disqualified"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      expect(banner, kind).toContain(">Beat Dev in the Final<");
+      expect(banner, kind).not.toContain("walkover");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {

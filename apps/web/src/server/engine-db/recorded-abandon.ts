@@ -3,6 +3,7 @@ import type postgres from "postgres";
 import { isLevelOutcome } from "@seazn/engine/core";
 import type { FixtureStatus } from "@seazn/engine/competition";
 import { engineFixtureStatus } from "@/lib/fixture-engine-status";
+import { ABANDON_RESULT_KINDS } from "@/lib/forfeit-tag";
 
 type Tx = postgres.TransactionSql;
 
@@ -30,8 +31,30 @@ export function hasActiveAbandonSql(tx: postgres.Sql | Tx, on = "f", opts: { exp
   const expunged = opts.expunge === true ? tx`and a.payload ->> 'expunge' = 'true'` : tx``;
   return tx`(${f}.status = 'abandoned' and exists (
     select 1 from score_events a
-    where a.fixture_id = ${f}.id and a.type = 'core.abandon' ${expunged}
-      and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)))`;
+    where ${activeAbandonOf(tx, on)} ${expunged}))`;
+}
+
+/** The one ledger rule both probes share: `a` is a `core.abandon` of the row `f` that no `core.void` targets. */
+function activeAbandonOf(tx: postgres.Sql | Tx, on: string) {
+  return tx`a.fixture_id = ${tx(on)}.id and a.type = 'core.abandon'
+      and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)`;
+}
+
+/**
+ * W2b Task 13 (spec §5.4/§5.5, X-AB-2) — the REASON of the row's active `core.abandon`, or null: what the public tag
+ * reads (`forfeitLedgerOfReason` → `forfeitTag`, lib/forfeit-tag.ts). An abandon's tag reads the ledger, never the
+ * status — after ST-G1 an abandon with a result is `decided` like any other, and a rain-reduced chase played out to its
+ * DLS target is `decided` with the same outcome and no abandon at all. So, unlike `hasActiveAbandonSql`, this is NOT
+ * gated on the status: it is gated on the outcome being one an abandon can leave (`ABANDON_RESULT_KINDS`, the reader's
+ * own list), so the probe runs only for rows the reader could tag. The latest active abandon wins (the kernel refuses a
+ * second once one decided).
+ */
+export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
+  const f = tx(on);
+  return tx`(case when ${f}.outcome ->> 'kind' in ${tx([...ABANDON_RESULT_KINDS])} then (
+    select a.payload ->> 'reason' from score_events a
+    where ${activeAbandonOf(tx, on)}
+    order by a.seq desc limit 1) end)`;
 }
 
 /**

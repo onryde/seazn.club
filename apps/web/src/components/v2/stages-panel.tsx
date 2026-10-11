@@ -94,6 +94,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { NO_LEDGER, forfeitTag, type ForfeitLedger } from "@/lib/forfeit-tag";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -1997,10 +1998,30 @@ function stageStatusLabel(msg: Msg, status: string): string {
 
 // EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet-row.tsx` reuses
 // this same derivation rather than a second copy.
-export function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
+//
+// W2b Task 13 (spec §5.5, UI-2): a credited result carries its tag — `forfeitTag` is the one reader, and `ledger` is
+// the row's active abandon (`forfeitLedgerOfReason(fixture.abandon_reason)`; absent ⇒ none, never the status). A winner
+// reads "{name} won (w/o)" / "(ret.)" / "(DQ)" / "(Aband. · DLS)"; a double walkover, which has no winner, reads its
+// tag alone ("2× w/o" — before W2b it read nothing); a level abandon its level word and the tag. A bye keeps today's
+// "won (w/o)" (no tag: `schedule.outcome.wonWo` below). The tags are ui.json's copies of public.json's, word for word
+// (forfeit-tag.test.ts), so the organiser and the spectator read one abbreviation.
+export function outcomeText(
+  msg: Msg,
+  outcome: unknown,
+  entrantNames: Record<string, string>,
+  ledger: ForfeitLedger = NO_LEDGER,
+): string | null {
   const o = outcome as { kind?: string; winner?: string } | null;
   if (!o?.kind) return null;
   const winner = entrantNames[o.winner ?? ""] ?? "?";
+  const tag = forfeitTag(outcome, ledger);
+  if (tag !== null) {
+    const word = msg(tag.tagKey);
+    if (tag.kind === "double_walkover") return word;
+    if (o.kind === "win" || o.kind === "award") return msg("schedule.outcome.wonTagged", { name: winner, tag: word });
+    const level = outcomeText(msg, outcome, entrantNames);
+    return level === null ? word : `${level} · ${word}`;
+  }
   switch (o.kind) {
     case "win":
       return msg("schedule.outcome.won", { name: winner });

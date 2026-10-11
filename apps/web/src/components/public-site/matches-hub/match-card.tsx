@@ -27,6 +27,7 @@
 import Link from "next/link";
 import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import { ScoreSentence } from "@/components/score-sentence";
+import { ForfeitTagChip } from "../forfeit-tag-chip";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
@@ -239,6 +240,9 @@ export function MatchCard({
       // `match-card.test.tsx` asserts the RENDERED attribute rather than the
       // call, because the call was already right.
       aria-label={t(dict, "matchesHub.card.label", { home: s0.name, away: s1.name })}
+      // W2b Task 13: the label above REPLACES the card's content for a screen reader, so a credited result's sentence
+      // is attached as the link's description — the tag below is its visible abbreviation.
+      aria-describedby={m.forfeit ? `mh-forfeit-${m.fixtureId}` : undefined}
       className="block rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm transition hover:border-accent-line"
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-ink-muted">
@@ -292,7 +296,15 @@ export function MatchCard({
           venue-less card keeps its result right-aligned exactly as it was. */}
       <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs text-ink-muted">
         <span className="min-w-0 truncate">{[m.venueName, m.courtName].filter(Boolean).join(" · ")}</span>
-        {m.resultLine ? (
+        {m.forfeit ? (
+          // W2b Task 13 (UI-2 option A): a credited result — a forfeit, a double walkover, an abandon with a result —
+          // shows its tag, the sentence its tooltip and accessible name. An abandon keeps its result sentence beside
+          // the tag ("Eagles won by 12 runs (DLS)" · "Aband. · DLS"); a forfeit's tag replaces the bare "Forfeited".
+          <span data-testid="mh-match-forfeit" className="flex shrink-0 items-baseline gap-1.5 font-medium text-ink">
+            {m.resultLine ? <ScoreSentence text={m.resultLine} /> : null}
+            <ForfeitTagChip id={`mh-forfeit-${m.fixtureId}`} tag={m.forfeit.tag} sentence={m.forfeit.sentence} testId="mh-match-forfeit-tag" />
+          </span>
+        ) : m.resultLine ? (
           <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
             <ScoreSentence text={m.resultLine} />
           </span>

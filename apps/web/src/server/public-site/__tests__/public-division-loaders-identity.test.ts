@@ -146,7 +146,14 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
            (public_fixtures_v.status = 'abandoned' and exists (
              select 1 from score_events a
               where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
-                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged,
+           -- W2b Task 13, carried the same way: the active abandon's reason, for a row an abandon could have left a
+           -- result on (the reader's ABANDON_RESULT_KINDS, written out), latest first. Independent of the loaders'.
+           (case when public_fixtures_v.outcome ->> 'kind' in ('win', 'draw', 'tie', 'no_result') then (
+             select a.payload ->> 'reason' from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)
+              order by a.seq desc limit 1) end) as abandon_reason
     from public_fixtures_v where division_id = ${division.id}
     order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixtureBefore));
   const fixtures = await withCourtVenueNames(rawFixtures);

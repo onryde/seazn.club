@@ -391,6 +391,46 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
     }
   });
 
+  it("W2b Task 13 (X-RS-2, X-AB-2): a stored walkover and a stored abandon reach the hub card as their tag and sentence", async () => {
+    // The producer end of the results card's chip, through the real division read (`readFixtures`' abandon_reason
+    // column) — the builder's unit test (forfeit-tag-surfaces.test.tsx) hands it rows by hand. Rows are written the way
+    // the knockout case above writes them, and put back in `finally`.
+    const [wo, ab] = scene.fixtureIds;
+    const before = await sql<{ id: string; status: string; outcome: unknown; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, status, outcome, home_entrant_id, away_entrant_id from fixtures where id in (${wo!}, ${ab!})`;
+    const row = (id: string) => before.find((r) => r.id === id)!;
+    const name = async (id: string) => (await sql<{ display_name: string }[]>`select display_name from entrants where id = ${id}`)[0]!.display_name;
+    try {
+      await sql`update fixtures set status = 'forfeited',
+                  outcome = ${sql.json({ kind: "award", winner: row(wo!).home_entrant_id, loser: row(wo!).away_entrant_id, reason: "walkover" })}
+                where id = ${wo!}`;
+      await sql`update fixtures set status = 'decided',
+                  outcome = ${sql.json({ kind: "win", winner: row(ab!).home_entrant_id, loser: row(ab!).away_entrant_id, method: "abandoned" })}
+                where id = ${ab!}`;
+      await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+                values (${randomUUID()}, ${ab!}, 1, 'core.start', ${sql.json({})}, now()),
+                       (${randomUUID()}, ${ab!}, 2, 'core.abandon', ${sql.json({ reason: "floodlights" })}, now())`;
+      const doc = (await loadCompetitionHub(scene.orgSlug, scene.compSlug))!;
+      expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+      const card = (id: string) => doc.matches.find((m) => m.fixtureId === id)!;
+      expect(card(wo!).forfeit).toEqual({
+        kind: "walkover", tag: "w/o", sentence: `${await name(row(wo!).away_entrant_id)} didn't show up — walkover.`,
+      });
+      expect(card(ab!).forfeit?.kind).toBe("abandoned");
+      expect(card(ab!).forfeit?.tag).toBe("Aband.");
+      expect(card(ab!).forfeit?.sentence).toMatch(/^Abandoned \(floodlights\)/);
+      // The positive pair: every other card carries none.
+      const others = doc.matches.filter((m) => m.fixtureId !== wo && m.fixtureId !== ab);
+      expect(others.length).toBeGreaterThan(0);
+      expect(others.filter((m) => m.forfeit != null).map((m) => m.fixtureId)).toEqual([]);
+    } finally {
+      await sql`delete from score_events where fixture_id = ${ab!}`;
+      for (const r of before) {
+        await sql`update fixtures set status = ${r.status}, outcome = ${r.outcome === null ? null : sql.json(r.outcome as never)} where id = ${r.id}`;
+      }
+    }
+  });
+
   it("a PRIVATE competition → null (the page 404s it)", async () => {
     expect(await loadCompetitionHub(scene.orgSlug, scene.privateSlug)).toBeNull();
   });

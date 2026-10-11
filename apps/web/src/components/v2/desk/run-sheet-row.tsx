@@ -30,6 +30,7 @@ import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -276,7 +277,7 @@ export function RunSheetRow({
   const away = fixture.away_entrant_id
     ? (entrantNames[fixture.away_entrant_id] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
-  const decided = outcomeText(msg, fixture.outcome, entrantNames);
+  const decided = outcomeText(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,
   // venue-qualified name this row already prints, so an archived court carried

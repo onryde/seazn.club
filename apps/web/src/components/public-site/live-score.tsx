@@ -27,6 +27,7 @@ import {
   stripLiveSetPoints,
 } from "@/lib/public-site";
 import { type LiveFixtureData } from "./live-score-data";
+import { NO_LEDGER, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
@@ -135,13 +136,21 @@ export function LiveScoreBody({
   // (R3.5/Task G) — correct at first paint but frozen after that, since a
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
-  const decidedLine = renderDecidedOutcome(
+  // W2b Task 13 (spec §5.5): a forfeit or a double walkover says which, naming the side, in the sentence the match
+  // centre's court card says it in (`forfeitTag`, the one reader). This fallback holds no ledger, so it never shows
+  // an abandon's words — those need the active `core.abandon`, which only the document's own header carries.
+  const forfeit = forfeitTag(data.outcome, NO_LEDGER);
+  const forfeitLine = forfeit
+    ? forfeitWords(forfeit, (key, vars) => t(activeDict, key, vars), (id) => entrantNames[id] ?? "?").sentence
+    : null;
+  const outcomeLine = renderDecidedOutcome(
     data.outcome,
     entrantNames,
     decidedTemplates,
     shootoutScore,
     tiebreakScoreFromDetail(data.summary?.detail),
   );
+  const decidedLine = forfeitLine ?? outcomeLine;
 
   // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
   // `suppressScorebug` for every non-cricket sport so the court slab is not

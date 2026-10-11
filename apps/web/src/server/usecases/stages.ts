@@ -300,6 +300,10 @@ export interface FixtureRow {
    *  (`hasActiveAbandonSql`'s expunge probe). Read by `listDivisionFixtures` only, for the console's qualification
    *  line (`buildQualificationView` F2); the v1 list route strips it, like the feed edges above. */
   expunged?: boolean;
+  /** W2b Task 13 (X-AB-2): the reason of the row's ACTIVE `core.abandon`, or null (`activeAbandonReasonSql`) — the
+   *  run sheet's abandon tag reads it (`forfeitTag`: the ledger, never the status). Read by `listDivisionFixtures`
+   *  only; the v1 list route strips it, like `expunged`. */
+  abandon_reason?: string | null;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {

@@ -41,6 +41,8 @@ import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, type ForfeitWords } from "@/lib/forfeit-tag";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import {
   bucketFixture,
   deriveHubTabs,
@@ -160,6 +162,38 @@ export const STATUS_LINE_KEYS: ReadonlySet<string> = new Set([
   // this line it would read "Not played", which is false.
   "needs_decision",
 ]);
+
+/**
+ * W2b Task 13 (spec §5.5, UI-2 option A) — a hub card's tag and sentence for a credited result, in the ORG's locale,
+ * or null. `forfeitTag` is the one reader (lib/forfeit-tag.ts): the outcome, and the ledger as the division read
+ * carries it (`abandon_reason`, the active abandon's — never the status). An abandon's sentence carries the card's own
+ * result sentence (`resultLine`'s `decidedOutcomeText`); a double walkover's names the side its next match was walked
+ * over to, read off the division's own fixtures (`feedsNextMatch`, then `doubleWalkoverNextWinner`).
+ */
+export function hubForfeit(
+  f: PublicFixture,
+  ctx: {
+    byId: ReadonlyMap<string, PublicFixture>;
+    names: Readonly<Record<string, string>>;
+    msg: (key: TKey, vars?: Record<string, string | number>) => string;
+    resultSentence: () => string | null;
+  },
+): ForfeitWords | null {
+  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));
+  if (tag === null) return null;
+  const nameOf = (id: string) => ctx.names[id] ?? "?";
+  const nextWinner =
+    tag.kind === "double_walkover"
+      ? doubleWalkoverNextWinner(
+          feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),
+          f.winner_to_fixture ? ctx.byId.get(f.winner_to_fixture) : null,
+        )
+      : null;
+  return forfeitWords(tag, (key, vars) => ctx.msg(key, vars), nameOf, {
+    result: tag.kind.startsWith("abandoned") ? ctx.resultSentence() : null,
+    next: nextWinner === null ? null : nameOf(nextWinner),
+  });
+}
 
 // -------------------------------------------------------------------- sides
 
@@ -742,6 +776,7 @@ export async function loadCompetitionHub(
       fixtures,
       stageKind: (stageId) => stageById.get(stageId)?.kind,
     });
+    const fixtureById = new Map(fixtures.map((x) => [x.id, x]));
     for (const f of fixtures) {
       // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
       // has NO stored label, and reading the stored label alone is what put
@@ -797,6 +832,20 @@ export async function loadCompetitionHub(
                 tiebreakScoreFromDetail(f.summary?.detail),
               )
             : null,
+        forfeit: hubForfeit(f, {
+          byId: fixtureById,
+          names,
+          msg,
+          resultSentence: () =>
+            decidedOutcomeText(
+              f.outcome,
+              names,
+              ui,
+              shootoutScoreFromDetail(f.summary?.detail),
+              d.sport_key,
+              tiebreakScoreFromDetail(f.summary?.detail),
+            ),
+        }),
       });
     }
 

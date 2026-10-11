@@ -28,6 +28,7 @@ import {
   type TableFixture,
   type TieWhatIf,
 } from "@seazn/engine/competition";
+import type { ForfeitCredit, LineupPair } from "@seazn/engine/core";
 import type { AnySportModule, MatchPointsBounds, TiebreakerKey } from "@seazn/engine/sport";
 import { inTheField } from "@/lib/entrant-field";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
@@ -96,18 +97,29 @@ export function divisionPointsBounds(
   return parsed.success ? module_.matchPointsBounds(parsed.data) : null;
 }
 
-/** Does a walkover in this division's PINNED module add goals to the ledger?
- *  True exactly when its config declares a forfeit score (`awardScore`):
- *  football's and the period kernel's `core.forfeit` score `cfg.awardScore`
- *  as the match's goals, and `standingsDelta` folds them into gf/ga like any
- *  other match. Every other sport's award leaves the ledger alone. A cfg that
- *  does not parse gives false (and no bounds, so no status either). */
+/** Does a walkover in this division's PINNED module credit the ledger the what-if reads? Asked of the engine
+ *  (W2b Task 13, X-WO-1; ruling 108): `forfeitCredit` is what an award credits the table — `standingsDelta` reads it
+ *  for every award — so a walkover is an ordinary match of the average exactly when its credit is not nothing: some
+ *  ledger key non-zero and not excluded from the ratios. Goals in football and the period kernel (`awardScore`), sets
+ *  and points in the set sports, a chess win, a defaulter's quota of balls; generic's walkover is the win points at
+ *  0–0. Before W2b this read `cfg.awardScore.goals` — true only for the three goal sports.
+ *
+ *  The credit is asked of a match that has not started (`init`): a walkover is recorded before play (X-RS-1), and
+ *  the what-if's question is the sport's, not one fixture's. A cfg that does not parse, or a module whose `init`
+ *  refuses the empty seats, gives false (and no bounds, so no status either). */
+const NO_ONE: LineupPair = { home: { entrantId: "home", slots: [] }, away: { entrantId: "away", slots: [] } };
 export function divisionAwardAddsToLedger(module_: AnySportModule | null | undefined, cfg: unknown): boolean {
   if (!module_) return false;
   const parsed = module_.configSchema.safeParse(cfg ?? {});
-  if (!parsed.success || parsed.data === null || typeof parsed.data !== "object") return false;
-  const award = (parsed.data as { awardScore?: { goals?: unknown } | null }).awardScore;
-  return typeof award?.goals === "number" && award.goals > 0;
+  if (!parsed.success) return false;
+  let credit: ForfeitCredit;
+  try {
+    credit = module_.forfeitCredit(parsed.data, module_.init(parsed.data, NO_ONE), "walkover", "away");
+  } catch {
+    return false;
+  }
+  const excluded = new Set(credit.excluded);
+  return credit.perSide.some((side) => Object.entries(side).some(([key, value]) => !excluded.has(key) && value !== 0));
 }
 
 export interface QualificationView {
@@ -128,8 +140,8 @@ export interface QualificationViewInput {
   /** entrant id → entrants.status, for every entrant in the division. */
   entrantStatuses: Readonly<Record<string, string>>;
   bounds: MatchPointsBounds | null;
-  /** The division's walkover writes goals into the ledger
-   *  (`divisionAwardAddsToLedger`) — then a two-sided award counts toward the
+  /** The division's walkover credits the ledger (`divisionAwardAddsToLedger`,
+   *  the engine's `forfeitCredit`) — then a two-sided award counts toward the
    *  what-if's average match. The SPORT's forfeit score never reaches a
    *  one-sided bye. A stage PointsRule's `forfeit.awardScore` scores every
    *  walkover and bye, but only into `for`/`against`/`diff`: where the what-if
@@ -161,9 +173,9 @@ function counted(f: QualFixture): boolean {
  *  (T3-⚠3): a no-result; and, unless a stage rule's forfeit score is in what
  *  the average reads (`ruleInAverage`, from `ruleScoreInAverage`), a one-sided
  *  bye (the adapter folds it from a fresh 0–0 state) or a two-sided award — a
- *  walkover — in a sport whose forfeit writes no score (`awardAddsToLedger`
- *  false; ice hockey's writes `awardScore` goals, so its walkover is an
- *  ordinary match here). The what-if's average match leaves these out. */
+ *  walkover — in a sport whose walkover credits nothing (`awardAddsToLedger`
+ *  false: generic's; every other sport's credits its ledger, so its walkover
+ *  is an ordinary match here — W2b X-WO-1). The what-if's average match leaves these out. */
 function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean): boolean {
   const kind = outcomeKind(f);
   if (kind === "no_result") return true;

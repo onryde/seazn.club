@@ -180,6 +180,11 @@ export const HubMatch = z.object({
    *  Optional because a hub document cached before the field existed (Redis
    *  15s, ISR 30s) reaches the client without it — absent reads as "no bye". */
   byeSides: z.tuple([z.boolean(), z.boolean()]).optional(),
+  /** W2b Task 13 (UI-2 option A): a credited result's short tag ("w/o", "ret.", "2× w/o", "Aband. · DLS") and the
+   *  full sentence that is its tooltip and accessible name, pre-resolved in the org's locale by `hubForfeit`
+   *  (lib/forfeit-tag.ts is the one reader). `kind` is the reader's own (`ForfeitTagKind`). Null for a played result
+   *  and a bye; optional because a hub document cached before the field existed reaches the client without it. */
+  forfeit: z.object({ kind: z.string(), tag: z.string(), sentence: z.string() }).nullable().optional(),
 });
 
 export const TableColumn = z.object({

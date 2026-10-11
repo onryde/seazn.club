@@ -34,6 +34,8 @@ export async function GET(req: Request, { params }: Ctx) {
         loser_to_slot: _lts,
         // W2b loop-F I-2: the console's qualification read, not part of the published `Fixture` contract.
         expunged: _expunged,
+        // W2b Task 13: the run sheet's abandon tag read, not part of the published `Fixture` contract either.
+        abandon_reason: _abandonReason,
         ...fixture
       }) => fixture,
     );

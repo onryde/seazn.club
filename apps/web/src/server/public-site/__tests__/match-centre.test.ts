@@ -650,13 +650,18 @@ describe("buildMatchCentre — cricket", () => {
       expect(runs.events.map((e) => e.type)).toContain("core.abandon");
       expect(runs.state.outcome).toMatchObject({ kind: "win", winner: HOME_SIDE.entrantId, method: "dls" });
       expect(runs.state.margin).toEqual({ kind: "runs", value: 11 });
-      const runsDoc = buildMatchCentre(input({ events: runs.events, cfg: runs.cfg, fixture: decidedFixture(runs) }));
+      // W2b Task 13 (X-AB-2): the chase was ABANDONED — its ledger holds the active core.abandon — so the line is the
+      // abandon's sentence, carrying the method's own result sentence whole (the method is still in it).
+      const reason = (runs.events.find((e) => e.type === "core.abandon")!.payload as { reason: string }).reason;
+      const runsDoc = buildMatchCentre(
+        input({ events: runs.events, cfg: runs.cfg, fixture: decidedFixture(runs), resolveMsg: (m) => t(en, m.key, m.params) }),
+      );
       expect(runsDoc.header.statusLine).toEqual({
-        key: "matchCentre.result.dlsRuns.other",
-        params: { winner: HOME_SIDE.name, runs: 11 },
+        key: "forfeit.sentence.abandoned",
+        params: { reason, result: `${HOME_SIDE.name} won by 11 runs (DLS)` },
       });
       expect(t(en, runsDoc.header.statusLine!.key, runsDoc.header.statusLine!.params)).toBe(
-        `${HOME_SIDE.name} won by 11 runs (DLS)`,
+        `Abandoned (${reason}) — ${HOME_SIDE.name} won by 11 runs (DLS).`,
       );
 
       const wickets = scriptLedger(DLS_REVISED_TARGET_SCRIPT);
@@ -695,8 +700,21 @@ describe("buildMatchCentre — cricket", () => {
     it("no_result (abandoned before a ball is bowled) -> matchCentre.result.no_result, no params", () => {
       const ledger = scriptLedger(NO_RESULT_SCRIPT);
       expect(ledger.state.outcome).toEqual({ kind: "no_result" });
-      const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
-      expect(doc.header.statusLine).toEqual({ key: "matchCentre.result.no_result" });
+      // W2b Task 13 (X-AB-2): an abandon's no-result reads the abandon's sentence around the no-result line.
+      const abandon = ledger.events.find((e) => e.type === "core.abandon");
+      expect(abandon, "premise: the no-result is an abandon's").toBeDefined();
+      const reason = (abandon!.payload as { reason: string }).reason;
+      const en = enPublic as unknown as Dict;
+      const doc = buildMatchCentre(
+        input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger), resolveMsg: (m) => t(en, m.key, m.params) }),
+      );
+      expect(doc.header.statusLine).toEqual({
+        key: "forfeit.sentence.abandoned",
+        params: { reason, result: t(en, "matchCentre.result.no_result") },
+      });
+      // …and a builder handed no translator still names the reason (the result needs words it cannot make).
+      const bare = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }));
+      expect(bare.header.statusLine).toEqual({ key: "forfeit.sentence.abandonedBare", params: { reason } });
     });
 
     it("an unrecognised win method still words the card's margin — the count is never silently dropped", () => {

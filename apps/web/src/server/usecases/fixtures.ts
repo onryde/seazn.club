@@ -9,7 +9,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
 import { fixtureHasResultSql } from "./fixture-results-sql";
-import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
 import { fireDivisionRevalidate } from "../public-site/revalidate";
@@ -173,7 +173,8 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
              f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
-             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged
+             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+             ${activeAbandonReasonSql(tx, "f")} as abandon_reason
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

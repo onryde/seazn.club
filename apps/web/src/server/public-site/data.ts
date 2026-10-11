@@ -9,7 +9,7 @@ import "server-only";
 // `revalidateTag('division:{id}')` for instant refresh (see usecases/scoring.ts).
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
-import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
@@ -374,6 +374,11 @@ export interface PublicFixture {
    *  read on the same fenced LATERAL as the feed edges). The qualification view reads it (F2). Optional and absent
    *  from older cached documents, where it reads as "not expunged" — the fail-closed answer. */
   expunged?: boolean;
+  /** W2b Task 13 (X-AB-2): the reason of the row's ACTIVE `core.abandon`, or null — what the public abandon tag reads
+   *  (`forfeitLedgerOfReason`; the ledger, never the status). Read on the same fenced LATERAL as `expunged`
+   *  (`activeAbandonReasonSql`). Optional: absent from older cached documents and from the reads that do not list it,
+   *  where it reads as no abandon — the tag is then simply not shown. */
+  abandon_reason?: string | null;
   /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
@@ -991,11 +996,13 @@ export async function readPublicDivisionDetail(
                  v.scheduled_at, v.venue, v.court_label,
                  v.status, v.outcome, v.summary, v.last_seq,
                  v.lane, v.is_final, v.third_place, v.conditional,
-                 e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged
+                 e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
+                 e.abandon_reason
           from public_fixtures_v v
           left join lateral (
             select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot,
-                   ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged
+                   ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged,
+                   ${activeAbandonReasonSql(sql, "x")} as abandon_reason
             from fixtures x where x.id = v.id
             offset 0
           ) e on true

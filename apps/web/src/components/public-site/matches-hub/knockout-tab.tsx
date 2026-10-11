@@ -47,6 +47,7 @@ import type {
   KnockoutViewT,
 } from "@/server/public-site/competition-hub-schema";
 import { BRACKET_CREST_CLASS } from "./bracket-crest";
+import { ForfeitTagChip } from "../forfeit-tag-chip";
 import { MatchCard } from "./match-card";
 import { divisionChoices, HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { useSearchParam, writeDivisionParam, writeSearchParam } from "../use-tab-param";
@@ -70,9 +71,11 @@ export interface KnockoutTabProps {
  *  `import type`, so a value cannot cross that boundary. */
 const THIRD_PLACE_KEY = "third-place";
 
-/** The status line `hubHeader` gives a forfeited fixture: `forfeited` is an
- *  `other` status, and `STATUS_LINE_KEYS` keeps its own name for it. */
-const FORFEITED_STATUS_KEY = "matchCentre.status.forfeited";
+/** W2b Task 13: the forfeits whose match was never played — the walkover's and the withdrawal's
+ *  (`HubMatch.forfeit.kind`, `forfeitTag`'s own kinds). A final won by one of these was not "beaten" in. A retirement
+ *  or a disqualification happened DURING the final, so the plain line stands. Before W2b every forfeited final read
+ *  the walkover line (the status was the only fact), a retirement included. */
+const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set(["walkover", "withdrew"]);
 
 /** A round-0 cell in the Draw, in px; round k is this times 2^k, so every node
  *  sits centred between the two that feed it. */
@@ -453,7 +456,7 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
               dict,
               // A final won by forfeit was never played, so "Beat X" would
               // report a match that did not happen.
-              final.header.statusLine?.key === FORFEITED_STATUS_KEY
+              UNPLAYED_FORFEIT_KINDS.has(final.forfeit?.kind ?? "")
                 ? "knockout.championLineWalkover"
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
@@ -475,6 +478,7 @@ function drawNode(match: HubMatchT, dict: PublicDict): ReactNode {
         home: match.header.sides[0].name,
         away: match.header.sides[1].name,
       })}
+      aria-describedby={match.forfeit ? `mh-knockout-forfeit-${match.fixtureId}` : undefined}
       className={`relative z-10 block w-full min-w-0 rounded-lg border bg-surface px-2 py-1 shadow-sm transition hover:border-accent-line ${live ? "border-emerald-400" : "border-zinc-200"}`}
     >
       {([0, 1] as const).map((i) => {
@@ -510,6 +514,16 @@ function drawNode(match: HubMatchT, dict: PublicDict): ReactNode {
             <span className="shrink-0 font-display text-[15px] tabular-nums text-ink">
               {match.header.scoreLines[i] ?? ""}
             </span>
+            {/* W2b Task 13 (UI-2 option A): the tag rides the winner's row (the first, when nobody won — a double
+                walkover), beside the score, so the tile never grows a line. */}
+            {match.forfeit && i === (match.winnerIndex ?? 0) ? (
+              <ForfeitTagChip
+                id={`mh-knockout-forfeit-${match.fixtureId}`}
+                tag={match.forfeit.tag}
+                sentence={match.forfeit.sentence}
+                testId="mh-knockout-node-forfeit"
+              />
+            ) : null}
           </span>
         );
       })}
