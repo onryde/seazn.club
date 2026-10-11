@@ -1210,6 +1210,21 @@ Elsewhere the text is the controller's record.
      - **Owner of the work:** W5, with RB2A-16, the DQ cascade. W2b changes nothing.
      - **For W5 to pin and put to the owner:** what "started" means. My reading is that the first fixture of the
        division has started or been scored, not merely that fixtures exist.
+112. **A walkover stays recordable after Start until something is played** (2026-10-11, owner "fix it", given after
+     my recommendation C). Found by the Task 17 pre-ship read.
+     - **What is stored:** the only real walkover on production (fixture 069dbf22…) and the active one on staging
+       (seazn_club, d26fca49…, football) are both `core.start` → `core.forfeit{walkover}`. The organiser pressed Start
+       and the opponent did not show.
+     - **The defect:** under X-RS-1 as written, the W2b phase guard refuses that stream on every fold. A probe on the
+       WT engine got FORFEIT_REASON_WRONG_PHASE. Both stored matches would fail to load after the deploy, and the
+       console dialog would offer no walkover after Start.
+     - **The rule:** for a walkover (and a double walkover), the phase reads "pre" while no sport (module-owned) event
+       is active after `core.start`. Kernel admin events do not count as play.
+     - **Unchanged:** once anything is played, a walkover is refused as before, and chess keeps its wider
+       `walkoverPhases`.
+     - **Amends** X-RS-1 and spec Appendix A, and is built in W2b. No data migration is needed.
+     - **False premise:** the early pre-ship read and the first Task 17 staging read used the stale `public` schema.
+       The app's schema is `seazn_club`.
 
 ## Recommendations (mine — not rulings)
 
