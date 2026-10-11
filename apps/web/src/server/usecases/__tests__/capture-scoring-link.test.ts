@@ -32,7 +32,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const URL_PATTERN = /^https:\/\/[^/]+\/score\/dl_[A-Za-z0-9_-]{43}$/;
 const ORIGIN = "https://capture-scoring.test";
 
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
+const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 // A throwaway key of this file's own (device-links.test.ts's reasoning): CI's unit job has no DEVICE_LINK_KEK at all.
 const DL_KEK = randomBytes(32).toString("hex");

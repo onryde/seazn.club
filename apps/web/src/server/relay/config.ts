@@ -164,21 +164,17 @@ export const OUTPUT_READ_FAILURES_BEFORE_REPORT = 6;
  *  which leg is production primary — R3 rules that, and this is the config line. */
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";
 
-/** Capture QR v2 §6.4 / §6.15 (W15, W21; W26): the three ingest settings the phone's descriptor reads. Each is read at
- *  the request, never cached, so a test (and an operator) can flip it. Typed `Record<…>` for the reason `tunable` gives.
- *  STREAM_INGEST_HOST is W15, retired by W26: unset in every environment; setting it breaks every phone. */
+/** Capture QR v2 §6.4 / §6.15 (W14, W21, W26): the two settings the phone's descriptor reads, STREAM_PLAYBACK_HOST and
+ *  STREAM_SRT_ENABLED. Each is read at the request, never cached, so a test (and an operator) can flip it. Typed
+ *  `Record<…>` for the reason `tunable` gives. There is no ingest-host setting: W15's custom-host rewrite was retired by W26
+ *  (2026-10-05) and removed with its setting on 2026-10-10 (owner ruling) — both legs are served on Cloudflare's own host. */
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
-function hostSetting(name: "STREAM_INGEST_HOST" | "STREAM_PLAYBACK_HOST", env: Record<string, string | undefined>): string | null {
+function hostSetting(name: "STREAM_PLAYBACK_HOST", env: Record<string, string | undefined>): string | null {
   const v = env[name]?.trim();
   if (!v) return null;
   // A bare hostname only: a scheme, port or path here would be served inside a URL the phone dials.
   if (!HOST_RE.test(v)) throw new Error(`${name} must be a bare hostname (no scheme, port or path), got ${JSON.stringify(v)}`);
   return v;
-}
-/** The RTMPS ingest host rewrite — W15, retired by W26 (2026-10-05): unset in every environment; setting it breaks every
- *  phone (capture trusts only `live.cloudflare.com`). Unset or blank = null, and Cloudflare's own host is served. */
-export function streamIngestHost(env: Record<string, string | undefined> = process.env): string | null {
-  return hostSetting("STREAM_INGEST_HOST", env);
 }
 /** The fake driver's playback host (§6.15: local and CI serve "the fake driver's value"). `.invalid` never resolves. */
 export const FAKE_PLAYBACK_HOST = "playback.fake.invalid";

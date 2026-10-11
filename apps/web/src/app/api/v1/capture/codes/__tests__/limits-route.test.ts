@@ -39,7 +39,7 @@ afterAll(() => setRelayDriversForTest(null));
 /** §10.4's numbers, typed from the spec. */
 const SPEC = { code: { max: 120, windowSeconds: 60 }, fail: { max: 30, windowSeconds: 60 }, start: { max: 6, windowSeconds: 60 } };
 
-const ENV_KEYS = ["RELAY_KEK", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
+const ENV_KEYS = ["RELAY_KEK", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 beforeAll(() => {
   for (const k of ENV_KEYS) delete process.env[k];

@@ -28,7 +28,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 // PHONE_SILENT_FLOOR_SECONDS and ENV_NAME are cleared so the floor is §6.9's DEFAULT (tunable() honours an override only
 // under ENV_NAME local/ci) — the window below is computed from that default.
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "PHONE_SILENT_FLOOR_SECONDS", "ENV_NAME"] as const;
+const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "PHONE_SILENT_FLOOR_SECONDS", "ENV_NAME"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const KEK = randomBytes(32).toString("hex");
 function baseEnv() {

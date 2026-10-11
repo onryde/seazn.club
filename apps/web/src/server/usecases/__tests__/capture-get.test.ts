@@ -10,7 +10,7 @@
 //
 // "Another sport": the descriptor reads a sport in ONE place — the overlay theme a sport opens on (defaultThemeFor). The
 // cricket case pins that row; nothing else here varies by sport, so the rest runs on the generic rig.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -32,8 +32,8 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 /** Every variable the descriptor reads. The suite runs with each in a KNOWN state, and restores them all. */
 const ENV_KEYS = [
-  "RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST",
-  "STREAM_SRT_ENABLED", "RELAY_DRIVERS",
+  "RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED",
+  "RELAY_DRIVERS",
 ] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 const setEnv = (k: (typeof ENV_KEYS)[number], v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
@@ -46,6 +46,7 @@ const KEK = randomBytes(32).toString("hex");
 beforeAll(baseEnv);
 beforeEach(baseEnv);
 afterAll(() => { for (const k of ENV_KEYS) setEnv(k, saved[k]); });
+afterEach(() => { vi.unstubAllEnvs(); });   // the W26 regression guard stubs a variable the descriptor no longer reads
 
 const ORIGIN = "http://app.test";   // the rig's deps.appUrl: the origin when neither base-url variable is set
 
@@ -482,17 +483,65 @@ describe.skipIf(!HAS_DB)("getCode — refusals and the deployment's settings", (
     expect((await get(r, null)).state, "the positive pair: no playback is needed to wait").toBe("waiting");
   });
 
-  it("STREAM_INGEST_HOST over Cloudflare's stored values: RTMPS rewritten, SRT unchanged (W21); over a foreign host: 503 unavailable (ingest_host_unexpected)", async () => {
+  // W26 (owner, 2026-10-05): both legs on Cloudflare's own host; the STREAM_INGEST_HOST rewrite was removed on 2026-10-10
+  // (owner ruling). Expected urls are the MEASURED values (docs/superpowers/specs/2026-09-11-cloudflare-stream-measured.md
+  // :199-201), never read off the module. A LIVE driver (the rig still injects its fake pair) makes Cloudflare's host the
+  // only one served; STREAM_PLAYBACK_HOST is set so the 503 under test is the ingest one, not playback_unconfigured.
+  const CF_RTMPS = "rtmps://live.cloudflare.com:443/live/";
+  const CF_SRT = "srt://live.cloudflare.com:778";
+  const storeCloudflare = (sid: string) =>
+    sql`update fixture_stream_inputs set ingest_rtmps_url = ${CF_RTMPS}, ingest_srt_url = ${CF_SRT} where session_id = ${sid}`;
+
+  it("REGRESSION GUARD (W26; rewrite removed 2026-10-10): a set STREAM_INGEST_HOST has NO effect — under a live driver Cloudflare's stored values are served exactly as stored, both legs", async () => {
     const r = await captureRig();
     const mine = phoneId("mine");
     const sid = await r.start(mine);
-    setEnv("STREAM_INGEST_HOST", "live.test.seazn.club");
-    const err = await refusal(get(r, mine));   // the fake's own host is foreign once a host is configured
-    expect(err).toMatchObject({ status: 503, code: "unavailable" });
-    expect((err as Error).message).toMatch(/ingest_host_unexpected/);
-    await sql`update fixture_stream_inputs set ingest_rtmps_url = 'rtmps://live.cloudflare.com:443/live/', ingest_srt_url = 'srt://live.cloudflare.com:778' where session_id = ${sid}`;
+    setEnv("RELAY_DRIVERS", "live");
+    setEnv("STREAM_PLAYBACK_HOST", "customer-x.cloudflarestream.com");
+    await storeCloudflare(sid);
+    vi.stubEnv("STREAM_INGEST_HOST", "live.test.seazn.club");
+    expect(process.env.STREAM_INGEST_HOST, "premise: the variable IS set for the GET").toBe("live.test.seazn.club");
     const body = await get(r, mine);
-    expect(body).toMatchObject({ cred: { rtmps: { url: "rtmps://live.test.seazn.club:443/live/" }, srt: { url: "srt://live.cloudflare.com:778" } } });
+    expect(body).toMatchObject({ cred: { rtmps: { url: CF_RTMPS }, srt: { url: CF_SRT } }, preferred: QR_PREFERRED_DEFAULT });
+    expect(CaptureDescriptor.parse(body)).toEqual(body);
+    // A second GET answers the same (the env is read at the request, never cached).
+    expect(await get(r, mine)).toMatchObject({ cred: { rtmps: { url: CF_RTMPS }, srt: { url: CF_SRT } } });
+  });
+
+  it("the foreign-host check, with no setting: under a live driver a non-Cloudflare host on either leg is 503 unavailable (ingest_host_unexpected) — the fake's own host included; Cloudflare's passes", async () => {
+    const r = await captureRig();
+    const mine = phoneId("mine");
+    const sid = await r.start(mine);
+    expect(await get(r, mine), "premise: under the FAKE driver the fake's own values are served").toMatchObject({
+      cred: { rtmps: { url: "rtmps://fake.ingest.invalid:443/live/" }, srt: { url: "srt://fake.ingest.invalid:778" } },
+    });
+    setEnv("RELAY_DRIVERS", "live");
+    setEnv("STREAM_PLAYBACK_HOST", "customer-x.cloudflarestream.com");
+    const servedBefore = (await sessionRow(sid)).credentials_served_count;
+    let refused = 0;
+    for (const [rtmps, srt] of [
+      ["rtmps://fake.ingest.invalid:443/live/", "srt://fake.ingest.invalid:778"],   // the fake's host is foreign to a live driver
+      ["rtmps://evil.example:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://evil.example:778"],
+      // Lookalikes, each on both legs: parent-domain, sibling (`endsWith(host)` admits it), child (`endsWith("." + host)`).
+      ["rtmps://live.cloudflare.com.evil.example:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://live.cloudflare.com.evil.example:778"],
+      ["rtmps://evil-live.cloudflare.com:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://evil-live.cloudflare.com:778"],
+      ["rtmps://x.live.cloudflare.com:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://x.live.cloudflare.com:778"],
+    ] as const) {
+      await sql`update fixture_stream_inputs set ingest_rtmps_url = ${rtmps}, ingest_srt_url = ${srt} where session_id = ${sid}`;
+      const err = await refusal(get(r, mine));
+      expect(err, `${rtmps} + ${srt}`).toBeInstanceOf(CaptureRefusalError);
+      expect(err, `${rtmps} + ${srt}`).toMatchObject({ status: 503, code: "unavailable" });
+      expect((err as Error).message, `${rtmps} + ${srt}`).toMatch(/ingest_host_unexpected/);
+      refused++;
+    }
+    expect(refused, "anti-vacuity").toBe(9);
+    expect((await sessionRow(sid)).credentials_served_count, "a refused cred is never counted as served").toBe(servedBefore);
+    await storeCloudflare(sid);
+    expect(await get(r, mine), "the positive pair").toMatchObject({ cred: { rtmps: { url: CF_RTMPS }, srt: { url: CF_SRT } } });
   });
 
   it("STREAM_SRT_ENABLED=false (A18): cred.srt is null and preferred is rtmps; unset is SRT on (W21)", async () => {
