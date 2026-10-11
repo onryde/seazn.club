@@ -2624,10 +2624,11 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
-  it("…an empty list is no evidence about ANYONE — a player with no camera participant included (the per-player guard cannot see this)", async () => {
+  it("…an empty list is no evidence about ANYONE — players with no camera participant included (the per-player guard cannot see this)", async () => {
     const m = await playedMatch();
-    // Stands for a seat with no camera row (the guard test below explains it).
-    await sql`delete from fixture_video_participants where fixture_id = ${m.b.fixtureId} and participant_id = ${m.part.away}`;
+    // Stands for seats with no camera row (the guard test below explains it):
+    // with nobody seated, only the list's own emptiness can say "not ready".
+    await sql`delete from fixture_video_participants where fixture_id = ${m.b.fixtureId}`;
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect([r.cameraSettled, r.cameraFlags, cameraFailures(r)]).toEqual([0, 0, []]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
