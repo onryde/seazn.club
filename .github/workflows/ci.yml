@@ -822,7 +822,13 @@ jobs:
       # would eventually disagree — at which point the reconciliation reports the
       # other job's files as "listed but not run", and that reads as "the gate is
       # broken" rather than "the globs drifted".
-      USECASES_EXCLUDE: "**/server/usecases/__tests__/[i-z]*"
+      #
+      # The letter split is by TEST FILE name at any depth under usecases/, so a
+      # nested `usecases/<area>/__tests__/` lands in exactly one job too. The
+      # `.test.*` anchor is load-bearing: vitest's exclude also prunes a matching
+      # DIRECTORY, and a bare `[a-h]*` swallowed `external-play/` whole, so its
+      # [i-z] tests ran in neither job (measured with `vitest list`, 2026-10-11).
+      USECASES_EXCLUDE: "**/server/usecases/**/[i-z]*.test.*"
 
     steps:
       - uses: actions/checkout@v5
@@ -1202,7 +1208,7 @@ jobs:
       # This job's HALF of src/server/usecases — the complement of smoke-db's.
       # Read by both the run and its reconciliation; see smoke-db's copy for why
       # it is one variable rather than two literals.
-      USECASES_EXCLUDE: "**/server/usecases/__tests__/[a-h]*"
+      USECASES_EXCLUDE: "**/server/usecases/**/[a-h]*.test.*"
 
     steps:
       - uses: actions/checkout@v5
