@@ -8,3 +8,4 @@ export * from "./play";
 export * from "./result";
 export * from "./reconcile";
 export * from "./sweep";
+export * from "./online-chess-flag";
