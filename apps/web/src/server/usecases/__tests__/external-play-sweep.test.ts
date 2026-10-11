@@ -2101,10 +2101,12 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
    *  T+16 as `ending` says; a sweep at T+19 tears the room down through T7's
    *  REAL endMeeting. Opened 19 minutes ago so every stamp is in the PAST of
    *  the DB's own clock that stamps the room's end. */
-  async function playedMatch(o: { policy?: CameraPolicy; start?: boolean; ending?: Ending; override?: boolean } = {}): Promise<Match> {
+  async function playedMatch(
+    o: { policy?: CameraPolicy; start?: boolean; ending?: Ending; override?: boolean; openedMinutesAgo?: number } = {},
+  ): Promise<Match> {
     const ending: Ending = o.ending ?? "tiebreak";
     const b = await openedBoard({
-      checkedIn: ["home", "away"], openedMinutesAgo: 19, cameraPolicy: o.policy ?? "required",
+      checkedIn: ["home", "away"], openedMinutesAgo: o.openedMinutesAgo ?? 19, cameraPolicy: o.policy ?? "required",
       ...(ending === "tiebreak" ? { kind: "knockout" } : {}),
     });
     let gameId: string;
@@ -2179,7 +2181,8 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(await bridgeOf(b.fixtureId), "premise: held mid-game").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
       await settleByHand();
     }
-    const torn = await sweep(b, { now: b.at(19), endMeeting: (id) => endMeeting(id, RTK) });
+    // On the real clock, so the room this pass ends is not yet 2 minutes old.
+    const torn = await sweep(b, { now: new Date(), endMeeting: (id) => endMeeting(id, RTK) });
     expect(torn.meetingsEnded, `premise: ${ending} — the sweep tore the room down`).toBe(1);
     const [m] = await sql<{ meeting_id: string }[]>`
       select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId}`;
@@ -2201,8 +2204,9 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(t!.started_at, "premise: T10 started the game").toEqual(b.at(6));
       const over = ending === "settled_while_held" ? null : b.at(OVER_MIN);
       expect(t!.over_at, `premise: ${ending} — the game's end on file`).toEqual(over);
-      // Players leave at the game's end; the room ends minutes later.
-      expect(t!.ended_at.getTime() - b.at(OVER_MIN).getTime(), "premise: the room outlived the game").toBeGreaterThan(60_000);
+      // Players leave at the game's end; the room ends minutes later (a
+      // board settled by hand has its own premise, in its test).
+      if (over !== null) expect(t!.ended_at.getTime() - over.getTime(), "premise: the room outlived the game").toBeGreaterThan(60_000);
     }
     rtk.calls = [];
     return {
@@ -2334,6 +2338,19 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(f!.person_id).toBe(m.b.home.personId);
     expect(f!.note).toContain(`camera off 60 s of ${Math.round((clockEnd - m.startedAt) / 1000)} s`);
     expect(f!.note).toContain(`${iso(left)} to ${iso(clockEnd)}`);
+  });
+
+  it("the room torn down BEFORE the clock's bound (settled by hand at once): the window stops at the room's end — a closed room has no cameras", async () => {
+    // Opened 11 minutes ago: the four moves are past, the room ends now —
+    // before Black's clock could have run out (T+8 + the whole base = T+13).
+    const m = await playedMatch({ ending: "settled_while_held", openedMinutesAgo: 11 });
+    const clockEnd = m.b.at(8).getTime() + SEED_CLOCK.base * 1000;
+    expect(clockEnd - m.endedAt, "premise: the room ended before the clock's bound").toBeGreaterThan(60_000);
+    bothOnThroughout(m);
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "both cameras read").toBe(2);
   });
 
   it("NO end on file at all — an impossible row (guard reached by SQL): nothing read; a day on, settled with no flag, and SAID so", async () => {
