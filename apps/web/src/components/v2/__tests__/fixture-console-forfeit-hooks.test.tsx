@@ -281,4 +281,22 @@ describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal d
     expect(previewWith(null), "no current model: the snapshot taken at 1-0").toBe(line(3, 0));
     expect(previewWith(fold(4)), "the ledger moved to 4-0 under the open dialog").toBe(line(4, 0));
   });
+
+  it("M-2: a forfeit refusal clears on the console's next write — here an Abandon — not only when the dialog reopens", async () => {
+    vi.mocked(apiV1).mockImplementationOnce(() => Promise.reject(new ApiV1Error("Score moved", 409, "SEQ_CONFLICT")));
+    const { island, el, dialogEl } = openConsole("in_play");
+    const r = await (propsOf(el).forfeit as (p: unknown) => Promise<{ ok: boolean; message?: string }>)({ by: AWAY.id, reason: "retired" });
+    expect(r).toEqual({ ok: false, message: en("score.seqConflict") });
+    (propsOf(dialogEl()!).onRefused as (m: string) => void)(r.message!);
+    expect(byTestid(island.tree(), "forfeit-refusal"), "the refusal shows").toHaveLength(1);
+    // The next write: Abandon…, its prompt, a reason.
+    const abandon = island.tree().find((e) => e.type === "button" && textOf(e) === en("score.abandon"));
+    click(abandon);
+    const prompt = island.tree().find((e) => typeof e.type === "function" && propsOf(e).title === en("score.abandonPrompt"));
+    expect(prompt, "Abandon opened its prompt").toBeDefined();
+    (propsOf(prompt!).onSubmit as (reason: string) => void)("rain");
+    await vi.waitFor(() => expect(byTestid(island.tree(), "forfeit-refusal"), "the old refusal is gone").toHaveLength(0));
+    const posts = vi.mocked(apiV1).mock.calls.filter(([url, init]) => url.endsWith("/events") && (init as { method?: string } | undefined)?.method === "POST");
+    expect(posts.map(([, init]) => (init as { json: { type: string } }).json.type), "the abandon was the write that cleared it").toEqual(["core.forfeit", "core.abandon"]);
+  });
 });

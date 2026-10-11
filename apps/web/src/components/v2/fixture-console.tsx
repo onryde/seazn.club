@@ -652,6 +652,9 @@ export function FixtureConsole({
   const post = useCallback(
     async (type: string, payload: unknown): Promise<{ ok: true } | { ok: false; message: string | null }> => {
       setError(null);
+      // Review M-2: an old forfeit refusal answers the write it came from, not the next one — any new write clears it,
+      // as it clears the console's own error line (reopening the dialog clears it too).
+      setForfeitRefusal(null);
       setPaywallFeature(null);
       setBusy(true);
       try {
@@ -693,7 +696,7 @@ export function FixtureConsole({
         setBusy(false);
       }
     },
-    [fixture.id, live.last_seq, resync, router, msg],
+    [fixture.id, live.last_seq, resync, router, msg, setForfeitRefusal],
   );
 
   const send: SendEvent = useCallback(
