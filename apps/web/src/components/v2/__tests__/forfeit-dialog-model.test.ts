@@ -268,3 +268,29 @@ describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
     expect(confirmable, `confirmable choices folded through the engine: ${confirmable}`).toBeGreaterThan(0);
   });
 });
+
+// Fix round 1 (review M-3): the two "still offered" guards, each driven ALONE. `pickForfeit` can only ever hold an
+// offered pair, so through it each guard is covered for by the other; these hand the guard a pair the dialog does not
+// offer — a selection carried over from a snapshot the match has since moved past.
+describe("UI-1 forfeit dialog: a choice the dialog does not offer (review M-3)", () => {
+  it("Confirm stays blocked on a side or reason the model no longer offers — Neither and the walkover once play started", () => {
+    const d = model(fixtureOf("generic", STARTED));
+    expect(d.who, "X-RS-1: no Neither once play started").not.toContain("both");
+    expect(forfeitConfirmBlocked(d, { who: "both", reason: "walkover" }, false), "Neither after play").toBe(true);
+    expect(forfeitConfirmBlocked(d, { who: "home", reason: "walkover" }, false), "a walkover after play").toBe(true);
+    // The positive pair: an offered choice is Confirmable.
+    expect(forfeitConfirmBlocked(d, { who: "home", reason: "retired" }, false)).toBe(false);
+  });
+
+  it("the preview of a choice the dialog does not offer is none — a football walkover once play started, though the module could price one", () => {
+    // FB-WO-1 prices a walkover at 3-0 whatever the state (the module's credit does not judge the phase); the dialog
+    // after kickoff offers retired or disqualified only (X-RS-1), so a walkover there previews nothing.
+    const fx = fixtureOf("football", (l) => [ev(1, "core.start"), ev(2, "football.goal", { by: l.home.entrantId })]);
+    expect(fx.m.forfeitCredit(fx.cfg as never, fx.state as never, "walkover", "away").perSide[0].gf, "the module prices it").toBe(3);
+    const d = model(fx);
+    expect(d.why("away")).not.toContain("walkover");
+    expect(d.preview("away", "walkover")).toBeNull();
+    // The positive pair: the offered retirement previews the credit (FB-RT-1: 3-0, the awarded margin beats 1-0).
+    expect(d.preview("away", "retired")).toEqual({ home: "3", away: "0" });
+  });
+});
