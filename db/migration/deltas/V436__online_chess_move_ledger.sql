@@ -59,7 +59,9 @@
 --   the append adopts that very move without an out-of-band flag. It excuses
 --   only that ply with that move: a submission that failed or timed out
 --   cannot whitewash a DIFFERENT move, or one at another ply. All three or
---   none; a game on file only.
+--   none; a game on file only; and only ever for the NEXT ply (the ledger's
+--   length): T10 records it only at that ply, and every ledger write spends
+--   a submission whose ply it passes.
 --
 -- Additive and nullable/defaulted, so every existing row (pending, ready,
 -- needs_organiser) is valid as it stands: an empty ledger.
@@ -120,13 +122,13 @@ alter table fixture_external_play
   -- A game end is a game's: no challenge, nothing to have ended.
   add constraint fixture_external_play_game_over_check
     check (game_over_at is null or challenge_id is not null),
-  -- A submission is whole or absent, at a ply the game can have, in T3's UCI
+  -- A submission is whole or absent, for the ledger's NEXT ply, in T3's UCI
   -- shape (assertUci), on a game on file. Spelled out per column: `null and
   -- false` is false, so a half-null row must fail on its own arm.
   add constraint fixture_external_play_pending_move_check
     check ((pending_move_ply is null and pending_move_uci is null and pending_move_at is null)
            or (pending_move_ply is not null and pending_move_uci is not null and pending_move_at is not null
-               and pending_move_ply >= 0
+               and pending_move_ply = move_count
                and pending_move_uci ~ '^[a-h][1-8][a-h][1-8][qrbn]?$'
                and challenge_id is not null));
 

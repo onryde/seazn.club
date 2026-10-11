@@ -698,10 +698,12 @@ describe.runIf(HAS_DB)("act — turn, absorb and races (Review Focus 2)", () => 
     try {
       const { sent, deps } = boardStub(async () => {
         // T11-shaped: the game ended on this very move and reconcile adopted
-        // the stream's moves before our append ran.
+        // the stream's moves before our append ran (spending T10's
+        // submission, as reconcile's ledger write does — V436, T13 I4).
         await sql`
           update fixture_external_play
-             set status = 'finished', finished_at = now(), moves_uci = '["e2e4"]'::jsonb, move_count = 1
+             set status = 'finished', finished_at = now(), moves_uci = '["e2e4"]'::jsonb, move_count = 1,
+                 pending_move_ply = null, pending_move_uci = null, pending_move_at = null
            where fixture_id = ${g.fixtureId}`;
         return { ok: true };
       });
@@ -2024,7 +2026,11 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
                        started_at = coalesce(started_at, ${lila.ply > 0 ? new Date() : null}),
                        draw_offer_by = ${lila.offeringSide()},
                        white_draw_offer_ply = ${lila.lastOffer.white},
-                       black_draw_offer_ply = ${lila.lastOffer.black}
+                       black_draw_offer_ply = ${lila.lastOffer.black},
+                       -- reconcile spends a submission whose ply it adopts (T13 I4)
+                       pending_move_ply = case when pending_move_ply < ${lila.ply} then null else pending_move_ply end,
+                       pending_move_uci = case when pending_move_ply < ${lila.ply} then null else pending_move_uci end,
+                       pending_move_at = case when pending_move_ply < ${lila.ply} then null else pending_move_at end
                  where fixture_id = ${g.fixtureId} and status in ('ready', 'live')`;
               lagged = false;
               bump("refresh");
