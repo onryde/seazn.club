@@ -1795,6 +1795,70 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 // periods) and owns the state; every pass is checked against it: what the
 // pass did (reads, retries, forfeits, holds, failures) and the row it left.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// T13 fix round 1, ruling I4 — the reviewer's probe P1, staged: the 5-minute
+// sweep reads a live game between Lichess's 200 for a Seazn move and T10's
+// append. T10 put the move on file before sending it, so the sweep adopts it
+// as ours: no out-of-band flag, and T10's append absorbs.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("I4 — a sweep landing between Lichess's 200 and T10's append (probe P1)", () => {
+  const outOfBand = async (b: Board) =>
+    sql<{ note: string | null }[]>`select note from fixture_play_flags where fixture_id = ${b.fixtureId} and kind = 'out_of_band_play' order by opened_at`;
+  const ledgerOf = async (b: Board) =>
+    (await sql<{ moves_uci: string[]; pending_move_ply: number | null }[]>`
+      select moves_uci, pending_move_ply from fixture_external_play where fixture_id = ${b.fixtureId}`)[0]!;
+  /** Black's REAL T10 move at minute 8; `atLichess` runs where Lichess holds
+   *  the move and its answer is on the way back. */
+  const blackPlays = (b: Board, uci: string, answer: BoardCall, atLichess: () => Promise<void>) =>
+    act(
+      { fixtureId: b.fixtureId, personId: b.away.personId, action: { kind: "move", uci } },
+      {
+        now: b.at(8), accessToken: async (u) => `tok-${u}`, publish: async () => {}, reconcile: async () => null,
+        submitMove: async () => { await atLichess(); return answer; },
+      },
+    );
+
+  it("our move is adopted with NO flag and T10's append absorbs — x3", async () => {
+    let checked = 0;
+    for (let i = 0; i < 3; i++) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const gameId = await liveGame(b); // e2e4 through T10 at minute 6
+      let pass: SweepReport | null = null;
+      const played = await blackPlays(b, "e7e5", { ok: true }, async () => {
+        serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5"] }));
+        pass = await sweep(b, { now: b.at(8) });
+      });
+      expect(pass!.reconciled, `run ${i}: premise, the sweep read the game mid-call`).toBe(1);
+      expect(played, `run ${i}`).toEqual({ ok: true, applied: false });
+      expect(await outOfBand(b), `run ${i}: our own move is never out-of-band`).toEqual([]);
+      expect(await ledgerOf(b), `run ${i}`).toEqual({ moves_uci: ["e2e4", "e7e5"], pending_move_ply: null });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("…a DIFFERENT move at that ply in the same window is still flagged (the negative pair)", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    await blackPlays(b, "e7e5", { ok: false, code: "not_your_turn_or_over", raw: "400" }, async () => {
+      serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "d7d5"] }));
+      expect((await sweep(b, { now: b.at(8) })).reconciled).toBe(1);
+    });
+    expect((await outOfBand(b)).map((f) => f.note)).toEqual([expect.stringContaining("ply 2 (d7d5)")]);
+  });
+
+  it("…and a submission that got no answer, then a different move at Lichess on a LATER pass, is flagged — the stale one whitewashes nothing", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    await blackPlays(b, "e7e5", { ok: false, code: "unavailable", raw: "timeout" }, async () => {});
+    expect(await ledgerOf(b), "premise: the unanswered move is on file").toEqual({ moves_uci: ["e2e4"], pending_move_ply: 1 });
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "d7d5"] }));
+    expect((await sweep(b, { now: b.at(12) })).reconciled).toBe(1);
+    expect((await outOfBand(b)).map((f) => f.note)).toEqual([expect.stringContaining("ply 2 (d7d5)")]);
+    expect(await ledgerOf(b), "the ply is filled: the stale submission is spent").toEqual({ moves_uci: ["e2e4", "d7d5"], pending_move_ply: null });
+  });
+});
+
 describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves, Lichess's answers, withdrawals and passes in any order", () => {
   /** `diverged`: a line that does not extend ours — T11 holds it mid-game. */
   type Truth = "silent" | "running" | "ended" | "aborted" | "diverged";

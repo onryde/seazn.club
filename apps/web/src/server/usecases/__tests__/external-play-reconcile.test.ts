@@ -1109,6 +1109,119 @@ describe.runIf(HAS_DB)("reconcile — the game's end is recorded at the FIRST te
 });
 
 // ---------------------------------------------------------------------------
+// T13 fix round 1, ruling I4: T10 records the move it is submitting before
+// Lichess hears it. A read landing between Lichess's 200 and T10's append
+// adopts that move as OURS — on every trigger, not only rejected_move — and
+// nothing else: a different move at that ply, or a move at another ply, is
+// still out-of-band play.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("reconcile — the move T10 is submitting is ours, never out-of-band (T13 I4)", () => {
+  type Pending = { pending_move_ply: number | null; pending_move_uci: string | null };
+  const pendingOf = async (fixtureId: string): Promise<Pending> =>
+    (await sql<Pending[]>`select pending_move_ply, pending_move_uci from fixture_external_play where fixture_id = ${fixtureId}`)[0]!;
+  const NO_PENDING: Pending = { pending_move_ply: null, pending_move_uci: null };
+  /** T10's REAL act for Black at ply 1, Lichess answering `answer` — and
+   *  running `meanwhile` where Lichess has the move and its 200 is on the
+   *  way back. The read T10 defers after a refusal is not under test here. */
+  const blackSubmits = (g: Game, uci: string, answer: BoardCall, meanwhile: () => Promise<void> = async () => {}) =>
+    act(
+      { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "move", uci } },
+      {
+        now: new Date(MOVED.getTime() + 1_000), accessToken: async (u) => `tok-${u}`, publish: async () => {},
+        submitMove: async () => { await meanwhile(); return answer; },
+        reconcile: async () => null,
+      },
+    );
+  const outOfBand = async (fixtureId: string) => (await flagsOf(fixtureId)).filter((f) => f.kind === "out_of_band_play");
+
+  it("a read landing between Lichess's 200 and T10's append adopts the move with NO flag — every trigger (counted)", async () => {
+    let checked = 0;
+    for (const trigger of RECONCILE_TRIGGERS) {
+      const g = await liveGame();
+      let out: Awaited<ReturnType<typeof reconcile>> = null;
+      const played = await blackSubmits(g, LINE[1]!, { ok: true }, async () => {
+        serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
+        out = await reconcile(g.fixtureId, trigger, observed().deps);
+      });
+      expect(out, `${trigger}: premise, the read adopted the move`).toMatchObject({ adopted: 1 });
+      expect(played, `${trigger}: T10's append found its move on file`).toEqual({ ok: true, applied: false });
+      expect(await outOfBand(g.fixtureId), trigger).toEqual([]);
+      expect((await rowOf(g.fixtureId)).moves_uci, trigger).toEqual(LINE.slice(0, 2));
+      expect(await pendingOf(g.fixtureId), `${trigger}: the adoption took it off file`).toEqual(NO_PENDING);
+      checked++;
+    }
+    expect(checked).toBe(RECONCILE_TRIGGERS.length);
+  });
+
+  it("a DIFFERENT move at that ply is still out-of-band play — flagged", async () => {
+    const g = await liveGame();
+    const other = "d7d5";
+    expect(other, "premise: not the submitted move").not.toBe(LINE[1]);
+    await blackSubmits(g, LINE[1]!, { ok: false, code: "not_your_turn_or_over", raw: "400" }, async () => {
+      serveStream(gameFull(g, MID, { moves: [LINE[0]!, other] }));
+      await reconcile(g.fixtureId, "sweep", observed().deps);
+    });
+    expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining(`ply 2 (${other})`)]);
+  });
+
+  it("a submission that FAILED (a 5xx Lichess never played) never whitewashes a later, different move — nor one at another ply", async () => {
+    const g = await liveGame();
+    await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+    expect(await pendingOf(g.fixtureId), "premise: the 5xx'd move is on file").toEqual({ pending_move_ply: 1, pending_move_uci: LINE[1] });
+    // At lichess.org Black plays d7d5 instead, and White answers.
+    serveStream(gameFull(g, MID, { moves: [LINE[0]!, "d7d5", "g1f3"] }));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining("plies 2-3 (d7d5 g1f3)")]);
+  });
+
+  it("…and a 5xx Lichess DID play is adopted with no flag on the next read of any kind — and taken off file", async () => {
+    const g = await liveGame();
+    await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 3) }));
+    const out = await reconcile(g.fixtureId, "game_end", observed().deps);
+    expect(out).toMatchObject({ adopted: 2 });
+    // Ours excused; White's third ply was not sent through Seazn.
+    expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining(`ply 3 (${LINE[2]})`)]);
+    expect(await pendingOf(g.fixtureId)).toEqual(NO_PENDING);
+  });
+
+  it("the EXPORT path excuses it too: a terminal export adopting the submitted ply flags only the plies after it", async () => {
+    const g = await liveGame();
+    await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+    lichess.onStream = () => status(503);
+    lichess.onExport = () => ok(exported(g, "export-expired.json"));
+    const out = await reconcile(g.fixtureId, "sweep", observed().deps);
+    expect(out).toMatchObject({ source: "export", adopted: LINE.length - 1 });
+    expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining(`plies 3-${LINE.length} `)]);
+  });
+
+  it("a submission recorded AFTER the read loaded the row refuses that read's write (staged in the stream read); the next read adopts it with no flag", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
+    let staged = 0;
+    const deps: ReconcileDeps = {
+      ...observed().deps,
+      readStream: async (a) => {
+        if (staged++ === 0) {
+          // T10 records Black's move (its 5xx leaves it on file) while this
+          // read is in flight: the row this read loaded had no submission.
+          await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+        }
+        return wiredReadGameStream(a);
+      },
+    };
+    const first = await reconcile(g.fixtureId, "sweep", deps);
+    expect(staged, "premise: staged inside the read").toBeGreaterThan(0);
+    expect(first, "the write is refused: the row moved under the read").toMatchObject({ adopted: 0 });
+    expect(await outOfBand(g.fixtureId)).toEqual([]);
+    expect((await rowOf(g.fixtureId)).moves_uci).toEqual(LINE.slice(0, 1));
+    const next = await reconcile(g.fixtureId, "sweep", observed().deps);
+    expect(next).toMatchObject({ adopted: 1 });
+    expect(await outOfBand(g.fixtureId)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The organiser decided first: close the bridge, read nothing, write nothing.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("reconcile — a fixture no longer playable closes its bridge with no read and no result", () => {
