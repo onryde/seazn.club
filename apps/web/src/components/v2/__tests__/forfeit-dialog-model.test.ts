@@ -100,6 +100,19 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(d.why("both"), "Neither is not a choice once something is played").toEqual([]);
   });
 
+  it("X-RS-1 (ruling 112): the console's reading of its ledger rows is the engine's — seq order, not array order; a void by `voids_event_id`; the empty ledger is nothing played", () => {
+    // Expected values from the ruling's text: a sport event after an active start is play; a voided one is not.
+    const played = playedOf("generic");
+    const rows = rowsOf(played.events);
+    expect(forfeitPlayRecorded([]), "empty ledger").toBe(false);
+    expect(forfeitPlayRecorded(rowsOf(STARTED())), "a bare start").toBe(false);
+    expect(forfeitPlayRecorded(rows), "start, then the sport's own event").toBe(true);
+    expect(forfeitPlayRecorded([...rows].reverse()), "the same rows out of array order").toBe(true);
+    const voided = rowsOf([...played.events, ev(3, "core.void", {}, played.events[1]!.id)]);
+    expect(forfeitPlayRecorded(voided), "the event voided").toBe(false);
+    expect(forfeitPlayRecorded([...voided].reverse()), "the void read before its target").toBe(false);
+  });
+
   it("X-RS-1 (ruling 112) after a void: voiding the one played event, or the start, takes the match back to nothing played — Neither and the walkover return", () => {
     // The take-back sequences (TEST-STRATEGY rule 1): start, play, void the play; and start, void the start.
     const played = playedOf("generic");
