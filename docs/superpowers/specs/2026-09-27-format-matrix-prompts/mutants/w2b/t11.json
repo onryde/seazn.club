@@ -1,0 +1,336 @@
+[
+ {
+  "id": "dialog-both-after-start",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const both = admission.both && !f.noNextMatch;",
+  "replace": "const both = !f.noNextMatch;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "after play started"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "tie-break is pending"
+   }
+  ]
+ },
+ {
+  "id": "dialog-both-ignores-no-next-match",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const both = admission.both && !f.noNextMatch;",
+  "replace": "const both = admission.both;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a final shows the guidance"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the guidance replaces Neither"
+   }
+  ]
+ },
+ {
+  "id": "dialog-retired-pre",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "return w === \"both\" ? [\"walkover\"] : sideReasons;",
+  "replace": "return w === \"both\" ? [\"walkover\"] : [...new Set<WriterForfeitReason>([...sideReasons, \"retired\"])];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "before play — Home, Away, Neither"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "rule 10"
+   }
+  ]
+ },
+ {
+  "id": "dialog-withdrew-offered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const sideReasons = admission.reasons.filter((r): r is WriterForfeitReason => !isCascadeOnlyForfeitReason(r));",
+  "replace": "const sideReasons = admission.reasons as WriterForfeitReason[];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "PF-2: no sport, in no phase"
+   }
+  ]
+ },
+ {
+  "id": "dialog-no-guidance",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "guidance: admission.both && f.noNextMatch ? \"noNextMatch\" : null,",
+  "replace": "guidance: null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a final shows the guidance"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the guidance replaces Neither"
+   }
+  ]
+ },
+ {
+  "id": "dialog-guidance-in-tiebreak",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "guidance: admission.both && f.noNextMatch ? \"noNextMatch\" : null,",
+  "replace": "guidance: f.noNextMatch ? \"noNextMatch\" : null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "tie-break is pending"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-played",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "replace": "const [h, a] = (module as unknown as { summary(s: unknown): { perSide: { line: string }[] } }).summary(state).perSide.map((s) => Number(s.line));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "never the played score itself"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "hockey walkover reads 5–0"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-sides-swapped",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "replace": "const [a, h] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "hockey walkover reads 5–0"
+   }
+  ]
+ },
+ {
+  "id": "dialog-confirm-generic",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "confirmKey: (w, reason) => (w === \"both\" ? \"forfeitDialog.confirm.doubleWalkover\" : CONFIRM_KEY[reason]),",
+  "replace": "confirmKey: () => \"forfeitDialog.confirm.walkover\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "one specific Confirm per reason"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "its own Confirm"
+   }
+  ]
+ },
+ {
+  "id": "dialog-double-submit",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "if (forfeitConfirmBlocked(model, sel, sendingRef.current)) return;",
+  "replace": "if (forfeitConfirmBlocked(model, sel, false)) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "Review Focus 4"
+   }
+  ]
+ },
+ {
+  "id": "console-tiebreak-closed",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && !held && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "W2b-R14"
+   }
+  ]
+ },
+ {
+  "id": "console-forfeit-held-level",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "status lags the ledger"
+   }
+  ]
+ },
+ {
+  "id": "console-forfeit-scorer",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && (!held || tiebreakPending) && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "X-ST-2"
+   }
+  ]
+ },
+ {
+  "id": "console-refusal-dropped",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "            setForfeitOpen(null);\n            setForfeitRefusal(message);\n",
+  "replace": "            setForfeitOpen(null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "a refused forfeit closes the dialog"
+   }
+  ]
+ },
+ {
+  "id": "page-no-next-match-edges-only",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+  "find": "no_next_match: doubleWalkoverRefused(stageKind, feedsNext),",
+  "replace": "no_next_match: !feedsNext,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+    ],
+    "name": "D19's double-walkover reading"
+   }
+  ]
+ },
+ {
+  "id": "d19-ladder-refuses",
+  "file": "apps/web/src/lib/double-walkover-next-match.ts",
+  "find": "return forbidsLevelResult(stageKind) && stageKind !== \"ladder\";",
+  "replace": "return forbidsLevelResult(stageKind);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/double-walkover-next-match.test.ts"
+    ],
+    "name": "every stage kind the engine declares"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+    ],
+    "name": "D19's double-walkover reading"
+   }
+  ]
+ },
+ {
+  "id": "admission-both-in-tiebreak",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "return allowed.includes(\"walkover\") && phase !== \"tiebreak\";",
+  "replace": "return allowed.includes(\"walkover\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-admission.test.ts"
+    ],
+    "name": "BG-WO-3 / W2b-R14"
+   }
+  ]
+ },
+ {
+  "id": "admission-over-admits",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "  if (phase === \"over\") return { phase, reasons: [], both: false };\n  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);",
+  "replace": "  const reasons = forfeitReasonsAllowed(phase as Exclude<ForfeitPhase, \"over\">, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-admission.test.ts"
+    ],
+    "name": "empty case first"
+   }
+  ]
+ },
+ {
+  "id": "bench-cascade-reason-mapped",
+  "file": "tools/bench/lib/drivers/scorer.ts",
+  "find": "if (isCascadeOnlyForfeitReason(p.reason)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/scorer-driver.test.ts"
+    ],
+    "name": "never a cascade-only reason"
+   }
+  ]
+ }
+]

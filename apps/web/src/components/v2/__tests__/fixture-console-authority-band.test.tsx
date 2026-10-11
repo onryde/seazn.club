@@ -366,6 +366,27 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", canOrganise: false, other: rig })).not.toContain('data-testid="score-forfeit"');
   });
 
+  it("W2b-R14's other side: a held ABANDONED line is not a tie-break — no Forfeit, even while the status lags the ledger (the resync's two reads race)", () => {
+    // The console's resync reads /state and /events in parallel (fixture-console.tsx `resync`), so an abandon landing
+    // between the two reads leaves an in_play status (not `decided`) beside a ledger whose abandon holds the line. Only
+    // the held gate keeps the Forfeit closed there: R14 reopens it for a pending tie-break alone. The engine would refuse
+    // the send anyway (ABANDONED_SETTLE_OR_VOID, X-AB-4); the console must not offer it.
+    const rig = chessTiebreak();
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const live = foldMatch(chess, rig.resolvedConfig as never, defaultLineupPair(chess.positions), [makeEnvelope(1, { type: "core.start", payload: {} } as never)]);
+    const abandon: EventIn = { ...rig.events[0]!, id: "ev-abandon", seq: 2, type: "core.abandon", payload: { reason: "rain" } };
+    const racing = { ...rig, state: live, events: [rig.events[0]!, abandon] };
+    const html = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: racing });
+    expect(html, "the abandon holds the line").toContain(BLOCK);
+    expect(html).toContain('data-cause="abandoned"');
+    expect(html).not.toContain('data-testid="score-forfeit"');
+    expect(html).not.toContain(">Abandon…<");
+    // The positive pair: the same live state with no abandon on the ledger offers the organiser both.
+    const open = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: { ...racing, events: [rig.events[0]!] } });
+    expect(open).not.toContain(BLOCK);
+    expect(bandHtml(open)).toContain('data-testid="score-forfeit"');
+  });
+
   it("P1 follow-up: a SCHEDULED chess knockout renders its console — not held, Start match offered (the page serves state null before kickoff)", () => {
     const rig = chessTiebreak();
     const html = consoleHtml({ status: "scheduled", outcome: null, stageKind: "knockout", other: { ...rig, state: null, events: [] } });

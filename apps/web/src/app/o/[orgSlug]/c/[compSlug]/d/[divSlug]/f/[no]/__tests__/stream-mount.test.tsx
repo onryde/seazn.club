@@ -15,6 +15,7 @@ const scene = vi.hoisted(() => ({
   status: "scheduled",
   open: [] as string[],
   feedsNext: true,
+  stageKind: null as string | null,
 }));
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
@@ -48,7 +49,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listEvents: vi.fn(async () => []),
   eventRecorderNames: vi.fn(async () => ({})),
   getLineup: vi.fn(async () => ({ slots: [] })),
-  loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: null })),
+  loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: scene.stageKind })),
   fixtureFeedsNextMatch: vi.fn(async (_auth: unknown, id: string) => (id === "fx-7" ? scene.feedsNext : !scene.feedsNext)),
 }));
 vi.mock("@/server/usecases/divisions", () => ({
@@ -129,7 +130,7 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 }
 
 beforeEach(() => {
-  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true });
+  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
@@ -215,5 +216,33 @@ describe("the organiser fixture page hands the console whether the line feeds a 
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// W2b Task 11 (D19, X-DW-3): the forfeit dialog's "Neither" is hidden exactly where the server refuses a double walkover,
+// and the page is what hands the console that reading — the stage kind (`loadFixturePadCfg`) with the feed edges
+// (`fixtureFeedsNextMatch`). Expected values are D19's rows, typed: a feeding bracket kind on a line that feeds nothing
+// refuses; a ladder, a table stage, a stage-less fixture and a line that feeds a next match never do.
+describe("the organiser fixture page hands the console D19's double-walkover reading (W2b Task 11)", () => {
+  it("no_next_match is true only for a feeding bracket kind on a line that feeds no next match", async () => {
+    const ROWS: [stageKind: string | null, feeds: boolean, want: boolean][] = [
+      [null, false, false],
+      [null, true, false],
+      ["league", false, false],
+      ["ladder", false, false],
+      ["knockout", true, false],
+      ["knockout", false, true],
+      ["double_elim", false, true],
+      ["stepladder", false, true],
+      ["page_playoff", false, true],
+    ];
+    let checked = 0;
+    for (const [stageKind, feeds, want] of ROWS) {
+      Object.assign(scene, { stageKind, feedsNext: feeds });
+      const fixture = (await consoleProps()).fixture as { no_next_match?: boolean };
+      expect(fixture.no_next_match, `${String(stageKind)}, feeds ${String(feeds)}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 });
