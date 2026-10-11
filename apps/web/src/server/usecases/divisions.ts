@@ -53,6 +53,7 @@ import {
   assertCameraPolicyForSport,
   assertCameraPolicyValue,
   assertPolicyChange,
+  CAMERA_POLICY_CHANGED,
   effectivePolicy,
   readCameraPolicy,
   type CameraPolicy,
@@ -806,7 +807,7 @@ export async function patchDivision(
           tx,
           cur.competition_id,
           auth.orgId,
-          "chess.camera_policy_changed",
+          CAMERA_POLICY_CHANGED,
           {
             divisionId: id,
             stageId: null,
