@@ -1531,11 +1531,15 @@ describe("validatePack — the standings derivation mirrors the product's own", 
 
     const exact = tiny();
     // The real derived ledger for alpha, so the comparison has a green case
-    // and is not merely "any metrics block reds".
+    // and is not merely "any metrics block reds". Summed by hand from the
+    // pack's streams: rr-r1-c1 3-1, rr-r2-c1 2-2, and rr-r3-c1's retirement
+    // after alpha's one point (W2b ruling 113), credited at the recorded 1-0
+    // (generic GN-RT-1: a retirement credits the recorded score) — 6 for,
+    // 3 against.
     exact.expected.tables[0]!.rows[0]!.metrics = {
-      for: 5,
+      for: 6,
       against: 3,
-      diff: 2,
+      diff: 3,
     };
     expectClean(validatePack(exact, TINY), TINY_NOT_DERIVED);
 
@@ -1551,8 +1555,8 @@ describe("validatePack — the standings derivation mirrors the product's own", 
   // comparison — the subset trips the per-key walk, the superset only the key
   // COUNT — so a single case leaves one half of the check untested.
   const metricsCases: [string, Record<string, number>][] = [
-    ["a SUBSET of", { for: 5 }],
-    ["a SUPERSET of", { for: 5, against: 3, diff: 2, invented: 0 }],
+    ["a SUBSET of", { for: 6 }],
+    ["a SUPERSET of", { for: 6, against: 3, diff: 3, invented: 0 }],
   ];
   it.each(metricsCases)(
     "reds a metrics block that is %s the derived ledger",
@@ -1562,7 +1566,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
       const finding = onlyError(validatePack(pack, TINY).findings);
       expect(finding.code).toBe("standings.metrics");
       expect(finding.message).toContain(
-        'the fold produced {"for":5,"against":3,"diff":2}',
+        'the fold produced {"for":6,"against":3,"diff":3}',
       );
     },
   );
@@ -4990,10 +4994,12 @@ describe("validatePack — stage 1.6, a scheduled division must declare a schedu
 // has nothing to do with the pack. These drive a REAL fold per reason.
 describe("validatePack — an award's method is its reason (W2b)", () => {
   /** A generic fixture decided by one forfeit. Where in the match a reason is
-   *  recordable is the ENGINE's rule (a walkover only before play started, a
-   *  retirement or disqualification only after); the stream is shaped to it. */
+   *  recordable is the ENGINE's rule (a walkover until something is played,
+   *  ruling 112; a disqualification from the Start; a retirement only once
+   *  something is played, ruling 113); the stream is shaped to it. */
   const forfeitEvents = (reason: (typeof FORFEIT_REASONS)[number]) => [
     ...(reason === "walkover" ? [] : [{ type: "core.start" }]),
+    ...(reason === "retired" ? [{ type: "generic.score", payload: { by: "@e1", points: 1 } }] : []),
     { type: "core.forfeit", payload: { by: "@e2", reason } },
   ];
   const awardPack = (reason: (typeof FORFEIT_REASONS)[number], method: string | undefined) =>
@@ -5049,9 +5055,38 @@ describe("validatePack — an award's method is its reason (W2b)", () => {
   });
 
   it("a walkover posted AFTER core.start is refused — the phase guard suite 11 had to be rebuilt around", () => {
+    // W2b ruling 112: the guard reads PLAY, not the Start — a walkover is
+    // refused once something is played. The bare-Start pair below is the
+    // other side of the same line.
     const pack = genericPack({
-      events: [{ type: "core.start" }, { type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } }],
+      events: [
+        { type: "core.start" },
+        { type: "generic.score", payload: { by: "@e1", points: 1 } },
+        { type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } },
+      ],
       outcome: { kind: "award", winner: "e1", method: "walkover" },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("fold.rejected");
+    expect(finding.message).toContain("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 112's positive pair: after a bare Start (nothing played) the
+    // same walkover folds clean.
+    expectClean(
+      validatePack(
+        genericPack({
+          events: [{ type: "core.start" }, { type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } }],
+          outcome: { kind: "award", winner: "e1", method: "walkover" },
+        }),
+        UNIT,
+      ),
+      UNIT_NO_TABLE,
+    );
+  });
+
+  it("W2b ruling 113: a retirement after a bare core.start is refused — nobody retires from a match never played", () => {
+    const pack = genericPack({
+      events: [{ type: "core.start" }, { type: "core.forfeit", payload: { by: "@e2", reason: "retired" } }],
+      outcome: { kind: "award", winner: "e1", method: "retired" },
     });
     const finding = onlyError(validatePack(pack, UNIT).findings);
     expect(finding.code).toBe("fold.rejected");

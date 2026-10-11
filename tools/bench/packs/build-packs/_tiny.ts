@@ -383,8 +383,12 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
+    // W2b ruling 113 (2026-10-11): nobody retires from a match never played, so Bravo retires hurt after the first
+    // point — one unattributed generic.score (no `person`, so TINY_LEADERBOARDS, rr-r2-c1's three attributed scores,
+    // does not move). The retirement special below needs play before it.
     events: [
       { type: "core.start" },
+      { type: "generic.score", payload: { by: "@e-alpha", points: 1 } },
       { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired" } },
     ],
   },
