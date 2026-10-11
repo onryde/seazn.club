@@ -1026,16 +1026,25 @@ describe("readGameStream — the reconcile read: the board stream's first line (
 
   it("a first line that never ends is refused at the cap and the stream closed — not buffered until the timeout", async () => {
     const chunk = "x".repeat(16 * 1024);
-    // Endless, newline-free: only the cap can end this read before the timeout.
+    // Newline-free, 1 MiB before it ends — a recorded gameFull line is under
+    // 1 KB, so a read that is still buffering at 128 KiB has no cap. (The
+    // body ends at all only so a capless read fails here instead of spinning
+    // in microtasks where no timer — not even the test's — can fire.)
+    const LIMIT = 64;
+    let pulls = 0;
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
-      pull(c) { c.enqueue(new TextEncoder().encode(chunk)); },
+      pull(c) {
+        if (++pulls > LIMIT) return c.close();
+        c.enqueue(new TextEncoder().encode(chunk));
+      },
       cancel() { cancelled = true; },
     });
     const f = vi.fn(async () => streamRes(body));
     expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
       .toMatchObject({ ok: false, code: "unavailable" });
     expect(cancelled).toBe(true);
+    expect(pulls, "chunks pulled before the read gave up").toBeLessThanOrEqual(8);
   });
 
   it("an empty move string (no ply yet) is an empty list", async () => {
