@@ -16,7 +16,9 @@ import type { ReactElement, ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import type { EventEnvelope } from "@seazn/engine/core";
 import { FixtureConsole } from "@/components/v2/fixture-console";
+import { ForfeitDialog, forfeitDialogModel } from "@/components/v2/forfeit-dialog";
 import type { EventIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { propsOf, renderIsland, textOf, type Props } from "@/components/__tests__/_hook-harness";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -230,5 +232,53 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     click(byTestid(d.tree(), "forfeit-confirm")[0]);
     await vi.waitFor(() => expect(d.onRefused).toHaveBeenCalledWith("nope"));
     expect(d.onClose).not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 1 (review M-1, M-2).
+describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal does not outlive the next write", () => {
+  it("M-1: the console hands the open dialog its CURRENT model as `live`; the chips stay the snapshot taken at open", async () => {
+    // A resync while the dialog is open (here the one a SEQ_CONFLICT answer triggers) brings a ledger whose start was
+    // voided: the match is back before play. `live` follows it (Neither returns); `model`, the chips, does not.
+    vi.mocked(apiV1).mockImplementationOnce(() => Promise.reject(new ApiV1Error("Score moved", 409, "SEQ_CONFLICT")));
+    const { el, dialogEl } = openConsole("in_play");
+    type M = { who: readonly string[] };
+    const at = () => propsOf(dialogEl()!) as { model: M; live?: M | null };
+    expect(at().live, "the console passes its current model").toBeTruthy();
+    expect(at().live!.who, "at open, the current model IS the snapshot's reading").toEqual(["home", "away"]);
+    await (propsOf(el).forfeit as (p: unknown) => Promise<unknown>)({ by: AWAY.id, reason: "retired" });
+    await vi.waitFor(() => expect(at().live!.who, "after the resync: before play again").toEqual(["home", "away", "both"]));
+    expect(at().model.who, "the chips stay the snapshot").toEqual(["home", "away"]);
+  });
+
+  it("M-1: the dialog's preview reads `live` — a goal recorded after it opened moves the credited score (FB-RT-1)", () => {
+    // FB-RT-1 (FDC Art. 28): the side that retires concedes the awarded 3-0, or the real margin where that is worse.
+    const football = builtinModules.find((m) => m.key === "football")!;
+    const cfg = football.configSchema.parse(Object.values(football.variants)[0] ?? {});
+    const l = defaultLineupPair(football.positions);
+    const fold = (goals: number) => {
+      const ledger: EventEnvelope[] = [makeEnvelope(1, { type: "core.start", payload: {} })];
+      for (let i = 0; i < goals; i++) ledger.push(makeEnvelope(i + 2, { type: "football.goal", payload: { by: l.home.entrantId } }));
+      return forfeitDialogModel(football, cfg, foldMatch(football, cfg, l, ledger), { noNextMatch: false });
+    };
+    const props = (live: ReturnType<typeof fold> | null) => ({
+      msg: (key: MessageKey, vars?: Record<string, string | number>) => tRuntime(messages, key, vars),
+      model: fold(1),
+      live,
+      home: { id: l.home.entrantId, name: HOME.name },
+      away: { id: l.away.entrantId, name: AWAY.name },
+      forfeit: vi.fn<Send>(async () => ({ ok: true })),
+      onClose: vi.fn(),
+      onRefused: vi.fn(),
+    });
+    const previewWith = (live: ReturnType<typeof fold> | null) => {
+      const d = renderIsland(ForfeitDialog as unknown as Component, props(live));
+      click(byTestid(d.tree(), "forfeit-who-away")[0]);
+      (propsOf(byTestid(d.tree(), "forfeit-why-retired")[0]!).onChange as () => void)();
+      return textOf(byTestid(d.tree(), "forfeit-preview")[0]!);
+    };
+    const line = (h: number, a: number) => tRuntime(messages, "forfeitDialog.preview", { home: HOME.name, homeScore: h, away: AWAY.name, awayScore: a });
+    expect(previewWith(null), "no current model: the snapshot taken at 1-0").toBe(line(3, 0));
+    expect(previewWith(fold(4)), "the ledger moved to 4-0 under the open dialog").toBe(line(4, 0));
   });
 });

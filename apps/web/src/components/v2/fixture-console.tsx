@@ -1628,6 +1628,7 @@ export function FixtureConsole({
         <ForfeitDialog
           msg={msg}
           model={forfeitOpen}
+          live={forfeitModel}
           home={{ id: home.id, name: homeName! }}
           away={{ id: away.id, name: awayName! }}
           forfeit={forfeit}

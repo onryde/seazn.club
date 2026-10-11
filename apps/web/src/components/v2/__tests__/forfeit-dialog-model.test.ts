@@ -16,6 +16,7 @@ import {
   forfeitConfirmBlocked,
   forfeitDialogModel,
   forfeitPayload,
+  forfeitPreviewNow,
   pickForfeit,
   NO_FORFEIT_PICK,
   type ForfeitSelection,
@@ -292,5 +293,34 @@ describe("UI-1 forfeit dialog: a choice the dialog does not offer (review M-3)",
     expect(d.preview("away", "walkover")).toBeNull();
     // The positive pair: the offered retirement previews the credit (FB-RT-1: 3-0, the awarded margin beats 1-0).
     expect(d.preview("away", "retired")).toEqual({ home: "3", away: "0" });
+  });
+});
+
+// Fix round 1 (review M-1): the preview states what the server will RECORD, which it judges at the current tip — so it
+// follows the console's current model while the chips stay the snapshot taken at open.
+describe("UI-1 forfeit dialog: the preview follows the current ledger (review M-1)", () => {
+  const goals = (n: number) => (l: ReturnType<typeof defaultLineupPair>) => [
+    ev(1, "core.start"),
+    ...Array.from({ length: n }, (_, i) => ev(i + 2, "football.goal", { by: l.home.entrantId })),
+  ];
+
+  it("a goal recorded on another device while the dialog is open moves the credited score — FB-RT-1, the real margin stands", () => {
+    // FB-RT-1 (FDC Art. 28): a retirement credits the awarded 3-0 unless the real margin is worse for the side that
+    // retired. At 1-0 the award stands (3-0); at 4-0 the real margin does (4-0).
+    const snapshot = model(fixtureOf("football", goals(1)));
+    const live = model(fixtureOf("football", goals(4)));
+    expect(snapshot.preview("away", "retired"), "the snapshot taken at 1-0").toEqual({ home: "3", away: "0" });
+    expect(forfeitPreviewNow(snapshot, live, "away", "retired"), "the consequence at the current tip").toEqual({ home: "4", away: "0" });
+    // Unchanged ledger: the same answer either way.
+    expect(forfeitPreviewNow(snapshot, model(fixtureOf("football", goals(1))), "away", "retired")).toEqual({ home: "3", away: "0" });
+  });
+
+  it("no current model, or one that no longer offers the choice: the snapshot's preview stands (the server judges that send)", () => {
+    const snapshot = model(fixtureOf("football", goals(1)));
+    expect(forfeitPreviewNow(snapshot, null, "away", "retired")).toEqual({ home: "3", away: "0" });
+    // The match was decided under the open dialog: the current model offers nothing (empty case first).
+    const decided = model(fixtureOf("football", (l) => [...goals(1)(l), ev(3, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]));
+    expect(decided.who).toEqual([]);
+    expect(forfeitPreviewNow(snapshot, decided, "away", "retired")).toEqual({ home: "3", away: "0" });
   });
 });

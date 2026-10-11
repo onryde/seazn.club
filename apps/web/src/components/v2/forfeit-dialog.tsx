@@ -103,6 +103,22 @@ export function forfeitDialogModel(
   };
 }
 
+/** Review M-1: the preview states the consequence the server will RECORD, and the server judges the send at the
+ *  current tip (`post` sends `live.last_seq`). So the chips stay the snapshot taken when the dialog opened, but the
+ *  preview reads the console's CURRENT model (`live`, recomputed from every resync): a goal recorded on another device
+ *  while the dialog is open moves the credited score with it (FB-RT-1: the real margin stands). Where the current model
+ *  no longer offers the choice (the match moved past it), nothing it computes is the answer — the server refuses that
+ *  send and the console says why — so the snapshot's preview stays, never a "no score" that would be a claim. */
+export function forfeitPreviewNow(
+  snapshot: ForfeitDialogModel,
+  live: ForfeitDialogModel | null,
+  who: ForfeitWho,
+  reason: ForfeitReason,
+): { home: string; away: string } | null {
+  if (live !== null && live.why(who).includes(reason as WriterForfeitReason)) return live.preview(who, reason);
+  return snapshot.preview(who, reason);
+}
+
 /** The page serves `state: null` for a scheduled fixture (no match_states row yet). The engine's reading of a fixture
  *  with no events is the module's own init — the same fallback the pad pipeline folds from (use-pad-pipeline.ts). */
 export function forfeitBaseState(module: Pick<AnySportModule, "init">, cfg: unknown, state: unknown, lineups: LineupPair): unknown {
@@ -152,6 +168,8 @@ export type ForfeitResult = { ok: true } | { ok: false; message: string };
 interface DialogProps {
   msg: Msg;
   model: ForfeitDialogModel;
+  /** The console's model over the CURRENT ledger (review M-1): the preview follows it; the chips stay `model`'s. */
+  live?: ForfeitDialogModel | null;
   /** The two entrants as the screen names them (`entrantDisplayName`, D-6). */
   home: { id: string; name: string };
   away: { id: string; name: string };
@@ -229,7 +247,7 @@ export function ForfeitDialog(props: DialogProps) {
   const whoLabel = (w: ForfeitWho): string => (w === "home" ? props.home.name : w === "away" ? props.away.name : msg("forfeitDialog.who.both"));
   const reasons = sel.who === null ? [] : model.why(sel.who);
   const chosen = sel.who !== null && sel.reason !== null;
-  const preview = chosen ? model.preview(sel.who!, sel.reason!) : null;
+  const preview = chosen ? forfeitPreviewNow(model, props.live ?? null, sel.who!, sel.reason!) : null;
   const blocked = forfeitConfirmBlocked(model, sel, sending);
 
   return (
