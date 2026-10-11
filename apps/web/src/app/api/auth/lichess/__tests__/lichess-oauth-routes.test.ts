@@ -29,14 +29,26 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+const requireUser = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
   return {
     ...actual,
     // safeNextPath is left as the REAL implementation (spread from `actual`)
     // — this suite proves the route reuses it, not a re-implementation.
-    requireUser: async () => ({ id: "u1" }),
+    requireUser,
   };
+});
+
+// T20: the start names the club (`?org=<slug>`) and asks the online-chess flag for it. The slug lookup needs a
+// database, so it is doubled; the flag is asked through the REAL helper, with PostHog doubled at its boundary.
+const CLUB = { id: "org-1", name: "Club", slug: "club" };
+const orgBySlug = vi.hoisted(() => vi.fn());
+vi.mock("@/server/slug-resolve", () => ({ orgBySlug }));
+const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
+vi.mock("@/lib/posthog-server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
+  return { ...actual, isServerFeatureEnabled: flags.isServerFeatureEnabled };
 });
 
 const upsertLichessLink = vi.hoisted(() => vi.fn());
@@ -52,6 +64,8 @@ vi.mock("@/server/usecases/external-accounts", async () => {
 import { HttpError } from "@/lib/errors";
 import { LICHESS_OAUTH_SCOPES } from "@/lib/oauth";
 import { pkceChallenge } from "@/server/external-play/pkce";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { GET } from "../route";
 import { GET as CALLBACK } from "../callback/route";
 
@@ -71,13 +85,20 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.stubEnv("LICHESS_CLIENT_ID", "seazn-test");
+  requireUser.mockReset().mockResolvedValue({ id: "u1" });
+  orgBySlug.mockReset().mockImplementation(async (slug: string) => (slug === CLUB.slug ? CLUB : null));
+  // The override vitest.config sets (local / CI / e2e) stays on unless a case removes it; a flag asked while it is
+  // on is a defect.
+  forgetOnlineChessFlagCache();
+  flags.isServerFeatureEnabled.mockReset().mockRejectedValue(new Error("flag asked while the override was on"));
 });
+
+/** The start a club page builds: the real href builder, so the route and the links cannot disagree. */
+const start = (next?: string) => new Request(`http://localhost${lichessLinkStartHref(CLUB.slug, next)}`);
 
 describe("GET /api/auth/lichess — start", () => {
   it("redirects with code_challenge S256 and stores verifier + state + next cookies", async () => {
-    const res = await GET(
-      new Request("http://localhost/api/auth/lichess?next=/shared/o/c/d/fixtures/f1/play"),
-    );
+    const res = await GET(start("/shared/o/c/d/fixtures/f1/play"));
     const loc = new URL(res.headers.get("location")!);
     expect(loc.origin + loc.pathname).toBe("https://lichess.org/oauth");
     expect(loc.searchParams.get("code_challenge_method")).toBe("S256");
@@ -87,7 +108,7 @@ describe("GET /api/auth/lichess — start", () => {
   });
 
   it("asks for exactly board:play, challenge:write and challenge:read — the grant that submits moves and recovers a crashed create", async () => {
-    const res = await GET(new Request("http://localhost/api/auth/lichess"));
+    const res = await GET(start());
     const loc = new URL(res.headers.get("location")!);
     // Anti-vacuity first: an EMPTY constant (the state this task reverses)
     // would make the equality below pass against a missing grant.
@@ -104,8 +125,97 @@ describe("GET /api/auth/lichess — start", () => {
   });
 
   it("refuses a protocol-relative next", async () => {
-    await GET(new Request("http://localhost/api/auth/lichess?next=//evil.example"));
+    const res = await GET(start("//evil.example"));
+    // The positive pair: the start itself went ahead — only the `next` was dropped.
+    expect(new URL(res.headers.get("location")!).origin).toBe("https://lichess.org");
     expect(cookieJar.has(NEXT_COOKIE)).toBe(false);
+  });
+});
+
+// T20: linking a Lichess account is how online chess STARTS for a player, so the start is offered only to a club
+// offered online chess (the PostHog flag `online-chess`, fallback off). Values from the brief: 403
+// ONLINE_CHESS_DISABLED, the flag asked for the signed-in user in the club's group.
+describe("GET /api/auth/lichess — online chess must be offered to the club", () => {
+  type FlagState = { label: string; offered: boolean; arm: () => void };
+  const FLAG_STATES: readonly FlagState[] = [
+    { label: "flag ON", offered: true, arm: () => flags.isServerFeatureEnabled.mockResolvedValue(true) },
+    { label: "flag OFF", offered: false, arm: () => flags.isServerFeatureEnabled.mockResolvedValue(false) },
+    {
+      label: "PostHog throws",
+      offered: false,
+      arm: () => flags.isServerFeatureEnabled.mockRejectedValue(new Error("posthog unreachable")),
+    },
+  ];
+  const flagIs = (s: FlagState) => {
+    vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+    forgetOnlineChessFlagCache();
+    flags.isServerFeatureEnabled.mockReset();
+    s.arm();
+  };
+  async function refusalOf(res: Response) {
+    return { status: res.status, body: (await res.json()) as { ok: boolean; code: string } };
+  }
+
+  it("flag ON starts the OAuth round trip; flag OFF or PostHog throwing refuses 403 ONLINE_CHESS_DISABLED and sets no cookie", async () => {
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      cookieJar.clear();
+      flagIs(s);
+      const res = await GET(start("/settings?tab=account"));
+      if (s.offered) {
+        expect(new URL(res.headers.get("location")!).origin + new URL(res.headers.get("location")!).pathname, s.label).toBe(
+          "https://lichess.org/oauth",
+        );
+        expect(cookieJar.has(STATE_COOKIE), s.label).toBe(true);
+      } else {
+        expect(await refusalOf(res), s.label).toMatchObject({ status: 403, body: { ok: false, code: "ONLINE_CHESS_DISABLED" } });
+        expect([...cookieJar.keys()], `${s.label}: nothing stored`).toEqual([]);
+      }
+      expect(flags.isServerFeatureEnabled, s.label).toHaveBeenCalledWith("online-chess", "u1", { orgId: CLUB.id, fallback: false });
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("a start that names no club, an unknown one, or a renamed slug is refused 403 — even with the override on, and the flag is never asked", async () => {
+    orgBySlug.mockImplementation(async (slug: string) => (slug === "old-club" ? { renamedTo: CLUB.slug } : null));
+    let checked = 0;
+    for (const url of [
+      "http://localhost/api/auth/lichess",
+      "http://localhost/api/auth/lichess?next=/settings",
+      "http://localhost/api/auth/lichess?org=",
+      "http://localhost/api/auth/lichess?org=nobody",
+      "http://localhost/api/auth/lichess?org=old-club",
+    ]) {
+      cookieJar.clear();
+      const res = await GET(new Request(url));
+      expect(await refusalOf(res), url).toMatchObject({ status: 403, body: { ok: false, code: "ONLINE_CHESS_DISABLED" } });
+      expect([...cookieJar.keys()], `${url}: nothing stored`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("signed out: to the login page FIRST, keeping the club and the next — so the start works on the way back", async () => {
+    requireUser.mockRejectedValueOnce(new Error("unauthenticated"));
+    flagIs(FLAG_STATES[1]!);
+    const href = lichessLinkStartHref(CLUB.slug, "/settings?tab=account");
+    const res = await GET(new Request(`http://localhost${href}`));
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("next"), "the whole start, query included").toBe(href);
+    expect(flags.isServerFeatureEnabled, "nobody to ask for yet").not.toHaveBeenCalled();
+  });
+
+  it("the club's refusal comes before Lichess being unconfigured: with both, the answer is 403, not the settings redirect", async () => {
+    vi.stubEnv("LICHESS_CLIENT_ID", undefined);
+    flagIs(FLAG_STATES[1]!);
+    expect(await refusalOf(await GET(start()))).toMatchObject({ status: 403, body: { code: "ONLINE_CHESS_DISABLED" } });
+    // The positive pair: offered, the same unconfigured start redirects to settings as before.
+    flagIs(FLAG_STATES[0]!);
+    const res = await GET(start());
+    expect(path(res.headers.get("location")!).searchParams.get("lichess")).toBe("not_configured");
   });
 });
 

@@ -28,6 +28,7 @@ import {
   summarizeCart,
   type CartAction,
 } from "./cart";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
 import {
@@ -498,7 +499,7 @@ export function RegisterStepper({
               {submitError.code === "LICHESS_LINK_REQUIRED" ? (
                 <p className="text-sm text-ink">
                   {t("register.lichessLinkRequired")}{" "}
-                  <a href="/api/auth/lichess" className="font-medium underline" data-testid="register-lichess-link">
+                  <a href={lichessLinkStartHref(orgSlug)} className="font-medium underline" data-testid="register-lichess-link">
                     {t("register.lichessLinkCta")}
                   </a>
                 </p>
