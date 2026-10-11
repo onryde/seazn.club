@@ -288,7 +288,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
         return (st.data?.rows ?? [])
           .map((r) => ({
             entrantId: r.entrantId, played: r.played, won: r.won, drawn: r.drawn, lost: r.lost, points: r.points,
-            credited: ["sets_won", "sets_lost", "points_won", "points_lost"].map((k) => r.metrics?.[k] ?? 0),
+            // Re-review N-2: a key read must EXIST — a renamed metric would otherwise read as a credited 0.
+            credited: ["sets_won", "sets_lost", "points_won", "points_lost"].map((k) => (r.metrics !== undefined && Object.hasOwn(r.metrics, k) ? r.metrics[k] : `no metric ${k}`)),
           }))
           .sort((a, b) => a.entrantId.localeCompare(b.entrantId));
       }, { timeout: 30_000 })
