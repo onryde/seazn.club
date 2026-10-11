@@ -13,7 +13,8 @@ import {
   buildStandings,
   buildTimetable,
 } from "./build.ts";
-import { DocBranding, DocModel, type ExportFixture } from "./types.ts";
+import { DocBranding, DocKind, DocModel, type ExportFixture } from "./types.ts";
+import { EngineError } from "../core/errors.ts";
 import { volleyball } from "../sports/setbased/volleyball.ts";
 
 const OPTS = { printedAt: "2026-07-20T09:00:00.000Z" };
@@ -533,5 +534,293 @@ describe("buildAuditLedger (PROMPT-63 §2)", () => {
     expect(model.description).toContain("TAMPERED");
     expect(model.description).toContain("#2");
     expect(model.description).toContain("unsigned");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Engine mutation-debt P0 pilot (2026-10-11): the build.ts survivors of Stryker run 37957068135, killed by what the export
+// format DECLARES, never by a run of the builders: the DocModel schema and the DocKind enum (types.ts), BuildOpts' field docs,
+// the v12 matchday-documents spec (docs/superpowers/specs/2026-07-17-v12-matchday-documents-design.md §3.4 and §4 PR2), the
+// audit PDF task (docs/superpowers/plans/2026-07-18-v13-wave.md Task 16), bracket-layout.ts's own shape declarations, and the
+// header comment's refusal contract ("Throws CONFIG_INVALID for shapes the ... geometry can't lay out"). Table cells are read
+// through the model's own header row, so no test hard-codes a column position.
+// ---------------------------------------------------------------------------
+
+type BracketFx = { id: string; round_no: number; seq_in_round: number; home: string | null; away: string | null; headline: string | null; decided: boolean };
+const bfx = (id: string, round_no: number, seq_in_round: number, home: string | null = null, away: string | null = null): BracketFx =>
+  ({ id, round_no, seq_in_round, home, away, headline: null, decided: false });
+/** A 4-entrant single-elimination field whose last round also holds the 3rd-place playoff: bracket-layout's twoSidedBracket
+ *  takes the lowest seq of the last round as the final and a second fixture there as the 3rd-place match. */
+const FOUR_WITH_THIRD = [bfx("sf1", 0, 1, "A", "B"), bfx("sf2", 0, 2, "C", "D"), bfx("final", 1, 1), bfx("third", 1, 2)];
+/** A k=2 double-elimination field with its grand-final reset: doubleElimBracket's rounds are WB 0..k-1, LB 2k..4k-3, GF 5k-2
+ *  and the reset 5k-1 (relative to the first round), here offset by 1. */
+const DE_WITH_RESET = [bfx("wb1a", 1, 1), bfx("wb1b", 1, 2), bfx("wb2", 2, 1), bfx("lb1", 5, 1), bfx("lb2", 6, 1), bfx("gf", 9, 1), bfx("reset", 10, 1)];
+/** IPL page playoffs: Q1 and the Eliminator, then Q2, then the Final (pagePlayoffBracket's one accepted shape). */
+const PAGE_FOUR = [bfx("q1", 0, 1), bfx("elim", 0, 2), bfx("q2", 1, 1), bfx("fin", 2, 1)];
+const LANES = { winners: "W", losers: "L", grandFinal: "GF", reset: "R" };
+const SLOTS = { q1: "Q1", eliminator: "E", q2: "Q2", final: "F" };
+
+/** The cell of `row` under the header `column`, located through the model's own header row. */
+function cell(table: { columns: string[]; rows: (string | number)[][] }, row: number, column: string): string | number {
+  const at = table.columns.indexOf(column);
+  expect(at, `the header has a "${column}" column: ${JSON.stringify(table.columns)}`).toBeGreaterThanOrEqual(0);
+  return table.rows[row]![at]!;
+}
+
+/** Every builder, each on an input that reaches its optional branches: an unscheduled and a court-less fixture, a club-less
+ *  team, a player with no number or date of birth, a participant with no number, an official with no duties and a duty
+ *  with no court, unresolved bracket sides, a tampered and unsigned ledger with no head. `kind` is the DocKind member the
+ *  builder is named for. */
+function everyBuilder(opts: Parameters<typeof buildTimetable>[2]): { name: string; kind: DocKind; model: DocModel }[] {
+  return [
+    { name: "buildTimetable", kind: "timetable", model: buildTimetable("T", [
+      { id: "a", at: null, court: null, stageName: "Prelim", round: 1, home: "A", away: "B" },
+      { id: "b", at: "2026-07-20T09:00:00Z", court: "Court 1", stageName: "Prelim", round: 1, home: "C", away: "D", result: "2–1" },
+    ], opts) },
+    { name: "buildStandings", kind: "standings", model: buildStandings("S", [
+      { name: "A", played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: { for: 2 }, badgeUrl: "https://b/a.png" },
+      { name: "B", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {} },
+    ], { ...opts, metricColumns: ["for"] }) },
+    { name: "buildRoster", kind: "roster", model: buildRoster("R", [{ teamName: "U12", players: [{ name: "Ada" }] }], opts) },
+    { name: "buildParticipants", kind: "participants", model: buildParticipants("P", [
+      { club: "", team: "", division: "Open", entrant: "Empty Spot 1", player: "", number: null, position: "" },
+    ], opts) },
+    { name: "buildOfficialsRota", kind: "officials_rota", model: buildOfficialsRota("O", [
+      { officialName: "Idle", duties: [] },
+      { officialName: "Busy", duties: [{ at: "09:00", court: null, compDivision: "C · D", role: "Referee", opponents: "A vs B", response: "pending" }] },
+    ], opts) },
+    { name: "buildAdmitTickets", kind: "admit_ticket", model: buildAdmitTickets("K", [
+      { maskedName: "A. B.", competition: "Cup", dates: "1 Aug", ref: "R1", status: "PAID", qrUrl: "https://x/r/R1", seq: 1 },
+    ], opts) },
+    { name: "buildBracket", kind: "bracket", model: buildBracket("B", FOUR_WITH_THIRD, () => "Round", opts) },
+    { name: "buildBracketDe", kind: "bracket", model: buildBracketDe("B", DE_WITH_RESET, LANES, opts) },
+    { name: "buildLadderPoster", kind: "bracket", model: buildLadderPoster("B", [bfx("r1", 0, 1), bfx("r2", 1, 1)], (i) => `Rung ${i + 1}`, opts) },
+    { name: "buildPagePoster", kind: "bracket", model: buildPagePoster("B", PAGE_FOUR, SLOTS, opts) },
+    { name: "buildAuditLedger", kind: "audit", model: buildAuditLedger("A", {
+      events: [{ seq: 1, at: "12:00", actor: "org", type: "core.start", detail: "{}", voids: "" }],
+      verified: false, firstTamperedSeq: 1, headHash: null, signature: null,
+    }, opts) },
+  ];
+}
+
+describe("every builder's model is one its own declared format accepts (the DocModel schema; mutation-debt P0)", () => {
+  it("each parses as a DocModel of the kind the builder is named for; a bracket kind carries exactly one bracket payload and no sections", () => {
+    const models = everyBuilder(OPTS);
+    let checked = 0;
+    for (const { name, kind, model } of models) {
+      const parsed = DocModel.safeParse(model);
+      expect(parsed.success, `${name}: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
+      expect(model.kind, name).toBe(kind);
+      if (kind === "bracket") {
+        // types.ts: "set only for kind:'bracket' (sections stay empty)"; "exactly one of the ... bracket payloads is set"
+        expect(model.sections, name).toEqual([]);
+        expect([model.bracket, model.bracketDe, model.ladder, model.pagePlayoff].filter((p) => p !== undefined), name).toHaveLength(1);
+      }
+      checked++;
+    }
+    // anti-vacuity: the sweep covers every kind a builder here produces, which is every DocKind except the two the sport
+    // modules' exportTemplates produce (scoresheet, match_report)
+    expect(checked).toBe(models.length);
+    expect(new Set(models.map((m) => m.kind))).toEqual(new Set(DocKind.options.filter((k) => k !== "scoresheet" && k !== "match_report")));
+  });
+});
+
+describe("base(): the caller's description, footerNote, liveUrl and branding reach every builder's model (BuildOpts → DocModel)", () => {
+  const branding = { orgName: "Riverside SC", sponsors: [{ name: "Acme", tier: "title" }] };
+  const opts = { ...OPTS, description: "What this sheet is.", footerNote: "Printed for the desk", liveUrl: "https://x/live", branding };
+
+  it("each builder carries all four onto the model; the audit ledger's description is its own verification stamp", () => {
+    let checked = 0;
+    for (const { name, model } of everyBuilder(opts)) {
+      expect(model.meta, name).toEqual({ printedAt: OPTS.printedAt, footerNote: opts.footerNote, liveUrl: opts.liveUrl });
+      expect(model.branding, name).toEqual(branding);
+      if (name !== "buildAuditLedger") expect(model.description, name).toBe(opts.description);
+      checked++;
+    }
+    expect(checked).toBe(11);
+  });
+
+  it("and none of them is invented when the caller gives none", () => {
+    let checked = 0;
+    for (const { name, model } of everyBuilder(OPTS)) {
+      expect(model.meta.footerNote, name).toBeUndefined();
+      expect(model.meta.liveUrl, name).toBeUndefined();
+      expect(model.branding, name).toBeUndefined();
+      if (name !== "buildAuditLedger") expect(model.description, name).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(11);
+  });
+});
+
+describe("timetable rows: each cell is its fixture's own value (v12 spec §3.4, order of play)", () => {
+  it("a scheduled fixture shows its time and court, a decided one its result between the sides; a court-less one is never a blank cell", () => {
+    const model = buildTimetable("T", [
+      { id: "a", at: "2026-07-20T09:00:00Z", court: "Court 7", stageName: "Prelim", round: 1, home: "A", away: "B", result: "3–1" },
+      { id: "b", at: "2026-07-20T09:30:00Z", court: null, stageName: "Prelim", round: 1, home: "C", away: "D" },
+    ], OPTS);
+    const table = model.sections[0]!.table!;
+    expect(cell(table, 0, "Time")).toBe("2026-07-20T09:00:00Z");
+    expect(cell(table, 0, "Court")).toBe("Court 7");
+    expect(cell(table, 0, "")).toBe("3–1"); // the deliberately unlabelled result column
+    expect(cell(table, 1, "Time")).toBe("2026-07-20T09:30:00Z");
+    const noCourt = cell(table, 1, "Court");
+    expect(typeof noCourt === "string" && noCourt.trim() !== "", `a fixture with no court prints a placeholder, got ${JSON.stringify(noCourt)}`).toBe(true);
+    expect(noCourt).not.toBe("Court 7");
+  });
+});
+
+describe("timetable page groups: per_pitch / per_division page breaks are respected (v12 spec §3.4), auto has none", () => {
+  const fx = (id: string, court: string | null, stageName: string, divisionName: string): ExportFixture =>
+    ({ id, at: null, court, stageName, round: 1, home: "H", away: "A", divisionName });
+  // given out of name order on purpose, with two stages on one court and one division
+  const FIXTURES2 = [fx("1", "Court B", "Prelim", "Girls"), fx("2", "Court A", "Prelim", "Boys"), fx("3", "Court A", "Knockout", "Boys")];
+  const shape = (m: DocModel) => m.sections.map((s) => [s.heading ?? null, s.subheading ?? null, s.pageBreakBefore === true]);
+
+  it("auto: one section per stage, no page-group heading and no page break anywhere", () => {
+    expect(shape(buildTimetable("T", FIXTURES2, OPTS))).toEqual([[null, "Prelim", false], [null, "Knockout", false]]);
+  });
+
+  it("per_pitch: the courts are collated by name, each court's first section carries its heading and every court after the first starts a new page", () => {
+    expect(shape(buildTimetable("T", FIXTURES2, { ...OPTS, pageBreaks: "per_pitch" }))).toEqual([
+      ["Court A", "Prelim", false],
+      [null, "Knockout", false],
+      ["Court B", "Prelim", true],
+    ]);
+  });
+
+  it("per_division (the competition timetable's default, exports.ts): grouped by division the same way", () => {
+    expect(shape(buildTimetable("T", FIXTURES2, { ...OPTS, pageBreaks: "per_division" }))).toEqual([
+      ["Boys", "Prelim", false],
+      [null, "Knockout", false],
+      ["Girls", "Prelim", true],
+    ]);
+  });
+});
+
+describe("standings: landscape only on request (BuildOpts.landscape)", () => {
+  it("a standings table built without `landscape` carries no landscape hint", () => {
+    const m = buildStandings("S", [{ name: "A", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} }], { ...OPTS, metricColumns: [] });
+    expect(m.sections[0]!.table!.landscape).toBeUndefined();
+  });
+});
+
+/** The page-break flags of a sectioned model, in order. */
+const breaks = (m: DocModel) => m.sections.map((s) => s.pageBreakBefore === true);
+
+describe("roster form (v12 spec §4: pageBreakBefore when scoped; 13 May sign-at-start form)", () => {
+  const teams = [
+    { teamName: "U12", clubName: "Acme SC", players: [{ name: "Ada", dob: "2014-01-01", number: 7 }] },
+    { teamName: "U14", players: [{ name: "Bo" }] },
+    { teamName: "U16", players: [] },
+  ];
+
+  it("per_team: every team after the first starts a new page; unscoped, none does", () => {
+    expect(breaks(buildRoster("R", teams, { ...OPTS, pageBreaks: "per_team" }))).toEqual([false, true, true]);
+    expect(breaks(buildRoster("R", teams, OPTS))).toEqual([false, false, false]);
+  });
+
+  it("a team with no club is headed by its own name; a player with no number or date of birth leaves those cells blank to fill in", () => {
+    const m = buildRoster("R", teams, OPTS);
+    expect(m.sections[1]!.heading).toBe("U14");
+    const table = m.sections[1]!.table!;
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0]).toContain("Bo");
+    expect(table.rows[0]!.filter((c) => c !== "Bo")).toEqual(["", "", ""]);
+  });
+
+  it("the form's header labels every column it prints, one label per cell", () => {
+    const table = buildRoster("R", teams, OPTS).sections[0]!.table!;
+    expect(table.columns).toHaveLength(table.rows[0]!.length);
+    expect(table.columns.filter((c) => c.trim() === "")).toEqual([]);
+  });
+});
+
+describe("participants: the squad number column", () => {
+  it("a squad number prints as the number; none prints an empty cell", () => {
+    const row = (n: number | null) => ({ club: "Acme", team: "U12", division: "Open", entrant: "Acme U12", player: "Ada", number: n, position: "GK" });
+    const t = buildParticipants("P", [row(7), row(null)], OPTS).sections[0]!.table!;
+    expect(cell(t, 0, "#")).toBe(7);
+    expect(cell(t, 1, "#")).toBe("");
+  });
+});
+
+describe("officials rota (v12 spec §3.4 / §4 PR2: one page per official, a duties table, a designed empty state)", () => {
+  const duty = (court: string | null) => ({ at: "09:00", court, compDivision: "C · D", role: "Referee", opponents: "A vs B", response: "accepted" as const });
+  const officials = [
+    { officialName: "One", duties: [duty("Court 3")] },
+    { officialName: "Two", duties: [] },
+    { officialName: "Three", duties: [duty(null)] },
+  ];
+  // production always asks for per_team (exports.ts officials rota and /me/rota.pdf)
+  const m = buildOfficialsRota("O", officials, { ...OPTS, pageBreaks: "per_team" });
+
+  it("per_team: every official after the first starts a new page", () => {
+    expect(breaks(m)).toEqual([false, true, true]);
+  });
+
+  it("an official with duties gets the table and no 'no duties' state; one with none gets the state and no table", () => {
+    expect(m.sections[0]!.subheading).toBeUndefined();
+    expect(m.sections[0]!.table!.rows).toHaveLength(1);
+    expect(m.sections[1]!.subheading).toBe("No duties assigned");
+    expect(m.sections[1]!.table).toBeUndefined();
+  });
+
+  it("a duty's court prints as its court; a court-less duty is never a blank cell", () => {
+    expect(cell(m.sections[0]!.table!, 0, "Court")).toBe("Court 3");
+    const noCourt = cell(m.sections[2]!.table!, 0, "Court");
+    expect(typeof noCourt === "string" && noCourt.trim() !== "", `got ${JSON.stringify(noCourt)}`).toBe(true);
+    expect(noCourt).not.toBe("Court 3");
+  });
+});
+
+describe("bracket posters: the layout's optional fixtures, and the refusal contract", () => {
+  it("the 3rd-place playoff and the grand-final reset are named on the poster", () => {
+    expect(buildBracket("B", FOUR_WITH_THIRD, () => "R", OPTS).bracket!.thirdPlaceId).toBe("third");
+    expect(buildBracketDe("B", DE_WITH_RESET, LANES, OPTS).bracketDe!.resetId).toBe("reset");
+  });
+
+  it("each of the four posters refuses a shape its layout cannot take with EngineError CONFIG_INVALID (never a crash)", () => {
+    const refusals: [string, () => unknown][] = [
+      ["buildBracket (a ladder is not a two-sided field)", () => buildBracket("B", [bfx("a", 0, 1), bfx("b", 1, 1), bfx("c", 2, 1)], () => "R", OPTS)],
+      ["buildBracketDe (no fixtures)", () => buildBracketDe("B", [], LANES, OPTS)],
+      ["buildLadderPoster (no fixtures)", () => buildLadderPoster("B", [], (i) => `${i}`, OPTS)],
+      ["buildPagePoster (three fixtures)", () => buildPagePoster("B", PAGE_FOUR.slice(0, 3), SLOTS, OPTS)],
+    ];
+    let checked = 0;
+    for (const [name, build] of refusals) {
+      let thrown: unknown;
+      try { build(); } catch (e) { thrown = e; }
+      expect(thrown instanceof EngineError && thrown.code === "CONFIG_INVALID", `${name} threw ${String(thrown)}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the stepladder's rungs climb bottom-up by round, whatever order the fixtures arrive in", () => {
+    const m = buildLadderPoster("B", [bfx("top", 2, 1), bfx("bottom", 0, 1), bfx("middle", 1, 1)], (i) => `Rung ${i + 1}`, OPTS);
+    expect(m.ladder!.rungs.map((r) => [r.fixtureId, r.label])).toEqual([["bottom", "Rung 1"], ["middle", "Rung 2"], ["top", "Rung 3"]]);
+  });
+});
+
+describe("audit ledger (v13 wave Task 16: one table, columns # Time Actor Event Detail Void, a stamp line)", () => {
+  const ledger = (headHash: string | null, verified: boolean) => buildAuditLedger("A", {
+    events: [{ seq: 1, at: "12:00", actor: "org", type: "core.start", detail: "{}", voids: "" }],
+    verified, firstTamperedSeq: verified ? null : 1, headHash, signature: null,
+  }, OPTS);
+
+  it("the table's columns are the six the task declares", () => {
+    expect(ledger(null, false).sections[0]!.table!.columns).toEqual(["#", "Time", "Actor", "Event", "Detail", "Void"]);
+  });
+
+  it("the stamp is three ' · '-separated parts, none blank, for a ledger with a head and for an empty one", () => {
+    const head = "0123456789abcdef".repeat(4);
+    for (const m of [ledger(head, true), ledger(null, false)]) {
+      const parts = m.description!.split(" · ");
+      expect(parts, m.description).toHaveLength(3);
+      expect(parts.filter((p) => p.trim() === ""), m.description).toEqual([]);
+    }
+    // the head is abbreviated on the stamp, never printed whole (the existing golden pins its 16-character prefix)
+    expect(ledger(head, true).description).not.toContain(head);
   });
 });
