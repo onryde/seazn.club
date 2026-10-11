@@ -20,7 +20,8 @@ import "server-only";
 // nothing in this file may declare a flag from our own arithmetic.
 //
 // MEASURED 2026-10-11 (fixtures README, game Rc11Game): with no read for
-// ~3.5 min past White's expiry, the first stream read still said `started`
+// ~3.5 min after the last move (~33 s past White's expiry), the first stream
+// read still said `started`
 // with `wtime: 0`; a second read 3 s later said `outoftime`, winner Black. A
 // read settles the flag, visible on the NEXT read. So on a local clock zero
 // we read, and if Lichess still says `started` with the mover's clock at zero
@@ -277,7 +278,12 @@ async function readTruth(g: Game, deps: ReconcileDeps): Promise<Truth> {
       "lichess reconcile: the board stream did not open with this player's token",
     );
     if (read.code === "unauthorized") revoked.push(seat.colour);
-    if (read.code === "rate_limited") return { source: "none", revoked };
+    if (read.code === "rate_limited") {
+      // 429 stops every call — but never swallows an operator's key fault
+      // already met on the other seat (review M1).
+      if (unopenable) throw unopenable;
+      return { source: "none", revoked };
+    }
   }
   const snap = await (deps.exportGame ?? realExportGame)(g.gameId);
   if (snap !== null && snap.gameId === g.gameId && IS_TERMINAL[snap.status]) {
@@ -359,9 +365,11 @@ function readable(b: BridgeRow): boolean {
 async function closeUnplayable(fixtureId: string, at: Date): Promise<void> {
   const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtureId}`;
   if (!fx || isPlayableFixtureStatus(fx.status)) return;
+  // A closed bridge holds no standing offer (an offer means something only
+  // while the game is played — review M2).
   const closed = await sql`
     update fixture_external_play
-       set status = 'finished', finished_at = ${at}, updated_at = now()
+       set status = 'finished', finished_at = ${at}, draw_offer_by = null, updated_at = now()
      where fixture_id = ${fixtureId} and status in ('ready', 'live')
      returning fixture_id`;
   if (closed.length > 0) {
@@ -379,11 +387,13 @@ async function holdRevoked(g: Game, revoked: Colour[]): Promise<ResultWrite> {
 }
 
 /** Mark the bridge finished — only from ready/live, so a held row keeps its
- *  reason (controller carry) and a finished row keeps its first finished_at. */
+ *  reason (controller carry) and a finished row keeps its first finished_at.
+ *  The game is over, so no offer stands (review M2: the stream read that
+ *  ended it may have lost its write to an offer T10 recorded meanwhile). */
 async function finish(g: Game, at: Date): Promise<boolean> {
   const rows = await sql`
     update fixture_external_play
-       set status = 'finished', finished_at = ${at}, updated_at = now()
+       set status = 'finished', finished_at = ${at}, draw_offer_by = null, updated_at = now()
      where fixture_id = ${g.fixture.fixtureId} and challenge_id = ${g.gameId}
        and status in ('ready', 'live')
      returning fixture_id`;
@@ -571,6 +581,12 @@ async function applyExport(
       line = uci;
     }
   }
+  // The export is read only for a game that has ENDED, so no offer stands —
+  // held or not (the stream path's rule, review M2).
+  await sql`
+    update fixture_external_play set draw_offer_by = null, updated_at = now()
+     where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
+       and status in ('ready', 'live', 'needs_organiser') and draw_offer_by is not null`;
   const outcome = await settle(g, t.snapshot, t.at, deps, adopted, "export");
   // The board's last state for the room: the line we now hold, and the clocks
   // as our row last knew them (the export's are never used).

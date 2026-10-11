@@ -148,6 +148,8 @@ type GameFullJson = {
   id: string;
   white: { id: string; name: string };
   black: { id: string; name: string };
+  /** The game's time control, ms (lila BotJsonView). */
+  clock: { initial: number; increment: number };
   state: {
     moves: string; wtime: number; btime: number; winc: number; binc: number;
     status: string; winner?: string; wdraw?: boolean; bdraw?: boolean;
@@ -176,14 +178,15 @@ const tokenOf = (p: Player) => `lio_seed_${p.lichessId}`;
  *  the overrides a case names (each override says where its shape comes from). */
 type LineOver = Partial<{
   moves: readonly string[]; status: string; winner: Colour; wtime: number; btime: number; winc: number;
-  wdraw: true; bdraw: true; gameId: string; whiteId: string | null;
+  wdraw: true; bdraw: true; gameId: string; whiteId: string | null; blackId: string | null;
 }>;
 function gameFull(g: Game, base: GameFullJson, over: LineOver = {}): string {
   const j = JSON.parse(JSON.stringify(base)) as GameFullJson;
   j.id = over.gameId ?? g.gameId;
   if (over.whiteId === null) delete (j.white as Partial<GameFullJson["white"]>).id;
   else j.white.id = j.white.name = over.whiteId ?? g.white.lichessId;
-  j.black.id = j.black.name = g.black.lichessId;
+  if (over.blackId === null) delete (j.black as Partial<GameFullJson["black"]>).id;
+  else j.black.id = j.black.name = over.blackId ?? g.black.lichessId;
   if (over.moves !== undefined) j.state.moves = over.moves.join(" ");
   if (over.status !== undefined) {
     j.state.status = over.status;
@@ -279,6 +282,15 @@ async function play(g: Game, moves: readonly string[]): Promise<void> {
     expect(out, `premise: T10 accepted ${uci}`).toEqual({ ok: true, applied: true });
     ply++;
   }
+}
+
+/** T10's real `act`: `who` offers a draw (Lichess answering 200). */
+async function offerBy(g: Game, who: Colour): Promise<void> {
+  const out = await act(
+    { fixtureId: g.fixtureId, personId: g[who].personId, action: { kind: "draw", accept: true } },
+    { now: new Date(), accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
+  );
+  expect(out, `premise: T10 recorded ${who}'s offer`).toEqual({ ok: true, applied: true });
 }
 
 /** A game T10 moved to 'live' with the recorded game's first ply. */
@@ -457,6 +469,31 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     expect(on.sent.map((b) => b.whiteMs), "the room sees Lichess's reading at the read").toEqual([MID.state.wtime - 7_000]);
   });
 
+  it("at ply 1 no clock runs (scalachess Clock.step): a later read stores Lichess's clocks as they are, nothing added back", async () => {
+    // T10 recorded White's first move at MOVED; READ is 9 min on. Neither
+    // clock starts until both sides have moved, so at ply 1 both read the
+    // recorded game's full limit (its gameFull `clock.initial`).
+    const g = await liveGame();
+    const limit = MID.clock.initial;
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), wtime: limit, btime: limit }));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    const r = await rowOf(g.fixtureId);
+    expect([r.white_ms, r.black_ms]).toEqual([limit, limit]);
+    expect(r.last_move_at, "nothing adopted: still T10's instant").toEqual(MOVED);
+  });
+
+  it("a read whose ONLY difference is Lichess's increment corrects it (brief Step 5)", async () => {
+    const g = await readyGame();
+    serveStream(gameFull(g, MID));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    const first = await rowOf(g.fixtureId);
+    expect(first.clock_increment_s, "premise: the recording's 3+0").toBe(MID.state.winc / 1000);
+    // Synthetic: the same line with lila's winc/binc at 2000 ms (a 3+2 game).
+    serveStream(gameFull(g, MID, { winc: 2_000 }));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    expect(await rowOf(g.fixtureId)).toEqual({ ...first, clock_increment_s: 2 });
+  });
+
   it("a stream AHEAD of the ledger (out-of-band play): adopts the longer line from where ours ends", async () => {
     const g = await liveGame();
     const before = await rowOf(g.fixtureId);
@@ -567,14 +604,21 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     expect(await resultsOf(g.fixtureId)).toEqual([]);
   });
 
-  it("a game whose players are not the ones on file is held provider_error; nothing is adopted or written", async () => {
-    const g = await liveGame();
-    serveStream(gameFull(g, EXPIRED_2, { whiteId: "someone-else" }));
-    const out = await reconcile(g.fixtureId, "game_end", observed().deps);
-    expect(out!.result).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
-    const r = await rowOf(g.fixtureId);
-    expect(r.moves_uci).toEqual(LINE.slice(0, 1));
-    expect(await resultsOf(g.fixtureId)).toEqual([]);
+  it("a game whose players are not the ones on file is held provider_error; nothing adopted or written — EITHER seat, counted", async () => {
+    // The winner becomes an entrant through T9's recorded colours, so a
+    // stranger on either seat must stop the write (review I3, MX17).
+    let checked = 0;
+    for (const seat of ["whiteId", "blackId"] as const) {
+      const g = await liveGame();
+      serveStream(gameFull(g, EXPIRED_2, { [seat]: "someone-else" }));
+      const out = await reconcile(g.fixtureId, "game_end", observed().deps);
+      expect(out!.result, seat).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
+      const r = await rowOf(g.fixtureId);
+      expect(r.moves_uci, seat).toEqual(LINE.slice(0, 1));
+      expect(await resultsOf(g.fixtureId), seat).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a seat Lichess reports with no id is not read as a mismatch", async () => {
@@ -722,6 +766,34 @@ describe.runIf(HAS_DB)("reconcile — a game end is written once and closes the 
     expect([after.moves_uci, after.white_ms, after.black_ms, after.last_move_at], "premise: nothing but the close changed")
       .toEqual([before.moves_uci, before.white_ms, before.black_ms, before.last_move_at]);
     expect(sent.map((b) => b.status)).toEqual(["outoftime"]);
+  });
+
+  it("the recorded flag pair read the measured 3 s apart: the stored clocks are Lichess's — none runs on a game that is over", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, EXPIRED_1));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    serveStream(gameFull(g, EXPIRED_2));
+    await reconcile(g.fixtureId, "game_end", observed(later(FLAG_REREAD_MS)).deps);
+    const r = await rowOf(g.fixtureId);
+    expect(r.status, "premise: settled").toBe("finished");
+    expect([r.white_ms, r.black_ms]).toEqual([EXPIRED_2.state.wtime, EXPIRED_2.state.btime]);
+  });
+
+  it("an offer T10 records while a FINAL read is in flight goes when the bridge closes (review M2)", async () => {
+    // The stale read's write loses its CAS to the offer; the close clears it.
+    const g = await readyGame();
+    await play(g, LINE.slice(0, 4));
+    serveStream(gameFull(g, EXPIRED_2));
+    const out = await reconcile(g.fixtureId, "game_end", {
+      ...observed().deps,
+      readStream: async (a) => {
+        await offerBy(g, "black");
+        return wiredReadGameStream(a);
+      },
+    });
+    expect(out, "premise: the stale read wrote no ply").toMatchObject({ adopted: 0, finished: true });
+    const r = await rowOf(g.fixtureId);
+    expect([r.status, r.draw_offer_by, r.black_draw_offer_ply]).toEqual(["finished", null, 4]);
   });
 
   it("a reconcile AFTER finished reads nothing, writes nothing, keeps the first finished_at — every trigger", async () => {
@@ -975,6 +1047,16 @@ describe.runIf(HAS_DB)("reconcile — a fixture no longer playable closes its br
     expect(await rowOf(g.fixtureId)).toEqual(before);
   });
 
+  it("a withdrawn board's standing offer goes with its closed bridge (review M2)", async () => {
+    const g = await readyGame();
+    await play(g, LINE.slice(0, 3));
+    await offerBy(g, "black");
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(g.orgId), g.black.entrantId);
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toBeNull();
+    const r = await rowOf(g.fixtureId);
+    expect([r.status, r.draw_offer_by, r.black_draw_offer_ply]).toEqual(["finished", null, 3]);
+  });
+
   it("a HELD row on a withdrawn fixture stays in the organiser's queue", async () => {
     const g = await liveGame();
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
@@ -1135,6 +1217,46 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
     const out = await reconcile(g.fixtureId, "sweep", observed().deps);
     expect(out).toMatchObject({ source: "export", adopted: 0, finished: true });
     expect((await rowOf(g.fixtureId)).moves_uci, "a short export is a truncated read, not a rewind").toEqual(LINE);
+  });
+
+  it("a terminal export LONGER than ours that does not extend it never overwrites accepted moves; its result is still written", async () => {
+    const g = await liveGame(); // ours: e2e4
+    await noGrant(g.white);
+    await noGrant(g.black);
+    // Synthetic: the recorded expired export opening with a move that is not ours.
+    lichess.onExport = () => ok(exported(g, "export-expired.json", { moves: ["d4", "e5", "Nf3"] }));
+    const out = await reconcile(g.fixtureId, "sweep", observed().deps);
+    expect(out).toMatchObject({ source: "export", adopted: 0, result: { wrote: "decided" }, finished: true });
+    expect((await rowOf(g.fixtureId)).moves_uci).toEqual(LINE.slice(0, 1));
+  });
+
+  it("a game the export ends has no standing offer — finished, and held alike (review M2) — counted", async () => {
+    let checked = 0;
+    for (const c of [
+      { kind: undefined, over: {}, want: "finished" },
+      // lila's `draw`, no winner, in a bracket: T12 holds tiebreak_owed.
+      { kind: "knockout", over: { status: "draw", winner: null }, want: "needs_organiser" },
+    ] as const) {
+      const g = await readyGame({ kind: c.kind });
+      await play(g, LINE.slice(0, 3));
+      await offerBy(g, "black");
+      await noGrant(g.white);
+      await noGrant(g.black);
+      lichess.onExport = () => ok(exported(g, "export-expired.json", c.over));
+      expect(await reconcile(g.fixtureId, "sweep", observed().deps), c.want).toMatchObject({ source: "export" });
+      const r = await rowOf(g.fixtureId);
+      expect([r.status, r.draw_offer_by, r.black_draw_offer_ply], c.want).toEqual([c.want, null, 3]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("429 does not swallow a token our key cannot open: White unopenable, Black's stream 429 — LICHESS_TOKEN_UNAVAILABLE (review M1)", async () => {
+    const g = await liveGame();
+    await unopenable(g.white);
+    lichess.onStream = () => status(429);
+    await expect(reconcile(g.fixtureId, "sweep", observed().deps)).rejects.toMatchObject({ status: 503, code: "LICHESS_TOKEN_UNAVAILABLE" });
+    expect([streams().length, exports().length], "the 429 still stops every call").toEqual([1, 0]);
   });
 
   it("a token our key cannot open is NEVER swallowed: with nothing else to trust, LICHESS_TOKEN_UNAVAILABLE is raised", async () => {
