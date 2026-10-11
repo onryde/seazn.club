@@ -32,7 +32,7 @@ import "server-only";
 // writes the ledger result and the needs_organiser holds; T10 and T12 never
 // write `finished`.
 import { Chess, type Move, type Square } from "chess.js";
-import { sql, type Tx } from "@/lib/db";
+import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { publishRoomBroadcast, type RoomBroadcast } from "@/lib/realtime";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
@@ -423,23 +423,24 @@ async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultW
  *  The evidence: the plies, and whether the camera was Required; null when
  *  no adopted ply is out-of-band. T10's move is known two ways: the refusal
  *  that triggered this read (`submitted`), and the submission T10 put on
- *  file BEFORE sending it (ruling I4, `lockedSubmission`) — so a read landing
+ *  file BEFORE sending it (ruling I4, `submissionOnFile`) — so a read landing
  *  between Lichess's 200 and T10's append (the 5-minute sweep reads every
  *  live game) adopts our move as ours. Either excuses ONLY the first adopted
  *  ply and only that move: a different move there, or any later ply, is
  *  still flagged. Written in the SAME statement as the ledger write that
  *  adopts, so one adoption is one flag: a re-read adopts nothing, and a
  *  racing read loses the CAS. */
-/** Ruling I4: the submission on file NOW, read under the row's lock in the
- *  transaction that writes the ledger — never the one this read loaded, so a
- *  submission T10 records while Lichess is being read still excuses its own
- *  move (the read adopts it, and T10's append absorbs). One T10 records
- *  after this lock waits for it, and then finds the ledger past its ply:
- *  V436 holds a submission at the NEXT ply only, so T10 records nothing. */
-async function lockedSubmission(tx: Tx, fixtureId: string): Promise<SubmittedMove | null> {
-  const [row] = await tx<{ ply: number | null; uci: string | null }[]>`
+/** Ruling I4: the submission on file NOW — read AFTER Lichess was, never
+ *  the one this read loaded, so a submission T10 records while Lichess is
+ *  being read still excuses its own move (the read adopts it, and T10's
+ *  append absorbs). One recorded after THIS read was sent to Lichess after
+ *  Lichess was read, so the line in hand cannot hold its move: nothing it
+ *  could excuse is missed. No lock is owed for that ordering, and the write
+ *  spends it anyway once the ledger passes its ply (V436: next ply only). */
+async function submissionOnFile(fixtureId: string): Promise<SubmittedMove | null> {
+  const [row] = await sql<{ ply: number | null; uci: string | null }[]>`
     select pending_move_ply as ply, pending_move_uci as uci
-      from fixture_external_play where fixture_id = ${fixtureId} for update`;
+      from fixture_external_play where fixture_id = ${fixtureId}`;
   return row && row.ply !== null && row.uci !== null ? { ply: row.ply, uci: row.uci } : null;
 }
 
@@ -586,12 +587,13 @@ async function applyStream(
   // Conditional on the ledger and the offer we read: a move T10 appended, or
   // an offer it recorded, since our read wins — this read is then older than
   // the row, and the next reconcile catches up.
+  const evidence =
+    changed && adopted > 0
+      ? await outOfBandEvidence(fixtureId, ours.length, theirs, [g.submitted, await submissionOnFile(fixtureId)])
+      : null;
   const wrote = !changed
     ? []
-    : await sql.begin(async (tx) => {
-    const evidence =
-      adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, [g.submitted, await lockedSubmission(tx, fixtureId)]) : null;
-    return tx`
+    : await sql`
     with up as (
     update fixture_external_play
        set moves_uci = ${sql.json(theirs)}, move_count = ${ply},
@@ -618,7 +620,6 @@ async function applyStream(
       select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
     )
     select fixture_id from up`;
-  });
   // The room hears of a row this read changed, and of every game end it reads
   // (the end may change nothing on the row, yet the boards must stop); the
   // clocks it sees are Lichess's, at the read.
@@ -653,9 +654,8 @@ async function applyExport(
   let adopted = 0;
   let line = ours;
   if (uci.length > ours.length && isPrefix(ours, uci)) {
-    const wrote = await sql.begin(async (tx) => {
-      const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, [g.submitted, await lockedSubmission(tx, fixtureId)]);
-      return tx`
+    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, [g.submitted, await submissionOnFile(fixtureId)]);
+    const wrote = await sql`
       with up as (
       update fixture_external_play
          set moves_uci = ${sql.json(uci)}, move_count = ${uci.length},
@@ -675,7 +675,6 @@ async function applyExport(
         select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
       )
       select fixture_id from up`;
-    });
     if (wrote.length > 0) {
       adopted = uci.length - ours.length;
       line = uci;
