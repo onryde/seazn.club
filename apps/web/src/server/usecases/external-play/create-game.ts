@@ -100,7 +100,8 @@ export type CreateOutcome =
         | "provider_error"
         | "no_person"
         /** T20: the club is not offered online chess (the PostHog flag `online-chess` is off). A NEW game is a
-         *  start; a game already on file answers `already` first, whatever the flag says. */
+         *  start; a game already on file answers `already` first, whatever the flag says, and a create already SENT
+         *  is still looked up and adopted (fix round 1, m3) — this answers only once a new send is all that is left. */
         | "online_chess_disabled"
         | GrantRefusal;
     };
@@ -167,7 +168,13 @@ export async function createGameIfReady(
   // T20: a new game STARTS online play, so the club must be offered it (the PostHog flag `online-chess`). Asked only
   // of a board otherwise ready to create — after `already` (a recorded game is never refused) and before any token
   // is read or seat opened. No person asks here (the sweep or the room), so the club is asked as itself.
-  if (!(await onlineChessOffered({ orgId: f.orgId, userId: null }))) {
+  //
+  // Fix round 1, m3 (controller ruling): a create already SENT whose outcome was never recorded (I2's marker) may
+  // have made a game at Lichess. Looking it up and adopting it FINISHES play, and finishing is never gated — so such a
+  // board goes on, adopt-only, and the refusal lands at the dequeue, after the recovery, only if a NEW send is all
+  // that is left. A board with no send on file is refused here, before anything is read.
+  const startOffered = await onlineChessOffered({ orgId: f.orgId, userId: null });
+  if (!startOffered && !(await createAlreadySent(fixtureId))) {
     return { created: false, reason: "online_chess_disabled" };
   }
 
@@ -238,6 +245,7 @@ export async function createGameIfReady(
       username: blackLichess.username,
     },
     tc,
+    startOffered,
   };
 
   // The queue's in-flight dedupe hands a follower the leader's result
@@ -272,7 +280,18 @@ export async function createGameIfReady(
     case "lost":
     case "refused":
       return { created: false, reason: "not_ready" };
+    case "disabled":
+      return { created: false, reason: "online_chess_disabled" };
   }
+}
+
+/** T20 fix round 1 (m3): does the board carry I2's sent marker — a create that may have reached Lichess? One read, on
+ *  the flag-off path only. The dequeue re-reads it under the claim; this only decides whether to go that far. */
+async function createAlreadySent(fixtureId: string): Promise<boolean> {
+  const [row] = await sql<{ sent: boolean }[]>`
+    select create_sent_at is not null as sent from fixture_external_play
+     where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null`;
+  return row?.sent === true;
 }
 
 type CreationPlan = {
@@ -286,6 +305,8 @@ type CreationPlan = {
   white: { userId: string; lichessId: string };
   black: { userId: string; lichessId: string; username: string };
   tc: TimeControl;
+  /** T20: whether the club is offered online chess — a NEW send needs it; adopting an earlier send does not (m3). */
+  startOffered: boolean;
 };
 
 type QueueStep =
@@ -293,7 +314,9 @@ type QueueStep =
   | { stage: "already" }
   | { stage: "held" }
   | { stage: "lost" }
-  | { stage: "refused" };
+  | { stage: "refused" }
+  /** T20: nothing to adopt, and the club is not offered a new send. */
+  | { stage: "disabled" };
 
 /**
  * The queued job: everything from the claim to the commit. Runs when the
@@ -382,6 +405,14 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
       gameId = found.id;
       accepted = true;
     }
+  }
+
+  if (gameId === null && !plan.startOffered) {
+    // T20 (fix round 1, m3): nothing of an earlier send to adopt — what is left is a NEW send, which starts online
+    // play, and the club is not offered it. The claim goes; the marker stays, so whoever comes next looks again
+    // before it ever sends (and the sweep's T+20 hold still sees a create whose outcome nobody recorded).
+    await releaseClaim(fixtureId, claim, "online_chess_disabled");
+    return { stage: "disabled" };
   }
 
   if (gameId === null) {

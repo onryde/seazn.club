@@ -11,7 +11,8 @@ import "server-only";
 // It gates what STARTS online play only: turning online play on for a division, opening a round, creating a game,
 // sending an invite, linking a Lichess account, and demanding one at sign-up. It never gates what FINISHES play —
 // moves, offers and resigns on a live game (play.ts), reconcile, result writing, the sweeps, or the match room of a
-// board that already has a game — so a club whose flag goes off mid-round never strands a live game.
+// board that already has a game, or the crash recovery that adopts a game an earlier create already sent (fix round 1,
+// m3: create-game.ts gates only a NEW send) — so a club whose flag goes off mid-round never strands a live game.
 // (Owner 2026-10-11: the flag is never switched off mid-round, and there is no kill switch.)
 import { HttpError } from "@/lib/errors";
 import { isServerFeatureEnabled } from "@/lib/posthog-server";

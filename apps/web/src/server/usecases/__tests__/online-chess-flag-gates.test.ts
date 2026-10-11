@@ -84,6 +84,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import type { GameSnapshot } from "@/server/external-play/types";
+import { MINT_CLAIM_STALE_MS } from "@/server/external-play/window";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -415,6 +416,7 @@ describe.skipIf(!HAS_DB)("gate: creating a game", () => {
       overrideOn();
       const f = await openedBoard();
       board.createChallengeToUser.mockClear();
+      board.listOngoingGames.mockClear();
       flagIs(s);
       const out = await createGameIfReady(f.fixtureId, { now: NOW, publish: async () => {} });
       if (s.offered) {
@@ -423,9 +425,98 @@ describe.skipIf(!HAS_DB)("gate: creating a game", () => {
       } else {
         expect(out, s.label).toEqual({ created: false, reason: "online_chess_disabled" });
         expect(board.createChallengeToUser, `${s.label}: Lichess never called`).not.toHaveBeenCalled();
+        // No send on file (fix round 1, m3): nothing to recover, so not even a lookup — refused before any token is read.
+        expect(board.listOngoingGames, `${s.label}: no recovery lookup`).not.toHaveBeenCalled();
         expect(await challengeOf(f.fixtureId), `${s.label}: no game recorded`).toBeNull();
+        expect(await markerOf(f.fixtureId), `${s.label}: no bridge row claimed or written`).toBeUndefined();
       }
       // A system path: no person asks, so the club is asked as itself.
+      expectAsked(f.orgId, f.orgId);
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  // Fix round 1, m3 (controller ruling): a create that was SENT but whose outcome was never recorded (the minter died
+  // after Lichess answered) may have a game at Lichess already. Looking it up and adopting it FINISHES play, and
+  // finishing is never gated — so the recovery runs whatever the flag says; only a brand-new send is refused.
+  type MarkerRow = { status: string; challenge_id: string | null; mint_claimed_at: Date | null; create_sent_at: Date | null };
+  const markerOf = async (fixtureId: string): Promise<MarkerRow | undefined> =>
+    (await sql<MarkerRow[]>`
+      select status, challenge_id, mint_claimed_at, create_sent_at from fixture_external_play where fixture_id = ${fixtureId}`)[0];
+  /** A minter that claimed, SENT, and died before its commit (T9's I2 shape): a stale claim carrying the sent marker. */
+  async function crashedAfterSend(f: { fixtureId: string; orgId: string }): Promise<Date> {
+    const stale = new Date(NOW.getTime() - MINT_CLAIM_STALE_MS - 1);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at, create_sent_at)
+      values (${f.fixtureId}, ${f.orgId}, ${T}, ${stale}, ${stale})`;
+    return stale;
+  }
+  /** What OUR create makes (T9's N1 verification): unrated, standard, this suite's 10+5, created just after the send. */
+  const ourGame = (gameId: string, sentAt: Date) => ({
+    gameId,
+    rated: false,
+    variant: "standard",
+    clockInitialSeconds: CLOCK.base,
+    clockIncrementSeconds: CLOCK.increment,
+    createdAtMs: sentAt.getTime() + 500,
+  });
+
+  it("a create sent before a crash, whose game IS at Lichess: every flag state adopts it — never re-sent, never refused", async () => {
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      overrideOn();
+      const f = await openedBoard();
+      const sent = await crashedAfterSend(f);
+      const theirs = `gm-${randomUUID().slice(0, 12)}`;
+      // White (home — the seed's pairing) is playing Black at Lichess: the game the crashed send made.
+      board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [{ gameId: theirs, color: "white", opponentId: f.away.lichessId }] });
+      board.exportGameMeta.mockImplementation(async (id: string) =>
+        id === theirs ? { ok: true, meta: ourGame(theirs, sent) } : UNEXPECTED,
+      );
+      board.createChallengeToUser.mockClear();
+      flagIs(s);
+      const publish = vi.fn(async () => undefined);
+      expect(await createGameIfReady(f.fixtureId, { now: NOW, publish }), s.label).toEqual({ created: true, gameId: theirs });
+      expect(board.createChallengeToUser, `${s.label}: never re-sent`).not.toHaveBeenCalled();
+      expect(await markerOf(f.fixtureId), `${s.label}: recorded and ready`).toMatchObject({
+        status: "ready",
+        challenge_id: theirs,
+        mint_claimed_at: null,
+        create_sent_at: null,
+      });
+      expect(publish, `${s.label}: the lobby is told`).toHaveBeenCalledTimes(1);
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("a create sent before a crash, whose game is NOT at Lichess: flag ON re-creates; flag OFF or PostHog throwing refuses after the lookup — nothing sent, the claim released, the marker kept", async () => {
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      overrideOn();
+      const f = await openedBoard();
+      await crashedAfterSend(f);
+      // Both lookups read, complete, and empty: proof nothing of ours exists (the beforeEach defaults).
+      board.createChallengeToUser.mockClear();
+      board.listOngoingGames.mockClear();
+      flagIs(s);
+      const out = await createGameIfReady(f.fixtureId, { now: NOW, publish: async () => {} });
+      expect(board.listOngoingGames, `${s.label}: the recovery looked first`).toHaveBeenCalledTimes(1);
+      if (s.offered) {
+        expect(out, s.label).toMatchObject({ created: true });
+        expect(board.createChallengeToUser, s.label).toHaveBeenCalledTimes(1);
+      } else {
+        expect(out, s.label).toEqual({ created: false, reason: "online_chess_disabled" });
+        expect(board.createChallengeToUser, `${s.label}: a NEW send is a start — refused`).not.toHaveBeenCalled();
+        const row = await markerOf(f.fixtureId);
+        expect(row, `${s.label}: claim released, still pending, no game`).toMatchObject({
+          status: "pending",
+          challenge_id: null,
+          mint_claimed_at: null,
+        });
+        expect(row?.create_sent_at, `${s.label}: the marker stays — never re-sent blind later`).not.toBeNull();
+      }
       expectAsked(f.orgId, f.orgId);
       checked++;
     }
