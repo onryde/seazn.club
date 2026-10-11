@@ -1190,6 +1190,12 @@ Elsewhere the text is the controller's record.
      It classifies each Survived/NoCoverage mutant there: A-real gets a test, A-msg gets one line, B-equivalent goes
      into `stryker-equivalent.json`, C-dead needs a caller search. The PR body carries per-file counts and the score
      before and after. Older survivors in the same files belong to W2e. The owner also approved ("yes") that W2b excludes the `arbitraryEvent` test-data generators in its engine files from mutation.
+110. **The console's forfeit dialog is the only place an organiser records a forfeit** (2026-10-11, owner "Ok" to
+     recommendation C). This amends spec §5.5 "Pad". The chess pad dock loses its old `forfeit` / `double_forfeit`
+     result methods and gains NO Forfeit or Double-forfeit tile. A tile would duplicate the dialog's phase,
+     `feedsNextMatch` and cascade-only rules, and it would need an exception to the pad's `filterTilesByBand`
+     rule (D-12). Forfeits are organiser-only (X-RS-3), and organisers already have the console. Open follow-up: if
+     the chess pad has no one-step route to that fixture's console, W2b adds a link rather than tiles.
 
 ## Recommendations (mine — not rulings)
 
