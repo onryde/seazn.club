@@ -203,6 +203,52 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     expect(d.forfeit).toHaveBeenCalledWith({ by: "both", reason: "walkover" });
   });
 
+  it("X-RS-1 (ruling 112; R112 review M-1): ONE mounted console follows its ledger through resyncs — [start] → [start, play] → [start, play, void play] — and its dialog's reasons move with it each time", async () => {
+    // The state read is HELD at one object across every resync (a server answer that did not move). The ledger the
+    // console re-reads (`listEvents` since 0) is then its only moving input, so the reasons can only follow it through
+    // `forfeitPlayRecorded(events)` and the model's memo. If either memo drops its dependency, the reasons go stale.
+    const HELD = foldMatch(generic, CFG, LINEUPS, [START]);
+    const voidOfPlay = makeEnvelope(3, { type: "core.void", payload: {} }, PLAY.id);
+    let ledger: EventEnvelope[] = [START];
+    const original = vi.mocked(apiV1).getMockImplementation()!;
+    vi.mocked(apiV1).mockImplementation(((url: string, init?: { method?: string }) => {
+      // The forfeit write loses a race (SEQ_CONFLICT), which is what makes the console resync.
+      if (url.endsWith("/events") && init?.method === "POST") return Promise.reject(new ApiV1Error("Score moved", 409, "SEQ_CONFLICT"));
+      if (url.includes("/events")) return Promise.resolve(rowsOf(ledger));
+      return Promise.resolve({ status: "in_play", last_seq: ledger.length, summary: null, state: HELD, outcome: null });
+    }) as typeof apiV1);
+    try {
+      const props = { ...baseProps("started"), initialState: { status: "in_play", last_seq: 1, summary: null, state: HELD, outcome: null } };
+      const island = renderIsland(FixtureConsole, props);
+      click(byTestid(island.tree(), "score-forfeit")[0]);
+      type M = { who: readonly string[]; why: (w: string) => readonly string[] };
+      const dialogEl = () => island.tree().find((e) => typeof e.type === "function" && propsOf(e).model !== undefined && propsOf(e).forfeit !== undefined);
+      const live = () => (propsOf(dialogEl()!) as { live?: M | null }).live!;
+      const reading = () => ({ who: [...live().who], why: [...live().why("home")] });
+      // Expected values: X-RS-1 as amended by ruling 112. Nothing played: Neither and the walkover, beside retired and
+      // disqualified (R4). Something played: no Neither, no walkover. Withdrew is never the dialog's (PF-2).
+      const NOTHING = { who: ["home", "away", "both"], why: ["walkover", "retired", "disqualified"] };
+      const PLAYED = { who: ["home", "away"], why: ["retired", "disqualified"] };
+      const steps: [string, EventEnvelope[], typeof NOTHING][] = [
+        ["[start, play]", [START, PLAY], PLAYED],
+        ["[start, play, void play]", [START, PLAY, voidOfPlay], NOTHING],
+      ];
+      expect(reading(), "[start]").toEqual(NOTHING);
+      let resyncs = 0;
+      for (const [name, next, want] of steps) {
+        ledger = next;
+        const before = vi.mocked(apiV1).mock.calls.filter(([u]) => u.includes("since_seq=0")).length;
+        await (propsOf(dialogEl()!).forfeit as (p: unknown) => Promise<unknown>)({ by: AWAY.id, reason: "disqualified" });
+        await vi.waitFor(() => expect(vi.mocked(apiV1).mock.calls.filter(([u]) => u.includes("since_seq=0")).length, `${name}: the console re-read its ledger`).toBe(before + 1));
+        await vi.waitFor(() => expect(reading(), name).toEqual(want));
+        resyncs++;
+      }
+      expect(resyncs).toBe(2);
+    } finally {
+      vi.mocked(apiV1).mockImplementation(original);
+    }
+  });
+
   it("before play: Neither walks over — a double walkover, its own Confirm, `by: \"both\"`", async () => {
     const { el } = openConsole("scheduled");
     const d = driveDialog(el);
