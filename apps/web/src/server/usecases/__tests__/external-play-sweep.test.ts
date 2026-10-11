@@ -2609,15 +2609,52 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
-  it("a player with NO camera connection in any session is off for the whole match", async () => {
+  // Ruling I2: an unreadable answer is never the negative one. T8 seated
+  // both players only on a LIVE video publisher, so a list that shows a
+  // seated player nowhere contradicts our own record — not ready, retried.
+  it("an EMPTY session list is NOT 'camera off': nothing stored, retried; a day on, settled with NO flag and SAID so", async () => {
+    const m = await playedMatch();
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(rtkReads().map((c) => c.path), "premise: the list was read, and was empty").toEqual(["/sessions"]);
+    expect([r.cameraSettled, r.cameraFlags, cameraFailures(r)]).toEqual([0, 0, []]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
+    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
+    expect(late.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("…an empty list is no evidence about ANYONE — a player with no camera participant included (the per-player guard cannot see this)", async () => {
+    const m = await playedMatch();
+    // Stands for a seat with no camera row (the guard test below explains it).
+    await sql`delete from fixture_video_participants where fixture_id = ${m.b.fixtureId} and participant_id = ${m.part.away}`;
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, r.cameraFlags, cameraFailures(r)]).toEqual([0, 0, []]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("sessions that never overlap the MATCH are an empty list too: not ready", async () => {
+    const m = await playedMatch();
+    const pre = session(m, m.startedAt - 600_000, m.startedAt - 300_000);
+    for (const side of ["home", "away"] as const) connect(m, pre, side, { joined: m.startedAt - 590_000, left: m.startedAt - 300_000 });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, r.cameraFlags, cameraFailures(r)]).toEqual([0, 0, []]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("a SEATED player no session shows (zero camera connections) is not ready — never 'off for the whole match'; once listed, settled", async () => {
     const m = await playedMatch();
     const x = session(m, m.startedAt - 120_000, m.endedAt);
     connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
-    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    const flags = await flagsOf(m.b.fixtureId);
-    expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
-    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.overAt)}`);
-    expect(flags[0]!.note).toContain("from 0 camera connections");
+    const first = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([first.cameraSettled, first.cameraFlags, cameraFailures(first)]).toEqual([0, 0, []]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    // The list catches up: away's camera, on all match.
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    const next = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
+    expect([next.cameraSettled, next.cameraFlags]).toEqual([1, 0]);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
   it("a player with no camera PARTICIPANT at all is still evidenced: off for the whole match", async () => {
