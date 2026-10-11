@@ -126,12 +126,13 @@ describe("forfeitTag — empty case first", () => {
 describe("forfeitTag — one row per member (UI-2's tags, counted)", () => {
   const generic = mod("generic");
   const cfg = firstCfg(generic);
-  /** Each forfeit reason, folded where its phase admits it: a walkover or a withdrawal before play, a retirement or a
-   *  disqualification once it started (X-RS-1). */
+  /** Each forfeit reason, folded where its phase admits it: a walkover or a withdrawal before play, a disqualification
+   *  once it started (X-RS-1), a retirement once something is played (ruling 113: one score on the tally). */
   const forfeitBy = (reason: string) =>
     fold(generic, cfg, (l) => [
       ...(reason === "retired" || reason === "disqualified" ? [ev(1, "core.start")] : []),
-      ev(2, "core.forfeit", { by: l.away.entrantId, reason }),
+      ...(reason === "retired" ? [ev(2, "generic.score", { by: l.home.entrantId, points: 1 })] : []),
+      ev(3, "core.forfeit", { by: l.away.entrantId, reason }),
     ]);
   const TAGS: Record<string, string> = { walkover: "w/o", withdrew: "w/o", retired: "ret.", disqualified: "DQ" };
 

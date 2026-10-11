@@ -203,8 +203,9 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       .toEqual([2, 0, 42, 0]);
   });
 
-  test("X-RS-1 (ruling 112): a walkover after Start with nothing played — Home, Away, Neither; walkover, retired, disqualified; recorded on the started ledger, credited like one before play", async ({ page, request }) => {
-    // The stored production shape (ruling 112): the organiser pressed Start, the opponent did not show.
+  test("X-RS-1 (rulings 112, 113): a walkover after Start with nothing played — Home, Away, Neither; walkover, disqualified (no retirement); recorded on the started ledger, credited like one before play", async ({ page, request }) => {
+    // The stored production shape (ruling 112): the organiser pressed Start, the opponent did not show. Ruling 113:
+    // nobody retires from a match never played, so the retirement is not offered until something is.
     const { fx, home, away } = await badmintonLeague(request);
     await post(request, fx.id, "core.start");
     expect((await read(request, fx.id)).status, "started, nothing played").toBe("in_play");
@@ -216,7 +217,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       const d = await openDialog(page);
       expect(await sidesShown(d), `${w}: nothing played — Neither is still offered`).toEqual(["home", "away", "both"]);
       await d.getByTestId("forfeit-who-away").click();
-      expect(await reasonsShown(d), `${w}: the walkover beside retired and disqualified (R4); withdrew is the cascade's`).toEqual(["walkover", "retired", "disqualified"]);
+      expect(await reasonsShown(d), `${w}: the walkover beside disqualified (R4) — no retirement until something is played (ruling 113); withdrew is the cascade's`).toEqual(["walkover", "disqualified"]);
       await d.getByTestId("forfeit-who-both").click();
       expect(await reasonsShown(d), `${w}: Neither only walks over`).toEqual(["walkover"]);
       await expectNoHorizontalScroll(page);
@@ -395,7 +396,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     await page.goto(await fixturePath(request, fx.id));
     const d = await openDialog(page);
     await d.getByTestId("forfeit-who-home").click();
-    await d.getByTestId("forfeit-why-retired").check();
+    // Ruling 113: after a bare Start the in-match reason on offer is the disqualification (no retirement before play).
+    await d.getByTestId("forfeit-why-disqualified").check();
     // Another device abandons the match while the dialog is open; the console catches up (a tab return).
     await post(request, fx.id, "core.abandon", { reason: "rain" });
     const caughtUp = page.waitForResponse((r) => r.request().method() === "GET" && r.url().includes(`/api/v1/fixtures/${fx.id}/state`));
@@ -410,7 +412,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     const direct = await apiJson(request, `/api/v1/fixtures/${fx.id}/events`, "POST", {
       expected_seq: await tip(request, fx.id),
       type: "core.forfeit",
-      payload: { by: fx.home_entrant_id, reason: "retired" },
+      payload: { by: fx.home_entrant_id, reason: "disqualified" },
     });
     expect(direct.error?.code, JSON.stringify(direct.error)).toBe("ABANDONED_SETTLE_OR_VOID");
   });
@@ -493,6 +495,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     const before = await staged(request, "badminton", "bwf", "league", [longA, longB]);
     const afterPlay = await staged(request, "badminton", "bwf", "league", [`${longA} II`, `${longB} II`]);
     await post(request, afterPlay.fx.id, "core.start");
+    // Ruling 113: "after play" means something played — a rally — or the retirement below is not on offer.
+    await post(request, afterPlay.fx.id, "badminton.rally", { wonBy: afterPlay.fx.home_entrant_id! });
     const final = await staged(request, "generic", "score", "knockout", [`${longA} III`, `${longB} III`]);
     const screens = [
       { name: "t11-before-play", id: before.fx.id, who: "away", why: "walkover" },

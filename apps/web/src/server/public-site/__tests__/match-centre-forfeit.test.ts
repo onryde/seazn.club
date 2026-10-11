@@ -75,9 +75,11 @@ function centre(s: Scene, over: Partial<MatchCentreInput> = {}) {
 
 const GENERIC = mod("generic");
 const GENERIC_CFG = GENERIC.configSchema.parse(Object.values(GENERIC.variants ?? {})[0] ?? {});
+// Each reason where its phase admits it (X-RS-1): a retirement once something is played (ruling 113: one score).
 const forfeit = (reason: string) => (l: ReturnType<typeof defaultLineupPair>) => [
   ...(reason === "retired" || reason === "disqualified" ? [ev(1, "core.start")] : []),
-  ev(2, "core.forfeit", { by: l.away.entrantId, reason }),
+  ...(reason === "retired" ? [ev(2, "generic.score", { by: l.home.entrantId, points: 1 })] : []),
+  ev(3, "core.forfeit", { by: l.away.entrantId, reason }),
 ];
 
 describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2)", () => {

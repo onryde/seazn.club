@@ -578,9 +578,10 @@ const CORE_ROWS: Gated[] = RULED_CORE_TYPES.map((type) => ({
   type,
   payload: (f) => {
     if (type === "core.settle") return { winner: f.home, method: "lot" };
-    // W2b D3: the row is posted on a STARTED fixture (`ready`), where a retirement is recordable (R4); a walkover is
-    // too until something is played (ruling 112), so the retirement is the row's one reason for every authority.
-    if (type === "core.forfeit") return { by: f.away, reason: "retired" };
+    // W2b D3: the row is posted on a STARTED fixture (`ready`) with nothing played, where a disqualification is
+    // recordable (R4) and a walkover too (ruling 112) — a retirement not until something is played (ruling 113) — so
+    // the disqualification is the row's one reason for every authority.
+    if (type === "core.forfeit") return { by: f.away, reason: "disqualified" };
     return { reason: "rain" };
   },
   ...(type === "core.settle" ? { prep: "abandon" as const } : {}),
@@ -651,14 +652,15 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
 
   it("X-RS-3: every event that records a forfeit, walkover, retirement or double walkover is organiser-only — core.forfeit for all four reasons and both, refused 403 for a device link and an official scorer; the API key is the positive pair", async () => {
     // single-sport: badminton. The gate reads the event TYPE (organiser-only-events.ts), never the sport; each reason
-    // is posted in the phase it belongs to (spec §4.1: a walkover before the start, a retirement or a
-    // disqualification after it), and the double walkover on a semi-final, which feeds a seat (D19).
+    // is posted in the phase it belongs to (spec §4.1: a walkover before the start, a disqualification after it, a
+    // retirement once something is played — ruling 113: one rally), and the double walkover on a semi-final, which
+    // feeds a seat (D19).
     const CASES = [
-      { reason: "walkover", by: "away", started: false },
-      { reason: "retired", by: "away", started: true },
-      { reason: "disqualified", by: "away", started: true },
-      { reason: "withdrew", by: "away", started: false },
-      { reason: "walkover", by: "both", started: false },
+      { reason: "walkover", by: "away", started: false, played: false },
+      { reason: "retired", by: "away", started: true, played: true },
+      { reason: "disqualified", by: "away", started: true, played: false },
+      { reason: "withdrew", by: "away", started: false, played: false },
+      { reason: "walkover", by: "both", started: false, played: false },
     ] as const;
     let refused = 0;
     let accepted = 0;
@@ -668,6 +670,7 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
         const id = s.fixtureIds[0]!;
         if (c.started) await scoreEvent(s.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
         const [f] = await sql<{ away: string }[]>`select away_entrant_id as away from fixtures where id = ${id}`;
+        if (c.played) await scoreEvent(s.auth, id, { expected_seq: 1, type: "badminton.rally", payload: { wonBy: f!.away } });
         const auth = await asAuthority(s, id, who);
         const before = await seq(id);
         const write = scoreEvent(auth, id, { expected_seq: before, type: "core.forfeit", payload: { by: c.by === "both" ? "both" : f!.away, reason: c.reason } });

@@ -68,7 +68,8 @@ const model = (fx: { m: Module; cfg: unknown; state: unknown; events: readonly E
 
 describe("UI-1 forfeit dialog model (spec §5.5)", () => {
   it("empty case first: a decided fixture offers nothing — no side, no reason, no guidance", () => {
-    const done = fixtureOf("generic", (l) => [ev(1, "core.start"), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]);
+    // Ruling 113: after a bare start the forfeit that decides is a disqualification (a retirement needs play).
+    const done = fixtureOf("generic", (l) => [ev(1, "core.start"), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "disqualified" })]);
     const d = model(done);
     expect(d.who).toEqual([]);
     for (const who of ["home", "away", "both"] as const) expect(d.why(who), who).toEqual([]);
@@ -84,12 +85,13 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(d.guidance).toBeNull();
   });
 
-  it("X-RS-1 (ruling 112): after Start with nothing played — Home, Away, Neither; a side walks over, retires or is disqualified", () => {
-    // Ruling 112: the walkover (and Neither) reads "pre" until something is played; retired and disqualified are
-    // recordable from the Start (R4, unchanged). The organiser who pressed Start for a no-show records the walkover.
+  it("X-RS-1 (rulings 112, 113): after Start with nothing played — Home, Away, Neither; a side walks over or is disqualified, never retires", () => {
+    // Ruling 112: the walkover (and Neither) reads "pre" until something is played; a disqualification is recordable
+    // from the Start (R4). Ruling 113: a retirement only once something is played — nobody retires from a match never
+    // played. The organiser who pressed Start for a no-show records the walkover.
     const d = model(fixtureOf("generic", STARTED));
     expect(d.who).toEqual(["home", "away", "both"]);
-    expect(d.why("away")).toEqual(["walkover", "retired", "disqualified"]);
+    expect(d.why("away")).toEqual(["walkover", "disqualified"]);
     expect(d.why("both")).toEqual(["walkover"]);
   });
 
@@ -113,12 +115,12 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(forfeitPlayRecorded([...voided].reverse()), "the void read before its target").toBe(false);
   });
 
-  it("X-RS-1 (ruling 112) after a void: voiding the one played event, or the start, takes the match back to nothing played — Neither and the walkover return", () => {
+  it("X-RS-1 (rulings 112, 113) after a void: voiding the one played event, or the start, takes the match back to nothing played — Neither and the walkover return, the retirement goes", () => {
     // The take-back sequences (TEST-STRATEGY rule 1): start, play, void the play; and start, void the start.
     const played = playedOf("generic");
     const back = model(fixtureOf("generic", () => [...played.events, ev(3, "core.void", {}, played.events[1]!.id)]));
     expect(back.who).toEqual(["home", "away", "both"]);
-    expect(back.why("away")).toEqual(["walkover", "retired", "disqualified"]);
+    expect(back.why("away")).toEqual(["walkover", "disqualified"]);
     const unstarted = model(fixtureOf("generic", () => [ev(1, "core.start"), ev(2, "core.void", {}, "e-1")]));
     expect(unstarted.who).toEqual(["home", "away", "both"]);
     expect(unstarted.why("away")).toEqual(["walkover"]);

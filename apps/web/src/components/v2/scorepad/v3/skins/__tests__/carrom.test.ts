@@ -156,8 +156,9 @@ describe("resolvePhase", () => {
     expect(resolvePhase(view({ events: stream(start()) }))).toBe("live");
   });
 
+  // Ruling 113: after a bare start the forfeit that decides is a disqualification (a retirement needs play).
   it("maps the engine's own 'done' down to 'post' after a forfeit", () => {
-    const v = view({ events: stream(start(), ["core.forfeit", { by: "H", reason: "retired" }]) });
+    const v = view({ events: stream(start(), ["core.forfeit", { by: "H", reason: "disqualified" }]) });
     expect(resolvePhase(v)).toBe("post");
   });
 
@@ -315,7 +316,7 @@ describe("buildTiles — live phase", () => {
 
 describe("buildTiles — post phase", () => {
   it("offers nothing at all once the fixture is decided", () => {
-    const v = view({ events: stream(start(), ["core.forfeit", { by: "H", reason: "retired" }]) });
+    const v = view({ events: stream(start(), ["core.forfeit", { by: "H", reason: "disqualified" }]) });
     expect(tileIds(v)).toEqual([]);
   });
 });
@@ -344,7 +345,7 @@ describe("the chassis's own More sheet never has anything left to offer", () => 
   it("across both cfgs, every band, and pre/live/post", () => {
     for (const cfg of [DEFAULT_CFG, CLUB29_CFG]) {
       for (const band of [0, 1, 3] as FidelityBand[]) {
-        for (const events of [stream(), stream(start()), stream(start(), ["core.forfeit", { by: "H", reason: "retired" }])]) {
+        for (const events of [stream(), stream(start()), stream(start(), ["core.forfeit", { by: "H", reason: "disqualified" }])]) {
           const v = view({ cfg, band, events });
           expect(realMoreActions(v), `phase=${resolvePhase(v)} band=${band}`).toEqual([]);
         }

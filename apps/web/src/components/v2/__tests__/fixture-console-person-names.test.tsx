@@ -257,10 +257,16 @@ describe("the forfeit dialog, opened (D-6)", () => {
   });
 
   // W2b Task 11: the dialog reads the module (its phase guard), so the console needs the pad's pin and a REAL folded
-  // state — a started football match.
+  // state — a started football match with the home goal played (ruling 113: a retirement needs something played, and
+  // the console reads that from its ledger, so the ledger holds the Start and the goal the state folds).
   const football = builtinModules.find((m) => m.key === "football")!;
   const CFG = football.configSchema.parse((football.variants as Record<string, unknown> | undefined)?.["11-a-side"] ?? {});
-  const STARTED = foldMatch(football, CFG, defaultLineupPair(football.positions), [makeEnvelope(1, { type: "core.start", payload: {} })]);
+  const START_ROW: EventIn = { ...GOAL, id: "ev-0", seq: 1, type: "core.start", payload: {} };
+  const GOAL_ROW: EventIn = { ...GOAL, id: "ev-2", seq: 2 };
+  const STARTED = foldMatch(football, CFG, defaultLineupPair(football.positions), [
+    makeEnvelope(1, { type: "core.start", payload: {} }),
+    makeEnvelope(2, { type: "football.goal", payload: { by: defaultLineupPair(football.positions).home.entrantId } }),
+  ]);
 
   /** The real `<ForfeitDialog/>` element the console builds once Forfeit is clicked, re-mounted in the harness so its
    *  own `useState` can be driven. Found by function identity rather than by a test-only export: the console is its
@@ -273,12 +279,12 @@ describe("the forfeit dialog, opened (D-6)", () => {
       away: PAIR,
       initialState: {
         status: "in_play",
-        last_seq: 1,
+        last_seq: 2,
         summary: { headline: "1 — 0" },
         state: STARTED,
         outcome: null,
       } satisfies LiveState,
-      initialEvents: [GOAL],
+      initialEvents: [START_ROW, GOAL_ROW],
       canEdit: true,
       canOrganise: true,
       stageKind: null,

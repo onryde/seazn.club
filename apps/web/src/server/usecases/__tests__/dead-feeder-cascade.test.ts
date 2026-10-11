@@ -772,8 +772,9 @@ async function scorerAbandon(auth: AuthCtx, id: string): Promise<void> {
 async function walkoverForHome(auth: AuthCtx, id: string): Promise<void> {
   const r = await fixtureRow(id);
   await post(auth, id, "core.start");
-  // W2b D3 (X-RS-1): once play has started a forfeit is a retirement, not a walkover.
-  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "retired" });
+  // W2b D3 (X-RS-1): after the Start with nothing played a forfeit is a disqualification (or a walkover, ruling 112) —
+  // never a retirement (ruling 113: nobody retires from a match never played).
+  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "disqualified" });
 }
 
 /** Decide a chess game for home over the board: a real `win` with a LOSER (a forfeit's award seats no loser). */
@@ -897,7 +898,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     expect(abandoned.outcome, "the NEW-H1 shape: abandoned with NO outcome").toBeNull();
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "disqualified" } } as never); // ruling 113: no retirement after a bare start
     const [fin] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin).toEqual({ status: "scheduled", outcome: null });
     // The positive pair: the seat WAS actionable (its sibling filled), so the cascade really did look at it.
@@ -917,7 +918,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     expect(events!.n, "premise: the generator's void has no ledger at all").toBe(0);
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "disqualified" } } as never); // ruling 113: no retirement after a bare start
     const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin!.status).toBe("forfeited");
   });
@@ -937,7 +938,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     await sql`update fixtures set status = 'abandoned', outcome = null where id = ${sf1!}`;
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "disqualified" } } as never); // ruling 113: no retirement after a bare start
     const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin!.status).toBe("forfeited"); // feederIsDead(sf1) === true: the voided abandon did not count as active
   });

@@ -9,9 +9,9 @@
 // two sides fails even though both still render. The dialog renders only after a click, which `renderToStaticMarkup`
 // can never show, so this file uses `_hook-harness.tsx`'s `renderIsland` (one level: the console, then the dialog).
 //
-// Expected values are the rules': X-RS-1 / D3 as amended by ruling 112 for the chips (until something is played a
-// walkover or Neither — after a bare Start too; once something is played retired or disqualified; never withdrew —
-// PF-2), §7 for the refusal (the dialog closes, the reason shows on the console).
+// Expected values are the rules': X-RS-1 / D3 as amended by rulings 112 and 113 for the chips (until something is played
+// a walkover or Neither — after a bare Start too, beside a disqualification; once something is played retired or
+// disqualified; never withdrew — PF-2), §7 for the refusal (the dialog closes, the reason shows on the console).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
@@ -172,7 +172,7 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     expect(d.onRefused).not.toHaveBeenCalled();
   });
 
-  it("X-RS-1 (ruling 112): after Start with nothing played, the console offers Neither and the walkover — a side's walkover names the OTHER side's win", async () => {
+  it("X-RS-1 (rulings 112, 113): after Start with nothing played, the console offers Neither, the walkover and the disqualification, never the retirement — a side's walkover names the OTHER side's win", async () => {
     // The console-wiring witness: the same fixture `in_play` above offers neither (its ledger holds a played event).
     // What decides it is the console's reading of its own ledger, handed to the engine's admission.
     const { el } = openConsole("started");
@@ -180,7 +180,7 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     for (const w of ["home", "away", "both"]) expect(byTestid(d.tree(), `forfeit-who-${w}`), w).toHaveLength(1);
     click(byTestid(d.tree(), "forfeit-who-away")[0]);
     const offered = ["walkover", "retired", "disqualified", "withdrew"].filter((r) => byTestid(d.tree(), `forfeit-why-${r}`).length > 0);
-    expect(offered, "a bare Start: the walkover beside retired and disqualified (R4); withdrew is the cascade's (PF-2)").toEqual(["walkover", "retired", "disqualified"]);
+    expect(offered, "a bare Start: the walkover beside disqualified (R4); no retirement until something is played (ruling 113); withdrew is the cascade's (PF-2)").toEqual(["walkover", "disqualified"]);
     (propsOf(byTestid(d.tree(), "forfeit-why-walkover")[0]!).onChange as () => void)();
     const confirm = byTestid(d.tree(), "forfeit-confirm")[0]!;
     expect(textOf(confirm)).toBe(en("forfeitDialog.confirm.walkover"));
@@ -203,7 +203,7 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     expect(d.forfeit).toHaveBeenCalledWith({ by: "both", reason: "walkover" });
   });
 
-  it("X-RS-1 (ruling 112; R112 review M-1): ONE mounted console follows its ledger through resyncs — [start] → [start, play] → [start, play, void play] — and its dialog's reasons move with it each time", async () => {
+  it("X-RS-1 (rulings 112, 113; R112 review M-1): ONE mounted console follows its ledger through resyncs — [start] → [start, play] → [start, play, void play] — and its dialog's reasons move with it each time", async () => {
     // The state read is HELD at one object across every resync (a server answer that did not move). The ledger the
     // console re-reads (`listEvents` since 0) is then its only moving input, so the reasons can only follow it through
     // `forfeitPlayRecorded(events)` and the model's memo. If either memo drops its dependency, the reasons go stale.
@@ -225,9 +225,10 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
       const dialogEl = () => island.tree().find((e) => typeof e.type === "function" && propsOf(e).model !== undefined && propsOf(e).forfeit !== undefined);
       const live = () => (propsOf(dialogEl()!) as { live?: M | null }).live!;
       const reading = () => ({ who: [...live().who], why: [...live().why("home")] });
-      // Expected values: X-RS-1 as amended by ruling 112. Nothing played: Neither and the walkover, beside retired and
-      // disqualified (R4). Something played: no Neither, no walkover. Withdrew is never the dialog's (PF-2).
-      const NOTHING = { who: ["home", "away", "both"], why: ["walkover", "retired", "disqualified"] };
+      // Expected values: X-RS-1 as amended by rulings 112 and 113. Nothing played: Neither and the walkover, beside
+      // disqualified (R4) — no retirement (ruling 113). Something played: no Neither, no walkover, the retirement. Withdrew
+      // is never the dialog's (PF-2).
+      const NOTHING = { who: ["home", "away", "both"], why: ["walkover", "disqualified"] };
       const PLAYED = { who: ["home", "away"], why: ["retired", "disqualified"] };
       const steps: [string, EventEnvelope[], typeof NOTHING][] = [
         ["[start, play]", [START, PLAY], PLAYED],

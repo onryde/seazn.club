@@ -671,10 +671,13 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // The real chess module, typed through `forfeitAdmission`'s own parameter and spread into it: no cast, and no field
     // named here, so the engine reads its walkover phases from the module itself. Only the phase is pinned to "play".
     const chess: Parameters<typeof forfeitAdmission<null>>[0] = builtinModules.find((m) => m.key === "boardgame")!;
-    // The game below holds only its Start: nothing played (ruling 112). Chess declares walkovers in play too, so the
-    // fact moves nothing for it — asserted, so the e2e's expectation cannot hang on which way it is read.
+    // The game below holds only its Start: nothing played (ruling 112). Chess declares walkovers in play too, so for the
+    // walkover the fact moves nothing; ruling 113 makes it move the retirement alone (nobody retires from a game never
+    // played) — asserted, so the e2e's expectation cannot hang on which way it is read.
     const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: false });
-    expect(forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: true }), "chess: ruling 112's fact changes nothing").toEqual(admitted);
+    const afterPlay = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: true });
+    expect(afterPlay.reasons.filter((r) => !admitted.reasons.includes(r)), "chess: ruling 113's fact adds the retirement only").toEqual(["retired"]);
+    expect(admitted.reasons, "chess: nothing played, no retirement (ruling 113)").not.toContain("retired");
     const cascadeOnly: readonly string[] = CASCADE_ONLY_FORFEIT_REASONS;
     const wantReasons = admitted.reasons.filter((r) => !cascadeOnly.includes(r));
     expect(wantReasons.length, "the engine admits a reason for a chess game in play").toBeGreaterThan(0);
@@ -707,21 +710,22 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       widths++;
     }
     expect(widths).toBe(3);
-    // Record it: the away player retired mid-game.
+    // Record it: the away player is disqualified (ruling 113: a chess game in play has nothing played short of its
+    // result, so the retirement is not on offer).
     const d = page.getByTestId("forfeit-dialog");
-    await d.getByTestId("forfeit-why-retired").check();
+    await d.getByTestId("forfeit-why-disqualified").check();
     await d.getByTestId("forfeit-confirm").click();
     await expect.poll(async () => (await read(request, fx.id)).status, { timeout: 20_000 }).not.toBe("in_play");
     const events = (await apiJson<{ type: string; payload: unknown }[]>(request, `/api/v1/fixtures/${fx.id}/events`)).data!;
-    expect(events.filter((e) => e.type === "core.forfeit").map((e) => e.payload)).toEqual([{ by: fx.away_entrant_id, reason: "retired" }]);
+    expect(events.filter((e) => e.type === "core.forfeit").map((e) => e.payload)).toEqual([{ by: fx.away_entrant_id, reason: "disqualified" }]);
     expect(events.filter((e) => e.type === "boardgame.result"), "no chess method stands in for the forfeit").toEqual([]);
     expect((await read(request, fx.id)).outcome).toMatchObject({ kind: "award", winner: fx.home_entrant_id });
     // What the organiser then READS: the console's activity panel (activity.tsx → buildRibbon) says the reason, not the
     // reason-free legacy line.
     const activity = page.locator('[data-role="v3-activity"]');
     await expect(
-      activity.locator('[data-role="v3-activity-row"]').filter({ hasText: ui("pad.ribbon.core.forfeit.retired") }),
-      "the activity row says it was a retirement",
+      activity.locator('[data-role="v3-activity-row"]').filter({ hasText: ui("pad.ribbon.core.forfeit.disqualified") }),
+      "the activity row says it was a disqualification",
     ).toHaveCount(1, { timeout: 20_000 });
     await expect(activity, "not the reason-free line").not.toContainText(ui("pad.ribbon.core.forfeit"));
 
