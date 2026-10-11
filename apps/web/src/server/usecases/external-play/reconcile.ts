@@ -682,6 +682,14 @@ async function settle(
   adopted: number,
   source: ReconcileOutcome["source"],
 ): Promise<ReconcileOutcome> {
+  // T13 fix round 1, ruling I1: the GAME's end, on file whatever T12 writes
+  // next. `finished_at` is stamped only when the bridge closes, so a held
+  // ending (a tie-break owed, an abort, a mid-game hold whose game ended)
+  // would otherwise have none, and the sweep's camera evidence would run on to
+  // the room's end. The first read that saw the game over is its end.
+  await sql`
+    update fixture_external_play set game_over_at = ${at}, updated_at = now()
+     where fixture_id = ${g.fixture.fixtureId} and challenge_id = ${g.gameId} and game_over_at is null`;
   const write = deps.writeResult ?? writeResultFrom;
   let result: ResultWrite;
   try {

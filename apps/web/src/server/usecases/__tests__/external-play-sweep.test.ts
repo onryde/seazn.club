@@ -40,6 +40,7 @@ import { EngineError, foldMatch } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import type { CameraPolicy } from "@/lib/camera-policy";
+import type { BoardCall } from "@/server/external-play/types";
 import { sql } from "@/lib/db";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
@@ -1042,7 +1043,10 @@ const recorded = (name: string): GameFullJson =>
 const MID = recorded("gamefull-mid-white.ndjson");
 /** Recorded 2026-10-11: the same game, outoftime, winner black. */
 const ENDED = recorded("gamefull-expired-2.ndjson");
-function gameFull(b: Board, gameId: string, base: GameFullJson, over: { moves?: readonly string[]; status?: string } = {}): string {
+function gameFull(
+  b: Board, gameId: string, base: GameFullJson,
+  over: { moves?: readonly string[]; status?: string; winner?: "white" | "black" } = {},
+): string {
   const j = JSON.parse(JSON.stringify(base)) as GameFullJson;
   j.id = gameId;
   j.white.id = j.white.name = b.home.lichessId; // the seed pairs home as White
@@ -1051,6 +1055,7 @@ function gameFull(b: Board, gameId: string, base: GameFullJson, over: { moves?: 
   if (over.status !== undefined) {
     j.state.status = over.status;
     delete j.state.winner;
+    if (over.winner !== undefined) j.state.winner = over.winner;
   }
   return `${JSON.stringify(j)}\n`;
 }
@@ -2054,9 +2059,14 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     b: Board;
     meetingId: string;
     part: Record<Side, string>;
-    /** The match window as the DB holds it: the first move, the room's end
-     *  (as a JS Date reads them — milliseconds, what the sweep computes on). */
+    /** The match window as the DB holds it: the first move, and the GAME's
+     *  end (ruling I1) — the bridge's close, else the first read that saw the
+     *  game over (as a JS Date reads them: milliseconds, what the sweep
+     *  computes on). */
     startedAt: number;
+    overAt: number;
+    /** The ROOM's end, minutes after the game's: every ending here is torn
+     *  down at a later sweep, as production does. */
     endedAt: number;
     /** The room's end rounded UP to the millisecond: `ended_at` is stamped
      *  by the DB's now(), which carries microseconds a JS Date drops, so a
@@ -2067,21 +2077,110 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   const iso = (ms: number) => new Date(ms).toISOString();
   const SAMPLE_MS = 7_000; // the spike's measured cadence
 
+  /** How a match ENDS, each through the producers production uses — and in
+   *  every one the room comes down at a LATER sweep than the game's end:
+   *  - `tiebreak` (the default): a knockout draw read by T11, held
+   *    tiebreak_owed by T12; the organiser settles it; the sweep tears down;
+   *  - `aborted`: Lichess aborts after White's first move, held `aborted`;
+   *    the organiser settles; the sweep tears down;
+   *  - `finished`: a league draw T12 writes and T11 finishes the bridge; the
+   *    sweep tears down at its next tick;
+   *  - `held_then_ended`: Black's token refused mid-game (T10's 401 → a
+   *    token_revoked hold); the game then ends at Lichess and T11 reads it
+   *    (T12 writes the result; the hold keeps its reason); torn down;
+   *  - `settled_while_held`: the same hold, but the organiser settles the
+   *    board by hand and NO read ever sees the game's end — only the clock
+   *    bounds it (last move + the side to move's time). */
+  type Ending = "tiebreak" | "aborted" | "finished" | "held_then_ended" | "settled_while_held";
+  const OVER_MIN = 16;
+
   /** A board played under `policy` through the REAL producers: both players
    *  check in; T9's create seats both through T8's REAL seat (the global
    *  fetch is the RealtimeKit fake for the create only — T8 passes no deps);
-   *  T10's first move starts it (unless `start: false`); T7's REAL endMeeting
-   *  ends the room. Opened 19 minutes ago so the first move, at T+6, is in
-   *  the PAST of the DB's own clock that stamps the room's end. */
-  async function playedMatch(o: { policy?: CameraPolicy; start?: boolean } = {}): Promise<Match> {
-    const b = await openedBoard({ checkedIn: ["home", "away"], openedMinutesAgo: 19, cameraPolicy: o.policy ?? "required" });
+   *  T10's first move starts it at T+6 (unless `start: false`); it ENDS at
+   *  T+16 as `ending` says; a sweep at T+19 tears the room down through T7's
+   *  REAL endMeeting. Opened 19 minutes ago so every stamp is in the PAST of
+   *  the DB's own clock that stamps the room's end. */
+  async function playedMatch(o: { policy?: CameraPolicy; start?: boolean; ending?: Ending; override?: boolean } = {}): Promise<Match> {
+    const ending: Ending = o.ending ?? "tiebreak";
+    const b = await openedBoard({
+      checkedIn: ["home", "away"], openedMinutesAgo: 19, cameraPolicy: o.policy ?? "required",
+      ...(ending === "tiebreak" ? { kind: "knockout" } : {}),
+    });
+    let gameId: string;
     vi.stubGlobal("fetch", RTK.fetch);
     try {
-      if (o.start === false) await readyGame(b, 5);
-      else await liveGame(b, 6);
+      gameId = o.start === false ? await readyGame(b, 5) : await liveGame(b, 6);
     } finally {
       vi.unstubAllGlobals();
     }
+    // D11: RealtimeKit down mid-match, the organiser proceeds without video.
+    if (o.override) await organiserOverrideVideo({ fixtureId: b.fixtureId, actorUserId: b.ownerUserId, note: "RealtimeKit down" });
+    const move = async (side: Side, uci: string, min: number, submit: () => Promise<BoardCall> = async () => ({ ok: true })) =>
+      act(
+        { fixtureId: b.fixtureId, personId: b[side].personId, action: { kind: "move", uci } },
+        // The read T10 defers after a refusal is T11's, covered there.
+        { now: b.at(min), accessToken: async (u) => `tok-${u}`, publish: async () => {}, submitMove: submit, reconcile: async () => null },
+      );
+    const blackMoves = (submit?: () => Promise<BoardCall>) => move("away", "e7e5", 7, submit);
+    const UNAUTHORIZED = async (): Promise<BoardCall> => ({ ok: false, code: "unauthorized", raw: "401 Unauthorized" });
+    /** The organiser decides the board by hand: a bracket's owed tie-break
+     *  is SETTLED (core.settle); any other board gets its result typed in
+     *  (boardgame.result, after core.start if nothing started the fold). */
+    const settleByHand = async () => {
+      const auth = await mintOrgOwnerAuth(b.orgId);
+      const st = await getFixtureState(auth, b.fixtureId);
+      let seq = st.last_seq;
+      if (ending === "tiebreak" && o.start !== false) {
+        await scoreEvent(auth, b.fixtureId, { expected_seq: seq, type: "core.settle", payload: { winner: b.home.entrantId, method: "lot" } });
+        return;
+      }
+      // No event yet (a null fold) is phase "pre", as T12 reads it.
+      if (((st.state as { phase?: string } | null)?.phase ?? "pre") === "pre") {
+        await scoreEvent(auth, b.fixtureId, { expected_seq: seq, type: "core.start", payload: {} });
+        seq++;
+      }
+      await scoreEvent(auth, b.fixtureId, { expected_seq: seq, type: "boardgame.result", payload: { winner: b.home.entrantId } });
+    };
+    const read = async (line: string, wrote: object) => {
+      serveStream(line);
+      expect(await reconcile(b.fixtureId, "game_end", { now: b.at(OVER_MIN) }), `premise: ${ending}`).toMatchObject(wrote);
+      lichess.reset();
+    };
+    if (o.start === false) {
+      // No first move: Lichess aborts at ply 0 — T12's `aborted`.
+      await read(gameFull(b, gameId, MID, { moves: [], status: "aborted" }), { result: { wrote: "aborted" } });
+      await settleByHand();
+    } else if (ending === "tiebreak") {
+      expect(await blackMoves(async () => ({ ok: true })), "premise: T10 played Black's reply").toEqual({ ok: true, applied: true });
+      await read(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5"], status: "draw" }), {
+        result: { wrote: "needs_organiser", reason: "tiebreak_owed" }, finished: false,
+      });
+      await settleByHand();
+    } else if (ending === "aborted") {
+      await read(gameFull(b, gameId, MID, { moves: ["e2e4"], status: "aborted" }), { result: { wrote: "aborted" }, finished: false });
+      await settleByHand();
+    } else if (ending === "finished") {
+      expect(await blackMoves(async () => ({ ok: true })), "premise: T10 played Black's reply").toEqual({ ok: true, applied: true });
+      await read(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5"], status: "draw" }), { result: { wrote: "draw" }, finished: true });
+    } else if (ending === "held_then_ended") {
+      expect(await blackMoves(UNAUTHORIZED), "premise: Lichess refused Black's token").toMatchObject({ ok: false });
+      expect(await bridgeOf(b.fixtureId), "premise: held mid-game").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
+      await read(gameFull(b, gameId, MID, { moves: ["e2e4"], status: "resign", winner: "white" }), {
+        result: { wrote: "decided" }, finished: false,
+      });
+    } else {
+      // Three plies, so the two clocks DIFFER (the first two cost nothing,
+      // scalachess Clock.step; White's third pays its minute): the side to
+      // move is Black, whose 401 then holds the board.
+      expect(await blackMoves(), "premise: T10 played Black's reply").toEqual({ ok: true, applied: true });
+      expect(await move("home", "g1f3", 8), "premise: T10 played White's second move").toEqual({ ok: true, applied: true });
+      expect(await move("away", "d7d5", 9, UNAUTHORIZED), "premise: Lichess refused Black's token").toMatchObject({ ok: false });
+      expect(await bridgeOf(b.fixtureId), "premise: held mid-game").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
+      await settleByHand();
+    }
+    const torn = await sweep(b, { now: b.at(19), endMeeting: (id) => endMeeting(id, RTK) });
+    expect(torn.meetingsEnded, `premise: ${ending} — the sweep tore the room down`).toBe(1);
     const [m] = await sql<{ meeting_id: string }[]>`
       select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId}`;
     expect(m, "premise: T8's seat opened the room").toBeDefined();
@@ -2091,17 +2190,19 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const of = (side: Side) => parts.find((p) => p.person_id === b[side].personId)?.participant_id;
     const part = { home: of("home"), away: of("away") };
     expect(part.home && part.away, "premise: T8 gave each player a camera participant").toBeTruthy();
-    await endMeeting(m!.meeting_id, RTK);
-    const [t] = await sql<{ started_at: Date | null; ended_at: Date; ended_ceil: number }[]>`
-      select ep.started_at, vm.ended_at,
+    const [t] = await sql<{ started_at: Date | null; over_at: Date | null; ended_at: Date; ended_ceil: number }[]>`
+      select ep.started_at, coalesce(ep.finished_at, ep.game_over_at) as over_at, vm.ended_at,
              ceil(extract(epoch from vm.ended_at) * 1000)::float8 as ended_ceil
         from fixture_video_meetings vm
         join fixture_external_play ep on ep.fixture_id = vm.fixture_id
        where vm.fixture_id = ${b.fixtureId}`;
     expect(t!.ended_at, "premise: T7 ended the room").not.toBeNull();
     if (o.start !== false) {
-      expect(t!.started_at, "premise: T10 started the game").not.toBeNull();
-      expect(t!.started_at!.getTime(), "premise: the match began before the room ended").toBeLessThan(t!.ended_at.getTime());
+      expect(t!.started_at, "premise: T10 started the game").toEqual(b.at(6));
+      const over = ending === "settled_while_held" ? null : b.at(OVER_MIN);
+      expect(t!.over_at, `premise: ${ending} — the game's end on file`).toEqual(over);
+      // Players leave at the game's end; the room ends minutes later.
+      expect(t!.ended_at.getTime() - b.at(OVER_MIN).getTime(), "premise: the room outlived the game").toBeGreaterThan(60_000);
     }
     rtk.calls = [];
     return {
@@ -2109,6 +2210,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       meetingId: m!.meeting_id,
       part: part as Record<Side, string>,
       startedAt: t!.started_at?.getTime() ?? Number.NaN,
+      overAt: t!.over_at?.getTime() ?? Number.NaN,
       endedAt: t!.ended_at.getTime(),
       endedCeil: Number(t!.ended_ceil),
     };
@@ -2181,6 +2283,74 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(CAMERA_EVIDENCE_GIVE_UP_MS).toBe(24 * 60 * 60_000);
   });
 
+  // Ruling I1: the window ends at the GAME's end — never at the room's, which
+  // in every production ending below comes down minutes later.
+  it("players gone at the GAME's end, the room torn down minutes later: NO flag — every read-ended production ending (counted)", { timeout: 120_000 }, async () => {
+    let checked = 0;
+    for (const ending of ["tiebreak", "aborted", "finished", "held_then_ended"] as const) {
+      const m = await playedMatch({ ending });
+      const x = session(m, m.startedAt - 120_000, m.overAt + 30_000);
+      for (const side of ["home", "away"] as const) connect(m, x, side, { joined: m.startedAt - 90_000, left: m.overAt + 30_000 });
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r), ending).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags], ending).toEqual([1, 0]);
+      expect((await flagsOf(m.b.fixtureId)).filter((f) => f.kind === "camera_lost"), ending).toEqual([]);
+      expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, `${ending}: both cameras read`).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("…and the camera off in the game's LAST minute is still the match's: flagged up to the game's end, not beyond", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.overAt + 30_000);
+    const left = m.overAt - 60_000;
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.overAt + 30_000 });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(r.cameraFlags).toBe(1);
+    const [f] = await flagsOf(m.b.fixtureId);
+    expect(f!.person_id).toBe(m.b.home.personId);
+    // From home's leave (its report's left_at) to the GAME's end (T11's draw read at T+16).
+    expect(f!.note).toContain(`camera off 60 s of ${Math.round((m.overAt - m.startedAt) / 1000)} s`);
+    expect(f!.note).toContain(`${iso(left)} to ${iso(m.overAt)}`);
+  });
+
+  it("settled by hand while held, NO read ever saw the end: the clock bounds it — the last move plus the side to move's time", async () => {
+    const m = await playedMatch({ ending: "settled_while_held" });
+    // The rulebook's bound: after White's g1f3 at T+8 it is Black's move, and
+    // Black's clock has never run (its one move was ply 1, before the clocks
+    // start — scalachess Clock.step), so it holds the division's whole base.
+    const clockEnd = m.b.at(8).getTime() + SEED_CLOCK.base * 1000;
+    expect(m.endedAt - clockEnd, "premise: the room outlived the clock's bound").toBeGreaterThan(60_000);
+    const x = session(m, m.startedAt - 120_000, clockEnd + 30_000);
+    const left = clockEnd - 60_000;
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: clockEnd + 30_000 });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(r.cameraFlags, "home left a minute early; away stayed to the bound").toBe(1);
+    const [f] = await flagsOf(m.b.fixtureId);
+    expect(f!.person_id).toBe(m.b.home.personId);
+    expect(f!.note).toContain(`camera off 60 s of ${Math.round((clockEnd - m.startedAt) / 1000)} s`);
+    expect(f!.note).toContain(`${iso(left)} to ${iso(clockEnd)}`);
+  });
+
+  it("NO end on file at all — an impossible row (guard reached by SQL): nothing read; a day on, settled with no flag, and SAID so", async () => {
+    const m = await playedMatch({ ending: "settled_while_held" });
+    bothOnThroughout(m);
+    // Stands for a row no producer writes: a started game with no last move.
+    await sql`update fixture_external_play set last_move_at = null where fixture_id = ${m.b.fixtureId}`;
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, cameraFailures(r)]).toEqual([0, []]);
+    expect(rtkReads(), "no window, no read").toEqual([]);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    const late = await pass(m, new Date(m.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + 1));
+    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: m.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
+    expect(late.cameraSettled).toBe(1);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
   it("camera on throughout: settled, NO flag — and every report was read (counted)", async () => {
     const m = await playedMatch();
     bothOnThroughout(m);
@@ -2213,7 +2383,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const to = Math.min(...samples.filter((t) => t >= gap[1]));
     const flags = await flagsOf(m.b.fixtureId);
     expect(flags.map((f) => [f.kind, f.person_id, f.closed_at])).toEqual([["camera_lost", m.b.home.personId, null]]);
-    expect(flags[0]!.note).toContain(`camera off ${Math.round((to - from) / 1000)} s of ${Math.round((m.endedAt - m.startedAt) / 1000)} s`);
+    expect(flags[0]!.note).toContain(`camera off ${Math.round((to - from) / 1000)} s of ${Math.round((m.overAt - m.startedAt) / 1000)} s`);
     expect(flags[0]!.note).toContain(`${iso(from)} to ${iso(to)}`);
     expect(flags[0]!.note).toContain("camera required");
     // D10: the organiser decides — nothing about the match moved.
@@ -2394,11 +2564,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   });
 
   it("an organiser's video override (D11): nothing read, nothing stored", async () => {
-    const m = await playedMatch();
+    const m = await playedMatch({ override: true });
     const x = session(m, m.startedAt - 120_000, m.endedAt);
     connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
-    await organiserOverrideVideo({ fixtureId: m.b.fixtureId, actorUserId: m.b.ownerUserId, note: "RealtimeKit down" });
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(rtkReads()).toEqual([]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
@@ -2430,7 +2599,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     const flags = await flagsOf(m.b.fixtureId);
     expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
-    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.endedAt)}`);
+    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.overAt)}`);
     expect(flags[0]!.note).toContain("from 0 camera connections");
   });
 
@@ -2445,7 +2614,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     const flags = await flagsOf(m.b.fixtureId);
     expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
-    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.endedAt)}`);
+    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.overAt)}`);
   });
 
   it("a session that ENDED before the first move is not the match: never read", async () => {

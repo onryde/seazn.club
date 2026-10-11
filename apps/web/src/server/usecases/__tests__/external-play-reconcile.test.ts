@@ -1019,6 +1019,96 @@ describe.runIf(HAS_DB)("reconcile — a game end is written once and closes the 
 });
 
 // ---------------------------------------------------------------------------
+// T13 fix round 1, ruling I1: the GAME's end is on file whatever T12 then
+// writes. `finished_at` is stamped only when the bridge closes, so a held
+// ending (a tie-break owed, an abort, a mid-game hold whose game ended) would
+// otherwise have no end at all, and the sweep's camera evidence would run on
+// to the room's end.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("reconcile — the game's end is recorded at the FIRST terminal read, held or not (T13 I1)", () => {
+  const overOf = async (fixtureId: string) =>
+    (await sql<{ game_over_at: Date | null }[]>`
+      select game_over_at from fixture_external_play where fixture_id = ${fixtureId}`)[0]!.game_over_at;
+
+  type Ending = { label: string; make: () => Promise<Game>; read: (g: Game) => void; trigger: "game_end" | "sweep"; wrote: object };
+  const ENDINGS: Ending[] = [
+    { label: "a result that FINISHES the bridge", make: () => liveGame(), read: (g) => serveStream(gameFull(g, EXPIRED_2)),
+      trigger: "game_end", wrote: { result: { wrote: "decided" }, finished: true } },
+    { label: "a bracket draw HELD tiebreak_owed", make: () => liveGame({ kind: "knockout" }),
+      read: (g) => serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), status: "draw" })),
+      trigger: "game_end", wrote: { result: { wrote: "needs_organiser", reason: "tiebreak_owed" }, finished: false } },
+    { label: "an abort after White's first move, HELD aborted", make: () => liveGame(),
+      read: (g) => serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), status: "aborted" })),
+      trigger: "game_end", wrote: { result: { wrote: "aborted" }, finished: false } },
+    { label: "a game HELD mid-game (token_revoked) that then ended", make: async () => {
+        const g = await liveGame();
+        await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+        return g;
+      }, read: (g) => serveStream(gameFull(g, EXPIRED_2)),
+      trigger: "sweep", wrote: { result: { wrote: "decided" }, finished: false } },
+    { label: "a DIVERGED line that has ended", make: async () => {
+        const g = await readyGame();
+        await play(g, LINE.slice(0, 3));
+        return g;
+      }, read: (g) => serveStream(gameFull(g, EXPIRED_2, { moves: LINE.slice(0, 2) })),
+      trigger: "game_end", wrote: { result: { wrote: "decided" }, finished: true } },
+    { label: "a terminal EXPORT (no stream opens)", make: () => liveGame(), read: (g) => {
+        lichess.onStream = () => status(503);
+        lichess.onExport = () => ok(exported(g, "export-expired.json"));
+      }, trigger: "sweep", wrote: { source: "export", result: { wrote: "decided" }, finished: true } },
+  ];
+
+  it("every terminal ending stamps game_over_at with the READ's time — the held ones too (counted)", async () => {
+    let checked = 0;
+    for (const e of ENDINGS) {
+      const g = await e.make();
+      expect(await overOf(g.fixtureId), `${e.label}: premise, no end before the read`).toBeNull();
+      lichess.reset();
+      e.read(g);
+      expect(await reconcile(g.fixtureId, e.trigger, observed(READ).deps), e.label).toMatchObject(e.wrote);
+      expect(await overOf(g.fixtureId), e.label).toEqual(READ);
+      checked++;
+    }
+    expect(checked).toBe(ENDINGS.length);
+  });
+
+  it("a LATER terminal read never moves it: the first read that saw the game over is its end", async () => {
+    // `unknownFinish` (a real Lichess status) goes to the organiser as
+    // provider_error — a hold reconcile still reads, so a second terminal
+    // read of the same game is reachable.
+    const g = await liveGame();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), status: "unknownFinish" }));
+    await reconcile(g.fixtureId, "game_end", observed(READ).deps);
+    expect(await overOf(g.fixtureId), "premise").toEqual(READ);
+    const held = await rowOf(g.fixtureId);
+    expect([held.status, held.needs_reason], "premise: held, and still read").toEqual(["needs_organiser", "provider_error"]);
+    lichess.reset();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), status: "unknownFinish" }));
+    await reconcile(g.fixtureId, "sweep", observed(later(3_600_000)).deps);
+    expect(lichess.calls.length, "premise: the second read happened").toBeGreaterThan(0);
+    expect(await overOf(g.fixtureId)).toEqual(READ);
+  });
+
+  it("a read of a game still RUNNING records no end — on a ready, a live and a held row (counted)", async () => {
+    let checked = 0;
+    for (const make of [() => readyGame(), () => liveGame(), async () => {
+      const g = await liveGame();
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+      return g;
+    }]) {
+      const g = await make();
+      lichess.reset();
+      serveStream(gameFull(g, MID));
+      await reconcile(g.fixtureId, "sweep", observed(READ).deps);
+      expect(lichess.calls.length, "premise: read").toBeGreaterThan(0);
+      expect(await overOf(g.fixtureId)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The organiser decided first: close the bridge, read nothing, write nothing.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("reconcile — a fixture no longer playable closes its bridge with no read and no result", () => {
