@@ -256,10 +256,15 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
  *  takeover no T9 write can land (each is conditional on its own claim) and
  *  no new claim can be taken (T9 refuses past the deadline before claiming). */
 async function holdUnknownCreate(pass: Pass, c: NoShowCandidate, deadline: Date): Promise<void> {
+  // The CAS is the claim alone, T9's own discipline: every T9 write (record,
+  // hold, release) is conditional on its claim and clears it, so a claim we
+  // saw still standing means nothing of T9's landed — and a claim we saw
+  // null means nothing of T9's can (it holds no claim, and takes none past
+  // the deadline). A status or marker condition here would be one no write
+  // can reach without moving the claim first.
   const taken = await sql`
     update fixture_external_play set mint_claimed_at = null, updated_at = now()
-     where fixture_id = ${c.fixtureId} and status = 'pending' and challenge_id is null
-       and date_trunc('milliseconds', create_sent_at) = ${c.createSentAt}
+     where fixture_id = ${c.fixtureId}
        and date_trunc('milliseconds', mint_claimed_at) is not distinct from ${c.mintClaimedAt}
     returning fixture_id`;
   if (taken.length === 0) return;
