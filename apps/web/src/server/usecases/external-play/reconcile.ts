@@ -111,7 +111,7 @@ const IS_TERMINAL: Record<LichessStatus | "unrecognised", boolean> = {
  *  held row is the organiser's: its game is over (aborted, fair_play, a
  *  tie-break owed) or never ran (no-shows, not_started, a blocked double
  *  walkover, an unknown create), so reconcile neither reads nor writes it. */
-const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error"] as const satisfies readonly HoldReason[];
+export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error"] as const satisfies readonly HoldReason[];
 
 /** lila registers no draw offer before ply 2 (Game.scala `playerCanOfferDraw`,
  *  lila 3747530a1 — source, as T10 cites it); V436's CHECKs refuse one. */
