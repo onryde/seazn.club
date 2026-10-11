@@ -887,5 +887,20 @@
         "name": "a final won by forfeit, every reason: the final's tag beside the line"
       }
     ]
+  },
+  {
+    "id": "cg-client-schedule-imports-bracket",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
+    "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"./bracket\";\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
+        ],
+        "name": "every client root's value-import graph stays clear of the barrel"
+      }
+    ]
   }
 ]

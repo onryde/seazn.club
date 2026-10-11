@@ -15,7 +15,7 @@ import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
 import type { ForfeitCopy, ForfeitWords } from "@/lib/forfeit-tag";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
-import { bracketForfeitWords } from "./bracket";
+import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
 // locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
