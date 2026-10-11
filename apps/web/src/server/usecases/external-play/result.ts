@@ -126,12 +126,16 @@ function dispositionOf(s: GameSnapshot): Disposition {
     // §3.6 draws; addendum 1: insufficientMaterialClaim ("the side that
     // cannot lose claims a draw", Status.scala) is a draw. None of the three
     // carries a winner at Lichess, so one that does is held.
+    // `draw` records NO method (controller ruling, fix round 1): spec §3.6
+    // names none, and Lichess's `draw` covers agreement, a threefold claim,
+    // scalachess autoDraw (insufficient material, fifty moves, fivefold) and
+    // a flag with a draw offer pending — no one method is true of them all.
     case "draw":
     case "stalemate":
     case "insufficientMaterialClaim": {
       if (s.winner) return organiser(s, "a drawn status with a winner");
-      const method: Record<typeof s.status, BoardgameMethod> = {
-        draw: "agreement",
+      const method: Record<typeof s.status, BoardgameMethod | undefined> = {
+        draw: undefined,
         stalemate: "stalemate",
         insufficientMaterialClaim: "insufficient",
       };
