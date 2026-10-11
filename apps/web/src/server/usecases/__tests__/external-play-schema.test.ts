@@ -190,14 +190,17 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     // durable "a create was sent" marker (fix round 1, I2). V436 adds T10's
     // move ledger: the seven columns of the plan's §3.4 contract plus the two
     // per-side offer plies lila's 20-ply re-offer rule needs, and (T11 fix
-    // round 1, ruling M7) the seat a token_revoked hold froze, and (T13,
-    // carry M4) the sweep's count of consecutive reads that told it nothing.
+    // round 1, ruling M7) the seat a token_revoked hold froze, (T13,
+    // carry M4) the sweep's count of consecutive reads that told it nothing,
+    // and (T13 fix round 1) the game's first-read end (I1) and the move T10
+    // is submitting (I4).
     expect(await columns("fixture_external_play")).toEqual([
       "black_draw_offer_ply", "black_emailed_at", "black_lichess_id", "black_ms",
       "challenge_id", "clock_increment_s", "create_sent_at", "created_at",
-      "draw_offer_by", "expires_at", "finished_at", "fixture_id", "last_error",
+      "draw_offer_by", "expires_at", "finished_at", "fixture_id", "game_over_at", "last_error",
       "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
-      "needs_reason", "org_id", "provider", "revoked_seat", "round_open_id",
+      "needs_reason", "org_id", "pending_move_at", "pending_move_ply", "pending_move_uci",
+      "provider", "revoked_seat", "round_open_id",
       "scheduled_at_basis", "started_at", "status", "sweep_no_truth_reads", "updated_at",
       "video_override_at", "white_draw_offer_ply", "white_emailed_at", "white_lichess_id",
       "white_ms", "white_side",
@@ -651,5 +654,94 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   it("V436 (T13 M4): a NEGATIVE count is refused by its own CHECK; NULL by NOT NULL", async () => {
     expect(await tryNoTruth(-1)).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: NO_TRUTH_CHECK });
     expect(await tryNoTruth(null as never)).toMatchObject({ accepted: false, code: "23502" });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V436, T13 fix round 1. I1: when a read first found the GAME over, held or
+  // not (the camera evidence ends there, never at the room's end). I4: the
+  // move T10 is submitting, recorded BEFORE Lichess hears it, so a read
+  // landing between Lichess's 200 and the append adopts it without a flag.
+  const GAME_OVER_CHECK = "fixture_external_play_game_over_check";
+  const PENDING_MOVE_CHECK = "fixture_external_play_pending_move_check";
+  type BridgeOutcome =
+    | { accepted: true; row: Record<string, unknown> }
+    | { accepted: false; code: string | undefined; constraint: string | undefined };
+  /** A bridge row with `cols` (a game on file unless `challenge_id: null`),
+   *  the named columns read back, rolled back. */
+  async function tryBridge(cols: Record<string, unknown>, read: readonly string[]): Promise<BridgeOutcome> {
+    const rollback = new Error("rollback");
+    let row: Record<string, unknown> | undefined;
+    try {
+      await sql.begin(async (tx) => {
+        const values = {
+          fixture_id: fixtureId, org_id: orgId, status: "live", scheduled_at_basis: new Date(),
+          challenge_id: `ch-${randomUUID().slice(0, 12)}`, ...cols,
+        };
+        await tx`insert into fixture_external_play ${tx(values as never)}`;
+        [row] = await tx<Record<string, unknown>[]>`
+          select ${tx(read as string[])} from fixture_external_play where fixture_id = ${fixtureId}`;
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && row) return { accepted: true, row };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+  const AT = new Date("2026-10-11T10:00:00.000Z");
+
+  it("V436 (T13 I1): a new row has seen no game end; a game on file records one", async () => {
+    expect(await tryBridge({}, ["game_over_at"])).toEqual({ accepted: true, row: { game_over_at: null } });
+    expect(await tryBridge({ game_over_at: AT }, ["game_over_at"])).toEqual({ accepted: true, row: { game_over_at: AT } });
+  });
+
+  it("V436 (T13 I1): a game end with NO game on file is refused by its own CHECK", async () => {
+    expect(await tryBridge({ status: "pending", challenge_id: null, game_over_at: AT }, ["game_over_at"]))
+      .toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: GAME_OVER_CHECK });
+  });
+
+  const PENDING = ["pending_move_ply", "pending_move_uci", "pending_move_at"] as const;
+  it("V436 (T13 I4): no submission by default; a whole one — ply, canonical UCI, time — is accepted (counted)", async () => {
+    expect(await tryBridge({}, PENDING)).toEqual({
+      accepted: true, row: { pending_move_ply: null, pending_move_uci: null, pending_move_at: null },
+    });
+    let checked = 0;
+    for (const [ply, uci] of [[0, "e2e4"], [1, "e7e5"], [57, "e7e8q"], [80, "a2a1n"]] as const) {
+      expect(await tryBridge({ pending_move_ply: ply, pending_move_uci: uci, pending_move_at: AT }, PENDING), uci).toEqual({
+        accepted: true, row: { pending_move_ply: ply, pending_move_uci: uci, pending_move_at: AT },
+      });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("V436 (T13 I4): HALF a submission is refused — each of the three missing in turn (counted)", async () => {
+    const whole = { pending_move_ply: 4, pending_move_uci: "g1f3", pending_move_at: AT };
+    let checked = 0;
+    for (const missing of PENDING) {
+      expect(await tryBridge({ ...whole, [missing]: null }, PENDING), missing)
+        .toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: PENDING_MOVE_CHECK });
+      checked++;
+    }
+    expect(checked).toBe(PENDING.length);
+  });
+
+  it("V436 (T13 I4): a negative ply, a move that is not UCI, or a submission with no game on file is refused (counted)", async () => {
+    const refused = { accepted: false, code: CHECK_VIOLATION, constraint: PENDING_MOVE_CHECK };
+    let checked = 0;
+    for (const cols of [
+      { pending_move_ply: -1, pending_move_uci: "e2e4" },
+      { pending_move_ply: 0, pending_move_uci: "e2e9" },
+      { pending_move_ply: 0, pending_move_uci: "E2E4" },
+      { pending_move_ply: 0, pending_move_uci: "e2e4k" },
+      { pending_move_ply: 0, pending_move_uci: "e2e4 " },
+      { pending_move_ply: 0, pending_move_uci: "" },
+      { pending_move_ply: 0, pending_move_uci: "e2e4", status: "pending", challenge_id: null },
+    ]) {
+      expect(await tryBridge({ pending_move_at: AT, ...cols }, PENDING), JSON.stringify(cols)).toEqual(refused);
+      checked++;
+    }
+    expect(checked).toBe(7);
   });
 });
