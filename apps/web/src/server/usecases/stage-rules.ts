@@ -88,8 +88,10 @@ export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): P
  * The reachable set is DERIVED, never a table typed in here: a side wins on
  * `⌈bestOf/2⌉` sets (the kernel's `majority`, and the schema refuses an even
  * `bestOf`), so the loser holds 0..⌈bestOf/2⌉−1 and no other final score
- * exists. A forfeit is the one other payer and it uses `cleanSweepPair`, which
- * falls back rather than looking a score up.
+ * exists. A forfeit pays the same lookup at its CREDITED score (W2b X-WO-1):
+ * the winner is credited the majority and the offender keeps the sets it won,
+ * which is inside that same set, so this check prices every forfeit too. Only
+ * a bye still pays `cleanSweepPair`.
  *
  * Returns `[]` — no opinion — for a config with no `pointsMap` at all. That is
  * what excludes TENNIS, which pays a flat `points {win, loss}`: derived from
