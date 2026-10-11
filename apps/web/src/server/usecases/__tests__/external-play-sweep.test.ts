@@ -1391,6 +1391,52 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
     expect(later.reconciled, "…nor handed to reconcile at all").toBe(0);
   });
 
+  it("C3: a board T11 held MID-game is read on the SAME back-off as empty reads — never every tick — even while Lichess answers; its result still settles it", async () => {
+    // Controller ruling C3 (2026-10-11): a held row is not re-read every tick.
+    // The rulebook: one tick after the last read, doubling per read that left
+    // the hold standing, capped at an hour; half a tick of cron jitter.
+    const reReadAfterMin = (n: number) => Math.min(5 * 2 ** Math.max(0, n - 1), 60);
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    // A line that does not extend ours: T11 holds provider_error, mid-game
+    // (long before any expected end), and Lichess goes on answering it.
+    serveStream(gameFull(b, gameId, MID, { moves: ["d2d4"] }));
+    await sweep(b, { now: b.at(8) });
+    expect(await bridge(b), "premise: T11 held it mid-game").toMatchObject({ status: "needs_organiser", needs_reason: "provider_error" });
+    expect(b.at(8).getTime(), "premise: before the expected end").toBeLessThan(endOf(b.at(6)).getTime());
+    let lastRead = 8;
+    let n = 0;
+    const got: number[] = [];
+    const want: number[] = [];
+    let checked = 0;
+    for (let minute = 13; minute <= 8 + 120; minute += 5) {
+      const due = minute - lastRead >= reReadAfterMin(n) - 2.5;
+      want.push(due ? 1 : 0);
+      if (due) {
+        lastRead = minute;
+        n++;
+      }
+      const r = await sweep(b, { now: b.at(minute) });
+      got.push(r.reconciled);
+      expect(r.heldForOrganiser, `minute ${minute}: never held again`).toBe(0);
+      checked++;
+    }
+    expect(checked, "ticks checked").toBe(24);
+    expect(got, "reads per tick: backed off like empty reads").toEqual(want);
+    expect(want.filter((x) => x === 0).length, "the schedule skips ticks (anti-vacuity)").toBeGreaterThan(10);
+    expect(await bridge(b)).toMatchObject({ status: "needs_organiser", needs_reason: "provider_error", sweep_no_truth_reads: n });
+    // The game's end still settles it, at the next due read.
+    serveStream(gameFull(b, gameId, ENDED));
+    let t = b.at(8 + 120);
+    let settled = false;
+    for (let i = 0; i < 30 && !settled; i++) {
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+      await sweep(b, { now: t });
+      settled = (await fixtureRow(b.fixtureId)).outcome !== null;
+    }
+    expect(settled, "Lichess's result was written").toBe(true);
+  });
+
   it("two passes at the SAME instant read a board ONCE (staged on the bridge row's lock)", async () => {
     // Both passes read the candidates before either claims; the claim is a
     // compare-and-set on last_polled_at, so the second finds it moved.
@@ -1484,7 +1530,8 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 // pass did (reads, retries, forfeits, holds, failures) and the row it left.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves, Lichess's answers, withdrawals and passes in any order", () => {
-  type Truth = "silent" | "running" | "ended" | "aborted";
+  /** `diverged`: a line that does not extend ours — T11 holds it mid-game. */
+  type Truth = "silent" | "running" | "ended" | "aborted" | "diverged";
   type CreateOutcome = "ok" | "throttled" | "acceptFails";
   type Act =
     | { kind: "checkIn"; side: Side }
@@ -1498,7 +1545,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     came: Record<Side, boolean>;
     bridge: "pending" | "ready" | "live" | "finished" | "held";
     reason: string | null;
-    heldBy: "create" | "sweep" | null; // who placed a provider_error hold
+    heldBy: "create" | "sweep" | "reconcile" | null; // who placed a provider_error hold
     throttledUntil: number | null;
     ledger: string[];
     startedAt: number | null;
@@ -1526,7 +1573,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       weight: 2,
     },
     { arbitrary: fc.constant<Act>({ kind: "move" }), weight: 1 },
-    { arbitrary: fc.constantFrom<Truth>("silent", "running", "ended", "aborted").map((truth): Act => ({ kind: "truth", truth })), weight: 2 },
+    { arbitrary: fc.constantFrom<Truth>("silent", "running", "ended", "aborted", "diverged").map((truth): Act => ({ kind: "truth", truth })), weight: 2 },
     { arbitrary: fc.constant<Act>({ kind: "withdraw" }), weight: 1 },
     { arbitrary: fc.constantFrom(0.5, 1, 3, 5, 10, 25).map((dt): Act => ({ kind: "sweep", dt })), weight: 4 },
   );
@@ -1557,6 +1604,10 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     ended_finishes: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "truth", truth: "ended" }, S(3)],
     withdrawn_closes_unread: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "withdraw" }, S(3)],
     truth_resets: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), { kind: "truth", truth: "running" }, S(5)],
+    // C3: a held row's read counts even when Lichess answers…
+    held_truth_counts: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5), { kind: "truth", truth: "running" }, S(25)],
+    // …and T11's own mid-game hold backs off the same way.
+    t11_hold_backs_off: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "truth", truth: "diverged" }, S(3), S(5), S(5), S(5)],
   } satisfies Record<string, readonly Act[]>;
   type PathName = keyof typeof PATHS;
   const PATH_NAMES = Object.keys(PATHS) as PathName[];
@@ -1566,7 +1617,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     steps: 0, skipped_precondition: 0, passes: 0, reads: 0, backoff_skips: 0, empty_counted: 0, truth_reset: 0,
     forfeit_one: 0, forfeit_both: 0, both_came_no_forfeit: 0, quiet_before_deadline: 0,
     retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
-    aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
+    aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
   };
 
   type PassFacts = { reconciled: number; mintRetries: number; forfeitBy: string | null; held: number; noShows: number; readLichess: boolean };
@@ -1592,20 +1643,30 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         if (!m.playable) {
           m.bridge = "finished"; // closed with no read, nothing written
           counters.closed_by_withdrawal++;
+        } else if (m.bridge === "held") {
+          // Ruling C3: every read of a held row counts toward its back-off,
+          // whatever Lichess says and whatever the expected end; never a new
+          // hold. The game's end is still written.
+          p.readLichess = true;
+          m.emptyReads++;
+          counters.held_read_counted++;
+          if (m.emptyReads > N) counters.held_read_again++;
+          if (m.truth === "ended") {
+            m.playable = false;
+            counters.finished_by_truth++;
+          }
         } else if (m.truth === "silent") {
           p.readLichess = true;
           if (m.t > end) {
             m.emptyReads++;
             counters.empty_counted++;
-            if (m.emptyReads >= N && (m.bridge === "ready" || m.bridge === "live")) {
+            if (m.emptyReads >= N) {
               if (m.startedAt === null) counters.m4_held_ready++;
               m.bridge = "held";
               m.reason = "provider_error";
               m.heldBy = "sweep";
               p.held = 1;
               counters.m4_held++;
-            } else if (m.bridge === "held") {
-              counters.held_read_again++; // still counted, never held twice
             }
           }
         } else {
@@ -1621,6 +1682,13 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
             m.reason = "aborted";
             p.held = 1;
             counters.aborted_held++;
+          } else if (m.truth === "diverged") {
+            // T11 (C2a): a line that does not extend ours is held, never rewound.
+            m.bridge = "held";
+            m.reason = "provider_error";
+            m.heldBy = "reconcile";
+            p.held = 1;
+            counters.t11_held++;
           }
         }
       }
@@ -1682,6 +1750,8 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         const s0 = m.startedAt ?? Number.NaN;
         return last?.reconciled === 1 && m.emptyReads === 0 && m.t > s0 + (2 * SEED_CLOCK.base) / 60 && m.t < s0 + SPAN;
       }
+      case "held_truth_counts": return last?.reconciled === 1 && last.readLichess && m.bridge === "held" && m.emptyReads === N + 1;
+      case "t11_hold_backs_off": return last?.reconciled === 0 && m.bridge === "held" && m.heldBy === "reconcile" && m.emptyReads === 2;
       case "at_end_not_past": return last?.reconciled === 1 && m.emptyReads === 0 && m.t === (m.startedAt ?? Number.NaN) + SPAN;
       case "ended_finishes": return last?.reconciled === 1 && m.bridge === "finished" && !m.playable;
       case "withdrawn_closes_unread": return last?.reconciled === 1 && !last.readLichess && m.bridge === "finished";
@@ -1722,6 +1792,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
           if (m.truth === "silent") return { status: 503, body: "Lichess said nothing" };
           if (m.truth === "running") return { status: 200, body: gameFull(b, c.gameId, MID, { moves: m.ledger, status: "started" }) };
           if (m.truth === "aborted") return { status: 200, body: gameFull(b, c.gameId, MID, { moves: [], status: "aborted" }) };
+          if (m.truth === "diverged") return { status: 200, body: gameFull(b, c.gameId, MID, { moves: ["d2d4"], status: "started" }) };
           return { status: 200, body: gameFull(b, c.gameId, ENDED) };
         };
 
@@ -1773,7 +1844,14 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
           } else if (step.kind === "truth") {
             const gameOnFile = m.bridge === "ready" || m.bridge === "live" || m.bridge === "held";
             const over = m.truth === "ended" || m.truth === "aborted";
-            if (!gameOnFile || over || (step.truth === "aborted" && m.ledger.length > 0)) {
+            // An abort at ply 0 is a READY board's (a held board's abort is
+            // not modelled); a diverging line needs a ledger to diverge from.
+            if (
+              !gameOnFile ||
+              over ||
+              (step.truth === "aborted" && (m.ledger.length > 0 || m.bridge === "held")) ||
+              (step.truth === "diverged" && m.ledger.length === 0)
+            ) {
               counters.skipped_precondition++;
               continue;
             }
