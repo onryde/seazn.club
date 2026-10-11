@@ -451,13 +451,11 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
 // ── The engine's declared domain: names and keys only, never a value to expect ──────────────────────────────────────
 
 /** Where the rulebook's value (the data) and the engine's declared value differ today, each with its reason. A
- *  difference not listed here fails; a listed one that is no longer a difference fails too. */
-const EXPECTED_DIFFERENCES: Readonly<Record<string, string>> = {
-  "hockey · (schema default) · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
-  "hockey · fih-outdoor · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
-  "hockey · fih-shootout · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
-  "hockey · youth · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
-};
+ *  difference not listed here fails; a listed one that is no longer a difference fails too. EMPTY since the W2b
+ *  cross-check (Task 15 Step 3): the four hockey awardScore entries (the schema default, fih-outdoor, fih-shootout,
+ *  youth) retired once loop D moved hockey's declared walkover 3→5 (HK-WO-1). The list stays: a new difference must be
+ *  named here, with its reason, or the two tests below red. */
+const EXPECTED_DIFFERENCES: Readonly<Record<string, string>> = {};
 
 /** The data writes only the keys a credit row reads, so an object value is compared on the keys it names. */
 function sameDeclared(engine: unknown, data: unknown): boolean {

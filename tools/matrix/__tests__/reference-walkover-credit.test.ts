@@ -1,0 +1,477 @@
+// W2b Task 15 Step 3 (plan PF-12): the reference ↔ engine cross-check for the walkover-credit family. It lives here,
+// beside W2a's reference-bracket.test.ts, because it depends on both packages: @seazn/reference may only `import type`
+// from the engine (R7), and the engine never imports the reference.
+//
+// Every case `enumerateCreditCases()` holds is folded through the REAL sport module — the case's stream (the play
+// before the forfeit, rebuilt event by event from the case's scoresheet, then `core.forfeit`) through
+// `foldMatchWithStoppage` (strict from seq 1, the product's fold), its outcome through the module's own
+// `standingsDelta`, its credit through `forfeitCredit`, its players'-stats reading through the stats fold's declared
+// rule — and the engine's answer is compared field by field with `walkoverCredit`'s:
+//   * winner / loser — every metric key the reference names (a key it leaves out is not judged: its own contract);
+//   * excluded — every key the reference excludes is in the engine's `forfeitCredit(...).excluded` (an exclusion is
+//     realised as a 0 credit, so a key the engine ALSO excludes that the reference credits 0, or does not name, is the
+//     same table — and one the reference credits non-zero reds on the metric itself);
+//   * points — the cfg's own declared points table read for the reference's "win" / "zero" (`forfeitPoints`, the
+//     harness's one reader of the four shapes) against both deltas' points;
+//   * statsMatch — `PlayerStatsModel.unplayed`, or, where a model declares none, `forfeitStatsRole` (the rule the
+//     stats fold applies, stats.ts `PlayerStatsModel.unplayed`'s own contract).
+// A disagreement is never resolved by editing the reference to match the engine (the rule row decides): this file
+// fails and prints both answers, and the orchestrator routes the loser to its own loop.
+import { forfeitStatsRole } from "@seazn/engine/stats";
+import { resolveVoids, type AwardReason, type MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
+import { CarromBoardSummary } from "@seazn/engine/sports/carrom";
+import { declaredCfgs } from "@seazn/engine/testkit";
+import * as reference from "@seazn/reference";
+import { CreditRefused, WALKOVER_CREDIT_DATA, enumerateCreditCases, walkoverCredit, walkoverCreditFamily, type CreditAnswer, type CreditCase } from "@seazn/reference";
+import { describe, expect, it } from "vitest";
+import { envelopes, foldStream } from "../lib/fold.ts";
+import { forfeitPoints } from "../lib/scenarios/w2b-checks.ts";
+import { sportModule } from "../lib/sport-cfg.ts";
+import { TEST_BALLS, declaredAllOut } from "../lib/streams/cricket.ts";
+import { footballPhases } from "../lib/streams/football.ts";
+import { periodLabels } from "../lib/streams/period.ts";
+import { START, type StreamEvent } from "../lib/streams/types.ts";
+
+type Side = "home" | "away";
+type Offender = Side | "both";
+type Sheet = { readonly home: readonly number[]; readonly away: readonly number[] };
+type Cfg = Record<string, unknown>;
+
+// The two seats' entrant ids (the harness's empty-slot lineups, lib/fold.ts lineupsFor).
+const H = "H";
+const A = "A";
+const idOf = (s: Side): string => (s === "home" ? H : A);
+const other = (s: Side): Side => (s === "home" ? "away" : "home");
+const LEAGUE = { kind: "league" } as const;
+
+/** The stream could not be built from the case's scoresheet: refused by name, never guessed (a failing item). */
+class SheetUnbuildable extends Error {
+  constructor(sport: string, why: string) {
+    super(`cross-check: ${sport} scoresheet — ${why}`);
+    this.name = "SheetUnbuildable";
+  }
+}
+
+// ── The engine's cfg for a case ──────────────────────────────────────────────────────────────────────────────────
+
+/** The cfg a case is folded under, as `CreditCase.variant`'s recipe says: a DECLARED name is the engine's declared cfg
+ *  of that name, parsed and UNMODIFIED (`declaredCfgs`); a named extra is not declared — it is a stage's match rules,
+ *  so its data keys are laid over the sport's base cfg (the schema default, or its first variant where the schema has
+ *  none) and parsed by the sport's own configSchema. */
+function engineCfgOf(c: CreditCase): Cfg {
+  const m = sportModule(c.sport);
+  const declared = declaredCfgs(m as never) as { name: string; cfg: Cfg }[];
+  const hit = declared.find((d) => d.name === c.variant);
+  if (hit !== undefined) return hit.cfg;
+  if (c.variant === undefined) throw new Error(`cross-check: ${c.label ?? c.sport} names no cfg`);
+  const variants = m.variants as Record<string, Cfg>;
+  const base = m.configSchema.safeParse({}).success ? {} : (Object.values(variants)[0] ?? {});
+  return m.configSchema.parse({ ...base, ...c.cfg }) as Cfg;
+}
+
+// ── The scoresheet as the sport's own events ─────────────────────────────────────────────────────────────────────
+
+/** One unit's points, point by point: alternate (home first) up to the lower score, then the leader's run — so no
+ *  side reaches the unit's end (target, two clear, cap) before the unit's last point, a deuce unit included. */
+function pointByPoint(h: number, a: number, point: (s: Side) => StreamEvent[]): StreamEvent[] {
+  const out: StreamEvent[] = [];
+  for (let i = 0; i < Math.min(h, a); i++) out.push(...point("home"), ...point("away"));
+  const lead: Side = h > a ? "home" : "away";
+  for (let i = 0; i < Math.abs(h - a); i++) out.push(...point(lead));
+  return out;
+}
+
+/** Units past the last one that holds any score: a unit nobody has scored in yet has not begun (no event). */
+function begunUnits(sheet: Sheet): { h: number; a: number }[] {
+  const units = sheet.home.map((h, i) => ({ h, a: sheet.away[i] ?? 0 }));
+  while (units.length > 0 && units[units.length - 1]!.h === 0 && units[units.length - 1]!.a === 0) units.pop();
+  return units;
+}
+
+/** The play before the forfeit, in the sport's own vocabulary (the generators' event types, tools/matrix/lib/streams):
+ *  `pre` before core.start (a toss), `play` after it. The sheet's units are the reference's: goals per period, points
+ *  per set or game, games per tennis set, points per carrom game, runs per innings, a generic tally. */
+function sheetEvents(sport: string, cfg: Cfg, sheet: Sheet): { pre: StreamEvent[]; play: StreamEvent[] } {
+  if (sheet.home.length !== sheet.away.length) throw new SheetUnbuildable(sport, "the two sides' unit lists differ in length");
+  const units = begunUnits(sheet);
+  const play: StreamEvent[] = [];
+  switch (sport) {
+    case "football":
+    case "hockey":
+    case "icehockey": {
+      // The period boundary between two units is the sport's own marker (never full time: the last unit stays open, the
+      // match is live) — football's phase markers short of FT, the period kernel's advance to each next label.
+      const markers: StreamEvent[] = sport === "football"
+        ? (footballPhases(cfg.halves as number) ?? []).slice(0, -1).map((phase) => ({ type: "football.period", payload: { phase } }))
+        : periodLabels((cfg.periods as { count: number }).count).slice(1).map((to) => ({ type: `${sport}.period.advance`, payload: { to } }));
+      if (units.length - 1 > markers.length) throw new SheetUnbuildable(sport, `${units.length} units, but the cfg plays ${markers.length + 1} period(s)`);
+      units.forEach(({ h, a }, i) => {
+        for (let g = 0; g < h; g++) play.push({ type: `${sport}.goal`, payload: { by: H } });
+        for (let g = 0; g < a; g++) play.push({ type: `${sport}.goal`, payload: { by: A } });
+        if (i < units.length - 1) play.push(markers[i]!);
+      });
+      return { pre: [], play };
+    }
+    case "volleyball":
+    case "tabletennis":
+    case "badminton":
+      for (const { h, a } of units) play.push(...pointByPoint(h, a, (s) => [{ type: `${sport}.rally`, payload: { wonBy: idOf(s) } }]));
+      return { pre: [], play };
+    case "tennis":
+      // Each game four straight points to its winner (no deuce from 0); the games of a set alternate like a set's points.
+      for (const { h, a } of units) play.push(...pointByPoint(h, a, (s) => Array.from({ length: 4 }, () => ({ type: "tennis.point", payload: { by: idOf(s) } }))));
+      return { pre: [], play };
+    case "carrom": {
+      const coinMax = (CarromBoardSummary.shape.opponentCoinsLeft as unknown as { maxValue: number }).maxValue;
+      const ppc = cfg.pointsPerCoin as number;
+      const gameTo = cfg.gameTo as number;
+      const maxBoards = cfg.maxBoards as number;
+      const boards = (s: Side, points: number): StreamEvent[] => {
+        if (points % ppc !== 0) throw new SheetUnbuildable(sport, `${points} points is no whole number of coins at ${ppc} a coin`);
+        const out: StreamEvent[] = [];
+        for (let left = points / ppc; left > 0; left -= Math.min(coinMax, left)) out.push({ type: "carrom.board.summary", payload: { winner: idOf(s), opponentCoinsLeft: Math.min(coinMax, left), queenTo: null } });
+        return out;
+      };
+      for (const { h, a } of units) {
+        const finished = h >= gameTo || a >= gameTo;
+        // A finished game: the loser's boards first, then the winner's, the winner's last board the one that reaches the
+        // target. An unfinished one must leave a board to play, or it would end on the leader (decideGame).
+        const won: Side = h >= gameTo ? "home" : "away";
+        const game = finished ? [...boards(other(won), won === "home" ? a : h), ...boards(won, won === "home" ? h : a)] : [...boards("home", h), ...boards("away", a)];
+        if (finished ? game.length > maxBoards : game.length >= maxBoards) throw new SheetUnbuildable(sport, `${h}-${a} needs ${game.length} boards; the cfg plays ${maxBoards}`);
+        play.push(...game);
+      }
+      return { pre: [], play };
+    }
+    case "generic":
+      for (const { h, a } of units) {
+        if (h > 0) play.push({ type: "generic.score", payload: { by: H, points: h } });
+        if (a > 0) play.push({ type: "generic.score", payload: { by: A, points: a } });
+      }
+      return { pre: [], play };
+    case "cricket": {
+      // The units are each side's innings. The side that has batted batted first (home, unless the sheet shows away
+      // batting while home has nothing — then away won the toss and batted); an innings at 0 after every other has not
+      // begun. Every innings but the last is closed (all out, the quota used); the last is under way, a wicket and a
+      // ball in hand. The engine's all-out is its own declaration (the pad's wickets ceiling, streams/cricket.ts).
+      const first: Side = (sheet.home[0] ?? 0) === 0 && (sheet.away[0] ?? 0) > 0 ? "away" : "home";
+      const innings: number[] = [];
+      for (let i = 0; i < sheet.home.length; i++) for (const s of [first, other(first)]) innings.push((s === "home" ? sheet.home : sheet.away)[i]!);
+      while (innings.length > 0 && innings[innings.length - 1] === 0) innings.pop();
+      const allOut = declaredAllOut(sportModule("cricket").padSpec?.(cfg));
+      const quota = (cfg.ballsPerInnings as number | null) ?? TEST_BALLS;
+      innings.forEach((runs, i) => {
+        const open = i === innings.length - 1;
+        play.push({ type: "cricket.innings.summary", payload: open ? { runs, wickets: Math.min(3, allOut - 1), legalBalls: Math.min(60, quota - 1), partial: true } : { runs, wickets: allOut, legalBalls: quota } });
+      });
+      return { pre: first === "away" ? [{ type: "cricket.toss", payload: { wonBy: A, elected: "bat" } }] : [], play };
+    }
+    case "boardgame":
+      // A chess game is its result: nothing is played short of it (the reference's sheet is empty).
+      if (units.length > 0) throw new SheetUnbuildable(sport, "a chess game has no scoring event short of its result");
+      return { pre: [], play };
+    default:
+      throw new SheetUnbuildable(sport, "no event vocabulary for this sport");
+  }
+}
+
+// ── One comparison ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One forfeited match to fold: the reference's case, the seat at fault, the stream, and the stream before the
+ *  forfeit that decides it (which must fold undecided — else the forfeit is not what decided the match). */
+interface Item {
+  readonly label: string;
+  readonly c: CreditCase;
+  readonly offender: Offender;
+  readonly prefix: readonly StreamEvent[];
+  readonly events: readonly StreamEvent[];
+}
+
+interface EngineAnswer {
+  outcome: MatchOutcome | null;
+  winner: Readonly<Record<string, number>>;
+  loser: Readonly<Record<string, number>>;
+  excluded: readonly string[];
+  points: { winner: number; loser: number };
+  statsMatch: boolean;
+}
+
+interface Judgement {
+  readonly label: string;
+  readonly rows: readonly string[];
+  readonly mismatches: readonly string[];
+  readonly reference: CreditAnswer | string;
+  readonly engine: EngineAnswer | string;
+}
+
+const forfeit = (by: Offender, reason: CreditCase["reason"]): StreamEvent => ({
+  type: "core.forfeit",
+  payload: by === "both" ? { by: "both", reason: "walkover" } : { by: idOf(by), reason },
+});
+
+/** The rule rows a case is judged by: the sport's credit row (its walkover, or its retirement), the cross-sport rows,
+ *  and players' stats — every id one the family cites (asserted below). */
+const SPORT_ROW: Readonly<Record<string, string>> = { football: "FB", hockey: "HK", icehockey: "IH", volleyball: "VB", tabletennis: "TT", badminton: "BD", tennis: "TN", cricket: "CK", boardgame: "BG", carrom: "CA", generic: "GN" };
+function rowsOf(c: CreditCase): string[] {
+  if (c.reason === "double_walkover") return ["X-DW-1", "X-DW-4", "X-PS-1"];
+  const p = SPORT_ROW[c.sport] ?? "??";
+  const retirement = c.reason === "retired" || c.reason === "disqualified" || (c.reason === "withdrew" && c.played !== undefined);
+  // Cricket and chess have no separate retirement row: CK-WO-1 "incl. refusal to continue", BG-WO-1 "or post-start".
+  const credit = retirement && p !== "CK" && p !== "BG" ? `${p}-RT-1` : `${p}-WO-1`;
+  const cross = c.reason === "withdrew" ? ["X-WD-1"] : retirement ? ["X-RT-1"] : ["X-WO-1"];
+  return [credit, ...cross, c.reason === "retired" || c.reason === "disqualified" ? "X-PS-2" : "X-PS-1"];
+}
+
+function engineAnswer(item: Item, cfg: Cfg, mismatches: string[]): EngineAnswer | string {
+  const m = sportModule(item.c.sport);
+  const before = foldStream(m, cfg, H, A, item.prefix);
+  if (before.outcome !== null) mismatches.push(`the play before the forfeit already decided the match: ${JSON.stringify(before.outcome)}`);
+  const f = foldStream(m, cfg, H, A, item.events);
+  const o = f.outcome;
+  const want = item.offender === "both"
+    ? { kind: "double_walkover" }
+    : { kind: "award", winner: idOf(other(item.offender)), loser: idOf(item.offender), reason: item.c.reason };
+  if (JSON.stringify(o) !== JSON.stringify(want)) mismatches.push(`outcome: the forfeit should decide it as ${JSON.stringify(want)}, the engine folds ${JSON.stringify(o)}`);
+  if (o === null || (o.kind !== "award" && o.kind !== "double_walkover")) return `the engine's fold decides no forfeit: ${JSON.stringify(o)}`;
+  const [dh, da] = m.standingsDelta(o, cfg, LEAGUE, f.state) as [StandingsDelta, StandingsDelta];
+  const winnerSide: Side = item.offender === "both" ? "home" : other(item.offender);
+  const [w, l] = winnerSide === "home" ? [dh, da] : [da, dh];
+  // A double walkover is the module's walkover by "both" (D9), as its own standingsDelta asks it.
+  const reason: AwardReason = item.offender === "both" || item.c.reason === "double_walkover" ? "walkover" : item.c.reason;
+  const credit = m.forfeitCredit(cfg, f.state, reason, item.offender) as { excluded: readonly string[] };
+  const active = resolveVoids(envelopes("cross-check", item.events));
+  const role = forfeitStatsRole(active);
+  if (role === null) mismatches.push("players' stats: the engine reads no active forfeit in the ledger (forfeitStatsRole null)");
+  const unplayed = m.playerStats?.unplayed !== undefined ? m.playerStats.unplayed(active) : role === "unplayed";
+  return { outcome: o, winner: w.metrics, loser: l.metrics, excluded: [...credit.excluded], points: { winner: w.points, loser: l.points }, statsMatch: !unplayed };
+}
+
+function judge(item: Item): Judgement {
+  const mismatches: string[] = [];
+  const rows = rowsOf(item.c);
+  let ref: CreditAnswer;
+  try {
+    ref = walkoverCredit(item.c);
+  } catch (e) {
+    if (!(e instanceof CreditRefused)) throw e;
+    return { label: item.label, rows, mismatches: [`the reference refused it (${e.reason})`], reference: e.message, engine: "not folded" };
+  }
+  let cfg: Cfg;
+  let eng: EngineAnswer | string;
+  try {
+    cfg = engineCfgOf(item.c);
+    eng = engineAnswer(item, cfg, mismatches);
+  } catch (e) {
+    // An engine refusal (EngineError from a strict fold, a module guard) is the engine's answer: it disagrees.
+    return { label: item.label, rows, mismatches: [`the engine refused it: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`], reference: ref, engine: "refused" };
+  }
+  if (typeof eng === "string") return { label: item.label, rows, mismatches: [...mismatches, eng], reference: ref, engine: eng };
+  return { label: item.label, rows, mismatches: [...mismatches, ...compare(ref, eng, cfg)], reference: ref, engine: eng };
+}
+
+/** The field-by-field comparison of one reference answer with the engine's (the header's five fields). */
+function compare(ref: CreditAnswer, eng: EngineAnswer, cfg: Cfg): string[] {
+  const out: string[] = [];
+  for (const [side, want, got] of [["winner", ref.winner, eng.winner], ["loser", ref.loser, eng.loser]] as const) {
+    for (const [k, v] of Object.entries(want)) if (got[k] !== v) out.push(`${side}.${k}: reference ${v}, engine ${String(got[k])}`);
+  }
+  for (const k of ref.excluded) if (!eng.excluded.includes(k)) out.push(`excluded: the reference excludes "${k}", the engine's forfeitCredit does not`);
+  const pts = forfeitPoints(cfg, ref.points, ref.winner);
+  if ("unread" in pts) out.push(`points (${ref.points}): ${pts.unread}`);
+  else if (pts.winner !== eng.points.winner || pts.loser !== eng.points.loser) out.push(`points: reference "${ref.points}" = ${pts.winner}/${pts.loser} by the cfg's table, engine ${eng.points.winner}/${eng.points.loser}`);
+  if (ref.statsMatch !== eng.statsMatch) out.push(`statsMatch: reference ${ref.statsMatch}, engine ${eng.statsMatch}`);
+  return out;
+}
+
+interface Sweep { readonly compared: number; readonly agreed: number; readonly disagreements: readonly Judgement[]; readonly sports: ReadonlySet<string> }
+
+function sweep(items: readonly Item[]): Sweep {
+  const judged = items.map(judge);
+  const disagreements = judged.filter((j) => j.mismatches.length > 0);
+  return { compared: judged.length, agreed: judged.length - disagreements.length, disagreements, sports: new Set(items.map((i) => i.c.sport)) };
+}
+
+/** Zero compared is a FAILURE; every disagreement fails, printed with both answers and the rows that decide it. */
+function expectAgreement(s: Sweep, what: string): void {
+  expect(s.compared, `${what}: zero compared is a vacuous green`).toBeGreaterThan(0);
+  const report = s.disagreements.map((d) => [
+    `● ${d.label}  [rows ${d.rows.join(", ")}]`,
+    ...d.mismatches.map((x) => `    - ${x}`),
+    `    reference: ${typeof d.reference === "string" ? d.reference : JSON.stringify(d.reference)}`,
+    `    engine:    ${typeof d.engine === "string" ? d.engine : JSON.stringify(d.engine)}`,
+  ].join("\n")).join("\n");
+  expect(s.disagreements.length, `${what}: ${s.disagreements.length} of ${s.compared} disagree\n${report}`).toBe(0);
+  expect(s.agreed).toBe(s.compared);
+}
+
+// ── The items ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A case as the streams it is folded on. No scoresheet and one side at fault: BOTH seats (the reference's credit is
+ *  the same whichever side defaulted — the engine's seat mapping is what that checks). A double walkover: both. A
+ *  scoresheet: the side the case names. */
+function itemsOf(c: CreditCase, label = c.label ?? `${c.sport} · ${c.reason}`): Item[] {
+  if (c.reason === "double_walkover" && c.played === undefined) return [{ label, c, offender: "both", prefix: [], events: [forfeit("both", c.reason)] }];
+  if (c.played === undefined) {
+    return (["home", "away"] as const).map((seat) => ({ label: `${label} · ${seat} at fault`, c, offender: seat, prefix: [], events: [forfeit(seat, c.reason)] }));
+  }
+  const offender: Offender = c.reason === "double_walkover" ? "both" : (c.by ?? (() => { throw new Error(`cross-check: ${label} has a scoresheet and names no side at fault`); })());
+  const { pre, play } = sheetEvents(c.sport, engineCfgOf(c), c.played);
+  const prefix = [...pre, START, ...play];
+  return [{ label: offender === "both" ? label : `${label} · ${offender} at fault`, c, offender, prefix, events: [...prefix, forfeit(offender, c.reason)] }];
+}
+
+/** Items whose stream could not be built count as failing items, never as skips. */
+function itemsOrUnbuildable(cases: readonly CreditCase[]): { items: Item[]; unbuildable: string[] } {
+  const items: Item[] = [];
+  const unbuildable: string[] = [];
+  for (const c of cases) {
+    try { items.push(...itemsOf(c)); } catch (e) { if (e instanceof SheetUnbuildable) unbuildable.push(`${c.label}: ${e.message}`); else throw e; }
+  }
+  return { items, unbuildable };
+}
+
+const CASES = enumerateCreditCases();
+
+describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enumerated case folded through the real sport module", () => {
+  it("empty case first: a sweep over no case compares nothing, and that is a failure, not a green", () => {
+    const empty = sweep([]);
+    expect([empty.compared, empty.agreed, empty.disagreements.length]).toEqual([0, 0, 0]);
+    expect(() => expectAgreement(empty, "no case")).toThrow(/zero compared/);
+  });
+
+  it("X-RS-1 + X-RT-1 + X-WD-1: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, retired, disqualified and withdrew, both seats — agrees with the engine", () => {
+    const cases: CreditCase[] = [];
+    for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
+      for (const e of data.cfgs) {
+        for (const reason of ["retired", "disqualified", "withdrew"] as const) {
+          for (const by of ["home", "away"] as const) cases.push({ sport, cfg: { ...e.cfg }, reason, played: { home: [], away: [] }, by, variant: e.name, label: `${sport} · ${e.name} · ${reason} · empty sheet` });
+        }
+      }
+    }
+    const { items, unbuildable } = itemsOrUnbuildable(cases);
+    expect(unbuildable).toEqual([]);
+    // Every one is START then the forfeit: the empty play folds undecided (each item's own guard, in judge()).
+    for (const i of items) expect(i.prefix.filter((e) => e.type !== "core.start"), i.label).toEqual([]);
+    const s = sweep(items);
+    // The counts first, so a red sweep still says how much it compared.
+    expect(s.compared).toBe(44 * 3 * 2); // 44 cfg entries (41 declared + 3 named extras) × 3 reasons × 2 seats
+    expect(s.sports.size).toBe(11);
+    expectAgreement(s, "the empty scoresheet");
+  });
+
+  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 210 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
+    expect(CASES.length).toBe(210); // the family's own count (walkover-credit.test.ts): 55 base + 155 variants
+    const { items, unbuildable } = itemsOrUnbuildable(CASES);
+    expect(unbuildable, "a scoresheet the cross-check could not rebuild as events is a failing item").toEqual([]);
+    const s = sweep(items);
+    // The counts first, so a red sweep still says how much it compared. One comparison per case, two where a single
+    // forfeit has no scoresheet (both seats): counted from the enumeration.
+    const owed = CASES.reduce((n, c) => n + (c.played === undefined && c.reason !== "double_walkover" ? 2 : 1), 0);
+    expect(s.compared).toBe(owed);
+    expect(owed).toBe(298); // 88 sheetless single forfeits × 2 + 44 double walkovers + 78 with a scoresheet
+    expect(s.sports.size).toBe(11);
+    // Every reason is reached where X-RS-1 records it: a walkover and a double walkover before the start, retired and
+    // disqualified after it, withdrew either side of it (PF-7).
+    const reached = new Set(items.map((i) => `${i.c.reason}${i.c.played === undefined ? "" : " · started"}`));
+    expect([...reached].sort()).toEqual(["disqualified · started", "double_walkover", "retired · started", "walkover", "withdrew", "withdrew · started"]);
+    expectAgreement(s, "the enumerated cases");
+  });
+
+  it("the recipe: the reference answers each case the same from the engine's declared cfg (parsed, unmodified; a named extra built as its source says) as from its own data — every enumerated case", () => {
+    let same = 0;
+    const differ: string[] = [];
+    for (const c of CASES) {
+      const fromData = walkoverCredit(c);
+      const fromEngine = walkoverCredit({ ...c, cfg: { ...engineCfgOf(c) } });
+      if (JSON.stringify(fromEngine) === JSON.stringify(fromData)) same++;
+      else differ.push(`${c.label}: data ${JSON.stringify(fromData)}, engine cfg ${JSON.stringify(fromEngine)}`);
+    }
+    expect(differ).toEqual([]);
+    expect(same).toBe(CASES.length);
+    expect(same).toBeGreaterThan(0);
+  });
+
+  it("sequence: a voided forfeit leaves nothing decided, and the forfeit recorded after it is the one credited — before the start (walkover voided, withdrew) and after it (retired voided, disqualified) — every sport", () => {
+    const items: Item[] = [];
+    for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
+      const e = data.cfgs[0]!;
+      // Before the start: A's walkover is voided (seq 1), then H withdraws.
+      const pre: CreditCase = { sport, cfg: { ...e.cfg }, reason: "withdrew", variant: e.name };
+      const voidedPre = [forfeit("away", "walkover"), { type: "core.void", payload: { event_id: "1" } }];
+      items.push({ label: `${sport} · ${e.name} · walkover (A) voided, then withdrew (H)`, c: pre, offender: "home", prefix: voidedPre, events: [...voidedPre, forfeit("home", "withdrew")] });
+      // After the start: the side at fault's retirement is voided, then it is disqualified.
+      const p = data.played[0]!;
+      const by = p.by ?? "away";
+      const cfg = data.cfgs.find((x) => x.name === p.cfg)!;
+      const after: CreditCase = { sport, cfg: { ...cfg.cfg }, reason: "disqualified", played: { home: [...p.home], away: [...p.away] }, by, variant: p.cfg };
+      const built = sheetEvents(sport, engineCfgOf(after), after.played!);
+      const played = [...built.pre, START, ...built.play];
+      const voidedAfter = [...played, forfeit(by, "retired"), { type: "core.void", payload: { event_id: String(played.length + 1) } }];
+      items.push({ label: `${sport} · ${p.cfg} · retired voided, then disqualified · ${p.name}`, c: after, offender: by, prefix: voidedAfter, events: [...voidedAfter, forfeit(by, "disqualified")] });
+    }
+    const s = sweep(items);
+    expect(s.compared).toBe(22);
+    expect(s.sports.size).toBe(11);
+    expectAgreement(s, "the void sequence");
+  });
+
+  it("every rule row a comparison is reported under is one the family cites — every enumerated case", () => {
+    let checked = 0;
+    for (const c of CASES) {
+      for (const id of rowsOf(c)) { expect(walkoverCreditFamily.rows, `${c.label}: ${id}`).toContain(id); checked++; }
+    }
+    expect(checked).toBeGreaterThan(CASES.length * 2);
+  });
+
+  it("tripwire: walkover-credit is the reference's only case enumerator — bracket-finish has none to fold (its consumer is the harness's judgeDrive, reference-bracket.test.ts); a new one owes a cross-check here", () => {
+    const enumerators = Object.keys(reference).filter((k) => /^enumerate/.test(k));
+    expect(enumerators).toEqual(["enumerateCreditCases"]);
+  });
+});
+
+describe("the cross-check's own reading of the engine is not vacuous", () => {
+  it("each sport's stream builder reaches the engine: every enumerated scoresheet folds with its play applied (more events than START), except where the sheet holds no score", () => {
+    let withPlay = 0;
+    let bare = 0;
+    for (const c of CASES) {
+      if (c.played === undefined) continue;
+      const scored = [...c.played.home, ...c.played.away].some((n) => n > 0);
+      const { play } = sheetEvents(c.sport, engineCfgOf(c), c.played);
+      if (scored) { expect(play.length, `${c.label}`).toBeGreaterThan(0); withPlay++; } else { expect(play, `${c.label}`).toEqual([]); bare++; }
+    }
+    expect(withPlay).toBeGreaterThan(0);
+    expect(withPlay + bare).toBe(78);
+  });
+
+  it("negative: a reference answer moved off the real engine's on ONE field reds on exactly that field — a credit, a loser's credit, an exclusion, the points, players' stats; and a stream at the wrong seat reds on the outcome", () => {
+    // A tennis retirement: straight sets, games excluded (TN-RT-1) — every field carries a value to move.
+    const c = CASES.find((x) => x.sport === "tennis" && x.reason === "retired");
+    expect(c, "the enumeration holds a tennis retirement").toBeDefined();
+    const [item] = itemsOf(c!);
+    const cfg = engineCfgOf(c!);
+    const mismatches: string[] = [];
+    const eng = engineAnswer(item!, cfg, mismatches);
+    expect(mismatches).toEqual([]);
+    if (typeof eng === "string") throw new Error(eng);
+    const real = walkoverCredit(c!);
+    expect(compare(real, eng, cfg), "the unmoved answer agrees").toEqual([]);
+    const moved: readonly [string, CreditAnswer, RegExp][] = [
+      ["a winner's credit", { ...real, winner: { ...real.winner, sets_won: (real.winner.sets_won ?? 0) + 1 } }, /^winner\.sets_won: reference \d+, engine \d+$/],
+      ["a loser's credit", { ...real, loser: { ...real.loser, games_lost: 1 } }, /^loser\.games_lost: reference 1, engine 0$/],
+      ["an exclusion", { ...real, excluded: [...real.excluded, "sets_won"] }, /^excluded: the reference excludes "sets_won"/],
+      ["the points", { ...real, points: "zero" }, /^points: reference "zero" = 0\/0/],
+      ["players' stats", { ...real, statsMatch: !real.statsMatch }, /^statsMatch: reference false, engine true$/],
+    ];
+    let reds = 0;
+    for (const [what, answer, why] of moved) {
+      const got = compare(answer, eng, cfg);
+      expect(got, what).toHaveLength(1);
+      expect(got[0], what).toMatch(why);
+      reds++;
+    }
+    expect(reds).toBe(moved.length);
+    // The same stream judged as if the OTHER side were at fault: the forfeit names the real one, so the outcome reds.
+    const flipped = judge({ ...item!, offender: item!.offender === "home" ? "away" : "home" });
+    expect(flipped.mismatches.some((m) => m.startsWith("outcome:")), JSON.stringify(flipped.mismatches)).toBe(true);
+  });
+});
