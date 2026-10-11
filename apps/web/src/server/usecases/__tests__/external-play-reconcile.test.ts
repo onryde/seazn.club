@@ -29,7 +29,7 @@ import { HttpError } from "@/lib/errors";
 import type { RoomBroadcast } from "@/lib/realtime";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 // The mocked module's read IS the real client wired to the fake Lichess.
-import { readGameStream as wiredReadGameStream } from "@/server/external-play/lichess/board-api";
+import { exportGame as wiredExportGame, readGameStream as wiredReadGameStream } from "@/server/external-play/lichess/board-api";
 import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
@@ -360,8 +360,9 @@ const serveStream = (line: string) => { lichess.onStream = () => ok(line); };
 // ---------------------------------------------------------------------------
 describe("RECONCILE_TRIGGERS — spec §3.5's five, a value a sweep can enumerate", () => {
   it("is exactly the spec's five triggers, each once", () => {
-    // Spec §3.5: "on a move Lichess rejects, on a local clock reaching zero,
-    // on game end, when the organiser opens the fixture, and by the sweep".
+    // Spec §3.5's list: "a rejected move", "a local clock reaching zero",
+    // "game end", "an organiser pressing resync" (an explicit action, not a
+    // page view — review M5), and "the cron sweep".
     const SPEC = ["rejected_move", "clock_zero", "game_end", "organiser", "sweep"];
     expect(new Set(RECONCILE_TRIGGERS).size, "no repeats").toBe(RECONCILE_TRIGGERS.length);
     expect([...RECONCILE_TRIGGERS].sort()).toEqual([...SPEC].sort());
@@ -1203,6 +1204,16 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
     });
   });
 
+  it("only Black's token refused (White has no grant to open a stream): the hold freezes Black alone (ruling M7)", async () => {
+    const g = await liveGame();
+    await noGrant(g.white);
+    lichess.onStream = () => status(401);
+    lichess.onExport = () => ok(exported(g, "export-mid.json"));
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toBeNull();
+    expect(streams().map((c) => c.token), "premise: only Black's stream was opened").toEqual([tokenOf(g.black)]);
+    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "black" });
+  });
+
   it("no grant on either side, export TERMINAL: settles from the export, extends forward, never reads its clocks", async () => {
     const g = await liveGame();
     await noGrant(g.white);
@@ -1435,6 +1446,31 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     expect(flags[0]!.note).toContain(`plies 2-${LINE.length} (${LINE.slice(1).join(" ")})`);
   });
 
+  it("two EXPORT reads of the same adoption before either writes: one wins the ledger, ONE flag (staged, ×3)", async () => {
+    let checked = 0;
+    for (let run = 0; run < 3; run++) {
+      const g = await liveGame();
+      for (const p of [g.white, g.black]) {
+        await sql`update user_external_accounts set access_token_enc = null, consented_at = null where user_id = ${p.userId} and provider = 'lichess'`;
+      }
+      lichess.onExport = () => ok(exported(g, "export-expired.json"));
+      let arrived = 0;
+      let release!: () => void;
+      const bothRead = new Promise<void>((r) => (release = r));
+      const exportGame: ReconcileDeps["exportGame"] = async (id) => {
+        if (++arrived === 2) release();
+        await bothRead;
+        return wiredExportGame(id);
+      };
+      const outs = await Promise.all([0, 1].map(() => reconcile(g.fixtureId, "sweep", { ...observed().deps, exportGame })));
+      expect(arrived, "the stage fired: both read").toBe(2);
+      expect(outs.map((o) => o?.adopted).sort(), "one adopted, the other lost its CAS").toEqual([0, LINE.length - 1]);
+      expect((await flagsOf(g.fixtureId)).length, `run ${run}`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("two reconciles that READ the same adoption before either writes: one wins the ledger, ONE flag (staged, ×3)", async () => {
     let checked = 0;
     for (let run = 0; run < 3; run++) {
@@ -1578,21 +1614,43 @@ describe.runIf(HAS_DB)("reconcile — M7: the seat whose token works plays on an
 
 describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and Lichess reads", () => {
   // Lichess's truth only moves forward in time: its line grows (by T10 or
-  // out of band), then one end freezes it. Each step advances that truth,
-  // then reconciles on a trigger through one of three read paths. The model
-  // below is the SPEC's (§3.5, the controller's carries, T12's rulebook for a
-  // league), never reconcile's:
+  // out of band), then one end freezes it. Each step may first ACT through
+  // T10's real `act` (a move, a draw offer) or withdraw an entrant, then
+  // advances that truth out of band, then reconciles on a trigger through one
+  // of three read paths (review M6: the alphabet is no longer reconcile-only).
+  // The model below is the SPEC's (§3.5, the controller's carries, T12's
+  // rulebook for a league, lila's draw rules as T10 transcribes them), never
+  // reconcile's — and the model owns the offer and the closed state:
   //   - the stream, when a seat opens it, is the truth; the ledger becomes its
   //     line (it never shortens — Lichess's never does here);
   //   - when no seat opens it, the export counts only for a final status;
   //   - clock_zero on a `started` line with the mover's clock at 0 reads
   //     exactly once more (the re-read sees the same truth here);
   //   - a final status closes the bridge, once — except `aborted`, which
-  //     T12 holds; a closed or held-final row is never read again.
+  //     T12 holds; a closed or held-final row is never read again;
+  //   - a withdrawn entrant closes the bridge on the next reconcile with no
+  //     read and no result; a closed, held or withdrawn board takes no T10 act;
+  //   - offers, lila's (Drawer.scala, as T10 transcribes it): one standing
+  //     offer at most; a yes from the opponent of a standing offer IS the draw;
+  //     an offer needs ply >= 2 and no own offer in the last 20 plies; a move
+  //     declines the opponent's offer. T10 applies the same rules to ITS row.
+  //     A stream read takes Lichess's offer (a new one at the read's ply); an
+  //     end, a withdrawal close and a terminal export clear it; plies stay.
   type End = "outoftime" | "resign" | "draw" | "aborted";
   type Mode = "stream" | "white_down" | "export";
-  type Step = { advance: number; end: End | null; trigger: ReconcileTrigger; mode: Mode; flagDue: boolean };
+  type Act = "none" | "move" | "offer_white" | "offer_black" | "withdraw";
+  type Step = { act: Act; advance: number; end: End | null; trigger: ReconcileTrigger; mode: Mode; flagDue: boolean };
+  // lila's draw rules (Drawer.scala), the rulebook here — T10's play suite pins
+  // its own constants against the same source.
+  const LILA_DRAW_MIN_PLY = 2;
+  const LILA_REOFFER_PLIES = 20;
   const stepArb: fc.Arbitrary<Step> = fc.record({
+    act: fc.oneof(
+      { arbitrary: fc.constant<Act>("none"), weight: 6 },
+      { arbitrary: fc.constant<Act>("move"), weight: 3 },
+      { arbitrary: fc.constantFrom<Act>("offer_white", "offer_black"), weight: 2 },
+      { arbitrary: fc.constant<Act>("withdraw"), weight: 1 },
+    ),
     advance: fc.integer({ min: 0, max: 3 }),
     end: fc.oneof(
       { arbitrary: fc.constant(null), weight: 5 },
@@ -1602,7 +1660,7 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
     mode: fc.constantFrom<Mode>("stream", "white_down", "export"),
     flagDue: fc.boolean(),
   });
-  const s = (o: Partial<Step> & Pick<Step, "trigger" | "mode">): Step => ({ advance: 0, end: null, flagDue: false, ...o });
+  const s = (o: Partial<Step> & Pick<Step, "trigger" | "mode">): Step => ({ act: "none", advance: 0, end: null, flagDue: false, ...o });
   // Each path's forced prefix ENDS with the step that makes its claim.
   const PATHS = {
     stream_settles: [s({ advance: 3, trigger: "sweep", mode: "stream" }), s({ advance: 2, end: "resign", trigger: "game_end", mode: "stream" })],
@@ -1612,6 +1670,33 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
       s({ advance: 5, trigger: "organiser", mode: "export" }),
       s({ end: "aborted", trigger: "rejected_move", mode: "white_down" }),
     ],
+    // T10 plays the move Lichess is waiting for; the read adopts nothing.
+    t10_move_read_back: [s({ act: "move", trigger: "sweep", mode: "stream" })],
+    // White offers at ply 2 through T10; Black then moves out of band (which
+    // declines it at Lichess); the read clears the offer, keeping its ply.
+    offer_declined_by_a_move: [
+      s({ advance: 2, trigger: "sweep", mode: "stream" }),
+      s({ act: "offer_white", trigger: "organiser", mode: "stream" }),
+      s({ advance: 2, trigger: "sweep", mode: "white_down" }),
+    ],
+    // Our row is behind (an untrusted mid-game export): T10 records nothing
+    // at ply 0, Lichess holds the offer at ply 3, and the read adopts it.
+    offer_adopted_from_the_read: [
+      s({ advance: 3, trigger: "sweep", mode: "export" }),
+      s({ act: "offer_white", trigger: "organiser", mode: "stream" }),
+    ],
+    // Black's yes to White's standing offer IS the draw at Lichess.
+    offer_accepted_is_the_draw: [
+      s({ advance: 2, trigger: "sweep", mode: "stream" }),
+      s({ act: "offer_white", trigger: "sweep", mode: "stream" }),
+      s({ act: "offer_black", trigger: "game_end", mode: "stream" }),
+    ],
+    // A withdrawal closes the board unread; T10 then refuses a move.
+    withdrawn_closes_unread: [
+      s({ advance: 1, trigger: "sweep", mode: "stream" }),
+      s({ act: "withdraw", trigger: "organiser", mode: "stream" }),
+      s({ act: "move", trigger: "sweep", mode: "stream" }),
+    ],
   } as const;
   type PathName = keyof typeof PATHS;
   const PATH_NAMES = Object.keys(PATHS) as PathName[];
@@ -1619,8 +1704,12 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
   const counters = {
     steps: 0, adopted: 0, reread: 0, export_ignored: 0, settled_stream: 0, settled_export: 0,
     held_final: 0, silent_after_close: 0, white_down: 0,
+    t10_moves: 0, t10_offers_recorded: 0, t10_offers_lichess_only: 0, t10_refused_closed: 0,
+    offer_cleared_by_read: 0, offer_adopted_by_read: 0, accepted_draw: 0, withdrawn_closed: 0,
   };
-  const claims: Record<PathName, number> = { stream_settles: 0, flag_reread: 0, export_settles: 0, export_ignored_then_aborted: 0 };
+  // Reported, not required: what a random suffix happened to reach.
+  const incidental = { t10_move_out_of_sync: 0, t10_offer_noop: 0 };
+  const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
 
   it("holds the model on every step — counted per path, K runs each", { timeout: 600_000 }, async () => {
     let run = 0;
@@ -1630,12 +1719,104 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
         run++;
         const steps = [...PATHS[path], ...suffix];
         const g = await readyGame();
-        const truth = { ply: 0, end: null as End | null };
-        const model = { ledger: 0, closed: false, heldFinal: false, resulted: false };
+        const truth = {
+          ply: 0, end: null as End | null, offer: null as Colour | null,
+          lastOffer: { white: null as number | null, black: null as number | null },
+        };
+        const model = {
+          ledger: 0, closed: false, heldFinal: false, resulted: false, withdrawn: false,
+          offer: null as Colour | null, offerPly: { white: null as number | null, black: null as number | null },
+        };
         let finishedAt: Date | null = null;
         for (const [i, step] of steps.entries()) {
+          const at = new Date(READ.getTime() + i * 10_000);
+          const label0 = `${path} step ${i} ${JSON.stringify(step)}`;
+          const shut = model.closed || model.heldFinal || model.withdrawn;
+          // 1. THE ACT, through T10's real `act` (Lichess answering 200).
+          let actClaim = false;
+          if (step.act === "withdraw") {
+            if (!shut) {
+              await withdrawEntrantCascade(await mintOrgOwnerAuth(g.orgId), g.black.entrantId);
+              model.withdrawn = true;
+            }
+          } else if (step.act !== "none") {
+            const who: Colour = step.act === "move" ? (model.ledger % 2 === 0 ? "white" : "black") : step.act === "offer_white" ? "white" : "black";
+            const action = step.act === "move" ? { kind: "move" as const, uci: LINE[model.ledger] ?? "e2e4" } : { kind: "draw" as const, accept: true };
+            const doAct = () => act(
+              { fixtureId: g.fixtureId, personId: g[who].personId, action },
+              {
+                now: new Date(at.getTime() - 5_000),
+                accessToken: async (u) => `tok-${u}`,
+                publish: async () => {},
+                submitMove: async () => ({ ok: true }),
+                offerOrAcceptDraw: async () => ({ ok: true }),
+              },
+            );
+            if (shut) {
+              await expect(doAct(), `${label0}: a closed, held or withdrawn board takes no act`).rejects.toMatchObject({ status: 404 });
+              counters.t10_refused_closed++;
+              actClaim = true;
+            } else {
+              // Guard, not comment: an ended truth is read the step it ends,
+              // so an open board here is always a running game at Lichess.
+              expect(truth.end, `${label0}: model — an open board's game is running`).toBeNull();
+              if (step.act === "move") {
+                if (truth.ply === model.ledger && model.ledger < LINE.length) {
+                  expect(await doAct(), `${label0}: T10 move`).toEqual({ ok: true, applied: true });
+                  if (truth.offer === (who === "white" ? "black" : "white")) truth.offer = null;
+                  if (model.offer === (who === "white" ? "black" : "white")) model.offer = null;
+                  truth.ply++;
+                  model.ledger++;
+                  counters.t10_moves++;
+                  actClaim = true;
+                } else {
+                  // Lichess has moved on (or the line is spent): not this
+                  // model's to play — the I4 suite drives that refusal.
+                  incidental.t10_move_out_of_sync++;
+                }
+              } else {
+                expect(await doAct(), `${label0}: T10 offer`).toEqual({ ok: true, applied: true });
+                const other: Colour = who === "white" ? "black" : "white";
+                // lila first: the opponent's standing offer makes this yes the draw.
+                if (truth.offer === other) {
+                  truth.end = "draw";
+                  truth.offer = null;
+                  counters.accepted_draw++;
+                  actClaim = true;
+                } else if (
+                  truth.offer === null && truth.ply >= LILA_DRAW_MIN_PLY &&
+                  (truth.lastOffer[who] === null || truth.lastOffer[who]! < truth.ply - LILA_REOFFER_PLIES)
+                ) {
+                  truth.offer = who;
+                  truth.lastOffer[who] = truth.ply;
+                }
+                // …then T10's row, by the same rules against ITS ledger.
+                if (
+                  model.offer === null && model.ledger >= LILA_DRAW_MIN_PLY &&
+                  (model.offerPly[who] === null || model.offerPly[who]! < model.ledger - LILA_REOFFER_PLIES)
+                ) {
+                  model.offer = who;
+                  model.offerPly[who] = model.ledger;
+                  counters.t10_offers_recorded++;
+                  actClaim = true;
+                } else if (truth.offer === who && truth.lastOffer[who] === truth.ply) {
+                  counters.t10_offers_lichess_only++;
+                  actClaim = true;
+                } else {
+                  incidental.t10_offer_noop++;
+                }
+              }
+            }
+          }
+          // 2. Lichess's truth moves on out of band; a move declines the
+          //    opponent's standing offer.
           if (truth.end === null) {
-            truth.ply = Math.min(LINE.length, truth.ply + step.advance);
+            const to = Math.min(LINE.length, truth.ply + step.advance);
+            for (let p = truth.ply; p < to; p++) {
+              const mover: Colour = p % 2 === 0 ? "white" : "black";
+              if (truth.offer !== null && truth.offer !== mover) truth.offer = null;
+            }
+            truth.ply = to;
             truth.end = step.end;
           }
           const moverIsWhite = truth.ply % 2 === 0;
@@ -1646,6 +1827,8 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
             ...(truth.end === null ? {} : { status: truth.end }),
             ...(truth.end === "outoftime" || truth.end === "resign" ? { winner } : {}),
             ...(zero ? (moverIsWhite ? { wtime: 0 } : { btime: 0 }) : {}),
+            ...(truth.end === null && truth.offer === "white" ? { wdraw: true as const } : {}),
+            ...(truth.end === null && truth.offer === "black" ? { bdraw: true as const } : {}),
           });
           lichess.reset();
           lichess.onStream = (c) =>
@@ -1658,7 +1841,6 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
                   status: truth.end,
                   winner: truth.end === "outoftime" || truth.end === "resign" ? winner : null,
                 }));
-          const at = new Date(READ.getTime() + i * 10_000);
           const { deps, sleeps } = observed(at);
           const out = await reconcile(g.fixtureId, step.trigger, deps);
           counters.steps++;
@@ -1668,6 +1850,13 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
             expect(lichess.calls, `${label}: a closed board is never read`).toEqual([]);
             expect(out, label).toBeNull();
             counters.silent_after_close++;
+          } else if (model.withdrawn) {
+            // The fixture is no longer playable: closed with no read, no result.
+            expect(lichess.calls, `${label}: a withdrawn board is closed unread`).toEqual([]);
+            expect(out, label).toBeNull();
+            model.closed = true;
+            model.offer = null;
+            counters.withdrawn_closed++;
           } else {
             const perRead = step.mode === "stream" ? 1 : 2;
             const reread = step.mode !== "export" && step.trigger === "clock_zero" && zero ? 1 : 0;
@@ -1680,6 +1869,16 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
             if (trusted) {
               if (truth.ply > model.ledger) counters.adopted++;
               model.ledger = Math.max(model.ledger, truth.ply);
+              if (truth.end !== null) {
+                model.offer = null;
+              } else if (truth.offer === null) {
+                if (model.offer !== null) counters.offer_cleared_by_read++;
+                model.offer = null;
+              } else if (truth.offer !== model.offer && truth.ply >= LILA_DRAW_MIN_PLY) {
+                model.offer = truth.offer;
+                model.offerPly[truth.offer] = truth.ply;
+                counters.offer_adopted_by_read++;
+              }
               if (truth.end === "aborted") {
                 model.heldFinal = true;
                 counters.held_final++;
@@ -1698,6 +1897,9 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
           const r = await rowOf(g.fixtureId);
           expect(r.moves_uci, `${label}: ledger`).toEqual(LINE.slice(0, model.ledger));
           expect(r.move_count, label).toBe(model.ledger);
+          expect([r.draw_offer_by, r.white_draw_offer_ply, r.black_draw_offer_ply], `${label}: the offer`).toEqual([
+            model.offer, model.offerPly.white, model.offerPly.black,
+          ]);
           const want = model.closed ? "finished" : model.heldFinal ? "needs_organiser" : model.ledger > 0 ? "live" : "ready";
           expect(r.status, `${label}: status`).toBe(want);
           if (model.heldFinal) expect(r.needs_reason, label).toBe("aborted");
@@ -1711,19 +1913,25 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
 
           // The forced prefix's last step is the path's claim.
           if (i === PATHS[path].length - 1) {
-            const made =
-              path === "stream_settles" ? model.closed && step.mode === "stream"
-              : path === "flag_reread" ? sleeps.length === 1
-              : path === "export_settles" ? model.closed && step.mode === "export"
-              : model.heldFinal;
-            if (made) claims[path]++;
+            const claimed: Record<PathName, () => boolean> = {
+              stream_settles: () => model.closed && step.mode === "stream",
+              flag_reread: () => sleeps.length === 1,
+              export_settles: () => model.closed && step.mode === "export",
+              export_ignored_then_aborted: () => model.heldFinal,
+              t10_move_read_back: () => actClaim && model.ledger === 1 && out?.adopted === 0,
+              offer_declined_by_a_move: () => model.offer === null && model.offerPly.white === 2 && r.move_count === 4,
+              offer_adopted_from_the_read: () => model.offer === "white" && model.offerPly.white === 3 && actClaim,
+              offer_accepted_is_the_draw: () => actClaim && model.closed && model.resulted && truth.end === "draw",
+              withdrawn_closes_unread: () => actClaim && model.closed && !model.resulted,
+            };
+            if (claimed[path]()) claims[path]++;
           }
         }
       }),
       { numRuns: K * PATH_NAMES.length, endOnFailure: true },
     );
     expect(run).toBe(K * PATH_NAMES.length);
-    console.info("reconcile property counters", JSON.stringify({ counters, claims }));
+    console.info("reconcile property counters", JSON.stringify({ counters, incidental, claims }));
     for (const p of PATH_NAMES) expect(claims[p], `every ${p} run made its claim`).toBe(K);
     for (const [name, n] of Object.entries(counters)) expect(n, `path counter ${name}`).toBeGreaterThan(0);
   });

@@ -12,8 +12,10 @@ import {
  *  T−15 challenge prepare + play-ready email, poll ready/live games, then
  *  escalate T+20 no-shows. Wire in onryde/seazn.club.workflow.
  *  Cron-shaped like /api/cron/registrations: x-cron-secret header (CRON_SECRET).
- *  Game callbacks are not this route — they POST /api/webhooks/lichess with
- *  HMAC `x-lichess-signature` (see webhook-signature.ts). */
+ *  Lichess sends no game callbacks (the old /api/webhooks/lichess route and
+ *  webhook-signature.ts are deleted): game state is READ from Lichess by
+ *  reconcile (usecases/external-play/reconcile.ts), whose `sweep` trigger
+ *  is T13's to run from a cron. */
 export async function POST(req: Request) {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;
