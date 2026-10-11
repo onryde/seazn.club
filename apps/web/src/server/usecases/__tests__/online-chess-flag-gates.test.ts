@@ -58,6 +58,27 @@ const board = vi.hoisted(() => ({
 }));
 vi.mock("@/server/external-play/lichess/board-api", () => board);
 
+// The roster's race (fix round 1, m2): `createEntrants` reads the division on the pooled connection, then resolves the
+// entrant cap (`getLimit`), then opens its transaction. A one-shot hook on THAT lookup — the per-division entrant cap,
+// asked only there — runs between the pre-read and the transaction, which is where a concurrent "turn online on" lands.
+// Pass-through otherwise: every other caller, and every other case, sees the real `getLimit`.
+const between = vi.hoisted(() => ({ hook: null as null | (() => Promise<void>), ran: 0 }));
+vi.mock("@/lib/entitlements", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/entitlements")>();
+  return {
+    ...actual,
+    getLimit: async (orgId: string, featureKey: string, competitionId?: string) => {
+      const hook = featureKey === "entrants.per_division.max" ? between.hook : null;
+      if (hook) {
+        between.hook = null;
+        between.ran++;
+        await hook();
+      }
+      return actual.getLimit(orgId, featureKey, competitionId);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -126,6 +147,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   overrideOn();
   mail.sent.length = 0;
+  between.hook = null;
   __resetCreationQueue();
   board.createChallengeToUser.mockImplementation(async () => ({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` }));
   board.acceptChallenge.mockResolvedValue({ ok: true });
@@ -538,6 +560,38 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
       checked++;
     }
     expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("the roster's race: a division the pre-read saw over the board but the transaction sees online demands the link (422) — the flag was never asked, and an unasked answer fails closed", async () => {
+    const owner = await seedOwner();
+    const competition = await competitionFor(owner);
+    const division = await createDivision(owner, competition.id, {
+      name: "Turning online",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", clock: CLOCK },
+    });
+    expect(await storedOnlinePlay(division.id), "premise: over the board when the roster save starts").toBeNull();
+    const unlinked = await seedPlayer(owner.orgId, "Unlinked", `u-${randomUUID().slice(0, 8)}`, false);
+    // Were it asked, the flag would say ON — so a pass here could only come from treating "never asked" as "off".
+    flagIs(FLAG_STATES[0]!);
+    // The organiser turns online play on between the roster's pre-read and its transaction (by SQL: the gate on that
+    // save is not what is under test here).
+    between.hook = async () => {
+      await sql`update divisions set config = config || ${sql.json({ onlinePlay: "lichess" })} where id = ${division.id}`;
+    };
+    between.ran = 0;
+    const entered = createEntrants(owner, division.id, [
+      { display_name: "Unlinked", kind: "individual", members: [{ person_id: unlinked.personId, is_captain: false, roles: [] }] },
+    ]);
+    expect(await refusal(entered)).toEqual({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    // Anti-vacuity: the race really ran, in the window it names — the pre-read saw the division OTB (so the flag was
+    // never asked), and the transaction saw it online.
+    expect(between.ran, "the turn-on landed between the pre-read and the transaction").toBe(1);
+    expect(flags.isServerFeatureEnabled, "the pre-read saw it over the board").not.toHaveBeenCalled();
+    expect(await storedOnlinePlay(division.id), "online by the time the transaction read it").toBe("lichess");
+    const [count] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${division.id}`;
+    expect(count!.n, "nobody entered").toBe(0);
   });
 });
 
