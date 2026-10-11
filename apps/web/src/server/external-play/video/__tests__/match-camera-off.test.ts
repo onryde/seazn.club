@@ -78,6 +78,18 @@ describe("matchCameraOff — the union over connections", () => {
     expect(offs(matchCameraOff(win(0, 900), [gappy, onThroughout(0, 900)]))).toEqual([]);
   });
 
+  it("a second tab opened and closed INSIDE a longer connection changes nothing", () => {
+    // Union, not "the latest connection wins": the short one ends first.
+    expect(offs(matchCameraOff(win(0, 900), [onThroughout(0, 900), onThroughout(100, 200)]))).toEqual([]);
+  });
+
+  it("a connection AFTER the match covers none of it, and never stretches the off time past the window", () => {
+    expect(offs(matchCameraOff(win(60, 840), [onThroughout(900, 1000)]))).toEqual([[at(60), at(840), 780]]);
+    expect(offs(matchCameraOff(win(60, 840), [onThroughout(0, 300), onThroughout(900, 1000)]))).toEqual([
+      [at(300), at(840), 540],
+    ]);
+  });
+
   it("a gap in the one connection is off, and the camera's own events confirm it", () => {
     const samples = [...every(0, 196), ...every(392, 595)];
     const plain = matchCameraOff(win(0, 600), [connection({ joined: 0, left: 600, samples })]);
