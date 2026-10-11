@@ -189,10 +189,12 @@ The export is a **fallback for a terminal status only** — used when neither pl
 token can be opened (`LICHESS_TOKEN_UNAVAILABLE`), and trusted only when it reports a
 status other than `created`/`started`. M11's export clocks are not used.
 
-Owed by Task 11: whether a board-stream read, like the export read in M2, causes Lichess
-to finalise a flag on an expired clock. Until measured, the local-clock-zero trigger
-retries the read once after 2 s before concluding the game is still live. (Ruling
-2026-10-09.)
+Measured by Task 11 (2026-10-11, `__fixtures__/lichess/README.md`): a board-stream read,
+like the export read in M2, makes Lichess finalise a flag on an expired clock — visible on
+the NEXT read. A read ~3.5 min after the last move returned `started` with White's clock
+at 0; the read 3 s later returned `outoftime`. So the local-clock-zero trigger retries the
+read once after **3 s** (`FLAG_REREAD_MS`) before concluding the game is still live.
+(Ruling 2026-10-09; the measured 3 s replaces the 2 s guessed before the measurement.)
 
 ### 3.6 Result
 Terminal status maps to our events, written **under organiser authority**
