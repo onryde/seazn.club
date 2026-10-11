@@ -61,6 +61,15 @@ export type HoldReason = (typeof HOLD_REASONS)[number];
  *  written bracket draw whose tie-break the engine opened. */
 type SnapshotOnlyReason = "fair_play" | "tiebreak_owed";
 
+/** The no-show holds (review M3): only the sweep's, and only for a forfeit
+ *  the engine kept refusing — never a caller's to assert (HOLD_REASONS). */
+const NO_SHOW_REASONS = {
+  white: "no_show_white",
+  black: "no_show_black",
+  both: "no_show_both",
+} as const satisfies Record<string, NeedsReason>;
+type NoShowReason = (typeof NO_SHOW_REASONS)[keyof typeof NO_SHOW_REASONS];
+
 /** The mid-game diagnoses — the best the room knew while the game ran
  *  (holdForOrganiser's T10/T11 callers). The snapshot that ENDS the game is
  *  newer and strictly more informative, so its hold replaces these; nothing
@@ -219,7 +228,7 @@ function widenSeat(stored: RevokedSeat | null, seat: RevokedSeat | null): Revoke
  *    had otherwise (review M5: a bare hold erased T9's last create error). */
 async function hold(
   fixtureId: string,
-  reason: "aborted" | HoldReason | SnapshotOnlyReason,
+  reason: "aborted" | HoldReason | SnapshotOnlyReason | NoShowReason,
   detail: string | null,
   final: boolean,
   seat: RevokedSeat | null = null,
@@ -302,6 +311,23 @@ export async function holdForOrganiser(a: {
     throw new HttpError(500, `a seat is recorded only for token_revoked, not ${a.reason}`, "HOLD_SEAT_WITHOUT_REVOKE");
   }
   const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false, a.seat ?? null);
+  return h.held ? heldAnswer(h.reason) : NONE;
+}
+
+/** Review M3: the sweep's no-show whose forfeit the engine refused the same
+ *  way, pass after pass — the organiser's, as the no-show it is (whose
+ *  colour stayed away), with the refusal as `detail`. The board stays open;
+ *  nothing is decided. */
+export async function holdRefusedNoShow(a: {
+  fixtureId: string;
+  absent: keyof typeof NO_SHOW_REASONS;
+  detail: string;
+}): Promise<ResultWrite> {
+  const reason = Object.hasOwn(NO_SHOW_REASONS, a.absent) ? NO_SHOW_REASONS[a.absent] : undefined;
+  if (reason === undefined) {
+    throw new HttpError(500, `not a no-show colour: ${JSON.stringify(a.absent)}`, "HOLD_REASON_UNKNOWN");
+  }
+  const h = await hold(a.fixtureId, reason, a.detail, false);
   return h.held ? heldAnswer(h.reason) : NONE;
 }
 

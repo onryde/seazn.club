@@ -30,7 +30,7 @@ import type { BoardCall, GameSnapshot } from "@/server/external-play/types";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
-import { HOLD_REASONS, holdForOrganiser, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
+import { HOLD_REASONS, holdForOrganiser, holdRefusedNoShow, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
 import { getFixtureState } from "../fixtures";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { scoreEvent } from "../scoring";
@@ -1038,6 +1038,26 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
       holdForOrganiser({ fixtureId: g.fixtureId, reason: "tiebreak_owed" as never }),
     ).rejects.toMatchObject({ code: "HOLD_REASON_UNKNOWN" });
     expect((await bridgeOf(g.fixtureId))!.status).toBe("ready");
+  });
+
+  it("T13 M3: the sweep's refused no-show holds ONLY as a no-show colour — anything else is refused before a write (counted)", async () => {
+    const g = await readyGame();
+    let checked = 0;
+    for (const absent of ["home", "toString", "", "no_show_both"]) {
+      await expect(holdRefusedNoShow({ fixtureId: g.fixtureId, absent: absent as never, detail: "x" }), absent)
+        .rejects.toMatchObject({ code: "HOLD_REASON_UNKNOWN" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect((await bridgeOf(g.fixtureId))!.status).toBe("ready");
+    // The pair: each colour holds as its own reason (spec §3.6's table).
+    for (const [absent, reason] of [["white", "no_show_white"], ["black", "no_show_black"], ["both", "no_show_both"]] as const) {
+      const h = await readyGame();
+      expect(await holdRefusedNoShow({ fixtureId: h.fixtureId, absent, detail: "refused" }), absent).toEqual({ wrote: "needs_organiser", reason });
+      expect(await bridgeOf(h.fixtureId), absent).toMatchObject({ status: "needs_organiser", needs_reason: reason });
+      checked++;
+    }
+    expect(checked).toBe(7);
   });
 
   it("a hold on a game whose result is already recorded (bridge 'finished') changes nothing", async () => {
