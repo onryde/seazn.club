@@ -2394,3 +2394,82 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
     expect(checked).toBe(13);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T13 fix round 1, ruling I4: the submission goes on file BEFORE Lichess
+// hears it, so a reconcile landing between Lichess's 200 and the append
+// below adopts this very move without an out-of-band flag (the reconcile
+// half is in external-play-reconcile.test.ts; the sweep's in the sweep's).
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("act — the move being submitted is on file before Lichess hears it (T13 I4)", () => {
+  type Pending = { pending_move_ply: number | null; pending_move_uci: string | null; pending_move_at: Date | null };
+  const pendingOf = async (fixtureId: string): Promise<Pending> =>
+    (await sql<Pending[]>`
+      select pending_move_ply, pending_move_uci, pending_move_at from fixture_external_play where fixture_id = ${fixtureId}`)[0]!;
+  const NONE: Pending = { pending_move_ply: null, pending_move_uci: null, pending_move_at: null };
+
+  it("at the call, the row holds the ply, the CANONICAL move and the time; the append clears it — each ply, counted", async () => {
+    const g = await readyGame();
+    const seen: Pending[] = [];
+    const { deps } = boardStub(async () => {
+      seen.push(await pendingOf(g.fixtureId));
+      return { ok: true };
+    });
+    // e1h1 — a castle written king-to-rook — is recorded as the e1g1 lila plays.
+    const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "e1h1"];
+    for (let ply = 0; ply < LINE.length; ply++) {
+      expect(await mv(g, ply % 2 === 0 ? "white" : "black", LINE[ply]!, deps, at(ply)), `ply ${ply}`).toEqual(APPLIED);
+      expect(await pendingOf(g.fixtureId), `ply ${ply}: cleared by the append`).toEqual(NONE);
+    }
+    expect(seen).toEqual(LINE.map((uci, ply) => ({
+      pending_move_ply: ply, pending_move_uci: uci === "e1h1" ? "e1g1" : uci, pending_move_at: at(ply),
+    })));
+  });
+
+  it("a refusal, a 5xx and a 401 each LEAVE it on file — the append never ran, and a 5xx may have played it (counted)", async () => {
+    let checked = 0;
+    for (const code of ["not_your_turn_or_over", "unavailable", "unauthorized"] as const) {
+      const g = await readyGame();
+      const { deps } = boardStub(() => ({ ok: false, code, raw: code }));
+      await mv(g, "white", "e2e4", deps, at(0));
+      expect(await pendingOf(g.fixtureId), code).toEqual({ pending_move_ply: 0, pending_move_uci: "e2e4", pending_move_at: at(0) });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a NEW submission at the same ply replaces a stale one; the next ply's append clears the older one too", async () => {
+    const g = await readyGame();
+    let n = 0;
+    const { deps } = boardStub(() => (++n === 1 ? { ok: false, code: "unavailable", raw: "502" } : { ok: true }));
+    await mv(g, "white", "d2d4", deps, at(0));
+    expect(await pendingOf(g.fixtureId), "premise: the 5xx'd move is on file").toMatchObject({ pending_move_uci: "d2d4" });
+    expect(await mv(g, "white", "e2e4", deps, at(1))).toEqual(APPLIED);
+    expect(await pendingOf(g.fixtureId)).toEqual(NONE);
+  });
+
+  it("a STALE tab never erases a LATER ply's submission (staged: its read, then the next mover's record, then its own)", async () => {
+    const g = await readyGame();
+    const { deps } = boardStub();
+    // White's second tab read the row at ply 0. Before it records, White's
+    // first tab plays e2e4 and Black's e7e5 is in flight (its 5xx leaves it
+    // on file) — then the stale tab records and submits its own e2e4.
+    let staged = false;
+    const stale: PlayDeps = {
+      ...deps,
+      accessToken: async (u) => {
+        if (!staged) {
+          staged = true;
+          expect(await mv(g, "white", "e2e4", deps, at(0)), "premise: the first tab's move").toEqual(APPLIED);
+          const fivexx = boardStub(() => ({ ok: false, code: "unavailable", raw: "502" }));
+          await mv(g, "black", "e7e5", fivexx.deps, at(1));
+        }
+        return `tok-${u}`;
+      },
+      submitMove: async () => ({ ok: false, code: "not_your_turn_or_over", raw: "400" }),
+    };
+    expect(await mv(g, "white", "e2e4", stale, at(0)), "the stale tab's own move is the one on file").toEqual(ABSORBED);
+    expect(staged, "premise: the stage ran").toBe(true);
+    expect(await pendingOf(g.fixtureId)).toEqual({ pending_move_ply: 1, pending_move_uci: "e7e5", pending_move_at: at(1) });
+  });
+});
