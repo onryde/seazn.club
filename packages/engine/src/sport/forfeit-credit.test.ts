@@ -674,3 +674,184 @@ describe("X-RS-1: every arbitraryEvent forfeit is one the phase guard admits (sp
     expect(forfeits).toBeGreaterThan(11 * 3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// X-WO-1 — the table pays the points of the CREDITED score (W2b Task 15, the reference ↔ engine cross-check). "The
+// same credited score is used in the table, tie-breaks, the public page and the qualification view": a sport whose
+// table is a pointsMap by set score pays the pair its cfg declares for the CREDITED sets, never a clean sweep. FIVB
+// 6.4.3 — an incomplete team keeps its sets — so an indoor retirement credited 3-2 pays the stage's 3-2 pair, and a
+// walkover's 3-0 its 3-0 pair. Every expected pair is read from the cfg's own pointsMap — the exact "W-L" key, else
+// "*" (the map's declared reading, spec 04 §3.3) — never from the kernel's lookup.
+// ---------------------------------------------------------------------------
+type Pair = readonly [number, number];
+type PointsMap = Record<string, Pair>;
+const pointsMapOf = (cfg: Record<string, unknown>): PointsMap | undefined => cfg.pointsMap as PointsMap | undefined;
+/** The cfg's declared pair for a decided set score: exact "W-L", else "*"; undefined when it declares neither. */
+const declaredPair = (map: PointsMap, w: number, l: number): Pair | undefined => map[`${w}-${l}`] ?? map["*"];
+/** The module's own coarse set event (`coarseEventType`), so the sweep never types a sport's event name. */
+const setSummaryType = (key: string) => `${key}.${(mod(key) as { coarseEventType?: string }).coarseEventType}`;
+const otherSeat = (side: string) => (side === H ? A : H);
+/** The [winner, loser] deltas of a [home, away] pair. */
+const byResult = (winner: string, [home, away]: [StandingsDelta, StandingsDelta]): [StandingsDelta, StandingsDelta] => (winner === H ? [home, away] : [away, home]);
+/** Swap the seats of a played prefix: rallies change hands, set summaries swap columns. */
+const mirrored = (spec: Spec): Spec =>
+  spec.map(([t, p]) => {
+    const q = (p ?? {}) as Record<string, unknown>;
+    if (typeof q.wonBy === "string") return [t, { ...q, wonBy: otherSeat(q.wonBy) }];
+    if ("home" in q && "away" in q) return [t, { ...q, home: q.away, away: q.home }];
+    return [t, p];
+  });
+
+describe("X-WO-1: an award pays the table points of its credited set score (VB-RT-1, FIVB 6.4.3)", () => {
+  const indoor = parsed("volleyball"); // the schema default IS indoor (volleyball.ts `defaults`, variant `indoor: {}`)
+  const fivb = pointsMapOf(indoor)!;
+  const vbSet = (home: number, away: number): [string, unknown] => [setSummaryType("volleyball"), { home, away }];
+  /** A at fault throughout; H takes the match. `credited` is the rule's set score: H gets the 3 sets it needs, A keeps
+   *  every set it won (FIVB 6.4.3). */
+  const INDOOR: Array<{ name: string; played: Spec; credited: [number, number] }> = [
+    // the cross-check's own rows (W2b Task 15): 25-15, then 25-0 and 15-0 to H
+    { name: "two sets up, the side at fault retires leading 15-10 in set 3", played: [vbSet(0, 25), vbSet(0, 25), ...rallies("volleyball.rally", 10, A, 5)], credited: [3, 2] },
+    { name: "two sets all, the side at fault retires leading 15-14 in the deciding set", played: [vbSet(25, 0), vbSet(0, 25), vbSet(25, 0), vbSet(0, 25), ...rallies("volleyball.rally", 14, A, 1)], credited: [3, 2] },
+    // a credited 3-1: no exact pair in the FIVB table, so its "*"
+    { name: "one set up, the side at fault retires between sets", played: [vbSet(0, 25)], credited: [3, 1] },
+  ];
+
+  it("premise: indoor is best-of-5, and its declared 3-2 pair is not its 3-0 pair — so a clean sweep is witnessable", () => {
+    expect([indoor.bestOf, indoor.setTo, indoor.finalSetTo]).toEqual([5, 25, 15]);
+    // FIVB / CEV competition points: 3-0 and 3-1 pay 3/0, 3-2 pays 2/1 (volleyball.ts header)
+    expect(declaredPair(fivb, 3, 2), "a 3-2 win").toEqual([2, 1]);
+    expect(declaredPair(fivb, 3, 1), "a 3-1 win").toEqual([3, 0]);
+    expect(declaredPair(fivb, 3, 0), "a 3-0 win").toEqual([3, 0]);
+  });
+
+  it("empty case first: a walkover (and a withdrawal before the start) credits 3-0 and pays the 3-0 pair — both seats", () => {
+    let checked = 0;
+    for (const atFault of [A, H]) {
+      for (const reason of ["walkover", "withdrew"]) {
+        const winner = otherSeat(atFault);
+        const [w, l] = byResult(winner, deltasOf("volleyball", indoor, [["core.forfeit", { by: atFault, reason }]]));
+        expect([w.metrics.sets_won, l.metrics.sets_won], `${reason} by ${atFault}: the credit`).toEqual([3, 0]);
+        expect([w.points, l.points], `${reason} by ${atFault}`).toEqual([...declaredPair(fivb, 3, 0)!]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("VB-RT-1: a retirement, disqualification or post-start withdrawal pays the credited score's pair (3-2 ⇒ 2/1, not 3/0) — both seats", () => {
+    let checked = 0;
+    let witnessed = 0;
+    for (const c of INDOOR) {
+      for (const [atFault, played] of [[A, c.played], [H, mirrored(c.played)]] as const) {
+        const winner = otherSeat(atFault);
+        for (const reason of ["retired", "disqualified", "withdrew"]) {
+          const tag = `${c.name} · ${reason} by ${atFault}`;
+          const [w, l] = byResult(winner, deltasOf("volleyball", indoor, [["core.start"], ...played, ["core.forfeit", { by: atFault, reason }]]));
+          expect([w.metrics.sets_won, l.metrics.sets_won], `${tag}: the credit`).toEqual(c.credited);
+          const want = declaredPair(fivb, ...c.credited)!;
+          expect([w.points, l.points], tag).toEqual([...want]);
+          expect([w.won, l.lost], tag).toEqual([1, 1]);
+          if (JSON.stringify(want) !== JSON.stringify(declaredPair(fivb, 3, 0))) witnessed++;
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(INDOOR.length * 2 * 3);
+    expect(witnessed, "the 3-2 cases, where the right pair is not the clean sweep").toBe(2 * 2 * 3);
+  });
+
+  it("a voided retirement, then a disqualification: the forfeit recorded after the void is the one paid", () => {
+    const m = mod("volleyball");
+    const c = INDOOR[0]!;
+    const before = [["core.start"], ...c.played] as Spec;
+    const evs = before.map(([t, p], i) => ev(i + 1, t, p ?? {}));
+    const n = evs.length + 1;
+    evs.push(ev(n, "core.forfeit", { by: A, reason: "retired" }));
+    evs.push(makeEnvelope(n + 1, { type: "core.void", payload: {} }, `e-${n}`));
+    // premise: the void reopens the match
+    const reopened = foldMatchWithStoppage(m as never, indoor as never, defaultLineupPair(m.positions), evs);
+    expect(outcomeOf(m as never, reopened as never)).toBeNull();
+    evs.push(ev(n + 2, "core.forfeit", { by: A, reason: "disqualified" }));
+    const f = foldMatchWithStoppage(m as never, indoor as never, defaultLineupPair(m.positions), evs);
+    const o = outcomeOf(m as never, f as never);
+    expect(o).toEqual({ kind: "award", winner: H, loser: A, reason: "disqualified" });
+    const [home, away] = m.standingsDelta(o!, indoor, { kind: "league" } as never, f.state);
+    expect([home.metrics.sets_won, away.metrics.sets_won]).toEqual(c.credited);
+    expect([home.points, away.points]).toEqual([...declaredPair(fivb, ...c.credited)!]);
+  });
+
+  it("a bye credits no score, so it keeps today's delta (C-5): the clean-sweep pair, here the 3-0 pair", () => {
+    const m = mod("volleyball");
+    const state = m.init(indoor, { home: { entrantId: H, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
+    const [home, away] = m.standingsDelta({ kind: "award", winner: H, loser: null, reason: "bye" } as never, indoor, { kind: "swiss" } as never, state);
+    expect([home.points, away.points]).toEqual([...declaredPair(fivb, 3, 0)!]);
+    expect([home.metrics.sets_won, away.metrics.sets_won], "a bye credits no sets").toEqual([0, 0]);
+  });
+
+  it("a pointsMap that prices neither the credited score nor \"*\" refuses the award exactly as it refuses that score played — never a silent clean sweep", () => {
+    const partial = parsed("volleyball", { pointsMap: { "3-0": [3, 0] } });
+    const refusal = expect.objectContaining({ code: "INVALID_EVENT", message: expect.stringContaining("3-2") });
+    // positive pair: the same table refuses a PLAYED 3-2
+    expect(() => deltasOf("volleyball", partial, [["core.start"], vbSet(25, 0), vbSet(0, 25), vbSet(25, 0), vbSet(0, 25), vbSet(15, 0)])).toThrowError(refusal);
+    expect(() => deltasOf("volleyball", partial, [["core.start"], ...INDOOR[0]!.played, ["core.forfeit", { by: A, reason: "retired" }]])).toThrowError(refusal);
+    // and prices the walkover's 3-0, which it declares
+    expect(deltasOf("volleyball", partial, [["core.forfeit", { by: A, reason: "walkover" }]]).map((d) => d.points)).toEqual([3, 0]);
+    // A bye has no credited score to price (its sets are the init 0-0), so the same table never refuses it: it keeps
+    // today's delta (C-5), the table's one pair. On every declared cfg a bye's 0-0 would fall to "*" anyway — only a
+    // table with no "*" tells the two readings apart.
+    const m = mod("volleyball");
+    const state = m.init(partial, { home: { entrantId: H, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
+    const bye = m.standingsDelta({ kind: "award", winner: H, loser: null, reason: "bye" } as never, partial, { kind: "swiss" } as never, state);
+    expect(bye.map((d) => d.points)).toEqual([...pointsMapOf(partial)!["3-0"]!]);
+  });
+
+  it("every pointsMap sport × every declared cfg and a configured sets-dependent table × every credited score × both seats × every reason: the cfg's own pair, inside declaredPointsSets", () => {
+    let checked = 0;
+    const witnessed = new Map<string, number>();
+    forEachSport(({ module: m }) => {
+      const declared = declaredCfgs(m as never).map(({ name, cfg }) => ({ name, cfg: cfg as Record<string, unknown> }));
+      // a flat W/D/L table (tennis, generic, the goal sports, …) is not this rule
+      if (declared.every((d) => pointsMapOf(d.cfg) === undefined)) return;
+      const base = declared[0]!.cfg;
+      const top = Math.ceil((base.bestOf as number) / 2);
+      // The pointsMap is a stage cfg field: an organiser's sets-dependent table on this sport, where the score one set
+      // short of a sweep pays less than the sweep — the case a clean-sweep pair would get wrong.
+      const configured = { name: "configured sets-dependent table", cfg: m.configSchema.parse({ ...base, pointsMap: { [`${top}-${top - 1}`]: [2, 1], "*": [3, 0] } }) as Record<string, unknown> };
+      witnessed.set(m.key, 0);
+      for (const { name, cfg } of [...declared, configured]) {
+        const map = pointsMapOf(cfg);
+        expect(map, `${m.key}/${name}: every declared cfg of a pointsMap sport declares one`).toBeDefined();
+        const need = Math.ceil((cfg.bestOf as number) / 2);
+        const sums = new Set(m.declaredPointsSets(cfg));
+        const sweep = JSON.stringify(declaredPair(map!, need, 0));
+        for (const atFault of [H, A]) {
+          const winner = otherSeat(atFault);
+          const cases: Array<{ k: number; reason: string; spec: Spec }> = [
+            { k: 0, reason: "walkover", spec: [["core.forfeit", { by: atFault, reason: "walkover" }]] },
+            { k: 0, reason: "withdrew (before the start)", spec: [["core.forfeit", { by: atFault, reason: "withdrew" }]] },
+          ];
+          for (let k = 0; k < need; k++) {
+            // the side at fault wins k sets setTo-0 (never the deciding set: k < need), then forfeits between sets
+            const won: Spec = Array.from({ length: k }, (): [string, unknown] => [setSummaryType(m.key), atFault === H ? { home: cfg.setTo, away: 0 } : { home: 0, away: cfg.setTo }]);
+            for (const reason of ["retired", "disqualified", "withdrew"]) cases.push({ k, reason, spec: [["core.start"], ...won, ["core.forfeit", { by: atFault, reason }]] });
+          }
+          for (const c of cases) {
+            const tag = `${m.key}/${name} · ${c.reason} by ${atFault} · credited ${need}-${c.k}`;
+            const [w, l] = byResult(winner, deltasOf(m.key, cfg, c.spec));
+            expect([w.metrics.sets_won, l.metrics.sets_won], `${tag}: the credit`).toEqual([need, c.k]);
+            const want = declaredPair(map!, need, c.k);
+            expect(want, `${tag}: the cfg prices the credited score`).toBeDefined();
+            expect([w.points, l.points], tag).toEqual([...want!]);
+            expect(sums.has(w.points + l.points), `${tag}: inside declaredPointsSets`).toBe(true);
+            if (JSON.stringify(want) !== sweep) witnessed.set(m.key, witnessed.get(m.key)! + 1);
+            checked++;
+          }
+        }
+      }
+    });
+    // volleyball, badminton and table tennis declare a pointsMap today; a sport that adopts one joins the sweep
+    expect(witnessed.size, `pointsMap sports swept: ${[...witnessed.keys()].join(", ")}`).toBeGreaterThanOrEqual(3);
+    for (const [key, n] of witnessed) expect(n, `${key}: cases whose credited pair is not the clean sweep`).toBeGreaterThan(0);
+    expect(checked).toBeGreaterThan(0);
+  });
+});

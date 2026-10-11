@@ -43,7 +43,7 @@ explicit rather than implicit.
 | Change of ends after each game, and at 11 in the third | all | — | — | deferred | derivable from the game index and the running score. |
 | Timeouts | all | — | `records.timeouts` is unset | modelled | BWF play has **no** timeouts (only the interval and the between-game break). The kernel refuses `badminton.timeout` with `INVALID_EVENT`, so a pad can never offer one. |
 | Substitutions | all | — | `records.substitutions` is unset | modelled | badminton has no substitutions; the kernel refuses `badminton.sub`. |
-| Retirement or injury | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | the opponent takes the match with the clean-sweep points pair. |
+| Retirement or injury | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | the opponent takes the match with the points for the CREDITED game score (X-WO-1; the pointsMap pair, exact score else `*`). |
 | Match abandoned (hall closure, power) | all | — | `core.abandon` → `State.replayFlagged` | modelled | leaves the fixture undecided for re-scheduling. |
 | Umpire / service judge on the sheet | all | official | `officialLabel.scorer = "Umpire"` | modelled | |
 | Remarks, injury notes | all | — | `core.note` | modelled | free text, no fold effect. |

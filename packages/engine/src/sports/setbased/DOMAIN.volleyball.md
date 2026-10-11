@@ -58,7 +58,7 @@ a row that says the sport does **not** have a fact is enforced by the preset's
 | Timeout / substitution allowances (2 timeouts a set, 6 subs a set indoor) | indoor | — | — | deferred | the referees enforce the caps. Making the schema refuse the 7th substitution would make a legitimate late correction unrecordable — a product decision, not a schema gap. |
 | Beach volleyball has no substitutions | beach | — | `records.substitutions` | deferred | `records` is a **sport** flag, so the kernel accepts `volleyball.sub` under the `beach` variant too. Gating capabilities per variant needs a product decision (it would also change what an existing beach division may record). |
 | Attack / block / dig / reception chains | all | persons | — | deferred | Pro statistics, not scoresheet facts; a separate fidelity tier, not this schema. |
-| Forfeit, incomplete or absent team | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | pays the clean-sweep points pair. |
+| Forfeit, incomplete or absent team | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | pays the stage's points for the CREDITED set score (X-WO-1; FIVB 6.4.3, an incomplete team keeps its sets: a retirement credited 3-2 pays the 3-2 pair, a walkover's 3-0 the 3-0 pair); a bye pays the clean-sweep pair. |
 | Match abandoned (venue, power, weather) | all | — | `core.abandon` → `State.replayFlagged` | modelled | leaves the fixture undecided for re-scheduling. |
 | Referee / scorer / captain signatures | all | officials | `exportTemplates.scoresheet.signatures` | modelled | the printed sheet already carries the block. |
 | Remarks and injury notes | all | — | `core.note` | modelled | free text, no fold effect. |

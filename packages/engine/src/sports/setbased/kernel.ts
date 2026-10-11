@@ -2262,7 +2262,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
         }
       : undefined;
 
-  // Award/forfeit points = a clean-sweep win pair: "*" (or the first entry).
+  // A bye's points = a clean-sweep win pair: "*" (or the first entry). A forfeit pays its credited score (X-WO-1).
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
     cfg.pointsMap["*"] ?? Object.values(cfg.pointsMap)[0] ?? [1, 0];
 
@@ -2517,12 +2517,21 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
         }
         case "award": {
-          // Forfeit: clean-sweep pair to keep the total inside declaredPointsSets; W2b (spec §5.2) the CREDITED sets and
-          // points (`setBasedForfeitCredit`) over the played ledger. The offender is the side that is not the winner.
+          // W2b (spec §5.2) the CREDITED sets and points (`setBasedForfeitCredit`) over the played ledger, and X-WO-1
+          // ("the same credited score is used in the table…") the table points of that credited set score — FIVB 6.4.3:
+          // an incomplete team keeps its sets, so an indoor retirement credited 3-2 pays the 3-2 pair, as the `win`
+          // branch would. The credit always gives the winner exactly ⌈bestOf/2⌉ sets and the offender fewer, i.e. a
+          // decided score, so its pair is a pointsMap value (inside declaredPointsSets) or the same refusal a played
+          // match at that score gets. A bye credits no score (C-5: exactly the pre-W2b bye delta) and keeps the
+          // clean-sweep pair.
           const winnerSide = sideOf(state, outcome.winner);
           const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
-          const credit = setBasedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
-          const [wp, lp] = cleanSweepPair(cfg);
+          const reason = awardReasonOf(outcome);
+          const credit = setBasedForfeitCredit(cfg, state, reason, offender);
+          // The table's own sets_won: the credit laid over the played ledger, exactly as `creditedMetrics` lays it.
+          const credited = (side: Side) => credit.perSide[side === "home" ? 0 : 1].sets_won ?? state.setsWon[side];
+          const [wp, lp] =
+            reason === "bye" ? cleanSweepPair(cfg) : matchPoints(cfg, credited(winnerSide), credited(offender));
           const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
             ...build(side, w, l, pts),
             metrics: creditedMetrics(sideMetrics(state, side), credit, side),
@@ -2554,8 +2563,8 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     // W2a: none — a set-based match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),
 
-    // §9.3 — every decided fixture pays a pointsMap value-sum (award reuses the
-    // clean-sweep pair, whose sum is already present).
+    // §9.3 — every decided fixture pays a pointsMap value-sum (a forfeit pays its
+    // credited score's pair, a bye the clean-sweep pair — both pointsMap values).
     declaredPointsSets(cfg) {
       return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
     },
