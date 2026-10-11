@@ -3,6 +3,7 @@ import "server-only";
 // external-play redesign, Task 7 — spec §6, §7.2). Replaces the
 // pre-redesign `usecases/external-play.ts` (deleted this task; R1).
 import { sql } from "@/lib/db";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import { mapBoardgameClockToLichess, type BoardgameClockInput } from "@/server/external-play/clock";
 import type { ExternalPlayStatus, LichessClock, NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "@/server/usecases/fixtures";
@@ -14,7 +15,12 @@ export type Side = "home" | "away";
 export type SidePlayer = {
   side: Side;
   entrantId: string;
+  /** `entrants.display_name` — the SNAPSHOT. Never rendered directly. */
+  snapshotName: string;
+  /** `entrantDisplayName({ name: snapshotName, kind, members })`. Render THIS. */
   displayName: string;
+  kind: string | null;
+  members: { person_id: string; full_name: string }[];
   personId: string | null;
   userId: string | null;
   lichess: { id: string; username: string } | null;
@@ -309,6 +315,8 @@ export async function bridgeBasis(f: OnlinePlayFixture, opts: { basisIfUnopened?
 
 type SideRow = {
   displayName: string;
+  kind: string | null;
+  fullName: string | null;
   personId: string | null;
   userId: string | null;
   email: string | null;
@@ -331,10 +339,27 @@ type SideRow = {
  * code's own rule: never silently pick one). `recipients` stays broad — every
  * member's linked email, not just the one resolved seat.
  */
+/** The name to RENDER for a chess seat. `entrantDisplayName` is the one
+ *  authority (lib/entrant-name.ts:70); this wrapper only supplies the
+ *  em-dash floor, because `loadSide`'s old fallback was the entrant UUID
+ *  (F5) and a 36-character hex string above a board is worse than "Entry 3". */
+export function sideDisplayName(a: {
+  snapshotName: string;
+  kind: string | null;
+  members: readonly { person_id: string; full_name: string }[];
+}): string {
+  const resolved = entrantDisplayName({
+    name: a.snapshotName,
+    ...(a.kind === null ? {} : { kind: a.kind }),
+    members: a.members,
+  });
+  return resolved.trim() === "" ? "—" : resolved;
+}
+
 async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
   const rows = await sql<SideRow[]>`
-    select e.display_name as "displayName",
-           p.id as "personId", p.user_id as "userId",
+    select e.display_name as "displayName", e.kind as "kind",
+           p.id as "personId", p.full_name as "fullName", p.user_id as "userId",
            u.email, u.locale,
            uea.external_user_id as "externalUserId", uea.username
       from entrants e
@@ -344,7 +369,15 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
       left join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
      where e.id = ${entrantId}
      order by em.person_id`;
-  const displayName = rows[0]?.displayName ?? entrantId;
+  // F5: the snapshot is a fallback for the resolver, never the entrant id.
+  const snapshotName = rows[0]?.displayName ?? "";
+  const kind = rows[0]?.kind ?? null;
+  const members = rows
+    .filter((r): r is SideRow & { personId: string; fullName: string } => r.personId !== null && r.fullName !== null)
+    .map((r) => ({ person_id: r.personId, full_name: r.fullName }))
+    // One row per member today; deduped so a second join row can never turn
+    // one person into "a pair" for the resolver.
+    .filter((m, i, all) => all.findIndex((x) => x.person_id === m.person_id) === i);
   const withUser = rows.filter(
     (r): r is SideRow & { personId: string; userId: string } => r.personId !== null && r.userId !== null,
   );
@@ -354,7 +387,10 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
   return {
     side,
     entrantId,
-    displayName,
+    snapshotName,
+    displayName: sideDisplayName({ snapshotName, kind, members }),
+    kind,
+    members,
     personId: solo?.personId ?? null,
     userId: solo?.userId ?? null,
     lichess:

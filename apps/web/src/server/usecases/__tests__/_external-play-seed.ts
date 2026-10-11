@@ -106,6 +106,12 @@ export type SeedOnlineChessFixtureOpts = {
    *  opened by the seeded owner. Omitted ⇒ the round has never been opened,
    *  which is the DEFAULT state of a freshly paired round. */
   roundOpenedAt?: Date;
+  /** T14 (F5): the PERSON names. When given, the entrants' display_name
+   *  snapshots become "Entry 1" / "Entry 2" — the text an entry flow leaves on
+   *  a singles entrant — so a test can tell the resolved name from the
+   *  snapshot. Omitted ⇒ both are "White" / "Black", as before. */
+  homeFullName?: string;
+  awayFullName?: string;
 };
 
 export type SeedOnlineChessFixtureResult = {
@@ -167,18 +173,19 @@ export async function seedOnlineChessFixture(
   }
   const homeLichess = `w-${randomUUID().slice(0, 8)}`;
   const awayLichess = `b-${randomUUID().slice(0, 8)}`;
-  const white = await seedPlayer(owner.orgId, "White", homeLichess, opts.linked);
-  const black = await seedPlayer(owner.orgId, "Black", awayLichess, opts.linked);
+  const white = await seedPlayer(owner.orgId, opts.homeFullName ?? "White", homeLichess, opts.linked);
+  const black = await seedPlayer(owner.orgId, opts.awayFullName ?? "Black", awayLichess, opts.linked);
+  const named = opts.homeFullName !== undefined || opts.awayFullName !== undefined;
   const [home] = await createEntrants(owner, division.id, [
     {
-      display_name: "White",
+      display_name: named ? "Entry 1" : "White",
       kind: "individual",
       members: [{ person_id: white.personId, is_captain: false, roles: [] }],
     },
   ]);
   const [away] = await createEntrants(owner, division.id, [
     {
-      display_name: "Black",
+      display_name: named ? "Entry 2" : "Black",
       kind: "individual",
       members: [{ person_id: black.personId, is_captain: false, roles: [] }],
     },
