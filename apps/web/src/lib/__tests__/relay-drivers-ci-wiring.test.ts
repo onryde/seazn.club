@@ -187,7 +187,7 @@ describe("capture-qr-v2: the CI override never reaches a deployed environment", 
   const isDeployWorkflow = (text: string) => text.split("\n").some((l) => !/^\s*#/.test(l) && /\bflyctl\b/.test(l));
   const names = (text: string) => text.includes(OVERRIDE);
 
-  it("no Fly config, Dockerfile, deploy workflow or staging/production env file names CAPTURE_QR_V2_ALWAYS — and each kind was found", () => {
+  it("no Fly config, Dockerfile, deploy workflow or staging/production env file names CAPTURE_QR_V2_ALWAYS or ONLINE_CHESS_ALWAYS — and each kind was found", () => {
     const files = walk(ROOT);
     const fly = files.filter(isFly);
     const docker = files.filter(isDocker);
