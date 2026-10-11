@@ -23,7 +23,7 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ConsoleForfeitNotStarted, ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
+import { ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
@@ -1407,11 +1407,10 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
 // the detail sheet's form (name, Ends on) → "Use this template", which POSTs
 // /api/v1/competitions/from-template; a created competition router.push()es
 // to its page, a degraded one opens the degrade modal and stays on /c/new.
-// Review I-5: a walkover is recorded BEFORE core.start (D3 R2), so a forfeit on a console still offering Start is refused
-// by name — never a Start tap followed by a walkover the rule then refuses. Since W2b Task 11 the console's forfeit
-// dialog offers that walkover before play itself; this page object still sends a pre-start forfeit over http (routing it
-// through the dialog is a follow-up).
-describe("forfeitUi: a console still offering Start is refused by name; one under way taps Forfeit and answers its core.forfeit", () => {
+// A walkover is recorded BEFORE core.start (D3 R2). Since W2b Task 11 the console's forfeit dialog offers that walkover,
+// and Neither, before play itself, so forfeitUi drives a scheduled console through the dialog and never taps Start
+// (review I-1 retired the old refusal by name, ConsoleForfeitNotStarted, whose premise was "it would tap Start first").
+describe("forfeitUi: the dialog's four taps on a console scheduled or under way — never Start — answering its core.forfeit", () => {
   const BASE = "http://localhost:3999";
   const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
@@ -1457,13 +1456,22 @@ describe("forfeitUi: a console still offering Start is refused by name; one unde
     return { ctx, log };
   }
 
-  it("Start mounted (scheduled): ConsoleForfeitNotStarted, naming the fixture, and NOTHING tapped — no Start, no Forfeit", async () => {
-    const g = forfeitPage(false);
-    const e = await forfeitUi(g.ctx, fx, "e-away", "walkover").then(() => null, (x: unknown) => x);
-    expect(e).toBeInstanceOf(ConsoleForfeitNotStarted);
-    expect((e as Error).message).toMatch(/fixture fx-1's console still offers Start/);
-    expect(g.log[0]).toBe("reload");
-    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([]);
+  it("Start mounted (scheduled): a walkover and Neither are the dialog's four taps, Start never tapped, and the answer is the core.forfeit's alone (review I-1)", async () => {
+    let checked = 0;
+    for (const by of ["e-away", "both"]) {
+      const g = forfeitPage(false);
+      const posted = await forfeitUi(g.ctx, fx, by, "walkover");
+      expect(posted, by).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
+      expect(g.log[0], by).toBe("reload");
+      const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+      const steps = forfeitSteps(fx, by, "walkover");
+      expect(acts.length, by).toBe(steps.length);
+      expect(acts.some((l) => l.includes(START_MATCH_TESTID)), `${by}: Start is never tapped`).toBe(false);
+      expect(acts[1], by).toContain(by === "both" ? "forfeit-who-both" : "forfeit-who-away");
+      expect(acts.at(-1), by).toBe(`click [data-testid="${FORFEIT_CONFIRM_TESTID}"]`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("under way (no Start): the four Forfeit steps are tapped and the console's answer is the core.forfeit's alone (the positive pair)", async () => {

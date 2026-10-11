@@ -44,7 +44,10 @@ import { readPublicUi } from "../browser/pages/public-division.ts";
 import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../browser/pages/run-sheet.ts";
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
-import { SETTLE_METHODS } from "@seazn/engine/core";
+import { FORFEIT_REASONS, SETTLE_METHODS } from "@seazn/engine/core";
+// W2b Task 11 (review I-1): the reasons PF-2 reserves for the withdrawal cascade, the PRODUCT's list (the console's
+// dialog and the server's refusal read it too), never a hand copy. It imports only @seazn/engine/core (boundary.test.ts).
+import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
@@ -135,12 +138,14 @@ export const PUBLIC_DATA_REVALIDATE_S = 30;
  *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
  *  literal only, PF-3); browser-driver.test.ts pins the two together. */
 export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; its wave owns the editor fixes (rulings 33, 47)");
-/** The forfeits the console's Forfeit cannot record as the rule has them (review I-5). It names ONE of the two entrants
- *  (no double walkover), taps Start first on a scheduled match (a walkover is recorded BEFORE core.start — D3 R2 refuses
- *  one after it) and posts the bare core.forfeit (none of the sport's play a retirement follows, D3 R4). Each of those
- *  goes over http — HttpDriver.forfeit's own composition, streams/index.ts forfeitPosting — until the console's forfeit
- *  dialog (W2b Task 11) exists, exempt by this route; an http forfeit does not use the browser's turn. */
-export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "the console's forfeit dialog is not built: a double walkover, a forfeit on a match not yet started, and the play before a retirement are posted over http");
+/** The one forfeit the console's dialog cannot record as the rule has it: one with generated PLAY to post first (a
+ *  retirement or a disqualification follows some of the sport's play, D3 R4). The dialog posts the bare core.forfeit, and
+ *  this driver's direct forfeit() does not tap that play on the pad first, so it goes over http — HttpDriver.forfeit's own
+ *  composition, streams/index.ts forfeitPosting — exempt by this route; an http forfeit does not use the browser's turn.
+ *  Since W2b Task 11 the dialog records everything else: a walkover or Neither before Start, and a forfeit under way
+ *  (review I-1). A stream that carries its play beside the forfeit is cut by segmentStream (play on the pad, the forfeit
+ *  on the console) and never reaches this route. */
+export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "a forfeit with generated play to post first is posted over http: the console's forfeit dialog records the forfeit alone, and the play is not tapped on the pad first");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -191,9 +196,10 @@ const ORGANISER_ACTION: Readonly<Record<string, "settle" | "abandon" | "forfeit"
   "core.abandon": "abandon",
   "core.forfeit": "forfeit",
 });
-/** The reasons the console's Forfeit authors: D1's list less `withdrew`, which the console never offers and the server
- *  refuses from every writer but the withdrawal cascade (PF-2). */
-const FORFEIT_REASONS: readonly ForfeitReason[] = ["walkover", "retired", "disqualified"];
+/** The reasons the console's forfeit dialog authors: the engine's closed list less the product's cascade-only reasons,
+ *  which the dialog never offers and the server refuses from every writer but the withdrawal cascade (PF-2). Both lists
+ *  are read, never retyped (review I-1). */
+const CONSOLE_FORFEIT_REASONS: readonly ForfeitReason[] = FORFEIT_REASONS.filter((r) => !(CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(r));
 
 type OrganiserAct =
   | { readonly action: "settle"; readonly winner: string; readonly method: SettleMethodId; readonly note: string | undefined }
@@ -220,7 +226,7 @@ function organiserActOf(event: StreamEvent): OrganiserAct {
     return { action, reason: p.reason };
   }
   if (!text(p.by)) throw new NoOrganiserRoute(event, "its payload names no entrant that forfeits");
-  if (!FORFEIT_REASONS.includes(p.reason as ForfeitReason)) throw new NoOrganiserRoute(event, `its reason is not one the console's Forfeit authors (${FORFEIT_REASONS.join(", ")})`);
+  if (!CONSOLE_FORFEIT_REASONS.includes(p.reason as ForfeitReason)) throw new NoOrganiserRoute(event, `its reason is not one the console's Forfeit authors (${CONSOLE_FORFEIT_REASONS.join(", ")})`);
   return { action, by: p.by, reason: p.reason as ForfeitReason };
 }
 
@@ -859,7 +865,7 @@ export class BrowserDriver implements OrganiserDriver {
     if (act.action === "forfeit") {
       // The existing forfeit route on either lane (its own ledger record and pages); the console's answers are
       // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes. The
-      // path is the one the forfeit TOOK (FORFEIT_DIALOG_ROUTE sends some over http while the console's turn is open).
+      // path is the one the forfeit TOOK (an organiser segment carries no play, so it is the dialog's while the turn is open).
       const { posted, via } = await this.#forfeit(fixtureId, act.by, act.reason, idempotencyPrefix, []);
       return via === "browser" ? this.#consoleRows(fixtureId, event, posted) : posted;
     }
@@ -877,8 +883,8 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   /** The ledger row at each seq the console answered, as `stored`; the LAST answer is the event the stream meant, and
-   *  its row must be that type and hold every value the event carries (a forfeit on a still-scheduled match answers
-   *  core.start first: that row is stored, not compared). */
+   *  its row must be that type and hold every value the event carries (any earlier answer's row is stored, not
+   *  compared). */
   async #consoleRows(fixtureId: string, event: StreamEvent, answered: readonly PostedEvent[]): Promise<PostedEvent[]> {
     if (answered.length === 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, "the page answered no event");
     const rows = await this.#http.ledger(fixtureId, Math.min(...answered.map((a) => a.seq)) - 1);
@@ -978,13 +984,13 @@ export class BrowserDriver implements OrganiserDriver {
     return (await this.#forfeit(fixtureId, by, reason, idempotencyPrefix, play)).posted;
   }
 
-  /** The console's Forfeit while the type's browser turn is open and the forfeit is one it records as the rule has it:
-   *  one named entrant, on a match already under way, with no play to post first. Anything else — a double walkover,
-   *  generated play, a fixture still scheduled — is HttpDriver.forfeit, exempt by FORFEIT_DIALOG_ROUTE while the
-   *  browser's turn was open (review I-5: the console would have dropped the play, or tapped Start before a walkover). */
+  /** The console's forfeit dialog while the type's browser turn is open and there is no play to post first: a walkover
+   *  or Neither on a match not yet started (the dialog offers both before Start, D3 R2 — Start is never tapped), and a
+   *  forfeit on a match under way (review I-1). Generated play first is HttpDriver.forfeit, exempt by
+   *  FORFEIT_DIALOG_ROUTE while the browser's turn was open (the dialog would have dropped the play). */
   async #forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[]): Promise<{ posted: PostedEvent[]; via: "browser" | "http" }> {
     const wanted = this.#wants("forfeit");
-    const onConsole = wanted && by !== "both" && play.length === 0 && (await this.#http.fixtureState(fixtureId)).status !== "scheduled";
+    const onConsole = wanted && play.length === 0;
     if (!onConsole) {
       if (wanted) this.#ledger.exempt("forfeit", FORFEIT_DIALOG_ROUTE);
       this.#ledger.record("forfeit", "http");

@@ -13,11 +13,10 @@
 //  - Start is `score-start-match` → send("core.start", {}) (:1026-1031), shown
 //    while the status is scheduled (`started`, :725). The console never
 //    starts a match by itself. Since W2b Task 11 its Forfeit is offered BEFORE
-//    play too (the dialog's walkover and "Neither", D3 R2), but this page
-//    object still drives only a forfeit on a match under way: forfeitUi
-//    refuses a console still showing Start by name (ConsoleForfeitNotStarted)
-//    and BrowserDriver sends a pre-start forfeit over http (review I-5).
-//    Routing those through the dialog is a follow-up, not done here.
+//    play too (the dialog's walkover and "Neither", D3 R2), so forfeitUi drives
+//    a forfeit on a scheduled match through the dialog as well, and never taps
+//    Start: a walkover is recorded before core.start (review I-1, which retired
+//    the old refusal of a console still showing Start).
 //  - The forfeit dialog (W2b Task 11, forfeit-dialog.tsx `ForfeitDialog`)
 //    opens from `score-forfeit` while not decided (and on a chess tie-break
 //    that is pending, R14): `forfeit-who-home|away|both` →
@@ -40,7 +39,7 @@
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
 import type { Page } from "playwright";
-import { FINALIZE_TESTID, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
 import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
@@ -57,15 +56,6 @@ export class ForfeitNeedsBothSides extends Error {
   constructor(fixtureId: string) {
     super(`browser: fixture ${fixtureId} has an empty side — the console's Forfeit names two entrants, so there is no forfeit to author`);
     this.name = "ForfeitNeedsBothSides";
-  }
-}
-
-/** The console still offers Start: the match is scheduled, and tapping Start before a forfeit would record core.start
- *  ahead of a walkover the rule records before it (D3 R2) — refused by name, never tapped (review I-5). */
-export class ConsoleForfeitNotStarted extends Error {
-  constructor(fixtureId: string) {
-    super(`browser: fixture ${fixtureId}'s console still offers Start — a forfeit on a match not yet started is not the console's to record (it would tap Start first); it goes over http`);
-    this.name = "ConsoleForfeitNotStarted";
   }
 }
 
@@ -111,18 +101,17 @@ export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage,
   return data;
 }
 
-/** Forfeits the open console's match, already under way, for `by` (an entrant id); the console's answer to the
- *  core.forfeit, as a one-element list. A console still offering Start is refused by name (ConsoleForfeitNotStarted):
- *  nothing is tapped. A `by` naming neither side, or an unauthorable reason, is the bench's own refusal
- *  (organiserStepsFor). */
+/** Forfeits the open console's match for `by` (an entrant id, or "both" for the dialog's Neither); the console's answer
+ *  to the core.forfeit, as a one-element list. The match may be scheduled or under way: the dialog offers a walkover
+ *  and Neither before Start (D3 R2), and Start is never tapped. A `by` naming neither side, or an unauthorable reason,
+ *  is the bench's own refusal (organiserStepsFor); a reason the PHASE does not offer is a chip the dialog does not
+ *  render, so its tap fails — a named finding, never a Start tap to reach it. */
 export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string, reason: ForfeitReason): Promise<PostedEvent[]> {
   const { page } = c;
   const steps = forfeitSteps(fixture, by, reason);
   const nav = navBudget(c);
-  const start = page.getByTestId(START_MATCH_TESTID);
-  // Start mounted means scheduled: refused, never tapped. Otherwise the Forfeit toggle is the first act.
-  await reload(c, { control: start.or(page.getByTestId(FORFEIT_TESTID)), what: "the console's Start or Forfeit" });
-  if ((await start.count()) > 0) throw new ConsoleForfeitNotStarted(fixture.id);
+  // The Forfeit opener is the first act, scheduled or under way.
+  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: "the console's Forfeit" });
   const posted: PostedEvent[] = [];
   const before = await shoot(c, "07-forfeit-before");
   posted.push(await postForfeit(page, c, fixture.id, steps));

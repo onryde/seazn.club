@@ -467,5 +467,80 @@
     "name": "Forfeit and Abandon never read alike"
    }
   ]
+ },
+ {
+  "id": "matrix-both-over-http",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted && by !== \"both\" && play.length === 0;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: the dialog records a walkover or Neither before Start"
+   }
+  ]
+ },
+ {
+  "id": "matrix-scheduled-over-http",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted && play.length === 0 && (await this.#http.fixtureState(fixtureId)).status !== \"scheduled\";\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: the dialog records a walkover or Neither before Start"
+   }
+  ]
+ },
+ {
+  "id": "matrix-play-on-console",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: generated play before a forfeit is the one http forfeit"
+   }
+  ]
+ },
+ {
+  "id": "matrix-cascade-not-subtracted",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "FORFEIT_REASONS.filter((r) => !(CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(r));",
+  "replace": "FORFEIT_REASONS.filter((r) => !([] as readonly string[]).includes(r));",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "every reason the engine declares routes to the console's Forfeit"
+   }
+  ]
+ },
+ {
+  "id": "matrix-po-refuses-scheduled",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: \"the console's Forfeit\" });\n",
+  "replace": "  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: \"the console's Forfeit\" });\n  if ((await page.getByTestId(\"score-start-match\").count()) > 0) throw new Error(\"console still offers Start\");\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "forfeitUi: the dialog's four taps on a console scheduled or under way"
+   }
+  ]
  }
 ]

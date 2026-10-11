@@ -29,7 +29,12 @@ const ORGANISER_ONLY_EVENTS = "apps/web/src/lib/organiser-only-events.ts";
 // match" (feedsNextMatch), shared by its every double-walkover writer; w2b-checks.ts's hasNoNextMatch reads it rather
 // than keep a second rule. Import-free (pinned below), so plain node loads it with no alias.
 const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH]);
+// W2b Task 11 (review I-1): forfeit-phase-refusal.ts holds the PRODUCT's CASCADE_ONLY_FORFEIT_REASONS (PF-2), which the
+// console's dialog and the server's refusal read; the browser driver subtracts it from the engine's FORFEIT_REASONS rather
+// than retype what the dialog authors. Its one import is @seazn/engine/core, a bare package @seazn/matrix depends on
+// (pinned below), so plain node loads it with no alias — the bench's scorer.ts already loads it in this process.
+const FORFEIT_PHASE_REFUSAL = "apps/web/src/lib/forfeit-phase-refusal.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -133,6 +138,16 @@ describe("tools/matrix import boundary", () => {
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === BRACKET_NEXT_MATCH)).map((m) => relative(MATRIX, m)).sort();
     // reference-bracket.ts cannot read it through the checks: w2b-checks → assertions.ts → reference-bracket.ts.
     expect(naming).toEqual(["lib/reference-bracket.ts", "lib/scenarios/w2b-checks.ts"]);
+  });
+
+  it("the product's cascade-only forfeit reasons are a file plain node can load: it exists, imports only the engine's core barrel (a package the matrix depends on), and only the browser driver names it", () => {
+    const file = join(REPO, FORFEIT_PHASE_REFUSAL);
+    expect(existsSync(file), FORFEIT_PHASE_REFUSAL).toBe(true);
+    expect(importsOf(file).map((i) => i.spec), `${FORFEIT_PHASE_REFUSAL} must import nothing but @seazn/engine/core`).toEqual(["@seazn/engine/core"]);
+    const deps = (JSON.parse(readFileSync(join(MATRIX, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+    expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === FORFEIT_PHASE_REFUSAL)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {
