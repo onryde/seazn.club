@@ -22,21 +22,15 @@ afterEach(() => {
 describe("POST /api/cron/external-play", () => {
   it("401s with a missing or wrong x-cron-secret, never running the sweep", async () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
-    expect((await POST(new Request("http://localhost/api/cron/external-play", { method: "POST" }))).status).toBe(
-      401,
-    );
+    expect((await POST()).status).toBe(401);
     hdrs.store = new Headers({ "x-cron-secret": "wrong" });
-    expect((await POST(new Request("http://localhost/api/cron/external-play", { method: "POST" }))).status).toBe(
-      401,
-    );
+    expect((await POST()).status).toBe(401);
     expect(sweepMock).not.toHaveBeenCalled();
   });
 
   it("503s when CRON_SECRET is not configured", async () => {
     vi.stubEnv("CRON_SECRET", "");
-    expect((await POST(new Request("http://localhost/api/cron/external-play", { method: "POST" }))).status).toBe(
-      503,
-    );
+    expect((await POST()).status).toBe(503);
   });
 
   it("runs ONE sweep pass with production deps and answers its report with the right secret", async () => {
@@ -49,10 +43,16 @@ describe("POST /api/cron/external-play", () => {
       reconciled: 4,
       heldForOrganiser: 5,
       scanned: 15,
-      failures: [{ job: "reconcile", fixtureId: "f-1", code: "LICHESS_TOKEN_UNAVAILABLE" }],
+      failures: [
+        {
+          job: "reconcile",
+          fixtureId: "f-1",
+          code: "LICHESS_TOKEN_UNAVAILABLE",
+        },
+      ],
     };
     sweepMock.mockResolvedValue(report);
-    const res = await POST(new Request("http://localhost/api/cron/external-play", { method: "POST" }));
+    const res = await POST();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, data: report });
     expect(sweepMock).toHaveBeenCalledTimes(1);
