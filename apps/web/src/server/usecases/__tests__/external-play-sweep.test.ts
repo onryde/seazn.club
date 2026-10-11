@@ -42,6 +42,7 @@ import { sql } from "@/lib/db";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { SHIP1_TIME_CONTROLS, isBoardApiPlayable, type TimeControl } from "@/server/external-play/time-controls";
 import { getFixtureState } from "../fixtures";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
@@ -53,6 +54,10 @@ import { act } from "../external-play/play";
 import { reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import {
+  SWEEP_CADENCE_MS,
+  SWEEP_MOVE_BUDGET,
+  SWEEP_NO_TRUTH_HOLD_AFTER,
+  expectedEndAt,
   playableWindow,
   sweepExternalPlay,
   type SweepDeps,
@@ -261,6 +266,8 @@ const WALKOVER = "walkover";
 // Boards, through the real producers.
 // ---------------------------------------------------------------------------
 type Side = "home" | "away";
+/** Every board's division clock (5+3, a ship-1 control): the stored shape. */
+const SEED_CLOCK = { base: 300, increment: 3 } as const;
 type Board = SeedOnlineChessFixtureResult & {
   opened: Date;
   /** `min` minutes after the organiser opened the round. */
@@ -279,7 +286,7 @@ async function openedBoard(
     divisionStarted: true,
     scheduledAt: new Date(opened.getTime() + 3 * 60 * 60_000),
     linked: true,
-    clock: { base: 300, increment: 3 },
+    clock: SEED_CLOCK,
   });
   if (o.kind) await sql`update stages set kind = ${o.kind} where id = ${s.stageId}`;
   const res = await openRound({ stageId: s.stageId, roundNo: 1, actorUserId: s.ownerUserId }, { now: opened });
@@ -458,6 +465,7 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     expect(report.scanned, "the board was looked at").toBeGreaterThanOrEqual(1);
     expect(report.noShows).toBe(0);
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(report.reconciled, "no game on file: nothing for reconcile to read").toBe(0);
   });
 
   it("BEFORE the deadline nobody is ruled absent — the minute before, and the deadline itself", async () => {
@@ -1072,5 +1080,391 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect(second.meetingsEnded).toBe(1);
     expect(ended).toEqual([m, m]);
     expect(await endedAt(b.fixtureId)).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job 4 — the reconcile sweep (the abandoned-board sweep, spec §3.5 / §4).
+// ---------------------------------------------------------------------------
+
+/** M13's increment multiplier, RECOVERED from the playability predicate by
+ *  probing it — never copied out of time-controls.ts. The predicate is
+ *  `limit + B × increment >= FLOOR`: the smallest limit it accepts at +0 is
+ *  the floor, at +1 it is floor − B. */
+function recoveredMoveBudget(): number {
+  const smallestAccepted = (increment: number): number => {
+    for (let limit = 0; limit <= 3600; limit++) {
+      if (isBoardApiPlayable({ key: "probe", limitSeconds: limit, incrementSeconds: increment })) return limit;
+    }
+    throw new Error(`isBoardApiPlayable accepts no control under an hour at +${increment}`);
+  };
+  const floor = smallestAccepted(0);
+  expect(floor, "a real floor, not zero").toBeGreaterThan(0);
+  return floor - smallestAccepted(1);
+}
+
+describe("expectedEndAt — the budget moves with the time control", () => {
+  it("SWEEP_MOVE_BUDGET is the multiplier isBoardApiPlayable itself uses, recovered by probing it", () => {
+    const recovered = recoveredMoveBudget();
+    expect(recovered, "the increment multiplier the predicate uses").toBeGreaterThan(0);
+    expect(SWEEP_MOVE_BUDGET).toBe(recovered);
+  });
+
+  it("allows BOTH clocks to run out: never before 2 × the limit — every ship-1 control", () => {
+    let checked = 0;
+    const t0 = new Date("2026-10-09T10:00:00.000Z");
+    for (const tc of SHIP1_TIME_CONTROLS) {
+      const span = expectedEndAt(t0, tc).getTime() - t0.getTime();
+      expect(span, tc.key).toBeGreaterThanOrEqual(2 * tc.limitSeconds * 1000);
+      // Both players' full budget: the limit plus B moves of increment, each.
+      expect(span, `${tc.key}: 2 × (limit + B × increment)`).toBe(
+        2 * (tc.limitSeconds + recoveredMoveBudget() * tc.incrementSeconds) * 1000,
+      );
+      checked++;
+    }
+    expect(checked, "ship-1 time controls checked").toBe(SHIP1_TIME_CONTROLS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("an increment lengthens the budget, and a slower control outlasts a faster one", () => {
+    const t0 = new Date("2026-10-09T10:00:00.000Z");
+    const by = (key: string): TimeControl => {
+      const tc = SHIP1_TIME_CONTROLS.find((c) => c.key === key);
+      if (!tc) throw new Error(`ship-1 list has no ${key}`);
+      return tc;
+    };
+    expect(expectedEndAt(t0, by("3+2")).getTime(), "the increment must count").toBeGreaterThan(expectedEndAt(t0, by("3+0")).getTime());
+    expect(expectedEndAt(t0, by("15+10")).getTime()).toBeGreaterThan(expectedEndAt(t0, by("10+5")).getTime());
+    expect(expectedEndAt(t0, by("5+0")).getTime()).toBeGreaterThan(expectedEndAt(t0, by("3+0")).getTime());
+  });
+
+  it("the cadence is the spec's 5-minute cron (§4), and a board is held after a SMALL number of empty reads", () => {
+    expect(SWEEP_CADENCE_MS).toBe(5 * 60_000);
+    expect(SWEEP_NO_TRUTH_HOLD_AFTER).toBeGreaterThanOrEqual(2);
+    expect(SWEEP_NO_TRUTH_HOLD_AFTER).toBeLessThanOrEqual(5);
+  });
+});
+
+describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () => {
+  type BridgeFacts = {
+    status: string;
+    needs_reason: string | null;
+    last_error: string | null;
+    challenge_id: string | null;
+    move_count: number;
+    sweep_no_truth_reads: number;
+    last_polled_at: Date | null;
+  };
+  const bridge = async (b: Board): Promise<BridgeFacts> => {
+    const [r] = await sql<BridgeFacts[]>`
+      select status, needs_reason, last_error, challenge_id, move_count, sweep_no_truth_reads, last_polled_at
+        from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    return r!;
+  };
+  /** Lichess requests made for this game (stream reads and exports). */
+  const readsOf = (gameId: string) => lichess.calls.filter((c) => c.gameId === gameId).length;
+  const flagsOf = async (b: Board) =>
+    sql<{ note: string | null }[]>`select note from fixture_play_flags where fixture_id = ${b.fixtureId} and kind = 'out_of_band_play' order by opened_at`;
+  /** When the game can be over at the latest: both clocks run out with B
+   *  moves of increment each — from the RULEBOOK (the seed's clock and the
+   *  recovered multiplier), never from expectedEndAt. */
+  const endOf = (startedAt: Date) =>
+    new Date(startedAt.getTime() + 2 * (SEED_CLOCK.base + recoveredMoveBudget() * SEED_CLOCK.increment) * 1000);
+
+  it("a LIVE game is read at every tick while it runs: the moves made at Lichess are adopted and flagged MID-game", async () => {
+    // Addendum (T11): the sweep is the main detector of out-of-band play —
+    // the cadence must make that real, so nothing waits for an expected end.
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b); // e2e4 through T10 at minute 6
+    expect(endOf(b.at(6)).getTime(), "premise: both ticks are before the game could have ended").toBeGreaterThan(b.at(13).getTime());
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5"] }));
+    const first = await sweep(b, { now: b.at(8) });
+    expect(first.reconciled).toBe(1);
+    expect((await bridge(b)).move_count).toBe(2);
+    expect(await flagsOf(b), "Black's reply was made at Lichess, not here").toHaveLength(1);
+    // The next tick reads again.
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5", "g1f3"] }));
+    const second = await sweep(b, { now: new Date(b.at(8).getTime() + SWEEP_CADENCE_MS) });
+    expect(second.reconciled).toBe(1);
+    expect((await bridge(b)).move_count).toBe(3);
+    expect(await flagsOf(b)).toHaveLength(2);
+  });
+
+  it("a pass that OVERLAPS the last one (under half a tick later) does not read the board again", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4"] }));
+    expect((await sweep(b, { now: b.at(8) })).reconciled).toBe(1);
+    const reads = readsOf(gameId);
+    const overlap = await sweep(b, { now: new Date(b.at(8).getTime() + SWEEP_CADENCE_MS / 2 - 1) });
+    expect(overlap.reconciled).toBe(0);
+    expect(readsOf(gameId)).toBe(reads);
+    expect((await sweep(b, { now: new Date(b.at(8).getTime() + SWEEP_CADENCE_MS / 2) })).reconciled, "half a tick on: due").toBe(1);
+  });
+
+  it("a READY game Lichess aborted at ply 0 is reconciled FIRST: an `aborted` hold, never a no-show", async () => {
+    // T10 ruling: a game resigned or aborted at ply 0 stays 'ready' on our
+    // side until reconcile — and an aborted game is not a no-show.
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await readyGame(b);
+    serveStream(gameFull(b, gameId, MID, { moves: [], status: "aborted" }));
+    const r = await sweep(b, { now: b.at(45) });
+    expect(r.reconciled).toBe(1);
+    expect(r.noShows).toBe(0);
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(await bridge(b)).toMatchObject({ status: "needs_organiser", needs_reason: "aborted" });
+    expect(r.heldForOrganiser, "the hold this pass placed").toBe(1);
+  });
+
+  it("a FINISHED game is never read again — and its meeting comes down in the SAME pass that finished it", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const { meetingId } = await ensureMeeting(b.fixtureId, RTK);
+    const gameId = await liveGame(b);
+    serveStream(gameFull(b, gameId, ENDED));
+    const ended: string[] = [];
+    const end: NonNullable<SweepDeps["endMeeting"]> = async (m) => {
+      ended.push(m);
+      await endMeeting(m, RTK);
+    };
+    const first = await sweep(b, { now: b.at(10), endMeeting: end });
+    expect(first.reconciled).toBe(1);
+    expect((await bridge(b)).status).toBe("finished");
+    expect(first.meetingsEnded, "job 3 runs after job 4").toBe(1);
+    expect(ended).toEqual([meetingId]);
+    const reads = readsOf(gameId);
+    const later = await sweep(b, { now: b.at(40), endMeeting: end });
+    expect(later.reconciled).toBe(0);
+    expect(readsOf(gameId)).toBe(reads);
+  });
+
+  it("a board WITHDRAWN mid-game: the sweep's reconcile closes its bridge with no Lichess read", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+    const r = await sweep(b, { now: b.at(10) });
+    expect(r.reconciled).toBe(1);
+    expect((await bridge(b)).status).toBe("finished");
+    expect(readsOf(gameId)).toBe(0);
+  });
+
+  it("M3: a hold T9 placed when the ACCEPT failed is never read; a hold placed MID-game is", async () => {
+    // T11 review M3: T9 holds token_revoked / provider_error at create time
+    // with the challenge recorded — the two mid-game reasons reconcile reads.
+    // Read every tick, an unaccepted challenge would be re-read forever.
+    let checked = 0;
+    for (const code of ["unauthorized", "unavailable"] as const) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const gameId = `gm-${randomUUID().slice(0, 12)}`;
+      board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
+      board.acceptChallenge.mockResolvedValueOnce({ ok: false, code, raw: `accept refused (${code})` });
+      expect(await createGameIfReady(b.fixtureId, { now: b.at(5), publish: async () => {} })).toMatchObject({ created: false });
+      const row = await bridge(b);
+      expect(row, `premise: T9 held it with the challenge (${code})`).toMatchObject({ status: "needs_organiser", challenge_id: gameId });
+      expect(row.needs_reason, `premise: a reason reconcile reads mid-game (${code})`).toMatch(/^(token_revoked|provider_error)$/);
+      expect(row.last_error).toMatch(/^accept:/);
+      const r = await sweep(b, { now: b.at(10) });
+      expect(r.reconciled, code).toBe(0);
+      expect(readsOf(gameId), code).toBe(0);
+      checked++;
+    }
+    expect(checked, "T9 accept-failure holds checked").toBe(2);
+
+    // The pair: a line that does not extend ours, held provider_error by
+    // T11 MID-game, IS read on the next tick.
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    serveStream(gameFull(b, gameId, MID, { moves: ["d2d4"] }));
+    await sweep(b, { now: b.at(8) });
+    expect(await bridge(b), "premise: T11 held it mid-game").toMatchObject({ status: "needs_organiser", needs_reason: "provider_error" });
+    const reads = readsOf(gameId);
+    const r = await sweep(b, { now: new Date(b.at(8).getTime() + SWEEP_CADENCE_MS) });
+    expect(r.reconciled).toBe(1);
+    expect(readsOf(gameId)).toBeGreaterThan(reads);
+  });
+
+  it(`M4: past the expected end, ${SWEEP_NO_TRUTH_HOLD_AFTER} consecutive reads that tell nothing — backing off between them — hold provider_error`, async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b); // started at minute 6
+    const end = endOf(b.at(6));
+    // Lichess answers nothing (the fake's default: every stream and export 503).
+    // BEFORE the end, every tick reads, and an empty read is not counted.
+    let t = b.at(8);
+    let before = 0;
+    while (t.getTime() < end.getTime()) {
+      expect((await sweep(b, { now: t })).reconciled, `tick ${t.toISOString()}`).toBe(1);
+      expect((await bridge(b)).sweep_no_truth_reads).toBe(0);
+      before++;
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(before, "ticks before the expected end").toBeGreaterThan(0);
+    // Past it: read, count, and back off — doubling from one tick.
+    let held = 0;
+    let readsCounted = 0;
+    let skipped = 0;
+    for (let tick = 0; tick < 40 && held === 0; tick++) {
+      const r = await sweep(b, { now: t });
+      const row = await bridge(b);
+      if (r.reconciled === 1) {
+        readsCounted++;
+        expect(row.sweep_no_truth_reads, `read ${readsCounted}`).toBe(readsCounted);
+        held = r.heldForOrganiser;
+      } else {
+        skipped++;
+      }
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(readsCounted, "consecutive empty reads before the hold").toBe(SWEEP_NO_TRUTH_HOLD_AFTER);
+    expect(held, "the pass that held it says so").toBe(1);
+    expect(skipped, "the back-off skipped at least one tick").toBeGreaterThan(0);
+    const row = await bridge(b);
+    expect(row).toMatchObject({ status: "needs_organiser", needs_reason: "provider_error" });
+    expect(row.last_error).toContain(gameId);
+    expect(forfeitsAttempted(b.fixtureId), "never a no-show").toEqual([]);
+  });
+
+  it("M4: an empty read AT the expected end is not past it; the next one is", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(b);
+    const end = endOf(b.at(6));
+    expect((await sweep(b, { now: end })).reconciled).toBe(1);
+    expect((await bridge(b)).sweep_no_truth_reads, "at the end: not counted").toBe(0);
+    expect((await sweep(b, { now: new Date(end.getTime() + SWEEP_CADENCE_MS) })).reconciled).toBe(1);
+    expect((await bridge(b)).sweep_no_truth_reads).toBe(1);
+  });
+
+  it("M4: a read that brings the truth resets the count — the board is not held on stale empties", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    let t = new Date(endOf(b.at(6)).getTime() + 60_000);
+    expect((await sweep(b, { now: t })).reconciled).toBe(1);
+    expect((await bridge(b)).sweep_no_truth_reads).toBe(1);
+    // Lichess answers: the game still runs (a long think).
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4"] }));
+    t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    expect((await sweep(b, { now: t })).reconciled).toBe(1);
+    expect((await bridge(b)).sweep_no_truth_reads, "truth resets it").toBe(0);
+    lichess.reset();
+    t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    expect((await sweep(b, { now: t })).reconciled).toBe(1);
+    expect(await bridge(b)).toMatchObject({ status: "live", sweep_no_truth_reads: 1 });
+  });
+
+  it("M4: a board the sweep held is still read — backed off — and the game's result settles it when Lichess answers", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const gameId = await liveGame(b);
+    let t = new Date(endOf(b.at(6)).getTime() + 60_000);
+    for (let i = 0; i < 40 && (await bridge(b)).status !== "needs_organiser"; i++) {
+      await sweep(b, { now: t });
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(await bridge(b), "premise: held by the sweep").toMatchObject({ needs_reason: "provider_error" });
+    // Empty reads go on being counted on the held row — and it is not held
+    // again: once is the organiser's queue.
+    let heldAgain = 0;
+    let readsAfter = 0;
+    for (let i = 0; i < 12; i++) {
+      const r = await sweep(b, { now: t });
+      heldAgain += r.heldForOrganiser;
+      readsAfter += r.reconciled;
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(readsAfter, "still read, backed off: fewer reads than ticks").toBeGreaterThan(0);
+    expect(readsAfter).toBeLessThan(12);
+    expect(heldAgain).toBe(0);
+    expect((await bridge(b)).sweep_no_truth_reads).toBe(SWEEP_NO_TRUTH_HOLD_AFTER + readsAfter);
+    serveStream(gameFull(b, gameId, ENDED));
+    let settled = false;
+    for (let i = 0; i < 40 && !settled; i++) {
+      await sweep(b, { now: t });
+      settled = (await fixtureRow(b.fixtureId)).outcome !== null;
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(settled, "Lichess's result was written").toBe(true);
+    const reads = readsOf(gameId);
+    const later = await sweep(b, { now: new Date(t.getTime() + 24 * 60 * 60_000) });
+    expect(readsOf(gameId), "a settled fixture's held row is the organiser's: never read again").toBe(reads);
+    expect(later.reconciled, "…nor handed to reconcile at all").toBe(0);
+  });
+
+  it("two passes at the SAME instant read a board ONCE (staged on the bridge row's lock)", async () => {
+    // Both passes read the candidates before either claims; the claim is a
+    // compare-and-set on last_polled_at, so the second finds it moved.
+    let checked = 0;
+    for (let run = 0; run < 3; run++) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      await liveGame(b);
+      const seen: string[] = [];
+      const deps: SweepDeps = {
+        now: b.at(8),
+        reconcile: async (a) => {
+          seen.push(a.fixtureId);
+          return null;
+        },
+      };
+      let runs: Promise<SweepReport>[] = [];
+      await sql.begin(async (tx) => {
+        await tx`select 1 from fixture_external_play where fixture_id = ${b.fixtureId} for update`;
+        runs = [sweep(b, deps), sweep(b, deps)];
+        for (let i = 0; i < 200; i++) {
+          const [w] = await sql<{ n: number }[]>`
+            select count(*)::int as n from pg_stat_activity
+             where datname = current_database() and wait_event_type = 'Lock' and query ilike '%set last_polled_at%'`;
+          if (w!.n >= 2) break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike '%set last_polled_at%'`;
+        expect(w!.n, `run ${run}: both claims are waiting on the row`).toBe(2);
+      });
+      const reports = await Promise.all(runs);
+      expect(reports.map((r) => r.reconciled).sort(), `run ${run}`).toEqual([0, 1]);
+      expect(seen).toEqual([b.fixtureId]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("an IMPOSSIBLE row — live with no started_at — is still read, but never counted toward a hold (guard reached)", async () => {
+    // T10 stamps started_at with the first move and T11 with an adopted one,
+    // so production cannot write this. The sweep must not guess an end for it.
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(b);
+    await sql`update fixture_external_play set started_at = null where fixture_id = ${b.fixtureId}`; // the impossible state, by hand
+    let t = b.at(240);
+    for (let i = 0; i < 4; i++) {
+      expect((await sweep(b, { now: t })).reconciled).toBe(1);
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(await bridge(b)).toMatchObject({ status: "live", sweep_no_truth_reads: 0 });
+  });
+
+  it("a READY game (never started) has its end measured from the round's deadline: held after the empties too", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await readyGame(b);
+    const end = endOf(playableWindow(b.opened).deadline);
+    expect((await sweep(b, { now: new Date(end.getTime() - 60_000) })).reconciled).toBe(1);
+    expect((await bridge(b)).sweep_no_truth_reads, "before the end: not counted").toBe(0);
+    let t = new Date(end.getTime() + 60_000);
+    for (let i = 0; i < 40 && (await bridge(b)).status === "ready"; i++) {
+      await sweep(b, { now: t });
+      t = new Date(t.getTime() + SWEEP_CADENCE_MS);
+    }
+    expect(await bridge(b)).toMatchObject({ status: "needs_organiser", needs_reason: "provider_error", sweep_no_truth_reads: SWEEP_NO_TRUTH_HOLD_AFTER });
+  });
+
+  it("a reconcile that THROWS is a failure by code, counts as an empty read past the end, and never aborts the pass", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(b);
+    const other = await openedBoard({ checkedIn: ["home"] });
+    const t = new Date(endOf(b.at(6)).getTime() + 60_000);
+    const r = await sweep([b, other], {
+      now: t,
+      reconcile: async () => {
+        throw Object.assign(new Error("token store unavailable"), { code: "LICHESS_TOKEN_UNAVAILABLE" });
+      },
+    });
+    expect(r.failures).toContainEqual({ job: "reconcile", fixtureId: b.fixtureId, code: "LICHESS_TOKEN_UNAVAILABLE" });
+    expect((await bridge(b)).sweep_no_truth_reads).toBe(1);
+    expect(forfeitsAttempted(other.fixtureId), "the rest of the pass ran").toHaveLength(1);
   });
 });

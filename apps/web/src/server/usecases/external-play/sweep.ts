@@ -6,7 +6,9 @@ import "server-only";
 //   1. the T+20 no-show      → `core.forfeit {by, reason: "walkover"}`;
 //   2. the mint retry         for a create that hit Lichess's 429 wall (M3);
 //   3. meeting teardown       at the result, or at T+20 when nobody played;
-//   4. the reconcile sweep    a live game nobody is watching.
+//   4. the reconcile sweep    every game on file, read from the BOARD STREAM by
+//                             T11's reconcile — the abandoned-board sweep and
+//                             the main detector of moves made at Lichess.
 // The T-10 notice is NOT here: under D12 the organiser's open-round action
 // sends the invites and stamps the window (T19).
 //
@@ -21,6 +23,8 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
+import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
 import { endMeeting } from "@/server/external-play/video/realtimekit";
 import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
@@ -29,6 +33,7 @@ import { mintOrgOwnerAuth } from "./auth";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { ensureBridgeRow, loadOnlinePlayFixture, loadSides } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
+import { RECONCILED_WHILE_HELD, reconcile, type ReconcileOutcome } from "./reconcile";
 import { holdForOrganiser } from "./result";
 import { checkIns } from "./room";
 
@@ -55,6 +60,8 @@ export type SweepDeps = {
   endMeeting?: (meetingId: string) => Promise<void>;
   /** T9's create, judged on the sweep's clock. */
   createGameIfReady?: (fixtureId: string, deps: { now: Date }) => Promise<CreateOutcome>;
+  /** T11's reconcile (`reconcile(fixtureId, "sweep")`), on the sweep's clock. */
+  reconcile?: (a: { fixtureId: string; trigger: "sweep" }) => Promise<ReconcileOutcome | null>;
   /** TEST SEAM — scope every job to these orgs. Production passes none and
    *  sweeps every org; the shared test database holds other suites' opened
    *  rounds, which an unscoped sweep would act on. */
@@ -277,6 +284,174 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
   pass.report.meetingsEnded++;
 }
 
+// ─── Job 4: the reconcile sweep (spec §3.5, §4; T11 review M3, M4) ─────────
+//
+// Every game on file is read through T11's reconcile, which opens the BOARD
+// STREAM's first line with a player's token (the export only for a terminal
+// status). Nothing pushes a game's end to us (T11, ruling M2), so this is the
+// trigger that needs no page open: it settles an abandoned board, closes the
+// bridge of a fixture settled elsewhere, and — reconcile flags every ply it
+// adopts — it is the main detector of moves made at Lichess, not through
+// Seazn. So a game is read at EVERY tick while Lichess answers, mid-game
+// included; nothing waits for an expected end.
+//
+// Candidates: a game on file (a challenge) whose bridge is `ready` (created,
+// no move yet — an abort at ply 0 lives here until read) or `live`, on any
+// fixture (reconcile closes the bridge of one no longer playable); or held
+// for one of reconcile's mid-game diagnoses on a fixture still playable —
+// EXCEPT T9's create-time holds (M3): those name a challenge that never
+// became a game, and would be re-read every tick for ever.
+//
+// Back-off and the M4 hold. A read that tells nothing (no stream line, no
+// terminal export — reconcile's `null` — or a throw) PAST the game's expected
+// end is counted in `sweep_no_truth_reads`; each such read doubles the wait
+// before the next, up to SWEEP_BACKOFF_CAP_MS, and at SWEEP_NO_TRUTH_HOLD_AFTER
+// a ready/live board goes to the organiser as provider_error — a board read
+// for ever with no signal blocks the next round. Any read that brings the
+// truth resets the count. `last_polled_at` is when the sweep last read; it is
+// also the claim, so overlapping passes read a board once.
+
+/** Spec §4: the 5-minute cron. */
+export const SWEEP_CADENCE_MS = 5 * 60_000;
+/** A tick lands up to half a period early or late. A re-read due one tick on
+ *  must not slip to the second because the cron fired a second early, and a
+ *  pass overlapping the last one must not read the board again. */
+const SWEEP_TICK_TOLERANCE_MS = SWEEP_CADENCE_MS / 2;
+/** The back-off's ceiling: a board nobody can read is still tried hourly. */
+export const SWEEP_BACKOFF_CAP_MS = 12 * SWEEP_CADENCE_MS;
+/** M4: empty reads in a row, past the expected end, before a ready/live
+ *  board is held provider_error. */
+export const SWEEP_NO_TRUTH_HOLD_AFTER = 3;
+
+/** Lichess's own per-player duration multiplier (M13: `limit + 40 ×
+ *  increment`) — the moves' worth of increment time-controls.ts's estimate
+ *  budgets, taken from it rather than typed here. */
+export const SWEEP_MOVE_BUDGET = estimatedSeconds({ key: "sweep-move-budget", limitSeconds: 0, incrementSeconds: 1 });
+
+/** The latest a game started at `startedAt` can still be running: BOTH clocks
+ *  spent, each with SWEEP_MOVE_BUDGET moves of increment. */
+export function expectedEndAt(startedAt: Date, tc: TimeControl): Date {
+  return new Date(startedAt.getTime() + 2 * (tc.limitSeconds + SWEEP_MOVE_BUDGET * tc.incrementSeconds) * 1000);
+}
+
+/** After its last read, how long before a board is read again: one tick
+ *  while reads bring the truth, then doubling per empty read, capped. */
+function reReadAfterMs(noTruthReads: number): number {
+  return Math.min(SWEEP_CADENCE_MS * 2 ** Math.max(0, noTruthReads - 1), SWEEP_BACKOFF_CAP_MS);
+}
+
+/** T9's create-time holds (create-game.ts: `create:<code>`, `accept:<code>`,
+ *  `recover:<why>` in last_error). */
+const CREATE_TIME_HOLD = "^(create|accept|recover):";
+
+type ReconcileCandidate = {
+  fixtureId: string;
+  bridgeStatus: string;
+  gameId: string;
+  startedAt: Date | null;
+  /** Truncated to the millisecond a JS Date holds, so the claim compares
+   *  like with like whatever precision a writer used. */
+  lastPolledAt: Date | null;
+  noTruthReads: number;
+  openedAt: Date | null;
+  clock: BoardgameClockInput | null;
+};
+
+async function reconcileCandidates(pass: Pass): Promise<ReconcileCandidate[]> {
+  return sql<ReconcileCandidate[]>`
+    select ep.fixture_id as "fixtureId", ep.status as "bridgeStatus", ep.challenge_id as "gameId",
+           ep.started_at as "startedAt", date_trunc('milliseconds', ep.last_polled_at) as "lastPolledAt",
+           ep.sweep_no_truth_reads as "noTruthReads", o.opened_at as "openedAt", d.config->'clock' as clock
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+      join divisions d on d.id = f.division_id
+      left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+     where ep.challenge_id is not null
+       and (ep.status in ('ready', 'live')
+            or (ep.status = 'needs_organiser'
+                and ep.needs_reason in ${sql(RECONCILED_WHILE_HELD as unknown as string[])}
+                and coalesce(ep.last_error, '') !~ ${CREATE_TIME_HOLD}
+                and f.status in ${sql(PLAYABLE_STATUSES as string[])}))
+       ${orgScope(pass)}
+     order by ep.last_polled_at nulls first, ep.fixture_id`;
+}
+
+/** addendum 1: the sweep calls assertTimeControl itself. A clock outside the
+ *  catalogue has no expected end: its board is still read, never counted. */
+function timeControlOf(clock: BoardgameClockInput | null): TimeControl | null {
+  try {
+    return assertTimeControl(clock ?? undefined);
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "INVALID_TIME_CONTROL") return null;
+    throw err;
+  }
+}
+
+function expectedEnd(c: ReconcileCandidate): Date | null {
+  const tc = timeControlOf(c.clock);
+  if (tc === null) return null;
+  if (c.startedAt !== null) return expectedEndAt(c.startedAt, tc);
+  if (c.bridgeStatus === "live") {
+    // T10 stamps started_at with the first move it accepts, T11 with the
+    // first it adopts: a live row without one is broken. Read it; never
+    // guess its end.
+    log.error({ fixtureId: c.fixtureId }, "external-play sweep: a live game on file has no started_at");
+    return null;
+  }
+  // Never started on our side. T9 creates no game after the round's deadline
+  // and Lichess aborts one whose first move does not come, so the deadline is
+  // its base; any read that brings the truth resets the count regardless.
+  return c.openedAt === null ? null : expectedEndAt(playableWindow(c.openedAt).deadline, tc);
+}
+
+async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullable<SweepDeps["reconcile"]>): Promise<void> {
+  if (c.lastPolledAt !== null && pass.now.getTime() - c.lastPolledAt.getTime() < reReadAfterMs(c.noTruthReads) - SWEEP_TICK_TOLERANCE_MS) {
+    return;
+  }
+  // The claim: a compare-and-set on the read we acted on, so of two passes
+  // that both saw the board due, one reads it.
+  const claimed = await sql`
+    update fixture_external_play set last_polled_at = ${pass.now}
+     where fixture_id = ${c.fixtureId}
+       and date_trunc('milliseconds', last_polled_at) is not distinct from ${c.lastPolledAt}
+    returning fixture_id`;
+  if (claimed.length === 0) return;
+  pass.report.reconciled++;
+  const end = expectedEnd(c);
+  let outcome: ReconcileOutcome | null;
+  try {
+    outcome = await read({ fixtureId: c.fixtureId, trigger: "sweep" });
+  } catch (err) {
+    await noTruth(pass, c, end);
+    throw err;
+  }
+  if (outcome === null) {
+    await noTruth(pass, c, end);
+    return;
+  }
+  // A hold reconcile placed (T12: aborted, a tie-break owed, fair play).
+  if (outcome.result?.wrote === "needs_organiser" || outcome.result?.wrote === "aborted") pass.report.heldForOrganiser++;
+  await sql`
+    update fixture_external_play set sweep_no_truth_reads = 0
+     where fixture_id = ${c.fixtureId} and sweep_no_truth_reads <> 0`;
+}
+
+async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Promise<void> {
+  if (end === null || pass.now.getTime() <= end.getTime()) return;
+  const [row] = await sql<{ reads: number; status: string }[]>`
+    update fixture_external_play set sweep_no_truth_reads = sweep_no_truth_reads + 1
+     where fixture_id = ${c.fixtureId} and status in ('ready', 'live', 'needs_organiser')
+    returning sweep_no_truth_reads as reads, status`;
+  if (!row || row.reads < SWEEP_NO_TRUTH_HOLD_AFTER) return;
+  if (row.status !== "ready" && row.status !== "live") return; // already the organiser's
+  const held = await holdForOrganiser({
+    fixtureId: c.fixtureId,
+    reason: "provider_error",
+    detail: `sweep: ${row.reads} reads of game ${c.gameId} past its expected end (${end.toISOString()}) told us nothing`,
+  });
+  if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
+}
+
 // ─── The pass ──────────────────────────────────────────────────────────────
 
 export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
@@ -291,6 +466,11 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
   };
   const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
 
+  // FIRST: a game on file is brought to the truth before anything rules on
+  // its board — a ready game aborted at ply 0 is the organiser's `aborted`,
+  // never a no-show (T10 ruling), and a game it finishes is torn down below.
+  const read = deps.reconcile ?? ((a) => reconcile(a.fixtureId, a.trigger, { now: pass.now }));
+  await each(pass, "reconcile", await reconcileCandidates(pass), (c) => sweepReconcile(pass, c, read));
   const create = deps.createGameIfReady ?? ((id, d) => createGameIfReady(id, { now: d.now }));
   await each(pass, "mint_retry", await retryCandidates(pass), (c) => mintRetry(pass, c, create));
   await each(pass, "no_show", await noShowCandidates(pass), (c) => noShow(pass, c));
