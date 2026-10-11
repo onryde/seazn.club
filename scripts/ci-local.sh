@@ -254,8 +254,9 @@ start_server() {
   # Like CI, it seals stream targets under a per-run random RELAY_KEK (a caller's own wins), and the walkthrough's
   # fake phone connects after FAKE_INGEST_CONNECT_AFTER_MS, the value e2e.yml pins for the walkthrough leg.
   # Capture QR v2: CAPTURE_QR_V2_ALWAYS=1 shows the panel's phone-camera option, which is otherwise behind the PostHog
-  # flag capture-qr-v2 with fallback false (no PostHog here) — as CI's server steps do.
-  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci CAPTURE_QR_V2_ALWAYS="${CAPTURE_QR_V2_ALWAYS:-1}" RELAY_KEK="${RELAY_KEK:-$(openssl rand -hex 32)}" FAKE_INGEST_CONNECT_AFTER_MS="${FAKE_INGEST_CONNECT_AFTER_MS:-10000}" node server.js ) > "$log" 2>&1 &
+  # flag capture-qr-v2 with fallback false (no PostHog here) — as CI's server steps do. ONLINE_CHESS_ALWAYS=1 likewise
+  # offers online chess (PostHog flag online-chess, fallback false).
+  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci CAPTURE_QR_V2_ALWAYS="${CAPTURE_QR_V2_ALWAYS:-1}" ONLINE_CHESS_ALWAYS="${ONLINE_CHESS_ALWAYS:-1}" RELAY_KEK="${RELAY_KEK:-$(openssl rand -hex 32)}" FAKE_INGEST_CONNECT_AFTER_MS="${FAKE_INGEST_CONNECT_AFTER_MS:-10000}" node server.js ) > "$log" 2>&1 &
   SERVER_PID=$!
   echo "$SERVER_PID" > "$RUNDIR/server.pid"
 

@@ -1700,6 +1700,9 @@ jobs:
           # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
           # Exactly "1". Staging and prod never set it.
           CAPTURE_QR_V2_ALWAYS: "1"
+          # Online chess: what starts it is behind the PostHog flag online-chess (fallback false); the
+          # override offers it to every spec and walkthrough. Exactly "1". Staging and prod never set it.
+          ONLINE_CHESS_ALWAYS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
