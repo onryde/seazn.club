@@ -38,6 +38,8 @@ import { effectiveBridge, loadOnlinePlayFixture, loadSides, type OnlinePlayFixtu
 import { isPlayableFixtureStatus, playGrantRefusal, type GrantRefusal } from "./preflight";
 import type { Colour } from "./invite";
 import { holdForOrganiser } from "./result";
+import type { SubmittedMove } from "./reconcile";
+import { deferred } from "@/lib/deferred";
 
 export type PlayAction =
   | { kind: "move"; uci: string }
@@ -74,9 +76,13 @@ export type PlayDeps = {
   abortGame?: (a: { token: string; gameId: string }) => Promise<BoardCall>;
   accessToken?: (userId: string) => Promise<string | null>;
   publish?: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
-  /** T11's reconcile, run when Lichess rejects a move we submitted. Imported
-   *  lazily by default: reconcile.ts imports this module's `fenAfter`. */
-  reconcile?: (fixtureId: string, trigger: "rejected_move") => Promise<unknown>;
+  /** T11's reconcile, run when Lichess rejects a move we submitted, told
+   *  what was sent (review N1). Imported lazily by default: reconcile.ts
+   *  imports this module's `fenAfter`. */
+  reconcile?: (fixtureId: string, trigger: "rejected_move", submitted: SubmittedMove) => Promise<unknown>;
+  /** Runs work AFTER the player's answer (review N3): the repo's `deferred`
+   *  — Next's after() in a request scope, at once outside one. */
+  defer?: (task: () => Promise<void>) => void;
 };
 
 /** The same 404 the match room answers: "no such fixture", "not your
@@ -269,7 +275,7 @@ export async function act(
   const now = deps.now ?? new Date();
   const publish = deps.publish ?? publishRoomBroadcast;
   const token = () => (deps.accessToken ?? getLichessAccessToken)(userId);
-  const lichessRefused = (code: BoardErrorCode, kind: PlayAction["kind"]) => afterRefusal(game, colour, code, kind, deps);
+  const lichessRefused = (code: BoardErrorCode, what: Refused) => afterRefusal(game, colour, code, what, deps);
 
   switch (action.kind) {
     case "move":
@@ -285,7 +291,7 @@ export async function act(
       // Forwarded and answered — nothing written, nothing broadcast (ruling
       // Q2). A resign at ply < 2 is an abort at Lichess (BotPlayer.scala).
       if (sent.ok) return { ok: true, applied: true };
-      await lichessRefused(sent.code, action.kind);
+      await lichessRefused(sent.code, { kind: action.kind });
       return { ok: false, reconcile: true, reason: sent.code };
     }
   }
@@ -299,15 +305,20 @@ export async function act(
  *  - a MOVE refused — spec §3.5's first trigger: M6's 400 covers "not your
  *    turn" and "game over" alike, and a 5xx may have played it, so reconcile
  *    reads Lichess, never assumes (T11 review I4). Not on a 429: the limit
- *    stops every call, reconcile's read included, until it passes. */
+ *    stops every call, reconcile's read included, until it passes. It is
+ *    told the move we sent, so a 5xx that DID play it is adopted as ours,
+ *    never flagged as out-of-band (review N1); and it runs AFTER the answer
+ *    — three Lichess reads of up to 10 s each must not hold a player's
+ *    refused move (review N3). */
 async function afterRefusal(
   game: Game,
   colour: Colour,
   code: BoardErrorCode,
-  kind: PlayAction["kind"],
+  what: Refused,
   deps: PlayDeps,
 ): Promise<void> {
   const fixtureId = game.fixture.fixtureId;
+  const kind = what.kind;
   if (code === "unauthorized") {
     await holdForOrganiser({
       fixtureId,
@@ -316,26 +327,34 @@ async function afterRefusal(
       detail: `lichess game ${game.gameId}: Lichess refused ${colour}'s token (${kind})`,
     });
   }
-  if (kind !== "move" || code === "rate_limited") return;
-  const run = deps.reconcile ?? (async (id: string, t: "rejected_move") => (await import("./reconcile")).reconcile(id, t));
-  try {
-    await run(fixtureId, "rejected_move");
-  } catch (err) {
-    // The player's answer is the refusal either way; a reconcile that could
-    // not run is the sweep's to repeat. Logged by code — never the error's
-    // body, which could carry a Lichess answer.
-    log.error(
-      { fixtureId, gameId: game.gameId, code: err instanceof HttpError ? err.code : "unexpected" },
-      "lichess: reconcile after a rejected move failed — left to the sweep",
-    );
-  }
+  if (what.kind !== "move" || code === "rate_limited") return;
+  const submitted = what.submitted;
+  const run =
+    deps.reconcile ??
+    (async (id: string, t: "rejected_move", sub: SubmittedMove) => (await import("./reconcile")).reconcile(id, t, {}, sub));
+  (deps.defer ?? deferred)(async () => {
+    try {
+      await run(fixtureId, "rejected_move", submitted);
+    } catch (err) {
+      // The player's answer is the refusal either way; a reconcile that could
+      // not run is the sweep's to repeat. Logged by code — never the error's
+      // body, which could carry a Lichess answer.
+      log.error(
+        { fixtureId, gameId: game.gameId, code: err instanceof HttpError ? err.code : "unexpected" },
+        "lichess: reconcile after a rejected move failed — left to the sweep",
+      );
+    }
+  });
 }
+
+/** The act Lichess refused: a move carries what was sent, at which ply. */
+type Refused = { kind: "move"; submitted: SubmittedMove } | { kind: Exclude<PlayAction["kind"], "move"> };
 
 type Ctx<C> = {
   token: () => Promise<string | null>;
   now: Date;
   publish: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
-  refused: (code: BoardErrorCode, kind: PlayAction["kind"]) => Promise<void>;
+  refused: (code: BoardErrorCode, what: Refused) => Promise<void>;
 } & C;
 
 type LedgerRow = {
@@ -389,7 +408,7 @@ async function playMove(
     }
     // Nothing is written on a refusal — and `unavailable` (a 5xx, a timeout)
     // MAY have played the move, so it is never recorded as "not played".
-    await ctx.refused(answer.code, "move");
+    await ctx.refused(answer.code, { kind: "move", submitted: { ply, uci } });
     return { ok: false, reconcile: true, reason: answer.code };
   }
 
@@ -500,7 +519,7 @@ async function draw(
   const sent = await ctx.call({ token: tok, gameId, accept });
   // Nothing written on a refusal, nor on a 5xx — which MAY have registered.
   if (!sent.ok) {
-    await ctx.refused(sent.code, "draw");
+    await ctx.refused(sent.code, { kind: "draw" });
     return { ok: false, reconcile: true, reason: sent.code };
   }
 

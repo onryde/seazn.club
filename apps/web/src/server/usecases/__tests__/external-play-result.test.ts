@@ -1265,6 +1265,33 @@ describe.runIf(HAS_DB)("M7 — a token_revoked hold records the seat it froze (c
     expect((await seatOf(h.fixtureId)).revoked_seat, "a seat-less hold adds nothing").toBe("black");
   });
 
+  it("a mid-game provider_error on a token_revoked row widens the freeze to both and keeps its detail; the stored reason stands (review N2) — each seat state, counted", async () => {
+    let checked = 0;
+    for (const [seat, widened] of [["white", "both"], ["black", "both"], ["both", "both"], [null, null]] as const) {
+      const g = await liveGame();
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", detail: "401", ...(seat === null ? {} : { seat }) });
+      expect(
+        await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "the move list diverged at ply 3" }),
+        "the answer is the STORED reason",
+      ).toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
+      // null is already "both frozen" (V436), and stays the unknown it was.
+      expect(await seatOf(g.fixtureId), String(seat)).toEqual({
+        needs_reason: "token_revoked",
+        revoked_seat: widened,
+        last_error: "the move list diverged at ply 3",
+      });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("…and with no detail of its own the earlier last_error survives", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "white", detail: "401 on move 7" });
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error" });
+    expect(await seatOf(g.fixtureId)).toEqual({ needs_reason: "token_revoked", revoked_seat: "both", last_error: "401 on move 7" });
+  });
+
   it("a seat on any OTHER reason is refused by name before anything is written — counted over HOLD_REASONS", async () => {
     let checked = 0;
     for (const reason of HOLD_REASONS.filter((r) => r !== "token_revoked")) {

@@ -231,13 +231,23 @@ async function hold(
       const stored = readNeedsReason(row.needs_reason);
       const replaces = final && (stored === reason || (MID_GAME_REASONS as readonly NeedsReason[]).includes(stored));
       if (!replaces) {
-        // A second revoked seat is new information, not a new diagnosis: the
-        // record widens (ruling M7), and nothing else on the row is touched.
         if (stored === "token_revoked" && reason === "token_revoked") {
+          // A second revoked seat is new information, not a new diagnosis:
+          // the record widens (ruling M7), nothing else on the row moves.
           const widened = widenSeat(row.revoked_seat, seat);
           if (widened !== row.revoked_seat) {
             await tx`update fixture_external_play set revoked_seat = ${widened}, updated_at = now() where fixture_id = ${fixtureId}`;
           }
+        } else if (stored === "token_revoked" && reason === "provider_error") {
+          // Review N2: a seat still playing on must not keep appending onto a
+          // ledger reconcile has just called untrustworthy. The first
+          // diagnosis stands; the freeze widens to both (an unknown seat —
+          // null — is both already) and the organiser reads the new detail.
+          const widened = row.revoked_seat === null ? null : "both";
+          await tx`
+            update fixture_external_play
+               set revoked_seat = ${widened}, last_error = coalesce(${detail}, last_error), updated_at = now()
+             where fixture_id = ${fixtureId}`;
         }
         return { held: true, reason: stored };
       }
@@ -271,7 +281,8 @@ export async function holdForOrganiser(a: {
   reason: HoldReason;
   detail?: string;
   /** token_revoked only: the seat whose token Lichess refused (ruling M7).
-   *  Absent ⇒ unknown, and both seats are frozen. */
+   *  Absent on a FRESH hold ⇒ unknown, and both seats are frozen; absent on
+   *  a row that already records a seat ⇒ that seat stands (review N4). */
   seat?: RevokedSeat;
 }): Promise<ResultWrite> {
   // The union is the contract, and a cast must not smuggle a no-show past it.

@@ -164,6 +164,10 @@ function boardStub(answer: (c: Call) => BoardCall | Promise<BoardCall> = () => (
   const calls: Call[] = [];
   const sent: { fixtureId: string; body: RoomBroadcast }[] = [];
   const reconciles: string[] = [];
+  /** The move each reconcile was told T10 had sent (review N1). */
+  const submissions: unknown[] = [];
+  /** Work T10 deferred past its answer (review N3), run here at once. */
+  const deferredTasks: Promise<unknown>[] = [];
   const hit = async (c: Call) => {
     calls.push(c);
     return answer(c);
@@ -176,11 +180,15 @@ function boardStub(answer: (c: Call) => BoardCall | Promise<BoardCall> = () => (
     publish: async (fixtureId, body) => {
       sent.push({ fixtureId, body });
     },
-    reconcile: async (_fixtureId, trigger) => {
+    reconcile: async (_fixtureId, trigger, submitted) => {
       reconciles.push(trigger);
+      submissions.push(submitted);
+    },
+    defer: (task) => {
+      deferredTasks.push(task());
     },
   };
-  return { calls, sent, deps, reconciles };
+  return { calls, sent, deps, reconciles, submissions, deferredTasks };
 }
 
 const by = (g: Game, who: "white" | "black", action: PlayAction, deps: PlayDeps, now?: Date) =>
@@ -772,10 +780,15 @@ describe.runIf(HAS_DB)("act — Lichess refusals (nothing is written, nothing br
     let checked = 0;
     for (const code of codes) {
       const g = await readyGame();
-      const { calls, sent, deps, reconciles } = boardStub(() => ({ ok: false, code, raw: code }));
+      const { calls, sent, deps, reconciles, submissions, deferredTasks } = boardStub(() => ({ ok: false, code, raw: code }));
       expect(await mv(g, "white", "e2e4", deps), code).toEqual(reconcile(code));
       expect(calls.length).toBe(1);
       expect(sent).toEqual([]);
+      // Review N3: the reconcile is deferred past the answer, never awaited by it.
+      expect(deferredTasks.length, code).toBe(code === "rate_limited" ? 0 : 1);
+      await Promise.all(deferredTasks);
+      // Review N1: it is told exactly what T10 sent, at which ply.
+      expect(submissions, code).toEqual(code === "rate_limited" ? [] : [{ ply: 0, uci: "e2e4" }]);
       // Spec §3.5's first trigger (T11 review I4): M6's 400 covers two states
       // and a 5xx may have played the move — reconcile, never assume. A 429
       // stops every call, reconcile's read included.
@@ -1382,6 +1395,23 @@ describe.runIf(HAS_DB)("act — non-canonical UCI lila would play (review I1)", 
       }
     }
     expect(checked, "anti-vacuity: 2 colours × 2 wings × 2 forms").toBe(8);
+  });
+
+  it("a castle sent king-to-rook and refused (5xx) tells reconcile the move in the form it is RECORDED — the king's own move, at its ply (review N1)", async () => {
+    let checked = 0;
+    for (const c of CASTLES) {
+      const g = await readyGame();
+      const ok = boardStub();
+      await playOut(g, [...CASTLE_READY, ...c.before], ok.deps);
+      const ply = CASTLE_READY.length + c.before.length;
+      const { calls, submissions, deferredTasks, deps } = boardStub(() => ({ ok: false, code: "unavailable", raw: "502" }));
+      expect(await mv(g, c.who, c.raw, deps), c.raw).toEqual(reconcile("unavailable"));
+      await Promise.all(deferredTasks);
+      expect(calls.at(-1)?.uci, "premise: Lichess was sent the king's own move").toBe(c.canonical);
+      expect(submissions, `${c.who} ${c.raw}`).toEqual([{ ply, uci: c.canonical }]);
+      checked++;
+    }
+    expect(checked, "2 colours × 2 wings").toBe(CASTLES.length);
   });
 
   it("a king-to-rook string is sent AS IT CAME when castling is not legal — at the start, and after the king walked and came back", async () => {
