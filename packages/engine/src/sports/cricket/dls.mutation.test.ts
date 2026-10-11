@@ -8,6 +8,40 @@
 import { describe, expect, it } from "vitest";
 import { DLS_G50, DLS_STANDARD_TABLE, dlsPar, dlsTarget, resources, resourcesFromBalls } from "./dls.ts";
 
+describe("the published table's shape — overs left 0..50 by wickets lost 0..9", () => {
+  // Properties the method defines, not values read off this file: 51 rows (0..50 overs left) of 10 columns (0..9 wickets
+  // lost); no overs left is no resources; a full 50 overs with nobody out is 100%; and resources never DROP when a side has
+  // more overs left, nor RISE when it has lost more wickets.
+  it("51 rows of 10 finite percentages, zero with no overs left, 100 at the top", () => {
+    expect(DLS_STANDARD_TABLE).toHaveLength(51);
+    let cells = 0;
+    for (const [overs, row] of DLS_STANDARD_TABLE.entries()) {
+      expect(row, `row ${overs}`).toHaveLength(10);
+      for (const v of row) {
+        if (!Number.isFinite(v) || v < 0 || v > 100) expect.fail(`row ${overs}: ${String(v)} is not a percentage`);
+        cells++;
+      }
+    }
+    expect(cells).toBe(510);
+    expect(DLS_STANDARD_TABLE[0]).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(DLS_STANDARD_TABLE[50]?.[0]).toBe(100);
+  });
+
+  it("through resources(): every whole over and wicket count reads a percentage, monotone in both directions", () => {
+    let checked = 0;
+    for (let overs = 0; overs <= 50; overs++) {
+      for (let wickets = 0; wickets <= 9; wickets++) {
+        const r = resources(overs, wickets);
+        if (!Number.isFinite(r)) expect.fail(`${overs} overs, ${wickets} down: ${String(r)}`);
+        if (overs > 0 && r < resources(overs - 1, wickets)) expect.fail(`${overs} overs, ${wickets} down reads less than ${overs - 1}`);
+        if (wickets > 0 && r > resources(overs, wickets - 1)) expect.fail(`${overs} overs, ${wickets} down reads more than ${wickets - 1} down`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(510);
+  });
+});
+
 describe("resources — the top of the published table (50 overs left)", () => {
   // The published Standard Edition row for 50 overs remaining, wickets lost 0..9 (2002 table, as hosted by the ICC). 100.0 is
   // the method's own definition: a whole 50-over innings with all ten wickets in hand IS 100% of a side's resources.

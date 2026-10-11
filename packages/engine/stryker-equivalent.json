@@ -104,6 +104,12 @@
       "reason": "`||` → `&&` differs only when exactly one operand holds. `lower === 50` alone cannot: overs is clamped to at most 50 and lower = floor(overs), so lower === 50 means overs === 50. `lower === overs` alone (a whole number of overs below 50) now falls through to the interpolation, which reads row lower + 1 (present, lower <= 49) and returns base + 0 × (next − base) = base, the early return's value. A NaN over count throws at the row lookup on line 98 in both versions before line 100."
     },
     {
+      "mutant": "src/sports/cricket/dls.ts:100:26 ConditionalExpression → false",
+      "original": "lower === 50",
+      "line": "if (lower === overs || lower === 50) return base;",
+      "reason": "`lower === 50` never holds without `lower === overs`: overs is clamped to at most 50 and lower = floor(overs), so lower === 50 means overs === 50 and the left operand already returned base. Dropping the right operand therefore changes no input's path."
+    },
+    {
       "mutant": "src/sports/cricket/dls.ts:156:7 ConditionalExpression → true",
       "original": "r2 > r1",
       "line": "if (r2 > r1) return Math.floor(s1 + (g50 * (r2 - r1)) / 100) + 1;",
