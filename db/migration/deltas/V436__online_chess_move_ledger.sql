@@ -43,6 +43,24 @@
 --   a held board is never re-read every tick). Written by the sweep alone;
 --   `last_polled_at` (V433) is when it last read.
 --
+-- game_over_at — when a reconcile read FIRST found this game over (a terminal
+--   Lichess status), whatever was then written: a result that finished the
+--   bridge, or a hold that keeps it (a tie-break owed, an abort, a mid-game
+--   hold whose game later ended). `finished_at` is stamped only when the
+--   bridge closes, so a held game would otherwise have no end on file, and the
+--   sweep's camera evidence (T13 fix round 1, ruling I1) would run on to the
+--   ROOM's end — accusing both players of the minutes after the game. Never
+--   moved once set. A game end needs a game: never without a challenge.
+--
+-- pending_move_ply / pending_move_uci / pending_move_at — the move T10 is
+--   SUBMITTING (T13 fix round 1, ruling I4): its ply (the ledger's length when
+--   sent), its canonical UCI, and when. Recorded BEFORE Lichess hears it and
+--   cleared by T10's append, so a reconcile landing between Lichess's 200 and
+--   the append adopts that very move without an out-of-band flag. It excuses
+--   only that ply with that move: a submission that failed or timed out
+--   cannot whitewash a DIFFERENT move, or one at another ply. All three or
+--   none; a game on file only.
+--
 -- Additive and nullable/defaulted, so every existing row (pending, ready,
 -- needs_organiser) is valid as it stands: an empty ledger.
 alter table fixture_external_play
@@ -56,7 +74,11 @@ alter table fixture_external_play
   add column white_draw_offer_ply integer     null,
   add column black_draw_offer_ply integer     null,
   add column revoked_seat         text        null,
-  add column sweep_no_truth_reads integer     not null default 0;
+  add column sweep_no_truth_reads integer     not null default 0,
+  add column game_over_at         timestamptz null,
+  add column pending_move_ply     integer     null,
+  add column pending_move_uci     text        null,
+  add column pending_move_at      timestamptz null;
 
 -- One constraint per guarded fact, each named so a test can assert it by
 -- SQLSTATE + name (never by clause text).
@@ -94,7 +116,19 @@ alter table fixture_external_play
                and needs_reason is not distinct from 'token_revoked')),
   -- A count of reads: never negative.
   add constraint fixture_external_play_sweep_no_truth_reads_check
-    check (sweep_no_truth_reads >= 0);
+    check (sweep_no_truth_reads >= 0),
+  -- A game end is a game's: no challenge, nothing to have ended.
+  add constraint fixture_external_play_game_over_check
+    check (game_over_at is null or challenge_id is not null),
+  -- A submission is whole or absent, at a ply the game can have, in T3's UCI
+  -- shape (assertUci), on a game on file. Spelled out per column: `null and
+  -- false` is false, so a half-null row must fail on its own arm.
+  add constraint fixture_external_play_pending_move_check
+    check ((pending_move_ply is null and pending_move_uci is null and pending_move_at is null)
+           or (pending_move_ply is not null and pending_move_uci is not null and pending_move_at is not null
+               and pending_move_ply >= 0
+               and pending_move_uci ~ '^[a-h][1-8][a-h][1-8][qrbn]?$'
+               and challenge_id is not null));
 
 -- camera_evidence_at — when the external-play sweep (T13, controller ruling
 --   C1; design §5.2 "fetched once, at least 2 minutes after the player leaves
