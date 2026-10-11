@@ -86,13 +86,23 @@ import {
   type OnlinePlayFixture,
   type Side,
 } from "./guard";
+import { onlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus, playGrantRefusal, seatPlayer, type GrantRefusal } from "./preflight";
 
 export type CreateOutcome =
   | { created: true; gameId: string }
   | {
       created: false;
-      reason: "not_ready" | "already" | "unplayable" | "provider_error" | "no_person" | GrantRefusal;
+      reason:
+        | "not_ready"
+        | "already"
+        | "unplayable"
+        | "provider_error"
+        | "no_person"
+        /** T20: the club is not offered online chess (the PostHog flag `online-chess` is off). A NEW game is a
+         *  start; a game already on file answers `already` first, whatever the flag says. */
+        | "online_chess_disabled"
+        | GrantRefusal;
     };
 
 export type CreateGameDeps = { now?: Date; publish?: (fixtureId: string) => Promise<void> };
@@ -153,6 +163,13 @@ export async function createGameIfReady(
   const open = await roundOpenFor(sql, fixtureId);
   if (!open) return { created: false, reason: "not_ready" };
   if (roomPhase(now, open.roundOpenedAt) !== "open") return { created: false, reason: "not_ready" };
+
+  // T20: a new game STARTS online play, so the club must be offered it (the PostHog flag `online-chess`). Asked only
+  // of a board otherwise ready to create — after `already` (a recorded game is never refused) and before any token
+  // is read or seat opened. No person asks here (the sweep or the room), so the club is asked as itself.
+  if (!(await onlineChessOffered({ orgId: f.orgId, userId: null }))) {
+    return { created: false, reason: "online_chess_disabled" };
+  }
 
   // T2's play gate, the one authority for "a grant that is enough to play":
   // a consent stamp AND every scope in PLAY_SCOPES (board:play to move,

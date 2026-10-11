@@ -61,6 +61,7 @@ import {
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
 import { audit } from "./audit";
 
 export interface DivisionRow {
@@ -246,6 +247,12 @@ export async function createDivision(
     "divisions.per_competition.max",
     competitionId,
   );
+  // T20: a division created online STARTS online play, so the club must be offered it (the PostHog flag
+  // `online-chess`). Asked only when online play is asked for, and out here for the same reason as the reads above:
+  // it is a remote call, never made while a tenant transaction holds a pooled connection.
+  if ((input.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess") {
+    await assertOnlineChessOffered(auth);
+  }
 
   const row = await withTenant(auth.orgId, async (tx) => {
     const [comp] = await tx`select 1 from competitions where id = ${competitionId}`;
@@ -725,6 +732,14 @@ export async function patchDivision(
   if (patch.auto_posts === true) {
     await requireFeature(auth.orgId, "news.auto", competitionId);
   }
+  // T20: turning online play ON starts online play, so the club must be offered it (the PostHog flag `online-chess`).
+  // Asked out here — a remote call, never made inside the tenant transaction — and only when the patch names
+  // 'lichess', the one value that can turn it on. Whether it DOES turn it on (the stored value was not 'lichess') is
+  // judged inside, on the row; `null` ⇒ not asked, and a patch that turns it on without an answer is refused.
+  const onlineOffered =
+    (patch.config as Record<string, unknown> | undefined)?.onlinePlay === "lichess"
+      ? await onlineChessOffered(auth)
+      : null;
   // T6 / D9: the camera requirement. Validated before anything is read. The
   // round-open question is asked INSIDE the write's own transaction (review
   // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
@@ -1013,6 +1028,17 @@ export async function patchDivision(
       // this is not simply `!locked`: online play switched ON over a stored
       // pre-gate clock on a locked division must still be judged (N-1).
       const storedConfig = (current.config ?? {}) as Record<string, unknown>;
+      // T20: only the off → lichess transition starts online play. A re-send of a stored 'lichess' (every Entrants
+      // and format save re-sends the whole config) and turning it off are never gated, so a club whose flag goes
+      // off can still save, and switch online play off, on a division already online. After the lock (409 keeps
+      // its precedence for a format change), before the clock (the feature is not offered at all).
+      if (
+        readOnlinePlay(finalConfig) === "lichess" &&
+        readOnlinePlay(storedConfig) !== "lichess" &&
+        onlineOffered !== true
+      ) {
+        throw onlineChessDisabled();
+      }
       const clockOrOnlineChanged =
         canonicalJson(finalConfig.clock ?? null) !== canonicalJson(storedConfig.clock ?? null) ||
         readOnlinePlay(finalConfig) !== readOnlinePlay(storedConfig);

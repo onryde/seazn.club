@@ -55,9 +55,13 @@ export async function onlineChessOffered(asker: OnlineChessAsker): Promise<boole
   return on;
 }
 
+/** The one refusal every server-side start gate throws with the flag off — for a gate that asked the flag earlier
+ *  (outside its transaction) and decides inside it. */
+export function onlineChessDisabled(): HttpError {
+  return new HttpError(403, "Online chess is not available for this organisation", ONLINE_CHESS_DISABLED_CODE);
+}
+
 /** The server-side refusal: 403 ONLINE_CHESS_DISABLED unless online chess is offered to this club. */
 export async function assertOnlineChessOffered(asker: OnlineChessAsker): Promise<void> {
-  if (!(await onlineChessOffered(asker))) {
-    throw new HttpError(403, "Online chess is not available for this organisation", ONLINE_CHESS_DISABLED_CODE);
-  }
+  if (!(await onlineChessOffered(asker))) throw onlineChessDisabled();
 }
