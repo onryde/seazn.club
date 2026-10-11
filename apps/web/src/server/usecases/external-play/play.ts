@@ -404,13 +404,14 @@ async function playMove(
   // below — the 5-minute sweep reads every live game — adopts this very move
   // as ours, never as out-of-band play. Cleared by the append; a refusal or a
   // 5xx leaves it (a 5xx may have played it). It excuses only this ply with
-  // this move, so it can never whitewash a different one; and it never
-  // overwrites a LATER ply's (a stale tab must not erase the next mover's).
+  // this move, so it can never whitewash a different one. Recorded only while
+  // the ledger is still at this ply (V436's CHECK: a submission is for the
+  // NEXT ply only) — a stale tab records nothing, and never erases the next
+  // mover's; Lichess judges its move as before.
   await sql`
     update fixture_external_play
        set pending_move_ply = ${ply}, pending_move_uci = ${uci}, pending_move_at = ${ctx.now}, updated_at = now()
-     where fixture_id = ${f.fixtureId} and challenge_id = ${gameId}
-       and (pending_move_ply is null or pending_move_ply <= ${ply})`;
+     where fixture_id = ${f.fixtureId} and challenge_id = ${gameId} and move_count = ${ply}`;
   const answer = await ctx.submit({ token: tok, gameId, uci });
   if (!answer.ok) {
     // A twin tab's identical move won the race at Lichess and ours was
@@ -451,11 +452,9 @@ async function playMove(
            end,
            ${sql(waitingCol)} = coalesce(${sql(waitingCol)}, ${limitMs}),
            draw_offer_by = case when draw_offer_by = ${otherColour(colour)} then null else draw_offer_by end,
-           -- I4: this ply's submission is now on the ledger (an earlier
-           -- one, too); a later ply's is not ours to clear.
-           pending_move_ply = case when pending_move_ply <= ${ply} then null else pending_move_ply end,
-           pending_move_uci = case when pending_move_ply <= ${ply} then null else pending_move_uci end,
-           pending_move_at = case when pending_move_ply <= ${ply} then null else pending_move_at end,
+           -- I4: the only submission the row can hold is this ply's (V436),
+           -- and the ledger now holds this ply.
+           pending_move_ply = null, pending_move_uci = null, pending_move_at = null,
            updated_at = now()
      where fixture_id = ${f.fixtureId}
        and challenge_id = ${gameId}

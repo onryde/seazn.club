@@ -1195,28 +1195,47 @@ describe.runIf(HAS_DB)("reconcile — the move T10 is submitting is ours, never 
     expect((await outOfBand(g.fixtureId)).map((f) => f.note)).toEqual([expect.stringContaining(`plies 3-${LINE.length} `)]);
   });
 
-  it("a submission recorded AFTER the read loaded the row refuses that read's write (staged in the stream read); the next read adopts it with no flag", async () => {
+  it("a submission recorded AFTER the read loaded the row still excuses its move — judged under the row's lock, not as loaded (staged in each read: stream, export)", async () => {
+    let checked = 0;
+    for (const path of ["stream", "export"] as const) {
+      const g = await liveGame();
+      let staged = 0;
+      // T10 records Black's move (its 5xx leaves it on file) while Lichess is
+      // being read: the row this read loaded had no submission.
+      const stage = async () => {
+        if (staged++ === 0) await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+      };
+      const deps: ReconcileDeps = { ...observed().deps };
+      if (path === "stream") {
+        serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
+        deps.readStream = async (a) => { await stage(); return wiredReadGameStream(a); };
+      } else {
+        lichess.onStream = () => status(503);
+        lichess.onExport = () => ok(exported(g, "export-expired.json"));
+        deps.exportGame = async (id) => { await stage(); return wiredExportGame(id); };
+      }
+      const out = await reconcile(g.fixtureId, "sweep", deps);
+      expect(staged, `${path}: premise, staged inside the read`).toBeGreaterThan(0);
+      expect(out, path).toMatchObject({ adopted: path === "stream" ? 1 : LINE.length - 1 });
+      const notes = (await outOfBand(g.fixtureId)).map((f) => f.note);
+      expect(notes, `${path}: Black's own move is never out-of-band`)
+        .toEqual(path === "stream" ? [] : [expect.stringContaining(`plies 3-${LINE.length} `)]);
+      expect(await pendingOf(g.fixtureId), `${path}: spent`).toEqual(NO_PENDING);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a read that adopts NO move (the clocks moved, not the line) keeps the submission — the next read still excuses it", async () => {
     const g = await liveGame();
+    await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
+    // Lichess has not applied it yet: the same line, the clocks moved.
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), wtime: 123_000, btime: 234_000 }));
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toMatchObject({ adopted: 0 });
+    expect((await rowOf(g.fixtureId)).white_ms, "premise: the read WROTE (its clocks)").toBe(123_000);
+    expect(await pendingOf(g.fixtureId), "kept: its ply is still the next").toEqual({ pending_move_ply: 1, pending_move_uci: LINE[1] });
     serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
-    let staged = 0;
-    const deps: ReconcileDeps = {
-      ...observed().deps,
-      readStream: async (a) => {
-        if (staged++ === 0) {
-          // T10 records Black's move (its 5xx leaves it on file) while this
-          // read is in flight: the row this read loaded had no submission.
-          await blackSubmits(g, LINE[1]!, { ok: false, code: "unavailable", raw: "502" });
-        }
-        return wiredReadGameStream(a);
-      },
-    };
-    const first = await reconcile(g.fixtureId, "sweep", deps);
-    expect(staged, "premise: staged inside the read").toBeGreaterThan(0);
-    expect(first, "the write is refused: the row moved under the read").toMatchObject({ adopted: 0 });
-    expect(await outOfBand(g.fixtureId)).toEqual([]);
-    expect((await rowOf(g.fixtureId)).moves_uci).toEqual(LINE.slice(0, 1));
-    const next = await reconcile(g.fixtureId, "sweep", observed().deps);
-    expect(next).toMatchObject({ adopted: 1 });
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toMatchObject({ adopted: 1 });
     expect(await outOfBand(g.fixtureId)).toEqual([]);
   });
 });

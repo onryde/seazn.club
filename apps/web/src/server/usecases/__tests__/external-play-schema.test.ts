@@ -702,13 +702,15 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   });
 
   const PENDING = ["pending_move_ply", "pending_move_uci", "pending_move_at"] as const;
+  /** A ledger of `n` plies (the CHECK reads its length, not its moves). */
+  const ledgerOf = (n: number) => ({ moves_uci: sql.json(Array.from({ length: n }, () => "e2e4")), move_count: n });
   it("V436 (T13 I4): no submission by default; a whole one — ply, canonical UCI, time — is accepted (counted)", async () => {
     expect(await tryBridge({}, PENDING)).toEqual({
       accepted: true, row: { pending_move_ply: null, pending_move_uci: null, pending_move_at: null },
     });
     let checked = 0;
     for (const [ply, uci] of [[0, "e2e4"], [1, "e7e5"], [57, "e7e8q"], [80, "a2a1n"]] as const) {
-      expect(await tryBridge({ pending_move_ply: ply, pending_move_uci: uci, pending_move_at: AT }, PENDING), uci).toEqual({
+      expect(await tryBridge({ ...ledgerOf(ply), pending_move_ply: ply, pending_move_uci: uci, pending_move_at: AT }, PENDING), uci).toEqual({
         accepted: true, row: { pending_move_ply: ply, pending_move_uci: uci, pending_move_at: AT },
       });
       checked++;
@@ -716,8 +718,22 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(4);
   });
 
+  it("V436 (T13 I4): a submission is for the NEXT ply only — one at a ply the ledger has passed, or not reached, is refused (counted)", async () => {
+    // T10 sends at ply = the ledger's length; every ledger write spends the
+    // submission it passes. So reconcile's write needs no ply condition, and
+    // an excuse can only ever be read at the ply it was sent for.
+    const refused = { accepted: false, code: CHECK_VIOLATION, constraint: PENDING_MOVE_CHECK };
+    let checked = 0;
+    for (const [ledger, ply] of [[1, 0], [4, 3], [4, 5], [0, 1]] as const) {
+      expect(await tryBridge({ ...ledgerOf(ledger), pending_move_ply: ply, pending_move_uci: "g1f3", pending_move_at: AT }, PENDING),
+        `ledger ${ledger}, ply ${ply}`).toEqual(refused);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("V436 (T13 I4): HALF a submission is refused — each of the three missing in turn (counted)", async () => {
-    const whole = { pending_move_ply: 4, pending_move_uci: "g1f3", pending_move_at: AT };
+    const whole = { ...ledgerOf(4), pending_move_ply: 4, pending_move_uci: "g1f3", pending_move_at: AT };
     let checked = 0;
     for (const missing of PENDING) {
       expect(await tryBridge({ ...whole, [missing]: null }, PENDING), missing)

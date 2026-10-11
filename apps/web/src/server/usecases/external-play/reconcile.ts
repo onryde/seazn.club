@@ -32,7 +32,7 @@ import "server-only";
 // writes the ledger result and the needs_organiser holds; T10 and T12 never
 // write `finished`.
 import { Chess, type Move, type Square } from "chess.js";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { publishRoomBroadcast, type RoomBroadcast } from "@/lib/realtime";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
@@ -230,9 +230,6 @@ type Game = {
   blackId: string;
   /** The move T10 sent, when this read follows Lichess refusing it. */
   submitted: SubmittedMove | null;
-  /** The move T10 put on file before sending it (ruling I4), as this read
-   *  loaded the row — whatever the trigger. */
-  pending: SubmittedMove | null;
 };
 
 /** A move T10 SENT to Lichess and was refused (or got no answer to): its ply
@@ -353,10 +350,6 @@ export async function reconcile(
     whiteId: b.white_lichess_id,
     blackId: b.black_lichess_id,
     submitted,
-    pending:
-      b.pending_move_ply !== null && b.pending_move_uci !== null
-        ? { ply: b.pending_move_ply, uci: b.pending_move_uci }
-        : null,
   };
 
   let truth = await readTruth(game, deps);
@@ -430,14 +423,26 @@ async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultW
  *  The evidence: the plies, and whether the camera was Required; null when
  *  no adopted ply is out-of-band. T10's move is known two ways: the refusal
  *  that triggered this read (`submitted`), and the submission T10 put on
- *  file BEFORE sending it (`pending`, ruling I4) — so a read landing between
- *  Lichess's 200 and T10's append (the 5-minute sweep reads every live game)
- *  adopts our move as ours. Either excuses ONLY the first adopted ply and
- *  only that move: a different move there, or any later ply, is still
- *  flagged. Written in the SAME statement as the ledger write that adopts,
- *  so one adoption is one flag: a re-read adopts nothing, and a racing read
- *  — or a submission recorded after this read loaded the row — loses the
- *  CAS. */
+ *  file BEFORE sending it (ruling I4, `lockedSubmission`) — so a read landing
+ *  between Lichess's 200 and T10's append (the 5-minute sweep reads every
+ *  live game) adopts our move as ours. Either excuses ONLY the first adopted
+ *  ply and only that move: a different move there, or any later ply, is
+ *  still flagged. Written in the SAME statement as the ledger write that
+ *  adopts, so one adoption is one flag: a re-read adopts nothing, and a
+ *  racing read loses the CAS. */
+/** Ruling I4: the submission on file NOW, read under the row's lock in the
+ *  transaction that writes the ledger — never the one this read loaded, so a
+ *  submission T10 records while Lichess is being read still excuses its own
+ *  move (the read adopts it, and T10's append absorbs). One T10 records
+ *  after this lock waits for it, and then finds the ledger past its ply:
+ *  V436 holds a submission at the NEXT ply only, so T10 records nothing. */
+async function lockedSubmission(tx: Tx, fixtureId: string): Promise<SubmittedMove | null> {
+  const [row] = await tx<{ ply: number | null; uci: string | null }[]>`
+    select pending_move_ply as ply, pending_move_uci as uci
+      from fixture_external_play where fixture_id = ${fixtureId} for update`;
+  return row && row.ply !== null && row.uci !== null ? { ply: row.ply, uci: row.uci } : null;
+}
+
 async function outOfBandEvidence(
   fixtureId: string,
   ours: number,
@@ -581,11 +586,12 @@ async function applyStream(
   // Conditional on the ledger and the offer we read: a move T10 appended, or
   // an offer it recorded, since our read wins — this read is then older than
   // the row, and the next reconcile catches up.
-  const evidence =
-    changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, [g.submitted, g.pending]) : null;
   const wrote = !changed
     ? []
-    : await sql`
+    : await sql.begin(async (tx) => {
+    const evidence =
+      adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, [g.submitted, await lockedSubmission(tx, fixtureId)]) : null;
+    return tx`
     with up as (
     update fixture_external_play
        set moves_uci = ${sql.json(theirs)}, move_count = ${ply},
@@ -596,7 +602,8 @@ async function applyStream(
            clock_increment_s = ${incrementS},
            draw_offer_by = ${offer.by},
            white_draw_offer_ply = ${offer.whitePly}, black_draw_offer_ply = ${offer.blackPly},
-           -- I4: a submission whose ply the ledger now holds is spent.
+           -- I4: a submission whose ply the ledger now holds is spent; one
+           -- still for the next ply stands (a read that adopted nothing).
            pending_move_ply = case when pending_move_ply < ${ply}::int then null else pending_move_ply end,
            pending_move_uci = case when pending_move_ply < ${ply}::int then null else pending_move_uci end,
            pending_move_at = case when pending_move_ply < ${ply}::int then null else pending_move_at end,
@@ -605,14 +612,13 @@ async function applyStream(
        and status in ('ready', 'live', 'needs_organiser')
        and move_count = ${b.move_count}
        and draw_offer_by is not distinct from ${b.draw_offer_by}
-       and pending_move_ply is not distinct from ${b.pending_move_ply}::int
-       and pending_move_uci is not distinct from ${b.pending_move_uci}::text
      returning fixture_id, org_id
     ), flagged as (
       insert into fixture_play_flags (fixture_id, org_id, kind, note)
       select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
     )
     select fixture_id from up`;
+  });
   // The room hears of a row this read changed, and of every game end it reads
   // (the end may change nothing on the row, yet the boards must stop); the
   // clocks it sees are Lichess's, at the read.
@@ -647,30 +653,29 @@ async function applyExport(
   let adopted = 0;
   let line = ours;
   if (uci.length > ours.length && isPrefix(ours, uci)) {
-    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, [g.submitted, g.pending]);
-    const wrote = await sql`
+    const wrote = await sql.begin(async (tx) => {
+      const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, [g.submitted, await lockedSubmission(tx, fixtureId)]);
+      return tx`
       with up as (
       update fixture_external_play
          set moves_uci = ${sql.json(uci)}, move_count = ${uci.length},
              status = case when status = 'ready' then 'live' else status end,
              started_at = coalesce(started_at, ${t.at}::timestamptz),
              last_move_at = ${t.at},
-             -- I4: a submission whose ply the ledger now holds is spent.
-             pending_move_ply = case when pending_move_ply < ${uci.length}::int then null else pending_move_ply end,
-             pending_move_uci = case when pending_move_ply < ${uci.length}::int then null else pending_move_uci end,
-             pending_move_at = case when pending_move_ply < ${uci.length}::int then null else pending_move_at end,
+             -- I4: this write adopts at least one ply, so it passes the only
+             -- submission the row can hold (V436: the next ply's) — spent.
+             pending_move_ply = null, pending_move_uci = null, pending_move_at = null,
              updated_at = now()
        where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
          and status in ('ready', 'live', 'needs_organiser')
          and move_count = ${g.bridge.move_count}
-         and pending_move_ply is not distinct from ${g.bridge.pending_move_ply}::int
-         and pending_move_uci is not distinct from ${g.bridge.pending_move_uci}::text
        returning fixture_id, org_id
       ), flagged as (
         insert into fixture_play_flags (fixture_id, org_id, kind, note)
         select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
       )
       select fixture_id from up`;
+    });
     if (wrote.length > 0) {
       adopted = uci.length - ours.length;
       line = uci;
