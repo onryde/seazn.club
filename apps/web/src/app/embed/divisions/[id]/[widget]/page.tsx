@@ -133,7 +133,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const roundLabels = Object.fromEntries(
     fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
   );
-  const scheduleCopy = publicScheduleCopy(dict, lookup);
+  // W2b Task 13 (review I-2): the forfeit tags and sentences ride the schedule copy, so the schedule rows AND the
+  // bracket tiles tag a credited result — in the org's locale like the rest of the copy.
+  const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
@@ -177,8 +179,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
         lookup={lookup}
         slotText={namer.slot}
-        // W2b Task 13: the forfeit tags and sentences, in the org's locale like the rest of the copy.
-        copy={{ ...scheduleCopy, forfeit: forfeitCopyOf((k) => t(dict, k)) }}
+        copy={scheduleCopy}
         tz={tz}
         locale={orgLocale}
       />

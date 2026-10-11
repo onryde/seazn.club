@@ -30,6 +30,8 @@ import { hubForfeit } from "@/server/public-site/competition-hub";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { MatchCard } from "../matches-hub/match-card";
 import { Bracket } from "../bracket";
+import { Schedule } from "../schedule";
+import { ResultsMatrix } from "../results-matrix";
 import { LiveScoreBody } from "../live-score";
 import { outcomeText } from "@/components/v2/stages-panel";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -196,6 +198,100 @@ describe("Bracket — the tile at every width has ONE footer row (the consumer)"
     const h = await render(two({ outcome: award("walkover") as never }), false);
     expect(h).not.toContain("bracket-forfeit");
     expect(h).toContain("3–0");
+  });
+});
+
+// ---------------------------------------------------------------- the schedule tab (review I-2)
+
+// The division page's DEFAULT tab and the embed schedule widget. Before fix round 1 a forfeited row read its time (or
+// TBD) in the rail as if it were still to be played, carried no tag, and a double walkover's "0 — 0" headline read as
+// an unplayed match.
+describe("Schedule — a forfeited row reads Ended, its credited score and its tag (T13 review I-2)", () => {
+  const render = async (fixtures: PublicFixture[], withForfeit = true) => {
+    const dict = await getDictionary("en", "public");
+    const copy = publicScheduleCopy(dict, msg);
+    return renderToStaticMarkup(
+      createElement(Schedule, {
+        fixtures, entrantNames: NAMES, divisionPath: "/d", tz: "UTC", slotLabels: {}, roundLabels: {}, stageOrder: {},
+        stageNames: {}, copy: withForfeit ? { ...copy, forfeit: forfeitCopyOf((k) => t(dict, k)) } : copy, locale: "en",
+      }),
+    );
+  };
+  /** One row (a link) by its fixture href. */
+  const rowOf = (h: string, id: string) => {
+    const at = h.indexOf(`href="/d/fixtures/${id}"`);
+    expect(at, `row ${id}`).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf("</a>", at));
+  };
+  const ENDED = en["matchesHub.ended"];
+
+  it("empty case first: a played decided row has no tag (and reads Ended, as before)", async () => {
+    const h = await render([fixture({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } as never, scheduled_at: "2026-09-25T09:00:00.000Z" })]);
+    expect(rowOf(h, "f1")).toContain(`>${ENDED}<`);
+    expect(rowOf(h, "f1")).not.toContain('role="img"');
+  });
+
+  it("every forfeit reason, either seat winning: Ended, the credited score, and the tag on the WINNER's row named by the sentence", async () => {
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      for (const [winner, loser] of [["h", "a"], ["a", "h"]] as const) {
+        const credited = { headline: "3–0", perSide: [{ entrantId: winner, line: "3" }, { entrantId: loser, line: "0" }] };
+        const fx = fixture({ outcome: award(reason, winner, loser) as never, summary: credited as never, scheduled_at: "2026-09-25T09:00:00.000Z" });
+        const row = rowOf(await render([fx]), "f1");
+        const tag = `${reason}, ${NAMES[winner]} won`;
+        expect(row, tag).toContain(`>${ENDED}<`);
+        expect(row, `${tag}: not the kickoff time`).not.toContain(">09:00<");
+        const sentence = tr(`forfeit.sentence.${reason}`, { loser: NAMES[loser]! });
+        const chip = new RegExp(`role="img" aria-label="${html(sentence).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>([^<]*)<`).exec(row);
+        expect(chip?.[1], `${tag}: the tag, named by "${sentence}"`).toBe(TAG[reason]);
+        // The rows split at the away name's cell: the tag sits in the winner's half only, before its own 3.
+        const [homeHalf, awayHalf] = row.split('title="Harbour United"');
+        const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
+        expect(win, `${tag}: the winner's row carries the tag`).toMatch(/role="img"[^]*>3<\/span>/);
+        expect(lose, `${tag}: the loser's row does not`).not.toContain('role="img"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length * 2);
+  });
+
+  it("a double walkover reads Ended and its 2× w/o tag — never an unplayed 0 — 0", async () => {
+    const dw = fixture({ outcome: { kind: "double_walkover" } as never, summary: { headline: "0 — 0", perSide: [{ entrantId: "h", line: "0" }, { entrantId: "a", line: "0" }] } as never });
+    const row = rowOf(await render([dw]), "f1");
+    expect(row).toContain(`>${ENDED}<`);
+    expect(row).toContain(">2× w/o<");
+    expect(row).toContain(`aria-label="${html(tr("forfeit.sentence.doubleWalkover"))}"`);
+    expect(row).not.toContain("0 — 0");
+    expect(row).not.toMatch(/>0<\/span>/);
+  });
+
+  it("the positive pair: a caller that hands no forfeit copy shows no tag", async () => {
+    const row = rowOf(await render([fixture({ outcome: award("walkover") as never })], false), "f1");
+    expect(row).not.toContain('role="img"');
+    expect(row).toContain(`>${ENDED}<`);
+  });
+});
+
+describe("ResultsMatrix — a forfeited cell carries its tag (T13 review I-2)", () => {
+  const render = (fixtures: PublicFixture[]) =>
+    renderToStaticMarkup(
+      createElement(ResultsMatrix, { entrantIds: ["h", "a"], entrantNames: NAMES, fixtures, fixtureHref: (id: string) => `/f/${id}`, dict: DICT }),
+    );
+  it("empty case first: a played result's cell is its headline alone", () => {
+    const h = render([fixture({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } as never })]);
+    expect(h).toContain(">3–0</a>");
+    expect(h).not.toContain('role="img"');
+  });
+  it("a walkover's cell: the credited headline and the w/o tag, named by the sentence", () => {
+    const h = render([fixture({ outcome: award("walkover") as never })]);
+    expect(h).toContain("3–0");
+    expect(h).toContain(`aria-label="${html(tr("forfeit.sentence.walkover", { loser: "Harbour United" }))}"`);
+    expect(h).toMatch(/role="img"[^>]*>w\/o</);
+  });
+  it("a double walkover's cell: the 2× w/o tag, never an unplayed 0 — 0", () => {
+    const h = render([fixture({ outcome: { kind: "double_walkover" } as never, summary: { headline: "0 — 0" } as never })]);
+    expect(h).toContain(">2× w/o<");
+    expect(h).not.toContain("0 — 0");
   });
 });
 

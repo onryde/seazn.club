@@ -164,6 +164,26 @@ const knockout = (semiAt: string | null, finalAt: string | null) => [
   }),
 ];
 
+describe("embed schedule widget — a forfeited match carries its tag, in the org's locale (W2b T13 review I-2)", () => {
+  it("es knockout: the walked-over semi reads its Spanish sentence as the tag's name; a played semi has no tag", async () => {
+    const fx = knockout("2026-09-25T09:00:00.000Z", null);
+    fx[0] = {
+      ...fx[0]!,
+      status: "forfeited",
+      outcome: { kind: "award", winner: "e1", loser: "e2", reason: "walkover" } as never,
+      summary: { headline: "3 — 0", perSide: [{ entrantId: "e1", line: "3" }, { entrantId: "e2", line: "0" }] } as never,
+    };
+    const { html } = await scheduleOf("es", "knockout", fx);
+    const es = await getDictionary("es", "public");
+    const en = await getDictionary("en", "public");
+    const sentence = t(es, "forfeit.sentence.walkover", { loser: "Side 2" });
+    // Premise: the Spanish sentence is not the English one, so this witnesses the org's locale.
+    expect(sentence).not.toBe(t(en, "forfeit.sentence.walkover", { loser: "Side 2" }));
+    expect(html).toContain(`role="img" aria-label="${esc(sentence)}"`);
+    expect(html.match(/data-testid="schedule-forfeit-tag"/g)?.length, "only the forfeited row").toBe(1);
+  });
+});
+
 describe("embed schedule widget — rounds by name, phrases in the org's locale (N1d d5)", () => {
   it("en knockout, nothing timed (round view): headed Semi-finals then Final, never 'Round N'", async () => {
     const { props, html } = await scheduleOf("en", "knockout", knockout(null, null));

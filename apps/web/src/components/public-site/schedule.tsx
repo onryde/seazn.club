@@ -13,6 +13,9 @@ import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
+import type { ForfeitCopy, ForfeitWords } from "@/lib/forfeit-tag";
+import { ForfeitTagChip } from "./forfeit-tag-chip";
+import { bracketForfeitWords } from "./bracket";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
 // locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
@@ -98,6 +101,9 @@ export interface ScheduleCopy {
   timesIn: string;
   /** No fixtures at all. */
   empty: string;
+  /** W2b Task 13 (review I-2) — the forfeit tags and sentences (`forfeitCopyOf` over the caller's public dictionary),
+   *  read by this tab's rows and by the bracket. Optional: a caller that hands none shows no tag, exactly as before. */
+  forfeit?: ForfeitCopy;
 }
 
 // Day bucket key as the venue-local calendar date (YYYY-MM-DD) so a 23:30 venue
@@ -181,6 +187,7 @@ function ScorebugRow({
   slotLabels,
   copy,
   dateTag,
+  forfeit,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -190,13 +197,25 @@ function ScorebugRow({
   slotLabels: Record<string, string>;
   copy: ScheduleCopy;
   dateTag: string;
+  /** W2b Task 13 (review I-2) — this row's forfeit tag and sentence, when it has one. */
+  forfeit: ForfeitWords | undefined;
 }) {
   const live = f.status === "in_play";
   // W2a fix round 1 (M5): a HELD bracket match (`needs_decision`) was played to a level score — only who advances is
   // owed — so it reads Ended with its score lines, as a decided one does. Nobody won, so no name is bolded.
-  const decided = f.status === "decided" || f.status === "finalized" || f.status === "needs_decision";
+  // W2b T13 review I-2: a FORFEITED match is over too — it read its kickoff time as if still to be played.
+  const decided =
+    f.status === "decided" || f.status === "finalized" || f.status === "needs_decision" || f.status === "forfeited";
   const winner = f.outcome?.winner ?? null;
-  const lines = decided || live ? sideLines(f) : null;
+  // A double walkover credits nobody: its summary's 0 — 0 would read as an unplayed match, so it shows its tag alone.
+  const doubleWalkover = forfeit?.kind === "double_walkover";
+  const lines = (decided || live) && !doubleWalkover ? sideLines(f) : null;
+  // The tag rides the winner's score (the first row when nobody won), as on the hub's draw node.
+  const chip =
+    forfeit === undefined ? null : (
+      <ForfeitTagChip tag={forfeit.tag} sentence={forfeit.sentence} testId="schedule-forfeit-tag" />
+    );
+  const chipOn = (id: string | null, first: boolean) => chip !== null && (winner === null ? first : id === winner);
   const homeName = f.home_entrant_id
     ? (entrantNames[f.home_entrant_id] ?? "?")
     : (slotLabels[`${f.id}:home`] ?? msg("schedule.tbd"));
@@ -261,7 +280,19 @@ function ScorebugRow({
 
       <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
       {lines ? (
-        <span className={scoreCls(f.home_entrant_id)}>{lines[0]}</span>
+        <span className={scoreCls(f.home_entrant_id)}>
+          {chipOn(f.home_entrant_id, true) ? <span className="mr-1.5 align-middle">{chip}</span> : null}
+          {lines[0]}
+        </span>
+      ) : chip !== null ? (
+        // No score lines beside the tag (a double walkover, or a line too long for the column): the tag alone, with a
+        // credited headline when there is one — never a double walkover's 0 — 0.
+        <span className="row-span-2 flex items-center gap-1.5 self-center">
+          {!doubleWalkover && f.summary?.headline ? (
+            <span className="font-display text-sm font-semibold tabular-nums text-ink">{f.summary.headline}</span>
+          ) : null}
+          {chip}
+        </span>
       ) : (
         <span
           className={`row-span-2 self-center ${
@@ -274,7 +305,12 @@ function ScorebugRow({
         </span>
       )}
       <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>
-      {lines ? <span className={scoreCls(f.away_entrant_id)}>{lines[1]}</span> : null}
+      {lines ? (
+        <span className={scoreCls(f.away_entrant_id)}>
+          {chipOn(f.away_entrant_id, false) ? <span className="mr-1.5 align-middle">{chip}</span> : null}
+          {lines[1]}
+        </span>
+      ) : null}
     </Link>
   );
 }
@@ -301,6 +337,9 @@ export function Schedule({
   // The Intl tag dates are written in: the org's locale, "en" as en-GB
   // ("Friday 25 September"), as every public date was before N1e e5.
   const dateTag = intlLocaleFor(locale);
+  // W2b Task 13 (review I-2): every row's forfeit words, built once from the WHOLE division (a double walkover's
+  // next-round clause reads the fixture its line feeds), exactly as the bracket builds its own.
+  const forfeitWords = bracketForfeitWords(fixtures, entrantNames, copy.forfeit);
 
   // Only offer the day view when at least one fixture actually has a date.
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
@@ -455,6 +494,7 @@ export function Schedule({
                     slotLabels={slotLabels}
                     copy={copy}
                     dateTag={dateTag}
+                    forfeit={forfeitWords.get(f.id)}
                   />
                 </li>
               ))}

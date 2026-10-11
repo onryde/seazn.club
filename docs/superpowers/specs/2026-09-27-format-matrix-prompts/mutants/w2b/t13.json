@@ -500,5 +500,117 @@
         "name": "a walkover: the tag is on the WINNER's row"
       }
     ]
+  },
+  {
+    "id": "i2-schedule-forfeited-not-ended",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "|| f.status === \"needs_decision\" || f.status === \"forfeited\";",
+    "replace": "|| f.status === \"needs_decision\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "every forfeit reason, either seat winning"
+      }
+    ]
+  },
+  {
+    "id": "i2-schedule-dw-shows-lines",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "const doubleWalkover = forfeit?.kind === \"double_walkover\";",
+    "replace": "const doubleWalkover = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "a double walkover reads Ended and its 2× w/o tag"
+      }
+    ]
+  },
+  {
+    "id": "i2-schedule-chip-first-row",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "(winner === null ? first : id === winner)",
+    "replace": "(first)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "every forfeit reason, either seat winning"
+      }
+    ]
+  },
+  {
+    "id": "i2-schedule-no-words",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "forfeit={forfeitWords.get(f.id)}",
+    "replace": "forfeit={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "every forfeit reason, either seat winning"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
+        ],
+        "name": "the walked-over semi reads its Spanish sentence"
+      }
+    ]
+  },
+  {
+    "id": "i2-matrix-dw-headline",
+    "file": "apps/web/src/components/public-site/results-matrix.tsx",
+    "find": "words.kind !== \"double_walkover\" && f.summary?.headline",
+    "replace": "f.summary?.headline",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "a double walkover's cell: the 2× w/o tag, never an unplayed 0 — 0"
+      }
+    ]
+  },
+  {
+    "id": "i2-matrix-no-words",
+    "file": "apps/web/src/components/public-site/results-matrix.tsx",
+    "find": "const words = DONE.has(f.status) ? forfeitOf(f) : null;",
+    "replace": "const words = null as ReturnType<typeof forfeitOf>;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "a walkover's cell: the credited headline and the w/o tag"
+      }
+    ]
+  },
+  {
+    "id": "i2-embed-no-forfeit-copy",
+    "file": "apps/web/src/app/embed/divisions/[id]/[widget]/page.tsx",
+    "find": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };",
+    "replace": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup) };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
+        ],
+        "name": "the walked-over semi reads its Spanish sentence"
+      }
+    ]
   }
 ]
