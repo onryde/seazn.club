@@ -902,5 +902,49 @@
         "name": "every client root's value-import graph stays clear of the barrel"
       }
     ]
+  },
+  {
+    "id": "n1-preview-dict-drops-forfeit-copy",
+    "file": "apps/web/src/lib/overlay-dict.ts",
+    "find": "k.startsWith(\"overlay.\") || FORFEIT_COPY_KEYS.has(k)",
+    "replace": "k.startsWith(\"overlay.\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
+        ],
+        "name": "every key the forfeit copy reads survives the slice"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
+        ],
+        "name": "a walkover and a double walkover read their sentences on air"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/stream-panel-context.test.ts"
+        ],
+        "name": "no panel \\(overlay switched off\\)"
+      }
+    ]
+  },
+  {
+    "id": "n2-client-imports-placement-client-subpath",
+    "file": "apps/web/src/components/public-site/schedule.tsx",
+    "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
+    "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"@seazn/engine/scheduling/placement-client\";\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
+        ],
+        "name": "every client root's value-import graph stays clear of the barrel"
+      }
+    ]
   }
 ]

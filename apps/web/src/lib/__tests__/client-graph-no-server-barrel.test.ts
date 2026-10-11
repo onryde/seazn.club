@@ -7,13 +7,19 @@
 //
 // The walk follows VALUE imports (`import type` / `export type` statements are erased by the compiler and never reach
 // a bundle) through `@/…` and relative specifiers; a package specifier is recorded, not followed.
+//
+// Fix round 2 (re-review N-2): the forbidden specifiers are DERIVED, not typed — every `@seazn/engine/*` export (the
+// engine's package.json `exports` map) whose own module graph reaches `@grpc/grpc-js`, plus grpc itself. The bare
+// barrel alone let `@seazn/engine/scheduling/placement-client`, which imports grpc directly, through.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const ENGINE = resolve(SRC, "../../../packages/engine");
 const BARREL = "@seazn/engine/scheduling";
+const GRPC = "@grpc/grpc-js";
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -75,9 +81,49 @@ function walk(root: string): Map<string, string[]> {
   return reached;
 }
 
+/** Every `@seazn/engine/*` specifier the package exports, with its entry file (`./sports/*` expanded per sport). */
+function engineExports(): Map<string, string> {
+  const pkg = JSON.parse(readFileSync(join(ENGINE, "package.json"), "utf8")) as { exports: Record<string, string> };
+  const out = new Map<string, string>();
+  for (const [key, target] of Object.entries(pkg.exports)) {
+    if (!key.includes("*")) {
+      out.set(`@seazn/engine${key.slice(1)}`, join(ENGINE, target));
+      continue;
+    }
+    const [dirPart] = target.split("*");
+    for (const name of readdirSync(join(ENGINE, dirPart!))) {
+      const entry = join(ENGINE, target.replace("*", name));
+      if (existsSync(entry)) out.set(`@seazn/engine${key.slice(1).replace("*", name)}`, entry);
+    }
+  }
+  return out;
+}
+
+/** The engine exports whose module graph (relative value + dynamic imports) reaches grpc — plus grpc itself. */
+function forbiddenSpecifiers(): { forbidden: Set<string>; exportsChecked: number } {
+  const forbidden = new Set<string>([GRPC]);
+  const exports = engineExports();
+  for (const [specifier, entry] of exports) {
+    if ([...walk(entry).keys()].some((file) => specsOf(file).includes(GRPC))) forbidden.add(specifier);
+  }
+  return { forbidden, exportsChecked: exports.size };
+}
+
 describe("no client module reaches the server-only scheduling barrel", () => {
   const files = sourceFiles(SRC);
   const roots = files.filter((f) => isClient(readFileSync(f, "utf8")));
+  const { forbidden, exportsChecked } = forbiddenSpecifiers();
+
+  it("the forbidden list is derived from the engine's exports: the barrel and placement-client, never a leaf", () => {
+    expect(exportsChecked, "engine exports read").toBeGreaterThan(20);
+    expect(forbidden.has(BARREL), "the barrel reaches grpc").toBe(true);
+    expect(forbidden.has(`${BARREL}/placement-client`), "placement-client imports grpc").toBe(true);
+    // The leaves exist precisely so a client can import them: a list that forbade them would be wrong the other way.
+    for (const leaf of ["bracket-layout", "swiss", "grid-step", "rest-floor"]) {
+      expect(forbidden.has(`${BARREL}/${leaf}`), `${leaf} is a client-safe leaf`).toBe(false);
+    }
+    expect(forbidden.has("@seazn/engine/core"), "the core the client islands import").toBe(false);
+  });
 
   it("the walker sees real edges (positive pair): schedule.tsx reaches lib/forfeit-tag.ts, bracket.tsx's barrel import is seen", () => {
     const schedule = join(SRC, "components/public-site/schedule.tsx");
@@ -94,11 +140,12 @@ describe("no client module reaches the server-only scheduling barrel", () => {
     for (const root of roots) {
       for (const [file, chain] of walk(root)) {
         walked++;
-        if (specsOf(file).includes(BARREL)) offenders.push(chain.map((f) => relative(SRC, f)).join(" → "));
+        const hit = specsOf(file).find((spec) => forbidden.has(spec));
+        if (hit !== undefined) offenders.push(`${chain.map((f) => relative(SRC, f)).join(" → ")} → ${hit}`);
       }
     }
     expect(roots.length, "client roots swept").toBeGreaterThan(50);
     expect(walked, "modules walked").toBeGreaterThan(roots.length);
-    expect(offenders, `a client chain reaches ${BARREL}`).toEqual([]);
+    expect(offenders, `a client chain reaches grpc (${[...forbidden].join(", ")})`).toEqual([]);
   });
 });
