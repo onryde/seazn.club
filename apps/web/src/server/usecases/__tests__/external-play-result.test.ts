@@ -18,18 +18,20 @@ import { readFileSync } from "node:fs";
 import fc from "fast-check";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { BoardgameMethod } from "@seazn/engine/sports/boardgame";
+import { BRACKET_KINDS, DRAW_KINDS } from "@seazn/engine/core";
+import { BoardgameMethod, boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { AppendEventRequest, StageKind } from "@/server/api-v1/schemas";
 import { appendEvent } from "@/server/engine-db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import type { BoardCall, GameSnapshot } from "@/server/external-play/types";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
-import { holdForOrganiser, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
+import { HOLD_REASONS, holdForOrganiser, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
+import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -89,11 +91,16 @@ type Game = Awaited<ReturnType<typeof seedOnlineChessFixture>> & {
 
 /** A game as T9's real producer leaves it: 'ready', colours recorded, no
  *  score event (T10 never writes one), so the fold is still in phase `pre`.
- *  `kind` flips the stage AFTER the division started — standing for an
- *  organiser who built that stage kind (the seed's fixture is SQL-inserted
- *  into a league stage). `whiteAway` gives Black to home through the real
- *  pairing card, so the winning colour and the winning side differ. */
-async function readyGame(over: { kind?: string; whiteAway?: boolean } = {}): Promise<Game> {
+ *  `kind` sets the stage kind BEFORE any event — standing for an organiser
+ *  who built that stage kind (the seed SQL-inserts a league stage). It must
+ *  come first: the fixture's cfg freezes at its FIRST event (append-event's
+ *  V347 freeze), carrying a bracket's decider (fixture-cfg.ts) exactly as a
+ *  bracket fixture does in production. `legacyCfg` then re-freezes it
+ *  WITHOUT the decider — standing for a fixture frozen before W2a deployed
+ *  (fixture-cfg.ts Review Focus 4: it finishes through needs_decision).
+ *  `whiteAway` gives Black to home through the real pairing card, so the
+ *  winning colour and the winning side differ. */
+async function readyGame(over: { kind?: string; whiteAway?: boolean; legacyCfg?: boolean } = {}): Promise<Game> {
   const s = await seedOnlineChessFixture({
     onlinePlay: "lichess",
     divisionStarted: true,
@@ -102,6 +109,7 @@ async function readyGame(over: { kind?: string; whiteAway?: boolean } = {}): Pro
     roundOpenedAt: OPENED,
     clock: { base: 300, increment: 3 },
   });
+  if (over.kind) await sql`update stages set kind = ${over.kind} where id = ${s.stageId}`;
   if (over.whiteAway) {
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "boardgame.pairing", payload: { white: s.away.entrantId } });
   }
@@ -117,14 +125,22 @@ async function readyGame(over: { kind?: string; whiteAway?: boolean } = {}): Pro
     white_side: whiteSide,
     challenge_id: gameId,
   });
-  if (over.kind) await sql`update stages set kind = ${over.kind} where id = ${s.stageId}`;
+  if (over.legacyCfg) {
+    const [row] = await sql<{ dcfg: unknown; scfg: Record<string, unknown> | null }[]>`
+      select d.config as dcfg, st.config as scfg
+        from fixtures f join divisions d on d.id = f.division_id join stages st on st.id = f.stage_id
+       where f.id = ${s.fixtureId}`;
+    // The cfg a NON-bracket kind resolves to = the same cfg without the overlay.
+    const cfg = resolveFixtureCfg(null, row!.dcfg, { kind: "league", config: row!.scfg }, boardgame);
+    await sql`update fixtures set config_snapshot = ${sql.json(cfg as never)}, config_snapshot_at = now() where id = ${s.fixtureId}`;
+  }
   return over.whiteAway
     ? { ...s, gameId, white: s.away, black: s.home, whiteSide }
     : { ...s, gameId, white: s.home, black: s.away, whiteSide };
 }
 
 /** A game that T10's REAL `act` moved to 'live' with one accepted move. */
-async function liveGame(over: { kind?: string; whiteAway?: boolean } = {}): Promise<Game> {
+async function liveGame(over: { kind?: string; whiteAway?: boolean; legacyCfg?: boolean } = {}): Promise<Game> {
   const g = await readyGame(over);
   const out = await act(
     { fixtureId: g.fixtureId, personId: g.white.personId, action: { kind: "move", uci: "e2e4" } },
@@ -186,7 +202,10 @@ type Expect =
   | { wrote: "decided"; method: BoardgameMethod }
   | { wrote: "draw"; method: BoardgameMethod | null } // null: no method on the payload
   | { wrote: "aborted" }
-  | { wrote: "needs_organiser"; reason: "provider_error" | "tiebreak_owed" | "fair_play" }
+  | { wrote: "needs_organiser"; reason: "provider_error" | "fair_play" }
+  // A drawn game in a bracket: the draw IS written (method `draw`), the fold
+  // awaits its tie-break and the organiser is told (W2a + controller R2).
+  | { wrote: "needs_organiser"; reason: "tiebreak_owed"; draw: BoardgameMethod | null }
   | { wrote: "none" };
 
 const ORGANISER: Expect = { wrote: "needs_organiser", reason: "provider_error" };
@@ -256,8 +275,13 @@ function rulebook(status: string, winner: Colour | null, bracket: boolean): Expe
         throw new Error(`rulebook has no row for ${status}`);
     }
   })();
-  // §3.6 / §7: a drawn game in a bracket is HELD, never written as decided.
-  if (base.wrote === "draw" && bracket) return { wrote: "needs_organiser", reason: "tiebreak_owed" };
+  // §3.6 / §7: a drawn game in a bracket is never DECIDED. Under W2a the
+  // draw is written through the engine, whose bracket decider
+  // (boardgame.bracketDeciders) opens the tie-break; ship 1 cannot create a
+  // tie-break Lichess game, so the organiser is told (controller R2).
+  // `bracket` here = a bracket kind (the engine's BRACKET_KINDS) whose fixture
+  // carries the decider, as every fixture frozen after W2a does.
+  if (base.wrote === "draw" && bracket) return { wrote: "needs_organiser", reason: "tiebreak_owed", draw: base.method };
   return base;
 }
 
@@ -268,8 +292,10 @@ function answerOf(e: Expect) {
 
 /** Lichess's OWN status list: the recorded OpenAPI enum (the same 14 as
  *  scalachess Status.scala), plus T3's explicit "unrecognised" marker. */
-const BRACKETS_ALL = StageKind.options.filter((k) => BRACKET_STAGE_KINDS.has(k));
-const DECIDING_ALL = StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k));
+// The engine's two halves of StageKind (packages/engine/src/core/types.ts):
+// a level result is forbidden / allowed. Read, never typed here.
+const BRACKETS_ALL = StageKind.options.filter((k) => BRACKET_KINDS.has(k));
+const DECIDING_ALL = StageKind.options.filter((k) => DRAW_KINDS.has(k));
 
 const DECLARED_STATUSES: string[] = (() => {
   const dir = join(dirname(fileURLToPath(import.meta.url)), "../../external-play/__fixtures__/lichess");
@@ -283,6 +309,16 @@ async function expectWritten(g: Game, s: GameSnapshot, e: Expect, label: string)
   const fx = await fixtureOf(g.fixtureId);
   const b = await bridgeOf(g.fixtureId);
   expect(events.map((x) => x.type), `${label}: never a forfeit`).not.toContain("core.forfeit");
+  if (e.wrote === "needs_organiser" && e.reason === "tiebreak_owed") {
+    expect(events.map((x) => x.type), `${label}: the draw is written, once`).toEqual(["boardgame.result"]);
+    expect(events[0]!.payload.winner ?? null, `${label}: no winner`).toBeNull();
+    expect(events[0]!.payload.method ?? null, `${label}: method`).toBe(e.draw);
+    expect(fx.outcome, `${label}: undecided — the tie-break is owed`).toBeNull();
+    expect(fx.status, `${label}: still in play, never decided`).toBe("in_play");
+    expect(b!.status, label).toBe("needs_organiser");
+    expect(b!.needs_reason, label).toBe("tiebreak_owed");
+    return;
+  }
   if (e.wrote === "decided" || e.wrote === "draw") {
     expect(events.length, `${label}: one result event`).toBe(1);
     expect(events[0]!.type, label).toBe("boardgame.result");
@@ -625,13 +661,13 @@ describe.runIf(HAS_DB)("writeResultFrom — the pre→live→done sequence", () 
     expect(await typesOf(g.fixtureId)).toEqual(["core.start", "boardgame.result", "core.void"]);
   });
 
-  it("a held outcome is idempotent too: a second knockout draw call holds once and writes nothing", async () => {
+  it("a held outcome is idempotent too: a second knockout draw call writes the draw once and holds once", async () => {
     const g = await readyGame({ kind: "knockout" });
     const s = snap(g, { status: "draw", winner: null });
     const held = { wrote: "needs_organiser", reason: "tiebreak_owed" };
     expect(await writeResultFrom(s, g.fixtureId)).toEqual(held);
     expect(await writeResultFrom(s, g.fixtureId)).toEqual(held);
-    expect(await typesOf(g.fixtureId)).toEqual([]);
+    expect(await typesOf(g.fixtureId)).toEqual(["core.start", "boardgame.result"]);
     expect(await bridgeOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "tiebreak_owed" });
   });
 
@@ -695,80 +731,197 @@ describe.runIf(HAS_DB)("writeResultFrom — the pre→live→done sequence", () 
   });
 });
 
-describe.runIf(HAS_DB)("writeResultFrom — a draw is legal in Swiss and league, held in a bracket", () => {
-  // Spec §3.6 and §7: "A knockout draw shows as held — 'winner to be
-  // decided' — never as a decided result." On THIS branch the engine has no
-  // tie-break phase and `boardgame.supportsDraws` answers true for every
-  // stage kind, so the hold is the bridge row: needs_organiser /
-  // tiebreak_owed, and NO boardgame.result at all.
-  //
-  // The bracket kinds are the ENGINE's declaration (BRACKET_STAGE_KINDS,
-  // packages/engine/src/competition/progression.ts) and the rest are every
-  // other StageKind (schemas.ts) — so a fifth bracket kind moves both lists.
-  const DRAWS = [
-    { status: "draw" as const, method: null }, // spec §3.6 names no method; see the rulebook
-    { status: "stalemate" as const, method: "stalemate" },
-  ];
-  const BRACKETS = StageKind.options.filter((k) => BRACKET_STAGE_KINDS.has(k));
-  const DECIDING = StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k));
+describe.runIf(HAS_DB)("writeResultFrom — a draw: decided where the stage allows one, the engine's to hold in a bracket", () => {
+  // W2a (main V432, spec §5.4) and controller ruling R2 (fix round 1). A
+  // level result in a bracket kind (the engine's BRACKET_KINDS —
+  // forbidsLevelResult) is never decided. T12 writes the draw THROUGH the
+  // engine like any result and the engine holds it:
+  //   - chess's bracket decider (boardgame.bracketDeciders, merged into the
+  //     cfg frozen at the fixture's first event) opens the tie-break: the
+  //     fixture stays in_play, awaiting its decider. Ship 1 cannot create a
+  //     tie-break Lichess game, so T12 holds THAT for the organiser
+  //     (tiebreak_owed);
+  //   - a fixture frozen WITHOUT the decider (before W2a) folds the draw as
+  //     a level outcome: needs_decision, the organiser's settle.
+  // Every expected value is read from those engine declarations.
+  const DRAWN = [
+    { status: "draw", winner: null },
+    { status: "stalemate", winner: null },
+    { status: "insufficientMaterialClaim", winner: null },
+    { status: "outoftime", winner: null }, // a flag against insufficient material
+    { status: "timeout", winner: null }, // a force-draw
+  ] as const;
+  const BRACKETS = BRACKETS_ALL;
+  const DECIDING = DECIDING_ALL;
 
-  it("premise: both lists are non-empty and cover every stage kind", () => {
+  it("premise: the engine splits every stage kind in two, declares a chess bracket decider, and every shape here IS a draw", () => {
     expect(BRACKETS.length).toBeGreaterThan(0);
     expect(DECIDING.length).toBeGreaterThan(0);
-    expect(BRACKETS.length + DECIDING.length).toBe(StageKind.options.length);
-    expect(DECIDING, "league and swiss are deciding kinds").toEqual(expect.arrayContaining(["league", "swiss"]));
-    expect(BRACKETS).toEqual(expect.arrayContaining(["knockout", "double_elim", "stepladder", "page_playoff"]));
+    expect(BRACKETS.length + DECIDING.length, "disjoint and exhaustive").toBe(StageKind.options.length);
+    expect(Object.keys(boardgame.bracketDeciders({} as never)).length, "chess declares a bracket decider").toBeGreaterThan(0);
+    let checked = 0;
+    for (const d of DRAWN) {
+      expect(rulebook(d.status, d.winner, false).wrote, d.status).toBe("draw");
+      checked++;
+    }
+    expect(checked).toBe(DRAWN.length);
   });
 
-  it("a draw in every non-bracket kind is written as a draw", async () => {
+  it("a draw in every draw-allowing kind × every drawn shape is DECIDED as a draw — counted", async () => {
     let checked = 0;
     for (const kind of DECIDING) {
-      for (const d of DRAWS) {
+      for (const d of DRAWN) {
         const g = await readyGame({ kind });
-        const out = await writeResultFrom(snap(g, { status: d.status, winner: null }), g.fixtureId);
-        expect(out, `${kind}/${d.status}`).toEqual({ wrote: "draw" });
-        const [ev] = await resultEvents(g.fixtureId);
-        expect(ev!.type).toBe("boardgame.result");
-        expect(ev!.payload.winner).toBeNull();
-        expect(ev!.payload.method ?? null).toBe(d.method);
+        const s = snap(g, { status: d.status, winner: d.winner });
+        const e = rulebook(d.status, d.winner, false);
+        expect(await writeResultFrom(s, g.fixtureId), `${kind}/${d.status}`).toEqual(answerOf(e));
+        await expectWritten(g, s, e, `${kind}/${d.status}`);
+        expect((await fixtureOf(g.fixtureId)).status, `${kind}/${d.status}`).toBe("decided");
         checked++;
       }
     }
-    expect(checked, "kind × draw-status combinations checked").toBe(DECIDING.length * DRAWS.length);
+    expect(checked, "kind × drawn shape checked").toBe(DECIDING.length * DRAWN.length);
   });
 
-  it("the SAME draw in a knockout is held — needs_organiser/tiebreak_owed, no result event, fixture undecided", async () => {
+  it("a draw in every BRACKET kind × every drawn shape is written, the fold awaits its tie-break, and the organiser is told — counted", async () => {
+    // Review M2: the flag and force draws are crossed here deterministically,
+    // not left to the property's draw.
     let checked = 0;
-    for (const d of DRAWS) {
-      const g = await readyGame({ kind: "knockout" });
-      const out = await writeResultFrom(snap(g, { status: d.status, winner: null }), g.fixtureId);
-      expect(out, d.status).toEqual({ wrote: "needs_organiser", reason: "tiebreak_owed" });
-      expect(await typesOf(g.fixtureId), "a knockout draw writes NOTHING to the ledger").toEqual([]);
-      const fx = await fixtureOf(g.fixtureId);
-      expect(fx.outcome).toBeNull();
-      expect(fx.status).not.toBe("finalized");
-      expect(await bridgeOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "tiebreak_owed" });
-      checked++;
+    for (const kind of BRACKETS) {
+      for (const d of DRAWN) {
+        const g = await readyGame({ kind });
+        const s = snap(g, { status: d.status, winner: d.winner });
+        const e = rulebook(d.status, d.winner, true);
+        expect(e, "premise: the rulebook owes a tie-break").toMatchObject({ reason: "tiebreak_owed" });
+        expect(await writeResultFrom(s, g.fixtureId), `${kind}/${d.status}`).toEqual(answerOf(e));
+        await expectWritten(g, s, e, `${kind}/${d.status}`);
+        checked++;
+      }
     }
-    expect(checked, "knockout draw statuses checked").toBe(DRAWS.length);
+    expect(checked, "bracket kind × drawn shape checked").toBe(BRACKETS.length * DRAWN.length);
   });
 
-  it("a DECISIVE knockout result is not held — the hold is about draws, not about knockouts", async () => {
-    const g = await readyGame({ kind: "knockout" });
-    expect(await writeResultFrom(snap(g, { status: "mate", winner: "white" }), g.fixtureId)).toEqual({ wrote: "decided" });
+  it("a bracket draw on a fixture frozen WITHOUT the decider ends needs_decision — written, never decided, not held on the bridge", async () => {
+    const g = await readyGame({ kind: "knockout", legacyCfg: true });
+    const before = await bridgeOf(g.fixtureId);
+    expect(await writeResultFrom(snap(g, { status: "draw", winner: null }), g.fixtureId)).toEqual({ wrote: "draw" });
+    const fx = await fixtureOf(g.fixtureId);
+    expect(fx.status, "W2a holds the level result").toBe("needs_decision");
+    expect(fx.outcome?.kind).toBe("draw");
+    expect((await resultEvents(g.fixtureId)).map((x) => x.type)).toEqual(["boardgame.result"]);
+    expect(await bridgeOf(g.fixtureId), "the engine holds it — no bridge hold on top").toEqual(before);
   });
 
-  it("every bracket kind holds a draw — counted", async () => {
+  it("a DECISIVE result in every bracket kind is decided, never held — counted", async () => {
     let checked = 0;
     for (const kind of BRACKETS) {
       const g = await readyGame({ kind });
-      expect(await writeResultFrom(snap(g, { status: "draw", winner: null }), g.fixtureId), kind).toEqual({
-        wrote: "needs_organiser",
-        reason: "tiebreak_owed",
-      });
+      const s = snap(g, { status: "mate", winner: "black" });
+      const e = rulebook("mate", "black", true);
+      expect(await writeResultFrom(s, g.fixtureId), kind).toEqual({ wrote: "decided" });
+      await expectWritten(g, s, e, kind);
       checked++;
     }
-    expect(checked, "bracket kinds checked").toBe(BRACKETS.length);
+    expect(checked).toBe(BRACKETS.length);
+  });
+
+  it("a second call is idempotent — the tie-break hold and the needs_decision draw alike", async () => {
+    const tb = await readyGame({ kind: "knockout" });
+    const s1 = snap(tb, { status: "draw", winner: null });
+    const first = await writeResultFrom(s1, tb.fixtureId);
+    expect(first).toEqual({ wrote: "needs_organiser", reason: "tiebreak_owed" });
+    const after1 = [await typesOf(tb.fixtureId), await bridgeOf(tb.fixtureId), await fixtureOf(tb.fixtureId)];
+    expect(await writeResultFrom(s1, tb.fixtureId), "same answer").toEqual(first);
+    expect([await typesOf(tb.fixtureId), await bridgeOf(tb.fixtureId), await fixtureOf(tb.fixtureId)], "nothing moved").toEqual(after1);
+
+    const nd = await readyGame({ kind: "knockout", legacyCfg: true });
+    const s2 = snap(nd, { status: "stalemate", winner: null });
+    expect(await writeResultFrom(s2, nd.fixtureId)).toEqual({ wrote: "draw" });
+    const after2 = [await typesOf(nd.fixtureId), await bridgeOf(nd.fixtureId), await fixtureOf(nd.fixtureId)];
+    expect(await writeResultFrom(s2, nd.fixtureId), "same answer").toEqual({ wrote: "draw" });
+    expect([await typesOf(nd.fixtureId), await bridgeOf(nd.fixtureId), await fixtureOf(nd.fixtureId)], "nothing moved").toEqual(after2);
+  });
+
+  it("the organiser entered a DRAW on the pad first (tie-break pending): a late Lichess result writes nothing and raises nothing — counted", async () => {
+    // Review §4.1: a playable fixture whose fold is in its tie-break used to
+    // reach the phase check and throw FOLD_STATUS_MISMATCH on every
+    // reconcile. The organiser's entry stands, whatever Lichess says.
+    const LATE = [
+      { status: "mate", winner: "white" },
+      { status: "draw", winner: null },
+      { status: "aborted", winner: null },
+      { status: "cheat", winner: "black" },
+    ] as const;
+    let checked = 0;
+    for (const late of LATE) {
+      const g = await readyGame({ kind: "knockout" });
+      const auth = await mintOrgOwnerAuth(g.orgId);
+      await scoreEvent(auth, g.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(auth, g.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: null } });
+      const fx = await fixtureOf(g.fixtureId);
+      expect([fx.status, fx.outcome], "premise: the pad's draw opened the tie-break").toEqual(["in_play", null]);
+      const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
+      expect(await writeResultFrom(snap(g, late), g.fixtureId), late.status).toEqual({ wrote: "none" });
+      expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)], late.status).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(LATE.length);
+  });
+
+  it("the organiser SETTLED a held draw (needs_decision → core.settle): a late Lichess result writes nothing", async () => {
+    const g = await readyGame({ kind: "knockout", legacyCfg: true });
+    const auth = await mintOrgOwnerAuth(g.orgId);
+    await scoreEvent(auth, g.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, g.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: null } });
+    expect((await fixtureOf(g.fixtureId)).status, "premise: held").toBe("needs_decision");
+    await scoreEvent(auth, g.fixtureId, {
+      expected_seq: 2,
+      type: "core.settle",
+      payload: { winner: g.home.entrantId, method: "organiser" },
+    });
+    expect((await fixtureOf(g.fixtureId)).status, "premise: settled").toBe("decided");
+    const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
+    expect(await writeResultFrom(snap(g, { status: "mate", winner: "black" }), g.fixtureId)).toEqual({ wrote: "none" });
+    expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)]).toEqual(before);
+  });
+
+  it("after OUR tie-break hold the organiser records the tie-break: a replay answers draw and holds nothing again", async () => {
+    const g = await readyGame({ kind: "knockout" });
+    const s = snap(g, { status: "draw", winner: null });
+    expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "needs_organiser", reason: "tiebreak_owed" });
+    const auth = await mintOrgOwnerAuth(g.orgId);
+    const tip = (await typesOf(g.fixtureId)).length;
+    await scoreEvent(auth, g.fixtureId, {
+      expected_seq: tip,
+      type: "boardgame.tiebreak",
+      payload: { rung: "armageddon", winner: g.away.entrantId },
+    });
+    expect((await fixtureOf(g.fixtureId)).status, "premise: the tie-break decided it").toBe("decided");
+    const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
+    expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "draw" });
+    expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)]).toEqual(before);
+  });
+
+  it("after OUR tie-break hold the organiser SETTLES it instead: a replay answers draw and holds nothing again", async () => {
+    // A settle decides the fixture but leaves the fold in phase "tiebreak"
+    // (core/events.ts settleApplies: a settlement outranks the module's
+    // outcome; the module state is not moved). Only the fixture's decided
+    // status says the tie-break is no longer owed.
+    const g = await readyGame({ kind: "knockout" });
+    const s = snap(g, { status: "stalemate", winner: null });
+    expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "needs_organiser", reason: "tiebreak_owed" });
+    const auth = await mintOrgOwnerAuth(g.orgId);
+    await scoreEvent(auth, g.fixtureId, {
+      expected_seq: (await typesOf(g.fixtureId)).length,
+      type: "core.settle",
+      payload: { winner: g.home.entrantId, method: "lot" },
+    });
+    const fs = await getFixtureState(auth, g.fixtureId);
+    expect(fs.status, "premise: settled").toBe("decided");
+    expect((fs.state as { phase?: string }).phase, "premise: the fold still reads its tie-break phase").toBe("tiebreak");
+    const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
+    expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "draw" });
+    expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)]).toEqual(before);
   });
 });
 
@@ -810,8 +963,11 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
     expect(b!.needs_reason, "the first diagnosis stands until the organiser clears it").toBe("token_revoked");
   });
 
-  it("every reason the union allows actually lands in the column — counted", async () => {
-    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "tiebreak_owed"] as const;
+  it("every reason a caller may hold for actually lands in the column — counted", async () => {
+    // Callers' diagnoses only (R2): tiebreak_owed is the ENGINE's to declare
+    // after a written draw, never a caller's to assert by hand.
+    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked"] as const;
+    expect([...HOLD_REASONS].sort(), "the union is exactly the callers' reasons").toEqual([...REASONS].sort());
     let checked = 0;
     for (const reason of REASONS) {
       const g = await liveGame();
@@ -826,6 +982,10 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
     const g = await readyGame();
     await expect(
       holdForOrganiser({ fixtureId: g.fixtureId, reason: "no_show_both" as never }),
+    ).rejects.toMatchObject({ code: "HOLD_REASON_UNKNOWN" });
+    // …nor a tie-break the engine has not opened (R2).
+    await expect(
+      holdForOrganiser({ fixtureId: g.fixtureId, reason: "tiebreak_owed" as never }),
     ).rejects.toMatchObject({ code: "HOLD_REASON_UNKNOWN" });
     expect((await bridgeOf(g.fixtureId))!.status).toBe("ready");
   });
@@ -976,10 +1136,12 @@ describe.runIf(HAS_DB)("writeResultFrom — assumptions are guards", () => {
 // those freely and left `held_aborted` at 0 — measured). The status, winner,
 // stage kind within its class, and the call tail are drawn.
 // ---------------------------------------------------------------------------
-type Pre = "ready" | "live" | "started" | "held" | "withdrawn" | "voided" | "decided_by_hand";
-const PRE_STATES: readonly Pre[] = ["ready", "live", "started", "held", "withdrawn", "voided", "decided_by_hand"];
-/** The fixture already had its decision before Lichess's result arrived. */
-const SETTLED_BEFORE = new Set<Pre>(["withdrawn", "voided", "decided_by_hand"]);
+type Pre = "ready" | "live" | "started" | "held" | "withdrawn" | "voided" | "decided_by_hand" | "drawn_by_hand";
+const PRE_STATES: readonly Pre[] = ["ready", "live", "started", "held", "withdrawn", "voided", "decided_by_hand", "drawn_by_hand"];
+/** The fixture already had its decision before Lichess's result arrived.
+ *  `drawn_by_hand`: the organiser entered a draw on the pad — decided in a
+ *  league, the tie-break pending in a bracket (review §4.1). */
+const SETTLED_BEFORE = new Set<Pre>(["withdrawn", "voided", "decided_by_hand", "drawn_by_hand"]);
 
 const W = fc.constantFrom<Colour>("white", "black");
 const CLASSES = {
@@ -1027,12 +1189,24 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
   }
 
   async function build(pre: Pre, kind: string, whiteAway: boolean): Promise<Game> {
-    const g = pre === "live" || pre === "withdrawn" ? await liveGame({ whiteAway }) : await readyGame({ whiteAway });
+    // The kind FIRST, as production builds it: the cfg freezes at the first
+    // event and a bracket fixture carries its decider from then on. Except a
+    // withdrawal: it is built in a league (expunge ⇒ abandoned) and the kind
+    // set after — a withdrawal from a Swiss or bracket board in phase `pre`
+    // writes a walkover the engine refuses there (WRONG_PHASE, W2b's to fix),
+    // and the board is settled either way.
+    const firstKind = pre === "withdrawn" ? undefined : kind;
+    const g = pre === "live" || pre === "withdrawn"
+      ? await liveGame({ kind: firstKind, whiteAway })
+      : await readyGame({ kind: firstKind, whiteAway });
     const auth = await mintOrgOwnerAuth(g.orgId);
     const tip = async () => (await typesOf(g.fixtureId)).length;
     if (pre === "started") await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.start", payload: {} });
     if (pre === "held") await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
-    if (pre === "withdrawn") await withdrawEntrantCascade(auth, g.black.entrantId);
+    if (pre === "withdrawn") {
+      await withdrawEntrantCascade(auth, g.black.entrantId);
+      await sql`update stages set kind = ${kind} where id = ${g.stageId}`;
+    }
     if (pre === "voided") {
       await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.abandon", payload: { reason: "void" } });
     }
@@ -1044,9 +1218,10 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
         payload: { winner: g.home.entrantId, method: "adjudication" },
       });
     }
-    // The kind last, so every pre-state is built the way a league builds it
-    // (a withdrawal from a bracket fixture in phase `pre` is W2b's).
-    await sql`update stages set kind = ${kind} where id = ${g.stageId}`;
+    if (pre === "drawn_by_hand") {
+      await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.start", payload: {} });
+      await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "boardgame.result", payload: { winner: null } });
+    }
     return g;
   }
 
@@ -1067,7 +1242,7 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
             const kind = cell.bracket ? bracketKind : decidingKind;
             const whiteAway = cell.whiteAway;
             const g = await build(pre, kind, whiteAway);
-            const bracket = BRACKET_STAGE_KINDS.has(kind);
+            const bracket = BRACKET_KINDS.has(kind);
             expect(bracket, "premise: the cell's kind is the cell's class").toBe(cell.bracket);
             const s = snap(g, outcome.status === "unrecognised"
               ? { status: "unrecognised", rawStatus: "laterStatus", winner: outcome.winner }
@@ -1088,7 +1263,12 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
               const [{ n: keyed }] = await sql<{ n: number }[]>`
                 select count(*)::int as n from score_events where fixture_id = ${g.fixtureId} and idempotency_key = ${key}`;
               expect(keyed, `${label}: our result at most once`).toBeLessThanOrEqual(1);
-              if (bracket) expect(now.fixture.outcome?.kind, `${label}: a bracket draw is never decided`).not.toBe("draw");
+              if (bracket) {
+                expect(now.fixture.outcome?.kind, `${label}: a bracket draw is never decided`).not.toBe("draw");
+                expect(now.fixture.status, `${label}: nor held as decided`).not.toBe(
+                  now.fixture.outcome?.kind === "draw" ? "decided" : "__never__",
+                );
+              }
               checks += 4;
 
               if (call === "foreign") {
@@ -1120,6 +1300,18 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
                 bump(pre === "started" ? "already_live" : "started_by_us");
                 if (e.wrote === "decided" && whiteAway) bump("white_away_written");
                 if (e.wrote === "decided" && bracket) bump("bracket_decisive_written");
+              } else if (e.wrote === "needs_organiser" && e.reason === "tiebreak_owed") {
+                // The draw IS written; the fold awaits its tie-break (R2).
+                expect(keyed, `${label}: the draw IS recorded`).toBe(1);
+                const [ev] = await sql<{ payload: { winner: string | null; method?: string } }[]>`
+                  select payload from score_events where fixture_id = ${g.fixtureId} and idempotency_key = ${key}`;
+                expect(ev!.payload.winner, `${label}: no winner`).toBeNull();
+                expect(ev!.payload.method ?? null, `${label}: method`).toBe(e.draw);
+                expect([now.fixture.status, now.fixture.outcome], `${label}: in play, undecided`).toEqual(["in_play", null]);
+                expect(now.bridge!.status, label).toBe("needs_organiser");
+                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe(pre === "held" ? "token_revoked" : "tiebreak_owed");
+                bump("held_tiebreak_owed");
+                bump(pre === "started" ? "already_live" : "started_by_us");
               } else if (e.wrote === "aborted" || e.wrote === "needs_organiser") {
                 expect(now.ledger, `${label}: a hold writes no event`).toEqual(before.ledger);
                 expect(now.bridge!.status, label).toBe("needs_organiser");

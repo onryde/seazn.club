@@ -10,6 +10,13 @@ import "server-only";
 // `finished` / `finished_at`: T11's reconcile calls this, then marks the
 // bridge itself.
 //
+// A drawn game in a bracket (W2a, main V432; controller ruling R2, fix round
+// 1) is written THROUGH the engine like any result, and the engine holds it:
+// chess's bracket decider opens the tie-break (fixture in_play, awaiting its
+// decider) — ship 1 cannot create a tie-break Lichess game, so T12 holds THAT
+// for the organiser (tiebreak_owed); a fixture frozen without the decider
+// folds to needs_decision, W2a's own hold. T12 never decides it either way.
+//
 // Mapping sources, in precedence order: spec §3.6's table; the controller's
 // addendum 1 (cheat / variantEnd / unrecognised → organiser,
 // insufficientMaterialClaim → draw); Lichess's own source where both are
@@ -17,9 +24,8 @@ import "server-only";
 // RoundAsyncActor.scala, Drawer.scala) and scalachess 2ab0a40 (Status.scala),
 // read 2026-10-10, NOT measured.
 import { createHash } from "node:crypto";
-import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
-import type { BoardgameMethod } from "@seazn/engine/sports/boardgame";
+import { boardgame, type BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { GameSnapshot, NeedsReason } from "@/server/external-play/types";
@@ -30,19 +36,21 @@ import { mintOrgOwnerAuth } from "./auth";
 import { effectiveBridge, loadOnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 
-/** The reasons a caller may hold a fixture for. Each is a V433/V435
+/** The reasons a CALLER may hold a fixture for. Each is a V433/V435
  *  `needs_reason` (the `satisfies` keeps them inside NEEDS_REASONS); no
- *  no-show is among them — spec §3.6: a revoked token is not a no-show. */
+ *  no-show is among them — spec §3.6: a revoked token is not a no-show.
+ *  `tiebreak_owed` is not a caller's to assert (R2): only a written draw
+ *  whose fold then awaits its decider produces it. */
 export const HOLD_REASONS = [
   "token_revoked",
   "provider_error",
   "double_walkover_blocked",
-  "tiebreak_owed",
 ] as const satisfies readonly NeedsReason[];
 export type HoldReason = (typeof HOLD_REASONS)[number];
 
-/** A hold only a snapshot produces: Lichess ruled a fair-play violation. */
-type SnapshotOnlyReason = "fair_play";
+/** Holds only a snapshot produces: Lichess ruled a fair-play violation; a
+ *  written bracket draw whose tie-break the engine opened. */
+type SnapshotOnlyReason = "fair_play" | "tiebreak_owed";
 
 export type ResultWrite =
   | { wrote: "decided" | "draw" | "aborted" | "forfeit" | "none" }
@@ -209,13 +217,27 @@ async function ledgerHolds(fixtureId: string, key: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-/** Spec §3.6 / §7: a drawn game in a bracket is held, never written as
- *  decided. "Bracket" is the ENGINE's declaration (progression.ts), not a
- *  list typed here. */
-async function inBracketStage(fixtureId: string): Promise<boolean> {
-  const [row] = await sql<{ kind: string | null }[]>`
-    select s.kind from fixtures f left join stages s on s.id = f.stage_id where f.id = ${fixtureId}`;
-  return row?.kind != null && BRACKET_STAGE_KINDS.has(row.kind);
+/** The engine's own "a tie-break is owed": the fold awaits its decider
+ *  (boardgame.awaitingDecider — phase "tiebreak"). Every caller asks it of a
+ *  PLAYABLE fixture only, which is the kernel `deciderPending`'s other half
+ *  ("nothing has decided it"): a settle or a tie-break result moves the
+ *  fixture to decided first (append-event's status derivation). */
+function tiebreakPending(fs: { state: unknown }): boolean {
+  return fs.state != null && boardgame.awaitingDecider?.(fs.state as never) === true;
+}
+
+/** After a written draw: where did the engine put it? A tie-break the
+ *  engine opened is held for the organiser; anything else (a decided draw,
+ *  W2a's needs_decision, a fixture since settled) is the draw it is. Also
+ *  run on a replay, so a hold a crash lost between the two writes is
+ *  restored — and a tie-break recorded since answers plain `draw`. */
+async function afterDraw(s: GameSnapshot, fixtureId: string, auth: Awaited<ReturnType<typeof mintOrgOwnerAuth>>): Promise<ResultWrite> {
+  const fs = await getFixtureState(auth, fixtureId);
+  if (!isPlayableFixtureStatus(fs.status) || !tiebreakPending(fs)) return { wrote: "draw" };
+  if ((await hold(fixtureId, "tiebreak_owed", `${describeSnapshot(s)} — a drawn game in a bracket: the tie-break is owed`)) === "finished") {
+    return NONE;
+  }
+  return { wrote: "needs_organiser", reason: "tiebreak_owed" };
 }
 
 function phaseOf(state: unknown): string {
@@ -231,8 +253,13 @@ async function attempt(
 ): Promise<ResultWrite> {
   const key = resultIdempotencyKey(fixtureId, s);
   // 1. A replay: this snapshot's result is already on the ledger — even if
-  //    an organiser has since voided it, which then stands.
-  if (d.kind === "result" && (await ledgerHolds(fixtureId, key))) return answerFor(d);
+  //    an organiser has since voided it, which then stands. A replayed draw
+  //    re-reads where the engine put it (afterDraw).
+  if (d.kind === "result" && (await ledgerHolds(fixtureId, key))) {
+    if (d.winner !== null) return answerFor(d);
+    const f = await loadOnlinePlayFixture(fixtureId);
+    return f ? afterDraw(s, fixtureId, await mintOrgOwnerAuth(f.orgId)) : answerFor(d);
+  }
 
   // 2. The fixture we serve, and THIS game on it.
   const f = await loadOnlinePlayFixture(fixtureId);
@@ -256,6 +283,16 @@ async function attempt(
     log.info({ fixtureId, gameId: s.gameId, fixtureStatus: f.fixtureStatus }, "lichess result: fixture already settled — nothing written");
     return NONE;
   }
+  // …or a level result the organiser entered on the pad, its tie-break now
+  // pending: the fixture still reads in_play, but its decision is the
+  // organiser's (review §4.1 — this used to reach the phase check and raise
+  // FOLD_STATUS_MISMATCH on every reconcile).
+  const auth = await mintOrgOwnerAuth(f.orgId);
+  const state = await getFixtureState(auth, fixtureId);
+  if (tiebreakPending(state)) {
+    log.info({ fixtureId, gameId: s.gameId }, "lichess result: a level result is already recorded, its tie-break pending — nothing written");
+    return NONE;
+  }
 
   if (d.kind === "hold") {
     if ((await hold(fixtureId, d.reason, d.detail)) === "finished") return NONE;
@@ -272,15 +309,10 @@ async function attempt(
     }
     const whiteIsHome = b.white_side === "home";
     winner = (d.winner === "white") === whiteIsHome ? f.homeEntrantId : f.awayEntrantId;
-  } else if (await inBracketStage(fixtureId)) {
-    await hold(fixtureId, "tiebreak_owed", `${describeSnapshot(s)} — a drawn game in a bracket stage`);
-    return { wrote: "needs_organiser", reason: "tiebreak_owed" };
   }
 
   // 5. Start the fold if nothing has (boardgame refuses a result in `pre`,
   //    boardgame.ts decideResult), then the result, keyed.
-  const auth = await mintOrgOwnerAuth(f.orgId);
-  const state = await getFixtureState(auth, fixtureId);
   const phase = phaseOf(state.state);
   let seq = state.last_seq;
   if (phase === "pre") {
@@ -288,7 +320,8 @@ async function attempt(
     seq += 1;
   } else if (phase !== "live") {
     // append-event.ts derives the status FROM the fold, so a playable status
-    // means `pre` or `live`. Anything else is a damaged row: refuse by name.
+    // means `pre`, `live` or a pending tie-break (answered above). Anything
+    // else is a damaged row: refuse by name.
     throw new HttpError(
       500,
       `fixture ${fixtureId} reads ${f.fixtureStatus} but its fold is in phase "${phase}"`,
@@ -301,7 +334,7 @@ async function attempt(
     payload: d.method === undefined ? { winner } : { winner, method: d.method },
     idempotency_key: key,
   });
-  return answerFor(d);
+  return d.winner === null ? afterDraw(s, fixtureId, auth) : answerFor(d);
 }
 
 /** Map a terminal snapshot onto the fixture. Non-terminal ⇒ `none`, nothing
