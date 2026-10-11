@@ -41,10 +41,10 @@ import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
-import { ensureBridgeRow, loadOnlinePlayFixture, loadSides } from "./guard";
+import { ensureBridgeRow, loadOnlinePlayFixture, loadSides, whiteSideOf, type OnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { RECONCILED_WHILE_HELD, reconcile, type ReconcileOutcome } from "./reconcile";
-import { holdForOrganiser } from "./result";
+import { holdForOrganiser, holdRefusedNoShow } from "./result";
 import { checkIns } from "./room";
 
 export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence";
@@ -174,6 +174,8 @@ function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
 /** W2b's refusal code (packages/engine core/errors.ts on W2b). Not yet in
  *  this engine's EngineErrorCode union, hence compared as a string. */
 const DOUBLE_WALKOVER_NO_NEXT_MATCH = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
+/** The sweep's no-show forfeit's idempotency key, per fixture. */
+const NO_SHOW_KEY_PREFIX = "extplay-noshow:";
 
 type NoShowCandidate = BridgeFacts & { fixtureId: string; openedAt: Date };
 
@@ -190,6 +192,10 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
       left join fixture_external_play ep on ep.fixture_id = f.id
      where f.status in ${sql(PLAYABLE_STATUSES as string[])}
        and (ep.fixture_id is null or (ep.status = 'pending' and ep.challenge_id is null))
+       -- Review M3: the sweep's own no-show is in the ledger (or was, and an
+       -- organiser voided it): never asked for again.
+       and not exists (select 1 from score_events se
+                        where se.fixture_id = f.id and se.idempotency_key = ${NO_SHOW_KEY_PREFIX} || f.id::text)
        ${orgScope(pass)}
      order by o.opened_at, f.id`;
 }
@@ -231,21 +237,55 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
       expected_seq: state.last_seq,
       type: "core.forfeit",
       payload: { by, reason: "walkover" },
-      idempotency_key: `extplay-noshow:${f.fixtureId}`,
+      idempotency_key: `${NO_SHOW_KEY_PREFIX}${f.fixtureId}`,
     });
   } catch (err) {
+    // T12's hold needs a row to hold; a board the open never attached has none.
+    await ensureBridgeRow(f);
     // W2b D19: a double walkover on a bracket line that feeds no next match
     // (a final, a last rung, a third-place match) has nowhere for "nobody
     // advances" to go, and is refused. An expected outcome, not an error: the
     // board stays open and goes to the organiser's queue. Read by CODE.
-    if (by !== "both" || !(err instanceof EngineError) || (err.code as string) !== DOUBLE_WALKOVER_NO_NEXT_MATCH) throw err;
-    // T12's hold needs a row to hold; a board the open never attached has none.
-    await ensureBridgeRow(f);
-    const held = await holdForOrganiser({ fixtureId: f.fixtureId, reason: "double_walkover_blocked" });
-    if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
+    if (by === "both" && err instanceof EngineError && (err.code as string) === DOUBLE_WALKOVER_NO_NEXT_MATCH) {
+      const held = await holdForOrganiser({ fixtureId: f.fixtureId, reason: "double_walkover_blocked" });
+      if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
+      return;
+    }
+    await refusedNoShow(pass, f, by, err);
     return;
   }
   pass.report.noShows++;
+}
+
+/** Review M3: any other refusal of the forfeit is a failure — the board is
+ *  re-examined next pass — until the SAME refusal has come back
+ *  NO_SHOW_REFUSALS_BEFORE_HOLD passes running: then it is persistent, and
+ *  the board goes to the organiser as the no-show it is instead of failing
+ *  every 5 minutes for ever. Counted on the bridge's `last_error` (a
+ *  different refusal restarts it); the hold replaces the marker. */
+export const NO_SHOW_REFUSALS_BEFORE_HOLD = 3;
+const NO_SHOW_REFUSED_MARKER = "noshow:refused:";
+
+async function refusedNoShow(pass: Pass, f: OnlinePlayFixture, by: string, err: unknown): Promise<void> {
+  const code = codeOf(err);
+  const prefix = `${NO_SHOW_REFUSED_MARKER}${code} n=`;
+  const [row] = await sql<{ n: number }[]>`
+    update fixture_external_play
+       set last_error = ${prefix} || (case when starts_with(coalesce(last_error, ''), ${prefix})
+                                           then coalesce(substring(last_error from length(${prefix}) + 1)::int, 0)
+                                           else 0 end + 1)::text,
+           updated_at = now()
+     where fixture_id = ${f.fixtureId} and status = 'pending' and challenge_id is null
+    returning substring(last_error from length(${prefix}) + 1)::int as n`;
+  if (!row || row.n < NO_SHOW_REFUSALS_BEFORE_HOLD) throw err;
+  const absent =
+    by === "both" ? "both" : (by === f.homeEntrantId ? "home" : "away") === (await whiteSideOf(f)) ? "white" : "black";
+  const held = await holdRefusedNoShow({
+    fixtureId: f.fixtureId,
+    absent,
+    detail: `sweep: the no-show forfeit was refused ${row.n} passes running (${code})`,
+  });
+  if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
 }
 
 /** Ruling I3: a create T9 sent and never recorded, past the deadline. T9's

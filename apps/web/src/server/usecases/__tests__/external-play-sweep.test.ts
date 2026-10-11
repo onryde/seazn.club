@@ -64,6 +64,7 @@ import {
   SWEEP_CADENCE_MS,
   SWEEP_MOVE_BUDGET,
   SWEEP_NO_TRUTH_HOLD_AFTER,
+  NO_SHOW_REFUSALS_BEFORE_HOLD,
   expectedEndAt,
   playableWindow,
   sweepExternalPlay,
@@ -860,6 +861,97 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     const report = await sweep(b, { now: b.at(45) });
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T13 fix round 1 — M3: a forfeit the engine keeps refusing reaches the
+// organiser; a forfeit already in the ledger is never asked for again.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("M3 — a refused no-show reaches the organiser; a written one is never re-asked", () => {
+  /** The same refusal at scoreEvent's door for this board (labelled: an
+   *  engine refusal the sweep cannot know in advance). */
+  const refuseWith = (b: Board, code: () => string) => {
+    scoring.refuse = (id, input) => (id === b.fixtureId && input.type === "core.forfeit" ? new EngineError(code() as never, "injected") : null);
+  };
+  /** Passes 5 minutes apart from T+25. */
+  const passes = async (b: Board, n: number, from = 0) => {
+    const out: SweepReport[] = [];
+    for (let i = 0; i < n; i++) out.push(await sweep(b, { now: b.at(25 + 5 * (from + i)) }));
+    return out;
+  };
+
+  it("the SAME refusal three passes running holds the board for the organiser as the no-show it is — counted once; then nothing is asked", async () => {
+    // The seed pairs home as White: only home came, so Black is the no-show.
+    const b = await openedBoard({ checkedIn: ["home"] });
+    refuseWith(b, () => "INVALID_EVENT");
+    const [p1, p2, p3] = await passes(b, 3);
+    expect([p1!.failures, p2!.failures], "the first two are failures, as before")
+      .toEqual([[{ job: "no_show", fixtureId: b.fixtureId, code: "INVALID_EVENT" }], [{ job: "no_show", fixtureId: b.fixtureId, code: "INVALID_EVENT" }]]);
+    expect([p1!.heldForOrganiser, p2!.heldForOrganiser]).toEqual([0, 0]);
+    expect(p3!.failures, "the third is handled").toEqual([]);
+    expect([p3!.heldForOrganiser, p3!.noShows]).toEqual([1, 0]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "no_show_black" });
+    expect((await fixtureRow(b.fixtureId)).status, "the board stays open for the organiser").toBe("scheduled");
+    const attempted = forfeitsAttempted(b.fixtureId).length;
+    expect(attempted).toBe(3);
+    const [p4] = await passes(b, 1, 3);
+    expect([p4!.heldForOrganiser, p4!.noShows, p4!.failures]).toEqual([0, 0, []]);
+    expect(forfeitsAttempted(b.fixtureId).length, "held: never asked again").toBe(attempted);
+  });
+
+  it("…both absent is no_show_both; and with Black on home (a pairing card) the colour is the RECORDED one", async () => {
+    const both = await openedBoard({ checkedIn: [] });
+    refuseWith(both, () => "INVALID_EVENT");
+    await passes(both, 3);
+    expect(await bridgeOf(both.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "no_show_both" });
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const auth = await mintOrgOwnerAuth(b.orgId);
+    const st = await getFixtureState(auth, b.fixtureId);
+    await scoreEvent(auth, b.fixtureId, { expected_seq: st.last_seq, type: "boardgame.pairing", payload: { white: b.away.entrantId } });
+    refuseWith(b, () => "INVALID_EVENT");
+    await passes(b, 3);
+    expect(await bridgeOf(b.fixtureId), "away is White and away stayed away").toEqual({ status: "needs_organiser", needs_reason: "no_show_white" });
+  });
+
+  it("a DIFFERENT refusal restarts the count: X, Y, X, X is not held; the fifth X is", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const codes = ["INVALID_EVENT", "INVALID_PAYLOAD", "INVALID_EVENT", "INVALID_EVENT", "INVALID_EVENT"];
+    let n = 0;
+    refuseWith(b, () => codes[Math.min(n++, codes.length - 1)]!);
+    const reports = await passes(b, 5);
+    expect(reports.map((r) => r.heldForOrganiser)).toEqual([0, 0, 0, 0, 1]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "no_show_black" });
+  });
+
+  it("a double walkover with no next match is still held at ONCE as double_walkover_blocked — never counted as a refusal", async () => {
+    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
+    refuseWith(b, () => "DOUBLE_WALKOVER_NO_NEXT_MATCH");
+    const [p1] = await passes(b, 1);
+    expect([p1!.heldForOrganiser, p1!.failures]).toEqual([1, []]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+  });
+
+  it("a board whose ledger already holds the sweep's no-show is never asked again — a forfeit the organiser VOIDED stays voided", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const auth = await mintOrgOwnerAuth(b.orgId);
+    // Stands for the sweep's own forfeit (its key), then the organiser's undo.
+    // Today's engine refuses a forfeit before a start (WRONG_PHASE), so the
+    // board is started first; W2b admits the sweep's at once.
+    let seq = (await getFixtureState(auth, b.fixtureId)).last_seq;
+    await scoreEvent(auth, b.fixtureId, { expected_seq: seq++, type: "core.start", payload: {} });
+    await scoreEvent(auth, b.fixtureId, {
+      expected_seq: seq++, type: "core.forfeit", payload: { by: b.away.entrantId, reason: "walkover" },
+      idempotency_key: `extplay-noshow:${b.fixtureId}`,
+    });
+    const [forfeit] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${b.fixtureId} and idempotency_key = ${`extplay-noshow:${b.fixtureId}`}`;
+    await scoreEvent(auth, b.fixtureId, { expected_seq: seq++, type: "core.void", payload: { event_id: forfeit!.id } });
+    expect(isPlayableFixtureStatus((await fixtureRow(b.fixtureId)).status), "premise: the void reopened the board").toBe(true);
+    scoring.calls = [];
+    const [p1, p2] = await passes(b, 2);
+    expect(forfeitsAttempted(b.fixtureId), "never asked again").toEqual([]);
+    expect([p1!.noShows, p2!.noShows, p1!.failures, p2!.failures]).toEqual([0, 0, [], []]);
   });
 });
 
@@ -1869,6 +1961,10 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     | { kind: "move" }
     | { kind: "truth"; truth: Truth }
     | { kind: "withdraw" }
+    // Review M3: from here on the engine refuses this board's forfeit, the
+    // same way every pass (injected at scoreEvent's door — a refusal the
+    // sweep cannot know in advance; today's engine gives WRONG_PHASE anyway).
+    | { kind: "refuseForfeits" }
     | { kind: "sweep"; dt: number };
   type Model = {
     t: number; // minutes after the organiser opened the round
@@ -1883,6 +1979,9 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     playable: boolean;
     emptyReads: number;
     lastRead: number | null;
+    refusing: boolean;
+    /** The same refusal of the no-show forfeit, passes running (M3). */
+    refusals: number;
   };
 
   // The rulebook, in minutes.
@@ -1938,6 +2037,8 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     held_truth_counts: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5), { kind: "truth", truth: "running" }, S(25)],
     // …and T11's own mid-game hold backs off the same way.
     t11_hold_backs_off: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "truth", truth: "diverged" }, S(3), S(5), S(5), S(5)],
+    // M3: the same refusal NO_SHOW_REFUSALS_BEFORE_HOLD passes running.
+    noshow_refused_held: [{ kind: "refuseForfeits" }, C("home"), S(25), S(5), S(5)],
   } satisfies Record<string, readonly Act[]>;
   type PathName = keyof typeof PATHS;
   const PATH_NAMES = Object.keys(PATHS) as PathName[];
@@ -1948,13 +2049,18 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     forfeit_one: 0, forfeit_both: 0, not_started_held: 0, quiet_before_deadline: 0,
     retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
     aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
+    refused_held: 0,
   };
 
-  type PassFacts = { reconciled: number; mintRetries: number; forfeitBy: string | null; held: number; noShows: number; readLichess: boolean };
+  type PassFacts = {
+    reconciled: number; mintRetries: number; forfeitBy: string | null; held: number; noShows: number; readLichess: boolean;
+    /** The refusal the forfeit met, when it is a failure this pass. */
+    refusedWith: string | null;
+  };
 
   /** One pass, as the rulebook says it goes: job 4, job 2, job 1. Mutates m. */
   function predictPass(m: Model, b: Board): PassFacts {
-    const p: PassFacts = { reconciled: 0, mintRetries: 0, forfeitBy: null, held: 0, noShows: 0, readLichess: false };
+    const p: PassFacts = { reconciled: 0, mintRetries: 0, forfeitBy: null, held: 0, noShows: 0, readLichess: false, refusedWith: null };
     // Job 4: a game on file — ready/live on any fixture, or held for a
     // mid-game diagnosis on a fixture still playable.
     // M3: never a hold T9 placed when the accept failed — that challenge was
@@ -2053,9 +2159,22 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         p.forfeitBy = !m.came.home && !m.came.away ? "both" : !m.came.home ? b.home.entrantId : b.away.entrantId;
         if (p.forfeitBy === "both") counters.forfeit_both++;
         else counters.forfeit_one++;
-        if (W2B) {
+        if (W2B && !m.refusing) {
           p.noShows = 1;
           m.playable = false; // forfeited
+        } else {
+          // Review M3: a failure, until the same refusal has come back
+          // NO_SHOW_REFUSALS_BEFORE_HOLD passes running — then the organiser's,
+          // as the no-show it is (the seed pairs home as White).
+          m.refusals++;
+          if (m.refusals < NO_SHOW_REFUSALS_BEFORE_HOLD) {
+            p.refusedWith = m.refusing ? "INVALID_EVENT" : "WRONG_PHASE";
+          } else {
+            m.bridge = "held";
+            m.reason = p.forfeitBy === "both" ? "no_show_both" : p.forfeitBy === b.home.entrantId ? "no_show_white" : "no_show_black";
+            p.held = 1;
+            counters.refused_held++;
+          }
         }
       }
     }
@@ -2067,6 +2186,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "quiet_before_deadline": return last !== null && last.forfeitBy === null && m.t < DEADLINE && !m.came.away;
       case "noshow_one": return last?.forfeitBy === b.away.entrantId;
       case "noshow_both": return last?.forfeitBy === "both";
+      case "noshow_refused_held": return last?.held === 1 && m.reason === "no_show_black" && last.refusedWith === null;
       case "both_came_no_game": return last !== null && last.forfeitBy === null && last.held === 1 && m.reason === "not_started" && m.t >= DEADLINE;
       case "retry_waits": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null;
       case "retry_lands": return last?.mintRetries === 1 && m.bridge === "ready";
@@ -2104,6 +2224,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         const m: Model = {
           t: 2, came: { home: false, away: false }, bridge: "pending", reason: null, heldBy: null, throttledUntil: null,
           ledger: [], startedAt: null, truth: "silent", playable: true, emptyReads: 0, lastRead: null,
+          refusing: false, refusals: 0,
         };
         const queueAt = () => __setCreationQueueDeps({ now: () => b.at(m.t).getTime() });
         let next429 = false;
@@ -2190,6 +2311,10 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
               continue;
             }
             m.truth = step.truth;
+          } else if (step.kind === "refuseForfeits") {
+            m.refusing = true;
+            scoring.refuse = (id, input) =>
+              id === b.fixtureId && input.type === "core.forfeit" ? new EngineError("INVALID_EVENT", "injected: the same refusal") : null;
           } else if (step.kind === "withdraw") {
             if (!m.playable) {
               counters.skipped_precondition++;
@@ -2215,7 +2340,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
             const attempts = forfeitsAttempted(b.fixtureId).slice(forfeitsBefore);
             expect(attempts.map((a) => (a.input.payload as { by: string }).by), `${label}: forfeits`).toEqual(p.forfeitBy === null ? [] : [p.forfeitBy]);
             expect(report.failures, `${label}: failures`).toEqual(
-              p.forfeitBy !== null && !W2B ? [{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }] : [],
+              p.refusedWith !== null ? [{ job: "no_show", fixtureId: b.fixtureId, code: p.refusedWith }] : [],
             );
             if (p.reconciled === 1 && !m.playable && m.bridge === "finished" && !p.readLichess) {
               expect(lichess.calls.length, `${label}: closed unread`).toBe(lichessBefore);
