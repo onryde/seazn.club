@@ -3055,6 +3055,55 @@ checklist.
   product's `isTbShape` also refuses under `mtbTo !== null` and reads per-set rules, so the adapter would over-refuse
   a 7-6 set in an mtb or final-set-rule variant, by name.
 
+
+### Mutation-debt exit gate (owner ruling MD-1, 2026-10-11) — binds W2b, W2c, W2d, W2e, W3, W4 and every later wave
+
+Unnumbered on purpose: W2b numbers its rulings after 82 on its own branch, and a number here would collide.
+
+**Why.** The first complete post-merge Stryker run (group=all, run 37957068135, main `a99147bd0`) listed about
+5,750 survivors (Survived + NoCoverage) in pre-existing engine code. It is a floor: 9 of 81 legs hit their timeout
+and wrote no report. A uniform 60-mutant sample (seed 20261010) classified read-only gave 19 real gaps, 18
+equivalent, 15 unreachable (13 of them the `arbitraryEvent` test-data generators inside each sport module), 6
+message-only and 2 counting artefacts. No live bug. Real gaps cluster in the non-sport modules (about 53% of their
+survivors) against about 24% in `sports/*`. The per-family floors in `packages/engine/stryker-floor.json` already
+stop the number growing; this gate is what makes it fall.
+
+**The gate.** Before a wave merges, every Survived or NoCoverage mutant on an engine file the wave CHANGES gets one
+class, and the wave's PR body carries the per-file counts and the file's score before and after:
+
+- **A-real**: a user- or organiser-visible change no test catches. A killing test is owed, and its expected value
+  comes from the rulebook or the engine's own declarations, never from the code under test.
+- **A-msg**: only an error message or diagnostic changes; the code and behaviour do not. No test owed; one line in
+  the PR body.
+- **B-equivalent**: no observable change. Recorded in `packages/engine/stryker-equivalent.json` with a one-line proof.
+- **C-dead**: unreachable from every production caller. The caller search is named.
+
+Measure it with Stryker scoped to the changed files (`--mutate`), never a local group=all. CI's group=all after the
+merge is the cross-check.
+
+**Who owns which files.** A file goes to the wave that changes it. The one that merges first does the work, and a
+later wave re-checks only lines it moves. W2b is the exception: it covers only its own lines (ruling 109 on W2b's
+branch), and the older survivors in its files fall to the wave that owns the file below.
+
+| wave | engine files with survivors |
+|---|---|
+| W2b (building) | only the LINES W2b adds or changes, measured with `--mutate` line ranges (W2b's own ruling 109, its owner, 2026-10-11). W2b also excludes the `arbitraryEvent` generators from mutation |
+| W2c stage-level rules | `competition/stage.ts`, `competition/progression.ts` |
+| W2d tables and tie-breaks | `competition/tiebreakers.ts`, `competition/points.ts` |
+| W2e sport fidelity | every older survivor in the sport modules and kernels, plus `stats/stats.ts`, `core/*` and `sport/module.ts` |
+| W3 Swiss | Swiss pairing under `scheduling/` |
+| W4 knockout family | `scheduling/bracket.ts`, `scheduling/bracket-layout.ts` |
+| no wave | `exports/*`, `import/*`, `officials/*`, `history/*`, `sport/registry.ts` (about 650 survivors): a standalone mutation-debt programme after the P0 pilot |
+
+**In flight.**
+- P0, branch `test/engine-mutation-debt-p0`: makes a test file that fails to LOAD under a mutant count as Killed.
+  Today Stryker reports it Survived (sample row `cricket.ts:3417`). 2,897 of the survivors are static mutants, so
+  until P0 lands, treat a static survivor as suspect. P0 also runs a timed pilot on `exports/build.ts` that measures
+  cost per killed mutant.
+- The "mutation" session owns the re-run of the 9 timed-out legs (`stryker-measured.json`, `stryker-timeouts.json`).
+- W2b excludes the `arbitraryEvent` generators from what Stryker mutates (they live inside its files), so P0 does
+  not touch `mutate`, the ignore lists or the disable comments.
+
 ## W1d first tasks (routed by the W1c final review, 2026-09-30)
 
 The final whole-branch review (`fce1ccdbf..93eb5af0d`) routed each item below to W1d by name. The fix-now items
