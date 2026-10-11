@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { DRY_RUN_TESTS_FILE, FILE_FAILED_REASON, FILE_FAILED_TEST_NAME, RUNNER_NAME, strykerPlugins } from "../scripts/stryker-vitest-runner.mjs";
+import { strykerPlugins as vitestPlugins } from "@stryker-mutator/vitest-runner";
+import { DRY_RUN_TESTS_FILE, FILE_FAILED_REASON, FILE_FAILED_TEST_NAME, FileFailureKills, RUNNER_NAME, filesFailedAsAWhole, strykerPlugins, vitestRunnerOf, type VitestFileLike } from "../scripts/stryker-vitest-runner.mjs";
 import { SPAWN_MS } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,10 @@ const VITEST_RUNNER = req.resolve("@stryker-mutator/vitest-runner");
 /** The mutant whose activation makes the fixture's second test file throw at load; and one that breaks nothing. */
 const BREAKS_LOAD = "7";
 const BREAKS_NOTHING = "8";
+/** Mutants that break a NESTED suite as a whole (review M1): one makes an afterAll in a nested describe throw, one empties the
+ *  list a nested describe's tests are generated from (vitest: "No test found in suite"). */
+const BREAKS_AFTER_ALL = "9";
+const EMPTIES_SWEEP = "10";
 
 const roots: string[] = [];
 afterAll(() => {
@@ -169,4 +174,166 @@ describe("the dry run refuses a test file that fails as a whole (the guard that 
     const map = JSON.parse(readFileSync(join(root, DRY_RUN_TESTS_FILE), "utf8")) as Record<string, string>;
     expect(Object.keys(map).length, "the map names a first test for each file the dry run ran").toBe(2);
   }, budget(1));
+});
+
+describe("a suite NESTED in a test file that fails as a whole is a detection too (review M1)", () => {
+  // vitest records a nested suite's own failure on that suite, never on the file: an afterAll that throws (runSuite's catch around
+  // the suite hooks) and a suite left with no test ("No test found in suite"), the shape a mutant that empties a sweep's list has
+  const NESTED = `
+const CASES = globalThis.__stryker__?.activeMutant === "${EMPTIES_SWEEP}" ? [] : [1, 2];
+describe("outer", () => {
+  describe("a sweep over CASES", () => {
+    for (const c of CASES) it(\`case \${c}\`, () => { expect(c).toBeGreaterThan(0); });
+  });
+  describe("with a cleanup", () => {
+    afterAll(() => { if (globalThis.__stryker__?.activeMutant === "${BREAKS_AFTER_ALL}") throw new Error("mutant ${BREAKS_AFTER_ALL} broke an afterAll"); });
+    it("passes", () => { expect(1).toBe(1); });
+  });
+});
+`;
+  const root = project({ "a-passes.test.js": PASSES, "c-nested.test.js": NESTED });
+
+  it("the plain runner reports both SURVIVED; this runner reports both KILLED, by the enclosing file's first dry-run test, naming the suite", () => {
+    const [plainDry, plainAfterAll, plainEmptied, dry, afterAllKill, emptiedKill] = drive(root, [
+      { runner: "plain", ops: ["dry", `mutant:${BREAKS_AFTER_ALL}`, `mutant:${EMPTIES_SWEEP}`] },
+      { runner: "wrapped", ops: ["dry", `mutant:${BREAKS_AFTER_ALL}`, `mutant:${EMPTIES_SWEEP}`] },
+    ]);
+    expect(plainDry!.status).toBe("complete");
+    const all = plainDry!.tests!.length;
+    expect(all, "the dry run ran both files: 1 + the sweep's 2 + 1").toBe(4);
+    expect(plainAfterAll, "every test passed, so the plain runner sees nothing").toEqual({ status: "survived", nrOfTests: all });
+    expect(plainEmptied, "the sweep's 2 tests simply vanish").toEqual({ status: "survived", nrOfTests: all - 2 });
+    expect(dry!.status).toBe("complete");
+    const first = testsIn(dry!, "c-nested.test.js")[0];
+    expect(first, "the dry run ran the nested file").toBeDefined();
+    expect(afterAllKill).toEqual({
+      status: "killed",
+      killedBy: [first!.id],
+      failureMessage: `${FILE_FAILED_REASON}\nc-nested.test.js > outer > with a cleanup: mutant ${BREAKS_AFTER_ALL} broke an afterAll`,
+      nrOfTests: all,
+    });
+    expect(emptiedKill).toEqual({
+      status: "killed",
+      killedBy: [first!.id],
+      failureMessage: `${FILE_FAILED_REASON}\nc-nested.test.js > outer > a sweep over CASES: No test found in suite a sweep over CASES`,
+      nrOfTests: all - 2,
+    });
+  }, budget(2));
+
+  it("the dry run refuses a nested suite that fails as a whole without any mutant, naming the file and the suite", () => {
+    const always = `describe("outer", () => {\n  afterAll(() => { throw new Error("this cleanup always throws"); });\n  it("passes", () => { expect(1).toBe(1); });\n});\n`;
+    const root2 = project({ "a-passes.test.js": PASSES, "d-nested-always.test.js": always });
+    const [plain, wrapped] = drive(root2, [{ runner: "plain", ops: ["dry"] }, { runner: "wrapped", ops: ["dry"] }]);
+    expect(plain!.status, "the plain dry run completes: every test passed").toBe("complete");
+    expect(wrapped!.status).toBe("error");
+    expect(wrapped!.errorMessage).toContain("d-nested-always.test.js > outer: this cleanup always throws");
+    expect(existsSync(join(root2, DRY_RUN_TESTS_FILE)), "a refused dry run writes no map").toBe(false);
+  }, budget(2));
+});
+
+// ---- FileFailureKills against a FAKE inner runner: the guards the real-runner scenarios above cannot reach (review M3) --------
+
+/** A sandbox for one fake run. */
+function sandbox(): string {
+  const d = mkdtempSync(join(tmpdir(), "file-failure-kills-"));
+  roots.push(d);
+  return d;
+}
+type Fake = { files?: VitestFileLike[] | (() => unknown); dry?: unknown; mutant?: unknown };
+/** An inner runner with the vitest runner's shape: `ctx.state.getFiles()` (left out when `files` is undefined), and fixed results. */
+function fake(f: Fake): unknown {
+  const getFiles = typeof f.files === "function" ? f.files : () => f.files;
+  return { ...(f.files === undefined ? {} : { ctx: { state: { getFiles } } }), dryRun: async () => f.dry, mutantRun: async () => f.mutant };
+}
+const failedOnLoad = (cwd: string, name: string, message = "it broke on load"): VitestFileLike =>
+  ({ filepath: join(cwd, name), type: "suite", name, result: { state: "fail", errors: [{ message }] }, tasks: [] });
+const clean = (cwd: string, name: string): VitestFileLike =>
+  ({ filepath: join(cwd, name), type: "suite", name, result: { state: "pass" }, tasks: [{ type: "test", name: "t", result: { state: "pass" } }] });
+const mapAt = (cwd: string) => join(cwd, DRY_RUN_TESTS_FILE);
+const SURVIVED = { status: "survived", nrOfTests: 3 };
+
+describe("FileFailureKills against a fake inner runner (every guard the real-runner scenarios cannot reach; review M3)", () => {
+  it("a mutant run the inner runner did NOT report survived passes through untouched, even with a file failed as a whole: a timeout stays a timeout, a kill keeps its own killer", async () => {
+    const cwd = sandbox();
+    const files = [failedOnLoad(cwd, "b.test.js")];
+    const timeout = { status: "timeout", reason: "hit limit" };
+    expect(await new FileFailureKills(fake({ files, mutant: timeout }), cwd).mutantRun({})).toBe(timeout);
+    const killed = { status: "killed", killedBy: ["5"], failureMessage: "expected 1 to be 2", nrOfTests: 1 };
+    expect(await new FileFailureKills(fake({ files, mutant: killed }), cwd).mutantRun({})).toBe(killed);
+  });
+
+  it("a dry run the inner runner did not complete passes through untouched and writes no map, even with a file failed as a whole", async () => {
+    let checked = 0;
+    for (const dry of [{ status: "error", errorMessage: "the inner runner broke" }, { status: "timeout" }]) {
+      const cwd = sandbox();
+      expect(await new FileFailureKills(fake({ files: [failedOnLoad(cwd, "b.test.js")], dry }), cwd).dryRun({}), dry.status).toBe(dry);
+      expect(existsSync(mapAt(cwd)), `${dry.status}: no map`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("an inner runner without ctx.state.getFiles() is refused by name, in a mutant run and in a dry run (never a TypeError)", async () => {
+    let checked = 0;
+    for (const files of [undefined, () => undefined, () => ({ length: 0 })]) {
+      const cwd = sandbox();
+      const r = new FileFailureKills(fake({ files, mutant: SURVIVED, dry: { status: "complete", tests: [] } }), cwd);
+      await expect(r.mutantRun({})).rejects.toThrow(`${RUNNER_NAME}: the vitest runner no longer exposes ctx.state.getFiles()`);
+      await expect(r.dryRun({})).rejects.toThrow(`${RUNNER_NAME}: the vitest runner no longer exposes ctx.state.getFiles()`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the dry run's map: no file is an empty map (ENOENT); any other read failure is thrown, never read as an empty map", async () => {
+    const cwd = sandbox();
+    const r = new FileFailureKills(fake({ files: [failedOnLoad(cwd, "b.test.js")], mutant: SURVIVED }), cwd);
+    expect(r.dryRunTests()).toEqual({});
+    mkdirSync(mapAt(cwd)); // a directory where the map belongs: EISDIR
+    let thrown: unknown;
+    try { r.dryRunTests(); } catch (e) { thrown = e; }
+    expect((thrown as { code?: string } | undefined)?.code, String(thrown)).toBe("EISDIR");
+    await expect(r.mutantRun({})).rejects.toMatchObject({ code: "EISDIR" });
+  });
+
+  it("a kill is credited through the map by the RESOLVED path of the failed file (the map's keys are resolved paths), and an unmapped file gets the synthetic id", async () => {
+    const cwd = sandbox();
+    const dry = { status: "complete", tests: [{ id: "11", name: "first", status: 0, fileName: join(cwd, "c.test.js") }, { id: "12", name: "second", status: 0, fileName: join(cwd, "c.test.js") }] };
+    expect(await new FileFailureKills(fake({ files: [clean(cwd, "c.test.js")], dry }), cwd).dryRun({})).toBe(dry);
+    expect(JSON.parse(readFileSync(mapAt(cwd), "utf8"))).toEqual({ [join(cwd, "c.test.js")]: "11" });
+    // vitest's filepath is not always normalised; the map is keyed by path.resolve (vitest-helpers.js's toTestResult)
+    const unnormalised = { ...failedOnLoad(cwd, "c.test.js"), filepath: `${cwd}/sub/../c.test.js` };
+    const killed = await new FileFailureKills(fake({ files: [unnormalised, failedOnLoad(cwd, "unmapped.test.js")], mutant: SURVIVED }), cwd).mutantRun({});
+    expect(killed).toMatchObject({ status: "killed", killedBy: ["11", `unmapped.test.js#${FILE_FAILED_TEST_NAME}`], nrOfTests: 3 });
+  });
+
+  it("a nested suite's own error makes its FILE failed as a whole, at any depth; a test's own error never does, nor a suite failed only because a test in it failed", () => {
+    const cwd = sandbox();
+    const nested: VitestFileLike = { filepath: join(cwd, "n.test.js"), type: "suite", name: "n.test.js", result: { state: "fail" }, tasks: [
+      { type: "test", name: "passes", result: { state: "pass" } },
+      { type: "suite", name: "outer", result: { state: "fail" }, tasks: [
+        { type: "suite", name: "inner", result: { state: "fail", errors: [{ message: "afterAll threw" }] }, tasks: [] },
+      ] },
+    ] };
+    const testFailed: VitestFileLike = { filepath: join(cwd, "t.test.js"), type: "suite", name: "t.test.js", result: { state: "fail" }, tasks: [
+      { type: "suite", name: "outer", result: { state: "fail" }, tasks: [
+        { type: "test", name: "fails", result: { state: "fail", errors: [{ message: "expected 1 to be 2" }] } },
+      ] },
+    ] };
+    const passed = clean(cwd, "p.test.js");
+    expect(filesFailedAsAWhole([nested, testFailed, passed]).map((f) => f.filepath)).toEqual([join(cwd, "n.test.js")]);
+    expect(filesFailedAsAWhole([]), "the empty case").toEqual([]);
+  });
+
+  it("the vitest runner's plugin is found by kind AND name, and its absence is refused by name", () => {
+    const real = vitestPlugins.find((p) => String(p.kind) === "TestRunner" && p.name === "vitest");
+    expect(real, "@stryker-mutator/vitest-runner declares its runner").toBeDefined();
+    expect(vitestRunnerOf(vitestPlugins)).toBe(real);
+    let checked = 0;
+    for (const plugins of [[], [{ kind: "Reporter", name: "vitest" }], [{ kind: "TestRunner", name: "jest" }]]) {
+      expect(() => vitestRunnerOf(plugins), JSON.stringify(plugins)).toThrow(`${RUNNER_NAME}: @stryker-mutator/vitest-runner declares no "vitest" test runner`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
 });
