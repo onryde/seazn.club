@@ -306,8 +306,10 @@ async function sweep(b: Board | readonly Board[], deps: SweepDeps): Promise<Swee
 const forfeitsAttempted = (fixtureId: string) =>
   scoring.calls.filter((c) => c.fixtureId === fixtureId && c.input.type === "core.forfeit");
 const forfeitsWritten = async (fixtureId: string) =>
-  sql<{ payload: { by: string; reason: string } }[]>`
-    select payload from score_events where fixture_id = ${fixtureId} and type = 'core.forfeit' order by seq`;
+  (
+    await sql<{ payload: { by: string; reason: string } }[]>`
+      select payload from score_events where fixture_id = ${fixtureId} and type = 'core.forfeit' order by seq`
+  ).map((r) => r.payload);
 const fixtureRow = async (fixtureId: string) => {
   const [r] = await sql<{ status: string; outcome: { kind?: string; winner?: string } | null }[]>`
     select status, outcome from fixtures where id = ${fixtureId}`;
