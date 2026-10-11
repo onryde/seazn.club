@@ -860,6 +860,19 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
     expect(Object.keys(SHEET).sort()).toEqual([...SPORT_KEYS].sort());
   });
 
+  it("scoresheetOf, the empty case (ruling 112, R112 review M-3): a stream holding nothing but its START — or nothing at all — reads as an EMPTY scoresheet in every sport, never a 0-0 unit (the oracle reads a unit as play)", () => {
+    let checked = 0;
+    for (const sport of SPORT_KEYS) {
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league") as Record<string, unknown>;
+      for (const events of [[{ type: "core.start", payload: {} }], []] as StreamEvent[][]) {
+        expect(scoresheetOf(sport, cfg, events, "h", "a"), `${sport} ${events.length === 0 ? "nothing" : "a bare START"}`).toEqual({ home: [], away: [] });
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * SPORT_KEYS.length);
+    expect(SPORT_KEYS.length).toBe(11);
+  });
+
   it("scoresheetOf refuses by name what it cannot place: an event outside the sport's vocabulary, a side neither of the two, a unit that may have ended, a sport it has no reading for", () => {
     const fb = { awardScore: { goals: 3 } };
     expect(() => scoresheetOf("football", fb, [{ type: "football.card", payload: { by: "h" } }], "h", "a")).toThrow(ScoresheetUnread);

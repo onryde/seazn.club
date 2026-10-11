@@ -327,7 +327,9 @@ type Sheet = { home: number[]; away: number[] };
  *  harness posted before its forfeit (START included or not). Read in the generators' own vocabulary
  *  (streams/*.ts `partial`) — never from the product. One unit holds the play: a reading that would have to place a
  *  finished unit (a set or a game that may have ended, a game at its target) refuses by name, as does an event outside
- *  the sport's vocabulary or a side that is neither of the two. */
+ *  the sport's vocabulary or a side that is neither of the two. With nothing recorded (no event, or a bare START) the
+ *  sheet is EMPTY in every sport, as generic's always was (ruling 112, R112 review M-3): a 0-0 unit is a unit, and the
+ *  oracle reads a unit as play. */
 export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events: readonly StreamEvent[], home: string, away: string): Sheet {
   const played = events.filter((e) => e.type !== "core.start");
   const unread = (why: string): never => { throw new ScoresheetUnread(sport, why); };
@@ -340,63 +342,68 @@ export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events
     for (const e of played) { const [s, n] = count(e); t[s] += n; }
     return t;
   };
-  switch (sport) {
-    case "football":
-    case "hockey":
-    case "icehockey": {
-      // FB/HK/IH-RT-1 read the goals so far: one period holds them.
-      only(`${sport}.goal`);
-      const t = tally((e) => [sideOf(pay(e).by, e), 1]);
-      return { home: [t.home], away: [t.away] };
+  // The sport's reading runs first, so a sport with no reading refuses even over nothing.
+  const read = (): Sheet => {
+    switch (sport) {
+      case "football":
+      case "hockey":
+      case "icehockey": {
+        // FB/HK/IH-RT-1 read the goals so far: one period holds them.
+        only(`${sport}.goal`);
+        const t = tally((e) => [sideOf(pay(e).by, e), 1]);
+        return { home: [t.home], away: [t.away] };
+      }
+      case "volleyball":
+      case "tabletennis":
+      case "badminton": {
+        // VB/TT/BD-RT-1: the unfinished set so far, rally by rally; a side at the set target may have ended it.
+        only(`${sport}.rally`);
+        const t = tally((e) => [sideOf(pay(e).wonBy, e), 1]);
+        if (Math.max(t.home, t.away) >= target("setTo")) unread(`a side reached setTo (${t.home}-${t.away}): set 1 may have ended`);
+        return { home: [t.home], away: [t.away] };
+      }
+      case "tennis": {
+        // TN-RT-1 is TN-WO-1's credit (the sheet is read for its shape): set 1's games — none, while no game can have ended.
+        only("tennis.point");
+        const t = tally((e) => [sideOf(pay(e).by, e), 1]);
+        if (Math.max(t.home, t.away) >= 4) unread(`${t.home}-${t.away} points: a game may have ended`);
+        return { home: [0], away: [0] };
+      }
+      case "generic": {
+        // GN-RT-1: "keeping any recorded score" — the points recorded so far.
+        only("generic.score");
+        const t = tally((e) => { const n = pay(e).points; return [sideOf(pay(e).by, e), typeof n === "number" ? n : unread(`generic.score carries no numeric points`)]; });
+        return { home: [t.home], away: [t.away] };
+      }
+      case "carrom": {
+        // CA-RT-1: the unfinished game so far — a board's winner scores the opponent's coins left × pointsPerCoin.
+        only("carrom.board.summary");
+        const per = target("pointsPerCoin");
+        const t = tally((e) => {
+          const p = pay(e);
+          if (p.queenTo !== null && p.queenTo !== undefined) unread("a board with the queen covered is not a reading this harness makes");
+          return [sideOf(p.winner, e), typeof p.opponentCoinsLeft === "number" ? p.opponentCoinsLeft * per : unread("carrom.board.summary carries no numeric opponentCoinsLeft")];
+        });
+        if (Math.max(t.home, t.away) >= target("gameTo")) unread(`a side reached gameTo (${t.home}-${t.away}): game 1 may have ended`);
+        return { home: [t.home], away: [t.away] };
+      }
+      case "cricket": {
+        // The innings so far, home batting first (the generators' order); CK-WO-1's credit does not read it.
+        only("cricket.innings.summary");
+        if (played.length > 2) unread(`${played.length} innings: only a first innings each is a reading this harness makes`);
+        const runs = played.map((e) => (typeof pay(e).runs === "number" ? (pay(e).runs as number) : unread("cricket.innings.summary carries no numeric runs")));
+        return { home: runs.slice(0, 1), away: [runs[1] ?? 0] };
+      }
+      case "boardgame":
+        // BG: the game IS its result — nothing is played short of it.
+        if (played.length > 0) unread(`${played[0]!.type} before the forfeit: a chess game has no scoring event short of its result`);
+        return { home: [], away: [] };
+      default:
+        return unread("no scoresheet reading for this sport");
     }
-    case "volleyball":
-    case "tabletennis":
-    case "badminton": {
-      // VB/TT/BD-RT-1: the unfinished set so far, rally by rally; a side at the set target may have ended it.
-      only(`${sport}.rally`);
-      const t = tally((e) => [sideOf(pay(e).wonBy, e), 1]);
-      if (Math.max(t.home, t.away) >= target("setTo")) unread(`a side reached setTo (${t.home}-${t.away}): set 1 may have ended`);
-      return { home: [t.home], away: [t.away] };
-    }
-    case "tennis": {
-      // TN-RT-1 is TN-WO-1's credit (the sheet is read for its shape): set 1's games — none, while no game can have ended.
-      only("tennis.point");
-      const t = tally((e) => [sideOf(pay(e).by, e), 1]);
-      if (Math.max(t.home, t.away) >= 4) unread(`${t.home}-${t.away} points: a game may have ended`);
-      return { home: [0], away: [0] };
-    }
-    case "generic": {
-      // GN-RT-1: "keeping any recorded score" — the points recorded so far.
-      only("generic.score");
-      const t = tally((e) => { const n = pay(e).points; return [sideOf(pay(e).by, e), typeof n === "number" ? n : unread(`generic.score carries no numeric points`)]; });
-      return played.length === 0 ? { home: [], away: [] } : { home: [t.home], away: [t.away] };
-    }
-    case "carrom": {
-      // CA-RT-1: the unfinished game so far — a board's winner scores the opponent's coins left × pointsPerCoin.
-      only("carrom.board.summary");
-      const per = target("pointsPerCoin");
-      const t = tally((e) => {
-        const p = pay(e);
-        if (p.queenTo !== null && p.queenTo !== undefined) unread("a board with the queen covered is not a reading this harness makes");
-        return [sideOf(p.winner, e), typeof p.opponentCoinsLeft === "number" ? p.opponentCoinsLeft * per : unread("carrom.board.summary carries no numeric opponentCoinsLeft")];
-      });
-      if (Math.max(t.home, t.away) >= target("gameTo")) unread(`a side reached gameTo (${t.home}-${t.away}): game 1 may have ended`);
-      return { home: [t.home], away: [t.away] };
-    }
-    case "cricket": {
-      // The innings so far, home batting first (the generators' order); CK-WO-1's credit does not read it.
-      only("cricket.innings.summary");
-      if (played.length > 2) unread(`${played.length} innings: only a first innings each is a reading this harness makes`);
-      const runs = played.map((e) => (typeof pay(e).runs === "number" ? (pay(e).runs as number) : unread("cricket.innings.summary carries no numeric runs")));
-      return { home: runs.slice(0, 1), away: [runs[1] ?? 0] };
-    }
-    case "boardgame":
-      // BG: the game IS its result — nothing is played short of it.
-      if (played.length > 0) unread(`${played[0].type} before the forfeit: a chess game has no scoring event short of its result`);
-      return { home: [], away: [] };
-    default:
-      return unread("no scoresheet reading for this sport");
-  }
+  };
+  const sheet = read();
+  return played.length === 0 ? { home: [], away: [] } : sheet;
 }
 
 /** The table points the family's `points` answer means, read off the stage cfg's OWN points table (X-WO-1): "win" is
