@@ -733,8 +733,8 @@ describe("exportGameMeta — the static facts a recovery verifies a candidate on
   });
 });
 
-describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () => {
-  it("each of the eleven functions arms AbortSignal.timeout with the shared constant", async () => {
+describe("LICHESS_TIMEOUT_MS covers every call, and nothing stays open (§4)", () => {
+  it("each of the twelve functions arms AbortSignal.timeout with the shared constant", async () => {
     const spy = vi.spyOn(AbortSignal, "timeout");
     const f = vi.fn(async () => res('{"ok":true,"id":"ch1"}', 200));
     const client = api(f as unknown as typeof fetch);
@@ -751,6 +751,9 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
       ["listOngoingGames", () => client.listOngoingGames("t")],
       ["cancelChallenge", () => client.cancelChallenge({ token: "t", challengeId: "c" })],
       ["exportGameMeta", () => client.exportGameMeta("g")],
+      // T11: the one stream read — its first line or the timeout, whichever
+      // comes first, and then it closes (spec §3.5 amended 5903962d4).
+      ["readGameStream", () => client.readGameStream({ token: "t", gameId: "g" })],
     ];
     let checked = 0;
     for (const [name, run] of calls) {
@@ -761,8 +764,8 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
     }
     // Anti-vacuity: the sweep must cover the whole surface, and zero is a
     // failure. If a function is added to the module, this count reds.
-    expect(checked).toBe(11);
-    expect(Object.keys(client).length).toBe(11);
+    expect(checked).toBe(12);
+    expect(Object.keys(client).length).toBe(12);
     spy.mockRestore();
   });
 
@@ -783,5 +786,262 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
       expect(new Headers(init.headers).get("accept")).not.toBe("application/x-ndjson");
     }
     expect(f.mock.calls.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readGameStream — the reconcile read (spec §3.5, amended 5903962d4). One GET
+// of the Board API stream with a PLAYER's token: take the first line
+// (`gameFull`), close. Every expected value is read out of the RECORDED lines
+// (game Rc11Game, recorded 2026-10-11 with both test accounts and sanitised —
+// see the fixtures README), never typed in.
+
+type RecordedGameFull = {
+  id: string;
+  white: { id: string }; black: { id: string };
+  state: { moves: string; wtime: number; btime: number; winc: number; status: string; winner?: string };
+};
+const recordedLine = (f: string) => raw(f);
+const parsedLine = (f: string) => JSON.parse(raw(f)) as RecordedGameFull;
+
+/** A body that yields `chunks` and then stays OPEN, as a live Lichess stream
+ *  does after its first line. `cancelled()` reports whether we closed it. */
+function openBody(chunks: string[]) {
+  let cancelled = false;
+  let i = 0;
+  const enc = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (i < chunks.length) {
+        c.enqueue(enc.encode(chunks[i++]!));
+        return;
+      }
+      return new Promise<void>(() => {}); // never ends on its own
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { body, cancelled: () => cancelled };
+}
+const streamRes = (b: ReadableStream<Uint8Array>) => new Response(b, { status: 200 });
+
+describe("readGameStream — the reconcile read: the board stream's first line (§3.5)", () => {
+  it("reads the recorded mid-game line exactly: every ply as UCI, both clocks, the increment, no winner", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson");
+    const rec = parsedLine("gamefull-mid-white.ndjson");
+    const f = vi.fn(async () => res(line, 200));
+    const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: rec.id });
+    expect(out).toEqual({
+      ok: true,
+      game: {
+        gameId: rec.id,
+        whiteId: rec.white.id,
+        blackId: rec.black.id,
+        movesUci: rec.state.moves.split(" "),
+        whiteMs: rec.state.wtime,
+        blackMs: rec.state.btime,
+        incrementMs: rec.state.winc,
+        status: rec.state.status,
+        winner: null,
+        drawOffer: { white: false, black: false },
+      },
+    });
+    // M16, re-measured 2026-10-11: the stream is exact where the export stalls.
+    expect(rec.state.moves.split(" ").length, "premise: the recording is 8 plies in").toBe(8);
+  });
+
+  it("Black's token at the same instant reads the same line (both were recorded)", async () => {
+    const reads = [];
+    for (const name of ["gamefull-mid-white.ndjson", "gamefull-mid-black.ndjson"]) {
+      const f = vi.fn(async () => res(recordedLine(name), 200));
+      reads.push(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game" }));
+    }
+    expect(reads.length).toBe(2);
+    const [w, b] = reads as [{ ok: true; game: { movesUci: string[]; blackMs: number } }, typeof reads[0]];
+    expect(b).toMatchObject({ ok: true, game: { movesUci: w.game.movesUci, blackMs: w.game.blackMs } });
+  });
+
+  it("GETs the game's board stream with the PLAYER's token as a bearer, asking for ndjson", async () => {
+    const f = vi.fn(async () => res(recordedLine("gamefull-mid-white.ndjson"), 200));
+    await api(f as unknown as typeof fetch).readGameStream({ token: "lio_player", gameId: "Rc11Game" });
+    expect(f).toHaveBeenCalledTimes(1);
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/api/board/game/stream/Rc11Game");
+    expect(init.method).toBe("GET");
+    const h = new Headers(init.headers);
+    expect(h.get("authorization")).toBe("Bearer lio_player");
+    expect(h.get("accept")).toBe("application/x-ndjson");
+    expect(init.signal, "bounded by a signal").toBeInstanceOf(AbortSignal);
+  });
+
+  it("takes the FIRST line and CLOSES the stream — it never waits for the next event (§4: nothing long-lived)", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson");
+    const next = '{"type":"gameState","moves":"e2e4","wtime":1,"btime":1,"winc":0,"binc":0,"status":"started"}\n';
+    const b = openBody([line, next]);
+    const f = vi.fn(async () => streamRes(b.body));
+    const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game" });
+    expect(out).toMatchObject({ ok: true, game: { movesUci: parsedLine("gamefull-mid-white.ndjson").state.moves.split(" ") } });
+    expect(b.cancelled(), "the stream was closed after its first line").toBe(true);
+  });
+
+  it("skips keep-alive blank lines and reassembles a line split across chunks", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson");
+    const third = Math.floor(line.length / 3);
+    const b = openBody(["\n", "\n", line.slice(0, third), line.slice(third, 2 * third), line.slice(2 * third)]);
+    const f = vi.fn(async () => streamRes(b.body));
+    const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game" });
+    expect(out).toMatchObject({ ok: true, game: { gameId: parsedLine("gamefull-mid-white.ndjson").id } });
+    expect(b.cancelled()).toBe(true);
+  });
+
+  it("the recorded flag pair: a clock at zero still `started`, then `outoftime` with the winner on the next read", async () => {
+    const one = parsedLine("gamefull-expired-1.ndjson");
+    const two = parsedLine("gamefull-expired-2.ndjson");
+    const read = async (name: string) =>
+      api(vi.fn(async () => res(recordedLine(name), 200)) as unknown as typeof fetch)
+        .readGameStream({ token: "t", gameId: "Rc11Game" });
+    expect(await read("gamefull-expired-1.ndjson")).toMatchObject({
+      ok: true, game: { status: one.state.status, whiteMs: one.state.wtime, winner: null },
+    });
+    expect(one.state.status, "premise: expired-1 is still started").toBe("started");
+    expect(one.state.wtime, "premise: …with White's clock at zero").toBe(0);
+    expect(await read("gamefull-expired-2.ndjson")).toMatchObject({
+      ok: true, game: { status: two.state.status, winner: two.state.winner },
+    });
+    expect(two.state.status, "premise: expired-2 settled it").toBe("outoftime");
+  });
+
+  it("a standing draw offer is read from wdraw/bdraw; an absent key is no offer", async () => {
+    // lila BotJsonView.scala (46d24871f) `.add("wdraw" -> isOfferingDraw)`, and
+    // scalalib's JsObject `add(key, Boolean)` writes the key ONLY when true —
+    // source, not measured: the recording made no offer, so its line has no
+    // such key (asserted on the raw text). The offer case is synthetic.
+    const line = recordedLine("gamefull-mid-white.ndjson");
+    expect(line).not.toMatch(/draw/);
+    const withOffer = (key: "wdraw" | "bdraw") =>
+      line.replace('"status":"started"', `"status":"started","${key}":true`);
+    let checked = 0;
+    for (const [body, expected] of [
+      [line, { white: false, black: false }],
+      [withOffer("wdraw"), { white: true, black: false }],
+      [withOffer("bdraw"), { white: false, black: true }],
+    ] as const) {
+      const f = vi.fn(async () => res(body, 200));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "Rc11Game" });
+      expect(out).toMatchObject({ ok: true, game: { drawOffer: expected } });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it.each([
+    [401, "unauthorized"], [403, "unauthorized"], [429, "rate_limited"],
+    [404, "unavailable"], [500, "unavailable"], [503, "unavailable"],
+  ])("HTTP %i is %s — a refusal is never a game", async (status, code) => {
+    const f = vi.fn(async () => res('{"error":"x"}', status));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toEqual({ ok: false, code, raw: '{"error":"x"}' });
+  });
+
+  it("a thrown fetch (network, or the signal firing) is unavailable, never an uncaught throw", async () => {
+    const f = vi.fn(async () => { throw new Error("socket hang up"); });
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: false, code: "unavailable" });
+  });
+
+  it("a stream whose first line never comes is abandoned when the timeout fires, and closed", async () => {
+    const timeout = new AbortController();
+    const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    try {
+      const b = openBody(["\n"]);
+      const f = vi.fn(async () => streamRes(b.body));
+      const pending = api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" });
+      await new Promise((r) => setTimeout(r, 20));
+      timeout.abort();
+      expect(await pending).toMatchObject({ ok: false, code: "unavailable" });
+      expect(b.cancelled(), "closed on the timeout").toBe(true);
+      expect(spy).toHaveBeenCalledWith(LICHESS_TIMEOUT_MS);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("every line that is not a readable gameFull is unavailable — never a guessed game", async () => {
+    const good = parsedLine("gamefull-mid-white.ndjson") as unknown as Record<string, unknown> & {
+      state: Record<string, unknown>;
+    };
+    const edit = (f: (g: typeof good) => void) => {
+      const g = structuredClone(good);
+      f(g);
+      return `${JSON.stringify(g)}\n`;
+    };
+    const bad: Array<[string, string]> = [
+      ["not JSON", "<html>oops</html>\n"],
+      ["a literal null", "null\n"],
+      ["first line is a gameState, not gameFull", edit((g) => { g.type = "gameState"; })],
+      ["no id", edit((g) => { delete g.id; })],
+      ["no state", edit((g) => { delete (g as Record<string, unknown>).state; })],
+      ["moves not a string", edit((g) => { g.state.moves = ["e2e4"]; })],
+      ["no status", edit((g) => { delete g.state.status; })],
+      ["no wtime", edit((g) => { delete g.state.wtime; })],
+      ["a negative btime", edit((g) => { g.state.btime = -1; })],
+      ["no winc", edit((g) => { delete g.state.winc; })],
+      // M5's class: a string that is not UCI must never reach our ledger.
+      ["a move that is not UCI", edit((g) => { g.state.moves = "e2e4 O-O"; })],
+      ["an empty body", ""],
+    ];
+    let checked = 0;
+    for (const [label, body] of bad) {
+      const f = vi.fn(async () => res(body, 200));
+      const out = await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" });
+      expect(out, label).toMatchObject({ ok: false, code: "unavailable" });
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a status Lichess has not declared comes back `unrecognised` with Lichess's own word", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson").replace('"status":"started"', '"status":"brandNew"');
+    const f = vi.fn(async () => res(line, 200));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: true, game: { status: "unrecognised", rawStatus: "brandNew" } });
+  });
+
+  it("a player with no id (an anonymous or AI seat) reads as null, never as the empty string", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson").replace(/"white":\{"id":"[^"]*",/, '"white":{');
+    const f = vi.fn(async () => res(line, 200));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: true, game: { whiteId: null, blackId: parsedLine("gamefull-mid-white.ndjson").black.id } });
+  });
+
+  it("a last line with no trailing newline is still read (a finished game's stream closes after it)", async () => {
+    const line = recordedLine("gamefull-expired-2.ndjson").trimEnd();
+    expect(line.endsWith("\n"), "premise: no newline left").toBe(false);
+    const f = vi.fn(async () => res(line, 200));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: true, game: { status: parsedLine("gamefull-expired-2.ndjson").state.status } });
+  });
+
+  it("a first line that never ends is refused at the cap and the stream closed — not buffered until the timeout", async () => {
+    const chunk = "x".repeat(16 * 1024);
+    // Endless, newline-free: only the cap can end this read before the timeout.
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) { c.enqueue(new TextEncoder().encode(chunk)); },
+      cancel() { cancelled = true; },
+    });
+    const f = vi.fn(async () => streamRes(body));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: false, code: "unavailable" });
+    expect(cancelled).toBe(true);
+  });
+
+  it("an empty move string (no ply yet) is an empty list", async () => {
+    const line = recordedLine("gamefull-mid-white.ndjson").replace(/"moves":"[^"]*"/, '"moves":""');
+    const f = vi.fn(async () => res(line, 200));
+    expect(await api(f as unknown as typeof fetch).readGameStream({ token: "t", gameId: "g" }))
+      .toMatchObject({ ok: true, game: { movesUci: [] } });
   });
 });

@@ -18,8 +18,10 @@ import "server-only";
 // lila REFUSING, so nothing exists; a timeout, network error, 5xx, or a 2xx
 // with no usable id is `outcome_unknown`, because a challenge may exist.
 import { LICHESS_TIMEOUT_MS } from "../window";
-import { assertUci } from "./uci";
-import { isLichessStatus, type BoardCall, type BoardErrorCode, type GameSnapshot } from "../types";
+import { UCI_RE, assertUci } from "./uci";
+import {
+  isLichessStatus, type BoardCall, type BoardErrorCode, type BoardGameFull, type GameSnapshot,
+} from "../types";
 
 const DEFAULT_BASE = "https://lichess.org";
 
@@ -60,6 +62,13 @@ export type GameMeta = {
 /** One of the caller's ongoing games, from the caller's side. */
 export type OngoingGame = { gameId: string; color: "white" | "black"; opponentId: string | null };
 type Listed<T> = { ok: true } & T | { ok: false; code: BoardErrorCode; raw: string };
+/** One read of the board stream (`readGameStream`). */
+export type GameStreamRead = { ok: true; game: BoardGameFull } | { ok: false; code: BoardErrorCode; raw: string };
+
+/** A first line longer than this is not a gameFull we can read (a 300-ply
+ *  game's line is ~2 KB). A cap, so a misbehaving body cannot grow a buffer
+ *  until the timeout fires. */
+const STREAM_LINE_MAX = 64 * 1024;
 
 /** `nb`'s maximum on /api/account/playing (lichess-org/api spec). A page this
  *  full cannot prove a game is absent. */
@@ -120,6 +129,83 @@ function readOngoing(raw: string): OngoingGame[] | null {
   return games;
 }
 
+const playerId = (p: unknown): string | null => (isRecord(p) ? strOrNull(p.id) : null);
+
+/** The first line of the board stream, parsed — or null for anything that is
+ *  not a readable `gameFull`. Shape from lila BotJsonView.scala (46d24871f,
+ *  read 2026-10-11) and the recorded lines (`gamefull-*.ndjson`): `id`,
+ *  `white`/`black` `{id}`, and `state` `{moves, wtime, btime, winc, status}`
+ *  with `winner`, `wdraw` and `bdraw` written only when they apply. Every
+ *  move must be UCI: M5's class of surprise (a string Lichess would read
+ *  differently from us) never reaches the ledger. */
+function readGameFull(line: string): BoardGameFull | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch { return null; }
+  if (!isRecord(parsed) || parsed.type !== "gameFull" || !nonEmpty(parsed.id) || !isRecord(parsed.state)) return null;
+  const st = parsed.state;
+  if (typeof st.moves !== "string" || typeof st.status !== "string") return null;
+  const wtime = numOrNull(st.wtime);
+  const btime = numOrNull(st.btime);
+  const winc = numOrNull(st.winc);
+  if (wtime === null || btime === null || winc === null || wtime < 0 || btime < 0 || winc < 0) return null;
+  const moves = st.moves.trim();
+  const movesUci = moves === "" ? [] : moves.split(/\s+/);
+  if (!movesUci.every((m) => UCI_RE.test(m))) return null;
+  const common: Omit<BoardGameFull, "status"> = {
+    gameId: parsed.id,
+    whiteId: playerId(parsed.white),
+    blackId: playerId(parsed.black),
+    movesUci,
+    whiteMs: wtime,
+    blackMs: btime,
+    incrementMs: winc,
+    winner: st.winner === "white" || st.winner === "black" ? st.winner : null,
+    drawOffer: { white: st.wdraw === true, black: st.bdraw === true },
+  };
+  return isLichessStatus(st.status)
+    ? { ...common, status: st.status }
+    : { ...common, status: "unrecognised", rawStatus: st.status };
+}
+
+/** The first non-blank line of an NDJSON body, or null (the body ended, the
+ *  line outgrew STREAM_LINE_MAX, or `signal` fired). The body is CANCELLED
+ *  on every way out, so the connection closes behind the one line we read.
+ *  Racing the signal as well as relying on fetch's own abort is what makes
+ *  the timeout hold for a body that ignores it. */
+async function firstLine(body: ReadableStream<Uint8Array> | null, signal: AbortSignal): Promise<string | null> {
+  if (body === null) return null;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const aborted = new Promise<never>((_, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  aborted.catch(() => {}); // settled by the race below, or after we are done
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await Promise.race([reader.read(), aborted]);
+      if (value) buffer += decoder.decode(value, { stream: true });
+      let nl = buffer.indexOf("\n");
+      while (nl >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        if (line !== "") return line;
+        buffer = buffer.slice(nl + 1);
+        nl = buffer.indexOf("\n");
+      }
+      if (buffer.length > STREAM_LINE_MAX) return null;
+      if (done) {
+        const rest = (buffer + decoder.decode()).trim();
+        return rest === "" ? null : rest;
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
 /** M6 and M12 are both 400s. Matched on the measured sentence, not on a
  *  substring that could drift: `includes`, so a trailing-field change in the
  *  JSON envelope does not silently reclassify a known state as unknown. */
@@ -172,10 +258,12 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
   /** Every call in this module — creation, accept, move, resign, draw, abort,
    *  export — is a single request under LICHESS_TIMEOUT_MS (10s). There are no
    *  long reads here BY DESIGN (§4: the streaming service was removed because
-   *  our server submits both players' moves). If you are about to add a
-   *  Lichess endpoint that streams NDJSON, this timeout will cut it off at ten
-   *  seconds and the failure will look like a flaky network — do not raise the
-   *  timeout, and do not open a stream. `keepAliveStream` is never sent. */
+   *  our server submits both players' moves). The ONE stream this module
+   *  opens is `readGameStream` (spec §3.5, amended 5903962d4): it takes the
+   *  first line and closes, under the same 10s bound. If you are about to keep
+   *  a stream open for its later events, this timeout will cut it off at ten
+   *  seconds and the failure will look like a flaky network — do not raise
+   *  the timeout. `keepAliveStream` is never sent. */
   async function call(
     path: string,
     init: { method: "POST" | "GET"; token?: string; body?: URLSearchParams },
@@ -392,6 +480,48 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         : { ...common, status: "unrecognised", rawStatus: status };
     },
 
+    /** THE reconcile read (spec §3.5, amended 5903962d4): open the game's
+     *  Board API stream with a PLAYER's token, take the first line
+     *  (`gameFull`), close. The export STALLS mid-game (M16, re-measured
+     *  2026-10-11: 5 plies against the stream's 8 at the same instant), so
+     *  this is the only source of mid-game moves, clocks and status.
+     *  MEASURED 2026-10-11 (record.log in the fixtures README): a read settles
+     *  an expired clock, visible on the NEXT read — the stream itself still
+     *  said `started` with `wtime: 0` on the first read after expiry.
+     *
+     *  Bounded by LICHESS_TIMEOUT_MS like every call here, and the body is
+     *  cancelled once the line is in: nothing stays open (§4). A refusal
+     *  keeps its class (401/403 `unauthorized` — the token is gone; 429
+     *  `rate_limited`); a 404, a 5xx, a thrown fetch, a timeout and any first
+     *  line that is not a readable `gameFull` are `unavailable`, never a
+     *  guessed game. `raw` is the error body only — never the token. */
+    async readGameStream(a: { token: string; gameId: string }): Promise<GameStreamRead> {
+      const closer = new AbortController();
+      const signal = AbortSignal.any([AbortSignal.timeout(LICHESS_TIMEOUT_MS), closer.signal]);
+      try {
+        let r: Response;
+        try {
+          r = await fetchFn(`${base}/api/board/game/stream/${encodeURIComponent(a.gameId)}`, {
+            method: "GET",
+            headers: { Accept: "application/x-ndjson", Authorization: `Bearer ${a.token}` },
+            signal,
+          });
+        } catch {
+          return { ok: false, code: "unavailable", raw: "" };
+        }
+        if (r.status < 200 || r.status >= 300) {
+          const raw = await r.text().catch(() => "");
+          return { ok: false, code: classifyBoardError(r.status, raw), raw };
+        }
+        const line = await firstLine(r.body, signal);
+        if (line === null) return { ok: false, code: "unavailable", raw: "" };
+        const game = readGameFull(line);
+        return game === null ? { ok: false, code: "unavailable", raw: line.slice(0, 500) } : { ok: true, game };
+      } finally {
+        closer.abort();
+      }
+    },
+
     /** The static facts a crash recovery verifies an ongoing-game candidate on
      *  (T9 N1). The MEASURED request: GET /game/export/{id}?moves=false,
      *  Accept: application/json, no Authorization (spike-battery2.log; the
@@ -435,3 +565,4 @@ export const cancelChallenge = defaultApi.cancelChallenge;
 export const listOutgoingChallenges = defaultApi.listOutgoingChallenges;
 export const exportGameMeta = defaultApi.exportGameMeta;
 export const listOngoingGames = defaultApi.listOngoingGames;
+export const readGameStream = defaultApi.readGameStream;

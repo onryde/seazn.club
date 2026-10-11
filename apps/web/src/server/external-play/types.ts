@@ -100,6 +100,30 @@ export type GameSnapshot = {
   | { status: "unrecognised"; rawStatus: string }
 );
 
+/** The Board API stream's first line, `gameFull` — the reconcile read (spec
+ *  §3.5, amended 5903962d4). Recorded 2026-10-11 (fixtures
+ *  `gamefull-*.ndjson`): exact at every ply where the export stalls (M16).
+ *  `movesUci` is lila's own UCI (king-to-king-square castling, a promotion
+ *  suffix always — scalachess UciDump `legacyStandardCastling`), so it speaks
+ *  the ledger's canonical form. `whiteMs`/`blackMs` are what each clock reads
+ *  AT THE READ (lila `remainingTime`, clamped at zero), `incrementMs` is
+ *  `state.winc`. `drawOffer` is lila's `wdraw`/`bdraw`, which it writes only
+ *  when true. A player with no id (anonymous) is null. */
+export type BoardGameFull = {
+  gameId: string;
+  whiteId: string | null;
+  blackId: string | null;
+  movesUci: string[];
+  whiteMs: number;
+  blackMs: number;
+  incrementMs: number;
+  winner: "white" | "black" | null;
+  drawOffer: { white: boolean; black: boolean };
+} & (
+  | { status: LichessStatus }
+  | { status: "unrecognised"; rawStatus: string }
+);
+
 /** Minimal game snapshot we need to map a result (from API or recorded fixture). */
 export type LichessGameSnapshot = {
   id: string;
