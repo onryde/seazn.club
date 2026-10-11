@@ -3562,7 +3562,7 @@
         ]
       },
       "post": {
-        "summary": "Create a division (pins sport module version). With onlinePlay 'lichess', 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT",
+        "summary": "Create a division (pins sport module version). With onlinePlay 'lichess', 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`), and 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT",
         "tags": [
           "divisions"
         ],
@@ -4103,6 +4103,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -4751,7 +4795,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
+        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). Turning onlinePlay on (a stored value other than 'lichess' patched to 'lichess') is 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`); re-sending a stored 'lichess', or turning it off, is never refused for that. With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
         "tags": [
           "divisions"
         ],
@@ -5390,6 +5434,50 @@
           },
           "402": {
             "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -22378,7 +22466,7 @@
     },
     "/api/v1/stages/{id}/open-round": {
       "post": {
-        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (T−10/T+20 hang off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
+        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (T−10/T+20 hang off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
         "tags": [
           "stages"
         ],
@@ -50788,7 +50876,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/resend": {
       "post": {
-        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its T+20 deadline, ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
+        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) — nobody is mailed. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its T+20 deadline, ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
         "tags": [
           "fixtures"
         ],
@@ -50896,6 +50984,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
