@@ -2394,6 +2394,7 @@
   "divset.camera.saved": "Ajuste de cámara guardado.",
   "divset.err.cameraPolicyLocked": "Ya se ha abierto una ronda en esta división: desde aquí el requisito de cámara solo puede relajarse, no endurecerse.",
   "divset.err.timeControlUnsupported": "El juego en línea necesita uno de los ritmos de juego admitidos: {controls}.",
+  "divset.err.onlineChessDisabled": "El ajedrez en línea no está disponible para este club en este momento, así que el juego en línea no se ha activado.",
   "onlineChess.camera.playerNotice": "Tu cámara debe permanecer encendida durante toda la partida. Si se apaga, o si te sales del encuadre, lo registramos para el organizador, que decide qué ocurre. Nada se decide automáticamente.",
   "divset.variant": "Variante",
   "divset.standingsPoints": "Puntos de clasificación",

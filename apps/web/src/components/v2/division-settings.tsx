@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
+import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import {
@@ -608,6 +609,10 @@ export function DivisionSettings({
         // the same in every locale; only the sentence around them is ours.
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
+      } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
+        // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
+        // flag change, a kept answer gone stale, PostHog down. Server English otherwise: localise the code.
+        setError(msg("divset.err.onlineChessDisabled"));
       } else {
         setError(err instanceof Error ? err.message : msg("divset.failed"));
       }

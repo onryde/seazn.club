@@ -1859,6 +1859,7 @@ export type DictionaryKey =
   | "divset.entrants.warning.missingDob"
   | "divset.entrants.warning.missingGender"
   | "divset.err.cameraPolicyLocked"
+  | "divset.err.onlineChessDisabled"
   | "divset.err.timeControlUnsupported"
   | "divset.failed"
   | "divset.fixtures"

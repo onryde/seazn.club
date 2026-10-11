@@ -2394,6 +2394,7 @@
   "divset.camera.saved": "Camera-instelling opgeslagen.",
   "divset.err.cameraPolicyLocked": "Er is al een ronde geopend voor deze divisie — de camera-eis kan vanaf nu alleen worden versoepeld, niet verscherpt.",
   "divset.err.timeControlUnsupported": "Online spelen vereist een van de ondersteunde speeltempo's: {controls}.",
+  "divset.err.onlineChessDisabled": "Online schaken is op dit moment niet beschikbaar voor deze club, dus online spelen is niet ingeschakeld.",
   "onlineChess.camera.playerNotice": "Je camera moet de hele partij aan blijven. Gaat hij uit, of ga je uit beeld, dan leggen we dat vast voor de organisator, die beslist wat er gebeurt. Er wordt niets automatisch beslist.",
   "divset.variant": "Variant",
   "divset.standingsPoints": "Punten in klassement",
