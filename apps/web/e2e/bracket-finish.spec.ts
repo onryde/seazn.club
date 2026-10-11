@@ -3,7 +3,8 @@ import { TAG, activeOrg, apiJson, addEntrantsViaApi, createStageAndGenerate, exp
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
-import { forfeitAdmission, type ForfeitPhase } from "@seazn/engine/core";
+import { forfeitAdmission } from "@seazn/engine/core";
+import { CASCADE_ONLY_FORFEIT_REASONS } from "../src/lib/forfeit-phase-refusal";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -293,6 +294,14 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     // v1's entrant patch (`status: "disqualified"`, the one route that sets it; no cascade, no withdrawal), so the
     // fixture stays held. Nothing refreshes the page's entrant props until a write succeeds (fixture-console `post`),
     // so the dialog still offers the departed side, and the server refuses it.
+    //
+    // KNOWN DEPENDENCY: this route depends on a gap. A bare status write (the PATCH below) does NOT run the departure
+    // cascade that `/withdraw` runs; only that is why the fixture is still held. The gap is owned outside W2b — W5
+    // (RB2A-16, the DQ cascade) and W9 (the atomic cascade). The server twin depends on the same gap:
+    // `src/server/engine-db/__tests__/settle-seating.test.ts:269` ("C17 over the ONE departed vocabulary"). When either
+    // wave makes the PATCH cascade, the "still held" assertion below goes red, loudly. Then swap the PATCH for a raw
+    // status flip through `withDb` (`update entrants set status = 'disqualified' where id = …`, as the legacy-row
+    // twin `settle-seating.test.ts:248` does). That flip survives the fix; do not weaken the refusal assertions.
     const { sf } = await knockout(request, "generic", "score");
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "core.abandon", { reason: "rain" });
@@ -659,9 +668,12 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
 
     // The organiser's chess forfeit: the console's dialog, at every width. Its reasons are the engine's own for a game
     // in play (chess's `walkoverPhases`, read through `forfeitAdmission`), less PF-2's cascade-only `withdrew`.
-    const chess = builtinModules.find((m) => m.key === "boardgame")! as unknown as { walkoverPhases?: readonly ForfeitPhase[] };
-    const admitted = forfeitAdmission({ forfeitPhase: () => "play" as const, walkoverPhases: chess.walkoverPhases }, null);
-    const wantReasons = admitted.reasons.filter((r) => r !== "withdrew");
+    // The real chess module, typed through `forfeitAdmission`'s own parameter and spread into it: no cast, and no field
+    // named here, so the engine reads its walkover phases from the module itself. Only the phase is pinned to "play".
+    const chess: Parameters<typeof forfeitAdmission<null>>[0] = builtinModules.find((m) => m.key === "boardgame")!;
+    const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null);
+    const cascadeOnly: readonly string[] = CASCADE_ONLY_FORFEIT_REASONS;
+    const wantReasons = admitted.reasons.filter((r) => !cascadeOnly.includes(r));
     expect(wantReasons.length, "the engine admits a reason for a chess game in play").toBeGreaterThan(0);
     const fx = ready[1]!;
     await page.goto(await fixturePath(request, fx.id));
@@ -701,6 +713,14 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     expect(events.filter((e) => e.type === "core.forfeit").map((e) => e.payload)).toEqual([{ by: fx.away_entrant_id, reason: "retired" }]);
     expect(events.filter((e) => e.type === "boardgame.result"), "no chess method stands in for the forfeit").toEqual([]);
     expect((await read(request, fx.id)).outcome).toMatchObject({ kind: "award", winner: fx.home_entrant_id });
+    // What the organiser then READS: the console's activity panel (activity.tsx → buildRibbon) says the reason, not the
+    // reason-free legacy line.
+    const activity = page.locator('[data-role="v3-activity"]');
+    await expect(
+      activity.locator('[data-role="v3-activity-row"]').filter({ hasText: ui("pad.ribbon.core.forfeit.retired") }),
+      "the activity row says it was a retirement",
+    ).toHaveCount(1, { timeout: 20_000 });
+    await expect(activity, "not the reason-free line").not.toContainText(ui("pad.ribbon.core.forfeit"));
 
     // The official scorer: the same dock at three widths, no forfeit method, and no Forfeit control at all (X-RS-3).
     const official = await officialScorerPage(browser, ready[2]!.id);

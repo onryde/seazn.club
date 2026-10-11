@@ -230,10 +230,11 @@ function readPhase(state: BoardgameStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
 
-/** `pre|live|done|final|abandoned` (boardgame.ts) mapped down onto
- *  `PadPhase`'s closed three — `core.abandon` folds to its OWN distinct
- *  "abandoned" phase here (unlike generic, which folds it into "done"), so
- *  POST_PHASES carries all three terminal values. */
+/** `pre|live|tiebreak|done|final|abandoned` (boardgame.ts) mapped down onto
+ *  `PadPhase`'s closed three. `core.abandon` folds to its OWN "abandoned"
+ *  phase (as generic's does since W2b D16), so POST_PHASES carries all three
+ *  terminal values. "tiebreak" is neither: it is live while the decider is
+ *  owed and post once settled (`resolvePhase` below). */
 const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state" | "events">): PadPhase {

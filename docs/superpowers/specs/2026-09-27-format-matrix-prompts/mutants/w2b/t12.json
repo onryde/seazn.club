@@ -292,5 +292,35 @@
     "name": "every KEY_OVERRIDE branch returns a key the gates know about"
    }
   ]
+ },
+ {
+  "id": "copy-fr-untranslated",
+  "file": "apps/web/src/dictionaries/fr/ui.json",
+  "find": "\"pad.ribbon.core.forfeit.walkover\": \"Forfait enregistré\",",
+  "replace": "\"pad.ribbon.core.forfeit.walkover\": \"Walkover recorded\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/event-copy-forfeit.test.ts"
+    ],
+    "name": "a DISTINCT key per kind"
+   }
+  ]
+ },
+ {
+  "id": "timeline-fr-untranslated",
+  "file": "apps/web/src/dictionaries/fr/public.json",
+  "find": "\"timeline.core.forfeit.retired\": \"Abandon — {side} a arrêté en cours de match\",",
+  "replace": "\"timeline.core.forfeit.retired\": \"Retired — {side} stopped during the match\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/timeline.test.ts"
+    ],
+    "name": "W2b Task 12"
+   }
+  ]
  }
 ]

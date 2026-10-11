@@ -34,6 +34,11 @@ const KINDS: readonly [string, Payload][] = [
   ["double_walkover", { by: "both", reason: "walkover" }],
 ];
 
+/** `locale:key` sentences that are MEANT to read the same as the English (a loanword, a proper name). Every other
+ *  non-English sentence must differ from the English — a key added to en alone and copied across reads as present,
+ *  so "present" is not "translated". Empty today: every forfeit sentence is translated in es/fr/nl. */
+const SAME_AS_ENGLISH: ReadonlySet<string> = new Set<string>([]);
+
 /** A translator that records every key asked of it and answers from `locale`'s dictionary. */
 function recorder(locale: string) {
   const asked: string[] = [];
@@ -99,8 +104,9 @@ describe("every surface says each forfeit with its own key, in all four locales"
     it(`${surface.name}: a DISTINCT key per kind, none the reason-free line, each present in en/es/fr/nl`, () => {
       const keys = new Map<string, string>();
       let read = 0;
+      let translated = 0;
+      const listedAndEqual = new Set<string>();
       for (const [kind, payload] of KINDS) {
-        const sentences = new Set<string>();
         for (const locale of Object.keys(LOCALES)) {
           const { m, asked } = recorder(locale);
           surface.render("core.forfeit", payload, m);
@@ -109,16 +115,25 @@ describe("every surface says each forfeit with its own key, in all four locales"
           else expect(key, `${kind}: same key in every locale`).toBe(keys.get(kind));
           const text = LOCALES[locale]![key];
           expect(typeof text === "string" && text.length > 0, `${locale}:${key}`).toBe(true);
-          sentences.add(text!);
           read++;
+          if (locale === "en") continue;
+          // Translated: this locale's sentence is not the English one, unless it is listed as meant to be.
+          const english = LOCALES.en![key];
+          if (SAME_AS_ENGLISH.has(`${locale}:${key}`)) {
+            expect(text, `${locale}:${key} is listed as the English`).toBe(english);
+            listedAndEqual.add(`${locale}:${key}`);
+          } else {
+            expect(text, `${locale}:${key} is translated, not the English`).not.toBe(english);
+            translated++;
+          }
         }
-        // Translated, not four copies of the English (a key added to en alone and copied across reads as present).
-        expect(sentences.size, `${kind}: translated per locale`).toBeGreaterThan(1);
       }
       const distinct = new Set(keys.values());
       expect(distinct.size, `${surface.name}: ${JSON.stringify(Object.fromEntries(keys))}`).toBe(KINDS.length);
       expect([...distinct], "the reason-free line is the legacy fallback, not a kind's").not.toContain(surface.fallback);
       expect(read, `keys read: ${read}`).toBe(KINDS.length * Object.keys(LOCALES).length);
+      expect(translated + listedAndEqual.size, `translations checked: ${translated}`).toBe(KINDS.length * (Object.keys(LOCALES).length - 1));
+      expect(translated, "at least one sentence is checked against the English").toBeGreaterThan(0);
     });
 
     it(`${surface.name}: a legacy row with no reason keeps the reason-free line (the positive pair of the above)`, () => {
