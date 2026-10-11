@@ -1195,7 +1195,21 @@ Elsewhere the text is the controller's record.
      result methods and gains NO Forfeit or Double-forfeit tile. A tile would duplicate the dialog's phase,
      `feedsNextMatch` and cascade-only rules, and it would need an exception to the pad's `filterTilesByBand`
      rule (D-12). Forfeits are organiser-only (X-RS-3), and organisers already have the console. Open follow-up: if
-     the chess pad has no one-step route to that fixture's console, W2b adds a link rather than tiles.
+     the chess pad has no one-step route to that fixture's console, W2b adds a link rather than tiles. Closed in
+     review: the console's Forfeit is one tap away on the same fixture page, so no link is owed.
+111. **A player cannot withdraw themselves once the tournament has started. W5 builds it** (2026-10-11, owner "A but
+     after match tournament started, player can't withdraw"). This was found in the W2b T12 review (G-2) and also
+     exists on main.
+     - **The gap:** a player's registration self-withdraw (`withdrawRegistrationPublic`/`ByRef` → `withdrawCore`)
+       sets `status='withdrawn'` and never runs the withdrawal cascade, and nothing checks the division phase. The
+       player's held or pending lines then stay as they are.
+     - **The knock-on:** the organiser's Withdraw on that player is refused 409 "already withdrawn". The only way
+       out is Reinstate, then Withdraw.
+     - **The rule:** after the start, the self-withdraw is refused and the player is told to contact the organiser.
+       The organiser's Withdraw (with its cascade) is the only departure route mid-event.
+     - **Owner of the work:** W5, with RB2A-16, the DQ cascade. W2b changes nothing.
+     - **For W5 to pin and put to the owner:** what "started" means. My reading is that the first fixture of the
+       division has started or been scored, not merely that fixtures exist.
 
 ## Recommendations (mine — not rulings)
 
