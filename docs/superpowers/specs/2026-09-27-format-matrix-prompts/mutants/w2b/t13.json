@@ -60,7 +60,7 @@
   {
     "id": "abandon-tag-from-status",
     "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "  return tx`(case when ${f}.outcome ->> 'kind' in ${tx([...ABANDON_RESULT_KINDS])} then (",
+    "find": "  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})\n                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (",
     "replace": "  return tx`(case when ${f}.status = 'abandoned' then (",
     "killers": [
       {
