@@ -167,7 +167,9 @@
 import {
   EngineError,
   foldMatchWithStoppage,
+  summaryOf,
   type EventEnvelope,
+  type FoldedOutcomeFacts,
   type Lineup,
   type LineupPair,
   type LineupSlot,
@@ -1589,6 +1591,7 @@ export function validatePack(
 
     let state: unknown;
     let squads: SquadState;
+    let facts: FoldedOutcomeFacts<unknown>;
     try {
       const result = foldMatchWithStoppage(
         sportModule,
@@ -1599,6 +1602,7 @@ export function validatePack(
       );
       state = result.state;
       squads = result.squads;
+      facts = result;
     } catch (err) {
       // The product turns this into `import.fold_rejected` with the offending
       // event's index (event-import.ts:306-321). Same information, same
@@ -1655,7 +1659,9 @@ export function validatePack(
       state,
       squads,
       outcome,
-      summary: sportModule.summary(state),
+      // The engine's one summary (W2b PF-1): `module.summary(state)` would still read a held level result the kernel
+      // turned into a withdrawal award. apps/web reads the same function (loop F).
+      summary: summaryOf(sportModule, facts),
     });
   });
 
