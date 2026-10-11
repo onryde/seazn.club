@@ -60,6 +60,23 @@ const EXPECTED_WALKOVER: Record<string, (cfg: Record<string, unknown>) => { winn
 /** PF-6 (CK-WO-2): unlimited-overs cricket has no quota, so NRR is undefined — filtered from the CK-WO-1 rule. */
 const unlimitedOvers = (key: string, cfg: Record<string, unknown>) => key === "cricket" && cfg.ballsPerInnings === null;
 
+/** R112 review I-1 — the cfgs a "nothing played" credit sweep owes: every cfg the sport DECLARES, plus, wherever a
+ *  declared cfg carries a best-of above 1, the same cfg at Best of 1 when the schema accepts it — an organiser picks it
+ *  in match rules (volleyball: `match-rules.ts` offers Best of 1), and its only set is the deciding one (`finalSetTo`).
+ *  PF-6's unlimited-overs cricket has no quota to charge (CK-WO-2) and is left out; the caller counts it. */
+function nothingPlayedCfgs(m: { key: string; configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown }; parse(v: unknown): unknown }; variants: Record<string, unknown> }): { name: string; cfg: Record<string, unknown>; unlimited: boolean }[] {
+  const out: { name: string; cfg: Record<string, unknown>; unlimited: boolean }[] = [];
+  for (const { name, cfg } of declaredCfgs(m as never)) {
+    const c = cfg as Record<string, unknown>;
+    out.push({ name, cfg: c, unlimited: unlimitedOvers(m.key, c) });
+    if (typeof c.bestOf === "number" && c.bestOf > 1) {
+      const one = m.configSchema.safeParse({ ...c, bestOf: 1 });
+      if (one.success) out.push({ name: `${name} at Best of 1`, cfg: one.data as Record<string, unknown>, unlimited: false });
+    }
+  }
+  return out;
+}
+
 function expectWalkover(key: string, cfg: Record<string, unknown>, stage = "league") {
   const [home, away] = walkoverDeltas(key, cfg, stage);
   const want = EXPECTED_WALKOVER[key]!(cfg);
@@ -417,55 +434,76 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     }
     expect(checked).toBe(ROWS.length);
   });
-  it("X-WD-6 (PF-7): withdrew before start credits the walkover, after start the retirement — every sport", () => {
+  it("X-WD-6 (PF-7): withdrew before start credits the walkover, after start the retirement — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     let before = 0;
-    let after = 0;
-    forEachSport(({ module: m }) => {
-      const cfg = parsed(m.key);
-      const [home, away] = deltasOf(m.key, cfg, [["core.forfeit", { by: A, reason: "withdrew" }]]);
-      const want = EXPECTED_WALKOVER[m.key]!(cfg);
-      expect(home.metrics, `${m.key} withdrew pre-start winner`).toMatchObject(want.winner);
-      expect(away.metrics, `${m.key} withdrew pre-start loser`).toMatchObject(want.loser);
-      before++;
+    let unlimited = 0;
+    const bestOfOne = new Set<string>();
+    const sports = forEachSport(({ module: m }) => {
+      for (const { name, cfg, unlimited: skip } of nothingPlayedCfgs(m)) {
+        if (skip) { unlimited++; continue; }
+        const [home, away] = deltasOf(m.key, cfg, [["core.forfeit", { by: A, reason: "withdrew" }]]);
+        const want = EXPECTED_WALKOVER[m.key]!(cfg);
+        expect(home.metrics, `${m.key}/${name} withdrew pre-start winner`).toMatchObject(want.winner);
+        expect(away.metrics, `${m.key}/${name} withdrew pre-start loser`).toMatchObject(want.loser);
+        if (name.endsWith("at Best of 1")) bestOfOne.add(m.key);
+        before++;
+      }
     });
+    let after = 0;
     for (const r of ROWS) {
       expectRetirement(r, "withdrew");
       after++;
     }
-    expect(before).toBe(11);
+    expect(sports).toBe(11);
+    expect(before).toBeGreaterThan(11);
+    expect(unlimited, "the Test variant is the one unlimited cfg").toBeGreaterThanOrEqual(1);
+    // The witness cfg the review found: volleyball Best of 1 (walkover 25-0, the deciding-set target 15) — and its two
+    // set-based siblings, whose deciding game has its own target too.
+    for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
     expect(after).toBe(ROWS.length);
   });
-  it("X-WD-6 (PF-7, ruling 112): a withdrawal after a bare Start — nothing played — credits the walkover, as before the start; so does one whose only play was voided, and so does a walkover there — every sport", () => {
+  it("X-WD-6 (PF-7, ruling 112): a withdrawal after a bare Start — nothing played — credits the walkover, as before the start; so does one whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     // Ruling 112: a Start with no sport event after it is still "before play" for a walkover, and the credit follows the
     // same fact. The expected credit is Appendix A's walkover row, from the cfg (EXPECTED_WALKOVER) — never the module's.
     let checked = 0;
-    forEachSport(({ module: m }) => {
-      const cfg = parsed(m.key);
+    let cfgs = 0;
+    let unlimited = 0;
+    const bestOfOne = new Set<string>();
+    const sports = forEachSport(({ module: m }) => {
       const l = defaultLineupPair(m.positions);
       const start = ev(1, "core.start");
-      // The sport's own play, from its generator (chess's one event decides a plain game: its bracket deciders hold a
-      // draw instead) — then voided, so nothing is played again.
-      const playCfg = [cfg, m.configSchema.parse({ ...cfg, ...m.bracketDeciders(cfg as never) })].find((c) => onePlayEvent(m, c, l, [start]) !== null);
-      if (playCfg === undefined) throw new Error(`${m.key}: its generator draws no sport event after the start`);
-      const play = onePlayEvent(m, playCfg, l, [start])!;
-      const want = EXPECTED_WALKOVER[m.key]!(cfg);
-      const scenes: { name: string; cfg: unknown; ledger: EventEnvelope[]; reason: "withdrew" | "walkover" }[] = [
-        { name: "withdrew after a bare start", cfg, ledger: [start], reason: "withdrew" },
-        { name: "walkover after a bare start", cfg, ledger: [start], reason: "walkover" },
-        { name: "withdrew after its one play was voided", cfg: playCfg, ledger: [start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id)], reason: "withdrew" },
-      ];
-      for (const s of scenes) {
-        const f = foldMatchWithStoppage(m as never, s.cfg as never, l, [...s.ledger, ev(s.ledger.length + 1, "core.forfeit", { by: A, reason: s.reason })]);
-        const o = outcomeOf(m as never, f as never);
-        expect(o, `${m.key} ${s.name}`).toMatchObject({ kind: "award", winner: H, loser: A, reason: s.reason });
-        const [home, away] = m.standingsDelta(o!, s.cfg, { kind: "league" } as never, f.state);
-        expect(home.metrics, `${m.key} ${s.name}: winner`).toMatchObject(want.winner);
-        expect(away.metrics, `${m.key} ${s.name}: withdrawn side`).toMatchObject(want.loser);
-        expect([home.won, home.lost, away.won, away.lost], `${m.key} ${s.name}`).toEqual([1, 0, 0, 1]);
-        checked++;
+      for (const { name, cfg, unlimited: skip } of nothingPlayedCfgs(m)) {
+        if (skip) { unlimited++; continue; }
+        // The sport's own play, from its generator (chess's one event decides a plain game: its bracket deciders hold a
+        // draw instead) — then voided, so nothing is played again.
+        const playCfg = [cfg, m.configSchema.parse({ ...cfg, ...m.bracketDeciders(cfg as never) })].find((c) => onePlayEvent(m, c, l, [start]) !== null);
+        if (playCfg === undefined) throw new Error(`${m.key}/${name}: its generator draws no sport event after the start`);
+        const play = onePlayEvent(m, playCfg, l, [start])!;
+        const want = EXPECTED_WALKOVER[m.key]!(cfg);
+        const scenes: { name: string; cfg: unknown; ledger: EventEnvelope[]; reason: "withdrew" | "walkover" }[] = [
+          { name: "withdrew after a bare start", cfg, ledger: [start], reason: "withdrew" },
+          { name: "walkover after a bare start", cfg, ledger: [start], reason: "walkover" },
+          { name: "withdrew after its one play was voided", cfg: playCfg, ledger: [start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id)], reason: "withdrew" },
+        ];
+        for (const s of scenes) {
+          const f = foldMatchWithStoppage(m as never, s.cfg as never, l, [...s.ledger, ev(s.ledger.length + 1, "core.forfeit", { by: A, reason: s.reason })]);
+          const o = outcomeOf(m as never, f as never);
+          expect(o, `${m.key}/${name} ${s.name}`).toMatchObject({ kind: "award", winner: H, loser: A, reason: s.reason });
+          const [home, away] = m.standingsDelta(o!, s.cfg, { kind: "league" } as never, f.state);
+          expect(home.metrics, `${m.key}/${name} ${s.name}: winner`).toMatchObject(want.winner);
+          expect(away.metrics, `${m.key}/${name} ${s.name}: withdrawn side`).toMatchObject(want.loser);
+          expect([home.won, home.lost, away.won, away.lost], `${m.key}/${name} ${s.name}`).toEqual([1, 0, 0, 1]);
+          checked++;
+        }
+        if (name.endsWith("at Best of 1")) bestOfOne.add(m.key);
+        cfgs++;
       }
     });
-    expect(checked).toBe(11 * 3);
+    expect(sports).toBe(11);
+    expect(cfgs).toBeGreaterThan(11);
+    expect(checked).toBe(cfgs * 3);
+    expect(unlimited).toBeGreaterThanOrEqual(1);
+    for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
   });
 });
 

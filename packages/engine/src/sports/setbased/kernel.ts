@@ -2290,8 +2290,9 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
    * RETIREMENT, in-match disqualification, a withdrawal (PF-7): every closed set stands; the open set completes for
    * the winner at max(its target, the retiree's points + winBy), capped; every further set the winner still needs is
    * credited at that set's own target, 0 (the deciding set's `finalSetTo`, FIVB 6.4.3); the retiree keeps everything
-   * it won. Before play there are no sets, so this is the walkover credit (no declared cfg is a one-set match, whose
-   * only set would be the deciding one) — which is why a withdrawal before the start needs no branch of its own.
+   * it won. With no set in state (before the start, or after a Start with nothing played — ruling 112/113) this is the
+   * walkover credit, `setTo`-0 every set: a Best of 1's only set is the deciding one, so `setTarget` would read
+   * `finalSetTo` there (R112 review I-1: volleyball Bo1 credited 15-0 against the walkover's 25-0).
    */
   const setBasedForfeitCredit = (cfg: SetBasedCfg, state: SetBasedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
     const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
@@ -2315,7 +2316,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     }
     // Every further set the winner still needs is credited at ITS OWN target (FIVB 6.4.3, review M-7): the deciding
     // set at `finalSetTo` once the count reaches it. A walkover is 0-25 every set (FIVB 6.4.1), so it keeps `setTo`.
-    let next = reason === "walkover" ? null : state.sets.length;
+    let next = reason === "walkover" || state.sets.length === 0 ? null : state.sets.length;
     while (sets[winner] < need) {
       sets[winner] += 1;
       points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);
