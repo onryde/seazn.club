@@ -58,6 +58,28 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("POST", "/api/v1/capture/codes/0123456789ab/beats")).toBeNull();
   });
 
+  it("the match-room routes and every shipped external-play route are explicit NEVER_KEY_ROUTES entries (a player's seat and a Lichess token, never a key)", () => {
+    const entries = [
+      "GET /fixtures/:id/external-play/room",
+      "POST /fixtures/:id/external-play/room",
+      "POST /fixtures/:id/external-play/room/act",
+      "POST /fixtures/:id/external-play/room/clock-zero",
+      // F2: shipped before T14 and classified nowhere (T16 deletes lobby + resolve).
+      "GET /fixtures/:id/external-play/lobby",
+      "POST /fixtures/:id/external-play/lobby",
+      "POST /fixtures/:id/external-play/resend",
+      "POST /fixtures/:id/external-play/resolve",
+    ];
+    let checked = 0;
+    for (const e of entries) {
+      expect(NEVER_KEY_ROUTES, e).toContain(e);
+      const [method, path] = e.split(" ") as [string, string];
+      expect(matchKeyRoute(method, `/api/v1${path.replace(/:id/g, "seg")}`), e).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: external-play routes checked").toBe(8);
+  });
+
   it("capture QR v2 (T8c, A16; W27): the phone's start and its scoring link are never key-reachable — and an org API key on EACH of the four phone routes finds no key rule", () => {
     expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/start");
     expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/scoring-link");
