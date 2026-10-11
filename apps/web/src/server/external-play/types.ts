@@ -33,6 +33,9 @@ export const NEEDS_REASONS = [
   // V435 (T12, spec §3.6): a drawn game in a bracket stage, held for the
   // organiser — never written as decided.
   "tiebreak_owed",
+  // V435 (T12 fix round 1, I2): Lichess ended the game for a fair-play
+  // violation (status `cheat`) — the organiser's fair-play queue.
+  "fair_play",
 ] as const;
 export type NeedsReason = (typeof NEEDS_REASONS)[number];
 

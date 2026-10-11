@@ -2278,6 +2278,7 @@ export type DictionaryKey =
   | "externalPlay.reason.abort"
   | "externalPlay.reason.accountMismatch"
   | "externalPlay.reason.delayUnsupported"
+  | "externalPlay.reason.fairPlay"
   | "externalPlay.reason.generic"
   | "externalPlay.reason.linkMissing"
   | "externalPlay.reason.noShow"

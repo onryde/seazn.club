@@ -5,6 +5,9 @@
 // Single-sport by construction: only a boardgame division can carry online
 // play, so only a chess fixture can ever own a fixture_external_play row.
 import { afterAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -216,6 +219,36 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay — a fixture settled t
     }
     expect(listedCount, "anti-vacuity: open statuses checked").toBe(OPEN.size);
     expect(hiddenCount, "anti-vacuity: settled statuses checked").toBe(SETTLED.size);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a fair-play verdict reaches the organiser under its OWN reason (T12 fix round 1, I2)", () => {
+  it("a fair_play hold is listed as fair_play — never folded into provider_error", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "fair_play", "lichess game X: status cheat");
+    const rows = await listNeedsOrganiserExternalPlay(s.auth, s.divisionId);
+    expect(rows.map((r) => [r.fixtureId, r.reason])).toEqual([[s.fixtureId, "fair_play"]]);
+  });
+});
+
+describe("the fair-play reason has organiser copy in all four locales", () => {
+  // T16 maps reasons to labels; the copy itself ships with the reason, so the
+  // queue can never meet a fair_play row with only the generic label to show.
+  it("each locale carries its own sentence, distinct from the generic label — counted", () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../dictionaries");
+    const LOCALES = ["en", "es", "fr", "nl"] as const;
+    const read = (l: string) => JSON.parse(readFileSync(join(dir, l, "ui.json"), "utf8")) as Record<string, string>;
+    const en = read("en");
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = read(l);
+      const text = d["externalPlay.reason.fairPlay"];
+      expect(text, `${l}: present`).toBeTruthy();
+      expect(text, `${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
+      if (l !== "en") expect(text, `${l}: translated, not English`).not.toBe(en["externalPlay.reason.fairPlay"]);
+      checked++;
+    }
+    expect(checked, "locales checked").toBe(LOCALES.length);
   });
 });
 
