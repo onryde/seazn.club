@@ -13,7 +13,7 @@ import { sweepExternalPlay } from "@/server/usecases/external-play";
  *  Lichess pushes nothing to us (spec §3.5; the old webhook route is deleted):
  *  game state is READ by reconcile, and this is the one trigger for it that
  *  needs no page open. */
-export async function POST(_req: Request) {
+export async function POST() {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;
     if (!secret) throw new HttpError(503, "CRON_SECRET is not configured");
