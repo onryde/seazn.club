@@ -61,6 +61,8 @@ describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as ame
           expect(e?.code, label).toBe("FORFEIT_REASON_WRONG_PHASE");
           expect((e!.data as { allowed: string[] }).allowed, label).toEqual(NOTHING_PLAYED);
           expect((e!.data as { reason: string }).reason, label).toBe("retired");
+          // The refusal says WHY in its own terms: the phase reads "play", and nothing is played yet (the copy's word).
+          expect((e!.data as { phase: string; played: boolean }), label).toMatchObject({ phase: "play", played: false });
           refused++;
         }
       }
@@ -90,10 +92,26 @@ describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as ame
         const e = refusalOf(() => fold(m, playCfg, l, [...ledger, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]));
         expect(e?.code, `${m.key}/${name} retired after ${play.type} voided`).toBe("FORFEIT_REASON_WRONG_PHASE");
         expect((e!.data as { allowed: string[] }).allowed, `${m.key}/${name}`).toEqual(NOTHING_PLAYED);
+        expect((e!.data as { played: boolean }).played, `${m.key}/${name}: the voided play is no play`).toBe(false);
         refused++;
       }
     });
     expect(refused).toBeGreaterThan(builtinModules.length);
+  });
+
+  it("X-RS-1 (ruling 113): the refusal names whether anything was played — a walkover refused after play says played: true, every sport whose walkover stops at the Start", () => {
+    // The positive pair of `played: false` above: the copy reads "once play has started" only when something was.
+    let refused = 0;
+    forEachSport(({ module: m }) => {
+      if (m.walkoverPhases !== undefined) return; // chess admits a walkover in play (FIDE 6.7.1) — nothing to refuse
+      for (const { name, playCfg, play, l } of scenes(m)) {
+        const e = refusalOf(() => fold(m, playCfg, l, [START(), play, ev(3, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })]));
+        expect(e?.code, `${m.key}/${name} walkover after ${play.type}`).toBe("FORFEIT_REASON_WRONG_PHASE");
+        expect(e!.data, `${m.key}/${name}`).toMatchObject({ reason: "walkover", played: true });
+        refused++;
+      }
+    });
+    expect(refused).toBeGreaterThan(builtinModules.length - 1);
   });
 
   it("X-RT-1 (ruling 113): [start, disqualified] is admitted — misconduct before play is real — every sport, every declared cfg, either side", () => {

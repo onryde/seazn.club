@@ -3948,6 +3948,7 @@
   "forfeit.phase.pre": "avant le début du match",
   "forfeit.phase.play": "une fois le jeu commencé",
   "forfeit.phase.tiebreak": "pendant le départage",
+  "forfeit.phase.nothingPlayed": "tant que rien n'a été joué",
   "forfeit.reason.walkover": "forfait",
   "forfeit.reason.retired": "abandon",
   "forfeit.reason.disqualified": "disqualification",

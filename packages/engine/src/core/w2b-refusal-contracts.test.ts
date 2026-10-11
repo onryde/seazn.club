@@ -46,30 +46,34 @@ const A = "A";
 const ALLOWED = {
   pre: FORFEIT_REASONS.filter((r) => r === "walkover" || r === "withdrew"),
   play: FORFEIT_REASONS.filter((r) => r !== "walkover"),
+  // Ruling 113: after a bare Start (nothing played) everything but the retirement.
+  bare: FORFEIT_REASONS.filter((r) => r !== "retired"),
 };
 
 describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the reason, both sides and what is allowed", () => {
-  it("D3 (ruling 112): a walkover once something is played, a retirement before the start, and a double walkover once something is played — code, copy and data", () => {
+  it("D3 (rulings 112, 113): a walkover once something is played, a retirement before the start and after a bare start, and a double walkover once something is played — code, copy and data", () => {
     const cfg = firstCfg("football");
     // Ruling 112: a bare start is still before play for a walkover, so the refusal needs the sport's own play — the
     // module's generator draws it, never a typed event.
     const played = onePlayEvent(mod("football"), cfg, defaultLineupPair(mod("football").positions), [ev(1, "core.start")]);
     if (played === null) throw new Error("football: its generator draws no sport event after the start");
     const rows = [
-      { label: "walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: A, reason: "walkover" })], phase: "play", reason: "walkover", both: false, bothAllowed: false },
-      { label: "retired before play", events: [ev(1, "core.forfeit", { by: A, reason: "retired" })], phase: "pre", reason: "retired", both: false, bothAllowed: true },
-      { label: "double walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: "both", reason: "walkover" })], phase: "play", reason: "walkover", both: true, bothAllowed: false },
+      { label: "walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: A, reason: "walkover" })], phase: "play", list: "play", reason: "walkover", both: false, bothAllowed: false, played: true },
+      { label: "retired before play", events: [ev(1, "core.forfeit", { by: A, reason: "retired" })], phase: "pre", list: "pre", reason: "retired", both: false, bothAllowed: true, played: false },
+      { label: "double walkover in play", events: [ev(1, "core.start"), played, ev(3, "core.forfeit", { by: "both", reason: "walkover" })], phase: "play", list: "play", reason: "walkover", both: true, bothAllowed: false, played: true },
+      // Ruling 113: the phase reads "play" from the Start, but nothing is played — the data says so (`played`).
+      { label: "retired after a bare start", events: [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "retired" })], phase: "play", list: "bare", reason: "retired", both: false, bothAllowed: true, played: false },
     ] as const;
     let checked = 0;
     for (const row of rows) {
       const e = errOf(() => fold("football", cfg, [...row.events]));
-      const allowed = ALLOWED[row.phase];
+      const allowed = ALLOWED[row.list];
       expect(e.code, row.label).toBe("FORFEIT_REASON_WRONG_PHASE");
       expect(e.message, row.label).toBe(`forfeit reason "${row.reason}" is not recordable in phase "${row.phase}" — allowed here: ${allowed.join(", ")}`);
-      expect(e.data, row.label).toEqual({ eventId: row.events.at(-1)!.id, phase: row.phase, reason: row.reason, both: row.both, allowed, bothAllowed: row.bothAllowed });
+      expect(e.data, row.label).toEqual({ eventId: row.events.at(-1)!.id, phase: row.phase, reason: row.reason, both: row.both, allowed, bothAllowed: row.bothAllowed, played: row.played });
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
   });
 
   it("D3 R3 (W2b-R14): a double walkover in a chess tie-break is refused with its own copy, though a walkover is allowed there", () => {
@@ -79,7 +83,7 @@ describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the r
     expect(e.code).toBe("FORFEIT_REASON_WRONG_PHASE");
     expect(e.message).toBe('a double walkover is not recordable in phase "tiebreak": the game was played — record one side\'s walkover or withdrawal');
     // BG-WO-1: chess admits a walkover in the tie-break phase too, so `allowed` holds it — and a double one is still not.
-    expect(e.data).toEqual({ eventId: "e-3", phase: "tiebreak", reason: "walkover", both: true, allowed: [...FORFEIT_REASONS], bothAllowed: false });
+    expect(e.data).toEqual({ eventId: "e-3", phase: "tiebreak", reason: "walkover", both: true, allowed: [...FORFEIT_REASONS], bothAllowed: false, played: true });
   });
 
   it("C17 (ruling 112): a fold of a module that declares no forfeitPhase judges the phase from the stream — play after an active core.start, a walkover refused once its own event is played", () => {

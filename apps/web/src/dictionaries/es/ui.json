@@ -3948,6 +3948,7 @@
   "forfeit.phase.pre": "antes de que empiece el partido",
   "forfeit.phase.play": "una vez empezado el juego",
   "forfeit.phase.tiebreak": "en el desempate",
+  "forfeit.phase.nothingPlayed": "antes de que se haya jugado nada",
   "forfeit.reason.walkover": "incomparecencia",
   "forfeit.reason.retired": "retirada",
   "forfeit.reason.disqualified": "descalificación",

@@ -2282,6 +2282,7 @@ export type DictionaryKey =
   | "footer.rights"
   | "footer.securePayments"
   | "footer.tagline"
+  | "forfeit.phase.nothingPlayed"
   | "forfeit.phase.play"
   | "forfeit.phase.pre"
   | "forfeit.phase.tiebreak"

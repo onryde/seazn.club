@@ -965,7 +965,8 @@ export function foldMatchWithStoppage<Cfg, State>(
       const phase = forfeitPhaseOf(module, state, started, decided);
       if (phase !== "over") {
         const { by, reason } = forfeitOf(event.payload);
-        const allowed = forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)));
+        const played = playRecorded(active.slice(0, index));
+        const allowed = forfeitReasonsAllowed(phase, walkoverPhases, played);
         // R3 (W2b-R14): never both sides in a tie-break — the classical game was played.
         const bothRefused = by === "both" && phase === "tiebreak";
         if (!allowed.includes(reason) || bothRefused) {
@@ -974,7 +975,9 @@ export function foldMatchWithStoppage<Cfg, State>(
             bothRefused
               ? `a double walkover is not recordable in phase "${phase}": the game was played — record one side's walkover or withdrawal`
               : `forfeit reason "${reason}" is not recordable in phase "${phase}" — allowed here: ${allowed.join(", ")}`,
-            { eventId: event.id, phase, reason, both: by === "both", allowed, bothAllowed: doubleWalkoverAdmitted(phase, allowed) },
+            // `played` (ruling 113): the phase reads "play" from the Start, but a retirement waits for play — the copy
+            // names "nothing played yet" rather than "once play has started" for that refusal.
+            { eventId: event.id, phase, reason, both: by === "both", allowed, bothAllowed: doubleWalkoverAdmitted(phase, allowed), played },
           );
         }
       }

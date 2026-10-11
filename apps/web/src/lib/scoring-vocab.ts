@@ -1340,6 +1340,9 @@ export const FORFEIT_REASON_KEY: Record<WriterForfeitReason, MessageKey> = {
   retired: "forfeit.reason.retired",
   disqualified: "forfeit.reason.disqualified",
 };
+/** Ruling 113: the phase reads "play" from the Start, but with nothing played a refused retirement is explained as
+ *  "before anything has been played" — "once play has started" would contradict the refusal. */
+export const FORFEIT_NOTHING_PLAYED_KEY: MessageKey = "forfeit.phase.nothingPlayed";
 const FORFEIT_WRONG_PHASE_NAMED_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named";
 const FORFEIT_WRONG_PHASE_BOTH_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak";
 
@@ -1640,9 +1643,10 @@ export function scoringErrorText(
     const named = forfeitPhaseRefusalOf(extra);
     if (named) {
       const allowed = named.allowed.map((r) => m(FORFEIT_REASON_KEY[r])).join(", ");
+      const phase = named.phase === "play" && named.played === false ? FORFEIT_NOTHING_PLAYED_KEY : FORFEIT_PHASE_KEY[named.phase];
       return named.both && named.phase === "tiebreak"
         ? m(FORFEIT_WRONG_PHASE_BOTH_KEY, { allowed })
-        : m(FORFEIT_WRONG_PHASE_NAMED_KEY, { phase: m(FORFEIT_PHASE_KEY[named.phase]), allowed });
+        : m(FORFEIT_WRONG_PHASE_NAMED_KEY, { phase: m(phase), allowed });
     }
   }
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;

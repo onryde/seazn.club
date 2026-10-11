@@ -994,6 +994,41 @@ describe("scoring-vocab covers what the engine declares", () => {
     expect(checked).toBe(4);
   });
 
+  it("ruling 113: a retirement refused after a bare Start reads \"before anything has been played\", never \"once play has started\" — every locale; played: true keeps the play sentence", () => {
+    // The engine's refusal names `played` (core/events.ts): the phase reads "play" from the Start, and ruling 113 refuses
+    // a retirement there until something is played. "Once play has started" would contradict the refusal it explains.
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k, v) => interpolate(dict[k]!, v);
+      const nothing = dict["forfeit.phase.nothingPlayed"];
+      expect(typeof nothing === "string" && nothing.length > 0, `${locale} forfeit.phase.nothingPlayed`).toBe(true);
+      expect(nothing, `${locale}: its own words, not the play phase's`).not.toBe(dict["forfeit.phase.play"]);
+      const named = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named"]!;
+      // The engine's list after a bare Start (walkover, disqualified, withdrew); the sentence drops the cascade's withdrew.
+      const allowed = ["walkover", "disqualified", "withdrew"];
+      const words = [dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!].join(", ");
+      const bare = scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: false });
+      expect(bare, locale).toBe(interpolate(named, { phase: nothing!, allowed: words }));
+      expect(bare, locale).not.toContain(dict["forfeit.phase.play"]!);
+      // The pair: once something is played, the play phase's words (a walkover refused after play).
+      const after = ["retired", "disqualified", "withdrew"];
+      const afterWords = [dict["forfeit.reason.retired"]!, dict["forfeit.reason.disqualified"]!].join(", ");
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed: after, both: false, played: true }), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: afterWords }),
+      );
+      // Before the Start nothing is played either, and the pre phase's words stand (the match has not started).
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "pre", allowed: ["walkover", "withdrew"], both: false, played: false }), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.pre"]!, allowed: dict["forfeit.reason.walkover"]! }),
+      );
+      // A `played` that is not a boolean is no shape this codebase reads: the code's own copy.
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: "no" }), locale).toBe(
+        dict["engineError.FORFEIT_REASON_WRONG_PHASE"],
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner says so in every locale; every other settle refusal keeps the code's own copy", () => {
     let checked = 0;
     for (const [locale, dict] of Object.entries(LOCALES)) {

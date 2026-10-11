@@ -3948,6 +3948,7 @@
   "forfeit.phase.pre": "voor de start van de wedstrijd",
   "forfeit.phase.play": "zodra het spel begonnen is",
   "forfeit.phase.tiebreak": "in de tiebreak",
+  "forfeit.phase.nothingPlayed": "voordat er iets is gespeeld",
   "forfeit.reason.walkover": "walk-over",
   "forfeit.reason.retired": "opgave",
   "forfeit.reason.disqualified": "diskwalificatie",

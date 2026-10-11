@@ -4,7 +4,9 @@
 // renders them in the reader's language (`lib/scoring-vocab.ts` `scoringErrorText`). A static sentence cannot be
 // right, because what a phase admits depends on the sport and on whether anything has been played:
 //   - chess admits a walkover while play is under way;
-//   - every other sport admits one after the Start only until something is played (ruling 112).
+//   - every other sport admits one after the Start only until something is played (ruling 112);
+//   - a retirement waits for something to be played (ruling 113), though the phase reads "play" from the Start — so the
+//     refusal also says whether anything was (`played`), and the copy never says "once play has started" for it.
 // No `server-only`: the pad and the console read it too.
 import { FORFEIT_REASONS, type ForfeitPhase, type ForfeitReason } from "@seazn/engine/core";
 
@@ -28,6 +30,9 @@ export interface ForfeitPhaseRefusal {
   allowed: WriterForfeitReason[];
   /** The refused forfeit named both sides (a double walkover). */
   both: boolean;
+  /** Ruling 113: whether anything was played before the refused forfeit (the engine's `playRecorded`); absent when the
+   *  refusal does not say. */
+  played?: boolean;
 }
 
 const REASONS: ReadonlySet<string> = new Set(FORFEIT_REASONS);
@@ -37,12 +42,13 @@ const REASONS: ReadonlySet<string> = new Set(FORFEIT_REASONS);
  *  cascade's). Null keeps the code's own copy; it never renders a guess. */
 export function forfeitPhaseRefusalOf(data: unknown): ForfeitPhaseRefusal | null {
   if (typeof data !== "object" || data === null) return null;
-  const d = data as { phase?: unknown; allowed?: unknown; both?: unknown };
+  const d = data as { phase?: unknown; allowed?: unknown; both?: unknown; played?: unknown };
   if (typeof d.phase !== "string" || !(REFUSAL_PHASES as readonly string[]).includes(d.phase)) return null;
   if (!Array.isArray(d.allowed) || d.allowed.length === 0) return null;
   if (!d.allowed.every((r) => typeof r === "string" && REASONS.has(r))) return null;
   if (typeof d.both !== "boolean") return null;
+  if (d.played !== undefined && typeof d.played !== "boolean") return null;
   const allowed = [...new Set(d.allowed as ForfeitReason[])].filter((r): r is WriterForfeitReason => !CASCADE_ONLY.has(r));
   if (allowed.length === 0) return null;
-  return { phase: d.phase as RefusalPhase, allowed, both: d.both };
+  return { phase: d.phase as RefusalPhase, allowed, both: d.both, ...(d.played === undefined ? {} : { played: d.played }) };
 }

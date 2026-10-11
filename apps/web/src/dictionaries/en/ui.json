@@ -3948,6 +3948,7 @@
   "forfeit.phase.pre": "before the match starts",
   "forfeit.phase.play": "once play has started",
   "forfeit.phase.tiebreak": "in the tie-break",
+  "forfeit.phase.nothingPlayed": "before anything has been played",
   "forfeit.reason.walkover": "walkover",
   "forfeit.reason.retired": "retirement",
   "forfeit.reason.disqualified": "disqualification",

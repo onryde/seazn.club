@@ -261,7 +261,7 @@ async function v1Inner<T>(
       // only a shape this codebase reads (lib/forfeit-phase-refusal.ts); anything else keeps the code's own copy.
       if (err.code === "FORFEIT_REASON_WRONG_PHASE") {
         const named = forfeitPhaseRefusalOf(err.data);
-        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both };
+        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both, ...(named.played === undefined ? {} : { played: named.played }) };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }
