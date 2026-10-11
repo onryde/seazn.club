@@ -150,6 +150,30 @@ describe("parseSemver / compareSemver — every part is a whole number of any le
   });
 });
 
+// semver.org §2: "Numeric identifiers MUST NOT include leading zeroes." A version that violates it is refused, which also keeps two
+// spellings of one number ("1.0.0", "01.0.0") from ranking equal and letting latest() fall back to insertion order.
+describe("parseSemver refuses leading zeros (semver.org §2)", () => {
+  it.each(["01.0.0", "1.00.0", "1.0.00", "001.2.3", "1.02.3", "1.2.03"])("rejects %j with CONFIG_INVALID", (bad) => {
+    const err = refusal(() => parseSemver(bad));
+    expect(err.code).toBe("CONFIG_INVALID");
+    expect(err.data).toStrictEqual({ version: bad });
+  });
+
+  it("still accepts a lone zero and a multi-digit part that does not start with zero", () => {
+    expect(parseSemver("0.0.0")).toEqual({ major: 0, minor: 0, patch: 0 });
+    expect(parseSemver("10.20.30")).toEqual({ major: 10, minor: 20, patch: 30 });
+    expect(parseSemver("1.0.10")).toEqual({ major: 1, minor: 0, patch: 10 });
+  });
+
+  it("a module whose version has a leading zero is refused at registration, so it can never tie with its plain spelling", () => {
+    const reg = createRegistry();
+    reg.register(generic);
+    const err = refusal(() => reg.register({ ...generic, version: `0${generic.version}` }));
+    expect(err.code).toBe("CONFIG_INVALID");
+    expect(reg.latest(generic.key)).toBe(generic);
+  });
+});
+
 describe("registry refusals name what they refused", () => {
   it("an empty key is CONFIG_INVALID with a message that says the key is the problem", () => {
     const err = refusal(() => createRegistry().register({ ...generic, key: "" }));
