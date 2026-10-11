@@ -158,6 +158,7 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
     const ctx = await seedOrg();
     const div = await seedDivision(ctx);
 
+    // W2b core (64c1a2881): a forfeit once play has started is a retirement (a walkover is recordable only before it).
     // Rounds 1-2: Alice's entrant wins by forfeit (no rally credit) — a real
     // 2-win streak by round 2, checked below on round 2's OWN draft.
     const roundFixtures: string[] = [];
@@ -171,7 +172,7 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
       await scoreEvent(ctx.auth, fx, {
         expected_seq: 1,
         type: "core.forfeit",
-        payload: { by: div.entrantB, reason: "walkover" },
+        payload: { by: div.entrantB, reason: "retired" },
       });
       roundFixtures.push(fx);
     }
@@ -198,7 +199,7 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
     await scoreEvent(ctx.auth, fx3, {
       expected_seq: seq,
       type: "core.forfeit",
-      payload: { by: div.entrantA, reason: "walkover" },
+      payload: { by: div.entrantA, reason: "retired" },
     });
 
     const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");

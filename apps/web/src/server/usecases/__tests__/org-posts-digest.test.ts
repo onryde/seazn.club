@@ -130,10 +130,11 @@ async function decideWithRally(ctx: Ctx, div: DivCtx, winner: string, loser: str
     returning id`;
   await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.start", payload: {} });
   await scoreEvent(ctx.auth, fx, { expected_seq: 1, type: "badminton.rally", payload: { wonBy: winner } });
+  // W2b core (64c1a2881): a walkover is recordable only before play; a side that quits once play has started retires.
   await scoreEvent(ctx.auth, fx, {
     expected_seq: 2,
     type: "core.forfeit",
-    payload: { by: loser, reason: "walkover" },
+    payload: { by: loser, reason: "retired" },
   });
   return fx;
 }
