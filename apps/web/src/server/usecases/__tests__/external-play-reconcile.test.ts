@@ -305,14 +305,21 @@ type Row = {
   started_at: Date | null; finished_at: Date | null; last_move_at: Date | null;
   white_ms: number | null; black_ms: number | null; clock_increment_s: number | null;
   draw_offer_by: string | null; white_draw_offer_ply: number | null; black_draw_offer_ply: number | null;
-  last_error: string | null;
+  last_error: string | null; revoked_seat: string | null;
 };
 async function rowOf(fixtureId: string): Promise<Row> {
   const [r] = await sql<Row[]>`
     select status, needs_reason, moves_uci, move_count, started_at, finished_at, last_move_at,
-           white_ms, black_ms, clock_increment_s, draw_offer_by, white_draw_offer_ply, black_draw_offer_ply, last_error
+           white_ms, black_ms, clock_increment_s, draw_offer_by, white_draw_offer_ply, black_draw_offer_ply, last_error,
+           revoked_seat
       from fixture_external_play where fixture_id = ${fixtureId}`;
   return r!;
+}
+/** V433's fair-play flags for a fixture, oldest first. */
+async function flagsOf(fixtureId: string) {
+  return sql<{ kind: string; org_id: string; person_id: string | null; note: string | null; closed_at: Date | null; resolved_by: string | null }[]>`
+    select kind, org_id, person_id, note, closed_at, resolved_by from fixture_play_flags
+     where fixture_id = ${fixtureId} order by opened_at, id`;
 }
 async function eventsOf(fixtureId: string) {
   return sql<{ type: string; payload: { winner?: string | null } }[]>`
@@ -1173,7 +1180,13 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
     const out = await reconcile(g.fixtureId, "rejected_move", observed().deps);
     expect(streams().map((c) => c.token)).toEqual([tokenOf(g.white), tokenOf(g.black)]);
     expect(out).toMatchObject({ source: "stream", result: { wrote: "needs_organiser", reason: "token_revoked" } });
-    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", moves_uci: LINE });
+    expect(await rowOf(g.fixtureId)).toMatchObject({
+      status: "needs_organiser",
+      needs_reason: "token_revoked",
+      moves_uci: LINE,
+      // Ruling M7: only White's seat is frozen; Black plays on.
+      revoked_seat: "white",
+    });
   });
 
   it("both refused, export mid-game: nothing trusted — held token_revoked, the ledger untouched", async () => {
@@ -1182,7 +1195,12 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
     lichess.onExport = () => ok(exported(g, "export-mid.json"));
     expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toBeNull();
     expect(exports().length).toBe(1);
-    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", moves_uci: LINE.slice(0, 1) });
+    expect(await rowOf(g.fixtureId)).toMatchObject({
+      status: "needs_organiser",
+      needs_reason: "token_revoked",
+      moves_uci: LINE.slice(0, 1),
+      revoked_seat: "both",
+    });
   });
 
   it("no grant on either side, export TERMINAL: settles from the export, extends forward, never reads its clocks", async () => {
@@ -1332,6 +1350,232 @@ describe.runIf(HAS_DB)("reconcile — tokens and the export fallback", () => {
 // ---------------------------------------------------------------------------
 // The property: interleaved triggers × Lichess snapshots, one game per run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// T11 fix round 1 — I5: plies reconcile ADOPTS were played at Lichess without
+// us (our server is the only mover). Controller ruling: a fair-play flag in
+// V433's table, never a sanction; evidence = the plies + whether the camera
+// was Required; one flag per adoption, never a duplicate on a re-read.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_play flag", () => {
+  it("a stream read that adopts plies writes one open flag naming them; a re-read of the same line writes none", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID));
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toMatchObject({ adopted: LINE.length - 1 });
+    const flags = await flagsOf(g.fixtureId);
+    expect(flags.length, "one adoption, one flag").toBe(1);
+    expect(flags[0]).toMatchObject({ kind: "out_of_band_play", org_id: g.orgId, person_id: null, closed_at: null, resolved_by: null });
+    // The evidence: the plies by number, the moves themselves (the recording's,
+    // not ours), and the camera policy (V433 default: off).
+    expect(flags[0]!.note).toContain(`plies 2-${LINE.length}`);
+    expect(flags[0]!.note).toContain(LINE.slice(1).join(" "));
+    expect(flags[0]!.note).toContain("camera not required (policy off)");
+    // A second and a third read of the same line adopt nothing.
+    for (const at of [later(1_000), later(60_000)]) {
+      expect(await reconcile(g.fixtureId, "sweep", observed(at).deps)).toMatchObject({ adopted: 0 });
+    }
+    expect((await flagsOf(g.fixtureId)).length, "never a duplicate on a re-read").toBe(1);
+    expect(await resultsOf(g.fixtureId), "never a sanction: no result, no forfeit").toEqual([]);
+    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "live", needs_reason: null });
+  });
+
+  it("each LATER adoption is its own flag, naming only its own plies", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 3) }));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    serveStream(gameFull(g, MID));
+    await reconcile(g.fixtureId, "sweep", observed(later(1_000)).deps);
+    const notes = (await flagsOf(g.fixtureId)).map((f) => f.note);
+    expect(notes.length).toBe(2);
+    expect(notes[0]).toContain(`plies 2-3 (${LINE.slice(1, 3).join(" ")})`);
+    expect(notes[1]).toContain(`plies 4-${LINE.length} (${LINE.slice(3).join(" ")})`);
+  });
+
+  it("the evidence says whether the camera was Required — each policy, at the stage, counted", async () => {
+    let checked = 0;
+    for (const policy of ["off", "optional", "required"] as const) {
+      const g = await liveGame();
+      await sql`update stages set camera_policy = ${policy} where id = ${g.stageId}`;
+      serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
+      await reconcile(g.fixtureId, "sweep", observed().deps);
+      const [flag] = await flagsOf(g.fixtureId);
+      expect(flag!.note, policy).toContain(`ply 2 (${LINE[1]})`);
+      expect(flag!.note, policy).toContain(policy === "required" ? "camera required" : `camera not required (policy ${policy})`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("no plies adopted ⇒ no flag: our own moves read back, a clock-only change, a diverged line, a shorter read — counted", async () => {
+    const cases: [string, (g: Game) => Promise<void>][] = [
+      ["T10 played them all", async (g) => { await play(g, LINE.slice(1)); serveStream(gameFull(g, MID)); }],
+      ["clock-only change", async (g) => { await play(g, LINE.slice(1)); serveStream(gameFull(g, MID, { wtime: 1_000 })); }],
+      ["diverged", async (g) => { serveStream(gameFull(g, MID, { moves: ["d2d4", "d7d5"] })); }],
+      ["shorter (a stalled read)", async (g) => { await play(g, LINE.slice(1, 3)); serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1) })); }],
+    ];
+    let checked = 0;
+    for (const [name, arrange] of cases) {
+      const g = await liveGame();
+      await arrange(g);
+      expect(await reconcile(g.fixtureId, "sweep", observed().deps), name).toMatchObject({ adopted: 0 });
+      expect(await flagsOf(g.fixtureId), name).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("an export that extends ours raises the flag too (no grant on either side)", async () => {
+    const g = await liveGame();
+    for (const p of [g.white, g.black]) {
+      await sql`update user_external_accounts set access_token_enc = null, consented_at = null where user_id = ${p.userId} and provider = 'lichess'`;
+    }
+    lichess.onExport = () => ok(exported(g, "export-expired.json"));
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toMatchObject({ source: "export", adopted: LINE.length - 1 });
+    const flags = await flagsOf(g.fixtureId);
+    expect(flags.length).toBe(1);
+    expect(flags[0]!.note).toContain(`plies 2-${LINE.length} (${LINE.slice(1).join(" ")})`);
+  });
+
+  it("two reconciles that READ the same adoption before either writes: one wins the ledger, ONE flag (staged, ×3)", async () => {
+    let checked = 0;
+    for (let run = 0; run < 3; run++) {
+      const g = await liveGame();
+      serveStream(gameFull(g, MID));
+      // Both reads are held at Lichess until both have arrived: each then
+      // writes against the SAME stale row, and the CAS picks one.
+      let arrived = 0;
+      let release!: () => void;
+      const bothRead = new Promise<void>((r) => (release = r));
+      const readStream: ReconcileDeps["readStream"] = async (a) => {
+        if (++arrived === 2) release();
+        await bothRead;
+        return wiredReadGameStream(a);
+      };
+      const outs = await Promise.all([0, 1].map(() => reconcile(g.fixtureId, "sweep", { ...observed().deps, readStream })));
+      expect(arrived, "the stage fired: both read").toBe(2);
+      expect(outs.map((o) => o?.adopted).sort(), "one adopted, the other lost its CAS").toEqual([0, LINE.length - 1]);
+      expect((await flagsOf(g.fixtureId)).length, `run ${run}`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T11 fix round 1 — I4: spec §3.5's first trigger, "on a move Lichess
+// rejects", produced by T10's REAL play path and consumed by the real
+// reconcile over the real wire. Nothing here injects `reconcile`.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("reconcile — I4: a move Lichess rejects is reconciled from T10's play path", () => {
+  const submitAnswering = (answer: BoardCall) => ({
+    now: new Date(MOVED.getTime() + 60_000),
+    accessToken: async (u: string) => `tok-${u}`,
+    publish: async () => {},
+    submitMove: async () => answer,
+  });
+
+  it("Lichess has moved on without us: the rejected move reads the stream ONCE and adopts (and flags) what was played", async () => {
+    const g = await liveGame();
+    // At Lichess the game is at ply 8 (played at lichess.org); our ledger has
+    // one ply, so per US it is Black's turn — Lichess says otherwise (M6 400).
+    serveStream(gameFull(g, MID));
+    const out = await act(
+      { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "move", uci: LINE[1]! } },
+      submitAnswering({ ok: false, code: "not_your_turn_or_over", raw: "400 Not your turn, or game already over" }),
+    );
+    expect(out, "the player's answer is still the refusal").toEqual({ ok: false, reconcile: true, reason: "not_your_turn_or_over" });
+    expect(streams().length, "one read").toBe(1);
+    expect(await rowOf(g.fixtureId)).toMatchObject({ moves_uci: LINE, move_count: LINE.length, status: "live" });
+    expect((await flagsOf(g.fixtureId)).map((f) => f.kind)).toEqual(["out_of_band_play"]);
+  });
+
+  it("a 5xx (which MAY have played it) reconciles: the move Lichess did play is adopted — a single ply", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 2) }));
+    const out = await act(
+      { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "move", uci: LINE[1]! } },
+      submitAnswering({ ok: false, code: "unavailable", raw: "502" }),
+    );
+    expect(out).toEqual({ ok: false, reconcile: true, reason: "unavailable" });
+    expect(streams().length).toBe(1);
+    expect((await rowOf(g.fixtureId)).moves_uci).toEqual(LINE.slice(0, 2));
+    expect((await flagsOf(g.fixtureId))[0]!.note).toContain(`ply 2 (${LINE[1]})`);
+  });
+
+  it("no read when nothing Lichess refused: an accepted move, our own turn refusal, an absorbed duplicate — nor on a 429 — counted", async () => {
+    const cases: [string, (g: Game) => Promise<unknown>][] = [
+      ["accepted", (g) => play(g, LINE.slice(1, 2))],
+      ["out of turn, refused HERE", (g) =>
+        act({ fixtureId: g.fixtureId, personId: g.white.personId, action: { kind: "move", uci: "d2d4" } }, submitAnswering({ ok: true }))],
+      ["absorbed duplicate", (g) =>
+        act({ fixtureId: g.fixtureId, personId: g.white.personId, action: { kind: "move", uci: LINE[0]! } }, submitAnswering({ ok: true }))],
+      ["rate limited", (g) =>
+        act({ fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "move", uci: LINE[1]! } },
+          submitAnswering({ ok: false, code: "rate_limited", raw: "429" }))],
+    ];
+    let checked = 0;
+    for (const [name, arrange] of cases) {
+      const g = await liveGame();
+      serveStream(gameFull(g, MID));
+      await arrange(g);
+      expect(lichess.calls, name).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("a reconcile that cannot run leaves the player's answer as it was and logs the CODE — never a token", async () => {
+    const g = await liveGame();
+    // Both sealed tokens unreadable by our key: reconcile raises 503
+    // LICHESS_TOKEN_UNAVAILABLE (never swallowed by reconcile itself).
+    for (const p of [g.white, g.black]) {
+      await sql`update user_external_accounts set access_token_enc = ${Buffer.from("not a sealed token")} where user_id = ${p.userId} and provider = 'lichess'`;
+    }
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      const out = await act(
+        { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "move", uci: LINE[1]! } },
+        submitAnswering({ ok: false, code: "not_your_turn_or_over", raw: "400" }),
+      );
+      expect(out).toEqual({ ok: false, reconcile: true, reason: "not_your_turn_or_over" });
+      const logged = errors.mock.calls.filter((c) => String(c[1]).includes("rejected move"));
+      expect(logged.length).toBe(1);
+      expect(logged[0]![0]).toMatchObject({ fixtureId: g.fixtureId, code: "LICHESS_TOKEN_UNAVAILABLE" });
+      expect(JSON.stringify(errors.mock.calls), "no token in any log line").not.toMatch(/lio_seed_|tok-/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T11 fix round 1 — M7: the innocent seat plays on under a token_revoked hold
+// and can win on the clock; reconcile writes the end over the hold.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("reconcile — M7: the seat whose token works plays on and can win on the clock", () => {
+  it("White's 401 freezes White; Black moves through T10; Lichess flags White ⇒ Black wins, the revoke still shows", async () => {
+    const g = await liveGame();
+    // White is off-turn at ply 1; White's resign is refused 401 by T10's act.
+    const refused = await act(
+      { fixtureId: g.fixtureId, personId: g.white.personId, action: { kind: "resign" } },
+      { accessToken: async (u) => `tok-${u}`, publish: async () => {}, resignGame: async () => ({ ok: false, code: "unauthorized", raw: "401" }) },
+    );
+    expect(refused).toEqual({ ok: false, reconcile: true, reason: "unauthorized" });
+    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "white" });
+    await play(g, LINE.slice(1, 2));
+    expect((await rowOf(g.fixtureId)).moves_uci, "the innocent seat's move is recorded on the held row").toEqual(LINE.slice(0, 2));
+    // EXPIRED_2: White ran out of time, Black wins (the recording).
+    serveStream(gameFull(g, EXPIRED_2));
+    expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toMatchObject({ result: { wrote: "decided" } });
+    expect(EXPIRED_2.state.winner, "premise: the recording's winner").toBe("black");
+    expect((await resultsOf(g.fixtureId)).map((e) => e.payload.winner), "Black, whose token works, wins on the clock").toEqual([g.black.entrantId]);
+    expect(await rowOf(g.fixtureId), "the organiser queue still shows the revoke").toMatchObject({
+      status: "needs_organiser",
+      needs_reason: "token_revoked",
+      revoked_seat: "white",
+    });
+  });
+});
+
 describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and Lichess reads", () => {
   // Lichess's truth only moves forward in time: its line grows (by T10 or
   // out of band), then one end freezes it. Each step advances that truth,

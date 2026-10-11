@@ -23,6 +23,7 @@ import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
+import { holdForOrganiser } from "../external-play/result";
 import { act, fenAfter, type PlayAction, type PlayDeps, type PlayResult } from "../external-play/play";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -48,6 +49,9 @@ const board = vi.hoisted(() => ({
   resignGame: vi.fn(),
   offerOrAcceptDraw: vi.fn(),
   abortGame: vi.fn(),
+  // reconcile's two reads, reached when a case does not inject `reconcile`.
+  readGameStream: vi.fn(),
+  exportGame: vi.fn(),
 }));
 vi.mock("@/server/external-play/lichess/board-api", () => board);
 
@@ -77,6 +81,8 @@ beforeEach(() => {
   board.resignGame.mockResolvedValue(UNEXPECTED);
   board.offerOrAcceptDraw.mockResolvedValue(UNEXPECTED);
   board.abortGame.mockResolvedValue(UNEXPECTED);
+  board.readGameStream.mockResolvedValue(UNEXPECTED);
+  board.exportGame.mockResolvedValue(null);
 });
 
 afterAll(async () => {
@@ -107,11 +113,13 @@ type Ledger = {
   draw_offer_by: string | null;
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
+  needs_reason: string | null;
+  revoked_seat: string | null;
 };
 async function ledger(fixtureId: string): Promise<Ledger> {
   const [row] = await sql<Ledger[]>`
     select status, white_side, moves_uci, move_count, started_at, last_move_at, white_ms, black_ms,
-           clock_increment_s, draw_offer_by, white_draw_offer_ply, black_draw_offer_ply
+           clock_increment_s, draw_offer_by, white_draw_offer_ply, black_draw_offer_ply, needs_reason, revoked_seat
       from fixture_external_play where fixture_id = ${fixtureId}`;
   if (!row) throw new Error(`no bridge row for ${fixtureId}`);
   return row;
@@ -149,10 +157,13 @@ async function readyGame(over: { whiteAway?: boolean } = {}): Promise<Game> {
 type Call = { kind: "move" | "resign" | "draw" | "abort"; token: string; gameId: string; uci?: string; accept?: boolean };
 
 /** Stands in for Lichess at T10's seam: records every call (with the token
- *  it carried) and answers what the case says. Records every broadcast. */
+ *  it carried) and answers what the case says. Records every broadcast, and
+ *  every reconcile T10 asks for (T11's real one is driven end to end in
+ *  external-play-reconcile.test.ts). */
 function boardStub(answer: (c: Call) => BoardCall | Promise<BoardCall> = () => ({ ok: true })) {
   const calls: Call[] = [];
   const sent: { fixtureId: string; body: RoomBroadcast }[] = [];
+  const reconciles: string[] = [];
   const hit = async (c: Call) => {
     calls.push(c);
     return answer(c);
@@ -165,8 +176,11 @@ function boardStub(answer: (c: Call) => BoardCall | Promise<BoardCall> = () => (
     publish: async (fixtureId, body) => {
       sent.push({ fixtureId, body });
     },
+    reconcile: async (_fixtureId, trigger) => {
+      reconciles.push(trigger);
+    },
   };
-  return { calls, sent, deps };
+  return { calls, sent, deps, reconciles };
 }
 
 const by = (g: Game, who: "white" | "black", action: PlayAction, deps: PlayDeps, now?: Date) =>
@@ -376,6 +390,8 @@ describe.runIf(HAS_DB)("act — the order of the checks (shape, game, caller, gr
     for (const state of [
       sql`status = 'finished', finished_at = now()`,
       sql`status = 'needs_organiser', needs_reason = 'mismatch'`,
+      // T9's create-time token_revoked hold records no seat: both frozen.
+      sql`status = 'needs_organiser', needs_reason = 'token_revoked'`,
     ]) {
       const g = await readyGame();
       const { deps: d0 } = boardStub();
@@ -396,7 +412,7 @@ describe.runIf(HAS_DB)("act — the order of the checks (shape, game, caller, gr
       expect(sent).toEqual([]);
       expect((await ledger(g.fixtureId)).moves_uci, "the ledger did not move").toEqual(["e2e4", "e7e5"]);
     }
-    expect(checked, "anti-vacuity: 2 states × 5 actions").toBe(10);
+    expect(checked, "anti-vacuity: 3 states × 5 actions").toBe(15);
   });
 
   it("a WITHDRAWAL mid-game (the real cascade leaves the board abandoned) ⇒ 404", async () => {
@@ -751,19 +767,39 @@ function twinTabs(
 }
 
 describe.runIf(HAS_DB)("act — Lichess refusals (nothing is written, nothing broadcast)", () => {
-  it("each refusal code passes through UNCHANGED as reconcile:<code> — no branch collapses two", async () => {
+  it("each refusal code passes through UNCHANGED as reconcile:<code> — no branch collapses two; each asks reconcile but a 429", async () => {
     const codes = ["unauthorized", "unplayable_time_control", "rate_limited", "unavailable", "not_your_turn_or_over"] as const;
-    const g = await readyGame();
     let checked = 0;
     for (const code of codes) {
-      const { calls, sent, deps } = boardStub(() => ({ ok: false, code, raw: code }));
+      const g = await readyGame();
+      const { calls, sent, deps, reconciles } = boardStub(() => ({ ok: false, code, raw: code }));
       expect(await mv(g, "white", "e2e4", deps), code).toEqual(reconcile(code));
       expect(calls.length).toBe(1);
       expect(sent).toEqual([]);
+      // Spec §3.5's first trigger (T11 review I4): M6's 400 covers two states
+      // and a 5xx may have played the move — reconcile, never assume. A 429
+      // stops every call, reconcile's read included.
+      expect(reconciles, code).toEqual(code === "rate_limited" ? [] : ["rejected_move"]);
+      // A 401 is a revoked token: held for the organiser, THIS seat recorded
+      // (spec §3.6; ruling M7). Nothing else holds.
+      expect(await ledger(g.fixtureId), code).toMatchObject(
+        code === "unauthorized"
+          ? { status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "white", move_count: 0 }
+          : { status: "ready", needs_reason: null, move_count: 0 },
+      );
       checked++;
     }
     expect(checked, "anti-vacuity: every BoardErrorCode").toBe(codes.length);
-    expect(await ledger(g.fixtureId)).toMatchObject({ status: "ready", move_count: 0 });
+  });
+
+  it("a move refused HERE (out of turn), an accepted move and an absorbed duplicate ask reconcile for nothing", async () => {
+    const g = await readyGame();
+    const { calls, deps, reconciles } = boardStub();
+    expect(await mv(g, "white", "e2e4", deps)).toEqual(APPLIED);
+    expect(await mv(g, "white", "e2e4", deps)).toEqual(ABSORBED);
+    expect(await mv(g, "white", "d2d4", deps)).toEqual(reconcile("not_your_turn_or_over"));
+    expect(calls.length, "premise: only the first reached Lichess").toBe(1);
+    expect(reconciles, "nothing Lichess refused").toEqual([]);
   });
 
   it("an ILLEGAL move (Lichess's 4xx, classified unavailable) records nothing, and the player's next legal move plays", async () => {
@@ -832,11 +868,19 @@ describe.runIf(HAS_DB)("act — resign, abort and draw are forwarded; T10 never 
     expect(await by(g, "white", { kind: "abort" }, deps)).toEqual(reconcile("unavailable"));
   });
 
-  it("resign and abort REFUSED (401) pass the code through", async () => {
-    const g = await readyGame();
-    const { deps } = boardStub(() => ({ ok: false, code: "unauthorized", raw: "401" }));
-    expect(await by(g, "white", { kind: "resign" }, deps)).toEqual(reconcile("unauthorized"));
-    expect(await by(g, "white", { kind: "abort" }, deps)).toEqual(reconcile("unauthorized"));
+  it("resign and abort REFUSED (401) pass the code through, hold the caller's seat, and reconcile nothing (not a move) — counted", async () => {
+    let checked = 0;
+    for (const kind of ["resign", "abort"] as const) {
+      for (const who of ["white", "black"] as const) {
+        const g = await readyGame();
+        const { deps, reconciles } = boardStub(() => ({ ok: false, code: "unauthorized", raw: "401" }));
+        expect(await by(g, who, { kind }, deps), `${kind} ${who}`).toEqual(reconcile("unauthorized"));
+        expect(await ledger(g.fixtureId), `${kind} ${who}`).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: who });
+        expect(reconciles).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 });
 
@@ -977,7 +1021,13 @@ describe.runIf(HAS_DB)("act — draw offers, as lila holds them", () => {
       const { g } = await atPly2();
       const { sent, deps } = boardStub(() => ({ ok: false, code, raw: code }));
       expect(await by(g, "white", yes, deps), code).toEqual(reconcile(code));
-      expect(await ledger(g.fixtureId)).toMatchObject({ draw_offer_by: null, white_draw_offer_ply: null });
+      expect(await ledger(g.fixtureId)).toMatchObject({
+        draw_offer_by: null,
+        white_draw_offer_ply: null,
+        // A 401 is a revoked token — White's seat held (ruling M7).
+        needs_reason: code === "unauthorized" ? "token_revoked" : null,
+        revoked_seat: code === "unauthorized" ? "white" : null,
+      });
       expect(sent).toEqual([]);
       checked++;
     }
@@ -1043,6 +1093,144 @@ describe.runIf(HAS_DB)("act — draw offers, as lila holds them", () => {
 // M2). Expected values come from scalachess Clock.step (2ab0a403): no time
 // runs until both sides have moved; then the mover pays the time since the
 // last move and earns the increment only if time remained; clamped at zero.
+describe.runIf(HAS_DB)("act — M7: a revoked token freezes ITS seat only (controller ruling, T11 fix round 1)", () => {
+  // Ruling M7: a token_revoked hold must not freeze the seat whose token still
+  // works — the innocent player keeps playing and can still win on the clock;
+  // T10 refuses acts for the revoked seat alone, and the organiser queue still
+  // shows the revoke (the row stays needs_organiser). Every hold here is T10's
+  // OWN, placed by its real `act` on Lichess's 401 — no hand-written row.
+  const other = (c: "white" | "black") => (c === "white" ? "black" : "white");
+  const REFUSE_401 = () => ({ ok: false, code: "unauthorized", raw: "401 Unauthorized" }) as const;
+
+  /** A live game where `revoked` is NOT to move, then `revoked`'s resign is
+   *  refused 401: White to move at ply 2 (Black revoked), Black to move at
+   *  ply 3 (White revoked). `offerFirst`: `revoked` offers a draw (recorded)
+   *  before the revoke. */
+  async function revokedOffTurn(revoked: "white" | "black", offerFirst = false) {
+    const g = await readyGame();
+    const ok = boardStub();
+    await playOut(g, revoked === "black" ? ["e2e4", "e7e5"] : ["e2e4", "e7e5", "g1f3"], ok.deps);
+    if (offerFirst) expect(await by(g, revoked, { kind: "draw", accept: true }, ok.deps)).toEqual(APPLIED);
+    const refusing = boardStub(REFUSE_401);
+    expect(await by(g, revoked, { kind: "resign" }, refusing.deps)).toEqual(reconcile("unauthorized"));
+    expect(await ledger(g.fixtureId), "premise: T10's 401 held the board for THIS seat").toMatchObject({
+      status: "needs_organiser",
+      needs_reason: "token_revoked",
+      revoked_seat: revoked,
+    });
+    return g;
+  }
+  const NEXT: Record<"white" | "black", string> = { white: "f1c4", black: "b8c6" };
+
+  it("the innocent seat plays on: its move reaches Lichess, is recorded and broadcast, the hold and its seat stand — BOTH seats, counted", async () => {
+    let checked = 0;
+    for (const revoked of ["white", "black"] as const) {
+      const innocent = other(revoked);
+      const g = await revokedOffTurn(revoked);
+      const before = await ledger(g.fixtureId);
+      const { calls, sent, deps, reconciles } = boardStub();
+      expect(await mv(g, innocent, NEXT[innocent], deps), `${revoked} revoked: ${innocent} moves`).toEqual(APPLIED);
+      expect(calls).toEqual([{ kind: "move", token: tokenOf(g[innocent]), gameId: g.gameId, uci: NEXT[innocent] }]);
+      expect(await ledger(g.fixtureId), `${revoked} revoked`).toMatchObject({
+        // NOT flipped to 'live': the organiser queue still shows the revoke.
+        status: "needs_organiser",
+        needs_reason: "token_revoked",
+        revoked_seat: revoked,
+        moves_uci: [...before.moves_uci, NEXT[innocent]],
+        move_count: before.move_count + 1,
+      });
+      expect(sent.length, "the room sees the move").toBe(1);
+      expect(reconciles).toEqual([]);
+      // …and may offer a draw on the held row.
+      expect(await by(g, innocent, { kind: "draw", accept: true }, deps)).toEqual(APPLIED);
+      expect(await ledger(g.fixtureId)).toMatchObject({ draw_offer_by: innocent, status: "needs_organiser", revoked_seat: revoked });
+      checked++;
+    }
+    expect(checked, "both seats").toBe(2);
+  });
+
+  it("the frozen seat's every act is a 404 that never reaches Lichess, on its turn and off it — BOTH seats × 4 actions, counted", async () => {
+    let checked = 0;
+    for (const revoked of ["white", "black"] as const) {
+      const g = await revokedOffTurn(revoked);
+      const { calls, sent, deps, reconciles } = boardStub();
+      const offTurn = await ledger(g.fixtureId);
+      for (const turn of ["off", "on"] as const) {
+        if (turn === "on") expect(await mv(g, other(revoked), NEXT[other(revoked)], deps), "premise: now the frozen seat's turn").toEqual(APPLIED);
+        for (const action of [
+          { kind: "move", uci: NEXT[revoked] },
+          { kind: "draw", accept: true },
+          { kind: "resign" },
+          { kind: "abort" },
+        ] as const satisfies readonly PlayAction[]) {
+          await expect(by(g, revoked, action, deps), `${revoked} ${turn} ${action.kind}`).rejects.toMatchObject(NOT_FOUND);
+          checked++;
+        }
+      }
+      expect(calls.map((c) => c.token), "only the innocent's one move reached Lichess").toEqual([tokenOf(g[other(revoked)])]);
+      expect(sent.length).toBe(1);
+      expect(reconciles).toEqual([]);
+      expect((await ledger(g.fixtureId)).move_count).toBe(offTurn.move_count + 1);
+    }
+    expect(checked, "2 seats × 2 turns × 4 actions").toBe(16);
+  });
+
+  it("the innocent seat may decline a draw the frozen seat offered before its revoke — BOTH seats", async () => {
+    let checked = 0;
+    for (const revoked of ["white", "black"] as const) {
+      const g = await revokedOffTurn(revoked, true);
+      expect((await ledger(g.fixtureId)).draw_offer_by, "premise: the frozen seat's offer stands").toBe(revoked);
+      const { deps, sent } = boardStub();
+      expect(await by(g, other(revoked), { kind: "draw", accept: false }, deps)).toEqual(APPLIED);
+      expect(await ledger(g.fixtureId)).toMatchObject({ draw_offer_by: null, status: "needs_organiser", revoked_seat: revoked });
+      expect(sent.length).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the innocent seat's OWN 401 widens the hold to both — then neither seat acts — BOTH orders", async () => {
+    let checked = 0;
+    for (const revoked of ["white", "black"] as const) {
+      const innocent = other(revoked);
+      const g = await revokedOffTurn(revoked);
+      const refusing = boardStub(REFUSE_401);
+      expect(await mv(g, innocent, NEXT[innocent], refusing.deps)).toEqual(reconcile("unauthorized"));
+      expect(refusing.reconciles, "a refused move asks reconcile").toEqual(["rejected_move"]);
+      expect(await ledger(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "both" });
+      const { calls, deps } = boardStub();
+      for (const who of ["white", "black"] as const) {
+        await expect(mv(g, who, NEXT[who], deps), who).rejects.toMatchObject(NOT_FOUND);
+      }
+      expect(calls).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a revoke that WIDENS to the innocent seat while its move is in flight: the write re-checks the row and records nothing", async () => {
+    // Staged: the hold lands between T10's read of the row and its append —
+    // inside the Lichess call. The SQL predicate, not the read, decides.
+    let checked = 0;
+    for (const revoked of ["white", "black"] as const) {
+      const innocent = other(revoked);
+      const g = await revokedOffTurn(revoked);
+      const before = await ledger(g.fixtureId);
+      let landed = false;
+      const { deps } = boardStub(async () => {
+        await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: innocent });
+        landed = true;
+        return { ok: true };
+      });
+      expect(await mv(g, innocent, NEXT[innocent], deps), "Lichess took it; the ledger is reconcile's to adopt").toEqual(ABSORBED);
+      expect(landed, "the stage fired").toBe(true);
+      expect(await ledger(g.fixtureId)).toMatchObject({ move_count: before.move_count, revoked_seat: "both", status: "needs_organiser" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 describe.runIf(HAS_DB)("act — clocks", () => {
   it("plies 0-1 are free; then each mover pays the elapsed time and earns the increment", async () => {
     const g = await readyGame();

@@ -35,6 +35,7 @@ import { Chess, type Move, type Square } from "chess.js";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { publishRoomBroadcast, type RoomBroadcast } from "@/lib/realtime";
+import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import {
   exportGame as realExportGame,
   readGameStream as realReadGameStream,
@@ -46,7 +47,7 @@ import { getLichessAccessToken } from "../external-accounts";
 import { effectiveBridge, loadOnlinePlayFixture, loadSides, type BridgeRow, type OnlinePlayFixture, type Side } from "./guard";
 import { fenAfter } from "./play";
 import { isPlayableFixtureStatus } from "./preflight";
-import { holdForOrganiser, writeResultFrom, type HoldReason, type ResultWrite } from "./result";
+import { holdForOrganiser, writeResultFrom, type HoldReason, type ResultWrite, type RevokedSeat } from "./result";
 
 /** Spec §3.5's five triggers — the domain as a VALUE so a sweep can
  *  cross-product it. Add a trigger here and the enumeration test fails until
@@ -377,13 +378,32 @@ async function closeUnplayable(fixtureId: string, at: Date): Promise<void> {
   }
 }
 
-async function holdRevoked(g: Game, revoked: Colour[]): Promise<ResultWrite> {
-  // Spec §3.6: a token revoked or rejected mid-match is not a no-show.
+async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultWrite> {
+  // Spec §3.6: a token revoked or rejected mid-match is not a no-show. Ruling
+  // M7: the hold records the seat, and freezes only that seat (T10).
+  const seat: RevokedSeat = revoked.includes("white")
+    ? (revoked.includes("black") ? "both" : "white")
+    : "black";
   return holdForOrganiser({
     fixtureId: g.fixture.fixtureId,
     reason: "token_revoked",
+    seat,
     detail: `lichess game ${g.gameId}: the board stream refused ${revoked.join(" and ")}'s token`,
   });
+}
+
+/** Review I5, controller ruling: OUR server is the only mover, so every ply a
+ *  read ADOPTS reached Lichess without us — out-of-band play. Spec §3.6 makes
+ *  it a fair-play flag for the organiser, never a sanction. The evidence: the
+ *  plies, and whether the camera was Required. (A T10 append that died after
+ *  Lichess's 200 is adopted too — a false flag the ruling accepts.) Written in
+ *  the SAME statement as the ledger write that adopts, so one adoption is one
+ *  flag: a re-read adopts nothing, and a racing read loses the CAS. */
+async function outOfBandEvidence(fixtureId: string, ours: number, line: readonly string[]): Promise<string> {
+  const policy = await fixtureCameraPolicy(fixtureId);
+  const plies = line.length - ours === 1 ? `ply ${ours + 1}` : `plies ${ours + 1}-${line.length}`;
+  const camera = policy === "required" ? "camera required" : `camera not required (policy ${policy})`;
+  return `${plies} (${line.slice(ours).join(" ")}) played at Lichess, not through Seazn; ${camera}`;
 }
 
 /** Mark the bridge finished — only from ready/live, so a held row keeps its
@@ -514,9 +534,11 @@ async function applyStream(
   // Conditional on the ledger and the offer we read: a move T10 appended, or
   // an offer it recorded, since our read wins — this read is then older than
   // the row, and the next reconcile catches up.
+  const evidence = changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs) : null;
   const wrote = !changed
     ? []
     : await sql`
+    with up as (
     update fixture_external_play
        set moves_uci = ${sql.json(theirs)}, move_count = ${ply},
            status = case when status = 'ready' and ${ply}::int > 0 then 'live' else status end,
@@ -531,7 +553,12 @@ async function applyStream(
        and status in ('ready', 'live', 'needs_organiser')
        and move_count = ${b.move_count}
        and draw_offer_by is not distinct from ${b.draw_offer_by}
-     returning fixture_id`;
+     returning fixture_id, org_id
+    ), flagged as (
+      insert into fixture_play_flags (fixture_id, org_id, kind, note)
+      select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
+    )
+    select fixture_id from up`;
   // The room hears of a row this read changed, and of every game end it reads
   // (the end may change nothing on the row, yet the boards must stop); the
   // clocks it sees are Lichess's, at the read.
@@ -566,7 +593,9 @@ async function applyExport(
   let adopted = 0;
   let line = ours;
   if (uci.length > ours.length && isPrefix(ours, uci)) {
+    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci);
     const wrote = await sql`
+      with up as (
       update fixture_external_play
          set moves_uci = ${sql.json(uci)}, move_count = ${uci.length},
              status = case when status = 'ready' then 'live' else status end,
@@ -575,7 +604,12 @@ async function applyExport(
        where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
          and status in ('ready', 'live', 'needs_organiser')
          and move_count = ${g.bridge.move_count}
-       returning fixture_id`;
+       returning fixture_id, org_id
+      ), flagged as (
+        insert into fixture_play_flags (fixture_id, org_id, kind, note)
+        select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up
+      )
+      select fixture_id from up`;
     if (wrote.length > 0) {
       adopted = uci.length - ours.length;
       line = uci;
