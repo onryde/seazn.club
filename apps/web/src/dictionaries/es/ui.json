@@ -5905,6 +5905,7 @@
   "externalPlay.reason.abort": "La partida de Lichess se abortó.",
   "externalPlay.reason.unfinished": "La partida de Lichess aún no ha terminado.",
   "externalPlay.reason.linkMissing": "Falta un enlace de Lichess.",
+  "externalPlay.reason.fairPlay": "Lichess terminó esta partida por una infracción de juego limpio.",
   "externalPlay.reason.generic": "Esta partida necesita una decisión del organizador.",
   "externalPlay.queue.versus": "vs",
   "externalPlay.queue.tbd": "Por definir",

@@ -187,7 +187,7 @@ type Expect =
   | { wrote: "decided"; method: BoardgameMethod }
   | { wrote: "draw"; method: BoardgameMethod | null } // null: no method on the payload
   | { wrote: "aborted" }
-  | { wrote: "needs_organiser"; reason: "provider_error" | "tiebreak_owed" }
+  | { wrote: "needs_organiser"; reason: "provider_error" | "tiebreak_owed" | "fair_play" }
   | { wrote: "none" };
 
 const ORGANISER: Expect = { wrote: "needs_organiser", reason: "provider_error" };
@@ -235,8 +235,14 @@ function rulebook(status: string, winner: Colour | null, bracket: boolean): Expe
       // draw" (Drawer.scala:55, RoundAsyncActor.scala:204).
       case "insufficientMaterialClaim":
         return drawUnlessWinner("insufficient");
-      // Addendum 1 → organiser. Brief → organiser (unknownFinish).
+      // Addendum 1 → the organiser's FAIR-PLAY queue: Lichess has already
+      // ruled a fair-play violation (Status.scala Cheat; the winner it
+      // reports is the innocent side). Its own reason, never a provider fault
+      // (T12 fix round 1, I2).
       case "cheat":
+        return { wrote: "needs_organiser", reason: "fair_play" };
+      // Addendum 1 → organiser (variantEnd: ship 1 is standard only;
+      // unrecognised: never a silent pass). Brief → organiser (unknownFinish).
       case "variantEnd":
       case "unknownFinish":
       case "unrecognised":
@@ -298,7 +304,8 @@ async function expectWritten(g: Game, s: GameSnapshot, e: Expect, label: string)
 // ---------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("fixture_external_play.needs_reason accepts this task's reasons", () => {
-  const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "tiebreak_owed"] as const;
+  // Every reason T12 writes: the callers' (HOLD_REASONS) and the snapshot's.
+  const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "tiebreak_owed", "fair_play", "aborted"] as const;
 
   it("accepts every reason this task writes, and refuses a free-text one", async () => {
     const s = await seedOnlineChessFixture({

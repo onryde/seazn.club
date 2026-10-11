@@ -42,15 +42,18 @@ export const HOLD_REASONS = [
 ] as const satisfies readonly NeedsReason[];
 export type HoldReason = (typeof HOLD_REASONS)[number];
 
+/** A hold only a snapshot produces: Lichess ruled a fair-play violation. */
+type SnapshotOnlyReason = "fair_play";
+
 export type ResultWrite =
   | { wrote: "decided" | "draw" | "aborted" | "forfeit" | "none" }
-  | { wrote: "needs_organiser"; reason: HoldReason };
+  | { wrote: "needs_organiser"; reason: HoldReason | SnapshotOnlyReason };
 
 type Colour = "white" | "black";
 type Disposition =
   | { kind: "none" }
   | { kind: "result"; winner: Colour | null; method: BoardgameMethod | undefined }
-  | { kind: "hold"; reason: "aborted" | HoldReason; detail: string };
+  | { kind: "hold"; reason: "aborted" | HoldReason | SnapshotOnlyReason; detail: string };
 
 const NONE: ResultWrite = { wrote: "none" };
 
@@ -128,11 +131,12 @@ function dispositionOf(s: GameSnapshot): Disposition {
     case "stalemate":
     case "insufficientMaterialClaim":
       return s.winner ? organiser(s, "a drawn status with a winner") : fromTable(s, null);
-    // Addendum 1: cheat → the organiser (a fair-play matter is theirs to
-    // rule on); variantEnd → the organiser (ship 1 plays standard only). The
-    // brief: unknownFinish → the organiser.
+    // Addendum 1: cheat → the organiser's FAIR-PLAY queue, under its own
+    // reason (fix round 1, I2): Lichess has already ruled, and the winner it
+    // reports is the innocent side. variantEnd → the organiser (ship 1 plays
+    // standard only). The brief: unknownFinish → the organiser.
     case "cheat":
-      return organiser(s, "Lichess ended this game for a fair-play violation");
+      return { kind: "hold", reason: "fair_play", detail: `${describeSnapshot(s)} — Lichess ended this game for a fair-play violation` };
     case "variantEnd":
       return organiser(s, "a variant ending in a standard game");
     case "unknownFinish":
@@ -151,7 +155,11 @@ function dispositionOf(s: GameSnapshot): Disposition {
  *  the hold and its idempotency. The first diagnosis stands until the
  *  organiser clears it (`needs_reason is null`), and a game whose result is
  *  already recorded (`finished`, T11) is never reopened. */
-async function hold(fixtureId: string, reason: "aborted" | HoldReason, detail: string | null): Promise<"held" | "finished"> {
+async function hold(
+  fixtureId: string,
+  reason: "aborted" | HoldReason | SnapshotOnlyReason,
+  detail: string | null,
+): Promise<"held" | "finished"> {
   const rows = await sql<{ fixture_id: string }[]>`
     update fixture_external_play
        set status = 'needs_organiser', needs_reason = ${reason}, last_error = ${detail}, updated_at = now()

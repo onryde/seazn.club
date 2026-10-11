@@ -28,6 +28,11 @@
 --    this branch's engine has no tie-break phase, so the hold is the bridge
 --    row. Amended into V435 (the CHECK's latest declaration) rather than a new
 --    version because the branch is unmerged; V436 is T10's move ledger.
+--
+-- 5. needs_reason gains 'fair_play' (T12 fix round 1, I2; addendum 1): Lichess
+--    ended the game for a fair-play violation (status `cheat`). The organiser
+--    sees a fair-play verdict Lichess already made, never a provider fault —
+--    amended here for the same reason as item 4.
 alter table fixture_external_play
   drop column url_white,
   drop column url_black,
@@ -40,5 +45,6 @@ alter table fixture_external_play
     'not_started', 'aborted', 'mismatch', 'provider_error',
     'token_revoked', 'double_walkover_blocked',
     'create_outcome_unknown',
-    'tiebreak_owed'
+    'tiebreak_owed',
+    'fair_play'
   ));
