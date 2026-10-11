@@ -11,6 +11,7 @@ import {
   ensureMeeting,
   fetchVideoOffCoverage,
   hasLiveVideoPublisher,
+  listMeetingSessions,
   listPeerIds,
   realtimeKitConfigured,
   refreshParticipantToken,
@@ -1012,6 +1013,10 @@ describe("fetchVideoOffCoverage", () => {
       "coveredSeconds",
       "eventOffSeconds",
       "incomplete",
+      // The connection's own span (T13, C1): two timestamps, so a match can
+      // union a reload's and a rejoin's connections. No identity in them.
+      "joinedAt",
+      "leftAt",
       "offIntervals",
       "offSeconds",
       "sampleCount",
@@ -1206,6 +1211,93 @@ describe("listPeerIds", () => {
     configure({ REALTIMEKIT_API_TOKEN: "" });
     const stub = stubFetch([]);
     await expect(listPeerIds(SID, rec.user_id, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unconfigured" });
+    expect(stub.calls.length).toBe(0);
+  });
+});
+
+describe("listMeetingSessions", () => {
+  // Every session a meeting ever had (T13, controller ruling C1): a REJOIN
+  // after everyone left opens a NEW session, so one meeting's camera evidence
+  // can span several. Shape from Cloudflare's published API reference
+  // ("Fetch all sessions of an App": GET /sessions, `associated_id` = the
+  // meeting id, `data.sessions[]` with id / associated_id / status LIVE|ENDED
+  // / started_at / ended_at). NOT measured live — T17 owes that.
+  const M = "mtg-7f3c";
+  const session = (o: { id: string; meeting?: string; status?: string; started?: string; ended?: string | null }) => ({
+    id: o.id,
+    associated_id: o.meeting ?? M,
+    status: o.status ?? "ENDED",
+    started_at: o.started ?? "2026-10-11T10:00:00.000Z",
+    ...(o.ended === null ? {} : { ended_at: o.ended ?? "2026-10-11T10:30:00.000Z" }),
+  });
+  const page = (rows: unknown[]) => ({ status: 200, body: { success: true, data: { sessions: rows } } });
+
+  it("returns this meeting's sessions in the API's order, asked by associated_id", async () => {
+    configure();
+    const stub = stubFetch([
+      page([
+        session({ id: "s-1", started: "2026-10-11T10:00:00.000Z", ended: "2026-10-11T10:20:00.000Z" }),
+        session({ id: "s-2", status: "LIVE", started: "2026-10-11T10:21:00.000Z", ended: null }),
+      ]),
+    ]);
+    expect(await listMeetingSessions(M, { fetch: stub.fetch })).toEqual([
+      { id: "s-1", status: "ENDED", startedAt: "2026-10-11T10:00:00.000Z", endedAt: "2026-10-11T10:20:00.000Z" },
+      { id: "s-2", status: "LIVE", startedAt: "2026-10-11T10:21:00.000Z", endedAt: null },
+    ]);
+    expect(stub.calls.map((c) => `${c.method} ${c.url.split("/realtime/kit/app-1")[1]}`)).toEqual([
+      `GET /sessions?associated_id=${M}&per_page=100`,
+    ]);
+  });
+
+  it("EMPTY: a meeting nobody ever joined has no sessions", async () => {
+    configure();
+    expect(await listMeetingSessions(M, { fetch: stubFetch([page([])]).fetch })).toEqual([]);
+  });
+
+  it("keeps only THIS meeting's sessions, whatever the filter returned", async () => {
+    configure();
+    const stub = stubFetch([page([session({ id: "s-other", meeting: "mtg-other" }), session({ id: "s-1" })])]);
+    expect((await listMeetingSessions(M, { fetch: stub.fetch })).map((x) => x.id)).toEqual(["s-1"]);
+  });
+
+  it("fails CLOSED on a body it cannot read — never a short session list", async () => {
+    configure();
+    const full = Array.from({ length: 100 }, (_, i) => session({ id: `s-${i}` }));
+    const cases: { name: string; first: { status: number; body?: unknown; text?: string }; code: string }[] = [
+      { name: "an HTML 200", first: { status: 200, text: "<html>oops</html>" }, code: "unavailable" },
+      { name: "no sessions list", first: { status: 200, body: { success: true, data: {} } }, code: "unavailable" },
+      { name: "a row that is not an object", first: page([session({ id: "s-1" }), "row"]), code: "unavailable" },
+      { name: "a row with no associated_id (it might be ours)", first: page([{ ...session({ id: "s-1" }), associated_id: undefined }]), code: "unavailable" },
+      { name: "OUR row with no id", first: page([{ ...session({ id: "s-1" }), id: "" }]), code: "unavailable" },
+      { name: "OUR row with a status outside LIVE | ENDED", first: page([session({ id: "s-1", status: "PAUSED" })]), code: "unavailable" },
+      { name: "OUR row with no started_at", first: page([{ ...session({ id: "s-1" }), started_at: undefined }]), code: "unavailable" },
+      { name: "OUR row with an ended_at that is not a date", first: page([session({ id: "s-1", ended: "later" })]), code: "unavailable" },
+      { name: "a FULL page (100 rows): more sessions may be on page 2", first: page(full), code: "unavailable" },
+      {
+        name: "RealtimeKit's own 404 — never read as 'no sessions'",
+        first: { status: 404, body: { success: false, error: { code: 404, message: "not found" } } },
+        code: "not_found",
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      await expect(listMeetingSessions(M, { fetch: stubFetch([c.first]).fetch }), c.name).rejects.toMatchObject({
+        name: "RealtimeKitError",
+        code: c.code,
+      });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    // Positive control for the full page: 99 rows is complete.
+    expect((await listMeetingSessions(M, { fetch: stubFetch([page(full.slice(0, 99))]).fetch })).length).toBe(99);
+  });
+
+  it("refuses an empty meeting id, and an unconfigured process, before any call", async () => {
+    configure();
+    const stub = stubFetch([page([])]);
+    await expect(listMeetingSessions("", { fetch: stub.fetch })).rejects.toThrow(/meeting id/);
+    configure({ REALTIMEKIT_API_TOKEN: "" });
+    await expect(listMeetingSessions(M, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unconfigured" });
     expect(stub.calls.length).toBe(0);
   });
 });
