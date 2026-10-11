@@ -1225,6 +1225,20 @@ Elsewhere the text is the controller's record.
      - **Amends** X-RS-1 and spec Appendix A, and is built in W2b. No data migration is needed.
      - **False premise:** the early pre-ship read and the first Task 17 staging read used the stale `public` schema.
        The app's schema is `seazn_club`.
+113. **Nothing played means not started, for every forfeit reason** (2026-10-11, owner "Ok A"). This extends ruling 112
+     from the walkover to every reason. "Played" is ruling 112's test: an active sport (module-owned) event after
+     `core.start`.
+     - **The rule:** after Start with nothing played, the match counts as not started.
+       - A walkover and a double walkover are admitted (ruling 112).
+       - A withdrawal is admitted and credits the walkover score.
+       - A disqualification stays admitted, because misconduct before play is real.
+       - A retirement is NOT admitted until something has been played: nobody retires from a match never played.
+     - **Supersedes** PF-7's "after start → retirement credit" for that state. This settles the X-WD-6 wording.
+     - **Why:** before this ruling a no-show tapped as Retired read "ret." and "stopped during the match", counted as
+       played in player stats, and in volleyball Best of 1 was credited 15-0 against the walkover's 25-0. The
+       credit half of that is fixed as R112-I-1.
+     - **No stored row changes:** production's only forfeit is a walkover.
+     - **Amends** X-RS-1, X-RT-1 and X-WD-6. Built in the ruling-112 lane.
 
 ## Recommendations (mine — not rulings)
 
