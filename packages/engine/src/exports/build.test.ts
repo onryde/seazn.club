@@ -634,7 +634,13 @@ describe("base(): the caller's description, footerNote, liveUrl and branding rea
     for (const { name, model } of everyBuilder(opts)) {
       expect(model.meta, name).toEqual({ printedAt: OPTS.printedAt, footerNote: opts.footerNote, liveUrl: opts.liveUrl });
       expect(model.branding, name).toEqual(branding);
-      if (name !== "buildAuditLedger") expect(model.description, name).toBe(opts.description);
+      if (name === "buildAuditLedger") {
+        // the audit ledger's description is its own verification stamp (v13 wave Task 16), never the caller's: three parts
+        expect(model.description, name).not.toBe(opts.description);
+        expect(model.description?.split(" · "), name).toHaveLength(3);
+      } else {
+        expect(model.description, name).toBe(opts.description);
+      }
       checked++;
     }
     expect(checked).toBe(11);
@@ -673,7 +679,10 @@ describe("timetable rows: each cell is its fixture's own value (v12 spec §3.4, 
 describe("timetable page groups: per_pitch / per_division page breaks are respected (v12 spec §3.4), auto has none", () => {
   const fx = (id: string, court: string | null, stageName: string, divisionName: string): ExportFixture =>
     ({ id, at: null, court, stageName, round: 1, home: "H", away: "A", divisionName });
-  // given out of name order on purpose, with two stages on one court and one division
+  // given out of name order on purpose, with two stages on one court and one division. WHY name order: the product reads the
+  // competition's divisions `order by name` (apps/web/src/server/usecases/exports.ts:749, the competition timetable, whose
+  // default is per_division), so the printed groups follow the order the rest of the export already uses; the v12 spec (§3.4) is
+  // silent on it. The builder collates every page group, courts included, with the one sort.
   const FIXTURES2 = [fx("1", "Court B", "Prelim", "Girls"), fx("2", "Court A", "Prelim", "Boys"), fx("3", "Court A", "Knockout", "Boys")];
   const shape = (m: DocModel) => m.sections.map((s) => [s.heading ?? null, s.subheading ?? null, s.pageBreakBefore === true]);
 
