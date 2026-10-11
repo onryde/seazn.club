@@ -414,6 +414,14 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     }]);
   });
 
+  it("a READY game Lichess shows with no move yet stays ready, not started", async () => {
+    const g = await readyGame();
+    serveStream(gameFull(g, MID, { moves: [] }));
+    await reconcile(g.fixtureId, "organiser", observed().deps);
+    const r = await rowOf(g.fixtureId);
+    expect([r.status, r.started_at, r.move_count]).toEqual(["ready", null, 0]);
+  });
+
   it("a SECOND reconcile is a no-op — at the same instant, and later with Lichess's clock having run on", async () => {
     const g = await readyGame();
     serveStream(gameFull(g, MID));
@@ -680,6 +688,22 @@ describe.runIf(HAS_DB)("reconcile — a game end is written once and closes the 
     expect((await resultsOf(g.fixtureId)).length).toBe(1);
     expect(await rowOf(g.fixtureId)).toMatchObject({ status: "finished", finished_at: READ, needs_reason: null });
     expect(sent.map((b) => [b.status, b.drawOfferBy])).toEqual([["outoftime", null]]);
+  });
+
+  it("a game end that changes NOTHING on the row still tells the room the game is over", async () => {
+    // The recorded pair read on two triggers at one instant: read 1 already
+    // brought the row to Lichess's clocks, so read 2's end changes no column.
+    const g = await liveGame();
+    serveStream(gameFull(g, EXPIRED_1));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    const before = await rowOf(g.fixtureId);
+    serveStream(gameFull(g, EXPIRED_2));
+    const { deps, sent } = observed();
+    expect(await reconcile(g.fixtureId, "game_end", deps)).toMatchObject({ adopted: 0, finished: true });
+    const after = await rowOf(g.fixtureId);
+    expect([after.moves_uci, after.white_ms, after.black_ms, after.last_move_at], "premise: nothing but the close changed")
+      .toEqual([before.moves_uci, before.white_ms, before.black_ms, before.last_move_at]);
+    expect(sent.map((b) => b.status)).toEqual(["outoftime"]);
   });
 
   it("a reconcile AFTER finished reads nothing, writes nothing, keeps the first finished_at — every trigger", async () => {
