@@ -88,7 +88,7 @@ const CF_BASE = "https://api.cloudflare.com/client/v4";
 export type MeetingRef = { meetingId: string };
 export type ParticipantToken = { participantId: string; authToken: string };
 
-type CfBody = { success?: unknown; data?: unknown; error?: { code?: unknown } | null; errors?: unknown };
+type CfBody = { success?: unknown; data?: unknown; paging?: unknown; error?: { code?: unknown } | null; errors?: unknown };
 
 /** RealtimeKit's own "not found", for every endpoint except active-session
  *  (which has its own reading, below). OpenAPI documents RealtimeKit's error
@@ -139,6 +139,17 @@ async function cf(
   init: { method: string; body?: unknown; notFound?: (body: unknown) => boolean },
   deps: RealtimeKitDeps,
 ): Promise<unknown> {
+  return (await cfEnvelope(cfg, path, init, deps)).data;
+}
+
+/** `cf`, keeping the envelope: `data` (checked present) and the siblings a
+ *  list endpoint documents beside it — `paging` (review M5). */
+async function cfEnvelope(
+  cfg: Config,
+  path: string,
+  init: { method: string; body?: unknown; notFound?: (body: unknown) => boolean },
+  deps: RealtimeKitDeps,
+): Promise<CfBody & { data: NonNullable<unknown> }> {
   const base = (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
   const url = `${base}/accounts/${cfg.accountId}/realtime/kit/${cfg.appId}${path}`;
   const doFetch = deps.fetch ?? fetch;
@@ -205,7 +216,7 @@ async function cf(
   if (body.data === undefined || body.data === null) {
     throw new RealtimeKitError(502, "unavailable", `RealtimeKit ${init.method} ${path} returned no data`);
   }
-  return body.data;
+  return body as CfBody & { data: NonNullable<unknown> };
 }
 
 /** `fixture_id` is the table's primary key, so a fixture has exactly one
@@ -703,9 +714,9 @@ export async function listPeerIds(
   return peers;
 }
 
-/** The largest page GET /sessions serves that we ask for. A meeting has one
- *  session per stretch of somebody being in it, so a full page cannot prove
- *  the list complete. */
+/** The page size GET /sessions is asked for. Completeness is never read off
+ *  the page size (a server cap under it would read a short list as whole —
+ *  review M5): the envelope's `paging.total_count` must equal the rows. */
 const SESSIONS_PER_PAGE = 100;
 
 export type MeetingSession = {
@@ -729,21 +740,28 @@ function malformedSessions(what: string): RealtimeKitError {
  *  status LIVE | ENDED, started_at, ended_at). NOT measured live — T17 owes
  *  that. Rows of another meeting are dropped by `associated_id` whatever the
  *  filter did; a row whose meeting cannot be read, a malformed row of ours,
- *  and a FULL page all THROW: a short list would hide a rejoin's coverage and
- *  read as "camera off", and an outage must never read as that. */
+ *  and a page that is not the WHOLE list — `paging.total_count` (the OpenAPI
+ *  envelope, beside `data`) absent, unreadable, or not exactly the rows on
+ *  the page — all THROW: a short list would hide a rejoin's coverage and read
+ *  as "camera off", and an outage must never read as that. */
 export async function listMeetingSessions(meetingId: string, deps: RealtimeKitDeps = {}): Promise<MeetingSession[]> {
   if (!meetingId) throw new Error("listMeetingSessions needs a meeting id");
   const cfg = requireConfig();
-  const data = (await cf(
+  const body = await cfEnvelope(
     cfg,
     `/sessions?associated_id=${encodeURIComponent(meetingId)}&per_page=${SESSIONS_PER_PAGE}`,
     { method: "GET" },
     deps,
-  )) as { sessions?: unknown };
+  );
+  const data = body.data as { sessions?: unknown };
   if (!Array.isArray(data.sessions)) throw malformedSessions("no sessions list");
   const rows = data.sessions as unknown[];
-  if (rows.length >= SESSIONS_PER_PAGE) {
-    throw malformedSessions(`${SESSIONS_PER_PAGE}+ rows; the session list is not provable from one page`);
+  const total = (body.paging as { total_count?: unknown } | null | undefined)?.total_count;
+  if (typeof total !== "number" || !Number.isInteger(total) || total < 0) {
+    throw malformedSessions("no paging.total_count; the session list is not provable whole");
+  }
+  if (total !== rows.length) {
+    throw malformedSessions(`${rows.length} rows of a total_count ${total}; the session list is not provable whole`);
   }
   const out: MeetingSession[] = [];
   rows.forEach((r, i) => {

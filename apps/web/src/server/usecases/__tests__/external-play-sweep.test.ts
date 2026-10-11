@@ -213,14 +213,14 @@ const rtk = vi.hoisted(() => {
           return json(503, { success: false });
         }
         const m = u.searchParams.get("associated_id");
-        return ok({
-          sessions: state.sessions
-            .filter((x) => x.meetingId === m)
-            .map((x) => ({
-              id: x.id, associated_id: x.meetingId, status: x.status, started_at: x.started_at,
-              ...(x.ended_at === null ? {} : { ended_at: x.ended_at }),
-            })),
-        });
+        const rows = state.sessions
+          .filter((x) => x.meetingId === m)
+          .map((x) => ({
+            id: x.id, associated_id: x.meetingId, status: x.status, started_at: x.started_at,
+            ...(x.ended_at === null ? {} : { ended_at: x.ended_at }),
+          }));
+        // The OpenAPI envelope: `paging.total_count` beside `data` (review M5).
+        return json(200, { success: true, data: { sessions: rows }, paging: { total_count: rows.length, start_offset: 0, end_offset: rows.length } });
       }
       const report = /^\/sessions\/peer-report\/([^/]+)$/.exec(path);
       if (method === "GET" && report) {
