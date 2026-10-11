@@ -151,8 +151,71 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expectNoHorizontalScroll(page);
       await crop(footer.locator("xpath=ancestor::a[1]"), `bracket-tile-walkover-${w}`);
       screens++;
+
+      // Review I-2 — the division's Schedule, its DEFAULT tab: the tag on the winner's credited score, named by the
+      // sentence. (The other tabs' panels are in the DOM, hidden — so scope to the schedule's.)
+      await page.goto(`${base}/${ko.divSlug}`);
+      await dismissCookieBanner(page);
+      const schedTag = page.locator("#panel-schedule").getByRole("img", { name: sentence });
+      await expect(schedTag, `${w}: the schedule row's tag is named by the sentence`).toHaveText(tag, { timeout: STEP_MS });
+      await expect(schedTag).toHaveCount(1);
+      await expect(schedTag).toHaveAttribute("data-testid", "schedule-forfeit-tag");
+      await expect(schedTag.locator("xpath=ancestor::a[1]"), `${w}: the row shows the credited score`).toContainText(String(CREDIT));
+      await expectNoHorizontalScroll(page);
+      await crop(schedTag.locator("xpath=ancestor::a[1]"), `schedule-walkover-${w}`);
+      screens++;
+
+      // Review I-1 — the hub's knockout tab, Rounds (every width): the semi's card carries the tag.
+      await page.goto(`${base}?tab=knockout`);
+      await dismissCookieBanner(page);
+      const koPanel = page.getByTestId("mh-tab-panel-knockout");
+      await expect(koPanel).toBeVisible({ timeout: STEP_MS });
+      const roundTag = koPanel.getByTestId(`mh-match-${sf!.id}`).getByRole("img", { name: sentence });
+      await expect(roundTag, `${w}: the Rounds card's tag is named by the sentence`).toHaveText(tag);
+      await expectNoHorizontalScroll(page);
+      screens++;
+
+      // …and the Draw (a desktop view — it opens at lg only; a phone's ?view=draw shows Rounds): the semi's node.
+      if (w === 1280) {
+        await page.goto(`${base}?tab=knockout&view=draw`);
+        await dismissCookieBanner(page);
+        const node = page.getByTestId(`mh-knockout-node-${sf!.id}`);
+        await expect(node).toBeVisible({ timeout: STEP_MS });
+        const nodeTag = node.getByRole("img", { name: sentence });
+        await expect(nodeTag, "1280: the Draw node's tag is named by the sentence").toHaveText(tag);
+        await expect(nodeTag).toHaveAttribute("data-testid", "mh-knockout-node-forfeit");
+        await expect(node).toHaveAttribute("aria-describedby", `mh-knockout-forfeit-${sf!.id}`);
+        await crop(node, `draw-node-walkover-${w}`);
+        screens++;
+      }
     }
-    expect(screens).toBe(WIDTHS.length * 3);
+    expect(screens).toBe(WIDTHS.length * 5 + 1);
+
+    // Review (b) — the champion banner: a final won by walkover carries the final's tag beside its line, named by the
+    // final's own sentence. The other semi and then the final are walked over (the final's seats come from the cascade).
+    const other = ko.semis[1]!;
+    await post(request, other.id, "core.forfeit", { by: other.away_entrant_id, reason: "walkover" });
+    await expect
+      .poll(async () => { const f = await read(request, ko.final.id); return f.home_entrant_id !== null && f.away_entrant_id !== null; }, { timeout: STEP_MS })
+      .toBe(true);
+    const seated = await read(request, ko.final.id);
+    await post(request, ko.final.id, "core.forfeit", { by: seated.away_entrant_id, reason: "walkover" });
+    expect((await read(request, ko.final.id)).outcome).toMatchObject({ kind: "award", winner: seated.home_entrant_id, reason: "walkover" });
+    const finalSentence = say("forfeit.sentence.walkover", { loser: ko.nameOf.get(seated.away_entrant_id!)! });
+    let banners = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.goto(`${base}?tab=knockout`);
+      await dismissCookieBanner(page);
+      const bannerTag = page.getByTestId("mh-knockout-champion-forfeit");
+      await expect(bannerTag, `${w}: the champion banner's tag`).toHaveText(tag, { timeout: STEP_MS });
+      await expect(bannerTag).toHaveAttribute("aria-label", finalSentence);
+      await expect(bannerTag).toHaveCount(1);
+      await expectNoHorizontalScroll(page);
+      await crop(bannerTag.locator("xpath=ancestor::div[starts-with(@data-testid, 'mh-knockout-champion-')][1]"), `champion-banner-walkover-${w}`);
+      banners++;
+    }
+    expect(banners).toBe(WIDTHS.length);
   });
 
   test("X-DW-1: a double walkover names the next round only once the final stands walked over", async ({ page, request }) => {
@@ -194,7 +257,23 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expectNoHorizontalScroll(page);
       await crop(tileTag.locator("xpath=ancestor::a[1]"), `bracket-tile-double-walkover-${w}`);
       screens++;
+
+      // Review I-2 — the Schedule row: the tag alone, named by the sentence, and never the unplayed 0 — 0. Its pair is
+      // the other semi's row (a walkover credited N–0), where the same probe DOES find a lone "0".
+      await page.goto(base);
+      await dismissCookieBanner(page);
+      const schedule = page.locator("#panel-schedule");
+      const dwRowTag = schedule.getByRole("img", { name: withNext });
+      await expect(dwRowTag, `${w}: the schedule row's tag`).toHaveText(dwTag, { timeout: STEP_MS });
+      const dwRow = dwRowTag.locator("xpath=ancestor::a[1]");
+      await expect(dwRow.getByText("0", { exact: true }), `${w}: a double walkover reads no 0 — 0`).toHaveCount(0);
+      await expect(dwRow).not.toContainText(/0\s*[–—-]\s*0/);
+      const otherRow = schedule.getByRole("img", { name: say("forfeit.sentence.walkover", { loser: ko.nameOf.get(other!.away_entrant_id!)! }) }).locator("xpath=ancestor::a[1]");
+      await expect(otherRow.getByText("0", { exact: true }), `${w}: the probe's positive pair`).toHaveCount(1);
+      await expectNoHorizontalScroll(page);
+      await crop(dwRow, `schedule-double-walkover-${w}`);
+      screens++;
     }
-    expect(screens).toBe(WIDTHS.length * 2);
+    expect(screens).toBe(WIDTHS.length * 3);
   });
 });

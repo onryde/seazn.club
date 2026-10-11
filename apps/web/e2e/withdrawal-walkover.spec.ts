@@ -2,16 +2,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll } from "./helpers";
 import { withDb } from "./rs007-money-kit";
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W2b Task 8 (spec §5.4, X-WD-1 / C17): an organiser withdraws an entrant whose knockout semi is HELD (a level
 // football result, needs_decision). Before W2b the cascade skipped the held line and the bracket waited on a settle
 // nobody could give (the withdrawn side cannot be named the winner). Now the line walks over to the remaining side,
 // and the final is seated with her opponent.
 //
-// Written by loop F (Task 8); goes green when Task 13 lands the public walkover tag (UI-2 option A: `w/o`) on the
-// run sheet's result line — loop H runs it. Until then the one red is the tag lookup below, by design.
+// Written by loop F (Task 8). W2b T13 fix round 1 (review (c)): the run sheet's line reads "{name} won (w/o)" before
+// Task 13 and after it, so it witnesses the CASCADE only; Task 13's own witness is the spectator's — the public semi's
+// sentence names the side that withdrew, and the results card's tag is named by that sentence. The competition is
+// public so the spectator can read it.
 //
 // The withdrawal is done with the organiser's hands (the entrants tab's Withdraw and its confirmation), the rig over
 // the API. Whole file, never a -g slice (AGENTS.md rule 21).
@@ -23,13 +26,12 @@ const ui = (key: string) => {
   return UI[key]!;
 };
 
-/** UI-2 option A's walkover tag, as the plan rules it (Task 13: "tags `w/o` …"). Read from the dictionaries by VALUE,
- *  so this spec does not guess the key Task 13 names; exactly one key per dictionary is the tag. */
-function walkoverTag(): string {
-  const hits = [...Object.entries(UI), ...Object.entries(PUBLIC)].filter(([, v]) => v === "w/o");
-  expect(hits.length, "Task 13's walkover tag (`w/o`) exists in an en dictionary").toBeGreaterThan(0);
-  return hits[0]![1];
-}
+/** The en public.json words, placeholders filled. */
+const say = (key: string, params: Record<string, string> = {}) => {
+  const tpl = PUBLIC[key];
+  expect(tpl, `public.json has ${key}`).toBeTruthy();
+  return Object.entries(params).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, v), tpl!);
+};
 
 const STEP_MS = 20_000;
 
@@ -53,13 +55,13 @@ async function heldSemi(r: APIRequestContext) {
   const sport = "football";
   const variant = "11-a-side";
   expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
-  const comp = await apiJson<{ id: string }>(r, "/api/v1/competitions", "POST", {
+  const comp = await apiJson<{ id: string; slug: string }>(r, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `W2b withdraw ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
-    visibility: "private",
+    visibility: "public",
   });
   expect(comp.status, JSON.stringify(comp.error)).toBe(201);
-  const div = await apiJson<{ id: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
+  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
   expect(div.status, JSON.stringify(div.error)).toBe(201);
   const names = ["W2b Ashford", "W2b Brockley", "W2b Catford", "W2b Deptford"];
   const added = await addEntrantsViaApi(r, div.data!.id, names, "team");
@@ -81,7 +83,7 @@ async function heldSemi(r: APIRequestContext) {
     expect(rows, "the semi feeds a final").toHaveLength(1);
     return rows[0]!.no;
   });
-  return { divisionId: div.data!.id, sf, nameOf, finalNo };
+  return { divisionId: div.data!.id, compSlug: comp.data!.slug, divSlug: div.data!.slug, sf, nameOf, finalNo };
 }
 
 async function withdrawThroughTheScreen(page: Page, name: string): Promise<void> {
@@ -101,7 +103,8 @@ async function withdrawThroughTheScreen(page: Page, name: string): Promise<void>
 test.describe("W2b — a withdrawal walks a held knockout line over (X-WD-1)", () => {
   test("X-WD-1: the organiser withdraws a side of a held semi; the run sheet shows the walkover and the final is seated", async ({ page, request }) => {
     test.setTimeout(4 * 60_000);
-    const { divisionId, sf, nameOf, finalNo } = await heldSemi(request);
+    const org = await activeOrg(page);
+    const { divisionId, compSlug, divSlug, sf, nameOf, finalNo } = await heldSemi(request);
     const leaving = sf.away_entrant_id!;
     const staying = sf.home_entrant_id!;
 
@@ -120,12 +123,35 @@ test.describe("W2b — a withdrawal walks a held knockout line over (X-WD-1)", (
     await expect(semi.getByTestId("run-sheet-held-chip")).toHaveCount(0);
     await expect(final, "the final is seated with the remaining side").toContainText(nameOf.get(staying)!);
 
-    const tag = walkoverTag();
+    const tag = say("forfeit.tag.walkover");
+    expect(tag, "UI-2 option A: a withdrawal reads the walkover tag").toBe("w/o");
+    expect(UI["forfeit.tag.walkover"], "the organiser and the spectator read one abbreviation").toBe(tag);
+    const runSheetLine = ui("schedule.outcome.wonTagged").replace("{name}", nameOf.get(staying)!).replace("{tag}", tag);
+    const sentence = say("forfeit.sentence.withdrew", { loser: nameOf.get(leaving)! });
+    const base = `/shared/${org.slug}/${compSlug}`;
     let widths = 0;
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });
-      await expect(semi, `${w}: the walkover tag is on the semi's row`).toContainText(tag);
+      await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+      await expect(semi, `${w}: the run sheet's line names the winner, tagged`).toContainText(runSheetLine, { timeout: STEP_MS });
       await expect(final, `${w}: the final names the remaining side`).toContainText(nameOf.get(staying)!);
+      await expectNoHorizontalScroll(page);
+
+      // The spectator: the semi's match centre says who withdrew (never "won by forfeit")…
+      await page.goto(`${base}/${divSlug}/fixtures/${sf.id}`);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("mc-status-line"), `${w}: the public semi's sentence`).toHaveText(sentence, { timeout: STEP_MS });
+      await expectNoHorizontalScroll(page);
+
+      // …and the results card's tag is named by that sentence.
+      await page.goto(`${base}?tab=matches`);
+      await dismissCookieBanner(page);
+      const completed = page.getByTestId("mh-filter-completed");
+      await expect(completed).toBeVisible({ timeout: STEP_MS });
+      await completed.click();
+      const card = page.getByTestId(`mh-match-${sf.id}`);
+      await expect(card).toBeVisible({ timeout: STEP_MS });
+      await expect(card.getByRole("img", { name: sentence }), `${w}: the hub card's tag`).toHaveText(tag);
       await expectNoHorizontalScroll(page);
       widths++;
     }
