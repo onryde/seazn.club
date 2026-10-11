@@ -195,8 +195,14 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay — a fixture settled t
     // The rulebook: still to be played (no result yet) ⇒ waiting; any
     // outcome, a void, a withdrawal or a cancellation ⇒ decided. A status
     // the CHECK gains later fails here until someone places it.
+    // `needs_decision` (W2a, main's V432 — gained at the 2026-10-11 rebase):
+    // a bracket match played to a LEVEL outcome, held for the organiser's
+    // settle on W2a's own surface. It carries an outcome, so by the rule
+    // above it is decided for this queue — one zone per fixture. Placed
+    // pending the controller's ruling (rebase report); listing it instead is
+    // a product change to queue.ts, not a table edit.
     const OPEN = new Set(["scheduled", "in_play"]);
-    const SETTLED = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+    const SETTLED = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"]);
     const s = await seeded();
     await bridge(s.fixtureId, s.orgId, "needs_organiser", "provider_error", null);
     let listedCount = 0;
