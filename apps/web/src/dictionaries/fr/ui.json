@@ -5890,6 +5890,7 @@
   "externalPlay.reason.linkMissing": "Un lien Lichess manque.",
   "externalPlay.reason.fairPlay": "Lichess a mis fin à cette partie pour une infraction au fair-play.",
   "externalPlay.reason.notStarted": "Les deux joueurs se sont présentés, mais la partie n’a jamais été créée.",
+  "externalPlay.reason.createOutcomeUnknown": "Une partie Lichess a peut-être été créée, mais elle n’a pas pu être confirmée avant l’échéance.",
   "externalPlay.reason.generic": "Cette partie demande une décision de l'organisateur.",
   "externalPlay.queue.versus": "vs",
   "externalPlay.queue.tbd": "À définir",

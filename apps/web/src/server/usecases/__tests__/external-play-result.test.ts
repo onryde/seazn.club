@@ -1014,7 +1014,9 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
   it("every reason a caller may hold for actually lands in the column — counted", async () => {
     // Callers' diagnoses only (R2): tiebreak_owed is the ENGINE's to declare
     // after a written draw, never a caller's to assert by hand.
-    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "not_started"] as const;
+    // T13 fix round 1 (I3): the sweep holds a create whose outcome nobody can
+    // prove past the deadline as T9's own create_outcome_unknown.
+    const REASONS = ["token_revoked", "provider_error", "double_walkover_blocked", "not_started", "create_outcome_unknown"] as const;
     expect([...HOLD_REASONS].sort(), "the union is exactly the callers' reasons").toEqual([...REASONS].sort());
     let checked = 0;
     for (const reason of REASONS) {
