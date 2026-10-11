@@ -2566,7 +2566,7 @@
   "score.voidLast": "⟲ Anular última entrada",
   "score.scoring": "Puntuación",
   "score.courtsidePad": "Panel de pista de {scorer}",
-  "score.forfeit": "Abandonar…",
+  "score.forfeit": "Dar por perdido…",
   "score.status.scheduled": "programado",
   "score.status.in_play": "en juego",
   "score.status.decided": "decidido",
