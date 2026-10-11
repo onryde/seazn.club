@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 import { meEmptyState } from "./me-empty-state";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { routes } from "@/lib/routes";
+import { lichessFlashKey } from "@/lib/lichess-link";
 import {
   getMySuspensions,
   listMyCareerStats,
@@ -38,7 +39,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 export default async function MePage({
   searchParams,
 }: {
-  searchParams: Promise<{ claimed?: string }>;
+  searchParams: Promise<{ claimed?: string; lichess?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/me");
@@ -80,7 +81,10 @@ export default async function MePage({
       myMarksAverage(user.id),
     ]);
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? orgs[0] ?? null;
-  const { claimed } = await searchParams;
+  const { claimed, lichess } = await searchParams;
+  // T20 fix round 1 (m5): a Lichess linking flow with no `next` lands here — the start's refusal for a club not
+  // offered online chess, and every callback outcome — so the player home says what happened (lib/lichess-link.ts).
+  const lichessKey = lichessFlashKey(lichess);
   const [next, ...rest] = upcoming;
 
   return (
@@ -127,6 +131,18 @@ export default async function MePage({
         {claimed && (
           <p className="mb-6 rounded-lg bg-lime-100 px-4 py-3 text-sm font-medium text-lime-900">
             {t(ui, "me.claimed")}
+          </p>
+        )}
+        {lichessKey && (
+          <p
+            role="status"
+            data-testid="me-lichess-flash"
+            data-tone={lichess === "linked" ? "ok" : "error"}
+            className={`mb-6 rounded-lg px-4 py-3 text-sm font-medium ${
+              lichess === "linked" ? "bg-lime-100 text-lime-900" : "bg-red-50 text-red-700"
+            }`}
+          >
+            {t(ui, lichessKey)}
           </p>
         )}
         <h1 className="page-title mb-6">{t(ui, "me.title")}</h1>

@@ -11,21 +11,15 @@ import {
 } from "@/lib/oauth";
 import { requireUser, safeNextPath } from "@/lib/auth";
 import { redirectLocal } from "@/lib/http";
+import { lichessLanding, type LichessFlashCode } from "@/lib/lichess-link";
 import { HttpError } from "@/lib/errors";
 import { PLAY_SCOPES, upsertLichessLink } from "@/server/usecases/external-accounts";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 
-/** Where a linked / failed flow lands: the validated `next` it started from,
- *  or `/me` (the player home — design §12) when there was none. `next` may
- *  already carry its own query string (e.g. `/settings?tab=account`), so the
- *  separator is chosen rather than always `?`. */
-function landing(next: string | null, query: string): string {
-  const base = next ?? "/me";
-  return `${base}${base.includes("?") ? "&" : "?"}${query}`;
-}
-
-function fail(next: string | null, reason: string) {
-  return redirectLocal(landing(next, `lichess=${reason}`));
+/** A failed flow lands where the start came from (lib/lichess-link.ts `lichessLanding`, shared with the start route's
+ *  own refusal), carrying why. */
+function fail(next: string | null, reason: LichessFlashCode) {
+  return redirectLocal(lichessLanding(next, reason));
 }
 
 /** Exchange the Lichess OAuth code (PKCE, no client secret), read the
@@ -126,7 +120,7 @@ export async function GET(req: Request) {
       throw err;
     }
 
-    return redirectLocal(landing(next, "lichess=linked"));
+    return redirectLocal(lichessLanding(next, "linked"));
   } finally {
     // A grant we did not store is a grant nobody will ever use — revoke it.
     // Best-effort: a failed revoke leaves an orphan on Lichess's side, not a

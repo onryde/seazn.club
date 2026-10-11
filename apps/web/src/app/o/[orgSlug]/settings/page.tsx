@@ -30,6 +30,7 @@ import { getDictionary, t, type Dict } from "@/lib/i18n";
 import { getLichessLink } from "@/server/usecases/external-accounts";
 import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { lichessConfigured } from "@/lib/oauth";
+import { lichessFlashKey } from "@/lib/lichess-link";
 import {
   DisplayNameForm,
   ChangeEmailForm,
@@ -298,16 +299,9 @@ export default async function SettingsPage({
       ? t(dict, `settings.emailChange.${email_change}`)
       : null;
 
-  const lichessMessageKey =
-    lichess === "linked"
-      ? "settings.account.lichess.flash.linked"
-      : lichess === "oauth_state" ||
-          lichess === "token" ||
-          lichess === "account" ||
-          lichess === "not_configured" ||
-          lichess === "already_linked"
-        ? (`settings.account.lichess.flash.${lichess}` as const)
-        : null;
+  // Every outcome the linking flow reports here — the callback's, and the start's own refusal (T20 fix round 1, m5) —
+  // through the one mapping /me shares; anything else renders nothing.
+  const lichessMessageKey = lichessFlashKey(lichess);
   const lichessMessage = lichessMessageKey ? t(dict, lichessMessageKey) : null;
 
   return (

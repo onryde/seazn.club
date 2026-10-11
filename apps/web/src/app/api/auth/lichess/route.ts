@@ -12,13 +12,10 @@ import {
 } from "@/lib/oauth";
 import { requireUser, safeNextPath } from "@/lib/auth";
 import { redirectLocal } from "@/lib/http";
-import { LICHESS_LINK_ORG_PARAM } from "@/lib/lichess-link";
+import { LICHESS_LINK_ORG_PARAM, lichessLanding } from "@/lib/lichess-link";
 import { pkceChallenge, pkceVerifier } from "@/server/external-play/pkce";
 import { orgBySlug } from "@/server/slug-resolve";
-import {
-  ONLINE_CHESS_DISABLED_CODE,
-  onlineChessOffered,
-} from "@/server/usecases/external-play/online-chess-flag";
+import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 
 /** Short-lived cookies that only need to survive the round trip to Lichess
  *  and back — same shape as the Google flow's state cookie. */
@@ -43,17 +40,24 @@ export async function GET(req: Request) {
     return redirectLocal(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
   }
 
+  // Same rule as Google: same-origin path only. Reuses `safeNextPath` — the
+  // only origin check in this repo (lib/auth.ts) — rather than a second,
+  // parallel prefix check. Read up front: a refused start lands on it too.
+  const next = safeNextPath(url.searchParams.get("next"));
+
   // T20: linking is how online chess STARTS for a player, and online chess is offered per club (the PostHog flag
-  // `online-chess`). The start names its club (lib/lichess-link.ts); a start naming none, an unknown or renamed slug,
-  // or a club not offered online chess is refused before anything is stored. Ahead of the configuration check: a
-  // club without the feature is told it is unavailable, not that Lichess is unconfigured.
+  // `online-chess`). The start names its club (lib/lichess-link.ts); a start naming none or an unknown slug, or a
+  // club not offered online chess, is refused before anything is stored. A renamed club's old slug (a stale link or
+  // bookmark) is followed ONCE through slug_history to the club it names now — never a chain. Ahead of the
+  // configuration check: a club without the feature is told it is unavailable, not that Lichess is unconfigured.
+  //
+  // The refusal is a browser navigation, so it lands on a page (fix round 1, m5), exactly as the callback reports its
+  // own failures: back to `next`, or `/me`, with `?lichess=unavailable` — never a raw JSON body.
   const slug = url.searchParams.get(LICHESS_LINK_ORG_PARAM);
-  const org = slug ? await orgBySlug(slug) : null;
+  let org = slug ? await orgBySlug(slug) : null;
+  if (org && "renamedTo" in org) org = await orgBySlug(org.renamedTo);
   if (!org || !("id" in org) || !(await onlineChessOffered({ orgId: org.id, userId: user.id }))) {
-    return NextResponse.json(
-      { ok: false, error: "Online chess is not available for this organisation", code: ONLINE_CHESS_DISABLED_CODE },
-      { status: 403 },
-    );
+    return redirectLocal(lichessLanding(next, "unavailable"));
   }
 
   if (!lichessConfigured()) {
@@ -66,10 +70,6 @@ export async function GET(req: Request) {
   jar.set(LICHESS_OAUTH_STATE_COOKIE, state, OAUTH_COOKIE_OPTS);
   jar.set(LICHESS_OAUTH_VERIFIER_COOKIE, verifier, OAUTH_COOKIE_OPTS);
 
-  // Same rule as Google: same-origin path only. Reuses `safeNextPath` — the
-  // only origin check in this repo (lib/auth.ts) — rather than a second,
-  // parallel prefix check.
-  const next = safeNextPath(url.searchParams.get("next"));
   if (next) {
     jar.set(LICHESS_OAUTH_NEXT_COOKIE, next, OAUTH_COOKIE_OPTS);
   }

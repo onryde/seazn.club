@@ -6,6 +6,8 @@
 // Drives the REAL page (an async server component, so `prerender`) with the flag asked through the REAL helper and
 // PostHog doubled at its boundary. Same page harness as preferences-tab.test.tsx: islands stubbed to markers, `sql`
 // to one row. The card itself is a marker carrying the props the page handed it.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
 
@@ -81,10 +83,10 @@ const ORG = {
   timezone: "Europe/London",
 };
 
-async function render(tab: string): Promise<string> {
+async function render(tab: string, lichess?: string): Promise<string> {
   const element = await SettingsPage({
     params: Promise.resolve({ orgSlug: ORG.slug }),
-    searchParams: Promise.resolve({ tab }),
+    searchParams: Promise.resolve(lichess === undefined ? { tab } : { tab, lichess }),
   });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
@@ -174,5 +176,44 @@ describe("Settings → Account: the Lichess card follows the club's online-chess
     expect(html).toContain(ORG.name);
     expect(html).not.toContain('data-testid="lichess-card"');
     expect(isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 1, m5: a refused start lands back here (the card's `next`) with `?lichess=unavailable`. The page says so in
+// the reader's language — the sentence read from each locale's own dictionary, never typed here.
+describe("Settings → Account: a refused Lichess start is explained, in every locale", () => {
+  const LOCALES = ["en", "es", "fr", "nl"] as const;
+  const DICTS = Object.fromEntries(
+    LOCALES.map((l) => [
+      l,
+      JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>,
+    ]),
+  ) as Record<(typeof LOCALES)[number], Record<string, string>>;
+  /** React's text escaping, so a sentence with an apostrophe is compared as the markup carries it. */
+  const escaped = (text: string) =>
+    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+
+  it("?lichess=unavailable renders that locale's sentence in the flash", async () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      resolveLocale.mockResolvedValue(loc);
+      flagIs(FLAG_STATES[1]!);
+      const sentence = DICTS[loc]["settings.account.lichess.flash.unavailable"];
+      expect(typeof sentence === "string" && sentence.length > 0, `${loc}: the key exists`).toBe(true);
+      const html = await render("account", "unavailable");
+      expect(html, loc).toContain('data-testid="lichess-flash"');
+      expect(html, loc).toContain(escaped(sentence!));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    // The locales really differ, so a page stuck on English could not pass the loop above.
+    expect(new Set(LOCALES.map((l) => DICTS[l]["settings.account.lichess.flash.unavailable"])).size).toBe(LOCALES.length);
+  });
+
+  it("a value that is not one of the flow's outcomes renders no flash", async () => {
+    flagIs(FLAG_STATES[1]!);
+    const html = await render("account", "pwned<script>");
+    expect(html).toContain("owner@example.com");
+    expect(html).not.toContain('data-testid="lichess-flash"');
   });
 });
