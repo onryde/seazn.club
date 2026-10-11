@@ -47,6 +47,7 @@
 // failing. Membership is authoritative regardless of what the registered
 // key's copy actually says.
 import { padLabel, PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
+import { forfeitCopyKind, isExpungeAbandon, type ForfeitCopyKind } from "@/lib/forfeit-copy-kind";
 import type { MessageKey } from "@/lib/messages";
 
 // Sign-off review 2026-08-17 (D1 + D2, found in a real 320px cricket
@@ -125,6 +126,32 @@ export const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
 };
 
 /**
+ * W2b Task 12: the line a forfeit's ribbon (and its activity row) says per kind — "Walkover recorded" is not
+ * "Disqualification recorded" to the scorer reading the row. Exhaustive over the engine's award reasons and a double
+ * walkover, so a reason the engine adds is a tsc red here; a row with no reason the engine declares keeps
+ * `CORE_RIBBON_KEY`'s reason-free "Match forfeited". Like that line, no name: this path takes no params.
+ */
+export const FORFEIT_RIBBON_KEY: Readonly<Record<ForfeitCopyKind, MessageKey>> = {
+  walkover: "pad.ribbon.core.forfeit.walkover",
+  retired: "pad.ribbon.core.forfeit.retired",
+  disqualified: "pad.ribbon.core.forfeit.disqualified",
+  withdrew: "pad.ribbon.core.forfeit.withdrew",
+  bye: "pad.ribbon.core.forfeit.bye",
+  double_walkover: "pad.ribbon.core.forfeit.doubleWalkover",
+};
+
+/** The `core.*` line, read from the payload where the payload changes what was recorded (a forfeit's kind, an
+ *  expunge abandon — W2b D5), else `CORE_RIBBON_KEY`'s per-type line. */
+function coreRibbonKey(eventType: string, payload: Record<string, unknown>): MessageKey | undefined {
+  if (eventType === "core.forfeit") {
+    const kind = forfeitCopyKind(payload);
+    if (kind !== null) return FORFEIT_RIBBON_KEY[kind];
+  }
+  if (eventType === "core.abandon" && isExpungeAbandon(payload)) return "pad.ribbon.core.abandon.expunge";
+  return CORE_RIBBON_KEY[eventType];
+}
+
+/**
  * Build the ribbon line for one just-committed event.
  *
  * Checks the `core.*` map above first; then looks up
@@ -165,7 +192,7 @@ export function buildRibbon(
   t: MsgFn,
   detail?: string,
 ): Ribbon {
-  const coreKey = CORE_RIBBON_KEY[eventType];
+  const coreKey = coreRibbonKey(eventType, payload);
   let base: string;
   if (coreKey) {
     base = t(coreKey);

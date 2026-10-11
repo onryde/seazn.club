@@ -558,6 +558,7 @@ describe("every payload this pad can produce folds through the real engine", () 
 
   it("the draw tile's own payload, across every DRAWN method a dock chip can mutate onto it", () => {
     const base = stream(start());
+    let checked = 0;
     for (const method of DRAWN_METHODS) {
       const v = view({ events: base });
       const drawn = drawTileEvent(v).payload;
@@ -565,11 +566,13 @@ describe("every payload this pad can produce folds through the real engine", () 
       const chip = dock.chips.find((c) => c.id === `method:${method}`)!;
       const payload = chip.mutate(drawn);
       const folded = foldOne(DEFAULT_CFG, base, RESULT_TYPE, payload) as { outcome?: { kind?: string } };
-      // double_forfeit is the one drawn-branch method that folds to a
-      // no_result rather than a draw (chess.md §7) — every other method here
-      // is an ordinary draw.
-      expect(folded.outcome?.kind, method).toBe(method === "double_forfeit" ? "no_result" : "draw");
+      // W2b (D15): double_forfeit (the one drawn-branch method that folded to a no_result) left the dock, so every
+      // method a drawn dock offers is an ordinary draw — a double walkover is core.forfeit{by:"both"}.
+      expect(folded.outcome?.kind, method).toBe("draw");
+      checked++;
     }
+    expect(checked, `drawn methods folded: ${checked}`).toBe(DRAWN_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("a full realistic sequence — pairing, then a half tap naming the pairing card's own player, enriched by a method chip", () => {

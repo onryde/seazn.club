@@ -28,6 +28,7 @@ import { ORGANISER_ONLY, ORGANISER_ONLY_SPORT_EVENTS } from "@/lib/organiser-onl
 import type { GuidedSheetSpec, SwapSlot, TileSpec } from "../types";
 import type { FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 import type { MessageKey } from "@/lib/messages";
 
 // `label` is never read by any assertion in this file — only `id`/`action`
@@ -76,21 +77,22 @@ describe("the tile grid cannot represent an authority action (D-12)", () => {
     ).toEqual(["goal"]);
   });
 
-  it("D-O1: drops a direct tile whose PAYLOAD records a sport forfeit (the server's predicate), and keeps the same type with an ordinary method", () => {
+  it("D-O1 (W2b D15): every forfeit shape is a core.forfeit tile the block drops, and no sport event is organiser-only by its payload any more", () => {
+    // Empty case first: W2b retired chess's forfeit methods on write for EVERY writer (D15), so the payload-scoped
+    // table the pad and the server share is empty (W2b-R15: the D-O1 entries removed).
+    expect(ORGANISER_ONLY_SPORT_EVENTS).toEqual({});
     let checked = 0;
-    for (const [type, arm] of Object.entries(ORGANISER_ONLY_SPORT_EVENTS)) {
-      for (const value of arm.values) {
-        expect(
-          kept([
-            tile("forfeitChip", { event: { type, payload: { [arm.field]: value } } }),
-            tile("ordinary", { event: { type, payload: { [arm.field]: "checkmate" } } }),
-          ]),
-          `${type}.${arm.field}=${value}`,
-        ).toEqual(["ordinary"]);
-        checked++;
-      }
+    // Every forfeit the engine's vocabulary can say (each reason, and a double walkover) reaches the grid only as
+    // core.forfeit — the server's predicate, read by identity, drops each one.
+    const shapes = [...FORFEIT_REASONS.map((reason) => ({ by: "H", reason })), { by: "both", reason: "walkover" }];
+    for (const payload of shapes) {
+      expect(
+        kept([tile("ff", { event: { type: "core.forfeit", payload } }), tile("goal", { event: { type: "football.goal", payload: {} } })]),
+        JSON.stringify(payload),
+      ).toEqual(["goal"]);
+      checked++;
     }
-    expect(checked).toBeGreaterThan(0);
+    expect(checked, `forfeit shapes dropped: ${checked}`).toBe(FORFEIT_REASONS.length + 1);
   });
 
   it("drops one reached through a guided SHEET, not just a direct event", () => {

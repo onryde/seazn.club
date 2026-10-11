@@ -83,8 +83,10 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/components/v2/fixture-console.tsx": { writes: 1, why: "`{ by, reason }` from the forfeit dialog's chips: a `WriterForfeitReason`, the engine's phase guard less PF-2's cascade-only reasons (Task 11)" },
   "apps/web/src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts": { writes: 1, why: "an empty `{}` tile payload, classified and never posted" },
   "apps/web/src/lib/__tests__/event-copy.test.ts": { writes: 1, why: "a reason-less copy fixture: rendered as a line, never posted" },
+  "apps/web/src/lib/__tests__/event-copy-forfeit.test.ts": { writes: 1, why: "a reason-less legacy fixture (Task 12's fallback pair): rendered as a line, never posted" },
   "apps/web/src/server/api-v1/__tests__/http.test.ts": { writes: 1, why: "`reason` drawn from FORFEIT_REASONS itself (the phase-refusal sweep)" },
   "apps/web/src/server/engine-db/__tests__/w2b-status.test.ts": { writes: 1, why: "`...both`, a spread `{ reason: \"walkover\" }`" },
+  "apps/web/src/server/public-site/__tests__/timeline.test.ts": { writes: 3, why: "Task 12's forfeit-copy sweeps: `reason` drawn from FORFEIT_REASONS itself (two), and a reason-less legacy fixture — rendered as timeline lines, never posted" },
   "apps/web/src/server/usecases/__tests__/organiser-only-events.test.ts": { writes: 1, why: "`reason: c.reason` from the authority case table" },
   "apps/web/src/server/usecases/withdrawal.ts": { writes: 1, why: "`REASON` (\"withdrew\"), the withdrawal cascade's own constant" },
 };
@@ -112,10 +114,10 @@ function classify(line: string): { path: string; kind: "prose" | "legacy" | "wri
   const kind = !/forfeit/.test(codePart) ? "prose" : /legacy/i.test(content) ? "legacy" : "write";
   return { path: m[1]!, kind };
 }
-/** Retired-method lines that are not writes of the method, or not yet removed — named and COUNTED, so each reds the day
- *  its count moves. boardgame.tsx's entry is a debt: Task 12 removes the pad's forfeit tiles and deletes it with them. */
+/** Retired-method lines that are not writes of the method — named and COUNTED, so each reds the day its count moves.
+ *  None is a debt any more: W2b Task 12 took forfeit / double_forfeit out of the chess dock (skins/boardgame.tsx
+ *  DECISIVE_METHODS / DRAWN_METHODS) and deleted its entry, so a pad that offers either again reds this scan. */
 const RETIRED_EXCEPTIONS: Record<string, { lines: number; why: string }> = {
-  "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx": { lines: 2, why: "Task 12: DECISIVE_METHODS / DRAWN_METHODS still offer forfeit / double_forfeit" },
   "apps/web/src/server/engine-db/append-event.ts": { lines: 1, why: "D15's refusal list (RETIRED_ON_WRITE_SPORT_EVENTS) names what it refuses" },
   "apps/web/src/server/public-site/match-centre.ts": { lines: 1, why: "RESULT_KINDS' public `forfeit` result kind, not a chess method" },
   "apps/web/src/server/public-site/__tests__/match-centre-dictionary.test.ts": { lines: 1, why: "the same public result kind, in its dictionary sweep" },
@@ -172,7 +174,7 @@ describe("X-RS-1: every forfeit this repo writes outside the engine uses the clo
     expect(deficit).toEqual(Object.fromEntries(Object.entries(UNREAD_WRITERS).map(([f, e]) => [f, e.writes])));
   });
 
-  it("X-RS-1: the retired chess forfeit methods are written only by legacy-replay rows and four named, counted exceptions", () => {
+  it("X-RS-1: the retired chess forfeit methods are written only by legacy-replay rows and three named, counted exceptions", () => {
     const hits = retiredGrep(SCOPES).map(classify);
     const writes: Record<string, number> = {};
     let legacy = 0;

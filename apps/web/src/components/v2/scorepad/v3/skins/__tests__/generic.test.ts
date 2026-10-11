@@ -181,9 +181,35 @@ describe("resolvePhase", () => {
     expect(resolvePhase(v)).toBe("post");
   });
 
-  it("maps an abandoned fixture to 'post' too — core.abandon folds to phase 'done'", () => {
+  it("GN-AB-1 (W2b D16): maps an abandoned fixture to 'post' — core.abandon folds to the module's own 'abandoned' phase", () => {
     const v = view({ events: stream(start(), ["core.abandon", { reason: "rain" }]) });
+    expect((v.state as { phase?: string }).phase, "the real fold's phase").toBe("abandoned");
     expect(resolvePhase(v)).toBe("post");
+    // What 'post' buys: no tile the grid would show on an abandoned fixture (the pad offered live tiles before D16).
+    const shown = buildTiles(v, t).filter((tile) => tile.phases.includes(resolvePhase(v)));
+    expect(shown.map((tile) => tile.id)).toEqual([]);
+  });
+
+  it("W2b D16: 'post' is exactly the module's own over phases — every phase a real fold reaches, judged by the engine's forfeitPhase", () => {
+    // The expectation is the ENGINE's declaration (`generic.forfeitPhase` maps a terminal phase to "over"), never a
+    // list typed here, so a phase the module adds later is judged the day it lands.
+    const scenes: Record<string, readonly (readonly [string, unknown])[]> = {
+      pre: [],
+      live: [start()],
+      done: [start(), winner("H")],
+      final: [start(), winner("H"), ["core.finalize", {}]],
+      abandoned: [start(), ["core.abandon", { reason: "rain" }]],
+    };
+    const seen = new Set<string>();
+    for (const [name, ledger] of Object.entries(scenes)) {
+      const v = view({ cfg: WIN_LOSS_CFG, events: stream(...ledger) });
+      const phase = (v.state as { phase: string }).phase;
+      expect(phase, `${name}: the fold reached the phase this scene names`).toBe(name);
+      const over = generic.forfeitPhase(v.state as never) === "over";
+      expect(resolvePhase(v) === "post", `${name}: post iff the engine calls it over`).toBe(over);
+      seen.add(phase);
+    }
+    expect(seen.size, `phases judged: ${seen.size}`).toBe(Object.keys(scenes).length);
   });
 
   it("degrades to 'pre' for a pad mounted before any fold exists", () => {

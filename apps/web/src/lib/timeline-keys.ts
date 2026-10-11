@@ -27,6 +27,8 @@
 //    differ only in the set/game noun, and the five `core.lineup.*` siblings
 //    all say "this side changed its line-up".
 
+import type { ForfeitCopyKind } from "@/lib/forfeit-copy-kind";
+
 /** The line a recorded type with no template of its own renders. Never nothing. */
 export const TIMELINE_NEUTRAL_KEY = "timeline.generic.event";
 /** Derived, not recorded: emitted when `summary.detail.sets[i].closed` flips. */
@@ -84,7 +86,28 @@ export const TIMELINE_OVERRIDE_KEYS: readonly string[] = [
   "timeline.core.settle.lot",
   "timeline.core.settle.higher_seed",
   "timeline.core.settle.organiser",
+  // W2b Task 12: a forfeit's reason (and a double walkover) is part of its
+  // sentence, and an expunge abandon says why the match left the table;
+  // `timeline.core.forfeit` / `timeline.core.abandon` stay the table entries and
+  // the reason-free fallbacks for a pre-D3 row.
+  "timeline.core.forfeit.walkover",
+  "timeline.core.forfeit.retired",
+  "timeline.core.forfeit.disqualified",
+  "timeline.core.forfeit.withdrew",
+  "timeline.core.forfeit.doubleWalkover",
+  "timeline.core.abandon.expunge",
 ];
+
+/** W2b Task 12: a forfeit line's key per kind. No bye: `CoreForfeit` refuses reason "bye" (a bye is written with no
+ *  event), so no ledger the timeline reads can carry one. */
+export const TIMELINE_FORFEIT_KEY: Readonly<Record<Exclude<ForfeitCopyKind, "bye">, string>> = {
+  walkover: "timeline.core.forfeit.walkover",
+  retired: "timeline.core.forfeit.retired",
+  disqualified: "timeline.core.forfeit.disqualified",
+  withdrew: "timeline.core.forfeit.withdrew",
+  double_walkover: "timeline.core.forfeit.doubleWalkover",
+};
+export const TIMELINE_EXPUNGE_KEY = "timeline.core.abandon.expunge";
 
 /** The template table: recorded event type -> dictionary key. */
 export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {

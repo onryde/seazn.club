@@ -147,13 +147,18 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
  * "adjudication" appears in both: an arbiter's discretionary ruling (FIDE
  * Art. 5.2) can go either way. Consumed by `buildDock` below: a decisive
  * half tap's dock offers exactly the first list, the draw tile's dock exactly
- * the second, never one flat list of 13 (R7-10).
+ * the second, never one flat list (R7-10).
+ *
+ * W2b (D15): no `forfeit` / `double_forfeit`. Both are retired on write for
+ * EVERY writer (append-event.ts `RETIRED_ON_WRITE_SPORT_EVENTS`; the engine's
+ * padSpec dropped them too) — a chess forfeit is `core.forfeit` with a reason,
+ * recorded through the console's forfeit dialog like every other sport's
+ * (UI-1). A chip for either would be a tap the server refuses for everybody.
  */
 export const DECISIVE_METHODS: readonly string[] = [
   "checkmate",
   "resign",
   "time",
-  "forfeit",
   "adjudication",
   "illegal_move",
 ];
@@ -165,7 +170,6 @@ export const DRAWN_METHODS: readonly string[] = [
   "repetition",
   "fifty_move",
   "dead_position",
-  "double_forfeit",
 ];
 
 /** `boardgame.ts`'s own field sentinel (`BOARD_MAX`), restated for the
@@ -703,7 +707,7 @@ function resultDetail(ctx: ActivityDetailContext, state: BoardgameStateShape): s
   const winner = payload.winner;
   if (typeof winner !== "string") {
     // A drawn or no-result card — `method`'s own vocab text ("Draw by
-    // agreement", "Double forfeit", …) already says which, so no extra word
+    // agreement", or a replayed pre-W2b "Double forfeit") already says which, so no extra word
     // is minted here. `moves` stays defensively handled (a payload from
     // before this change, or any other producer, may still carry it) even
     // though nothing in this file writes it any more — see `buildDock`'s

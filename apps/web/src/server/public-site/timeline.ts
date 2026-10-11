@@ -74,6 +74,8 @@ import { admittedLevelWithdrawal } from "@/lib/level-withdrawal";
 import { matchPhase, periodBreakdown, servingSide, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import {
+  TIMELINE_EXPUNGE_KEY,
+  TIMELINE_FORFEIT_KEY,
   TIMELINE_GAME_BROKEN_KEY,
   TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
@@ -81,6 +83,7 @@ import {
   TIMELINE_PERIOD_END_KEY,
   TIMELINE_SET_WON_KEY,
 } from "@/lib/timeline-keys";
+import { forfeitCopyKind, isExpungeAbandon } from "@/lib/forfeit-copy-kind";
 import type { MsgT, PersonT, SetsViewT, SideT, TimelineLineT } from "./match-centre-schema";
 
 export interface TimelineArgs {
@@ -485,6 +488,14 @@ const KEY_OVERRIDE: Readonly<
     payload.method === "lot" || payload.method === "higher_seed" || payload.method === "organiser"
       ? `timeline.core.settle.${payload.method}`
       : null,
+  // W2b Task 12: the forfeit's reason (or a double walkover) is the sentence; a pre-D3 row with no reason the engine
+  // declares keeps the table's reason-free line. A bye is never a core.forfeit (`CoreForfeit` refuses it).
+  "core.forfeit": (payload) => {
+    const kind = forfeitCopyKind(payload);
+    return kind === null || kind === "bye" ? null : TIMELINE_FORFEIT_KEY[kind];
+  },
+  // W2b D5: the withdrawal cascade's expunge is not a plain abandon — the match left the table.
+  "core.abandon": (payload) => (isExpungeAbandon(payload) ? TIMELINE_EXPUNGE_KEY : null),
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share
