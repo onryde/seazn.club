@@ -124,6 +124,9 @@ vi.mock("@/components/account-actions", () => ({
   TransferOwnerForm: () => <div />,
   DeleteAccountButton: () => <div />,
 }));
+// The Lichess card (chess branch) reads its copy through useT, which throws outside a DictProvider; it has its own
+// suite (lichess-card-online-chess-flag.test.tsx).
+vi.mock("@/components/lichess-link-card", () => ({ LichessLinkCard: () => <div /> }));
 
 import SettingsPage from "../page";
 

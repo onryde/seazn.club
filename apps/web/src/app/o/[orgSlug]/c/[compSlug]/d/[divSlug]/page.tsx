@@ -58,7 +58,7 @@ import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
-import { listNeedsOrganiserExternalPlay } from "@/server/usecases/external-play";
+import { listNeedsOrganiserExternalPlay, onlineChessOffered } from "@/server/usecases/external-play";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -522,6 +522,14 @@ export default async function DivisionPage({
     tab === "fixtures" && editable
       ? await listNeedsOrganiserExternalPlay(auth, id)
       : [];
+  // T20: the controls that START online chess (turning it on, the camera policy, re-sending an invite) render only
+  // while the club is offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess
+  // division's settings, or a queue that has rows.
+  const onlineChessOn =
+    division.sport_key === "boardgame" &&
+    ((tab === "settings" && canEdit) || needsOrganiserExternalPlay.length > 0)
+      ? await onlineChessOffered(auth)
+      : false;
 
   return (
     <>
@@ -766,6 +774,7 @@ export default async function DivisionPage({
             {needsOrganiserExternalPlay.length > 0 && (
               <div className="mb-4">
                 <ExternalPlayNeedsResultQueue
+                  resendOffered={onlineChessOn}
                   rows={needsOrganiserExternalPlay.map((r) => ({
                     ...r,
                     href:
@@ -973,6 +982,7 @@ export default async function DivisionPage({
                   : undefined,
             }}
             orgId={auth.orgId}
+            onlineChessOffered={onlineChessOn}
             variants={await listVariantOptions(auth, division.sport_key)}
             locked={formatLocked([{ fixture_count: fixtures.length }])}
             stages={stages.map((st) => ({

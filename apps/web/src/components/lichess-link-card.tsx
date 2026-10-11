@@ -3,14 +3,17 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 
 type Props = {
   linkedUsername: string | null;
   configured: boolean;
+  /** The club whose settings page this is: the link start names it (T20 — online chess is offered per club). */
+  orgSlug: string;
 };
 
 /** Account-tab control to link / unlink a Lichess account for online chess. */
-export function LichessLinkCard({ linkedUsername, configured }: Props) {
+export function LichessLinkCard({ linkedUsername, configured, orgSlug }: Props) {
   const t = useT();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -58,7 +61,7 @@ export function LichessLinkCard({ linkedUsername, configured }: Props) {
         </div>
       ) : (
         <a
-          href={`/api/auth/lichess?next=${encodeURIComponent("/settings?tab=account")}`}
+          href={lichessLinkStartHref(orgSlug, "/settings?tab=account")}
           className="btn btn-primary text-xs inline-flex"
           data-testid="lichess-link"
         >

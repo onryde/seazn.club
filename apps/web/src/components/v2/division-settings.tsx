@@ -382,6 +382,7 @@ export function DivisionSettings({
   canAutoPost,
   showSeeds,
   viewerPlan,
+  onlineChessOffered,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -425,6 +426,10 @@ export function DivisionSettings({
    *  layer — every organiser can hide their seeds. */
   showSeeds: boolean;
   viewerPlan: ViewerPlan;
+  /** T20: the club is offered online chess (the PostHog flag `online-chess`, asked by the page). Off ⇒ the Online
+   *  play select and the camera control are not rendered at all. A division already online keeps its stored value
+   *  through a save — the select's state still starts from the config (applyFormat). */
+  onlineChessOffered: boolean;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -1060,7 +1065,7 @@ export function DivisionSettings({
               </select>
             </label>
 
-            {division.sport_key === "boardgame" && (
+            {division.sport_key === "boardgame" && onlineChessOffered && (
               <div>
                 <label className="block text-xs text-slate-500">
                   {msg("divset.onlinePlay.label")}
@@ -1152,8 +1157,8 @@ export function DivisionSettings({
 
       {/* T6 — its own group, OUTSIDE the format lock: the camera requirement
           is edited mostly on divisions that already have fixtures, where the
-          Format group above is read-only. */}
-      {division.sport_key === "boardgame" && (
+          Format group above is read-only. T20: only while the club is offered online chess. */}
+      {division.sport_key === "boardgame" && onlineChessOffered && (
         <Group
           title={msg("divset.camera.label")}
           summary={cameraSummary(storedCameraChoice, inheritedCamera, msg)}

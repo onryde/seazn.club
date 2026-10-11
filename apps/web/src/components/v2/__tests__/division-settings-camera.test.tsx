@@ -93,6 +93,8 @@ function renderChess(own: CameraPolicy | null, inherited: CameraPolicy, dict = E
       canAutoPost={false}
       showSeeds
       viewerPlan="community"
+      // T20: the camera control renders only while the club is offered online chess.
+      onlineChessOffered
     />,
   );
 }
