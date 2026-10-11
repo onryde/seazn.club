@@ -32,6 +32,7 @@ import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import { HOLD_REASONS, holdForOrganiser, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
 import { getFixtureState } from "../fixtures";
+import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { scoreEvent } from "../scoring";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -958,7 +959,10 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
     const g = await liveGame();
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
-    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error" });
+    expect(
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error" }),
+      "the answer is the STORED reason, never the caller's (review I1)",
+    ).toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
     const b = await bridgeOf(g.fixtureId);
     expect(b!.needs_reason, "the first diagnosis stands until the organiser clears it").toBe("token_revoked");
   });
@@ -1005,6 +1009,146 @@ describe.runIf(HAS_DB)("Review Focus 1 — the player revoked our token on liche
     await expect(holdForOrganiser({ fixtureId: s.fixtureId, reason: "provider_error" })).rejects.toMatchObject({
       code: "NO_ONLINE_GAME",
     });
+  });
+});
+
+describe.runIf(HAS_DB)("I1 — a game's final outcome replaces a mid-game hold, never the reverse", () => {
+  // Controller ruling I1 (fix round 1). A mid-game diagnosis (token_revoked,
+  // provider_error — holdForOrganiser's callers) is the best the room knew
+  // while the game ran; the snapshot that ends the game is newer and strictly
+  // more informative. So a terminal snapshot's hold replaces a mid-game
+  // reason and refreshes last_error; a mid-game hold never replaces a
+  // terminal one, nor touches a fixture whose result is written. Every answer
+  // is the PERSISTED reason, so the organiser's queue and the writer agree.
+  const queueOf = async (g: Game) =>
+    (await listNeedsOrganiserExternalPlay(await mintOrgOwnerAuth(g.orgId), g.divisionId)).filter((r) => r.fixtureId === g.fixtureId);
+
+  it("token_revoked, then a knockout DRAW: the column reads tiebreak_owed, last_error names the draw — and a later revoke does not undo it", async () => {
+    const g = await liveGame({ kind: "knockout" });
+    expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" })).toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
+    const s = snap(g, { status: "draw", winner: null });
+    // Forward: the final outcome replaces the mid-game reason.
+    expect(await writeResultFrom(s, g.fixtureId)).toEqual({ wrote: "needs_organiser", reason: "tiebreak_owed" });
+    const b = await bridgeOf(g.fixtureId);
+    expect(b!.needs_reason).toBe("tiebreak_owed");
+    expect(b!.last_error, "last_error refreshed with the snapshot").toMatch(/draw/);
+    expect(b!.last_error).toMatch(/tie-break/);
+    expect((await queueOf(g)).map((r) => r.reason), "the queue says what the writer said").toEqual(["tiebreak_owed"]);
+    // Reverse: a mid-game hold never replaces the terminal reason.
+    expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" }), "the STORED reason").toEqual({
+      wrote: "needs_organiser",
+      reason: "tiebreak_owed",
+    });
+    expect(await bridgeOf(g.fixtureId), "nothing moved").toEqual(b);
+  });
+
+  it("each mid-game reason × every TERMINAL snapshot hold: the snapshot's reason replaces it, last_error names its status — counted", async () => {
+    const MID = ["token_revoked", "provider_error"] as const;
+    const TERMINAL = [
+      { status: "aborted", winner: null, answer: { wrote: "aborted" }, reason: "aborted" },
+      { status: "noStart", winner: "white", answer: { wrote: "aborted" }, reason: "aborted" },
+      { status: "cheat", winner: "black", answer: { wrote: "needs_organiser", reason: "fair_play" }, reason: "fair_play" },
+      { status: "unknownFinish", winner: null, answer: { wrote: "needs_organiser", reason: "provider_error" }, reason: "provider_error" },
+    ] as const;
+    let checked = 0;
+    for (const mid of MID) for (const t of TERMINAL) {
+      const g = await liveGame();
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: mid, detail: "401 on move 9" });
+      expect(await writeResultFrom(snap(g, { status: t.status, winner: t.winner }), g.fixtureId), t.status).toEqual(t.answer);
+      const b = await bridgeOf(g.fixtureId);
+      expect(b!.needs_reason, t.status).toBe(t.reason);
+      expect(b!.last_error, `${t.status}: last_error refreshed`).toMatch(new RegExp(t.status));
+      expect(await typesOf(g.fixtureId), `${t.status}: a hold writes no event`).toEqual([]);
+      // Reverse.
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error" }), `${t.status}: the stored reason`).toEqual(t.answer);
+      expect(await bridgeOf(g.fixtureId), `${t.status}: a mid-game hold changes nothing`).toEqual(b);
+      checked++;
+    }
+    expect(checked).toBe(MID.length * TERMINAL.length);
+  });
+
+  it("token_revoked, then a decisive result on a game with no recorded colour: the colour hold replaces it", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+    await sql`update fixture_external_play set white_side = null where fixture_id = ${g.fixtureId}`;
+    expect(await writeResultFrom(snap(g, { status: "mate", winner: "white" }), g.fixtureId)).toEqual({
+      wrote: "needs_organiser",
+      reason: "provider_error",
+    });
+    expect(await bridgeOf(g.fixtureId)).toMatchObject({ needs_reason: "provider_error", last_error: expect.stringMatching(/colour/) });
+  });
+
+  it("token_revoked, then the game ENDS with a result (league draw, a win): written, off the queue — and a later revoke is refused", async () => {
+    const ENDS = [
+      { status: "draw", winner: null, wrote: "draw", kind: "league" },
+      { status: "mate", winner: "white", wrote: "decided", kind: "league" },
+      { status: "resign", winner: "black", wrote: "decided", kind: "knockout" },
+    ] as const;
+    let checked = 0;
+    for (const end of ENDS) {
+      const g = await liveGame({ kind: end.kind });
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+      expect((await queueOf(g)).length, `${end.status}: premise — on the queue`).toBe(1);
+      expect(await writeResultFrom(snap(g, { status: end.status, winner: end.winner }), g.fixtureId), end.status).toEqual({
+        wrote: end.wrote,
+      });
+      expect((await fixtureOf(g.fixtureId)).status, end.status).toBe("decided");
+      expect(await queueOf(g), `${end.status}: the result replaced the hold on the queue`).toEqual([]);
+      const b = await bridgeOf(g.fixtureId);
+      // Reverse: the game is over; a mid-game hold has nothing to hold.
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" }), end.status).toEqual({ wrote: "none" });
+      expect(await bridgeOf(g.fixtureId), `${end.status}: nothing moved`).toEqual(b);
+      checked++;
+    }
+    expect(checked).toBe(ENDS.length);
+  });
+
+  it("a mid-game provider_error, then unknownFinish: the reason stays provider_error and last_error is the snapshot's", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "stream dropped at move 14" });
+    expect((await bridgeOf(g.fixtureId))!.last_error, "premise").toBe("stream dropped at move 14");
+    expect(await writeResultFrom(snap(g, { status: "unknownFinish", winner: null }), g.fixtureId)).toEqual({
+      wrote: "needs_organiser",
+      reason: "provider_error",
+    });
+    expect((await bridgeOf(g.fixtureId))!.last_error).toMatch(/unknownFinish/);
+  });
+
+  it("a reason that is NOT a mid-game diagnosis (double_walkover_blocked) is not replaced: the answer is the stored reason", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "double_walkover_blocked" });
+    const b = await bridgeOf(g.fixtureId);
+    expect(await writeResultFrom(snap(g, { status: "aborted", winner: null }), g.fixtureId)).toEqual({
+      wrote: "needs_organiser",
+      reason: "double_walkover_blocked",
+    });
+    expect(await bridgeOf(g.fixtureId)).toEqual(b);
+  });
+
+  it("a held needs_decision fixture (legacy cfg) is never held on top by a mid-game caller", async () => {
+    const g = await liveGame({ kind: "knockout", legacyCfg: true });
+    expect(await writeResultFrom(snap(g, { status: "draw", winner: null }), g.fixtureId)).toEqual({ wrote: "draw" });
+    expect((await fixtureOf(g.fixtureId)).status, "premise").toBe("needs_decision");
+    const b = await bridgeOf(g.fixtureId);
+    expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" })).toEqual({ wrote: "none" });
+    expect(await bridgeOf(g.fixtureId)).toEqual(b);
+  });
+});
+
+describe.runIf(HAS_DB)("M5 — holdForOrganiser keeps last_error unless it brings its own", () => {
+  it("no detail: the row's earlier last_error survives the hold", async () => {
+    const g = await liveGame();
+    // Stands for T9's last create error, which the room shows beside the hold.
+    await sql`update fixture_external_play set last_error = 'create failed: 429 rate limited' where fixture_id = ${g.fixtureId}`;
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+    expect(await bridgeOf(g.fixtureId)).toMatchObject({ needs_reason: "token_revoked", last_error: "create failed: 429 rate limited" });
+  });
+
+  it("with a detail: last_error is the caller's diagnosis", async () => {
+    const g = await liveGame();
+    await sql`update fixture_external_play set last_error = 'create failed: 429 rate limited' where fixture_id = ${g.fixtureId}`;
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", detail: "401 on move 7" });
+    expect(await bridgeOf(g.fixtureId)).toMatchObject({ needs_reason: "token_revoked", last_error: "401 on move 7" });
   });
 });
 
@@ -1298,6 +1442,7 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
                 expect(now.bridge, `${label}: the bridge is T11's to finish`).toEqual(before.bridge);
                 bump(e.wrote);
                 bump(pre === "started" ? "already_live" : "started_by_us");
+                if (pre === "held") bump("held_then_written");
                 if (e.wrote === "decided" && whiteAway) bump("white_away_written");
                 if (e.wrote === "decided" && bracket) bump("bracket_decisive_written");
               } else if (e.wrote === "needs_organiser" && e.reason === "tiebreak_owed") {
@@ -1309,16 +1454,25 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
                 expect(ev!.payload.method ?? null, `${label}: method`).toBe(e.draw);
                 expect([now.fixture.status, now.fixture.outcome], `${label}: in play, undecided`).toEqual(["in_play", null]);
                 expect(now.bridge!.status, label).toBe("needs_organiser");
-                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe(pre === "held" ? "token_revoked" : "tiebreak_owed");
+                // I1: the snapshot that ends the game replaces a mid-game reason.
+                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe("tiebreak_owed");
+                expect(now.bridge!.last_error, `${label}: last_error is the snapshot's`).toContain(`status ${outcome.status}`);
                 bump("held_tiebreak_owed");
+                if (pre === "held") bump("held_superseded");
                 bump(pre === "started" ? "already_live" : "started_by_us");
               } else if (e.wrote === "aborted" || e.wrote === "needs_organiser") {
                 expect(now.ledger, `${label}: a hold writes no event`).toEqual(before.ledger);
                 expect(now.bridge!.status, label).toBe("needs_organiser");
                 const reason = e.wrote === "aborted" ? "aborted" : e.reason;
-                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe(pre === "held" ? "token_revoked" : reason);
+                // I1 (was test:1124, which froze the stale mid-game reason as
+                // the expected value): the terminal snapshot's reason replaces
+                // the `held` pre-state's token_revoked, and last_error is its.
+                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe(reason);
+                expect(now.bridge!.last_error, `${label}: last_error is the snapshot's`).toContain(
+                  outcome.status === "unrecognised" ? "laterStatus" : `status ${outcome.status}`,
+                );
                 bump(e.wrote === "aborted" ? "held_aborted" : `held_${e.reason}`);
-                if (pre === "held") bump("first_diagnosis_kept");
+                if (pre === "held") bump("held_superseded");
               } else {
                 expect(now, `${label}: nothing moved`).toEqual(before);
                 bump(nonterminal ? "none_nonterminal" : "none_settled");
@@ -1346,12 +1500,16 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
       "already_live",
       "white_away_written",
       "bracket_decisive_written",
-      "first_diagnosis_kept",
+      "held_superseded",
+      "held_then_written",
+      // Not held_fair_play: cheat is one status in four of one organiser
+      // shape, so its count is draw luck (measured: 1 in a run). The cheat
+      // sweep and the I1 terminal sweep pin it deterministically.
     ]) {
       expect(totals[path] ?? 0, `anti-vacuity: ${path}`).toBeGreaterThan(0);
       checked++;
     }
-    expect(checked).toBe(14);
+    expect(checked).toBe(15);
     expect(checks).toBeGreaterThan(0);
   });
 });

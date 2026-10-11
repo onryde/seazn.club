@@ -35,6 +35,7 @@ import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
 import { effectiveBridge, loadOnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
+import { readNeedsReason } from "./queue";
 
 /** The reasons a CALLER may hold a fixture for. Each is a V433/V435
  *  `needs_reason` (the `satisfies` keeps them inside NEEDS_REASONS); no
@@ -52,9 +53,18 @@ export type HoldReason = (typeof HOLD_REASONS)[number];
  *  written bracket draw whose tie-break the engine opened. */
 type SnapshotOnlyReason = "fair_play" | "tiebreak_owed";
 
+/** The mid-game diagnoses — the best the room knew while the game ran
+ *  (holdForOrganiser's T10/T11 callers). The snapshot that ENDS the game is
+ *  newer and strictly more informative, so its hold replaces these; nothing
+ *  else is ever replaced (review I1; controller ruling, fix round 1). */
+const MID_GAME_REASONS = ["token_revoked", "provider_error"] as const satisfies readonly HoldReason[];
+
+/** A hold's answer is the reason the row now STORES — which is the caller's
+ *  only when it landed — so the organiser's queue and this answer agree.
+ *  `aborted` keeps its own answer (spec §3.6). */
 export type ResultWrite =
   | { wrote: "decided" | "draw" | "aborted" | "forfeit" | "none" }
-  | { wrote: "needs_organiser"; reason: HoldReason | SnapshotOnlyReason };
+  | { wrote: "needs_organiser"; reason: Exclude<NeedsReason, "aborted"> };
 
 type Colour = "white" | "black";
 type Disposition =
@@ -169,42 +179,67 @@ function dispositionOf(s: GameSnapshot): Disposition {
   }
 }
 
-/** Hold the fixture for the organiser: ONE conditional UPDATE, which is both
- *  the hold and its idempotency. The first diagnosis stands until the
- *  organiser clears it (`needs_reason is null`), and a game whose result is
- *  already recorded (`finished`, T11) is never reopened. */
+type Held = { held: false } | { held: true; reason: NeedsReason };
+
+/** Hold the fixture for the organiser — or say why not. Under the fixture's
+ *  append lock (append-event.ts), so no result or settle lands between the
+ *  read of the fixture's status and the hold:
+ *  - a game whose result is recorded (bridge `finished`, T11) or a fixture
+ *    no longer playable (decided, needs_decision, abandoned…) is never held:
+ *    `{ held: false }`;
+ *  - a reason already on the row stands unless `replaces` names it — the
+ *    answer is then the STORED reason;
+ *  - `last_error` takes `detail` when one is given, and keeps what the row
+ *    had otherwise (review M5: a bare hold erased T9's last create error). */
 async function hold(
   fixtureId: string,
   reason: "aborted" | HoldReason | SnapshotOnlyReason,
   detail: string | null,
-): Promise<"held" | "finished"> {
-  const rows = await sql<{ fixture_id: string }[]>`
-    update fixture_external_play
-       set status = 'needs_organiser', needs_reason = ${reason}, last_error = ${detail}, updated_at = now()
-     where fixture_id = ${fixtureId} and needs_reason is null and status <> 'finished'
-     returning fixture_id`;
-  if (rows.length > 0) return "held";
-  const [row] = await sql<{ status: string }[]>`
-    select status from fixture_external_play where fixture_id = ${fixtureId}`;
-  // Every caller acts on a game it found on this row, so a missing row is a
-  // caller bug — refused by name rather than reported as held.
-  if (!row) throw new HttpError(404, "no online game on file for this fixture", "NO_ONLINE_GAME");
-  return row.status === "finished" ? "finished" : "held";
+  replaces: readonly NeedsReason[],
+): Promise<Held> {
+  return sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+    const [row] = await tx<{ status: string; needs_reason: unknown; fixture_status: string }[]>`
+      select ep.status, ep.needs_reason, f.status as fixture_status
+        from fixture_external_play ep join fixtures f on f.id = ep.fixture_id
+       where ep.fixture_id = ${fixtureId}
+         for update of ep`;
+    // Every caller acts on a game it found on this row, so a missing row is a
+    // caller bug — refused by name rather than reported as held.
+    if (!row) throw new HttpError(404, "no online game on file for this fixture", "NO_ONLINE_GAME");
+    if (row.status === "finished" || !isPlayableFixtureStatus(row.fixture_status)) return { held: false };
+    if (row.needs_reason !== null) {
+      const stored = readNeedsReason(row.needs_reason);
+      if (stored !== reason && !replaces.includes(stored)) return { held: true, reason: stored };
+    }
+    await tx`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = ${reason},
+             last_error = coalesce(${detail}, last_error), updated_at = now()
+       where fixture_id = ${fixtureId}`;
+    return { held: true, reason };
+  });
+}
+
+function heldAnswer(reason: NeedsReason): ResultWrite {
+  return reason === "aborted" ? { wrote: "aborted" } : { wrote: "needs_organiser", reason };
 }
 
 /** The non-snapshot half: a fixture that cannot produce a result at all goes
  *  to the organiser queue with its own reason. Called by T10's `unauthorized`
- *  caller and by T13's double-walkover refusal. Answers `none` when the
- *  game's result is already recorded. `reason` is the caller's diagnosis; an
- *  EARLIER one on the row stands (the queue shows the first). */
-export async function holdForOrganiser(a: { fixtureId: string; reason: HoldReason }): Promise<ResultWrite> {
+ *  caller and by T13's double-walkover refusal. A mid-game diagnosis never
+ *  replaces a reason already on the row (the first diagnosis, or the
+ *  snapshot that ended the game), and a game that is over — its result
+ *  recorded, or the fixture settled — is not held at all: `none`. `detail`
+ *  (e.g. "401 on move 7") becomes `last_error`; without one the row's
+ *  earlier `last_error` stands. Answers the STORED reason. */
+export async function holdForOrganiser(a: { fixtureId: string; reason: HoldReason; detail?: string }): Promise<ResultWrite> {
   // The union is the contract, and a cast must not smuggle a no-show past it.
   if (!(HOLD_REASONS as readonly string[]).includes(a.reason)) {
     throw new HttpError(500, `not a hold reason: ${JSON.stringify(a.reason)}`, "HOLD_REASON_UNKNOWN");
   }
-  return (await hold(a.fixtureId, a.reason, null)) === "finished"
-    ? NONE
-    : { wrote: "needs_organiser", reason: a.reason };
+  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, []);
+  return h.held ? heldAnswer(h.reason) : NONE;
 }
 
 function answerFor(d: Disposition & { kind: "result" }): ResultWrite {
@@ -232,12 +267,16 @@ function tiebreakPending(fs: { state: unknown }): boolean {
  *  run on a replay, so a hold a crash lost between the two writes is
  *  restored — and a tie-break recorded since answers plain `draw`. */
 async function afterDraw(s: GameSnapshot, fixtureId: string, auth: Awaited<ReturnType<typeof mintOrgOwnerAuth>>): Promise<ResultWrite> {
-  const fs = await getFixtureState(auth, fixtureId);
-  if (!isPlayableFixtureStatus(fs.status) || !tiebreakPending(fs)) return { wrote: "draw" };
-  if ((await hold(fixtureId, "tiebreak_owed", `${describeSnapshot(s)} — a drawn game in a bracket: the tie-break is owed`)) === "finished") {
-    return NONE;
-  }
-  return { wrote: "needs_organiser", reason: "tiebreak_owed" };
+  if (!tiebreakPending(await getFixtureState(auth, fixtureId))) return { wrote: "draw" };
+  // hold() re-reads the fixture under its lock: one settled since (a settle
+  // leaves the fold in "tiebreak", core/events.ts settleApplies) is not held.
+  const h = await hold(
+    fixtureId,
+    "tiebreak_owed",
+    `${describeSnapshot(s)} — a drawn game in a bracket: the tie-break is owed`,
+    MID_GAME_REASONS,
+  );
+  return h.held ? heldAnswer(h.reason) : { wrote: "draw" };
 }
 
 function phaseOf(state: unknown): string {
@@ -295,8 +334,9 @@ async function attempt(
   }
 
   if (d.kind === "hold") {
-    if ((await hold(fixtureId, d.reason, d.detail)) === "finished") return NONE;
-    return d.reason === "aborted" ? { wrote: "aborted" } : { wrote: "needs_organiser", reason: d.reason };
+    // The snapshot ends the game: its hold replaces a mid-game diagnosis.
+    const h = await hold(fixtureId, d.reason, d.detail, MID_GAME_REASONS);
+    return h.held ? heldAnswer(h.reason) : NONE;
   }
 
   // 4. The winning ENTRANT, from the colours T9 recorded with the game —
@@ -304,8 +344,13 @@ async function attempt(
   let winner: string | null = null;
   if (d.winner !== null) {
     if (b.white_side === null) {
-      await hold(fixtureId, "provider_error", `${describeSnapshot(s)} — the game on file has no recorded colour`);
-      return { wrote: "needs_organiser", reason: "provider_error" };
+      const h = await hold(
+        fixtureId,
+        "provider_error",
+        `${describeSnapshot(s)} — the game on file has no recorded colour`,
+        MID_GAME_REASONS,
+      );
+      return h.held ? heldAnswer(h.reason) : NONE;
     }
     const whiteIsHome = b.white_side === "home";
     winner = (d.winner === "white") === whiteIsHome ? f.homeEntrantId : f.awayEntrantId;
