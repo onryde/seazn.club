@@ -21,6 +21,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
+import { endMeeting } from "@/server/external-play/video/realtimekit";
 import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
@@ -50,6 +51,8 @@ export type SweepReport = {
 
 export type SweepDeps = {
   now?: Date;
+  /** T7's teardown (kick-all, deactivate, stamp `ended_at`). */
+  endMeeting?: (meetingId: string) => Promise<void>;
   /** T9's create, judged on the sweep's clock. */
   createGameIfReady?: (fixtureId: string, deps: { now: Date }) => Promise<CreateOutcome>;
   /** TEST SEAM — scope every job to these orgs. Production passes none and
@@ -222,6 +225,58 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
   await create(c.fixtureId, { now: pass.now });
 }
 
+// ─── Job 3: meeting teardown ───────────────────────────────────────────────
+//
+// A fixture has one meeting for life (fixture_video_meetings, PK fixture_id);
+// T7's endMeeting kicks everyone, deactivates it, and only then stamps
+// `ended_at` — so a failed deactivate leaves the row for the next pass, and
+// an ended row is never a candidate again. A meeting is torn down when:
+//   - the game is over: the bridge is `finished` (spec §5.2, "at the result");
+//   - the board is settled: the fixture is no longer playable (withdrawn,
+//     decided by hand, cancelled, held for a decision);
+//   - nobody played: the round's deadline has passed and no game is, or may
+//     be, on file (no challenge, no possibly-sent create). Past T+20 no game
+//     can be made (T9 refuses), so the room has no further use.
+// A game on file that is not finished keeps its meeting, past T+20 or not:
+// "nothing in our system ends a live game early" (spec §3.6).
+
+type TeardownCandidate = {
+  fixtureId: string;
+  meetingId: string;
+  fixtureStatus: string;
+  bridgeStatus: string | null;
+  challengeId: string | null;
+  createSentAt: Date | null;
+  openedAt: Date | null;
+};
+
+async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
+  return sql<TeardownCandidate[]>`
+    select m.fixture_id as "fixtureId", m.meeting_id as "meetingId", f.status as "fixtureStatus",
+           ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
+           o.opened_at as "openedAt"
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+      left join fixture_external_play ep on ep.fixture_id = m.fixture_id
+      left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+     where m.ended_at is null
+       ${orgScope(pass)}
+     order by m.created_at, m.fixture_id`;
+}
+
+function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
+  if (c.bridgeStatus === "finished") return true;
+  if (!isPlayableFixtureStatus(c.fixtureStatus)) return true;
+  const gameOnFile = c.challengeId !== null || c.createSentAt !== null;
+  return !gameOnFile && c.openedAt !== null && pass.now.getTime() >= playableWindow(c.openedAt).deadline.getTime();
+}
+
+async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {
+  if (!meetingIsDone(pass, c)) return;
+  await end(c.meetingId);
+  pass.report.meetingsEnded++;
+}
+
 // ─── The pass ──────────────────────────────────────────────────────────────
 
 export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
@@ -239,5 +294,9 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
   const create = deps.createGameIfReady ?? ((id, d) => createGameIfReady(id, { now: d.now }));
   await each(pass, "mint_retry", await retryCandidates(pass), (c) => mintRetry(pass, c, create));
   await each(pass, "no_show", await noShowCandidates(pass), (c) => noShow(pass, c));
+  // Last, so a game finished or a board forfeited earlier in THIS pass is
+  // torn down in it.
+  const end = deps.endMeeting ?? ((m) => endMeeting(m));
+  await each(pass, "teardown", await teardownCandidates(pass), (c) => teardown(pass, c, end));
   return report;
 }
