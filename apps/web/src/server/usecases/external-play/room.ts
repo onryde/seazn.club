@@ -124,8 +124,9 @@ async function openAnchor(fixtureId: string): Promise<Date | null> {
  *  list rather than compared against it — postgres.js's `sql([])` renders an
  *  empty list as `(null)`, which is at best a wasted round trip and, if both
  *  sides were ever personId-less, a query this function must not even
- *  attempt. */
-async function checkIns(
+ *  attempt. Exported for T13's no-show sweep, which must judge "who came"
+ *  by exactly this reading. */
+export async function checkIns(
   f: OnlinePlayFixture,
   home: SidePlayer,
   away: SidePlayer,
