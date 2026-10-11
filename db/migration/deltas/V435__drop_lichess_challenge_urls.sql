@@ -23,11 +23,13 @@
 --    could not prove the outcome lands on. Same constraint name, so
 --    NEEDS_REASONS (types.ts) and its pg_constraint read-back still match.
 --
--- 4. needs_reason gains 'tiebreak_owed' (T12, spec §3.6): a drawn game in a
---    bracket stage is HELD for the organiser and never written as decided —
---    this branch's engine has no tie-break phase, so the hold is the bridge
---    row. Amended into V435 (the CHECK's latest declaration) rather than a new
---    version because the branch is unmerged; V436 is T10's move ledger.
+-- 4. needs_reason gains 'tiebreak_owed' (T12, spec §3.6; fix round 1, R2): a
+--    drawn game in a bracket stage is written through the engine, whose
+--    bracket decider (W2a) then holds the fixture in_play in its tie-break
+--    phase — never decided. Ship 1 cannot create a tie-break Lichess game, so
+--    the bridge row tells the organiser the tie-break is owed. Amended into
+--    V435 (the CHECK's latest declaration) rather than a new version because
+--    the branch is unmerged; V436 is T10's move ledger.
 --
 -- 5. needs_reason gains 'fair_play' (T12 fix round 1, I2; addendum 1): Lichess
 --    ended the game for a fair-play violation (status `cheat`). The organiser
