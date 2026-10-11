@@ -67,7 +67,7 @@ async function staged(r: APIRequestContext, sport: string, variant: string, kind
   const fx = all.find((f) => f.home_entrant_id && f.away_entrant_id)!;
   expect(fx, "a fixture with both entrants").toBeTruthy();
   const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
-  return { fx, home: nameOf.get(fx.home_entrant_id!)!, away: nameOf.get(fx.away_entrant_id!)!, all };
+  return { fx, home: nameOf.get(fx.home_entrant_id!)!, away: nameOf.get(fx.away_entrant_id!)!, all, nameOf };
 }
 const badmintonLeague = (r: APIRequestContext) => staged(r, "badminton", "bwf", "league", [`Asha ${TAG}`, `Bala ${TAG}`]);
 
@@ -81,6 +81,34 @@ async function seatedInFinal(sfId: string): Promise<(string | null)[]> {
     expect(rows, "the semi feeds a final").toHaveLength(1);
     return [rows[0]!.home, rows[0]!.away];
   });
+}
+
+/** The fixture a semi's winner feeds, its status and slot labels, and which of its seats the semi feeds — read from
+ *  the rows, not inferred. */
+async function finalFedBy(sfId: string) {
+  return withDb(async (sql) => {
+    const rows = await sql<{ id: string; status: string; home: string | null; away: string | null; home_label: string | null; away_label: string | null; slot: number }[]>`
+      select n.id, n.status, n.home_entrant_id as home, n.away_entrant_id as away,
+             n.home_slot_label->>'key' as home_label, n.away_slot_label->>'key' as away_label, f.winner_to_slot as slot
+        from fixtures f join fixtures n on n.id = f.winner_to_fixture
+       where f.id = ${sfId}`;
+    expect(rows, "the semi feeds a final").toHaveLength(1);
+    const r = rows[0]!;
+    return { ...r, fedSeat: r.slot === 1 ? r.home : r.away, fedLabel: r.slot === 1 ? r.home_label : r.away_label };
+  });
+}
+
+/** Neither → walkover → Confirm on the open console: the dialog's own double walkover, its preview and its label. */
+async function confirmNeither(page: Page) {
+  const d = await openDialog(page);
+  expect(await sidesShown(d), "before play, with a next match (or a table): Neither is offered").toEqual(["home", "away", "both"]);
+  await d.getByTestId("forfeit-who-both").click();
+  expect(await reasonsShown(d), "Neither only walks over").toEqual(["walkover"]);
+  await d.getByTestId("forfeit-why-walkover").check();
+  // X-DW-4: no score is credited to either side.
+  await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview.none"));
+  await expect(d.getByTestId("forfeit-confirm")).toHaveText(ui("forfeitDialog.confirm.doubleWalkover"));
+  await d.getByTestId("forfeit-confirm").click();
 }
 
 /** The forfeit POSTs a page itself sends (count requests, not ledger rows a retry could merge). */
@@ -227,6 +255,82 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     });
     expect(refused.error?.code, JSON.stringify(refused.error)).toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
     expect(await forfeitsIn(request, final.fx.id)).toHaveLength(0);
+  });
+
+  // Review I-2: the console is the FIRST producer of core.forfeit {by:"both"}. Each test drives Neither through the
+  // browser and reads what the SERVER stored, then what the table or the next match shows. Expected values are
+  // Appendix A's (X-DW-1, X-DW-2, X-DW-4, C-5's bye award), never the module's.
+  test("X-DW-1 + X-DW-4: Neither before play records ONE core.forfeit {by: both, walkover}; the league table credits nothing", async ({ page, request }) => {
+    // single-sport: X-DW-4 is a product rule; the engine's parity sweep folds every module's double walkover.
+    const { fx } = await badmintonLeague(request);
+    expect(fx.status, "never started").toBe("scheduled");
+    await page.goto(await fixturePath(request, fx.id));
+    const posts = countForfeitPosts(page);
+    await confirmNeither(page);
+
+    await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
+    expect(posts(), "the page sent one forfeit").toBe(1);
+    expect((await forfeitsIn(request, fx.id))[0]!.payload).toEqual({ by: "both", reason: "walkover" });
+    expect((await ledger(request, fx.id)).map((e) => e.type), "no core.start: a double walkover is recorded before play").toEqual(["core.forfeit"]);
+    await expect(dialogOf(page)).toHaveCount(0);
+    await expect(page.getByTestId("score-forfeit"), "decided: no Forfeit").toHaveCount(0, { timeout: 20_000 });
+    await expect(page.getByTestId("score-start-match"), "decided: no Start").toHaveCount(0);
+    const after = await read(request, fx.id);
+    expect([after.status, after.outcome], "X-DW-1: its own outcome, both sides lose").toEqual(["forfeited", { kind: "double_walkover" }]);
+    // X-DW-4: P+1, L+1, 0 points for both, no score credited.
+    const want = (entrantId: string) => ({ entrantId, played: 1, won: 0, drawn: 0, lost: 1, points: 0, credited: [0, 0, 0, 0] });
+    await expect
+      .poll(async () => {
+        const st = await apiJson<{ rows: { entrantId: string; played: number; won: number; drawn: number; lost: number; points: number; metrics: Record<string, number> }[] }>(
+          request,
+          `/api/v1/stages/${fx.stage_id}/standings`,
+        );
+        return (st.data?.rows ?? [])
+          .map((r) => ({
+            entrantId: r.entrantId, played: r.played, won: r.won, drawn: r.drawn, lost: r.lost, points: r.points,
+            credited: ["sets_won", "sets_lost", "points_won", "points_lost"].map((k) => r.metrics?.[k] ?? 0),
+          }))
+          .sort((a, b) => a.entrantId.localeCompare(b.entrantId));
+      }, { timeout: 30_000 })
+      .toEqual([want(fx.home_entrant_id!), want(fx.away_entrant_id!)].sort((a, b) => a.entrantId.localeCompare(b.entrantId)));
+  });
+
+  test("X-DW-1 + X-DW-2: Neither on a semi-final seats nobody in the final; once the other semi is won, the final is that winner's by walkover over a Bye", async ({ page, request }) => {
+    // single-sport: the cascade reads the feed graph and the outcome, never the sport (double-walkover-seating.test.ts sweeps it).
+    const semis = await staged(request, "generic", "score", "knockout", ["Ana", "Ben", "Cy", "Di"].map((n) => `${n} DW ${TAG}`));
+    const sf1 = semis.fx;
+    const sf2 = semis.all.find((f) => f.id !== sf1.id && f.home_entrant_id && f.away_entrant_id)!;
+    expect(sf2, "the other semi, both seated").toBeTruthy();
+    await page.goto(await fixturePath(request, sf1.id));
+    const posts = countForfeitPosts(page);
+    await confirmNeither(page);
+
+    await expect.poll(async () => (await forfeitsIn(request, sf1.id)).length, { timeout: 20_000 }).toBe(1);
+    expect(posts(), "the page sent one forfeit").toBe(1);
+    expect((await forfeitsIn(request, sf1.id))[0]!.payload).toEqual({ by: "both", reason: "walkover" });
+    const out = await read(request, sf1.id);
+    expect([out.status, out.outcome], "X-DW-1").toEqual(["forfeited", { kind: "double_walkover" }]);
+    // X-DW-2: the seat it feeds stays empty — neither side advances — and the final waits on the other semi.
+    const early = await finalFedBy(sf1.id);
+    expect([early.fedSeat, early.status], "nobody seated from the double walkover; the final still scheduled").toEqual([null, "scheduled"]);
+
+    // The other semi is won (home 2-0), so the final's dead seat walks its winner over (X-DW-2, C-5's bye award).
+    await post(request, sf2.id, "core.start");
+    await post(request, sf2.id, "generic.result", { p1Score: 2, p2Score: 0 });
+    expect((await read(request, sf2.id)).outcome).toMatchObject({ kind: "win", winner: sf2.home_entrant_id });
+    await expect.poll(async () => (await finalFedBy(sf1.id)).status, { timeout: 20_000 }).toBe("forfeited");
+    const final = await finalFedBy(sf1.id);
+    expect([final.fedSeat, final.fedLabel], "the dead seat: empty, labelled Bye").toEqual([null, "bracket.slot.bye"]);
+    expect((await read(request, final.id)).outcome).toEqual({ kind: "award", winner: sf2.home_entrant_id, loser: null, reason: "bye" });
+    // What the next match shows: the winner against a Bye, decided — no Start, no Forfeit.
+    await page.goto(await fixturePath(request, final.id));
+    const heading = page.locator("header h1").first();
+    await expect(heading).toContainText(ui("bracket.slot.bye"), { timeout: 20_000 });
+    const winner = semis.nameOf.get(sf2.home_entrant_id!);
+    expect(winner, "rig: the other semi's winner has a name").toBeTruthy();
+    await expect(heading).toContainText(winner!);
+    await expect(page.getByTestId("score-start-match")).toHaveCount(0);
+    await expect(page.getByTestId("score-forfeit")).toHaveCount(0);
   });
 
   test("X-AB-4: a forfeit on a match abandoned under the open dialog is refused — the dialog closes and the console says settle or void", async ({ page, request }) => {
