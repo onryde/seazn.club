@@ -32,6 +32,7 @@ import {
   type OnlinePlayFixture,
   type SidePlayer,
 } from "./guard";
+import { assertOnlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus } from "./preflight";
 
 type AnySql = postgres.TransactionSql | postgres.Sql;
@@ -226,6 +227,9 @@ export async function resendExternalPlayNotice(
   // Not an online board, or not this org's: the same 404, so a probe cannot
   // tell which.
   if (!f || f.orgId !== auth.orgId) throw new HttpError(404, "No online-play fixture here");
+  // T20: an invite STARTS play for the people it reaches, so the club must be offered online chess (403
+  // ONLINE_CHESS_DISABLED). After the 404, so a probe still cannot tell a foreign board from a missing one.
+  await assertOnlineChessOffered(auth);
   if (f.bridge?.status === "finished") {
     throw new HttpError(409, "Fixture already finished", "ALREADY_RESOLVED");
   }

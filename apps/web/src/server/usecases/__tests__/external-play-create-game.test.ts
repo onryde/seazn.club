@@ -21,6 +21,7 @@ import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { PLAY_SCOPES, getLichessLink } from "../external-accounts";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady, type CreateOutcome } from "../external-play/create-game";
+import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
@@ -1135,6 +1136,20 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
         const r = await createGameIfReady(s.fixtureId, { now: NOW });
         if (!r.created) produced.add(r.reason);
       },
+      // T20: the club not offered online chess. The override off and no PostHog in the test env — the flag's own
+      // fallback (off) answers, through the real evaluator. Restored before the next case.
+      online_chess_disabled: async () => {
+        const s = await seed();
+        vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+        forgetOnlineChessFlagCache();
+        try {
+          const r = await createGameIfReady(s.fixtureId, { now: NOW });
+          if (!r.created) produced.add(r.reason);
+        } finally {
+          vi.unstubAllEnvs();
+          forgetOnlineChessFlagCache();
+        }
+      },
     };
     const declared = Object.keys(builders) as Reason[];
     for (const reason of declared) {
@@ -1143,7 +1158,7 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
       await builders[reason]();
     }
     expect([...produced].sort(), "every declared reason is reachable").toEqual([...declared].sort());
-    expect(produced.size, "anti-vacuity: seven reasons, seven cases").toBe(7);
+    expect(produced.size, "anti-vacuity: eight reasons, eight cases").toBe(8);
   });
 });
 

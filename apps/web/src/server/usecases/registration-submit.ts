@@ -54,6 +54,7 @@ import {
 } from "./registration-eligibility";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
+import { onlineChessOffered } from "./external-play/online-chess-flag";
 
 // ---------------------------------------------------------------------------
 // Input / output shapes
@@ -559,7 +560,12 @@ export async function submitRegistrationGroup(
     );
     if (issues.length > 0) throw eligibilityError(issues);
 
-    if (readOnlinePlay(divCtx.config) === "lichess") {
+    // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
+    // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
+    if (
+      readOnlinePlay(divCtx.config) === "lichess" &&
+      (await onlineChessOffered({ orgId: divCtx.org_id, userId: ctx.sessionUserId ?? null }))
+    ) {
       if (!entry.registering_self) {
         throw new HttpError(
           422,
@@ -1228,7 +1234,11 @@ export async function joinTeamEntry(
   );
   if (issues.length > 0) throw eligibilityError(issues);
 
-  if (readOnlinePlay(divCtx.config) === "lichess") {
+  // T20: as at submit — no Lichess link is demanded while the club is not offered online chess.
+  if (
+    readOnlinePlay(divCtx.config) === "lichess" &&
+    (await onlineChessOffered({ orgId: divCtx.org_id, userId: ctx.sessionUserId ?? null }))
+  ) {
     await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
   }
 

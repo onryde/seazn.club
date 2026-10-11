@@ -57,6 +57,7 @@ import {
   type InviteBridgeFacts,
   type InviteSeat,
 } from "./invite";
+import { assertOnlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus } from "./preflight";
 
 export type { OpenRoundRefusal, OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
@@ -151,6 +152,10 @@ export async function openRound(
   if (!supportsOnlinePlay(st.sportKey) || readOnlinePlay(st.config) !== "lichess") {
     throw new HttpError(422, "This round is not played online", "ROUND_NOT_ONLINE");
   }
+  // T20: an open STARTS play — it invites real people and starts their window — so the club must be offered online
+  // chess (the PostHog flag `online-chess`; 403 ONLINE_CHESS_DISABLED). A re-open invites too, so it is gated alike.
+  // After the two refusals above: a stranger learns nothing about the club's flag, and an offline round asks nothing.
+  await assertOnlineChessOffered({ orgId: st.orgId, userId: a.actorUserId });
   // The guard serves no board of a division that has not started.
   if (st.divisionStatus === "setup" || st.divisionStatus === "scheduled") {
     return { opened: false, reason: "division_not_started" };
