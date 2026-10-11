@@ -84,6 +84,18 @@
       "original": "f.court === null",
       "line": "if (scope.courts !== undefined && (f.court === null || !scope.courts.includes(f.court))) continue;",
       "reason": "Dropping the null short-circuit leaves `!scope.courts.includes(f.court)`. courts is a string[] (ClearScope: z.array(z.string())), which never holds null, so a court-less fixture still reads includes(null) = false and is skipped exactly as `f.court === null` skipped it; for a fixture on a court the operand was false already."
+    },
+    {
+      "mutant": "src/sport/registry.ts:77:24 ConditionalExpression → false",
+      "original": "versions.size === 0",
+      "line": "if (!versions || versions.size === 0) {",
+      "reason": "A key's version Map is never empty: byKey is private to createRegistry's closure, register() is its only writer and calls byKey.set only after versions.set has put the module in, and SportRegistry has no unregister or delete. So the operand is false in every reachable state and `false` in its place changes nothing; an unknown key is refused by `!versions`, which the mutant keeps."
+    },
+    {
+      "mutant": "src/sport/registry.ts:82:22 EqualityOperator → compareSemver(module.version, best.version) >= 0",
+      "original": "compareSemver(module.version, best.version) > 0",
+      "line": "if (!best || compareSemver(module.version, best.version) > 0) best = module;",
+      "reason": "`>= 0` differs from `> 0` only when compareSemver returns 0, i.e. two DIFFERENT version strings that parse to the same triple. The version Map is keyed by the exact string and register() refuses a duplicate, and parseSemver refuses leading zeros (semver.org §2), so each (major, minor, patch) has exactly one spelling: two keys in the Map never compare equal, and the module being compared is never `best` itself because `best` is taken from earlier iterations. With `>=` the replacement would only differ on a tie, which cannot occur."
     }
   ]
 }

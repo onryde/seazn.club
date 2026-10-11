@@ -7,14 +7,16 @@ import { EngineError } from "../core/errors.ts";
 import type { AnySportModule } from "./module.ts";
 
 // Tiny local semver — spec 03 §3, PROMPT-03 §2 (no dep). Strict x.y.z; no
-// ranges or prerelease tags: a persisted module_version is always exact.
+// ranges or prerelease tags: a persisted module_version is always exact. A part
+// is "0" or starts 1-9 (semver.org §2: no leading zeros), so "01.0.0" is refused
+// rather than ranking equal to "1.0.0" and leaving latest() to insertion order.
 export interface Semver {
   major: number;
   minor: number;
   patch: number;
 }
 
-const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 export function parseSemver(version: string): Semver {
   const match = SEMVER_RE.exec(version);
