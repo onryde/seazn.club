@@ -2330,14 +2330,13 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
   };
 
   /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
-   *  `setBasedForfeitCredit` `standingsDelta` lays over the table), the sets won otherwise; a bye keeps its played
-   *  sets (C-5). Mirrors football's `displayedGoals`: the headline and the table cannot disagree, a walkover never reads
-   *  0–0, and a retiree who led on sets never reads as leading the match it lost. */
+   *  `setBasedForfeitCredit` `standingsDelta` lays over the table), the sets won otherwise. A bye needs no branch: its
+   *  credit IS the played tally (C-5). Mirrors football's `displayedGoals`: the headline and the table cannot
+   *  disagree, a walkover never reads 0–0, and a retiree who led on sets never reads as leading the match it lost. */
   const displayedSets = (state: SetBasedState): { home: number; away: number } => {
     const outcome = state.outcome;
     if (outcome?.kind !== "award") return state.setsWon;
     const reason = awardReasonOf(outcome);
-    if (reason === "bye") return state.setsWon;
     const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
     const credit = setBasedForfeitCredit(state.cfg, state, reason, offender);
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };

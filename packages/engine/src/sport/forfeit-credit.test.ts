@@ -903,7 +903,7 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
     expect(outcomeOf(m as never, f as never)?.kind, `${tag}: the forfeit decided it`).toBe("award");
     const summary = summaryOf(m as never, f as never);
     const offenderSide = offender === l.home.entrantId ? "home" : "away";
-    const credit = m.forfeitCredit(cfg as never, f.state as never, reason as never, offenderSide);
+    const credit = m.forfeitCredit(cfg, f.state, reason as never, offenderSide);
     const primary = (m.metrics as readonly { key: string }[])[0]!.key;
     const want = credit.perSide.map((side) => side[primary] ?? null);
     const lines = summary.perSide.map((side) => side.line);
@@ -947,6 +947,26 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
     }
     expect(checked).toBe(ROWS.length);
     expect(new Set(ROWS.map((r) => r.key)).size).toBe(builtinModules.length);
+  });
+
+  it("a bye (no loser) reads its played tally: the set kernels never invent a credited score for a bye (C-5)", () => {
+    // The three helpers carry no bye branch because each module's credit for a bye IS its played tally; this pins it.
+    let checked = 0;
+    for (const key of ["volleyball", "badminton", "tabletennis", "tennis", "carrom"]) {
+      const m = mod(key);
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        for (const seat of ["home", "away"] as const) {
+          const l = defaultLineupPair(m.positions);
+          const state = m.init(cfg, l) as Record<string, unknown>;
+          const winner = l[seat].entrantId;
+          const before = m.summary(state);
+          const bye = m.summary({ ...state, outcome: { kind: "award", winner, loser: null, reason: "bye" } });
+          expect([bye.headline, bye.perSide.map((p) => p.line)], `${key}/${name} bye to ${seat}`).toEqual([before.headline, before.perSide.map((p) => p.line)]);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "byes checked").toBeGreaterThanOrEqual(10);
   });
 
   it("the played strip stays: a badminton retirement after a game each keeps both games' scores beside the credit", () => {

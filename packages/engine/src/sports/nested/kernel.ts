@@ -2085,12 +2085,11 @@ export function makeNestedModule(
 
   /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
    *  `nestedForfeitCredit` `standingsDelta` lays over the table — TN-WO-1/TN-RT-1 straight sets), the sets won
-   *  otherwise; a bye keeps its played sets (C-5). Mirrors football's `displayedGoals`. */
+   *  otherwise. A bye needs no branch: its credit IS the played tally (C-5). Mirrors football's `displayedGoals`. */
   const displayedSets = (state: NestedState): { home: number; away: number } => {
     const outcome = state.outcome;
     if (outcome?.kind !== "award") return state.setsWon;
     const reason = awardReasonOf(outcome);
-    if (reason === "bye") return state.setsWon;
     const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
     const credit = nestedForfeitCredit(state.cfg, state, reason, offender);
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };

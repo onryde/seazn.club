@@ -337,5 +337,86 @@
         "name": "X-DW-1"
       }
     ]
+  },
+  {
+    "id": "c1-setbased-summary-played-sets",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "const sets = displayedSets(state);",
+    "replace": "const sets = state.setsWon;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "either seat at fault: the summary is the credit"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "the summary is the credit, and the retiree never leads"
+      }
+    ]
+  },
+  {
+    "id": "c1-setbased-summary-seat-swap",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "home: credit.perSide[0].sets_won ?? state.setsWon.home",
+    "replace": "home: credit.perSide[1].sets_won ?? state.setsWon.home",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "either seat at fault: the summary is the credit"
+      }
+    ]
+  },
+  {
+    "id": "c1-nested-summary-played-sets",
+    "file": "packages/engine/src/sports/nested/kernel.ts",
+    "find": "const sets = displayedSets(state);",
+    "replace": "const sets = state.setsWon;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "either seat at fault: the summary is the credit"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "the summary is the credit, and the retiree never leads"
+      }
+    ]
+  },
+  {
+    "id": "c1-carrom-summary-played-games",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "const won = displayedGames(state);",
+    "replace": "const won = state.gamesWon;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "either seat at fault: the summary is the credit"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "the summary is the credit, and the retiree never leads"
+      }
+    ]
   }
 ]
