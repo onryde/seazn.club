@@ -27,7 +27,8 @@ export interface CreditCase {
   reason: CreditReason;
   /** Present once play started (the Start pressed): each side's score per unit (period, set, game), the last unit
    *  possibly unfinished. EMPTY (no unit) is a Start with nothing played yet — ruling 112: still before play for a
-   *  walkover. */
+   *  walkover; ruling 113: nothing played means not started, for every reason (no retirement; a disqualification or a
+   *  withdrawal takes the walkover credit). */
   played?: { home: number[]; away: number[] };
   /** ADDITIVE (not in the plan's frozen interface): the side at fault. It is what "worse for the offender" (FB-RT-1)
    *  and "the retiring side keeps what it won" (VB-RT-1) read `played` against, so it is REQUIRED with a scoresheet:
@@ -63,6 +64,7 @@ export const CREDIT_REFUSALS = {
   "cfg-invalid": "X-WO-1: the credit is derived from the stage's own cfg, and the cfg lacks a value the row reads",
   "played-before-start": "X-RS-1 (ruling 112): a walkover (and a double walkover) is recorded until something is played — a Start with an empty scoresheet is still before play; only chess also once play is under way (FIDE 6.7.1, BG-WO-2)",
   "not-started": "X-RS-1: retired and disqualified are recorded after play started, so they carry the scoresheet so far",
+  "nothing-played": "X-RS-1 / X-RT-1 (ruling 113): nobody retires from a match never played — a retirement is recorded once the scoresheet holds play",
   "played-malformed": "the scoresheet so far is not two equal-length lists of whole, non-negative unit scores the sport can reach",
   "unit-unfinished": "only the last unit of the scoresheet so far may be unfinished",
   "already-decided": "the scoresheet so far already decides the match, so nobody retired from it",
@@ -306,9 +308,10 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   const sheet = c.played;
   const playedAny = sheet !== undefined && [sheet.home, sheet.away].some((xs) => Array.isArray(xs) && xs.length > 0);
   // X-RS-1: walkover until something is played (chess also once play is under way); retired / disqualified after the
-  // Start.
+  // Start — and (ruling 113) a retirement only once something is played.
   if ((c.reason === "walkover" || c.reason === "double_walkover") && playedAny && !chess) throw new CreditRefused("played-before-start", `${c.sport} ${c.reason} with a scoresheet holding play`);
   if ((c.reason === "retired" || c.reason === "disqualified") && !started) throw new CreditRefused("not-started", `${c.sport} ${c.reason} with no scoresheet`);
+  if (c.reason === "retired" && !playedAny) throw new CreditRefused("nothing-played", `${c.sport} retired with an empty scoresheet`);
   // The scoresheet is read from the side at fault's view, so a forfeit with one names that side — never a silent
   // default. A double walkover's sides are both at fault: its sheet (chess only) is read for its shape alone.
   if (started && c.reason !== "double_walkover" && c.by === undefined) throw new CreditRefused("offender-unknown", `${c.sport} ${c.reason} with a scoresheet names no side at fault`);
@@ -321,8 +324,11 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   }
   // PF-7: a withdrawal before start takes the walkover credit; after start (a held level result included, X-WD-1) the
   // retirement credit — the played score stands. X-RT-1: an in-match disqualification takes the retirement credit.
-  const retirement = c.reason === "retired" || c.reason === "disqualified" || (c.reason === "withdrew" && started);
-  const sp = retirement ? p : null;
+  // Ruling 113: nothing played means not started, for every reason — an EMPTY scoresheet credits as before the start
+  // (a disqualification or a withdrawal after a bare Start takes the walkover credit; X-WD-6: a Best of 1's set at
+  // setTo, not its deciding-set target).
+  const retirement = c.reason === "retired" || c.reason === "disqualified" || c.reason === "withdrew";
+  const sp = retirement && playedAny ? p : null;
   let credit: Credit;
   if (GOALS.includes(c.sport)) credit = goalCredit(c.sport, c.cfg, sp);
   else if (SETS.includes(c.sport)) credit = setCredit(c.sport, c.cfg, sp);
@@ -345,9 +351,10 @@ function dataOf(sport: string): { cfgs: readonly CreditCfgEntry[]; played: reado
 }
 
 /** Every case the family answers: per sport, the 5 BASE cases (its first cfg: walkover, withdrew before start and the
- *  double walkover; its first played scenario: retired and disqualified) — 11 × 5 = 55 — then every other cfg's
- *  walkover, withdrawal and double walkover, and every other played scenario's retirement, disqualification and
- *  withdrawal after start (PF-7). Deterministic, in the registry's order. */
+ *  double walkover; its first played scenario: retired and disqualified) — 11 × 5 = 55, less a retirement where that
+ *  scenario's sheet holds no play (ruling 113: chess) — then every other cfg's walkover, withdrawal and double
+ *  walkover, and every other played scenario's retirement (where its sheet holds play), disqualification and withdrawal
+ *  after start (PF-7). Deterministic, in the registry's order. */
 export function enumerateCreditCases(): CreditCase[] {
   const base: CreditCase[] = [];
   const variants: CreditCase[] = [];
@@ -363,10 +370,14 @@ export function enumerateCreditCases(): CreditCase[] {
     const [firstCfg, ...otherCfgs] = cfgs;
     const [firstPlay, ...otherPlays] = played;
     if (firstCfg === undefined || firstPlay === undefined) throw new CreditRefused("cfg-invalid", `${sport}: the data holds no cfg or no played scenario`);
-    base.push(unplayed(firstCfg, "walkover"), withPlay(firstPlay, "retired"), withPlay(firstPlay, "disqualified"), unplayed(firstCfg, "withdrew"), unplayed(firstCfg, "double_walkover"));
+    // Ruling 113: a scenario whose sheet holds no play (chess's game is no unit; a win/loss match records none) has no
+    // retirement — nobody retires from a match never played — so it enumerates the disqualification alone.
+    const holdsPlay = (s: PlayedScenario): boolean => s.home.length > 0 || s.away.length > 0;
+    const inMatch = (s: PlayedScenario): CreditCase[] => [...(holdsPlay(s) ? [withPlay(s, "retired")] : []), withPlay(s, "disqualified")];
+    base.push(unplayed(firstCfg, "walkover"), ...inMatch(firstPlay), unplayed(firstCfg, "withdrew"), unplayed(firstCfg, "double_walkover"));
     for (const e of otherCfgs) variants.push(unplayed(e, "walkover"), unplayed(e, "withdrew"), unplayed(e, "double_walkover"));
     for (const s of [firstPlay, ...otherPlays]) variants.push(withPlay(s, "withdrew"));
-    for (const s of otherPlays) variants.push(withPlay(s, "retired"), withPlay(s, "disqualified"));
+    for (const s of otherPlays) variants.push(...inMatch(s));
   }
   return [...base, ...variants];
 }

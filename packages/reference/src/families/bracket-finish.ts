@@ -248,6 +248,8 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
     if (a.reason === "walkover" && !(walkoverPhase === "pre" || (chess && (phase === "play" || phase === "tiebreak")))) return "FORFEIT_REASON_WRONG_PHASE"; // D3 R2; X-RS-1, BG-WO-2, BG-WO-3
     if (a.offender === "both" && phase === "tiebreak") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R3: the classical game was played
     if ((a.reason === "retired" || a.reason === "disqualified") && phase === "pre") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R4; X-RS-1
+    // Ruling 113 (amends X-RS-1, X-RT-1): nobody retires from a match never played — a bare Start is still before play.
+    if (a.reason === "retired" && walkoverPhase === "pre") return "FORFEIT_REASON_WRONG_PHASE";
     return null; // D3 R5: withdrew in any phase but over
   };
 
