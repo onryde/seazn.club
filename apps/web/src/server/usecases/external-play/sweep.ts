@@ -132,44 +132,82 @@ function orgScope(pass: Pass) {
   return pass.orgIds === undefined ? sql`` : sql`and f.org_id in ${sql(pass.orgIds as string[])}`;
 }
 
+// ─── A game that is, or may be, on file (review M1, ruling I3) ─────────────
+//
+// ONE predicate for job 1 (never a no-show) and job 3 (keep the room):
+//   - a challenge is recorded: a game is on file;
+//   - a `pending` row under a LIVE mint claim: T9 is in flight, and its create
+//     may land past the deadline (it judged the window at its claim);
+//   - a `pending` row with T9's sent marker (`create_sent_at`, T9 I2) BEFORE
+//     the deadline: T9's next caller recovers it (findSentGame).
+// Past the deadline a sent marker under a stale (or no) claim is nobody's —
+// T9 refuses on the window BEFORE it would claim and recover — so job 1
+// holds it `create_outcome_unknown` (T9's own reason for that state), and job
+// 3 then takes its room down. A held row with no challenge is no game.
+
+type BridgeFacts = {
+  bridgeStatus: string | null;
+  challengeId: string | null;
+  createSentAt: Date | null;
+  mintClaimedAt: Date | null;
+};
+
+function claimIsLive(pass: Pass, claimedAt: Date | null): boolean {
+  return claimedAt !== null && claimedAt.getTime() >= pass.now.getTime() - MINT_CLAIM_STALE_MS;
+}
+
+function gameMayBeOnFile(pass: Pass, r: BridgeFacts, deadline: Date): boolean {
+  if (r.challengeId !== null) return true;
+  if (r.bridgeStatus !== "pending") return false;
+  if (claimIsLive(pass, r.mintClaimedAt)) return true;
+  return r.createSentAt !== null && pass.now.getTime() < deadline.getTime();
+}
+
 // ─── Job 1: the T+20 no-show ───────────────────────────────────────────────
 //
 // A board is a no-show candidate only when its round was OPENED (inner join),
 // the fixture is still playable (T8's predicate — never needs_decision, never a
-// withdrawn or settled board), and no game is — or may be — on file: no bridge
-// row, or a `pending` one with no challenge, no possibly-sent create
-// (`create_sent_at`, T9 I2) and no live mint claim (a create in flight past the
-// deadline is T9's to finish) — invite.ts's `bridgeTakesInvites`, plus the
-// claim. The window is then judged per board, and the guard loads it.
+// withdrawn or settled board), and no game is — or may be — on file (above):
+// no bridge row, or a `pending` one with no challenge. The window is then
+// judged per board, and the guard loads it. A sent create past the deadline
+// is held for the organiser (I3), never ruled a no-show: a game may exist.
 
 /** W2b's refusal code (packages/engine core/errors.ts on W2b). Not yet in
  *  this engine's EngineErrorCode union, hence compared as a string. */
 const DOUBLE_WALKOVER_NO_NEXT_MATCH = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
 
-type NoShowCandidate = { fixtureId: string; openedAt: Date };
+type NoShowCandidate = BridgeFacts & { fixtureId: string; openedAt: Date };
 
 async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
+  // Millisecond stamps, as a JS Date holds them, so the I3 takeover compares
+  // like with like whatever precision a writer used.
   return sql<NoShowCandidate[]>`
-    select f.id as "fixtureId", o.opened_at as "openedAt"
+    select f.id as "fixtureId", o.opened_at as "openedAt",
+           ep.status as "bridgeStatus", ep.challenge_id as "challengeId",
+           date_trunc('milliseconds', ep.create_sent_at) as "createSentAt",
+           date_trunc('milliseconds', ep.mint_claimed_at) as "mintClaimedAt"
       from fixtures f
       join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
       left join fixture_external_play ep on ep.fixture_id = f.id
      where f.status in ${sql(PLAYABLE_STATUSES as string[])}
-       and (ep.fixture_id is null
-            or (ep.status = 'pending' and ep.challenge_id is null and ep.create_sent_at is null
-                and (ep.mint_claimed_at is null
-                     or ep.mint_claimed_at < ${new Date(pass.now.getTime() - MINT_CLAIM_STALE_MS)})))
+       and (ep.fixture_id is null or (ep.status = 'pending' and ep.challenge_id is null))
        ${orgScope(pass)}
      order by o.opened_at, f.id`;
 }
 
 async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
-  if (pass.now.getTime() < playableWindow(c.openedAt).deadline.getTime()) return;
+  const { deadline } = playableWindow(c.openedAt);
+  if (pass.now.getTime() < deadline.getTime()) return;
+  if (gameMayBeOnFile(pass, c, deadline)) return;
   // THE guard (spec §6): online play still on, a boardgame, both entrants.
   // An organiser who switched online play off after the open has taken the
   // board back to the table.
   const f = await loadOnlinePlayFixture(c.fixtureId);
   if (!f) return;
+  if (c.createSentAt !== null) {
+    await holdUnknownCreate(pass, c, deadline);
+    return;
+  }
   const { home, away } = await loadSides(f);
   const came = await checkIns(f, home, away, c.openedAt);
   if (came.home && came.away) {
@@ -209,6 +247,29 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
     return;
   }
   pass.report.noShows++;
+}
+
+/** Ruling I3: a create T9 sent and never recorded, past the deadline. T9's
+ *  claim is taken over FIRST, conditionally on the very row judged: a record
+ *  T9 lands meanwhile (a ready game) wins and nothing is held; after it no T9
+ *  write can land (each is conditional on its own claim) and no new claim
+ *  can be taken (T9 refuses past the deadline before claiming). */
+async function holdUnknownCreate(pass: Pass, c: NoShowCandidate, deadline: Date): Promise<void> {
+  const taken = await sql`
+    update fixture_external_play set mint_claimed_at = null, updated_at = now()
+     where fixture_id = ${c.fixtureId} and status = 'pending' and challenge_id is null
+       and date_trunc('milliseconds', create_sent_at) = ${c.createSentAt}
+       and date_trunc('milliseconds', mint_claimed_at) is not distinct from ${c.mintClaimedAt}
+    returning fixture_id`;
+  if (taken.length === 0) return;
+  const held = await holdForOrganiser({
+    fixtureId: c.fixtureId,
+    reason: "create_outcome_unknown",
+    detail:
+      `sweep: a create was sent at ${c.createSentAt!.toISOString()} and never recorded; ` +
+      `past the deadline (${deadline.toISOString()}) nothing can recover it`,
+  });
+  if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
 }
 
 // ─── Job 2: the mint retry (M3) ────────────────────────────────────────────
@@ -271,18 +332,15 @@ async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<Swee
 //   - the board is settled: the fixture is no longer playable (withdrawn,
 //     decided by hand, cancelled, held for a decision);
 //   - nobody played: the round's deadline has passed and no game is, or may
-//     be, on file (no challenge, no possibly-sent create). Past T+20 no game
-//     can be made (T9 refuses), so the room has no further use.
+//     be, on file (gameMayBeOnFile — the predicate job 1 waits on). Past T+20
+//     no game can be made (T9 refuses), so the room has no further use.
 // A game on file that is not finished keeps its meeting, past T+20 or not:
 // "nothing in our system ends a live game early" (spec §3.6).
 
-type TeardownCandidate = {
+type TeardownCandidate = BridgeFacts & {
   fixtureId: string;
   meetingId: string;
   fixtureStatus: string;
-  bridgeStatus: string | null;
-  challengeId: string | null;
-  createSentAt: Date | null;
   openedAt: Date | null;
 };
 
@@ -290,7 +348,7 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
   return sql<TeardownCandidate[]>`
     select m.fixture_id as "fixtureId", m.meeting_id as "meetingId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
-           o.opened_at as "openedAt"
+           ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt"
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
       left join fixture_external_play ep on ep.fixture_id = m.fixture_id
@@ -303,8 +361,9 @@ async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[]> {
 function meetingIsDone(pass: Pass, c: TeardownCandidate): boolean {
   if (c.bridgeStatus === "finished") return true;
   if (!isPlayableFixtureStatus(c.fixtureStatus)) return true;
-  const gameOnFile = c.challengeId !== null || c.createSentAt !== null;
-  return !gameOnFile && c.openedAt !== null && pass.now.getTime() >= playableWindow(c.openedAt).deadline.getTime();
+  if (c.openedAt === null) return false;
+  const { deadline } = playableWindow(c.openedAt);
+  return pass.now.getTime() >= deadline.getTime() && !gameMayBeOnFile(pass, c, deadline);
 }
 
 async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<SweepDeps["endMeeting"]>): Promise<void> {

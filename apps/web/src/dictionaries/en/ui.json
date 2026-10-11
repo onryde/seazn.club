@@ -5907,6 +5907,7 @@
   "externalPlay.reason.linkMissing": "A Lichess link is missing.",
   "externalPlay.reason.fairPlay": "Lichess ended this game for a fair-play violation.",
   "externalPlay.reason.notStarted": "Both players checked in, but the game was never created.",
+  "externalPlay.reason.createOutcomeUnknown": "A Lichess game may have been created, but it could not be confirmed before the deadline.",
   "externalPlay.reason.generic": "This game needs an organiser decision.",
   "externalPlay.queue.versus": "vs",
   "externalPlay.queue.tbd": "TBD",

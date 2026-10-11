@@ -49,6 +49,11 @@ export const HOLD_REASONS = [
   // T13 (controller ruling C2): both players came, no game was made by the
   // deadline — the sweep's, spec §9's deadlineReason.
   "not_started",
+  // T13 fix round 1 (ruling I3): a create T9 SENT and never recorded (a crash
+  // between its marker and its record) whose claim went stale past the
+  // deadline — T9 refuses before it could recover it, so the sweep holds it
+  // with T9's own reason for exactly that state (types.ts).
+  "create_outcome_unknown",
 ] as const satisfies readonly NeedsReason[];
 export type HoldReason = (typeof HOLD_REASONS)[number];
 

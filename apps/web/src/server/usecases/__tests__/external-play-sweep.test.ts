@@ -660,13 +660,14 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     expect(checked).toBe(2);
   });
 
-  it("a possibly-sent create (T9's create_sent_at marker) is never ruled a no-show", async () => {
+  it("a possibly-sent create (T9's create_sent_at marker) is never ruled a no-show — past T+20 it is the organiser's (I3)", async () => {
     const b = await openedBoard({ checkedIn: [] });
     // Stands for T9's createAtDequeue: the marker it writes before the HTTP
     // call, whose outcome is unknown (T9 I2) — a game may exist.
     await sql`update fixture_external_play set create_sent_at = ${b.at(19)} where fixture_id = ${b.fixtureId}`;
     await sweep(b, { now: b.at(45) });
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
   });
 
   it("a create IN FLIGHT (a live mint claim) is left to T9; a STALE claim is not a game", async () => {
@@ -860,6 +861,133 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
   });
+});
+
+// ---------------------------------------------------------------------------
+// T13 fix round 1 — I3 and M1: a game that IS, or MAY BE, on file. One
+// predicate for job 1 (never a no-show) and job 3 (keep the room): a game on
+// file; a LIVE mint claim (T9 in flight — its create may land past T+20); or
+// T9's sent marker while T9 can still recover it (before T+20). Past T+20 a
+// sent marker under a stale claim is nobody's — T9 refuses before its claim —
+// so the sweep holds it create_outcome_unknown, and its room comes down.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () => {
+  /** T9's REAL create at `min`, dying between its sent marker and its record
+   *  (the Board API call throws: a deploy restart mid-call). */
+  async function crashedCreate(b: Board, now: Date): Promise<void> {
+    board.createChallengeToUser.mockRejectedValueOnce(new Error("the process died mid-call"));
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    await createGameIfReady(b.fixtureId, { now, publish: async () => {} }).catch(() => null);
+    board.acceptChallenge.mockReset();
+    const [r] = await sql<{ status: string; challenge_id: string | null; create_sent_at: Date | null }[]>`
+      select status, challenge_id, create_sent_at from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect([r!.status, r!.challenge_id, r!.create_sent_at !== null], "premise: T9's marker, no game recorded").toEqual(["pending", null, true]);
+  }
+  const roomEnded = async (fixtureId: string) =>
+    (await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`)[0]!.ended_at !== null;
+
+  it("a create SENT and never recorded, its claim stale past T+20: held create_outcome_unknown — never a no-show — and its room comes down; once", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await ensureMeeting(b.fixtureId, RTK);
+    await crashedCreate(b, b.at(19));
+    // The reviewer's probe P3: T9 itself cannot recover it past T+20.
+    expect(await createGameIfReady(b.fixtureId, { now: b.at(21), publish: async () => {} }), "premise: T9 refuses past T+20")
+      .toEqual({ created: false, reason: "not_ready" });
+    const r = await sweep(b, { now: b.at(25), endMeeting: (id) => endMeeting(id, RTK) });
+    expect(r.failures).toEqual([]);
+    expect([r.heldForOrganiser, r.meetingsEnded, r.noShows]).toEqual([1, 1, 0]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(await roomEnded(b.fixtureId)).toBe(true);
+    const again = await sweep(b, { now: b.at(45), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([again.heldForOrganiser, again.meetingsEnded, again.noShows, again.failures]).toEqual([0, 0, 0, []]);
+  });
+
+  it("BEFORE T+20 a sent marker under a stale claim is T9's to recover: nothing held, the room stays", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await ensureMeeting(b.fixtureId, RTK);
+    await crashedCreate(b, b.at(15));
+    const r = await sweep(b, { now: b.at(19), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([r.heldForOrganiser, r.meetingsEnded, r.noShows]).toEqual([0, 0, 0]);
+    expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "pending" });
+    expect(await roomEnded(b.fixtureId)).toBe(false);
+  });
+
+  it("M1 (probe P5): a claim taken a second before T+20, no marker yet — job 1 waits AND job 3 keeps the room; once stale, both rule", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await ensureMeeting(b.fixtureId, RTK);
+    const { deadline } = playableWindow(b.opened);
+    // Stands for T9's claim (taken before its marker), live at T+20.
+    await sql`update fixture_external_play set mint_claimed_at = ${new Date(deadline.getTime() - 1_000)} where fixture_id = ${b.fixtureId}`;
+    const at = await sweep(b, { now: deadline, endMeeting: (id) => endMeeting(id, RTK) });
+    expect([at.heldForOrganiser, at.meetingsEnded, at.noShows], "in flight: nobody rules").toEqual([0, 0, 0]);
+    expect(await roomEnded(b.fixtureId)).toBe(false);
+    // The claim goes stale with nothing sent: both came, no game — not_started (C2).
+    const stale = await sweep(b, { now: new Date(deadline.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([stale.heldForOrganiser, stale.meetingsEnded]).toEqual([1, 1]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+  });
+
+  it("…and a sent marker under a LIVE claim past T+20 (T9 still in flight) is not held until the claim goes stale", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await ensureMeeting(b.fixtureId, RTK);
+    const { deadline } = playableWindow(b.opened);
+    // Stands for T9 mid-call: its marker and its renewed claim, a second before T+20.
+    const sent = new Date(deadline.getTime() - 1_000);
+    await sql`update fixture_external_play set create_sent_at = ${sent}, mint_claimed_at = ${sent} where fixture_id = ${b.fixtureId}`;
+    const live = await sweep(b, { now: new Date(deadline.getTime() + 10_000), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([live.heldForOrganiser, live.meetingsEnded, live.noShows]).toEqual([0, 0, 0]);
+    // T9's own staleness: a claim is stale once OLDER than MINT_CLAIM_STALE_MS.
+    const edge = await sweep(b, { now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([edge.heldForOrganiser, edge.meetingsEnded], "exactly the stale age: still live").toEqual([0, 0]);
+    const stale = await sweep(b, { now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS + 1), endMeeting: (id) => endMeeting(id, RTK) });
+    expect([stale.heldForOrganiser, stale.meetingsEnded, stale.noShows]).toEqual([1, 1, 0]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
+  });
+
+  it("a T9 record landing between the sweep's read and its hold wins: a READY game is never held (staged on the bridge row's lock) — x3", async () => {
+    let checked = 0;
+    for (let i = 0; i < 3; i++) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      const { deadline } = playableWindow(b.opened);
+      // Stands for a slow T9: marker sent, claim gone stale, its record late.
+      const sent = new Date(deadline.getTime() - 60_000);
+      await sql`update fixture_external_play set create_sent_at = ${sent}, mint_claimed_at = ${sent} where fixture_id = ${b.fixtureId}`;
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let signalHeld!: (pid: number) => void;
+      const held = new Promise<number>((resolve) => (signalHeld = resolve));
+      const gameId = `gm-${randomUUID().slice(0, 12)}`;
+      const holder = sql.begin(async (tx) => {
+        const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        await tx`select fixture_id from fixture_external_play where fixture_id = ${b.fixtureId} for update`;
+        signalHeld(pid);
+        await released;
+        // T9's record (create-game.ts: ready, the game, the claim and marker cleared).
+        await tx`update fixture_external_play set status = 'ready', challenge_id = ${gameId}, white_side = 'home',
+                   white_lichess_id = ${b.home.lichessId}, black_lichess_id = ${b.away.lichessId},
+                   mint_claimed_at = null, create_sent_at = null where fixture_id = ${b.fixtureId}`;
+      });
+      const holderPid = await held;
+      const pass = sweep(b, { now: new Date(deadline.getTime() + 5 * 60_000) });
+      const until = Date.now() + 30_000;
+      for (;;) {
+        const [{ n }] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))`;
+        if (n >= 1) break;
+        if (Date.now() > until) throw new Error("premise: the sweep's hold never waited on the row");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      release();
+      await holder;
+      const r = await pass;
+      expect(r.failures, `run ${i}`).toEqual([]);
+      expect(r.heldForOrganiser, `run ${i}: nothing held`).toBe(0);
+      expect(await bridgeOf(b.fixtureId), `run ${i}: T9's game stands`).toEqual({ status: "ready", needs_reason: null });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, 120_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -1115,14 +1243,14 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+2
     expect(ended.length, "at T+20 exactly the room has closed").toBe(1);
   });
 
-  it("a possibly-sent create (T9's create_sent_at) is a game that may exist: its meeting stays", async () => {
+  it("a possibly-sent create (T9's create_sent_at) is a game that may exist while T9 can recover it: its meeting stays", async () => {
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     await meetingFor(b);
     // Stands for T9's createAtDequeue marker before its HTTP call (T9 I2).
-    await sql`update fixture_external_play set create_sent_at = ${b.at(19)} where fixture_id = ${b.fixtureId}`;
+    await sql`update fixture_external_play set create_sent_at = ${b.at(15)} where fixture_id = ${b.fixtureId}`;
     const { ended, end } = recordingEnd();
-    await sweep(b, { now: b.at(45), endMeeting: end });
-    expect(ended).toEqual([]);
+    await sweep(b, { now: b.at(19), endMeeting: end });
+    expect(ended, "before T+20 T9's next caller recovers it").toEqual([]);
   });
 
   it("a game on file keeps its meeting past T+20 — ready (never started) or live", async () => {
@@ -2826,22 +2954,26 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   });
 });
 
-describe("the not_started reason has organiser copy in all four locales (C2)", () => {
-  it("each locale carries its own sentence, distinct from the generic label — counted", () => {
+describe("the sweep's own hold reasons have organiser copy in all four locales (C2, I3)", () => {
+  it("each locale carries its own sentence per reason, distinct from the generic and no-show labels — counted", () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../dictionaries");
     const LOCALES = ["en", "es", "fr", "nl"] as const;
+    const KEYS = ["externalPlay.reason.notStarted", "externalPlay.reason.createOutcomeUnknown"] as const;
     const read = (l: string) => JSON.parse(readFileSync(join(dir, l, "ui.json"), "utf8")) as Record<string, string>;
     const en = read("en");
     let checked = 0;
-    for (const l of LOCALES) {
-      const d = read(l);
-      const text = d["externalPlay.reason.notStarted"];
-      expect(text, `${l}: present`).toBeTruthy();
-      expect(text, `${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
-      expect(text, `${l}: not the no-show label (both players came)`).not.toBe(d["externalPlay.reason.noShow"]);
-      if (l !== "en") expect(text, `${l}: translated, not English`).not.toBe(en["externalPlay.reason.notStarted"]);
-      checked++;
+    for (const key of KEYS) {
+      for (const l of LOCALES) {
+        const d = read(l);
+        const text = d[key];
+        expect(text, `${key} ${l}: present`).toBeTruthy();
+        expect(text, `${key} ${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
+        expect(text, `${key} ${l}: not the no-show label (both players came)`).not.toBe(d["externalPlay.reason.noShow"]);
+        for (const other of KEYS) if (other !== key) expect(text, `${key} ${l}: not ${other}`).not.toBe(d[other]);
+        if (l !== "en") expect(text, `${key} ${l}: translated, not English`).not.toBe(en[key]);
+        checked++;
+      }
     }
-    expect(checked, "locales checked").toBe(LOCALES.length);
+    expect(checked, "key × locale checked").toBe(KEYS.length * LOCALES.length);
   });
 });

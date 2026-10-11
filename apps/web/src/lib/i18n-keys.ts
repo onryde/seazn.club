@@ -2291,6 +2291,7 @@ export type DictionaryKey =
   | "externalPlay.queue.versus"
   | "externalPlay.reason.abort"
   | "externalPlay.reason.accountMismatch"
+  | "externalPlay.reason.createOutcomeUnknown"
   | "externalPlay.reason.delayUnsupported"
   | "externalPlay.reason.fairPlay"
   | "externalPlay.reason.generic"
