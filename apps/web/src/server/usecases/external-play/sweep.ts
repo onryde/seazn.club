@@ -25,7 +25,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
-import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
 import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
@@ -627,8 +627,9 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 // (the last move plus the side to move's remaining time). None known: not
 // ready. Never past the room's own end — nobody is on camera in a closed room.
 //
-// Under Required only: Off and Optional store nothing and ask RealtimeKit
-// nothing, and an organiser's video override (D11) is "proceed without
+// Under Required only — the policy in force when the match began (review M4;
+// D9 lets it be relaxed later, audited): Off and Optional store nothing and
+// ask RealtimeKit nothing, and an organiser's video override (D11) is "proceed without
 // video" — nothing to evidence. Evidence for the organiser, NEVER a
 // sanction (D10): a fixture_play_flags row, and nothing else moves.
 //
@@ -786,7 +787,8 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
 
 async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
   // No first move: no match to evidence. Override: no video expected.
-  if (c.startedAt === null || c.overrideAt !== null || (await fixtureCameraPolicy(c.fixtureId)) !== "required") {
+  // The policy IN FORCE when the match began (review M4), never the current one.
+  if (c.startedAt === null || c.overrideAt !== null || (await fixtureCameraPolicyAt(c.fixtureId, c.startedAt)) !== "required") {
     await settleCamera(pass, c, []);
     return;
   }

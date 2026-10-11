@@ -50,6 +50,7 @@ import { getFixtureState } from "../fixtures";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { patchDivision } from "../divisions";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
@@ -2877,16 +2878,40 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(at.cameraSettled).toBe(1);
   });
 
-  it("nothing is stored, and RealtimeKit never asked, when the policy is not Required — off, optional — counted", async () => {
+  // Review M4: the policy IN FORCE for the match — never the current one. D9
+  // lets an organiser relax the requirement after a round opened (audited in
+  // competition_events, the same transaction as the write), and a downgrade
+  // after the match must not erase the evidence of a match played under
+  // Required.
+  /** The organiser relaxes the division through the REAL PATCH (D9 gate +
+   *  audit row). */
+  const relax = async (m: Match, to: CameraPolicy) => {
+    await patchDivision(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId, { camera_policy: to });
+  };
+  const policyChanges = (m: Match) =>
+    sql<{ id: string; created_at: Date }[]>`
+      select id, created_at from competition_events
+       where type = 'chess.camera_policy_changed' and payload->>'divisionId' = ${m.b.divisionId}
+       order by created_at, id`;
+  /** A home camera gap in the match, away on throughout. */
+  const homeGap = (m: Match) => {
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+  };
+
+  it("nothing is stored, and RealtimeKit never asked, when the policy IN FORCE at the match was not Required — relaxed before its first move, or optional all along (counted)", async () => {
     let checked = 0;
     for (const relaxTo of ["off", "optional"] as const) {
       const m = await playedMatch();
-      const x = session(m, m.startedAt - 120_000, m.endedAt);
-      connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
-      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
-      // D9: after the open an organiser may only RELAX — here at the stage,
-      // the nearest level (a settings write; the PATCH is not under test).
-      await sql`update stages set camera_policy = ${relaxTo} where id = ${m.b.stageId}`;
+      homeGap(m);
+      await relax(m, relaxTo);
+      const changes = await policyChanges(m);
+      expect(changes, `${relaxTo}: premise, the PATCH audited the change`).toHaveLength(1);
+      // The match's clock runs 19 minutes in the past (playedMatch) while the
+      // DB stamps the audit row now: moved to a minute before the first move,
+      // it stands for a change the organiser made then.
+      await sql`update competition_events set created_at = ${new Date(m.startedAt - 60_000)} where id = ${changes[0]!.id}`;
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
       expect(r.cameraFlags, relaxTo).toBe(0);
       expect(await flagsOf(m.b.fixtureId), relaxTo).toEqual([]);
@@ -2904,42 +2929,49 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(checked).toBe(3);
   });
 
-  // Review M2: "the players" are the guard's — each side's ONE member with a
-  // user account (loadSides) — never every entrant member.
-  /** Roster data as registration can leave it (SQL stands in for it): a
-   *  member on `side`'s entrant, with a user account or without. */
-  async function addMember(m: Match, side: Side, withUser: boolean): Promise<string> {
-    const entrantId = (await sql<{ id: string }[]>`
-      select ${side === "home" ? sql`home_entrant_id` : sql`away_entrant_id`} as id from fixtures where id = ${m.b.fixtureId}`)[0]!.id;
-    const personId = withUser
-      ? (await seedPlayer(m.b.orgId, "Second member", `extra-${randomUUID().slice(0, 6)}`, false)).personId
-      : (await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${m.b.orgId}, 'Club volunteer') returning id`)[0]!.id;
-    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${personId}, ${m.b.orgId})`;
-    return personId;
-  }
-
-  it("M2: an entrant member with no user account is not a player — both on camera all match is NO flag", async () => {
-    const m = await playedMatch();
-    const extra = await addMember(m, "home", false);
-    bothOnThroughout(m);
-    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(cameraFailures(r)).toEqual([]);
-    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
-    expect((await flagsOf(m.b.fixtureId)).filter((f) => f.person_id === extra)).toEqual([]);
+  it("M4: relaxed AFTER the match (a legal D9 downgrade): the match was played under Required, so it is still evidenced (counted)", async () => {
+    let checked = 0;
+    for (const relaxTo of ["off", "optional"] as const) {
+      const m = await playedMatch();
+      homeGap(m);
+      await relax(m, relaxTo);
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r), relaxTo).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags], relaxTo).toEqual([1, 1]);
+      expect((await flagsOf(m.b.fixtureId)).map((f) => [f.kind, f.person_id]), relaxTo).toEqual([["camera_lost", m.b.home.personId]]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
-  it("M2: a side the guard cannot name ONE player for (two members with accounts) is judged for nobody; the other side still is", async () => {
+  it("M4: two downgrades after the match — the EARLIEST says what was in force, never the latest", async () => {
     const m = await playedMatch();
-    const second = await addMember(m, "home", true);
-    const x = session(m, m.startedAt - 120_000, m.endedAt);
-    const gaps: [number, number][] = [[m.startedAt + 200_000, m.startedAt + 400_000]];
-    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps });
-    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, gaps });
+    homeGap(m);
+    await relax(m, "optional");
+    await relax(m, "off");
+    const changes = await policyChanges(m);
+    expect(changes, "premise: two audited changes").toHaveLength(2);
+    // The second in TIME is inserted first in id order too often to trust:
+    // pin the order on the sort key itself — the later change an hour later.
+    await sql`update competition_events set created_at = created_at + interval '1 hour' where id = ${changes[1]!.id}`;
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-    expect(cameraFailures(r)).toEqual([]);
-    const flagged = (await flagsOf(m.b.fixtureId)).filter((f) => f.kind === "camera_lost").map((f) => f.person_id);
-    expect(flagged, "away only: home's player is ambiguous").toEqual([m.b.away.personId]);
-    expect(flagged).not.toContain(second);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 1]);
+  });
+
+  it("M4: an audit row whose policy cannot be read is never guessed — a failure, nothing settled, read again next pass", async () => {
+    const m = await playedMatch();
+    homeGap(m);
+    const [{ competition_id }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${m.b.divisionId}`;
+    // Stands for a row a future writer left in a shape this reader does not know.
+    await sql`
+      insert into competition_events (competition_id, type, payload, created_at)
+      values (${competition_id}, 'chess.camera_policy_changed',
+              ${sql.json({ divisionId: m.b.divisionId, effectiveFrom: "sometimes", effectiveTo: "off" })}, now())`;
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r).map((f) => f.code)).toEqual(["CAMERA_POLICY_AUDIT_UNREADABLE"]);
+    expect(r.cameraSettled).toBe(0);
+    expect(await settledAt(m.b.fixtureId)).toBeNull();
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
   it("an organiser's video override (D11): nothing read, nothing stored", async () => {

@@ -119,6 +119,64 @@ export async function fixtureCameraPolicy(fixtureId: string): Promise<CameraPoli
   });
 }
 
+/** The D9 audit row's type (divisions.ts writes it in the same transaction
+ *  as the change it describes). */
+export const CAMERA_POLICY_CHANGED = "chess.camera_policy_changed";
+
+/** The policy IN FORCE for one fixture at `at` (review M4) — what the
+ *  players were told when the match began, never what the settings say now:
+ *  D9 lets an organiser relax the requirement after a round opened, and a
+ *  downgrade after the match must not erase the evidence of a match played
+ *  under Required.
+ *
+ *  Only the DIVISION level moves after the open with a writer, and every such
+ *  move is audited (`effectiveFrom`: the division-level policy before it). So:
+ *  a stage's own value wins and has no writer; otherwise the EARLIEST change
+ *  of this division after `at` says what was in force then (its
+ *  `effectiveFrom`); no change since ⇒ the current policy. An audit row whose
+ *  policy cannot be read THROWS — a guess either way would invent or erase
+ *  evidence. */
+export async function fixtureCameraPolicyAt(fixtureId: string, at: Date): Promise<CameraPolicy> {
+  const [row] = await sql<
+    { stagePolicy: unknown; divisionPolicy: unknown; competitionPolicy: unknown; changedFrom: unknown; changed: boolean }[]
+  >`
+    select s.camera_policy as "stagePolicy",
+           d.camera_policy as "divisionPolicy",
+           c.camera_policy as "competitionPolicy",
+           ce.payload->'effectiveFrom' as "changedFrom",
+           ce.id is not null as changed
+      from fixtures f
+      left join stages s on s.id = f.stage_id
+      join divisions d on d.id = f.division_id
+      join competitions c on c.id = d.competition_id
+      left join lateral (
+        select e.id, e.payload from competition_events e
+         where e.competition_id = d.competition_id and e.type = ${CAMERA_POLICY_CHANGED}
+           and e.payload->>'divisionId' = d.id::text and e.created_at > ${at}
+         order by e.created_at, e.id
+         limit 1
+      ) ce on true
+     where f.id = ${fixtureId}`;
+  if (!row) return "off";
+  const stage = readCameraPolicy(row.stagePolicy);
+  if (stage === null && row.changed) {
+    const then = readCameraPolicy(row.changedFrom);
+    if (then === null) {
+      throw new HttpError(
+        500,
+        `a ${CAMERA_POLICY_CHANGED} row for fixture ${fixtureId}'s division has no readable effectiveFrom`,
+        "CAMERA_POLICY_AUDIT_UNREADABLE",
+      );
+    }
+    return then;
+  }
+  return effectivePolicy({
+    stage,
+    division: readCameraPolicy(row.divisionPolicy),
+    competition: readCameraPolicy(row.competitionPolicy),
+  });
+}
+
 /** The competition's own policy — the floor of the chain, and what the
  *  division settings screen shows as INHERITED when the division sets nothing.
  *  The caller has already resolved `competitionId` through a tenant-scoped
