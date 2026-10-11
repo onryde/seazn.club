@@ -1825,6 +1825,23 @@ describe("step 5 — submit", () => {
     expect(textOf(secondary)).toBe("Registration failed");
   });
 
+  // T20: the server answers LICHESS_LINK_REQUIRED only while the club is offered online chess (the PostHog flag
+  // `online-chess`), so the stepper needs no flag of its own — but its link must NAME the club, because the start
+  // route refuses (403 ONLINE_CHESS_DISABLED) a start that names none. The URL is typed here from the route's contract
+  // (`/api/auth/lichess?org=<slug>`), not built with the helper under test.
+  it("LICHESS_LINK_REQUIRED: the link to Lichess names THIS club, so the start route can ask the club's flag", async () => {
+    apiV1Mock.impl.mockRejectedValueOnce(
+      new ApiV1Error("Sign in and link your Lichess account to register for online play", 422, "LICHESS_LINK_REQUIRED"),
+    );
+    const { island } = await reachReview();
+    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === "Enter the competition");
+    await (propsOf(btn!).onClick as () => Promise<void>)();
+
+    const links = island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link");
+    expect(links, "exactly one link to Lichess").toHaveLength(1);
+    expect(propsOf(links[0]!).href).toBe(`/api/auth/lichess?org=${ORG_SLUG}`);
+  });
+
   it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {
     apiV1Mock.impl.mockRejectedValueOnce(
       new ApiV1Error(
