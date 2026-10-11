@@ -1,8 +1,0 @@
-{
-  "id": "gameAbort1",
-  "status": "aborted",
-  "players": {
-    "white": { "userId": "lichess-home" },
-    "black": { "userId": "lichess-away" }
-  }
-}

@@ -1,8 +1,0 @@
-{
-  "id": "gameDrawAgree1",
-  "status": "draw",
-  "players": {
-    "white": { "userId": "lichess-home" },
-    "black": { "userId": "lichess-away" }
-  }
-}

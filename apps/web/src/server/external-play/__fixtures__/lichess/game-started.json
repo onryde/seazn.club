@@ -1,8 +1,0 @@
-{
-  "id": "gameStarted1",
-  "status": "started",
-  "players": {
-    "white": { "userId": "lichess-home" },
-    "black": { "userId": "lichess-away" }
-  }
-}
