@@ -23,6 +23,7 @@ import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { releaseFedSeats } from "./fed-seats";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
+import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { isCascadeOnlyForfeitReason } from "@/lib/forfeit-phase-refusal";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -193,11 +194,6 @@ export const RETIRED_ON_WRITE_SPORT_EVENTS: Readonly<Record<string, { field: str
   "boardgame.result": { field: "method", values: ["forfeit", "double_forfeit"] },
 };
 
-/** The kinds whose double walkover must send nobody somewhere (D19): every kind that forbids a level result except a
- *  ladder, which wires no feed edge by design (W2a loop G) and keeps its positions on a double walkover. */
-const needsNextMatchForDoubleWalkover = (stageKind: string | null): boolean =>
-  forbidsLevelResult(stageKind) && stageKind !== "ladder";
-
 /**
  * W2b append guards, ahead of the fold (each refusal aborts the transaction before anything is written):
  *
@@ -210,7 +206,9 @@ const needsNextMatchForDoubleWalkover = (stageKind: string | null): boolean =>
  * - D19: `core.forfeit{by:"both"}` in a bracket kind on a fixture that feeds no seat (no `winner_to_fixture`, no
  *   `loser_to_fixture` — the feed graph, never a round name) — DOUBLE_WALKOVER_NO_NEXT_MATCH. A final, a stepladder's
  *   last rung, a page playoff final, a third-place match — and (loop-F I-5) a double-elimination grand final with a
- *   bracket reset, whose two edges both feed its own rematch (`feedsNextMatch`).
+ *   bracket reset, whose two edges both feed its own rematch (`feedsNextMatch`). The rule is ONE reading
+ *   (`doubleWalkoverRefused`, lib/double-walkover-next-match.ts) that the fixture page also reads, so the console's
+ *   forfeit dialog never offers "Neither" where this refuses it (Task 11).
  */
 function assertW2bWriteGuards(
   fixture: Pick<FixtureRow, "id" | "status" | "outcome" | "winner_to_fixture" | "loser_to_fixture">,
@@ -245,12 +243,7 @@ function assertW2bWriteGuards(
       status: fixture.status,
     });
   }
-  if (
-    candidate.type === "core.forfeit" &&
-    payload.by === "both" &&
-    needsNextMatchForDoubleWalkover(stageKind) &&
-    !feedsNextMatch(fixture)
-  ) {
+  if (candidate.type === "core.forfeit" && payload.by === "both" && doubleWalkoverRefused(stageKind, feedsNextMatch(fixture))) {
     throw new EngineError("DOUBLE_WALKOVER_NO_NEXT_MATCH", "a match with no next match can't be a double walkover", {
       fixtureId: fixture.id,
       stage: stageKind,

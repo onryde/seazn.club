@@ -355,6 +355,29 @@ function forfeitPhaseOf<State>(
   return decided ? "over" : started ? "play" : "pre";
 }
 
+/** W2b (plan D3 R1–R3) — a double walkover ("both") is a walkover, so only where the phase admits one, and never in a
+ *  tie-break: the classical game was played (W2b-R14). */
+function doubleWalkoverAdmitted(phase: Exclude<ForfeitPhase, "over">, allowed: readonly ForfeitReason[]): boolean {
+  return allowed.includes("walkover") && phase !== "tiebreak";
+}
+
+/**
+ * W2b Task 11 (UI-1; spec §5.5) — what the D3 phase guard admits for a forfeit recorded against `state` NOW: the
+ * module's own phase, the reasons that phase admits (`forfeitReasonsAllowed`, the list the guard judges by) and whether
+ * a double walkover is admitted. "over" admits nothing (R0: the module's own guard refuses there). The organiser
+ * console's forfeit dialog offers exactly this — less PF-2's cascade-only reasons, which the SERVER refuses — so it can
+ * never offer what the guard refuses (core/forfeit-admission.test.ts runs the guard to prove the two agree).
+ */
+export function forfeitAdmission<State>(
+  module: { forfeitPhase(state: State): ForfeitPhase; walkoverPhases?: readonly ForfeitPhase[] },
+  state: State,
+): { phase: ForfeitPhase; reasons: ForfeitReason[]; both: boolean } {
+  const phase = module.forfeitPhase(state);
+  if (phase === "over") return { phase, reasons: [], both: false };
+  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES);
+  return { phase, reasons, both: doubleWalkoverAdmitted(phase, reasons) };
+}
+
 // Core events are owned by the kernel, so the kernel — not the sport module —
 // validates their payloads (spec 03 §2). Unknown `core.*` types are invalid.
 export function validateCoreEvent(event: EventEnvelope): void {
@@ -906,7 +929,7 @@ export function foldMatchWithStoppage<Cfg, State>(
             bothRefused
               ? `a double walkover is not recordable in phase "${phase}": the game was played — record one side's walkover or withdrawal`
               : `forfeit reason "${reason}" is not recordable in phase "${phase}" — allowed here: ${allowed.join(", ")}`,
-            { eventId: event.id, phase, reason, both: by === "both", allowed, bothAllowed: allowed.includes("walkover") && phase !== "tiebreak" },
+            { eventId: event.id, phase, reason, both: by === "both", allowed, bothAllowed: doubleWalkoverAdmitted(phase, allowed) },
           );
         }
       }
