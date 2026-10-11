@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
+import { NEEDS_REASONS } from "@/server/external-play/types";
 import { seedFutureDivision, seedOrg } from "./_seed";
 
 /** Postgres names a column CHECK `<table>_<column>_check` and a table CHECK
@@ -188,13 +189,14 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     // lichess.org link to hand a player. V435 also adds create_sent_at, T9's
     // durable "a create was sent" marker (fix round 1, I2). V436 adds T10's
     // move ledger: the seven columns of the plan's §3.4 contract plus the two
-    // per-side offer plies lila's 20-ply re-offer rule needs.
+    // per-side offer plies lila's 20-ply re-offer rule needs, and (T11 fix
+    // round 1, ruling M7) the seat a token_revoked hold froze.
     expect(await columns("fixture_external_play")).toEqual([
       "black_draw_offer_ply", "black_emailed_at", "black_lichess_id", "black_ms",
       "challenge_id", "clock_increment_s", "create_sent_at", "created_at",
       "draw_offer_by", "expires_at", "finished_at", "fixture_id", "last_error",
       "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
-      "needs_reason", "org_id", "provider", "round_open_id",
+      "needs_reason", "org_id", "provider", "revoked_seat", "round_open_id",
       "scheduled_at_basis", "started_at", "status", "updated_at",
       "video_override_at", "white_draw_offer_ply", "white_emailed_at", "white_lichess_id",
       "white_ms", "white_side",
@@ -548,5 +550,64 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
       checked++;
     }
     expect(checked, "anti-vacuity: offer-ply columns").toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // V436, T11 fix round 1 (ruling M7): the seat a token_revoked hold froze.
+  const SEAT_CHECK = "fixture_external_play_revoked_seat_check";
+  type SeatOutcome =
+    | { accepted: true; row: { needs_reason: string | null; revoked_seat: string | null } }
+    | { accepted: false; code: string | undefined; constraint: string | undefined };
+  async function trySeat(cols: { status: string; needs_reason: string | null; revoked_seat: string | null }): Promise<SeatOutcome> {
+    const rollback = new Error("rollback");
+    let row: { needs_reason: string | null; revoked_seat: string | null } | undefined;
+    try {
+      await sql.begin(async (tx) => {
+        await tx`insert into fixture_external_play ${tx({ fixture_id: fixtureId, org_id: orgId, scheduled_at_basis: new Date(), ...cols } as never)}`;
+        [row] = await tx<{ needs_reason: string | null; revoked_seat: string | null }[]>`
+          select needs_reason, revoked_seat from fixture_external_play where fixture_id = ${fixtureId}`;
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && row) return { accepted: true, row };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+  const seatRefused = { accepted: false, code: CHECK_VIOLATION, constraint: SEAT_CHECK };
+
+  it("V436 (M7): a token_revoked hold records white, black, both — or no seat (unknown: both frozen)", async () => {
+    let checked = 0;
+    for (const seat of ["white", "black", "both", null]) {
+      expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: seat }), String(seat))
+        .toEqual({ accepted: true, row: { needs_reason: "token_revoked", revoked_seat: seat } });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: three seats and none").toBe(4);
+  });
+
+  it("V436 (M7): a seat on ANY other reason is refused — counted over NEEDS_REASONS", async () => {
+    const others = NEEDS_REASONS.filter((r) => r !== "token_revoked");
+    let checked = 0;
+    for (const reason of others) {
+      expect(await trySeat({ status: "needs_organiser", needs_reason: reason, revoked_seat: "white" }), reason).toEqual(seatRefused);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every other reason").toBe(NEEDS_REASONS.length - 1);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("V436 (M7): a seat on a row that is not held — no reason at all — is refused (a NULL reason must not pass)", async () => {
+    let checked = 0;
+    for (const status of ["pending", "ready", "live", "finished"]) {
+      expect(await trySeat({ status, needs_reason: null, revoked_seat: "black" }), status).toEqual(seatRefused);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("V436 (M7): a seat outside white/black/both is refused", async () => {
+    expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "home" })).toEqual(seatRefused);
   });
 });
