@@ -1177,6 +1177,13 @@ Elsewhere the text is the controller's record.
      `method` stays a free string (narrowing it would not be additive under the bench `_RULES.md` §4 freeze). The PR
      body must flag both additive PackSchema changes for the owner, as §4 requires. The owner's permission covers the
      R3-protected `run-suite.ts` / `PackSchema` edits for this fix only.
+108. **A credited result pays the table points of its credited score** (2026-10-11, owner "A"). This confirms the
+     orchestrator's reading of X-WO-1, which the W2b T15 cross-check surfaced: the engine paid every award the
+     clean-sweep pair, while the reference paid the credited score. A volleyball side that retires, is disqualified or
+     withdraws after the start at two sets all is credited a 3-2 loss and takes that score's points (FIVB 6.4.3: the
+     incomplete team keeps its sets; FIVB table 2/1). A walkover credited 3-0 pays 3/0, and a bye still pays the
+     clean-sweep pair. One rule for every credited result, with no offender-gets-0 exception. Engine fix 570f53890.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
