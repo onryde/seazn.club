@@ -2521,9 +2521,10 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           // ("the same credited score is used in the table…") the table points of that credited set score — FIVB 6.4.3:
           // an incomplete team keeps its sets, so an indoor retirement credited 3-2 pays the 3-2 pair, as the `win`
           // branch would. The credit always gives the winner exactly ⌈bestOf/2⌉ sets and the offender fewer, i.e. a
-          // decided score, so its pair is a pointsMap value (inside declaredPointsSets) or the same refusal a played
-          // match at that score gets. A bye credits no score (C-5: exactly the pre-W2b bye delta) and keeps the
-          // clean-sweep pair.
+          // decided score, so its pair is a pointsMap value (inside declaredPointsSets). A map that prices neither that
+          // score nor "*" refuses nothing at fold time: the forfeit folds and is recorded, and it is THIS standings read
+          // that throws (INVALID_EVENT, from matchPoints) — exactly as it throws for a played match ending on that score.
+          // A bye credits no score (C-5: exactly the pre-W2b bye delta) and keeps the clean-sweep pair.
           const winnerSide = sideOf(state, outcome.winner);
           const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
           const reason = awardReasonOf(outcome);

@@ -44,6 +44,36 @@ const idOf = (s: Side): string => (s === "home" ? H : A);
 const other = (s: Side): Side => (s === "home" ? "away" : "home");
 const LEAGUE = { kind: "league" } as const;
 
+/** Every case enumerator a module exports (the tripwire's reader, review M5). An export is one by NAME — `enumerate*`,
+ *  at any arity — or by SHAPE: a zero-argument function, or a zero-argument method of an exported object or of an object
+ *  in an exported array (a family), that returns a non-empty array of objects. Arity 0 is the one shape this can call
+ *  without inventing an input, so an enumerator that needs one is held to the name. Classes are never called, and a
+ *  zero-argument export that throws reds the tripwire with its own error rather than being read as "not one". */
+function caseEnumerators(mod: Record<string, unknown>): { found: string[]; called: number } {
+  const found = new Set<string>();
+  let called = 0;
+  const isClass = (f: (...args: never[]) => unknown) => /^class\b/.test(Function.prototype.toString.call(f));
+  const read = (name: string, f: unknown, self: unknown) => {
+    if (typeof f !== "function") return;
+    const fn = f as (...args: never[]) => unknown;
+    if (/^enumerate/.test(name.slice(name.lastIndexOf(".") + 1))) found.add(name);
+    if (isClass(fn) || fn.length !== 0) return;
+    called++;
+    const out: unknown = fn.call(self);
+    if (Array.isArray(out) && out.length > 0 && out.every((x) => typeof x === "object" && x !== null && !Array.isArray(x))) found.add(name);
+  };
+  const members = (name: string, holder: unknown) => {
+    if (holder === null || typeof holder !== "object" || Array.isArray(holder)) return;
+    for (const [key, member] of Object.entries(holder)) read(`${name}.${key}`, member, holder);
+  };
+  for (const [name, value] of Object.entries(mod)) {
+    read(name, value, undefined);
+    if (Array.isArray(value)) value.forEach((v, i) => members(`${name}[${i}]`, v));
+    else members(name, value);
+  }
+  return { found: [...found].sort(), called };
+}
+
 /** The stream could not be built from the case's scoresheet: refused by name, never guessed (a failing item). */
 class SheetUnbuildable extends Error {
   constructor(sport: string, why: string) {
@@ -424,8 +454,26 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
   });
 
   it("tripwire: walkover-credit is the reference's only case enumerator — bracket-finish has none to fold (its consumer is the harness's judgeDrive, reference-bracket.test.ts); a new one owes a cross-check here", () => {
-    const enumerators = Object.keys(reference).filter((k) => /^enumerate/.test(k));
-    expect(enumerators).toEqual(["enumerateCreditCases"]);
+    const { found, called } = caseEnumerators(reference as unknown as Record<string, unknown>);
+    expect(found).toEqual(["enumerateCreditCases"]);
+    // not vacuous: the shape reading called at least the one zero-argument export it found
+    expect(called).toBeGreaterThanOrEqual(1);
+  });
+
+  it("tripwire's own reader: an enumerator is caught by its name OR by its shape, whatever it is called — and a non-case function is not", () => {
+    const synthetic: Record<string, unknown> = {
+      listCases: () => [{ sport: "football" }], // shape only: a zero-argument function returning case objects
+      enumerateLater: (_sport: string) => [], // name only: an enumerator that needs an input
+      family: { cases: () => [{ id: 1 }], expect: (_c: unknown) => 0 }, // a family's zero-argument method
+      families: [{ more: () => [{ id: 2 }] }], // inside an exported array of families
+      labels: () => ["a", "b"], // strings, not cases
+      none: () => [], // empty: nothing enumerated
+      Refusal: class {}, // a class is never called
+      DATA: [{ sport: "football" }], // data, not a function
+    };
+    const { found, called } = caseEnumerators(synthetic);
+    expect(found).toEqual(["enumerateLater", "families[0].more", "family.cases", "listCases"]);
+    expect(called, "listCases, labels, none, family.cases, families[0].more").toBe(5);
   });
 });
 

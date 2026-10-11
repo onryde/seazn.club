@@ -788,18 +788,23 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     expect([home.metrics.sets_won, away.metrics.sets_won], "a bye credits no sets").toEqual([0, 0]);
   });
 
-  it("a pointsMap that prices neither the credited score nor \"*\" refuses the award exactly as it refuses that score played — never a silent clean sweep", () => {
+  it("a pointsMap that prices neither the credited score nor \"*\": the forfeit folds and is recorded, then its standings read throws exactly as a played match at that score does — never a silent clean sweep", () => {
     const partial = parsed("volleyball", { pointsMap: { "3-0": [3, 0] } });
-    const refusal = expect.objectContaining({ code: "INVALID_EVENT", message: expect.stringContaining("3-2") });
-    // positive pair: the same table refuses a PLAYED 3-2
-    expect(() => deltasOf("volleyball", partial, [["core.start"], vbSet(25, 0), vbSet(0, 25), vbSet(25, 0), vbSet(0, 25), vbSet(15, 0)])).toThrowError(refusal);
-    expect(() => deltasOf("volleyball", partial, [["core.start"], ...INDOOR[0]!.played, ["core.forfeit", { by: A, reason: "retired" }]])).toThrowError(refusal);
+    const m = mod("volleyball");
+    const unpriced = expect.objectContaining({ code: "INVALID_EVENT", message: expect.stringContaining("3-2") });
+    const retired: Spec = [["core.start"], ...INDOOR[0]!.played, ["core.forfeit", { by: A, reason: "retired" }]];
+    // Nothing refuses the forfeit: the fold records it and decides the match. Only the table read fails (a recompute).
+    const folded = foldMatchWithStoppage(m as never, partial as never, defaultLineupPair(m.positions), retired.map(([t, p], i) => ev(i + 1, t, p ?? {})));
+    expect(outcomeOf(m as never, folded as never)).toEqual({ kind: "award", winner: H, loser: A, reason: "retired" });
+    expect(() => m.standingsDelta(outcomeOf(m as never, folded as never)!, partial, { kind: "league" } as never, folded.state)).toThrowError(unpriced);
+    // positive pair: a PLAYED 3-2 on the same table folds too, and its standings read throws the same way
+    expect(() => deltasOf("volleyball", partial, [["core.start"], vbSet(25, 0), vbSet(0, 25), vbSet(25, 0), vbSet(0, 25), vbSet(15, 0)])).toThrowError(unpriced);
+    expect(() => deltasOf("volleyball", partial, retired)).toThrowError(unpriced);
     // and prices the walkover's 3-0, which it declares
     expect(deltasOf("volleyball", partial, [["core.forfeit", { by: A, reason: "walkover" }]]).map((d) => d.points)).toEqual([3, 0]);
-    // A bye has no credited score to price (its sets are the init 0-0), so the same table never refuses it: it keeps
-    // today's delta (C-5), the table's one pair. On every declared cfg a bye's 0-0 would fall to "*" anyway — only a
-    // table with no "*" tells the two readings apart.
-    const m = mod("volleyball");
+    // A bye has no credited score to price (its sets are the init 0-0), so reading it on the same table never throws: it
+    // keeps today's delta (C-5), the table's one pair. On every declared cfg a bye's 0-0 would fall to "*" anyway — only
+    // a table with no "*" tells the two readings apart.
     const state = m.init(partial, { home: { entrantId: H, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
     const bye = m.standingsDelta({ kind: "award", winner: H, loser: null, reason: "bye" } as never, partial, { kind: "swiss" } as never, state);
     expect(bye.map((d) => d.points)).toEqual([...pointsMapOf(partial)!["3-0"]!]);
@@ -807,6 +812,7 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
 
   it("every pointsMap sport × every declared cfg and a configured sets-dependent table × every credited score × both seats × every reason: the cfg's own pair, inside declaredPointsSets", () => {
     let checked = 0;
+    const perSport: Record<string, number> = {};
     const witnessed = new Map<string, number>();
     forEachSport(({ module: m }) => {
       const declared = declaredCfgs(m as never).map(({ name, cfg }) => ({ name, cfg: cfg as Record<string, unknown> }));
@@ -844,6 +850,7 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
             expect([w.points, l.points], tag).toEqual([...want!]);
             expect(sums.has(w.points + l.points), `${tag}: inside declaredPointsSets`).toBe(true);
             if (JSON.stringify(want) !== sweep) witnessed.set(m.key, witnessed.get(m.key)! + 1);
+            perSport[m.key] = (perSport[m.key] ?? 0) + 1;
             checked++;
           }
         }
@@ -852,6 +859,10 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     // volleyball, badminton and table tennis declare a pointsMap today; a sport that adopts one joins the sweep
     expect(witnessed.size, `pointsMap sports swept: ${[...witnessed.keys()].join(", ")}`).toBeGreaterThanOrEqual(3);
     for (const [key, n] of witnessed) expect(n, `${key}: cases whose credited pair is not the clean sweep`).toBeGreaterThan(0);
-    expect(checked).toBeGreaterThan(0);
+    // Pinned (reproduced independently in review). Per cfg: 2 seats × (2 pre-start cases + 3 reasons × ⌈bestOf/2⌉
+    // credited scores), so a best-of-3 cfg is 16, a best-of-5 22 and a best-of-7 28. A declared cfg added, dropped or re-shaped moves these,
+    // and that is a change to read, not to absorb.
+    expect(perSport, `cases checked per sport (${checked} in all)`).toEqual({ volleyball: 82, badminton: 64, tabletennis: 116 });
+    expect(checked).toBe(262);
   });
 });
