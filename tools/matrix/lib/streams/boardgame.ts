@@ -20,7 +20,8 @@ export const boardgameGenerator: SportStreamGenerator = {
       : null;
   },
   // W2b: chess has no scoring event short of its result (eventSchemas: result, pairing, tiebreak) — the game IS its
-  // result, so a retirement after START has nothing played before it.
+  // result, so a retirement after START has nothing played before it, and ruling 113 refuses one (generateStream names
+  // it OutcomeUnreachable); a disqualification after START stands.
   partial() {
     return [];
   },

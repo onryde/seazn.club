@@ -55,14 +55,26 @@ export function rootCfgOf(row: RowKey, sport: string, overrides: Record<string, 
   return stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport), overrides), rootKind(row));
 }
 
-function generatorBuilds(row: RowKey, sport: string, outcome: RequestedOutcome, overrides: Record<string, unknown> = {}): boolean {
+function streamBuilds(sport: string, cfg: unknown, stageKind: StageKind, outcome: RequestedOutcome): boolean {
   try {
-    generateStream({ sportKey: sport, cfg: rootCfgOf(row, sport, overrides), stageKind: rootKind(row), home: "h", away: "a", outcome });
+    generateStream({ sportKey: sport, cfg, stageKind, home: "h", away: "a", outcome });
     return true;
   } catch (e) {
     if (e instanceof OutcomeUnreachable || e instanceof GeneratorUnsupported) return false;
     throw e;
   }
+}
+
+function generatorBuilds(row: RowKey, sport: string, outcome: RequestedOutcome, overrides: Record<string, unknown> = {}): boolean {
+  return streamBuilds(sport, rootCfgOf(row, sport, overrides), rootKind(row), outcome);
+}
+
+/** RT-PART's in-match reasons for a sport under a stage's cfg, in the order its drives alternate them: the retirement
+ *  and the disqualification (X-RT-1), each where the sport's generator builds it after START and partial play. Ruling
+ *  113 refuses a retirement where nothing is played short of the result (chess), so there the disqualification is
+ *  driven alone. */
+export function inMatchReasons(sport: string, cfg: unknown, stageKind: StageKind): ("retired" | "disqualified")[] {
+  return (["retired", "disqualified"] as const).filter((reason) => streamBuilds(sport, cfg, stageKind, { kind: "forfeit", by: "home", reason, at: "after_start" }));
 }
 
 /** CK-AB-1's override: a cricket result past the minimum overs is the DLS method's, which the cfg declares OFF by
@@ -113,11 +125,11 @@ export function w2bCells(key: W2bScenarioKey, isDropped: (row: RowKey, sport: st
     // X-RS-1 / X-WO-1 / BG-WO-2: every sport (a walkover is the bare core.forfeit everywhere) × every root stage kind.
     case "WO-PRE":
       return keep(rootKindRows().flatMap((row) => SPORT_KEYS.map((sport) => ({ row, sport }))));
-    // X-RT-1: a table and a bracket, every sport whose generator builds START + partial play + the retirement there.
-    case "RT-PART": {
-      const retired: RequestedOutcome = { kind: "forfeit", by: "home", reason: "retired", at: "after_start" };
-      return keep([tableRootRow(), bracketRootRow()].flatMap((row) => SPORT_KEYS.filter((sport) => generatorBuilds(row, sport, retired)).map((sport) => ({ row, sport }))));
-    }
+    // X-RT-1: a table and a bracket, every sport whose generator builds START + partial play + the retirement there,
+    // or the in-match disqualification (ruling 113: a sport with nothing played short of its result — chess — cannot
+    // retire, and its RT-PART drives the disqualification alone; inMatchReasons).
+    case "RT-PART":
+      return keep([tableRootRow(), bracketRootRow()].flatMap((row) => SPORT_KEYS.filter((sport) => inMatchReasons(sport, rootCfgOf(row, sport), rootKind(row)).length > 0).map((sport) => ({ row, sport }))));
     // X-DW-1..4: every sport × every root stage kind, plus the third-place row (a fixture with no next match).
     case "DW-ALL":
       return keep([...rootKindRows(), ...thirdPlaceRows()].flatMap((row) => SPORT_KEYS.map((sport) => ({ row, sport }))));

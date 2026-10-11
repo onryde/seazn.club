@@ -1289,8 +1289,9 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const f = driver.rows()[0]!;
     await driver.postStream(f.id, [START], "foreign"); // not recorded: a foreign write
     // A forfeit on a live fixture posts only core.forfeit (decideFixture), so the engine takes it. W2b D3: in play that
-    // is a retirement (R2 refuses a walkover after core.start).
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
+    // is a disqualification — the fixture holds only its Start, and ruling 113 refuses a retirement until something
+    // is played.
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "disqualified", at: "after_start" });
     expect(putsOn(driver, f.id)).toEqual([]);
     expect(rec.lineupsPut).toBe(0);
     expect(rec.notes).toContain(`lineups: ${f.id} was in_play when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`);
@@ -1590,7 +1591,8 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t");
     rec.streams.set(f.id, [START]);
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
+    // Ruling 113: the fixture holds only its Start, so the in-play forfeit is a disqualification (no retirement yet).
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "disqualified", at: "after_start" });
     const held = driver.fixtures.find((x) => x.id === f.id)!.events;
     expect(held.map((e) => e.type)).toEqual(["core.start", "core.forfeit"]);
     expect(rec.streams.get(f.id)).toEqual(held);
@@ -1615,7 +1617,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const prefix = `${ctx.tag}:${f.id}`; // decideFixture's own prefix
     await driver.postStream(f.id, [START], prefix);
     rec.streams.set(f.id, [START]);
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "disqualified", at: "after_start" });
     expect(driver.fixtures.find((x) => x.id === f.id)!.events.map((e) => e.type)).toEqual(["core.start", "core.forfeit"]);
     expect([...driver.keys.get(f.id)!.keys()]).toEqual([`${prefix}:s0`, `${prefix}:s1`]);
     expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
@@ -1641,8 +1643,9 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
   it("events on the fixture the harness never posted make parity unjudgeable, not a silent pass", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t"); // not recorded: a foreign write
-    // W2b D3: the fixture is in play, so the forfeit is a retirement (R2 refuses a walkover after core.start).
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
+    // W2b D3: the fixture is in play with nothing played, so the forfeit is a disqualification (ruling 113 refuses a
+    // retirement until something is played).
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "disqualified", at: "after_start" });
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(rec.declared.has(f.id)).toBe(false);
   });

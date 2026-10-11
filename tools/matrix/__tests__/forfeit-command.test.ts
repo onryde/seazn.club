@@ -164,14 +164,14 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(checked).toBe(SPORT_KEYS.length * SIDES.length * REASONS.length);
   });
 
-  it("in play (phase play): a retirement or disqualification is accepted with the played score kept; a walkover is refused FORFEIT_REASON_WRONG_PHASE once something is played (R2, ruling 112) — accepted after a bare Start, and wherever the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
+  it("in play (phase play): a disqualification is accepted from the Start and a retirement once something is played, with the played score kept; a retirement after a bare Start is refused FORFEIT_REASON_WRONG_PHASE (ruling 113); a walkover is refused once something is played (R2, ruling 112) — accepted after a bare Start, and wherever the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
     // single-sport per case: generic declares walkovers in `pre` only, boardgame in `pre`, `play` and `tiebreak` (D3);
     // football for the played case. Generic's and chess's win streams are START + one deciding event, so the take-back
-    // leaves a bare START — nothing played (ruling 112); football's keeps its goal — something played.
+    // leaves a bare START — nothing played (rulings 112, 113); football's keeps its goal — something played.
     for (const [sport, side, reason, played, code] of [
-      ["generic", "home", "retired", false, null], ["generic", "away", "disqualified", false, null], ["generic", "home", "walkover", false, null],
+      ["generic", "home", "retired", false, "FORFEIT_REASON_WRONG_PHASE"], ["generic", "away", "disqualified", false, null], ["generic", "home", "walkover", false, null],
       ["football", "home", "walkover", true, "FORFEIT_REASON_WRONG_PHASE"], ["football", "away", "retired", true, null],
-      ["boardgame", "home", "walkover", false, null], ["boardgame", "away", "retired", false, null],
+      ["boardgame", "home", "walkover", false, null], ["boardgame", "away", "retired", false, "FORFEIT_REASON_WRONG_PHASE"], ["boardgame", "away", "disqualified", false, null],
     ] as const) {
       const { m, d, sf1 } = await bracket(sport);
       await run(m, d, "Score", 0, 0);   // sf1 decided by play …
@@ -195,7 +195,7 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     }
   });
 
-  it("a second forfeit on a decided fixture is refused ALREADY_DECIDED, and a forfeit while an abandon is active is refused ABANDONED_SETTLE_OR_VOID (D4); void the abandon and the retirement is accepted (X-AB-4)", async () => {
+  it("a second forfeit on a decided fixture is refused ALREADY_DECIDED, and a forfeit while an abandon is active is refused ABANDONED_SETTLE_OR_VOID (D4); void the abandon and the disqualification is accepted (X-AB-4)", async () => {
     const a = await bracket("generic");
     await forfeit(a.m, a.d, 0, "home", "walkover");
     await forfeit(a.m, a.d, 0, "away", "walkover");
@@ -206,11 +206,13 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     await run(b.m, b.d, "Settle", 0, 2);  // an open semi held by an abandon at score, then settled
     await run(b.m, b.d, "Void", 0, 0);    // the settle taken back: abandoned, held
     expect(row(b.d, b.sf1).status).toBe("abandoned");
-    await forfeit(b.m, b.d, 0, "home", "retired");
+    // Generic's abandon at score holds a bare START (its win is one deciding event): nothing played, so the in-match
+    // reason is the disqualification (ruling 113 refuses a retirement there).
+    await forfeit(b.m, b.d, 0, "home", "disqualified");
     expect(lastForfeit(b.m)).toMatchObject({ code: "ABANDONED_SETTLE_OR_VOID" });
     await run(b.m, b.d, "Void", 0, 0);    // the abandon taken back: in play again
-    await forfeit(b.m, b.d, 0, "home", "retired");
-    expect(row(b.d, b.sf1)).toMatchObject({ status: "forfeited", outcome: { kind: "award", reason: "retired" } });
+    await forfeit(b.m, b.d, 0, "home", "disqualified");
+    expect(row(b.d, b.sf1)).toMatchObject({ status: "forfeited", outcome: { kind: "award", reason: "disqualified" } });
   });
 
   it("a double walkover on the FINAL (no next match) is refused DOUBLE_WALKOVER_NO_NEXT_MATCH and the final stays open (X-DW-3)", async () => {
@@ -401,7 +403,9 @@ describe("rule 10 — the required sequences, every step checked", () => {
     { name: "void then forfeit", sport: "generic", play: async ({ m, d, sf1 }) => {
       await run(m, d, "Score", 0, 1);
       await run(m, d, "Void", 0, 0);
-      await forfeit(m, d, 0, "away", "retired");
+      // The take-back leaves a bare START (generic's win is one event): the in-match reason is the disqualification
+      // (ruling 113).
+      await forfeit(m, d, 0, "away", "disqualified");
       expect(row(d, sf1).status).toBe("forfeited");
       return 1;
     } },
@@ -719,7 +723,7 @@ describe("rule 10 — the required sequences, every step checked", () => {
       { name: "void then forfeit", sport: "generic", play: async ({ m, d }) => {
         await run(m, d, "Score", 0, 1);
         await run(m, d, "Void", 0, 0);
-        await forfeit(m, d, 0, "away", "retired");
+        await forfeit(m, d, 0, "away", "disqualified"); // a bare START stands: no retirement (ruling 113)
       } },
       { name: "a forfeit voided, then forfeited again", sport: "football", play: async ({ m, d }) => {
         await forfeit(m, d, 0, "home", "walkover");

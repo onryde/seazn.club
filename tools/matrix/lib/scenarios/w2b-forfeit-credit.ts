@@ -30,7 +30,7 @@ import { sportModule, stageCfg } from "../sport-cfg.ts";
 import { routeTo, type Route } from "../routing.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
-import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies, w2bCells } from "../w2b-cells.ts";
+import { AWARD_POLICY, DLS_ON, abandonOverride, inMatchReasons, w2bApplies, w2bCells } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, decideFixture, ensureLineups, liveEvents, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
@@ -568,10 +568,13 @@ const woPre = scenario("WO-PRE", async (ctx, rec, setup) => {
   ]);
 });
 
-const RT_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
-
 const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
   const drives: ForfeitDrive[] = [];
+  // X-RT-1's two in-match reasons, as this sport's generator builds them under the stage's cfg: ruling 113 refuses a
+  // retirement where nothing is played short of the result (chess), so there the disqualification is driven alone.
+  const stageKind = setup.stage.kind as StageKind;
+  const reasons: readonly ForfeitReason[] = inMatchReasons(ctx.spec.sport, stageCfg(ctx.spec.sport, ctx.cfg, stageKind), stageKind);
+  if (reasons.length === 0) throw new Error(`RT-PART: ${ctx.spec.sport} on a ${stageKind} builds neither a retirement nor a disqualification after partial play — not an RT-PART cell`);
   const hooks: RoundHooks = {
     beforeRound: async (_round, batch) => {
       const f = firstScheduled(batch);
@@ -579,7 +582,7 @@ const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
       const n = drives.length;
       const by: Side = n % 2 === 0 ? "home" : "away";
       // X-RT-1: an in-match disqualification takes the retirement's credit, so the two reasons alternate.
-      const d = await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: RT_REASONS[n % RT_REASONS.length], at: "after_start" });
+      const d = await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: reasons[n % reasons.length]!, at: "after_start" });
       const tip = (await ctx.driver.fixtureState(f.id)).last_seq;
       drives.push({ ...d, seq: tip, posted: rec.streams.get(f.id)?.length ?? 0 });
     },

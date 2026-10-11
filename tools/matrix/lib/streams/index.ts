@@ -80,6 +80,11 @@ export class ForfeitPostingRefused extends Error {
 const IN_PLAY_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
 const PRE_PLAY_REASONS: readonly ForfeitReason[] = ["walkover"];
 
+/** W2b ruling 113 (amends X-RS-1, X-RT-1): nobody retires from a match never played. "Played" is the engine's own
+ *  reading (core/events.ts playRecorded, ruling 112): a sport — non-`core.` — event after START. A disqualification
+ *  needs only START; a retirement needs this. */
+const holdsPlay = (play: readonly StreamEvent[]): boolean => play.some((e) => !e.type.startsWith("core."));
+
 /** The events a forfeit is posted as, given the fixture's status now — the ONE composition generateStream, the drivers
  *  and decideFixture share (W2b D3, finding 10). On a fixture already under way the forfeit goes in bare. On a
  *  SCHEDULED one, `play` goes in before it: START and the sport's partial play for a retirement or a disqualification
@@ -96,6 +101,9 @@ export function forfeitPosting(status: string, forfeit: { readonly by: string; r
   }
   if (forfeit.by !== "both" && IN_PLAY_REASONS.includes(forfeit.reason) && play.length === 0) {
     throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded after ${START.type} and some play, but none was given (D3 R4)`);
+  }
+  if (forfeit.by !== "both" && forfeit.reason === "retired" && !holdsPlay(play)) {
+    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded once something is played, but the play given holds no sport event (ruling 113: nobody retires from a match never played)`);
   }
   const first = play.at(0);
   if (first !== undefined && first.type !== START.type) throw new ForfeitPostingRefused(`the play before a forfeit starts with ${START.type}, not ${first.type}`);
@@ -153,7 +161,15 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
-  if (o.kind === "forfeit") return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, o.at === "before_start" ? [] : partialPlay(req));
+  if (o.kind === "forfeit") {
+    const play = o.at === "before_start" ? [] : partialPlay(req);
+    // Ruling 113: a sport with nothing to play short of its result (chess: the game IS its result) cannot retire — named
+    // here, before forfeitPosting would refuse the shape, so a sweep reads it as the sport's, not the request's.
+    if (o.reason === "retired" && play.length > 0 && !holdsPlay(play)) {
+      throw new OutcomeUnreachable(req.sportKey, label, "ruling 113: nobody retires from a match never played, and the sport's partial play here is START alone (nothing is played short of its result)");
+    }
+    return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, play);
+  }
   if (o.kind === "double_walkover") return [DOUBLE_WALKOVER];
   if (o.kind === "abandon") return o.afterPartial === true ? [...partialPlay(req), ABANDON] : o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
   if (o.kind === "level") return levelStream(req, gen);
