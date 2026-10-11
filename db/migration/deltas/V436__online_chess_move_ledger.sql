@@ -38,8 +38,10 @@
 --   Counted only past the game's expected end; reset to 0 by any read that
 --   brings the truth. It backs the sweep's re-read off, and at a small N puts
 --   a ready/live board in the organiser's queue as provider_error (T11 review
---   M4: a board read forever with no signal blocks the next round). Written
---   by the sweep alone; `last_polled_at` (V433) is when it last read.
+--   M4: a board read forever with no signal blocks the next round). On a row
+--   ALREADY held, every read counts whatever it brings (controller ruling C3:
+--   a held board is never re-read every tick). Written by the sweep alone;
+--   `last_polled_at` (V433) is when it last read.
 --
 -- Additive and nullable/defaulted, so every existing row (pending, ready,
 -- needs_organiser) is valid as it stands: an empty ledger.
@@ -93,3 +95,18 @@ alter table fixture_external_play
   -- A count of reads: never negative.
   add constraint fixture_external_play_sweep_no_truth_reads_check
     check (sweep_no_truth_reads >= 0);
+
+-- camera_evidence_at — when the external-play sweep (T13, controller ruling
+--   C1; design §5.2 "fetched once, at least 2 minutes after the player leaves
+--   or the match ends") SETTLED this meeting's camera evidence: every player's
+--   peer reports, over every session of the meeting, read final and turned
+--   into a camera_lost flag (fixture_play_flags) where the camera was off in
+--   the match — or nothing to read (no game, a policy other than Required, an
+--   organiser's video override). Null while the reports are not final; the
+--   sweep retries. Stamped in the SAME transaction as the flags it writes, on
+--   the condition that it is still null, so a re-run or a racing pass writes
+--   no second flag. Evidence comes after the meeting ends, never before.
+alter table fixture_video_meetings
+  add column camera_evidence_at timestamptz null,
+  add constraint fixture_video_meetings_camera_evidence_check
+    check (camera_evidence_at is null or ended_at is not null);

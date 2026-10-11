@@ -72,6 +72,44 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
     });
   });
 
+  // V436 (T13, controller ruling C1): camera evidence is read after the
+  // meeting ends — never before — and a settled stamp is what stops a re-run
+  // writing a second flag. Every write here is rolled back (a sentinel), so
+  // the shared meeting row stays as beforeAll made it.
+  const ROLLBACK = new Error("rollback sentinel");
+  const rolledBack = (write: (tx: typeof sql) => Promise<unknown>): Promise<Outcome> =>
+    sql
+      .begin(async (tx) => {
+        await write(tx as unknown as typeof sql);
+        throw ROLLBACK;
+      })
+      .then(
+        () => ({ accepted: false as const, code: "NO_ROLLBACK", constraint: undefined }),
+        (err: { code?: string; constraint_name?: string }) =>
+          err === ROLLBACK
+            ? { accepted: true as const }
+            : { accepted: false as const, code: err.code, constraint: err.constraint_name },
+      );
+
+  it("C1: a meeting's camera evidence starts unsettled (null)", async () => {
+    const [row] = await sql<{ camera_evidence_at: Date | null }[]>`
+      select camera_evidence_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+    expect(row, "premise: the meeting row exists").toBeDefined();
+    expect(row!.camera_evidence_at).toBeNull();
+  });
+
+  it("C1: camera evidence cannot be settled on a meeting that has not ENDED", async () => {
+    expect(await rolledBack((tx) => tx`
+      update fixture_video_meetings set camera_evidence_at = now() where fixture_id = ${fixtureId}`,
+    )).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_meetings_camera_evidence_check" });
+  });
+
+  it("C1 (the pair): an ENDED meeting's evidence settles", async () => {
+    expect(await rolledBack((tx) => tx`
+      update fixture_video_meetings set ended_at = now(), camera_evidence_at = now() where fixture_id = ${fixtureId}`,
+    )).toEqual({ accepted: true });
+  });
+
   it("D6: two participants for ONE person are accepted — N angles are config, not a migration", async () => {
     for (const n of ["a", "b"]) {
       expect(await attempt(sql`
