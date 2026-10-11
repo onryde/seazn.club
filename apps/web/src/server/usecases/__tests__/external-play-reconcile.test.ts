@@ -523,6 +523,24 @@ describe.runIf(HAS_DB)("reconcile — the stream is the read; the ledger follows
     expect([r.draw_offer_by, r.black_draw_offer_ply], "the re-offer rule still reads the ply").toEqual([null, 4]);
   });
 
+  it("a game that has ENDED has no standing offer: the one on file is cleared, a flag on the final line is not adopted", async () => {
+    // Synthetic: a resign read while lila still wrote bdraw (an offer is
+    // only meaningful while the game is played — Drawer.scala; source).
+    const g = await readyGame();
+    await play(g, LINE.slice(0, 4));
+    await act(
+      { fixtureId: g.fixtureId, personId: g.black.personId, action: { kind: "draw", accept: true } },
+      { now: new Date(), accessToken: async (u) => `tok-${u}`, publish: async () => {}, offerOrAcceptDraw: async () => ({ ok: true }) },
+    );
+    expect((await rowOf(g.fixtureId)).draw_offer_by, "premise: Black's offer on file").toBe("black");
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 4), status: "resign", winner: "white", wdraw: true, bdraw: true }));
+    const { deps, sent } = observed(new Date());
+    expect(await reconcile(g.fixtureId, "game_end", deps)).toMatchObject({ finished: true });
+    const r = await rowOf(g.fixtureId);
+    expect([r.draw_offer_by, r.black_draw_offer_ply, r.white_draw_offer_ply], "no offer after the end; the ply history stays").toEqual([null, 4, null]);
+    expect(sent.map((b) => b.drawOfferBy)).toEqual([null]);
+  });
+
   it("an offer read before ply 2 is not adopted (lila registers none; V436 refuses one)", async () => {
     const g = await readyGame();
     serveStream(gameFull(g, MID, { moves: LINE.slice(0, 1), wdraw: true }));

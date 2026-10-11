@@ -483,8 +483,10 @@ async function applyStream(
   const ply = theirs.length;
   const adopted = ply - ours.length;
   const clocks = clocksAt(g.bridge, lichess, ply, adopted, t.at);
+  // A game that has ended has no standing offer (an offer means something
+  // only while the game is played); the plies stay, as T10 leaves them.
   const offer = IS_TERMINAL[lichess.status]
-    ? { by: g.bridge.draw_offer_by, whitePly: g.bridge.white_draw_offer_ply, blackPly: g.bridge.black_draw_offer_ply }
+    ? { by: null, whitePly: g.bridge.white_draw_offer_ply, blackPly: g.bridge.black_draw_offer_ply }
     : offerAfter(g.bridge, lichess, ply);
   const incrementS = Math.round(lichess.incrementMs / 1000);
   const b = g.bridge;
