@@ -552,13 +552,37 @@ async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullab
   }
   // The claim: a compare-and-set on the read we acted on, so of two passes
   // that both saw the board due, one reads it.
-  const claimed = await sql`
+  const [claimed] = await sql<HoldFacts[]>`
     update fixture_external_play set last_polled_at = ${pass.now}
      where fixture_id = ${c.fixtureId}
        and date_trunc('milliseconds', last_polled_at) is not distinct from ${c.lastPolledAt}
-    returning fixture_id`;
-  if (claimed.length === 0) return;
+    returning status, needs_reason as "needsReason"`;
+  if (!claimed) return;
   pass.report.reconciled++;
+  try {
+    await readAndRule(pass, c, read);
+  } finally {
+    await countHoldPlaced(pass, c.fixtureId, claimed);
+  }
+}
+
+type HoldFacts = { status: string; needsReason: string | null };
+
+/** Review M6: a hold this read placed — reconcile's own (token_revoked, the
+ *  game's end replacing a mid-game diagnosis, T12's snapshot holds) or the
+ *  no-truth back-off's — is counted ONCE, by what the row says before the
+ *  read (at the claim) and after it, whoever inside the read wrote it. A
+ *  hold another actor lands during the read is counted too: the report is
+ *  the pass's telling, never a ledger. */
+async function countHoldPlaced(pass: Pass, fixtureId: string, before: HoldFacts): Promise<void> {
+  const [after] = await sql<HoldFacts[]>`
+    select status, needs_reason as "needsReason" from fixture_external_play where fixture_id = ${fixtureId}`;
+  if (!after || after.status !== "needs_organiser") return;
+  if (before.status === "needs_organiser" && before.needsReason === after.needsReason) return;
+  pass.report.heldForOrganiser++;
+}
+
+async function readAndRule(pass: Pass, c: ReconcileCandidate, read: NonNullable<SweepDeps["reconcile"]>): Promise<void> {
   const end = expectedEnd(c);
   if (c.bridgeStatus === "needs_organiser") {
     try {
@@ -579,8 +603,6 @@ async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullab
     await noTruth(pass, c, end);
     return;
   }
-  // A hold reconcile placed (T12: aborted, a tie-break owed, fair play).
-  if (outcome.result?.wrote === "needs_organiser" || outcome.result?.wrote === "aborted") pass.report.heldForOrganiser++;
   await sql`
     update fixture_external_play set sweep_no_truth_reads = 0
      where fixture_id = ${c.fixtureId} and sweep_no_truth_reads <> 0`;
@@ -600,12 +622,12 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
   const row = await countRead(c.fixtureId);
   if (!row || row.reads < SWEEP_NO_TRUTH_HOLD_AFTER) return;
   if (row.status !== "ready" && row.status !== "live") return; // already the organiser's
-  const held = await holdForOrganiser({
+  // Counted by the read's before/after (review M6), never here too.
+  await holdForOrganiser({
     fixtureId: c.fixtureId,
     reason: "provider_error",
     detail: `sweep: ${row.reads} reads of game ${c.gameId} past its expected end (${end.toISOString()}) told us nothing`,
   });
-  if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
 }
 
 // ─── Job 5: the camera evidence after the match (controller ruling C1) ─────
