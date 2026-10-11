@@ -187,15 +187,20 @@ type Held = { held: false } | { held: true; reason: NeedsReason };
  *  - a game whose result is recorded (bridge `finished`, T11) or a fixture
  *    no longer playable (decided, needs_decision, abandoned…) is never held:
  *    `{ held: false }`;
- *  - a reason already on the row stands unless `replaces` names it — the
- *    answer is then the STORED reason;
+ *  - `final` = the snapshot that ENDED the game. A final hold replaces a
+ *    mid-game reason (MID_GAME_REASONS) or refreshes its own; any other
+ *    reason on the row stands. A mid-game hold never touches a held row —
+ *    not its reason, and not its `last_error` even under the same reason
+ *    (re-review N1: a mid-game provider_error erased the word Lichess gave
+ *    for an unrecognised status). When the row is not rewritten, the answer
+ *    is the STORED reason;
  *  - `last_error` takes `detail` when one is given, and keeps what the row
  *    had otherwise (review M5: a bare hold erased T9's last create error). */
 async function hold(
   fixtureId: string,
   reason: "aborted" | HoldReason | SnapshotOnlyReason,
   detail: string | null,
-  replaces: readonly NeedsReason[],
+  final: boolean,
 ): Promise<Held> {
   return sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
@@ -210,7 +215,8 @@ async function hold(
     if (row.status === "finished" || !isPlayableFixtureStatus(row.fixture_status)) return { held: false };
     if (row.needs_reason !== null) {
       const stored = readNeedsReason(row.needs_reason);
-      if (stored !== reason && !replaces.includes(stored)) return { held: true, reason: stored };
+      const replaces = final && (stored === reason || (MID_GAME_REASONS as readonly NeedsReason[]).includes(stored));
+      if (!replaces) return { held: true, reason: stored };
     }
     await tx`
       update fixture_external_play
@@ -238,7 +244,7 @@ export async function holdForOrganiser(a: { fixtureId: string; reason: HoldReaso
   if (!(HOLD_REASONS as readonly string[]).includes(a.reason)) {
     throw new HttpError(500, `not a hold reason: ${JSON.stringify(a.reason)}`, "HOLD_REASON_UNKNOWN");
   }
-  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, []);
+  const h = await hold(a.fixtureId, a.reason, a.detail ?? null, false);
   return h.held ? heldAnswer(h.reason) : NONE;
 }
 
@@ -274,7 +280,7 @@ async function afterDraw(s: GameSnapshot, fixtureId: string, auth: Awaited<Retur
     fixtureId,
     "tiebreak_owed",
     `${describeSnapshot(s)} — a drawn game in a bracket: the tie-break is owed`,
-    MID_GAME_REASONS,
+    true,
   );
   return h.held ? heldAnswer(h.reason) : { wrote: "draw" };
 }
@@ -335,7 +341,7 @@ async function attempt(
 
   if (d.kind === "hold") {
     // The snapshot ends the game: its hold replaces a mid-game diagnosis.
-    const h = await hold(fixtureId, d.reason, d.detail, MID_GAME_REASONS);
+    const h = await hold(fixtureId, d.reason, d.detail, true);
     return h.held ? heldAnswer(h.reason) : NONE;
   }
 
@@ -348,7 +354,7 @@ async function attempt(
         fixtureId,
         "provider_error",
         `${describeSnapshot(s)} — the game on file has no recorded colour`,
-        MID_GAME_REASONS,
+        true,
       );
       return h.held ? heldAnswer(h.reason) : NONE;
     }
