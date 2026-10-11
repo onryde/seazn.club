@@ -903,6 +903,50 @@ describe.runIf(HAS_DB)("writeResultFrom — a draw: decided where the stage allo
     expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)]).toEqual(before);
   });
 
+  it("N2: the organiser VOIDS our written draw, then the same snapshot replays: a draw, nothing held — league and bracket, counted", async () => {
+    // Re-review N2. The replay finds our draw's key on the ledger (the void
+    // appends; it never deletes) and re-reads the fold. After the void the
+    // engine owes no tie-break — read from its own declaration, not typed
+    // here — so the answer is the plain draw and no hold is written: not in
+    // a league (a hold there would be a tie-break on a fixture with no draw),
+    // and not a fresh one in a bracket (its first tie-break hold is the
+    // organiser's to clear).
+    const CASES = [
+      { kind: "league", status: "draw" },
+      { kind: "swiss", status: "insufficientMaterialClaim" },
+      { kind: "knockout", status: "stalemate" },
+      { kind: "double_elim", status: "timeout" },
+    ] as const;
+    let checked = 0;
+    for (const c of CASES) {
+      const label = `${c.kind}/${c.status}`;
+      expect(BRACKET_KINDS.has(c.kind) || DRAW_KINDS.has(c.kind), `${label}: premise — a kind the engine classifies`).toBe(true);
+      const g = await readyGame({ kind: c.kind });
+      const s = snap(g, { status: c.status, winner: null });
+      const first = rulebook(c.status, null, BRACKET_KINDS.has(c.kind));
+      expect(await writeResultFrom(s, g.fixtureId), `${label}: first call`).toEqual(answerOf(first));
+      const auth = await mintOrgOwnerAuth(g.orgId);
+      const [res] = await sql<{ id: string }[]>`
+        select id from score_events where fixture_id = ${g.fixtureId} and idempotency_key = ${resultIdempotencyKey(g.fixtureId, s)}`;
+      await scoreEvent(auth, g.fixtureId, {
+        expected_seq: (await typesOf(g.fixtureId)).length,
+        type: "core.void",
+        payload: { event_id: res!.id },
+      });
+      const fs = await getFixtureState(auth, g.fixtureId);
+      expect(fs.status, `${label}: premise — the void reopened the fixture`).toBe("in_play");
+      expect(fs.outcome, `${label}: premise — no outcome`).toBeNull();
+      expect(boardgame.awaitingDecider?.(fs.state as never), `${label}: premise — the engine owes no tie-break`).toBe(false);
+      const before = [await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)];
+      // The engine owes nothing, so the answer is the rulebook's for a stage
+      // that allows the draw.
+      expect(await writeResultFrom(s, g.fixtureId), `${label}: replay`).toEqual(answerOf(rulebook(c.status, null, false)));
+      expect([await typesOf(g.fixtureId), await bridgeOf(g.fixtureId)], `${label}: nothing moved`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+  });
+
   it("after OUR tie-break hold the organiser SETTLES it instead: a replay answers draw and holds nothing again", async () => {
     // A settle decides the fixture but leaves the fold in phase "tiebreak"
     // (core/events.ts settleApplies: a settlement outranks the module's
