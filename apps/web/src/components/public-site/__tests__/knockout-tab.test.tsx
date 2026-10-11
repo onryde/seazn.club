@@ -873,6 +873,25 @@ describe("KnockoutTab — the champion banner", () => {
     expect(checked).toBe(2);
   });
 
+  // W2b T13 fix round 1 (review (b)) — the line keeps no reason ("Beat Dev" is right for a retirement, and the walkover
+  // line does not say "withdrew"), so the final's own tag rides beside it: the same chip, named by the same sentence.
+  const BANNER_CHIP = /<span role="img" aria-label="([^"]*)" title="([^"]*)" data-testid="mh-knockout-champion-forfeit"[^>]*>([^<]*)<\/span>/;
+  it("empty case first: a played final's banner carries no tag", () => {
+    expect(bannerOf(render(doneDoc("f1")))).not.toContain("mh-knockout-champion-forfeit");
+  });
+  it("a final won by forfeit, every reason: the final's tag beside the line, named and titled by its sentence, once", () => {
+    let checked = 0;
+    for (const kind of ["walkover", "withdrew", "retired", "disqualified"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      const chip = BANNER_CHIP.exec(banner);
+      expect(chip, `${kind}: the banner's chip`).not.toBeNull();
+      expect([chip![1], chip![2], chip![3]], kind).toEqual([esc("Dev — the sentence"), esc("Dev — the sentence"), kind === "retired" ? "ret." : "w/o"]);
+      expect(banner.split("mh-knockout-champion-forfeit").length - 1, `${kind}: once`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {
     expect(render(doneDoc(null))).not.toContain(`data-testid="mh-knockout-champion-`);
   });

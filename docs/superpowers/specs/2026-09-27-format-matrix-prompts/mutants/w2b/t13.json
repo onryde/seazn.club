@@ -872,5 +872,20 @@
         "name": "X-WO-1 \\(review M-5\\): every sport whose walkover credits GOALS"
       }
     ]
+  },
+  {
+    "id": "b-banner-chip-dropped",
+    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+    "find": "            {final.forfeit ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+    "replace": "            {false ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/knockout-tab.test.tsx"
+        ],
+        "name": "a final won by forfeit, every reason: the final's tag beside the line"
+      }
+    ]
   }
 ]

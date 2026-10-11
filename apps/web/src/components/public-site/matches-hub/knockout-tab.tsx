@@ -461,6 +461,17 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
             )}
+            {/* W2b T13 review (b): the line names no reason ("Beat Dev" stands for a retirement too), so the final's
+                own tag rides beside it — the same chip and sentence as its card. No id: the card's chip owns that. */}
+            {final.forfeit ? (
+              <span className="ml-1.5 inline-block align-middle">
+                <ForfeitTagChip
+                  tag={final.forfeit.tag}
+                  sentence={final.forfeit.sentence}
+                  testId="mh-knockout-champion-forfeit"
+                />
+              </span>
+            ) : null}
           </p>
         ) : null}
       </div>
