@@ -1114,6 +1114,55 @@ describe.runIf(HAS_DB)("I1 — a game's final outcome replaces a mid-game hold, 
     expect((await bridgeOf(g.fixtureId))!.last_error).toMatch(/unknownFinish/);
   });
 
+  it("N1: a FINAL provider_error, then a mid-game provider_error WITH a detail: the final detail survives — counted", async () => {
+    // Same reason both times, so only last_error can tell the order apart.
+    // `unrecognised` is the worst case: Lichess's new word lives ONLY in
+    // last_error (re-review N1).
+    const FINAL = [
+      { snapshot: { status: "unrecognised", rawStatus: "laterStatus", winner: null }, word: "laterStatus" },
+      { snapshot: { status: "unknownFinish", winner: null }, word: "unknownFinish" },
+      { snapshot: { status: "variantEnd", winner: "white" }, word: "variantEnd" },
+    ] as const;
+    let checked = 0;
+    for (const f of FINAL) {
+      const g = await liveGame();
+      expect(await writeResultFrom(snap(g, f.snapshot as never), g.fixtureId), f.word).toEqual({
+        wrote: "needs_organiser",
+        reason: "provider_error",
+      });
+      const b = await bridgeOf(g.fixtureId);
+      expect(b!.last_error, `${f.word}: premise — the final detail is on the row`).toContain(f.word);
+      expect(
+        await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "stream read failed (mid-game)" }),
+        f.word,
+      ).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
+      expect(await bridgeOf(g.fixtureId), `${f.word}: the mid-game hold rewrote nothing`).toEqual(b);
+      checked++;
+    }
+    expect(checked).toBe(FINAL.length);
+  });
+
+  it("N1 positive pair: a mid-game provider_error WITH a detail, then the FINAL one: the final detail replaces it", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "stream read failed (mid-game)" });
+    expect((await bridgeOf(g.fixtureId))!.last_error, "premise").toBe("stream read failed (mid-game)");
+    expect(
+      await writeResultFrom(snap(g, { status: "unrecognised", rawStatus: "laterStatus", winner: null } as never), g.fixtureId),
+    ).toEqual({ wrote: "needs_organiser", reason: "provider_error" });
+    expect((await bridgeOf(g.fixtureId))!.last_error).toContain("laterStatus");
+  });
+
+  it("a mid-game hold never rewrites a mid-game hold either: the first detail stands", async () => {
+    const g = await liveGame();
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", detail: "401 on move 7" });
+    const b = await bridgeOf(g.fixtureId);
+    expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", detail: "401 on move 8" })).toEqual({
+      wrote: "needs_organiser",
+      reason: "token_revoked",
+    });
+    expect(await bridgeOf(g.fixtureId)).toEqual(b);
+  });
+
   it("a reason that is NOT a mid-game diagnosis (double_walkover_blocked) is not replaced: the answer is the stored reason", async () => {
     const g = await liveGame();
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "double_walkover_blocked" });
