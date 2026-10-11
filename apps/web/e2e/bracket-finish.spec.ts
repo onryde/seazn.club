@@ -455,11 +455,12 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     const { sf } = ko;
     await page.goto(await fixturePath(request, sf.id));
     await expect(tile(page, "tiebreak")).toBeVisible();
-    // D-H3: the block says the tie-break is pending; I1: held, so no Forfeit and no Abandon (the engine would take an
-    // abandon here — tiebreak.test.ts — but a held fixture is the organiser's to settle).
+    // D-H3: the block says the tie-break is pending. W2b-R14 (BG-WO-3): a player who does not turn up for the tie-break
+    // games is walked over, so the Forfeit is offered here (W2b Task 11); I1 still keeps Abandon off a held fixture (the
+    // engine would take an abandon here — tiebreak.test.ts — but a held fixture is the organiser's to settle).
     await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveAttribute("data-cause", "tiebreak");
     await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.tiebreak"));
-    await expect(page.getByTestId("score-forfeit")).toHaveCount(0);
+    await expect(page.getByTestId("score-forfeit")).toBeVisible();
     await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
     await expect(tile(page, "draw"), "the game is already drawn: no second Draw").toHaveCount(0);
     await expect(tappableHalves(page), "no half records a result while the tie-break is owed").toHaveCount(0);
