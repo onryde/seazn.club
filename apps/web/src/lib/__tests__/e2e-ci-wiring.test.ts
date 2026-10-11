@@ -489,6 +489,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
   // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
   "capture-panel-pr2.spec.ts",
+
+  // Online chess (Lichess) — OTB has no Play CTA, an online board links to no
+  // Lichess game, and the organiser's needs-result queue resolves a held board.
+  "chess-external-play.spec.ts",
 ];
 
 afterEach(() => {
