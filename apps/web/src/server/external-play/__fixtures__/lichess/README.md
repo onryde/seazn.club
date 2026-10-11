@@ -18,9 +18,9 @@ export requires actually creating a public open challenge on lichess.org,
 which this recording pass deliberately avoided (GETs only). Its exact shape
 is to be confirmed against a real response in Task 16.
 
-The sibling `game-*.json` fixtures in this directory are a separate,
-pre-existing flat-`userId` convention owned by other tests/tasks — not
-touched here.
+(The flat-`userId` `game-*.json` fixtures that used to sit beside these
+were read only by the V404-era sync suite; Task 11 removed both with the
+webhook they served — reconcile reads the board stream, below.)
 
 `export-live-clocks.json` is the FULL, untrimmed `GET /game/export/<id>`
 response recorded from lichess.org on 2026-10-09 while a draw offer stood
