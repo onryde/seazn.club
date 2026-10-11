@@ -69,8 +69,10 @@ function unwrap(s: unknown): unknown {
 }
 /** The words a rulebook uses for a match lost without (all of) its play. The sweep FLAGS an award or a no_result
  *  without it, but the vocabulary still FINDS one class on its own: a value that ends the match as a WIN under its
- *  own method. Boardgame's single forfeit folds to `win{method:"forfeit"}` (neither award nor no_result), so only this
- *  filter selects it for the gated list (review N2; the gap it leaves is `VOCABULARY_GAP`, beside `UNREACHED_TYPES`).
+ *  own method. Boardgame's retired `boardgame.result{method:"forfeit"}` — refused on write since W2b (D15), still replayed
+ *  from a pre-W2b stream — folds to `win{method:"forfeit"}` (neither award nor no_result; W2b's own chess `core.forfeit`
+ *  folds to an award), so only this filter selects it for the gated list (review N2; the gap it leaves is
+ *  `VOCABULARY_GAP`, beside `UNREACHED_TYPES`).
  *  It also decides whether a `no_result` a value produces is a forfeit (a double forfeit) or not. */
 const FORFEIT_VOCABULARY = /forfeit|walkover|default|disqualif/i;
 /** The side placeholders: the walk's lineups name the entrants "H" and "A" (`defaultLineupPair`); the DB rows swap

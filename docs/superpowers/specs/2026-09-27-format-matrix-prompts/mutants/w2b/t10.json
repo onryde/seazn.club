@@ -107,45 +107,45 @@
  {
   "id": "retired-grep-blind",
   "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
-  "find": "'method: \"double_forfeit\"', \"-e\", 'method: \"forfeit\"'",
-  "replace": "'x-rs-1-no-such-method-a', \"-e\", 'x-rs-1-no-such-method-b'",
+  "find": "\"-E\", ...RETIRED.flatMap((p) => [\"-e\", p])",
+  "replace": "\"-E\", \"-e\", \"x-rs-1-no-such-method\"",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
     ],
-    "name": "the retired chess forfeit methods are written nowhere"
+    "name": "the retired chess forfeit methods are written only"
    }
   ]
  },
  {
   "id": "legacy-exemption-off",
   "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
-  "find": "hits.filter((h) => !/legacy/i.test(h))",
-  "replace": "hits.filter((h) => !/x-rs-1-never/i.test(h))",
+  "find": "/legacy/i.test(content) ? \"legacy\"",
+  "replace": "false ? \"legacy\"",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
     ],
-    "name": "the retired chess forfeit methods are written nowhere"
+    "name": "the retired chess forfeit methods are written only"
    }
   ]
  },
  {
   "id": "legacy-exemption-case-sensitive",
   "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
-  "find": "hits.filter((h) => !/legacy/i.test(h))",
-  "replace": "hits.filter((h) => !/legacy/.test(h))",
+  "find": "/legacy/i.test(content) ? \"legacy\"",
+  "replace": "/legacy/.test(content) ? \"legacy\"",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
     ],
-    "name": "the retired chess forfeit methods are written nowhere"
+    "name": "the retired chess forfeit methods are written only"
    }
   ]
  },
@@ -160,7 +160,7 @@
     "files": [
      "tools/bench/lib/__tests__/summary-seam.test.ts"
     ],
-    "name": "PF-1 seam"
+    "name": "PF-1 seam: no bench source calls module.summary directly"
    }
   ]
  },
@@ -175,7 +175,217 @@
     "files": [
      "tools/bench/lib/__tests__/summary-seam.test.ts"
     ],
-    "name": "PF-1 seam"
+    "name": "PF-1 seam: no bench source calls module.summary directly"
+   }
+  ]
+ },
+ {
+  "id": "scan-comments-kept-floor",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "if (path.endsWith(\".json\")) return text;",
+  "replace": "return text;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan is not vacuous"
+   }
+  ]
+ },
+ {
+  "id": "scan-comments-kept-deficit",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "if (path.endsWith(\".json\")) return text;",
+  "replace": "return text; // deficit",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "every forfeit write the scan cannot read is named"
+   }
+  ]
+ },
+ {
+  "id": "deficit-blind",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": ".filter((m) => !readAt.has(m.index)).length;",
+  "replace": ".filter(() => false).length;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "every forfeit write the scan cannot read is named"
+   }
+  ]
+ },
+ {
+  "id": "legacy-by-path",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "/legacy/i.test(content) ? \"legacy\"",
+  "replace": "/legacy/i.test(line) ? \"legacy\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired-method grep reads every spelling"
+   }
+  ]
+ },
+ {
+  "id": "retired-keyed-narrow",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "  `[\"']?method[\"']?[[:space:]]*:[[:space:]]*${Q}(double_)?forfeit${Q}`,\n",
+  "replace": "  `method: ${Q}(double_)?forfeit${Q}`,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired-method grep reads every spelling"
+   }
+  ]
+ },
+ {
+  "id": "retired-bare-dropped",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "  `^[[:space:]]*${Q}(double_)?forfeit${Q}[[:space:]]*,?[[:space:]]*(//.*)?$`,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   }
+  ]
+ },
+ {
+  "id": "retired-inline-dropped",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "  `\\\\[[^]]*${Q}(double_)?forfeit${Q}[^]]*\\\\]`,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   }
+  ]
+ },
+ {
+  "id": "retired-prose-off",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "!/forfeit/.test(codePart) ? \"prose\"",
+  "replace": "false ? \"prose\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   }
+  ]
+ },
+ {
+  "id": "t12-removes-the-forfeit-tile",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+  "find": "  \"time\",\n  \"forfeit\",\n",
+  "replace": "  \"time\",\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written only"
+   }
+  ]
+ },
+ {
+  "id": "seam-direct-old-regex",
+  "file": "tools/bench/lib/__tests__/summary-seam.test.ts",
+  "find": "String.raw`(?:\\?\\.|\\.)\\s*summary\\s*(?:\\?\\.\\s*)?\\(`,",
+  "replace": "String.raw`\\b\\w+\\.summary\\(`,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam: the direct-read pattern sees every spelling"
+   }
+  ]
+ },
+ {
+  "id": "seam-call-via-dropped",
+  "file": "tools/bench/lib/__tests__/summary-seam.test.ts",
+  "find": "String.raw`(?:\\?\\.|\\.)\\s*summary\\s*\\.\\s*(?:call|apply|bind)\\b`,",
+  "replace": "String.raw`x-pf1-never-matches`,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam: the direct-read pattern sees every spelling"
+   }
+  ]
+ },
+ {
+  "id": "seam-bracket-dropped",
+  "file": "tools/bench/lib/__tests__/summary-seam.test.ts",
+  "find": "String.raw`\\[\\s*[\"'\\x60]summary[\"'\\x60]\\s*\\]`,",
+  "replace": "String.raw`x-pf1-never-matches`,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam: the direct-read pattern sees every spelling"
+   }
+  ]
+ },
+ {
+  "id": "seam-destructure-dropped",
+  "file": "tools/bench/lib/__tests__/summary-seam.test.ts",
+  "find": "String.raw`\\{[^{}]*\\bsummary\\b(?!\\s*:\\s*summaryOf\\b)[^{}]*\\}\\s*(?::[^=;{}]*)?=(?![=>])`,",
+  "replace": "String.raw`x-pf1-never-matches`,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam: the direct-read pattern sees every spelling"
+   }
+  ]
+ },
+ {
+  "id": "seam-param-dropped",
+  "file": "tools/bench/lib/__tests__/summary-seam.test.ts",
+  "find": "String.raw`\\(\\s*\\{[^{}]*\\bsummary\\b(?!\\s*:\\s*summaryOf\\b)[^{}]*\\}`,",
+  "replace": "String.raw`x-pf1-never-matches`,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam: the direct-read pattern sees every spelling"
    }
   ]
  }
