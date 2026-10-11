@@ -3082,14 +3082,15 @@ Measure it with Stryker scoped to the changed files (`--mutate`), never a local 
 merge is the cross-check.
 
 **Who owns which files.** A file goes to the wave that changes it. The one that merges first does the work, and a
-later wave re-checks only lines it moves.
+later wave re-checks only lines it moves. W2b is the exception: it covers only its own lines (ruling 109 on W2b's
+branch), and the older survivors in its files fall to the wave that owns the file below.
 
 | wave | engine files with survivors |
 |---|---|
-| W2b (building) | every sport module and kernel, `competition/points.ts`, `competition/stage.ts`, `stats/stats.ts`, `core/*`, `sport/module.ts` |
+| W2b (building) | only the LINES W2b adds or changes, measured with `--mutate` line ranges (W2b's own ruling 109, its owner, 2026-10-11). W2b also excludes the `arbitraryEvent` generators from mutation |
 | W2c stage-level rules | `competition/stage.ts`, `competition/progression.ts` |
 | W2d tables and tie-breaks | `competition/tiebreakers.ts`, `competition/points.ts` |
-| W2e sport fidelity | every sport module and kernel not closed by W2b |
+| W2e sport fidelity | every older survivor in the sport modules and kernels, plus `stats/stats.ts`, `core/*` and `sport/module.ts` |
 | W3 Swiss | Swiss pairing under `scheduling/` |
 | W4 knockout family | `scheduling/bracket.ts`, `scheduling/bracket-layout.ts` |
 | no wave | `exports/*`, `import/*`, `officials/*`, `history/*`, `sport/registry.ts` (about 650 survivors): a standalone mutation-debt programme after the P0 pilot |
@@ -3100,8 +3101,8 @@ later wave re-checks only lines it moves.
   until P0 lands, treat a static survivor as suspect. P0 also runs a timed pilot on `exports/build.ts` that measures
   cost per killed mutant.
 - The "mutation" session owns the re-run of the 9 timed-out legs (`stryker-measured.json`, `stryker-timeouts.json`).
-- Excluding the `arbitraryEvent` generators from what Stryker mutates waits for W2b to merge, because they live
-  inside files W2b is editing.
+- W2b excludes the `arbitraryEvent` generators from what Stryker mutates (they live inside its files), so P0 does
+  not touch `mutate`, the ignore lists or the disable comments.
 
 ## W1d first tasks (routed by the W1c final review, 2026-09-30)
 
