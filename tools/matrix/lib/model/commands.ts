@@ -483,7 +483,8 @@ const FORFEIT_W_MAX = FORFEIT_SIDES.length * FORFEIT_REASONS.length - 1;
  *  any reason but walkover, INVALID_EVENT); D4 (an active abandon nothing has settled, ABANDONED_SETTLE_OR_VOID); R0 (the match is over:
  *  guarantee 4, ALREADY_DECIDED — a HELD match, needs_decision, is left to the product: the cascade's own withdrew is
  *  admitted there, PF-1, and the model cannot see that rule whole); R2/R3 (a walkover outside the sport's declared
- *  `walkoverPhases ?? ["pre"]`, or `both` in a tie-break, FORFEIT_REASON_WRONG_PHASE); R4 (retired or disqualified
+ *  `walkoverPhases ?? ["pre"]` — judged in "pre" while nothing is played after the start, ruling 112 —, or `both` in a
+ *  tie-break, FORFEIT_REASON_WRONG_PHASE); R4 (retired or disqualified
  *  before play, FORFEIT_REASON_WRONG_PHASE); X-DW-3 (a double walkover where the bracket fixture has no next match,
  *  DOUBLE_WALKOVER_NO_NEXT_MATCH — a server rule, so where a phase refusal also applies either code is the product's).
  *  `null` codes: accepted. "either": the model cannot tell. */
@@ -537,7 +538,11 @@ export function forfeitVerdict(m: ModelState, f: FixtureModel, by: ForfeitSide, 
   if (phase === "over") return lastRound ? refuse("ALREADY_DECIDED", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("ALREADY_DECIDED");
   const walkoverPhases = (sportModule(m.sport) as unknown as { walkoverPhases?: readonly string[] }).walkoverPhases ?? ["pre"];
   if (reason === "walkover") {
-    if ((by === "both" && phase === "tiebreak") || !walkoverPhases.includes(phase)) return lastRound ? refuse("FORFEIT_REASON_WRONG_PHASE", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 112, the model's own reading of its known ledger: something is played once a live sport (non-`core.`) event
+    // follows a live start; until then a walkover is judged as before play.
+    const startAt = live.findIndex((e) => e.type === "core.start");
+    const played = startAt >= 0 && live.slice(startAt + 1).some((e) => !e.type.startsWith("core."));
+    if ((by === "both" && phase === "tiebreak") || !walkoverPhases.includes(played ? phase : "pre")) return lastRound ? refuse("FORFEIT_REASON_WRONG_PHASE", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("FORFEIT_REASON_WRONG_PHASE");
     return lastRound ? refuse("DOUBLE_WALKOVER_NO_NEXT_MATCH") : { codes: null };
   }
   return phase === "pre" ? refuse("FORFEIT_REASON_WRONG_PHASE") : { codes: null };

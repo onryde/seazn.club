@@ -164,17 +164,25 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(checked).toBe(SPORT_KEYS.length * SIDES.length * REASONS.length);
   });
 
-  it("in play (phase play): a retirement or disqualification is accepted with the played score kept; a walkover is refused FORFEIT_REASON_WRONG_PHASE (R2) — except where the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
-    // single-sport per case: generic declares walkovers in `pre` only, boardgame in `pre`, `play` and `tiebreak` (D3).
-    for (const [sport, side, reason, code] of [
-      ["generic", "home", "retired", null], ["generic", "away", "disqualified", null], ["generic", "home", "walkover", "FORFEIT_REASON_WRONG_PHASE"],
-      ["boardgame", "home", "walkover", null], ["boardgame", "away", "retired", null],
+  it("in play (phase play): a retirement or disqualification is accepted with the played score kept; a walkover is refused FORFEIT_REASON_WRONG_PHASE once something is played (R2, ruling 112) — accepted after a bare Start, and wherever the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
+    // single-sport per case: generic declares walkovers in `pre` only, boardgame in `pre`, `play` and `tiebreak` (D3);
+    // football for the played case. Generic's and chess's win streams are START + one deciding event, so the take-back
+    // leaves a bare START — nothing played (ruling 112); football's keeps its goal — something played.
+    for (const [sport, side, reason, played, code] of [
+      ["generic", "home", "retired", false, null], ["generic", "away", "disqualified", false, null], ["generic", "home", "walkover", false, null],
+      ["football", "home", "walkover", true, "FORFEIT_REASON_WRONG_PHASE"], ["football", "away", "retired", true, null],
+      ["boardgame", "home", "walkover", false, null], ["boardgame", "away", "retired", false, null],
     ] as const) {
       const { m, d, sf1 } = await bracket(sport);
       await run(m, d, "Score", 0, 0);   // sf1 decided by play …
       await run(m, d, "Void", 0, 0);    // … and its deciding event taken back: in play, START kept
       expect(row(d, sf1).status, `${sport}: in play`).toBe("in_play");
-      const before = d.ledgers.get(sf1)!.length;
+      const led = d.ledgers.get(sf1)!;
+      const voided = new Set(led.flatMap((e) => (e.voids === undefined ? [] : [e.voids])));
+      const live = led.filter((e) => e.type !== "core.void" && !voided.has(e.id)).map((e) => e.type);
+      expect(live[0], `rig: ${sport} started`).toBe("core.start");
+      expect(live.some((t) => !t.startsWith("core.")), `rig: ${sport} ${played ? "has" : "has no"} sport event standing`).toBe(played);
+      const before = led.length;
       await forfeit(m, d, 0, side, reason);
       const label = `${sport} ${side}/${reason}`;
       if (code === null) {
