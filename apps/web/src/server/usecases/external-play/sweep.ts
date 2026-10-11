@@ -310,6 +310,14 @@ async function teardown(pass: Pass, c: TeardownCandidate, end: NonNullable<Sweep
 // for ever with no signal blocks the next round. Any read that brings the
 // truth resets the count. `last_polled_at` is when the sweep last read; it is
 // also the claim, so overlapping passes read a board once.
+//
+// A HELD board (controller ruling C3): every read of a row already in the
+// organiser's queue — T11's mid-game diagnoses and the sweep's own M4 hold —
+// counts the same way, whatever it brings and whatever the expected end, so
+// a held board is never re-read every tick: the read that matters is the one
+// that finds the game over, and the back-off still reaches it within the
+// hour. A held row is never held again, and reconcile re-placing the hold it
+// already has is not a new hold in the report.
 
 /** Spec §4: the 5-minute cron. */
 export const SWEEP_CADENCE_MS = 5 * 60_000;
@@ -418,6 +426,14 @@ async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullab
   if (claimed.length === 0) return;
   pass.report.reconciled++;
   const end = expectedEnd(c);
+  if (c.bridgeStatus === "needs_organiser") {
+    try {
+      await read({ fixtureId: c.fixtureId, trigger: "sweep" });
+    } finally {
+      await countRead(c.fixtureId);
+    }
+    return;
+  }
   let outcome: ReconcileOutcome | null;
   try {
     outcome = await read({ fixtureId: c.fixtureId, trigger: "sweep" });
@@ -436,12 +452,18 @@ async function sweepReconcile(pass: Pass, c: ReconcileCandidate, read: NonNullab
      where fixture_id = ${c.fixtureId} and sweep_no_truth_reads <> 0`;
 }
 
-async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Promise<void> {
-  if (end === null || pass.now.getTime() <= end.getTime()) return;
+/** One more read that left the board where it was — the back-off's count. */
+async function countRead(fixtureId: string): Promise<{ reads: number; status: string } | undefined> {
   const [row] = await sql<{ reads: number; status: string }[]>`
     update fixture_external_play set sweep_no_truth_reads = sweep_no_truth_reads + 1
-     where fixture_id = ${c.fixtureId} and status in ('ready', 'live', 'needs_organiser')
+     where fixture_id = ${fixtureId} and status in ('ready', 'live', 'needs_organiser')
     returning sweep_no_truth_reads as reads, status`;
+  return row;
+}
+
+async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Promise<void> {
+  if (end === null || pass.now.getTime() <= end.getTime()) return;
+  const row = await countRead(c.fixtureId);
   if (!row || row.reads < SWEEP_NO_TRUTH_HOLD_AFTER) return;
   if (row.status !== "ready" && row.status !== "live") return; // already the organiser's
   const held = await holdForOrganiser({
