@@ -32,7 +32,8 @@
 // (guard.ts `d.sport_key = 'boardgame'`); the sweep adds no sport branch.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import fc from "fast-check";
+import { readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, foldMatch } from "@seazn/engine/core";
@@ -49,6 +50,7 @@ import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
+import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
 import { reconcile } from "../external-play/reconcile";
@@ -94,11 +96,12 @@ const board = vi.hoisted(() => ({
 }));
 const lichess = vi.hoisted(() => {
   type Answer = { status: number; body: string };
+  type Script = (c: { gameId: string }) => Answer;
   const refused = (what: string): Answer => ({ status: 503, body: `no ${what} scripted` });
   const state = {
     calls: [] as { kind: "stream" | "export" | "other"; gameId: string }[],
-    onStream: (_c: { gameId: string }): Answer => refused("stream"),
-    onExport: (_c: { gameId: string }): Answer => refused("export"),
+    onStream: ((): Answer => refused("stream")) as Script,
+    onExport: ((): Answer => refused("export")) as Script,
     reset() {
       state.calls = [];
       state.onStream = () => refused("stream");
@@ -1466,5 +1469,352 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
     expect(r.failures).toContainEqual({ job: "reconcile", fixtureId: b.fixtureId, code: "LICHESS_TOKEN_UNAVAILABLE" });
     expect((await bridge(b)).sweep_no_truth_reads).toBe(1);
     expect(forfeitsAttempted(other.fixtureId), "the rest of the pass ran").toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sequence property (TEST-STRATEGY rules 1 and 10): every job, with the
+// producers that change a board under it — check-ins, T9's create (and its
+// 429), T10's first move, what Lichess answers, a withdrawal — interleaved
+// with passes at random intervals. The MODEL is written from the rulebook
+// (spec §3.2/§3.5/§3.6, the M3/M4 rulings, window.ts's and the cron's
+// periods) and owns the state; every pass is checked against it: what the
+// pass did (reads, retries, forfeits, holds, failures) and the row it left.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves, Lichess's answers, withdrawals and passes in any order", () => {
+  type Truth = "silent" | "running" | "ended" | "aborted";
+  type Act =
+    | { kind: "checkIn"; side: Side }
+    | { kind: "create"; outcome: "ok" | "throttled" | "acceptFails" }
+    | { kind: "move" }
+    | { kind: "truth"; truth: Truth }
+    | { kind: "withdraw" }
+    | { kind: "sweep"; dt: number };
+  type Model = {
+    t: number; // minutes after the organiser opened the round
+    came: Record<Side, boolean>;
+    bridge: "pending" | "ready" | "live" | "finished" | "held";
+    reason: string | null;
+    heldBy: "create" | "sweep" | null; // who placed a provider_error hold
+    throttledUntil: number | null;
+    ledger: string[];
+    startedAt: number | null;
+    truth: Truth;
+    playable: boolean;
+    emptyReads: number;
+    lastRead: number | null;
+  };
+
+  // The rulebook, in minutes.
+  const MIN = 60_000;
+  const DEADLINE = DEADLINE_AFTER_MS / MIN; // window.ts: T+20 from the open
+  const TICK = SWEEP_CADENCE_MS / MIN; // spec §4: the 5-minute cron
+  const SPAN = (2 * (SEED_CLOCK.base + recoveredMoveBudget() * SEED_CLOCK.increment)) / 60; // both clocks, B moves of increment
+  const HOLD = CREATION_429_HOLD_MS / MIN; // T9's queue hold after a 429
+  const N = SWEEP_NO_TRUTH_HOLD_AFTER;
+  /** M3/M4 ruling: one tick while reads bring the truth, doubling per empty
+   *  read past the end, capped at an hour; half a tick of cron jitter. */
+  const reReadAfter = (n: number) => Math.min(TICK * 2 ** Math.max(0, n - 1), 12 * TICK);
+
+  const actArb: fc.Arbitrary<Act> = fc.oneof(
+    { arbitrary: fc.constantFrom<Side>("home", "away").map((side): Act => ({ kind: "checkIn", side })), weight: 2 },
+    {
+      arbitrary: fc.constantFrom("ok", "throttled", "acceptFails").map((outcome): Act => ({ kind: "create", outcome })),
+      weight: 2,
+    },
+    { arbitrary: fc.constant<Act>({ kind: "move" }), weight: 1 },
+    { arbitrary: fc.constantFrom<Truth>("silent", "running", "ended", "aborted").map((truth): Act => ({ kind: "truth", truth })), weight: 2 },
+    { arbitrary: fc.constant<Act>({ kind: "withdraw" }), weight: 1 },
+    { arbitrary: fc.constantFrom(0.5, 1, 3, 5, 10, 25).map((dt): Act => ({ kind: "sweep", dt })), weight: 4 },
+  );
+
+  const C = (side: Side): Act => ({ kind: "checkIn", side });
+  const S = (dt: number): Act => ({ kind: "sweep", dt });
+  const CREATE: Act = { kind: "create", outcome: "ok" };
+  const THROTTLED: Act = { kind: "create", outcome: "throttled" };
+  // Forced paths: each ENDS with the step that makes its claim, and each
+  // runs K times — so every claim below is reached, and counted, K times.
+  const PATHS = {
+    quiet_before_deadline: [C("home"), S(5)],
+    noshow_one: [C("home"), S(25)],
+    noshow_both: [S(25)],
+    both_came_no_game: [C("home"), C("away"), S(25)],
+    retry_waits: [C("home"), C("away"), THROTTLED, S(0.5)],
+    retry_lands: [C("home"), C("away"), THROTTLED, S(1)],
+    retry_too_late: [C("home"), C("away"), THROTTLED, S(25)],
+    accept_failed_unread: [C("home"), C("away"), { kind: "create", outcome: "acceptFails" }, { kind: "truth", truth: "ended" }, S(3)],
+    aborted_ready_held: [C("home"), C("away"), CREATE, { kind: "truth", truth: "aborted" }, S(25)],
+    m4_held: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5)],
+    m4_held_read_again: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), S(5), S(5), S(5), S(25)],
+    m4_ready_held: [C("home"), C("away"), CREATE, S(25), S(10), S(5), S(10)],
+    ended_finishes: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "truth", truth: "ended" }, S(3)],
+    withdrawn_closes_unread: [C("home"), C("away"), CREATE, { kind: "move" }, { kind: "withdraw" }, S(3)],
+    truth_resets: [C("home"), C("away"), CREATE, { kind: "move" }, S(25), { kind: "truth", truth: "running" }, S(5)],
+  } satisfies Record<string, readonly Act[]>;
+  type PathName = keyof typeof PATHS;
+  const PATH_NAMES = Object.keys(PATHS) as PathName[];
+  const K = 4;
+  const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
+  const counters = {
+    steps: 0, skipped_precondition: 0, passes: 0, reads: 0, backoff_skips: 0, empty_counted: 0, truth_reset: 0,
+    forfeit_one: 0, forfeit_both: 0, both_came_no_forfeit: 0, quiet_before_deadline: 0,
+    retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
+    aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
+  };
+
+  type PassFacts = { reconciled: number; mintRetries: number; forfeitBy: string | null; held: number; noShows: number; readLichess: boolean };
+
+  /** One pass, as the rulebook says it goes: job 4, job 2, job 1. Mutates m. */
+  function predictPass(m: Model, b: Board): PassFacts {
+    const p: PassFacts = { reconciled: 0, mintRetries: 0, forfeitBy: null, held: 0, noShows: 0, readLichess: false };
+    // Job 4: a game on file — ready/live on any fixture, or held for a
+    // mid-game diagnosis on a fixture still playable.
+    // M3: never a hold T9 placed when the accept failed — that challenge was
+    // never accepted, and would be re-read every tick for ever.
+    const heldMidGame = m.bridge === "held" && m.reason === "provider_error" && m.playable;
+    if (heldMidGame && m.heldBy === "create") counters.held_by_create_unread++;
+    const readable = m.bridge === "ready" || m.bridge === "live" || (heldMidGame && m.heldBy !== "create");
+    if (readable) {
+      if (m.lastRead !== null && m.t - m.lastRead < reReadAfter(m.emptyReads) - TICK / 2) {
+        counters.backoff_skips++;
+      } else {
+        p.reconciled = 1;
+        m.lastRead = m.t;
+        counters.reads++;
+        const end = (m.startedAt ?? DEADLINE) + SPAN;
+        if (!m.playable) {
+          m.bridge = "finished"; // closed with no read, nothing written
+          counters.closed_by_withdrawal++;
+        } else if (m.truth === "silent") {
+          p.readLichess = true;
+          if (m.t > end) {
+            m.emptyReads++;
+            counters.empty_counted++;
+            if (m.emptyReads >= N && (m.bridge === "ready" || m.bridge === "live")) {
+              if (m.startedAt === null) counters.m4_held_ready++;
+              m.bridge = "held";
+              m.reason = "provider_error";
+              m.heldBy = "sweep";
+              p.held = 1;
+              counters.m4_held++;
+            } else if (m.bridge === "held") {
+              counters.held_read_again++; // still counted, never held twice
+            }
+          }
+        } else {
+          p.readLichess = true;
+          if (m.emptyReads > 0) counters.truth_reset++;
+          m.emptyReads = 0;
+          if (m.truth === "ended") {
+            m.playable = false; // T12 wrote Lichess's result
+            if (m.bridge !== "held") m.bridge = "finished"; // a held row keeps its reason
+            counters.finished_by_truth++;
+          } else if (m.truth === "aborted") {
+            m.bridge = "held";
+            m.reason = "aborted";
+            p.held = 1;
+            counters.aborted_held++;
+          }
+        }
+      }
+    }
+    // Job 2: a create Lichess throttled, retried once its hold is over and
+    // only inside the window.
+    if (m.bridge === "pending" && m.throttledUntil !== null && m.playable && m.t >= DEADLINE) {
+      counters.retry_too_late++;
+    }
+    if (m.bridge === "pending" && m.throttledUntil !== null && m.playable && m.t < DEADLINE) {
+      if (m.t >= m.throttledUntil) {
+        p.mintRetries = 1;
+        m.bridge = "ready";
+        m.throttledUntil = null;
+        counters.retry_landed++;
+      } else {
+        counters.retry_waited++;
+      }
+    }
+    // Job 1: no game on file at the deadline, someone absent.
+    if (m.bridge === "pending" && m.playable && m.t < DEADLINE && !(m.came.home && m.came.away)) {
+      counters.quiet_before_deadline++;
+    }
+    if (m.bridge === "pending" && m.playable && m.t >= DEADLINE) {
+      if (m.came.home && m.came.away) {
+        counters.both_came_no_forfeit++;
+      } else {
+        p.forfeitBy = !m.came.home && !m.came.away ? "both" : !m.came.home ? b.home.entrantId : b.away.entrantId;
+        if (p.forfeitBy === "both") counters.forfeit_both++;
+        else counters.forfeit_one++;
+        if (W2B) {
+          p.noShows = 1;
+          m.playable = false; // forfeited
+        }
+      }
+    }
+    return p;
+  }
+
+  function claimHolds(path: PathName, m: Model, last: PassFacts | null, b: Board): boolean {
+    switch (path) {
+      case "quiet_before_deadline": return last !== null && last.forfeitBy === null && m.t < DEADLINE && !m.came.away;
+      case "noshow_one": return last?.forfeitBy === b.away.entrantId;
+      case "noshow_both": return last?.forfeitBy === "both";
+      case "both_came_no_game": return last !== null && last.forfeitBy === null && m.bridge === "pending" && m.t >= DEADLINE;
+      case "retry_waits": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null;
+      case "retry_lands": return last?.mintRetries === 1 && m.bridge === "ready";
+      case "retry_too_late": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null && m.t >= DEADLINE;
+      case "accept_failed_unread": return last?.reconciled === 0 && m.bridge === "held" && m.heldBy === "create" && m.truth === "ended";
+      case "aborted_ready_held": return last?.held === 1 && m.reason === "aborted";
+      case "m4_held": return last?.held === 1 && m.reason === "provider_error";
+      case "m4_held_read_again": return last?.reconciled === 1 && last.held === 0 && m.bridge === "held" && m.emptyReads === N + 1;
+      case "m4_ready_held": return last?.held === 1 && m.heldBy === "sweep" && m.startedAt === null;
+      case "ended_finishes": return last?.reconciled === 1 && m.bridge === "finished" && !m.playable;
+      case "withdrawn_closes_unread": return last?.reconciled === 1 && !last.readLichess && m.bridge === "finished";
+      case "truth_resets": return last?.reconciled === 1 && last.readLichess && m.emptyReads === 0;
+    }
+  }
+
+  it("holds the model on every pass — counted per path, K runs each", { timeout: 600_000 }, async () => {
+    let run = 0;
+    await fc.assert(
+      fc.asyncProperty(fc.array(actArb, { minLength: 0, maxLength: 8 }), async (suffix) => {
+        const path = PATH_NAMES[run % PATH_NAMES.length]!;
+        run++;
+        __resetCreationQueue();
+        const b = await openedBoard({ checkedIn: [] });
+        const m: Model = {
+          t: 2, came: { home: false, away: false }, bridge: "pending", reason: null, heldBy: null, throttledUntil: null,
+          ledger: [], startedAt: null, truth: "silent", playable: true, emptyReads: 0, lastRead: null,
+        };
+        const queueAt = () => __setCreationQueueDeps({ now: () => b.at(m.t).getTime() });
+        let next429 = false;
+        board.createChallengeToUser.mockImplementation(async () => {
+          if (next429) {
+            next429 = false;
+            return { ok: false, code: "rate_limited", raw: "Too many requests. Try again later." };
+          }
+          return { ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` };
+        });
+        let nextAcceptFails = false;
+        board.acceptChallenge.mockImplementation(async () => {
+          if (nextAcceptFails) {
+            nextAcceptFails = false;
+            return { ok: false, code: "unavailable", raw: "Lichess is unavailable" };
+          }
+          return { ok: true };
+        });
+        lichess.onStream = (c) => {
+          if (m.truth === "silent") return { status: 503, body: "Lichess said nothing" };
+          if (m.truth === "running") return { status: 200, body: gameFull(b, c.gameId, MID, { moves: m.ledger, status: "started" }) };
+          if (m.truth === "aborted") return { status: 200, body: gameFull(b, c.gameId, MID, { moves: [], status: "aborted" }) };
+          return { status: 200, body: gameFull(b, c.gameId, ENDED) };
+        };
+
+        const steps: readonly Act[] = [...PATHS[path], ...suffix];
+        let last: PassFacts | null = null;
+        for (const [i, step] of steps.entries()) {
+          const label = `${path} run ${run} step ${i} ${JSON.stringify(step)} @${m.t}`;
+          counters.steps++;
+          if (step.kind === "checkIn") {
+            await stampFixtureCheckIn(b[step.side].personId, b.fixtureId, b.orgId);
+            m.came[step.side] = true;
+          } else if (step.kind === "create") {
+            if (!(m.came.home && m.came.away && m.bridge === "pending" && m.throttledUntil === null && m.playable && m.t < DEADLINE)) {
+              counters.skipped_precondition++;
+              continue;
+            }
+            queueAt();
+            next429 = step.outcome === "throttled";
+            nextAcceptFails = step.outcome === "acceptFails";
+            const out = await createGameIfReady(b.fixtureId, { now: b.at(m.t), publish: async () => {} });
+            if (step.outcome === "throttled") {
+              expect(out, label).toEqual({ created: false, reason: "provider_error" });
+              m.throttledUntil = m.t + HOLD;
+            } else if (step.outcome === "acceptFails") {
+              // T9: the challenge exists at Lichess, so it is recorded and held.
+              expect(out, label).toMatchObject({ created: false });
+              m.bridge = "held";
+              m.reason = "provider_error"; // T9's needsReasonFor("unavailable")
+              m.heldBy = "create";
+            } else {
+              expect(out, label).toMatchObject({ created: true });
+              m.bridge = "ready";
+            }
+            counters.creates++;
+          } else if (step.kind === "move") {
+            if (!(m.bridge === "ready" && m.ledger.length === 0 && m.playable && (m.truth === "silent" || m.truth === "running"))) {
+              counters.skipped_precondition++;
+              continue;
+            }
+            const out = await act(
+              { fixtureId: b.fixtureId, personId: b.home.personId, action: { kind: "move", uci: "e2e4" } },
+              { now: b.at(m.t), accessToken: async (u) => `tok-${u}`, publish: async () => {}, submitMove: async () => ({ ok: true }) },
+            );
+            expect(out, label).toEqual({ ok: true, applied: true });
+            m.ledger = ["e2e4"];
+            m.bridge = "live";
+            m.startedAt = m.t;
+            counters.moves++;
+          } else if (step.kind === "truth") {
+            const gameOnFile = m.bridge === "ready" || m.bridge === "live" || m.bridge === "held";
+            const over = m.truth === "ended" || m.truth === "aborted";
+            if (!gameOnFile || over || (step.truth === "aborted" && m.ledger.length > 0)) {
+              counters.skipped_precondition++;
+              continue;
+            }
+            m.truth = step.truth;
+          } else if (step.kind === "withdraw") {
+            if (!m.playable) {
+              counters.skipped_precondition++;
+              continue;
+            }
+            await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+            expect(isPlayableFixtureStatus((await fixtureRow(b.fixtureId)).status), `${label}: premise — a withdrawal settles the board`).toBe(false);
+            m.playable = false;
+            counters.withdrawals++;
+          } else {
+            m.t += step.dt;
+            queueAt();
+            const forfeitsBefore = forfeitsAttempted(b.fixtureId).length;
+            const lichessBefore = lichess.calls.length;
+            const report = await sweep(b, { now: b.at(m.t) });
+            const p = predictPass(m, b);
+            p.readLichess = p.readLichess && lichess.calls.length > lichessBefore;
+            counters.passes++;
+            expect(
+              { reconciled: report.reconciled, mintRetries: report.mintRetries, noShows: report.noShows, held: report.heldForOrganiser },
+              `${label}: the pass`,
+            ).toEqual({ reconciled: p.reconciled, mintRetries: p.mintRetries, noShows: p.noShows, held: p.held });
+            const attempts = forfeitsAttempted(b.fixtureId).slice(forfeitsBefore);
+            expect(attempts.map((a) => (a.input.payload as { by: string }).by), `${label}: forfeits`).toEqual(p.forfeitBy === null ? [] : [p.forfeitBy]);
+            expect(report.failures, `${label}: failures`).toEqual(
+              p.forfeitBy !== null && !W2B ? [{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }] : [],
+            );
+            if (p.reconciled === 1 && !m.playable && m.bridge === "finished" && !p.readLichess) {
+              expect(lichess.calls.length, `${label}: closed unread`).toBe(lichessBefore);
+            }
+            const [row] = await sql<{ status: string; needs_reason: string | null; sweep_no_truth_reads: number }[]>`
+              select status, needs_reason, sweep_no_truth_reads from fixture_external_play where fixture_id = ${b.fixtureId}`;
+            const status = m.bridge === "held" ? "needs_organiser" : m.bridge;
+            expect(row, `${label}: the row`).toEqual({ status, needs_reason: m.bridge === "held" ? m.reason : null, sweep_no_truth_reads: m.emptyReads });
+            expect(isPlayableFixtureStatus((await fixtureRow(b.fixtureId)).status), `${label}: playable`).toBe(m.playable);
+            last = p;
+          }
+          if (i === PATHS[path].length - 1) {
+            expect(claimHolds(path, m, last, b), `${label}: the path's claim`).toBe(true);
+            claims[path]++;
+          }
+        }
+      }),
+      { numRuns: PATH_NAMES.length * K },
+    );
+    // Anti-vacuity: every path's claim reached K times, and the model's
+    // branches all exercised.
+    expect(claims, "claims per path").toEqual(Object.fromEntries(PATH_NAMES.map((p) => [p, K])));
+    for (const [name, n] of Object.entries(counters)) {
+      if (name === "skipped_precondition") continue;
+      expect(n, `counter ${name}`).toBeGreaterThan(0);
+    }
+    // fd 1 directly: the JSON reporter drops console output.
+    writeSync(1, `sweep property: ${JSON.stringify({ runs: run, claims, counters })}\n`);
   });
 });
