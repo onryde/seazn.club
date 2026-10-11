@@ -54,6 +54,12 @@ export type BridgeRow = {
    *  froze; null on any other row, and on a token_revoked hold whose seat
    *  nobody recorded (both frozen). */
   revoked_seat: "white" | "black" | "both" | null;
+  /** V436 (T13 fix round 1, ruling I4): the move T10 is submitting — the
+   *  ply it was sent at, the canonical UCI, and when — recorded BEFORE the
+   *  Board API call, cleared once the ledger holds that ply. All or none. */
+  pending_move_ply: number | null;
+  pending_move_uci: string | null;
+  pending_move_at: Date | null;
 };
 
 export type OnlinePlayFixture = {
@@ -104,6 +110,9 @@ type RawBridge = {
   white_draw_offer_ply: number | null;
   black_draw_offer_ply: number | null;
   revoked_seat: "white" | "black" | "both" | null;
+  pending_move_ply: number | null;
+  pending_move_uci: string | null;
+  pending_move_at: string | null;
 };
 
 function reviveBridge(raw: RawBridge): BridgeRow {
@@ -133,6 +142,9 @@ function reviveBridge(raw: RawBridge): BridgeRow {
     white_draw_offer_ply: raw.white_draw_offer_ply,
     black_draw_offer_ply: raw.black_draw_offer_ply,
     revoked_seat: raw.revoked_seat,
+    pending_move_ply: raw.pending_move_ply,
+    pending_move_uci: raw.pending_move_uci,
+    pending_move_at: raw.pending_move_at === null ? null : new Date(raw.pending_move_at),
   };
 }
 

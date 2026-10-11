@@ -230,6 +230,9 @@ type Game = {
   blackId: string;
   /** The move T10 sent, when this read follows Lichess refusing it. */
   submitted: SubmittedMove | null;
+  /** The move T10 put on file before sending it (ruling I4), as this read
+   *  loaded the row — whatever the trigger. */
+  pending: SubmittedMove | null;
 };
 
 /** A move T10 SENT to Lichess and was refused (or got no answer to): its ply
@@ -350,6 +353,10 @@ export async function reconcile(
     whiteId: b.white_lichess_id,
     blackId: b.black_lichess_id,
     submitted,
+    pending:
+      b.pending_move_ply !== null && b.pending_move_uci !== null
+        ? { ply: b.pending_move_ply, uci: b.pending_move_uci }
+        : null,
   };
 
   let truth = await readTruth(game, deps);
@@ -421,18 +428,23 @@ async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultW
  *  played (review N1: our own move is never fair-play evidence against the
  *  player). Spec §3.6 makes it a flag for the organiser, never a sanction.
  *  The evidence: the plies, and whether the camera was Required; null when
- *  no adopted ply is out-of-band. (A concurrent read landing between
- *  Lichess's 200 and T10's append still flags our ply — the rare false flag
- *  the ruling accepts.) Written in the SAME statement as the ledger write
- *  that adopts, so one adoption is one flag: a re-read adopts nothing, and a
- *  racing read loses the CAS. */
+ *  no adopted ply is out-of-band. T10's move is known two ways: the refusal
+ *  that triggered this read (`submitted`), and the submission T10 put on
+ *  file BEFORE sending it (`pending`, ruling I4) — so a read landing between
+ *  Lichess's 200 and T10's append (the 5-minute sweep reads every live game)
+ *  adopts our move as ours. Either excuses ONLY the first adopted ply and
+ *  only that move: a different move there, or any later ply, is still
+ *  flagged. Written in the SAME statement as the ledger write that adopts,
+ *  so one adoption is one flag: a re-read adopts nothing, and a racing read
+ *  — or a submission recorded after this read loaded the row — loses the
+ *  CAS. */
 async function outOfBandEvidence(
   fixtureId: string,
   ours: number,
   line: readonly string[],
-  submitted: SubmittedMove | null,
+  excuses: readonly (SubmittedMove | null)[],
 ): Promise<string | null> {
-  const ourMoveFirst = submitted !== null && submitted.ply === ours && line[ours] === submitted.uci;
+  const ourMoveFirst = excuses.some((e) => e !== null && e.ply === ours && line[ours] === e.uci);
   const from = ourMoveFirst ? ours + 1 : ours;
   if (from >= line.length) return null;
   const policy = await fixtureCameraPolicy(fixtureId);
@@ -569,7 +581,8 @@ async function applyStream(
   // Conditional on the ledger and the offer we read: a move T10 appended, or
   // an offer it recorded, since our read wins — this read is then older than
   // the row, and the next reconcile catches up.
-  const evidence = changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, g.submitted) : null;
+  const evidence =
+    changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, [g.submitted, g.pending]) : null;
   const wrote = !changed
     ? []
     : await sql`
@@ -583,11 +596,17 @@ async function applyStream(
            clock_increment_s = ${incrementS},
            draw_offer_by = ${offer.by},
            white_draw_offer_ply = ${offer.whitePly}, black_draw_offer_ply = ${offer.blackPly},
+           -- I4: a submission whose ply the ledger now holds is spent.
+           pending_move_ply = case when pending_move_ply < ${ply}::int then null else pending_move_ply end,
+           pending_move_uci = case when pending_move_ply < ${ply}::int then null else pending_move_uci end,
+           pending_move_at = case when pending_move_ply < ${ply}::int then null else pending_move_at end,
            updated_at = now()
      where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
        and status in ('ready', 'live', 'needs_organiser')
        and move_count = ${b.move_count}
        and draw_offer_by is not distinct from ${b.draw_offer_by}
+       and pending_move_ply is not distinct from ${b.pending_move_ply}::int
+       and pending_move_uci is not distinct from ${b.pending_move_uci}::text
      returning fixture_id, org_id
     ), flagged as (
       insert into fixture_play_flags (fixture_id, org_id, kind, note)
@@ -628,17 +647,24 @@ async function applyExport(
   let adopted = 0;
   let line = ours;
   if (uci.length > ours.length && isPrefix(ours, uci)) {
-    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, g.submitted);
+    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, [g.submitted, g.pending]);
     const wrote = await sql`
       with up as (
       update fixture_external_play
          set moves_uci = ${sql.json(uci)}, move_count = ${uci.length},
              status = case when status = 'ready' then 'live' else status end,
              started_at = coalesce(started_at, ${t.at}::timestamptz),
-             last_move_at = ${t.at}, updated_at = now()
+             last_move_at = ${t.at},
+             -- I4: a submission whose ply the ledger now holds is spent.
+             pending_move_ply = case when pending_move_ply < ${uci.length}::int then null else pending_move_ply end,
+             pending_move_uci = case when pending_move_ply < ${uci.length}::int then null else pending_move_uci end,
+             pending_move_at = case when pending_move_ply < ${uci.length}::int then null else pending_move_at end,
+             updated_at = now()
        where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
          and status in ('ready', 'live', 'needs_organiser')
          and move_count = ${g.bridge.move_count}
+         and pending_move_ply is not distinct from ${g.bridge.pending_move_ply}::int
+         and pending_move_uci is not distinct from ${g.bridge.pending_move_uci}::text
        returning fixture_id, org_id
       ), flagged as (
         insert into fixture_play_flags (fixture_id, org_id, kind, note)
