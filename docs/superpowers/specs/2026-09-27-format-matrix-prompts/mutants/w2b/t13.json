@@ -1,0 +1,341 @@
+[
+  {
+    "id": "tag-withdrew-ret",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "  withdrew: \"forfeit.tag.walkover\",",
+    "replace": "  withdrew: \"forfeit.tag.retired\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "X-RS-2: walkover, withdrew"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "X-RS-2: every reason, its tag"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "each forfeit reason carries its tag"
+      }
+    ]
+  },
+  {
+    "id": "tag-dw-null",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "    return kind === \"double_walkover\" ? tagOf(kind, {}) : null;",
+    "replace": "    return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "X-DW-1: a double walkover"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "X-DW-1"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "X-DW-1: the next-round clause"
+      }
+    ]
+  },
+  {
+    "id": "abandon-tag-from-status",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "  return tx`(case when ${f}.outcome ->> 'kind' in ${tx([...ABANDON_RESULT_KINDS])} then (",
+    "replace": "  return tx`(case when ${f}.status = 'abandoned' then (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+        ],
+        "name": "a DLS abandon is stored decided"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+        ],
+        "name": "every outcome kind an abandon can leave"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/competition-hub-db.test.ts"
+        ],
+        "name": "W2b Task 13"
+      }
+    ]
+  },
+  {
+    "id": "abandon-tag-ignores-ledger",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "  if (ledger.abandon === null) return null;\n",
+    "replace": "  if (ledger.abandon === null) ledger = { abandon: { reason: \"\" } };\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "X-AB-2: the abandon tag reads the LEDGER"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "X-AB-2: the ledger, not the status"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "X-AB-2: an abandon's words read the ledger column"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "a decided DLS row carries the abandon tag only"
+      }
+    ]
+  },
+  {
+    "id": "qualification-played",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    credit = module_.forfeitCredit(parsed.data, module_.init(parsed.data, NO_ONE), \"walkover\", \"away\");",
+    "replace": "    credit = { perSide: [{ gf: 0, ga: 0 }, { gf: 0, ga: 0 }], excluded: [] } as unknown as ForfeitCredit; // the played 0-0 ledger",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "X-WO-1: the qualification view"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "divisionAwardAddsToLedger: exactly the modules"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "credits its sets"
+      }
+    ]
+  },
+  {
+    "id": "qualification-refusal-adds",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  } catch {\n    return false;\n  }\n  const excluded = new Set(credit.excluded);",
+    "replace": "  } catch {\n    return true;\n  }\n  const excluded = new Set(credit.excluded);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "divisionAwardAddsToLedger: exactly the modules"
+      }
+    ]
+  },
+  {
+    "id": "dw-next-ignores-feeds",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "  if (!feeds || next == null",
+    "replace": "  if (next == null",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "X-DW-1"
+      }
+    ]
+  },
+  {
+    "id": "hub-dw-next-ignores-feeds",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "          feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),",
+    "replace": "          true,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "X-DW-1: the next-round clause"
+      }
+    ]
+  },
+  {
+    "id": "forfeit-without-loser-tagged",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "    if (ids.loser === undefined) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "a bye keeps today"
+      }
+    ]
+  },
+  {
+    "id": "abandon-settle-tagged",
+    "file": "apps/web/src/lib/forfeit-tag.ts",
+    "find": "  if (typeof o.method !== \"string\" || !ABANDON_METHODS.has(o.method)) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/forfeit-tag.test.ts"
+        ],
+        "name": "an abandon decided another way"
+      }
+    ]
+  },
+  {
+    "id": "mc-live-tagged",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "  const tag = status === \"scheduled\" || status === \"in_play\" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
+    "replace": "  const tag = forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "the sentence is a finished match"
+      }
+    ]
+  },
+  {
+    "id": "knockout-retired-unplayed",
+    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+    "find": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\"]);",
+    "replace": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\", \"retired\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/knockout-tab.test.tsx"
+        ],
+        "name": "a RETIREMENT or a disqualification was played"
+      }
+    ]
+  },
+  {
+    "id": "chip-name-is-tag",
+    "file": "apps/web/src/components/public-site/forfeit-tag-chip.tsx",
+    "find": "      aria-label={sentence}",
+    "replace": "      aria-label={tag}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "the tag is shown, its accessible name"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "the forfeit tile shows the credited score"
+      }
+    ]
+  },
+  {
+    "id": "run-sheet-no-ledger",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "forfeitLedgerOfReason(fixture.abandon_reason)",
+    "replace": "forfeitLedgerOfReason(null)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "a decided DLS row carries the abandon tag only"
+      }
+    ]
+  },
+  {
+    "id": "loader-dict-always",
+    "file": "apps/web/src/server/public-site/match-centre-load.ts",
+    "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
+    "replace": "  const publicDict = true ? await getDictionary",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-load-feeder-read.test.ts"
+        ],
+        "name": "a fixture whose two entrants are set"
+      }
+    ]
+  },
+  {
+    "id": "loader-dict-never",
+    "file": "apps/web/src/server/public-site/match-centre-load.ts",
+    "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
+    "replace": "  const publicDict = false ? await getDictionary",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
+        ],
+        "name": "X-AB-2"
+      }
+    ]
+  },
+  {
+    "id": "loader-dw-next-skipped",
+    "file": "apps/web/src/server/public-site/match-centre-load.ts",
+    "find": "    (fixture.outcome as { kind?: string } | null)?.kind === \"double_walkover\"\n",
+    "replace": "    false\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
+        ],
+        "name": "X-DW-1"
+      }
+    ]
+  }
+]

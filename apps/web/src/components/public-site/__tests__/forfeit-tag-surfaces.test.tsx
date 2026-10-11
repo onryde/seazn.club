@@ -90,6 +90,10 @@ describe("hubForfeit — the hub card's words (the producer)", () => {
     expect(hubForfeit(final, ctx([final]))!.sentence).toBe("Neither side showed up — both lose.");
     const waiting = fixture({ id: "fin", outcome: null, status: "scheduled" });
     expect(hubForfeit(dw, ctx([dw, waiting]))!.sentence).toBe("Neither side showed up — both lose.");
+    // D19 (`feedsNextMatch`): a line whose winner AND loser both go to the same match (a two-entrant double elim's
+    // winners' match into the grand final) feeds no NEXT match — even with that match walked over, no clause.
+    const both = fixture({ outcome: { kind: "double_walkover" } as never, winner_to_fixture: "fin", loser_to_fixture: "fin" });
+    expect(hubForfeit(both, ctx([both, next]))!.sentence).toBe("Neither side showed up — both lose.");
   });
 
   it("X-AB-2: an abandon's words read the ledger column, and carry the card's own result sentence", () => {

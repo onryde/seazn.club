@@ -168,6 +168,18 @@ describe("a voided row says WHY it is struck through", () => {
     expect(html).not.toContain(fixtureStatusLabel(msg, "decided"));
   });
 
+  // W2b Task 13 (X-AB-2): the row's abandon tag reads the row's ledger column (`abandon_reason`, the division read's
+  // `activeAbandonReasonSql`), never its status — a DLS abandon is stored `decided`, like a reduced chase played out.
+  it("a decided DLS row carries the abandon tag only when its ledger holds the abandon", () => {
+    const outcome = { kind: "win", winner: "e1", loser: "e2", method: "dls" };
+    const abandoned = rowHtml(fx({ status: "decided", outcome, abandon_reason: "rain" }));
+    expectRowRendered(abandoned);
+    expect(abandoned).toContain(`Alpha won (${messages["forfeit.tag.abandonedDls"]})`);
+    const played = rowHtml(fx({ status: "decided", outcome, abandon_reason: null }));
+    expect(played).toContain("Alpha won");
+    expect(played).not.toContain(messages["forfeit.tag.abandonedDls"]);
+  });
+
   it("an unresolved entrant still reads Awaiting draw", () => {
     const html = rowHtml(fx({ home_entrant_id: null, home_slot_label: null }));
     expect(html).toContain("Bravo");

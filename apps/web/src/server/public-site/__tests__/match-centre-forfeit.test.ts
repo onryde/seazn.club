@@ -110,6 +110,22 @@ describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2
     );
   });
 
+  it("the sentence is a finished match's: a row the header still reads as scheduled or in play keeps its own line", () => {
+    // A guard, not a comment: the status and the outcome are two stored columns, and a row whose status has not caught
+    // up (written apart, or read between the two writes) must not tell a spectator a live match was walked over.
+    let rows = 0;
+    for (const status of ["scheduled", "in_play"]) {
+      const line = centre({ m: GENERIC, cfg: GENERIC_CFG, status, ledger: forfeit("walkover") }).doc.header.statusLine;
+      expect(line?.key ?? "(no line)", status).not.toMatch(/^forfeit\./);
+      rows++;
+    }
+    expect(rows).toBe(2);
+    // The positive pair: the same ledger on a finished row reads the sentence.
+    expect(centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: forfeit("walkover") }).doc.header.statusLine?.key).toBe(
+      "forfeit.sentence.walkover",
+    );
+  });
+
   it("X-RS-2 + ruling 108: a football walkover shows the credited score beside the sentence (the engine's awardScore)", () => {
     const FOOTBALL = mod("football");
     const cfg = FOOTBALL.configSchema.parse({});
