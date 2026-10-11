@@ -332,5 +332,140 @@
     "name": "never a cascade-only reason"
    }
   ]
+ },
+ {
+  "id": "dialog-confirm-unoffered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "return sel.who === null || sel.reason === null || sending || !model.why(sel.who).includes(sel.reason);",
+  "replace": "return sel.who === null || sel.reason === null || sending;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "Confirm stays blocked on a side or reason the model no longer offers"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-unoffered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "if (w === \"both\" || headline === undefined || !why(w).includes(reason as WriterForfeitReason)) return null;",
+  "replace": "if (w === \"both\" || headline === undefined) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "the preview of a choice the dialog does not offer is none"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-snapshot",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const preview = chosen ? forfeitPreviewNow(model, props.live ?? null, sel.who!, sel.reason!) : null;",
+  "replace": "const preview = chosen ? model.preview(sel.who!, sel.reason!) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the dialog's preview reads `live`"
+   }
+  ]
+ },
+ {
+  "id": "preview-now-ignores-live",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "  if (live !== null && live.why(who).includes(reason as WriterForfeitReason)) return live.preview(who, reason);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a goal recorded on another device while the dialog is open"
+   }
+  ]
+ },
+ {
+  "id": "preview-now-unoffered-live",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "  if (live !== null && live.why(who).includes(reason as WriterForfeitReason)) return live.preview(who, reason);\n",
+  "replace": "  if (live !== null) return live.preview(who, reason);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "one that no longer offers the choice"
+   }
+  ]
+ },
+ {
+  "id": "console-live-dropped",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "          live={forfeitModel}\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the console hands the open dialog its CURRENT model"
+   }
+  ]
+ },
+ {
+  "id": "console-live-is-snapshot",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "          live={forfeitModel}\n",
+  "replace": "          live={forfeitOpen}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the console hands the open dialog its CURRENT model"
+   }
+  ]
+ },
+ {
+  "id": "console-refusal-outlives-write",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "      setForfeitRefusal(null);\n      setPaywallFeature(null);\n",
+  "replace": "      setPaywallFeature(null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "a forfeit refusal clears on the console's next write"
+   }
+  ]
+ },
+ {
+  "id": "es-forfeit-reads-abandon",
+  "file": "apps/web/src/dictionaries/es/ui.json",
+  "find": "\"score.forfeit\": \"Dar por perdido…\",",
+  "replace": "\"score.forfeit\": \"Abandonar…\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-labels.test.ts"
+    ],
+    "name": "Forfeit and Abandon never read alike"
+   }
+  ]
  }
 ]
