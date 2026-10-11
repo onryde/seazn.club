@@ -84,6 +84,12 @@
       "original": "f.court === null",
       "line": "if (scope.courts !== undefined && (f.court === null || !scope.courts.includes(f.court))) continue;",
       "reason": "Dropping the null short-circuit leaves `!scope.courts.includes(f.court)`. courts is a string[] (ClearScope: z.array(z.string())), which never holds null, so a court-less fixture still reads includes(null) = false and is skipped exactly as `f.court === null` skipped it; for a fixture on a court the operand was false already."
+    },
+    {
+      "mutant": "src/sport/registry.ts:75:24 ConditionalExpression → false",
+      "original": "versions.size === 0",
+      "line": "if (!versions || versions.size === 0) {",
+      "reason": "A key's version Map is never empty: byKey is private to createRegistry's closure, register() is its only writer and calls byKey.set only after versions.set has put the module in, and SportRegistry has no unregister or delete. So the operand is false in every reachable state and `false` in its place changes nothing; an unknown key is refused by `!versions`, which the mutant keeps."
     }
   ]
 }
