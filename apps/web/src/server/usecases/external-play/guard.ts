@@ -367,7 +367,9 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
   };
 }
 
-export async function loadSides(f: OnlinePlayFixture): Promise<{ home: SidePlayer; away: SidePlayer }> {
+export async function loadSides(
+  f: Pick<OnlinePlayFixture, "homeEntrantId" | "awayEntrantId">,
+): Promise<{ home: SidePlayer; away: SidePlayer }> {
   const [home, away] = await Promise.all([
     loadSide("home", f.homeEntrantId),
     loadSide("away", f.awayEntrantId),

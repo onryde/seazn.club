@@ -604,6 +604,8 @@ export const CAMERA_EVIDENCE_GIVE_UP_MS = 24 * 60 * 60_000;
 type CameraCandidate = {
   fixtureId: string;
   orgId: string;
+  homeEntrantId: string;
+  awayEntrantId: string;
   meetingId: string;
   endedAt: Date;
   startedAt: Date | null;
@@ -620,6 +622,7 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
   const readable = new Date(pass.now.getTime() - CAMERA_EVIDENCE_AFTER_MS);
   return sql<CameraCandidate[]>`
     select m.fixture_id as "fixtureId", m.org_id as "orgId", m.meeting_id as "meetingId",
+           f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            m.ended_at as "endedAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.last_move_at as "lastMoveAt", ep.move_count as "moveCount",
            ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
@@ -655,22 +658,25 @@ async function readCameraEvidence(
   window: { from: Date; to: Date },
   rtk: RealtimeKitDeps,
 ): Promise<CameraFlag[] | "not_ready"> {
-  // The players are the fixture's two sides; their cameras are the player
-  // participants T8 added. A player with none had no camera in the match.
-  const rows = await sql<{ personId: string; participantId: string | null }[]>`
-    select em.person_id as "personId", vp.participant_id as "participantId"
-      from fixtures f
-      join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-      join persons p on p.id = em.person_id and p.merged_into is null
-      left join fixture_video_participants vp
-        on vp.fixture_id = f.id and vp.person_id = em.person_id and vp.preset = 'player'
-     where f.id = ${c.fixtureId}
-     order by em.person_id, vp.participant_id`;
+  // The players are the guard's (review M2): each side's ONE member with a
+  // user account (loadSides) — never every entrant member, so a club
+  // volunteer on the roster is never "off camera all match". A side the guard
+  // cannot name one player for (a roster edited after the match) is judged
+  // for nobody: evidence about the wrong person is worse than none. Their
+  // cameras are the player participants T8 added; a player with none had no
+  // camera in the match.
+  const sides = await loadSides(c);
   const players = new Map<string, string[]>();
-  for (const r of rows) {
-    const ids = players.get(r.personId) ?? [];
-    if (r.participantId !== null) ids.push(r.participantId);
-    players.set(r.personId, ids);
+  for (const side of [sides.home, sides.away]) {
+    if (side.personId === null) {
+      log.warn({ fixtureId: c.fixtureId, side: side.side }, "external-play sweep: no single player on a side; its camera is not judged");
+      continue;
+    }
+    const parts = await sql<{ participantId: string }[]>`
+      select participant_id as "participantId" from fixture_video_participants
+       where fixture_id = ${c.fixtureId} and person_id = ${side.personId} and preset = 'player'
+       order by participant_id`;
+    players.set(side.personId, parts.map((r) => r.participantId));
   }
 
   const from = window.from.getTime();
