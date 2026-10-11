@@ -135,7 +135,7 @@ type ScoreCall = {
 };
 const scoring = vi.hoisted(() => ({
   calls: [] as ScoreCall[],
-  refuse: null as null | ((fixtureId: string, input: { type: string; payload: unknown }) => Error | null),
+  refuse: null as null | ((fixtureId: string, input: { type: string; payload: unknown }) => Error | null | Promise<Error | null>),
 }));
 vi.mock("@/server/usecases/scoring", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/scoring")>();
@@ -144,7 +144,7 @@ vi.mock("@/server/usecases/scoring", async (importOriginal) => {
     scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
       const [auth, fixtureId, input] = args;
       scoring.calls.push({ fixtureId, input: input as ScoreCall["input"], auth: auth as ScoreCall["auth"] });
-      const refused = scoring.refuse?.(fixtureId, input as { type: string; payload: unknown }) ?? null;
+      const refused = (await scoring.refuse?.(fixtureId, input as { type: string; payload: unknown })) ?? null;
       if (refused) throw refused;
       return real.scoreEvent(...args);
     },
@@ -525,5 +525,145 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     const report = await sweepExternalPlay({ now: new Date(), orgIds: [] });
     expect(report).toMatchObject({ scanned: 0, noShows: 0, failures: [] });
     expect(scoring.calls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job 1 — a double walkover with nowhere for "nobody advances" to go.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, not thrown", () => {
+  // W2b D19 refuses `by: "both"` in a bracket kind on a fixture that feeds no
+  // next match (no winner/loser edge — the feed graph, never a round name):
+  // EngineError DOUBLE_WALKOVER_NO_NEXT_MATCH. The board stays OPEN for the
+  // organiser — a handled outcome. Today's engine refuses the pre-phase
+  // forfeit first (WRONG_PHASE) and cannot produce this refusal, so the
+  // today-half injects it at scoreEvent's door: the code W2b throws
+  // (packages/engine errors.ts on feat/format-matrix-w2b), with a message
+  // that is NOT W2b's — the routing must read the code, never the text.
+  const NO_NEXT = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
+  const injectNoNextFor = (fixtureId: string) => {
+    scoring.refuse = (id, input) =>
+      id === fixtureId && input.type === "core.forfeit" && (input.payload as { by?: string }).by === "both"
+        ? new EngineError(NO_NEXT as never, "injected: a message the sweep must not read")
+        : null;
+  };
+  const bridgeOf = async (fixtureId: string) => {
+    const [r] = await sql<{ status: string; needs_reason: string | null }[]>`
+      select status, needs_reason from fixture_external_play where fixture_id = ${fixtureId}`;
+    return r ?? null;
+  };
+  /** A bracket line that feeds no next match, in W2b's own terms. */
+  const SHAPES = [
+    { label: "a knockout final", kind: "knockout", thirdPlace: false },
+    { label: "a third-place match", kind: "knockout", thirdPlace: true },
+    { label: "a stepladder's last rung", kind: "stepladder", thirdPlace: false },
+  ] as const;
+
+  it("each no-next-match shape leaves the board OPEN, held double_walkover_blocked, and is counted — never a failure", async () => {
+    let checked = 0;
+    for (const shape of W2B ? SHAPES : SHAPES.slice(0, 1)) {
+      const b = await openedBoard({ checkedIn: [], kind: shape.kind });
+      if (shape.thirdPlace) await sql`update fixtures set third_place = true where id = ${b.fixtureId}`;
+      if (!W2B) injectNoNextFor(b.fixtureId);
+      const report = await sweep(b, { now: b.at(45) });
+      expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload), shape.label).toEqual([{ by: "both", reason: WALKOVER }]);
+      expect(report.heldForOrganiser, shape.label).toBe(1);
+      expect(report.noShows, shape.label).toBe(0);
+      expect(report.failures, `${shape.label}: handled, not failed`).toEqual([]);
+      const fx = await fixtureRow(b.fixtureId);
+      expect(fx.status, `${shape.label} stays open`).toBe("scheduled");
+      expect(fx.outcome).toBeNull();
+      expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+      checked++;
+    }
+    expect(checked, "no-next-match shapes checked").toBe(W2B ? SHAPES.length : 1);
+  });
+
+  it("the pair: a double walkover that FEEDS a next match is not held (W2b writes it; today it is the pre-phase refusal)", async () => {
+    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
+    // A next match for the winner to go to — the feed edge W2b reads.
+    const [next] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+      values (${b.stageId}, ${b.divisionId}, ${b.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
+      returning id`;
+    await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.heldForOrganiser).toBe(0);
+    expect((await bridgeOf(b.fixtureId))?.status, "not held").toBe("pending");
+    if (W2B) {
+      expect(report.noShows).toBe(1);
+      expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: "both", reason: WALKOVER }]);
+    } else {
+      expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
+    }
+  });
+
+  it("only THAT code holds: any other refusal of a double walkover is a failure, and the board is not held", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    scoring.refuse = (id) => (id === b.fixtureId ? new EngineError("INVALID_EVENT", "injected: some other refusal") : null);
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.heldForOrganiser).toBe(0);
+    expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "INVALID_EVENT" }]);
+    expect((await bridgeOf(b.fixtureId))?.status).toBe("pending");
+  });
+
+  it("THAT code on a SINGLE forfeit is not a double walkover: a failure, never a hold", async () => {
+    // W2b raises it for `by: "both"` only; a single forfeit refused with it
+    // would be a W2b defect, and must not be filed as double_walkover_blocked.
+    const b = await openedBoard({ checkedIn: ["home"] });
+    scoring.refuse = (id) => (id === b.fixtureId ? new EngineError(NO_NEXT as never, "injected") : null);
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.heldForOrganiser).toBe(0);
+    expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: NO_NEXT }]);
+    expect((await bridgeOf(b.fixtureId))?.status).toBe("pending");
+  });
+
+  it("a board settled while the refused forfeit was in flight is not counted as held", async () => {
+    // Staged at scoreEvent's door: the organiser cancels the board, THEN the
+    // refusal lands. T12's hold answers `none` for an unplayable fixture, and
+    // nothing was held, so nothing is counted.
+    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
+    scoring.refuse = async (id, input) => {
+      if (id !== b.fixtureId || input.type !== "core.forfeit") return null;
+      // Stands for the organiser's cancel of this board.
+      await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+      return new EngineError(NO_NEXT as never, "injected");
+    };
+    const report = await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId).length, "premise: the refusal landed").toBe(1);
+    expect(report.heldForOrganiser).toBe(0);
+    expect(report.failures).toEqual([]);
+    expect((await bridgeOf(b.fixtureId))?.status, "nothing held").toBe("pending");
+  });
+
+  it("the refusal does not abort the rest of the pass", async () => {
+    const blocked = await openedBoard({ checkedIn: [], kind: "knockout" });
+    const ordinary = await openedBoard({ checkedIn: ["home"] });
+    if (!W2B) injectNoNextFor(blocked.fixtureId);
+    const report = await sweepExternalPlay({ now: blocked.at(45), orgIds: [blocked.orgId, ordinary.orgId] });
+    expect(report.heldForOrganiser).toBe(1);
+    expect(forfeitsAttempted(ordinary.fixtureId).map((c) => c.input.payload), "the other board still got its ruling")
+      .toEqual([{ by: ordinary.away.entrantId, reason: WALKOVER }]);
+  });
+
+  it("a HELD board is the organiser's: the next pass neither re-tries nor re-holds it", async () => {
+    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
+    if (!W2B) injectNoNextFor(b.fixtureId);
+    await sweep(b, { now: b.at(45) });
+    const second = await sweep(b, { now: b.at(50) });
+    expect(forfeitsAttempted(b.fixtureId).length, "one attempt, ever").toBe(1);
+    expect(second.heldForOrganiser).toBe(0);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+  });
+
+  it("a board with NO bridge row (paired after the open) still holds: the row is minted first", async () => {
+    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
+    // Stands for a board the open never attached (no row yet): T13 mints it
+    // through T9's ensureBridgeRow, because T12's hold needs a row to hold.
+    await sql`delete from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    if (!W2B) injectNoNextFor(b.fixtureId);
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.failures).toEqual([]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
   });
 });
