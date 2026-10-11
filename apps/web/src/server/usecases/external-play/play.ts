@@ -8,8 +8,9 @@ import "server-only";
 // Lichess decides legality and ends games. This file never adjudicates a
 // result and never writes 'finished' (controller ruling Q2): a resign, an
 // abort and a draw are forwarded and answered, and T11's reconcile — called by
-// T14's act route after a game-ending action, and by T13's sweep — reads the
-// end from Lichess. Mid-game truth is this ledger plus the Board API stream;
+// T14's act route after a game-ending action, by T13's sweep, and from HERE
+// when Lichess rejects a move we submitted (spec §3.5's first trigger; T11
+// review I4) — reads the end from Lichess. Mid-game truth is this ledger plus the Board API stream;
 // the export is never read for moves or clocks (M16).
 //
 // The append is ONE conditional UPDATE keyed on the move count the caller
@@ -36,6 +37,7 @@ import { getLichessAccessToken } from "../external-accounts";
 import { effectiveBridge, loadOnlinePlayFixture, loadSides, type OnlinePlayFixture, type Side } from "./guard";
 import { isPlayableFixtureStatus, playGrantRefusal, type GrantRefusal } from "./preflight";
 import type { Colour } from "./invite";
+import { holdForOrganiser } from "./result";
 
 export type PlayAction =
   | { kind: "move"; uci: string }
@@ -72,6 +74,9 @@ export type PlayDeps = {
   abortGame?: (a: { token: string; gameId: string }) => Promise<BoardCall>;
   accessToken?: (userId: string) => Promise<string | null>;
   publish?: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
+  /** T11's reconcile, run when Lichess rejects a move we submitted. Imported
+   *  lazily by default: reconcile.ts imports this module's `fenAfter`. */
+  reconcile?: (fixtureId: string, trigger: "rejected_move") => Promise<unknown>;
 };
 
 /** The same 404 the match room answers: "no such fixture", "not your
@@ -171,15 +176,33 @@ type Game = {
   blackLichessId: string;
   moves: string[];
   ply: number;
+  /** The seats that may not act: none on a ready/live game; on a
+   *  token_revoked hold, the revoked seat (both when it was not recorded). */
+  frozen: readonly Colour[];
 };
+
+/** Who may not act on this bridge, or null when nobody may. Controller ruling
+ *  M7 (2026-10-11): a token_revoked hold freezes ONLY the revoked seat — the
+ *  other player keeps playing and can still win on the clock, since freezing
+ *  the innocent side would hand the flag to the player whose token broke.
+ *  Every other hold, 'finished' and 'pending' accept nothing. */
+function frozenSeats(b: { status: string; needs_reason: string | null; revoked_seat: Colour | "both" | null }): readonly Colour[] | null {
+  if (b.status === "ready" || b.status === "live") return [];
+  if (b.status === "needs_organiser" && b.needs_reason === "token_revoked") {
+    if (b.revoked_seat === "white" || b.revoked_seat === "black") return [b.revoked_seat];
+    return ["white", "black"];
+  }
+  return null;
+}
 
 /** The game a player may act on, or null. A ready or live bridge with a
  *  game id, on a board that is still playable. */
 function playableGame(f: OnlinePlayFixture): Game | null {
   const b = effectiveBridge(f);
   if (!b || b.challenge_id === null) return null;
-  // 'finished' and 'needs_organiser' accept nothing; 'pending' has no game.
-  if (b.status !== "ready" && b.status !== "live") return null;
+  // 'finished' and every other hold accept nothing; 'pending' has no game.
+  const frozen = frozenSeats(b);
+  if (frozen === null) return null;
   // A withdrawn or walked-over board still loads (guard.ts); T8's predicate
   // is the one authority for "still playable".
   if (!isPlayableFixtureStatus(f.fixtureStatus)) return null;
@@ -201,6 +224,7 @@ function playableGame(f: OnlinePlayFixture): Game | null {
     blackLichessId: b.black_lichess_id,
     moves: b.moves_uci,
     ply: b.move_count,
+    frozen,
   };
 }
 
@@ -226,6 +250,9 @@ export async function act(
   const me = [home, away].find((s) => s.personId === a.personId);
   if (!me) throw NOT_FOUND();
   const colour: Colour = game.whiteSide === me.side ? "white" : "black";
+  // A seat a revoked token froze acts on nothing — the same 404 as a held
+  // board (ruling M7); its opponent plays on.
+  if (game.frozen.includes(colour)) throw NOT_FOUND();
 
   // 4. THE GRANT, as the seat asks it (T2's one play gate). Named, so T14
   //    can send the player to re-link; a downgraded grant mid-game lands here.
@@ -242,12 +269,13 @@ export async function act(
   const now = deps.now ?? new Date();
   const publish = deps.publish ?? publishRoomBroadcast;
   const token = () => (deps.accessToken ?? getLichessAccessToken)(userId);
+  const lichessRefused = (code: BoardErrorCode, kind: PlayAction["kind"]) => afterRefusal(game, colour, code, kind, deps);
 
   switch (action.kind) {
     case "move":
-      return playMove(game, colour, action.uci, { token, now, publish, submit: deps.submitMove ?? realSubmitMove });
+      return playMove(game, colour, action.uci, { token, now, publish, refused: lichessRefused, submit: deps.submitMove ?? realSubmitMove });
     case "draw":
-      return draw(game, colour, action.accept, { token, now, publish, call: deps.offerOrAcceptDraw ?? realOfferOrAcceptDraw });
+      return draw(game, colour, action.accept, { token, now, publish, refused: lichessRefused, call: deps.offerOrAcceptDraw ?? realOfferOrAcceptDraw });
     case "resign":
     case "abort": {
       const call = action.kind === "resign" ? (deps.resignGame ?? realResignGame) : (deps.abortGame ?? realAbortGame);
@@ -256,8 +284,50 @@ export async function act(
       const sent = await call({ token: tok, gameId: game.gameId });
       // Forwarded and answered — nothing written, nothing broadcast (ruling
       // Q2). A resign at ply < 2 is an abort at Lichess (BotPlayer.scala).
-      return sent.ok ? { ok: true, applied: true } : { ok: false, reconcile: true, reason: sent.code };
+      if (sent.ok) return { ok: true, applied: true };
+      await lichessRefused(sent.code, action.kind);
+      return { ok: false, reconcile: true, reason: sent.code };
     }
+  }
+}
+
+/** What follows a refusal Lichess gave to a call we SENT (never to one of our
+ *  own refusals, which reach Lichess with nothing):
+ *  - `unauthorized` — the caller's token is revoked or lacks the scope: hold
+ *    the board for the organiser as token_revoked, recording THIS seat, so
+ *    only this seat is frozen (spec §3.6: not a no-show; ruling M7);
+ *  - a MOVE refused — spec §3.5's first trigger: M6's 400 covers "not your
+ *    turn" and "game over" alike, and a 5xx may have played it, so reconcile
+ *    reads Lichess, never assumes (T11 review I4). Not on a 429: the limit
+ *    stops every call, reconcile's read included, until it passes. */
+async function afterRefusal(
+  game: Game,
+  colour: Colour,
+  code: BoardErrorCode,
+  kind: PlayAction["kind"],
+  deps: PlayDeps,
+): Promise<void> {
+  const fixtureId = game.fixture.fixtureId;
+  if (code === "unauthorized") {
+    await holdForOrganiser({
+      fixtureId,
+      reason: "token_revoked",
+      seat: colour,
+      detail: `lichess game ${game.gameId}: Lichess refused ${colour}'s token (${kind})`,
+    });
+  }
+  if (kind !== "move" || code === "rate_limited") return;
+  const run = deps.reconcile ?? (async (id: string, t: "rejected_move") => (await import("./reconcile")).reconcile(id, t));
+  try {
+    await run(fixtureId, "rejected_move");
+  } catch (err) {
+    // The player's answer is the refusal either way; a reconcile that could
+    // not run is the sweep's to repeat. Logged by code — never the error's
+    // body, which could carry a Lichess answer.
+    log.error(
+      { fixtureId, gameId: game.gameId, code: err instanceof HttpError ? err.code : "unexpected" },
+      "lichess: reconcile after a rejected move failed — left to the sweep",
+    );
   }
 }
 
@@ -265,6 +335,7 @@ type Ctx<C> = {
   token: () => Promise<string | null>;
   now: Date;
   publish: (fixtureId: string, body: RoomBroadcast) => Promise<void>;
+  refused: (code: BoardErrorCode, kind: PlayAction["kind"]) => Promise<void>;
 } & C;
 
 type LedgerRow = {
@@ -276,6 +347,14 @@ type LedgerRow = {
   black_ms: number;
   draw_offer_by: Colour | null;
 };
+
+/** The row, AS IT STANDS at the write, still takes `colour`'s act: a running
+ *  game, or a token_revoked hold that froze the OTHER seat only (ruling M7).
+ *  Re-checked in SQL, so a hold landing between our read and our write — or
+ *  widening to this seat — refuses the write. */
+const actable = (colour: Colour) =>
+  sql`(status in ('ready', 'live')
+       or (status = 'needs_organiser' and needs_reason = 'token_revoked' and revoked_seat = ${otherColour(colour)}))`;
 
 async function playMove(
   game: Game,
@@ -310,6 +389,7 @@ async function playMove(
     }
     // Nothing is written on a refusal — and `unavailable` (a 5xx, a timeout)
     // MAY have played the move, so it is never recorded as "not played".
+    await ctx.refused(answer.code, "move");
     return { ok: false, reconcile: true, reason: answer.code };
   }
 
@@ -328,7 +408,7 @@ async function playMove(
     update fixture_external_play
        set moves_uci = moves_uci || jsonb_build_array(${uci}::text),
            move_count = move_count + 1,
-           status = 'live',
+           status = case when status = 'needs_organiser' then status else 'live' end,
            started_at = coalesce(started_at, ${ctx.now}),
            last_move_at = ${ctx.now},
            clock_increment_s = coalesce(clock_increment_s, ${f.clock.increment}),
@@ -343,7 +423,7 @@ async function playMove(
            updated_at = now()
      where fixture_id = ${f.fixtureId}
        and challenge_id = ${gameId}
-       and status in ('ready', 'live')
+       and ${actable(colour)}
        and move_count = ${ply}
      returning moves_uci, move_count, white_ms, black_ms, draw_offer_by`;
   const [row] = appended;
@@ -419,7 +499,10 @@ async function draw(
   if (tok === null) return { ok: false, reconcile: false, reason: "lichess_link_required" };
   const sent = await ctx.call({ token: tok, gameId, accept });
   // Nothing written on a refusal, nor on a 5xx — which MAY have registered.
-  if (!sent.ok) return { ok: false, reconcile: true, reason: sent.code };
+  if (!sent.ok) {
+    await ctx.refused(sent.code, "draw");
+    return { ok: false, reconcile: true, reason: sent.code };
+  }
 
   const offerPlyCol = colour === "white" ? "white_draw_offer_ply" : "black_draw_offer_ply";
   // Each transition is applied to the row AS IT STANDS, not to our snapshot,
@@ -433,7 +516,7 @@ async function draw(
         update fixture_external_play
            set draw_offer_by = ${colour}, ${sql(offerPlyCol)} = move_count, updated_at = now()
          where fixture_id = ${f.fixtureId} and challenge_id = ${gameId}
-           and status in ('ready', 'live')
+           and ${actable(colour)}
            and draw_offer_by is null
            and move_count >= ${DRAW_MIN_PLY}
            and (${sql(offerPlyCol)} is null or ${sql(offerPlyCol)} < move_count - ${DRAW_REOFFER_PLIES})
@@ -442,7 +525,7 @@ async function draw(
         update fixture_external_play
            set draw_offer_by = null, updated_at = now()
          where fixture_id = ${f.fixtureId} and challenge_id = ${gameId}
-           and status in ('ready', 'live')
+           and ${actable(colour)}
            and draw_offer_by = ${otherColour(colour)}
          returning moves_uci, move_count, white_ms, black_ms, last_move_at, draw_offer_by`;
   const [row] = changed;
