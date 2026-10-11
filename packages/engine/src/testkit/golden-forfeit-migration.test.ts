@@ -1,8 +1,9 @@
 // W2b Task 5 (ruling 102 Q1; plan PF-3) — the golden corpora's recorded `core.forfeit` payloads carry pre-W2b reasons
 // ("no-show", or "walkover" after the start), which the closed W2b vocabulary and the D3 phase guard refuse. The
-// migration rewrites ONLY the reason, by the ruled rule: a forfeit before any (unvoided) `core.start` is a `walkover`,
-// one after it is `retired` — in every sport, chess included (PF-3: no boardgame exception). Expected values here are
-// that rule, written out; nothing is read back from the function under test.
+// migration rewrites ONLY the reason, by the ruled rule as ruling 113 amends it ("nothing played means not started,
+// for every forfeit reason"): a forfeit with nothing played before it — no unvoided sport event after an unvoided
+// `core.start` — is a `walkover`, one after play is `retired` — in every sport, chess included (PF-3: no boardgame
+// exception). Expected values here are that rule, written out; nothing is read back from the function under test.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { goldenPath, readCorpus, SPORT_DIRS } from "./golden.ts";
@@ -14,7 +15,7 @@ const START: MigratableEvent = { type: "core.start", payload: {} };
 const reasonsOf = (events: readonly MigratableEvent[]) =>
   events.filter((e) => e.type === "core.forfeit").map((e) => (e.payload as { reason: string }).reason);
 
-describe("golden forfeit migration (ruling 102 Q1, PF-3)", () => {
+describe("golden forfeit migration (ruling 102 Q1, PF-3; ruling 113)", () => {
   it("empty case first: an empty corpus maps to an empty corpus, nothing examined", () => {
     expect(migrateGoldenForfeits([])).toEqual({ streams: [], examined: 0, rewritten: 0 });
   });
@@ -36,23 +37,29 @@ describe("golden forfeit migration (ruling 102 Q1, PF-3)", () => {
     expect([out.examined, out.rewritten]).toEqual([2, 1]);
   });
 
-  it("a forfeit after core.start becomes retired in every sport — chess too (PF-3: no boardgame exception)", () => {
+  it("ruling 113: a forfeit after core.start AND the sport's own play becomes retired; after a bare start (nothing played) a walkover — every sport, chess too (PF-3: no boardgame exception)", () => {
+    const GOAL: MigratableEvent = { type: "football.goal", payload: { by: "H" } };
     const out = migrateGoldenForfeits([
-      stream(START, { type: "football.goal", payload: { by: "H" } }, forfeit("A", "walkover")),
+      stream(START, GOAL, forfeit("A", "walkover")),
       stream(START, forfeit("H", "no-show")),
-      // chess: D3 would admit a walkover in `live`, but the ruling migrates every post-start forfeit to retired
+      // chess: a pairing card before the start is no play, and nothing is played after it
       stream({ type: "boardgame.pairing", payload: { white: "H" } }, START, forfeit("A", "walkover")),
+      stream(START, GOAL, forfeit("H", "no-show")),
+      // ruling 113's own row: Task 5 migrated this one to retired; with nothing played it is a walkover
+      stream(START, forfeit("A", "retired")),
     ]);
-    expect(out.streams.map((s) => reasonsOf(s.events))).toEqual([["retired"], ["retired"], ["retired"]]);
-    expect([out.examined, out.rewritten]).toEqual([3, 3]);
+    expect(out.streams.map((s) => reasonsOf(s.events))).toEqual([["retired"], ["walkover"], ["walkover"], ["retired"], ["walkover"]]);
+    expect([out.examined, out.rewritten]).toEqual([5, 4]);
   });
 
-  it("a voided core.start counts as not started; a void AFTER the forfeit does not reach back", () => {
-    const voidedFirst = stream({ ...START }, { type: "core.void", payload: {}, voids: "e-0" }, forfeit("A", "no-show"));
-    const voidedAfter = stream({ ...START }, forfeit("A", "no-show"), { type: "core.void", payload: {}, voids: "e-0" });
-    const out = migrateGoldenForfeits([voidedFirst, voidedAfter]);
-    expect(out.streams.map((s) => reasonsOf(s.events))).toEqual([["walkover"], ["retired"]]);
-    expect([out.examined, out.rewritten]).toEqual([2, 2]);
+  it("a voided core.start counts as not started, a voided play as nothing played; a void AFTER the forfeit does not reach back", () => {
+    const GOAL: MigratableEvent = { type: "football.goal", payload: { by: "H" } };
+    const voidedFirst = stream({ ...START }, GOAL, { type: "core.void", payload: {}, voids: "e-0" }, forfeit("A", "no-show"));
+    const voidedPlay = stream({ ...START }, GOAL, { type: "core.void", payload: {}, voids: "e-1" }, forfeit("A", "no-show"));
+    const voidedAfter = stream({ ...START }, GOAL, forfeit("A", "no-show"), { type: "core.void", payload: {}, voids: "e-1" });
+    const out = migrateGoldenForfeits([voidedFirst, voidedPlay, voidedAfter]);
+    expect(out.streams.map((s) => reasonsOf(s.events))).toEqual([["walkover"], ["walkover"], ["retired"]]);
+    expect([out.examined, out.rewritten]).toEqual([3, 3]);
   });
 
   it("`by` is never rewritten and `both` is never introduced — every forfeit of a mixed set", () => {
@@ -79,7 +86,9 @@ describe("golden forfeit migration (ruling 102 Q1, PF-3)", () => {
   });
 
   it("assumptions are guards: a double walkover after the start, or a payload with no side, is refused by name", () => {
-    expect(() => migrateGoldenForfeits([stream(START, forfeit("both", "walkover"))])).toThrow(/double walkover after core\.start/);
+    expect(() => migrateGoldenForfeits([stream(START, { type: "football.goal", payload: { by: "H" } }, forfeit("both", "walkover"))])).toThrow(/double walkover after play/);
+    // its pair: after a bare start nothing is played, so a double walkover is still a walkover (ruling 112)
+    expect(reasonsOf(migrateGoldenForfeits([stream(START, forfeit("both", "walkover"))]).streams[0]!.events)).toEqual(["walkover"]);
     expect(() => migrateGoldenForfeits([stream({ type: "core.forfeit", payload: { reason: "no-show" } })])).toThrow(/names no side/);
     expect(() => migrateGoldenForfeits([stream({ type: "core.forfeit", payload: null })])).toThrow(/names no side/);
   });

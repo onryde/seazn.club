@@ -1,14 +1,17 @@
 // W2b Task 5 (ruling 102 Q1; plan PF-3) — migrates the golden corpora's recorded `core.forfeit` reasons to the W2b
 // vocabulary. Before W2b a forfeit's reason was free text ("no-show", "walkover" at any point); W2b closes it
-// (`FORFEIT_REASONS`) and the D3 phase guard refuses a walkover after the start. The ruled rule: a forfeit before any
-// `core.start` still active at that point is a `walkover`; one after it is `retired`, in every sport (chess included —
-// PF-3: no boardgame exception, since D3 R4 admits `retired` after the start everywhere). Only the reason moves: `by`,
-// every other event, and every recorded state stay byte-for-byte; the rebaseline that follows is a separate commit.
+// (`FORFEIT_REASONS`) and the D3 phase guard refuses a walkover once play started. The ruled rule, as amended by
+// ruling 113 (2026-10-11: "nothing played means not started, for every forfeit reason"): a forfeit with nothing
+// played before it — no active sport event after an active `core.start`, `playRecorded` — is a `walkover`; one after
+// play is `retired`, in every sport (chess included — PF-3: no boardgame exception). Ruling 102 drew the line at the
+// Start; ruling 113 refuses a retirement after a bare Start, so the line moved to the first play. Only the reason
+// moves: `by`, every other event, and every recorded state stay byte-for-byte; the rebaseline that follows is a
+// separate commit.
 //
 // One-off CLI: `node --experimental-strip-types src/testkit/golden-forfeit-migration.ts [--write]` prints the
 // per-sport table, and with `--write` rewrites the corpora in place.
 import { pathToFileURL } from "node:url";
-import { resolveVoids } from "../core/events.ts";
+import { playRecorded } from "../core/events.ts";
 import { readCorpus, SPORT_DIRS, writeCorpus, type GoldenEvent } from "./golden.ts";
 import { makeEnvelope } from "./helpers.ts";
 
@@ -23,11 +26,12 @@ function forfeitSide(payload: unknown): string {
   return by;
 }
 
-/** The ruled reason for the forfeit at `index`: walkover unless an unvoided core.start precedes it. Voids are resolved
- *  over the PREFIX — a void recorded after the forfeit cannot un-start the match the forfeit was recorded in. */
+/** The ruled reason for the forfeit at `index` (ruling 113): walkover unless something was played before it — the
+ *  fold's own reading, `playRecorded`. Voids are resolved over the PREFIX — a void recorded after the forfeit cannot
+ *  un-play the match the forfeit was recorded in. */
 function ruledReason(events: readonly MigratableEvent[], index: number): MigratedReason {
   const prefix = events.slice(0, index).map((event, i) => makeEnvelope(i, event as never, event.voids));
-  return resolveVoids(prefix).some((event) => event.type === "core.start") ? "retired" : "walkover";
+  return playRecorded(prefix) ? "retired" : "walkover";
 }
 
 /** Rewrites every `core.forfeit` reason in `streams` to the ruled one. `examined` counts every forfeit seen;
@@ -43,9 +47,10 @@ export function migrateGoldenForfeits<S extends { readonly events: readonly Migr
       examined++;
       const by = forfeitSide(event.payload);
       const reason = ruledReason(stream.events, index);
-      // Assumption, guarded: a double walkover is a W2b shape and a pre-start one; it has no "retired" form.
+      // Assumption, guarded: a double walkover is a W2b shape, recordable only while nothing is played (ruling 112); it
+      // has no "retired" form.
       if (by === "both" && reason === "retired") {
-        throw new Error("golden forfeit migration: a double walkover after core.start has no W2b reason");
+        throw new Error("golden forfeit migration: a double walkover after play has no W2b reason");
       }
       const payload = event.payload as Record<string, unknown>;
       if (payload.reason === reason) return event;
