@@ -241,6 +241,17 @@ describe("walkover-credit: tennis, cricket, chess, carrom, generic", () => {
     const w = single({ wins: 1, white: 0, black: 0 }, { wins: 0, white: 0, black: 0 }, false);
     for (const name of [DEFAULT, "classical", "rapid", "blitz"]) expect(wo("boardgame", name), name).toEqual(w);
     expect(walkoverCredit({ sport: "boardgame", cfg: {}, reason: "walkover", played: { home: [], away: [] }, by: "away" })).toEqual(w);
+    // Once something IS played (a sheet holding an entry), every other sport refuses the walkover (ruling 112); chess
+    // still records it — its walkover stands once play is under way (FIDE 6.7.1, BG-WO-2), and a double walkover too.
+    let inPlay = 0;
+    for (const reason of ["walkover", "double_walkover"] as const) {
+      const r = refusalOf({ sport: "boardgame", cfg: {}, reason, played: { home: [0], away: [1] }, by: "away" });
+      expect(r, `chess ${reason} with play on the sheet`).toBe("answered");
+      expect(refusalOf({ sport: "football", cfg: cfgOf("football", DEFAULT), reason, played: { home: [0], away: [1] }, by: "away" }), `football ${reason}: the positive pair`).toBe("played-before-start");
+      inPlay++;
+    }
+    expect(inPlay).toBe(2);
+    expect(walkoverCredit({ sport: "boardgame", cfg: {}, reason: "walkover", played: { home: [0], away: [1] }, by: "away" })).toEqual(w);
   });
   it("CA-WO-1: the games needed to win, each 25-0 — and a 29-point club game's own target (X-WO-1)", () => {
     for (const [name, w] of [[DEFAULT, sets(2, 0, 50, 0)], ["icf", sets(2, 0, 50, 0)], ["club-29", sets(2, 0, 58, 0)]] as const) {
