@@ -25,6 +25,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
@@ -832,12 +833,27 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
 
 async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
   // No first move: no match to evidence. Override: no video expected.
-  // The policy IN FORCE when the match began (review M4), never the current one.
-  if (c.startedAt === null || c.overrideAt !== null || (await fixtureCameraPolicyAt(c.fixtureId, c.startedAt)) !== "required") {
+  if (c.startedAt === null || c.overrideAt !== null) {
     await settleCamera(pass, c, []);
     return;
   }
   const givenUp = pass.now.getTime() - c.endedAt.getTime() > CAMERA_EVIDENCE_GIVE_UP_MS;
+  // The policy IN FORCE when the match began (review M4), never the current
+  // one. An audit row nobody can read (CAMERA_POLICY_AUDIT_UNREADABLE) is
+  // one more answer not ready (re-review N2): a failure, read again, until
+  // the same day's give-up — then settled with no flag, never failed for ever.
+  let policy: CameraPolicy;
+  try {
+    policy = await fixtureCameraPolicyAt(c.fixtureId, c.startedAt);
+  } catch (err) {
+    if (!givenUp) throw err; // reported by `each`; read again next pass
+    await giveUpUnread(pass, c, err);
+    return;
+  }
+  if (policy !== "required") {
+    await settleCamera(pass, c, []);
+    return;
+  }
   const gameEnd = gameEndOf(c);
   let read: CameraFlag[] | "not_ready";
   if (gameEnd === null) {
@@ -857,10 +873,25 @@ async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDe
     return;
   }
   if (!givenUp) return;
+  await giveUpUnread(pass, c);
+}
+
+/** A day on and still nothing readable: settled with NO flag, and said so —
+ *  the report's code, the log's cause when one is known. */
+async function giveUpUnread(pass: Pass, c: CameraCandidate, cause?: unknown): Promise<void> {
   await settleCamera(pass, c, []);
   const code = "CAMERA_EVIDENCE_UNREAD";
   pass.report.failures.push({ job: "camera_evidence", fixtureId: c.fixtureId, code });
-  log.error({ fixtureId: c.fixtureId, code }, "external-play sweep: camera evidence never became readable; settled with no flag");
+  log.error(
+    {
+      fixtureId: c.fixtureId,
+      code,
+      ...(cause === undefined
+        ? {}
+        : { cause: codeOf(cause), message: cause instanceof Error ? cause.message : String(cause) }),
+    },
+    "external-play sweep: camera evidence never became readable; settled with no flag",
+  );
 }
 
 // ─── The pass ──────────────────────────────────────────────────────────────
