@@ -2434,6 +2434,142 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(flags[0]!.note).toContain("from 0 camera connections");
   });
 
+  it("a player with no camera PARTICIPANT at all is still evidenced: off for the whole match", async () => {
+    // Stands for a seat that never registered a camera — T8 cannot seat a
+    // Required player without one, so this is the guard: a player missing
+    // from the camera rows is never silently "fine".
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
+    await sql`delete from fixture_video_participants where fixture_id = ${m.b.fixtureId} and participant_id = ${m.part.away}`;
+    await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    const flags = await flagsOf(m.b.fixtureId);
+    expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
+    expect(flags[0]!.note).toContain(`${iso(m.startedAt)} to ${iso(m.endedAt)}`);
+  });
+
+  it("a session that ENDED before the first move is not the match: never read", async () => {
+    const m = await playedMatch();
+    // The preflight room: everyone left before the game began…
+    const pre = session(m, m.startedAt - 600_000, m.startedAt - 300_000);
+    for (const side of ["home", "away"] as const) connect(m, pre, side, { joined: m.startedAt - 590_000, left: m.startedAt - 300_000, ready: { now: false } });
+    // …and the match's own session.
+    const x = bothOnThroughout(m, session(m, m.startedAt - 120_000, m.endedAt));
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(r.cameraSettled, "a stale report outside the match never holds the evidence up").toBe(1);
+    expect(rtkReads().some((c) => c.path.includes(pre.id)), "the pre-match session is not read").toBe(false);
+    expect(rtkReads().some((c) => c.path.includes(x.id)), "premise: the match's session is").toBe(true);
+    expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  it("the sequence property: passes at any time, reports turning final, an outage — one settle, the flag the truth owes, never a read after it (model) — counted per path, K runs each", { timeout: 600_000 }, async () => {
+    type Act = { kind: "pass"; dtMs: number } | { kind: "ready"; side: Side } | { kind: "outage" };
+    const HOUR = 3_600_000;
+    const P = (dtMs: number): Act => ({ kind: "pass", dtMs });
+    const R = (side: Side): Act => ({ kind: "ready", side });
+    const OUTAGE: Act = { kind: "outage" };
+    const actArb: fc.Arbitrary<Act> = fc.oneof(
+      { weight: 5, arbitrary: fc.constantFrom(30_000, CAMERA_EVIDENCE_AFTER_MS, SWEEP_CADENCE_MS, 6 * HOUR, 20 * HOUR).map(P) },
+      { weight: 2, arbitrary: fc.constantFrom<Side>("home", "away").map(R) },
+      { weight: 1, arbitrary: fc.constant(OUTAGE) },
+    );
+    // Each prefix ENDS with its claim; each runs K times, then a random suffix.
+    const PATHS = {
+      early_nothing_read: [R("home"), R("away"), P(CAMERA_EVIDENCE_AFTER_MS - 1)],
+      not_ready_waits: [R("away"), P(CAMERA_EVIDENCE_AFTER_MS)],
+      ready_flags_the_off_player: [R("home"), R("away"), P(CAMERA_EVIDENCE_AFTER_MS)],
+      outage_retried: [R("home"), R("away"), OUTAGE, P(CAMERA_EVIDENCE_AFTER_MS)],
+      given_up_unread: [P(20 * HOUR), P(6 * HOUR)],
+      settled_never_reread: [R("home"), R("away"), P(CAMERA_EVIDENCE_AFTER_MS), P(SWEEP_CADENCE_MS)],
+    } satisfies Record<string, Act[]>;
+    type PathName = keyof typeof PATHS;
+    const PATH_NAMES = Object.keys(PATHS) as PathName[];
+    const K = 3;
+    const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
+    const counters = { passes: 0, early: 0, not_ready: 0, flagged: 0, outage_failed: 0, unread: 0, settled_skip: 0, readies: 0 };
+    type Facts = { reads: boolean; settledNow: 0 | 1; flags: number; failure: string | null };
+    let run = 0;
+    await fc.assert(
+      fc.asyncProperty(fc.array(actArb, { minLength: 0, maxLength: 6 }), async (suffix) => {
+        const path = PATH_NAMES[run % PATH_NAMES.length]!;
+        run++;
+        // A run's unconsumed outage (one scripted after its settle) must not
+        // leak into the next run: the fake's state is per-test, runs are not.
+        rtk.sessionsFail = 0;
+        const m = await playedMatch();
+        const x = session(m, m.startedAt - 120_000, m.endedAt);
+        const ready: Record<Side, { now: boolean }> = { home: { now: false }, away: { now: false } };
+        // The truth: home's camera was off 200 s mid-match; away's never.
+        connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]], ready: ready.home });
+        connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, ready: ready.away });
+        const jm = { t: 0, settled: null as null | "flag" | "unread", outage: false };
+        let last: Facts | null = null;
+        const acts = [...PATHS[path], ...suffix];
+        for (let i = 0; i < acts.length; i++) {
+          const a = acts[i]!;
+          const label = `${path} #${run} step ${i} ${JSON.stringify(a)}`;
+          if (a.kind === "ready") {
+            ready[a.side].now = true;
+            counters.readies++;
+          } else if (a.kind === "outage") {
+            rtk.sessionsFail = 1;
+            jm.outage = true;
+          } else {
+            jm.t += a.dtMs;
+            counters.passes++;
+            const givenUp = m.endedCeil + jm.t - m.endedAt > CAMERA_EVIDENCE_GIVE_UP_MS;
+            const f: Facts = { reads: false, settledNow: 0, flags: 0, failure: null };
+            if (jm.settled !== null) counters.settled_skip++;
+            else if (jm.t < CAMERA_EVIDENCE_AFTER_MS) counters.early++;
+            else {
+              f.reads = true;
+              if (jm.outage) {
+                jm.outage = false;
+                if (givenUp) {
+                  jm.settled = "unread"; f.settledNow = 1; f.failure = "CAMERA_EVIDENCE_UNREAD"; counters.unread++;
+                } else {
+                  f.failure = "unavailable"; counters.outage_failed++;
+                }
+              } else if (ready.home.now && ready.away.now) {
+                jm.settled = "flag"; f.settledNow = 1; f.flags = 1; counters.flagged++;
+              } else if (givenUp) {
+                jm.settled = "unread"; f.settledNow = 1; f.failure = "CAMERA_EVIDENCE_UNREAD"; counters.unread++;
+              } else counters.not_ready++;
+            }
+            rtk.calls = [];
+            const report = await pass(m, new Date(m.endedCeil + jm.t));
+            expect(rtkReads().length > 0, `${label}: read RealtimeKit`).toBe(f.reads);
+            expect({ settled: report.cameraSettled, flags: report.cameraFlags }, `${label}: report`).toEqual({ settled: f.settledNow, flags: f.flags });
+            expect(cameraFailures(report).map((x) => x.code), `${label}: failures`).toEqual(f.failure === null ? [] : [f.failure]);
+            expect((await settledAt(m.b.fixtureId)) !== null, `${label}: settled`).toBe(jm.settled !== null);
+            expect((await flagsOf(m.b.fixtureId)).map((x) => [x.kind, x.person_id]), `${label}: flags`).toEqual(
+              jm.settled === "flag" ? [["camera_lost", m.b.home.personId]] : [],
+            );
+            last = f;
+          }
+          if (i === PATHS[path].length - 1) {
+            const ok = (() => {
+              switch (path) {
+                case "early_nothing_read": return last !== null && !last.reads && jm.settled === null;
+                case "not_ready_waits": return last?.reads === true && last.settledNow === 0 && last.failure === null && jm.settled === null;
+                case "ready_flags_the_off_player": return last?.settledNow === 1 && jm.settled === "flag";
+                case "outage_retried": return last?.failure === "unavailable" && jm.settled === null;
+                case "given_up_unread": return last?.failure === "CAMERA_EVIDENCE_UNREAD" && jm.settled === "unread";
+                case "settled_never_reread": return last?.reads === false && jm.settled === "flag";
+              }
+            })();
+            expect(ok, `${label}: the path's claim`).toBe(true);
+            claims[path]++;
+          }
+        }
+      }),
+      { numRuns: PATH_NAMES.length * K },
+    );
+    expect(claims, "claims per path").toEqual(Object.fromEntries(PATH_NAMES.map((p) => [p, K])));
+    for (const [name, n] of Object.entries(counters)) expect(n, `counter ${name}`).toBeGreaterThan(0);
+    writeSync(1, `camera property: ${JSON.stringify({ runs: run, claims, counters })}\n`);
+  });
+
   it("RealtimeKit down: a failure, nothing stored, read again next pass", async () => {
     const m = await playedMatch();
     bothOnThroughout(m);
