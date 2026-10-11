@@ -228,7 +228,14 @@ type Game = {
   whiteSide: Side;
   whiteId: string;
   blackId: string;
+  /** The move T10 sent, when this read follows Lichess refusing it. */
+  submitted: SubmittedMove | null;
 };
+
+/** A move T10 SENT to Lichess and was refused (or got no answer to): its ply
+ *  — the ledger's length when it was sent — and the canonical UCI the ledger
+ *  would have recorded. Review N1: a 5xx or a timeout may have played it. */
+export type SubmittedMove = { ply: number; uci: string };
 
 type Truth =
   | { source: "stream"; game: BoardGameFull; at: Date; revoked: Colour[] }
@@ -309,11 +316,18 @@ export async function reconcile(
   fixtureId: string,
   trigger: ReconcileTrigger,
   deps: ReconcileDeps = {},
+  /** rejected_move only: what T10 sent (review N1). */
+  submitted: SubmittedMove | null = null,
 ): Promise<ReconcileOutcome | null> {
   // An assumption is a guard: a trigger outside the five is refused, never
   // reconciled on a guess.
   if (!(RECONCILE_TRIGGERS as readonly string[]).includes(trigger)) {
     throw new HttpError(400, "Unknown reconcile trigger", "UNKNOWN_RECONCILE_TRIGGER");
+  }
+  // Only a move Lichess refused has a submission; on any other trigger one
+  // would excuse plies nobody here sent.
+  if (submitted !== null && trigger !== "rejected_move") {
+    throw new HttpError(500, `a submitted move is evidence for rejected_move only, not ${trigger}`, "SUBMITTED_WITHOUT_REJECTED_MOVE");
   }
   const f = await loadOnlinePlayFixture(fixtureId);
   if (f === null || !isPlayableFixtureStatus(f.fixtureStatus)) {
@@ -335,6 +349,7 @@ export async function reconcile(
     whiteSide: b.white_side,
     whiteId: b.white_lichess_id,
     blackId: b.black_lichess_id,
+    submitted,
   };
 
   let truth = await readTruth(game, deps);
@@ -378,32 +393,52 @@ async function closeUnplayable(fixtureId: string, at: Date): Promise<void> {
   }
 }
 
+/** The seat a list of refused tokens names (ruling M7). An empty list names
+ *  no seat — refused by name rather than read as Black (review N4). */
+export function revokedSeatOf(revoked: readonly Colour[]): RevokedSeat {
+  const white = revoked.includes("white");
+  const black = revoked.includes("black");
+  if (white && black) return "both";
+  if (white) return "white";
+  if (black) return "black";
+  throw new HttpError(500, "a token_revoked hold needs the seat whose token was refused", "REVOKED_SEAT_EMPTY");
+}
+
 async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultWrite> {
   // Spec §3.6: a token revoked or rejected mid-match is not a no-show. Ruling
   // M7: the hold records the seat, and freezes only that seat (T10).
-  const seat: RevokedSeat = revoked.includes("white")
-    ? (revoked.includes("black") ? "both" : "white")
-    : "black";
   return holdForOrganiser({
     fixtureId: g.fixture.fixtureId,
     reason: "token_revoked",
-    seat,
+    seat: revokedSeatOf(revoked),
     detail: `lichess game ${g.gameId}: the board stream refused ${revoked.join(" and ")}'s token`,
   });
 }
 
-/** Review I5, controller ruling: OUR server is the only mover, so every ply a
- *  read ADOPTS reached Lichess without us — out-of-band play. Spec §3.6 makes
- *  it a fair-play flag for the organiser, never a sanction. The evidence: the
- *  plies, and whether the camera was Required. (A T10 append that died after
- *  Lichess's 200 is adopted too — a false flag the ruling accepts.) Written in
- *  the SAME statement as the ledger write that adopts, so one adoption is one
- *  flag: a re-read adopts nothing, and a racing read loses the CAS. */
-async function outOfBandEvidence(fixtureId: string, ours: number, line: readonly string[]): Promise<string> {
+/** Review I5, controller ruling: OUR server is the only mover, so a ply a
+ *  read ADOPTS reached Lichess without us — out-of-band play — unless it is
+ *  the very move T10 sent at that ply, which a 5xx or a timeout may have
+ *  played (review N1: our own move is never fair-play evidence against the
+ *  player). Spec §3.6 makes it a flag for the organiser, never a sanction.
+ *  The evidence: the plies, and whether the camera was Required; null when
+ *  no adopted ply is out-of-band. (A concurrent read landing between
+ *  Lichess's 200 and T10's append still flags our ply — the rare false flag
+ *  the ruling accepts.) Written in the SAME statement as the ledger write
+ *  that adopts, so one adoption is one flag: a re-read adopts nothing, and a
+ *  racing read loses the CAS. */
+async function outOfBandEvidence(
+  fixtureId: string,
+  ours: number,
+  line: readonly string[],
+  submitted: SubmittedMove | null,
+): Promise<string | null> {
+  const ourMoveFirst = submitted !== null && submitted.ply === ours && line[ours] === submitted.uci;
+  const from = ourMoveFirst ? ours + 1 : ours;
+  if (from >= line.length) return null;
   const policy = await fixtureCameraPolicy(fixtureId);
-  const plies = line.length - ours === 1 ? `ply ${ours + 1}` : `plies ${ours + 1}-${line.length}`;
+  const plies = line.length - from === 1 ? `ply ${from + 1}` : `plies ${from + 1}-${line.length}`;
   const camera = policy === "required" ? "camera required" : `camera not required (policy ${policy})`;
-  return `${plies} (${line.slice(ours).join(" ")}) played at Lichess, not through Seazn; ${camera}`;
+  return `${plies} (${line.slice(from).join(" ")}) played at Lichess, not through Seazn; ${camera}`;
 }
 
 /** Mark the bridge finished — only from ready/live, so a held row keeps its
@@ -534,7 +569,7 @@ async function applyStream(
   // Conditional on the ledger and the offer we read: a move T10 appended, or
   // an offer it recorded, since our read wins — this read is then older than
   // the row, and the next reconcile catches up.
-  const evidence = changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs) : null;
+  const evidence = changed && adopted > 0 ? await outOfBandEvidence(fixtureId, ours.length, theirs, g.submitted) : null;
   const wrote = !changed
     ? []
     : await sql`
@@ -593,7 +628,7 @@ async function applyExport(
   let adopted = 0;
   let line = ours;
   if (uci.length > ours.length && isPrefix(ours, uci)) {
-    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci);
+    const evidence = await outOfBandEvidence(fixtureId, ours.length, uci, g.submitted);
     const wrote = await sql`
       with up as (
       update fixture_external_play
@@ -607,7 +642,7 @@ async function applyExport(
        returning fixture_id, org_id
       ), flagged as (
         insert into fixture_play_flags (fixture_id, org_id, kind, note)
-        select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up
+        select fixture_id, org_id, 'out_of_band_play', ${evidence}::text from up where ${evidence}::text is not null
       )
       select fixture_id from up`;
     if (wrote.length > 0) {
