@@ -12,27 +12,29 @@
 //    `scoring` (:685 — status not finalized) — so a finalized console drops it.
 //  - Start is `score-start-match` → send("core.start", {}) (:1026-1031), shown
 //    while the status is scheduled (`started`, :725). The console never
-//    starts a match by itself, and its Forfeit is mounted only once it has
-//    started — so a forfeit here is one on a match under way. A forfeit on a
-//    scheduled fixture is not the console's (review I-5): a walkover is
-//    recorded BEFORE core.start (D3 R2), and a retirement after the sport's
-//    play, which the console's bare forfeit drops (D3 R4). BrowserDriver sends
-//    those over http until the forfeit dialog (W2b Task 11), and forfeitUi
-//    refuses a console still showing Start by name (ConsoleForfeitNotStarted).
-//  - ForfeitButton (:1294, :1336-1408) renders while not decided: toggle
-//    `score-forfeit` → `score-forfeit-home|away` → TextPromptDialog (opens
-//    "walkover") → send("core.forfeit", {by, reason}). Those steps are the
-//    bench's own organiserStepsFor (scorer.ts:322-355, ruling 38), run through
-//    the copied executeStep (lib/pads/execute.ts).
+//    starts a match by itself. Since W2b Task 11 its Forfeit is offered BEFORE
+//    play too (the dialog's walkover and "Neither", D3 R2), but this page
+//    object still drives only a forfeit on a match under way: forfeitUi
+//    refuses a console still showing Start by name (ConsoleForfeitNotStarted)
+//    and BrowserDriver sends a pre-start forfeit over http (review I-5).
+//    Routing those through the dialog is a follow-up, not done here.
+//  - The forfeit dialog (W2b Task 11, forfeit-dialog.tsx `ForfeitDialog`)
+//    opens from `score-forfeit` while not decided (and on a chess tie-break
+//    that is pending, R14): `forfeit-who-home|away|both` →
+//    `forfeit-why-<reason>` (only the reasons the engine's phase guard admits,
+//    never the cascade's withdrew) → `forfeit-confirm` →
+//    post("core.forfeit", {by, reason}). Those steps are the bench's own
+//    organiserStepsFor (scorer.ts, ruling 38), run through the copied
+//    executeStep (lib/pads/execute.ts).
 //  - "Void last entry" (:1277-1286, W1d Task 14) has no testid: it is the button whose accessible name is the
 //    dictionary's score.voidLast, and its title (score.voidLastTitle) names the entry it would void. It voids the
 //    newest event that is neither a core.void nor already voided (:880 lastVoidable) — an entry the console
 //    chooses itself, so the page object reports the answer and the caller judges the choice. It renders only while
 //    the match is scoring (not decided-locked), so it is offered on an in-play fixture.
 //  - "Abandon" (W2a Task 14 Step 8) has no testid either: it is the `btn btn-danger` button whose accessible name is the
-//    dictionary's score.abandon. It opens the TextPromptDialog forfeit's reason prompt also uses (score-prompt-reason /
-//    score-prompt-submit) and submits send("core.abandon", { reason }). It is offered only while `offerOrganiserActions`
-//    (not decided, not HELD, an organiser), so an abandoned or held match drops it.
+//    dictionary's score.abandon. It opens the console's TextPromptDialog reason prompt (score-prompt-reason /
+//    score-prompt-submit — the abandon's alone since W2b Task 11) and submits send("core.abandon", { reason }). It is
+//    offered only while `offerAbandon` (not decided, not HELD, an organiser), so an abandoned or held match drops it.
 //  - The console polls only every 15 s (scorepad/use-fixture-stream.ts:21),
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
@@ -68,7 +70,7 @@ export class ConsoleForfeitNotStarted extends Error {
 }
 
 export type ForfeitFixture = Pick<FixtureRow, "id" | "home_entrant_id" | "away_entrant_id">;
-/** D1's reasons (streams/types.ts); the console's prompt takes the reason as text until W2b Task 11's dialog. */
+/** D1's reasons (streams/types.ts); the console's forfeit dialog offers them as choices (W2b Task 11), less withdrew. */
 export type { ForfeitReason } from "../../streams/types.ts";
 import type { ForfeitReason } from "../../streams/types.ts";
 

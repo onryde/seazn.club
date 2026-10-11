@@ -85,7 +85,8 @@
 // ---------------------------------------------------------------------------
 //  - dock chips (`chip`, `offeredChip`) and `releaseHold`: the generic pad
 //    amends a HELD half tap from its dock (see those `TapStep` variants).
-//  - `text`: typing into a field — the console's reason prompt.
+//  - `text`: typing into a field. (W2b T11: the console's forfeit no longer types its reason — the dialog offers
+//    it as a choice, so no mapped route types today; the kind stays for the selector contract.)
 //  - organiser actions: an event the product's `isOrganiserOnlyEvent` names
 //    (W2a T9) is mapped by `organiserStepsFor` (never an adapter) and tapped on
 //    `organiserPage`,
@@ -101,6 +102,10 @@ import type { Session } from "../http.ts";
 // "one copy, not two checked against each other" move `import.ts` made for IMPORT_CAPS (bench design §17.3). The
 // mirror this replaces had silently lost `core.settle` and chess's forfeit results when T9 widened the rule.
 import { isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
+// W2b T11: what the console's forfeit dialog can send — the engine's closed vocabulary less the cascade's reasons (PF-2),
+// read from the product's one list rather than retyped.
+import { isCascadeOnlyForfeitReason } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 
 // ---------------------------------------------------------------------------
 // Taps — the vocabulary a scorer's finger actually has. Every kind maps to
@@ -173,11 +178,15 @@ export const SEND_NOW_TESTID = "pad-send-now";
 export const FINALIZE_TESTID = "score-finalize";
 /** Task 10 fix round 1 — every hold-window dock chip (detail-dock.tsx). */
 export const DOCK_CHIP_TESTID_PREFIX = "pad-dock-chip-";
-/** Task 10 fix round 1 — the console's forfeit: the toggle, then
- *  `score-forfeit-home|away` (fixture-console.tsx `ForfeitButton`), then the
- *  reason prompt's field and submit (`TextPromptDialog`). */
+/** W2b Task 11 — the console's forfeit dialog (forfeit-dialog.tsx `ForfeitDialog`): the opener, then
+ *  `forfeit-who-home|away|both`, then the reason radio `forfeit-why-<reason>`, then the one Confirm. */
 export const FORFEIT_TESTID = "score-forfeit";
-export const FORFEIT_SIDE_TESTID_PREFIX = "score-forfeit-";
+export const FORFEIT_WHO_TESTID_PREFIX = "forfeit-who-";
+export const FORFEIT_WHY_TESTID_PREFIX = "forfeit-why-";
+export const FORFEIT_CONFIRM_TESTID = "forfeit-confirm";
+/** The console's single-field reason prompt (fixture-console.tsx `TextPromptDialog`) — since W2b T11 the ABANDON's
+ *  alone (the forfeit offers its reason as a choice). No bench route maps an abandon; the matrix's `abandonUi`
+ *  (tools/matrix/lib/browser/pages/fixture-console.ts) taps these. */
 export const PROMPT_REASON_TESTID = "score-prompt-reason";
 export const PROMPT_SUBMIT_TESTID = "score-prompt-submit";
 
@@ -318,12 +327,14 @@ const FORFEIT_PAYLOAD_KEYS: readonly string[] = ["by", "reason"];
 
 /**
  * The console route for an organiser-only event. Only `core.forfeit` is
- * mapped: the Forfeit toggle, the forfeiting side's own "<name> forfeits"
- * button, the reason prompt (it opens pre-filled "walkover", so the pack's
- * reason is TYPED over it), and submit — which sends exactly
- * `core.forfeit {by, reason}` with the reason TRIMMED
- * (fixture-console.tsx `TextPromptDialog` onSubmit, `ForfeitButton` send).
- * A payload that route cannot produce throws, like an adapter's (R50(e)).
+ * mapped (W2b Task 11): the Forfeit opener, the dialog's side choice (the
+ * OFFENDING side, or `both` for a double walkover), its reason radio, and the
+ * one Confirm — which sends exactly `core.forfeit {by, reason}`
+ * (fixture-console.tsx `forfeit`, forfeit-dialog.tsx `forfeitPayload`). The
+ * dialog offers only the closed vocabulary less the cascade's reasons (PF-2),
+ * and Neither only walks over, so a payload that route cannot produce throws,
+ * like an adapter's (R50(e)). Whether the PHASE offers the reason is the
+ * dialog's to show: a chip it does not render fails the tap, a named finding.
  */
 export function organiserStepsFor(
   event: { readonly type: string; readonly payload: unknown },
@@ -340,23 +351,29 @@ export function organiserStepsFor(
   if (unknown.length > 0) {
     throw new Error(`core.forfeit payload has unknown key(s) ${unknown.join(", ")} — the console sends exactly {by, reason}`);
   }
-  if (typeof p.reason !== "string" || p.reason.trim().length === 0) {
-    throw new Error("core.forfeit needs a non-empty reason — the console's prompt sends nothing for an empty one");
-  }
-  if (p.reason !== p.reason.trim()) {
-    throw new Error(`core.forfeit reason ${JSON.stringify(p.reason)} is not authorable — the console's prompt trims what it sends`);
-  }
-  const side = p.by === ctx.entrants.home ? "home" : p.by === ctx.entrants.away ? "away" : undefined;
-  if (side === undefined) {
+  if (typeof p.reason !== "string" || !(FORFEIT_REASONS as readonly string[]).includes(p.reason)) {
     throw new Error(
-      `core.forfeit by "${String(p.by)}" matches neither home ("${ctx.entrants.home}") nor away ("${ctx.entrants.away}")`,
+      `core.forfeit reason ${JSON.stringify(p.reason)} is not a choice in the console's forfeit dialog — it offers ${FORFEIT_REASONS.join(", ")} only`,
     );
+  }
+  if (isCascadeOnlyForfeitReason(p.reason)) {
+    throw new Error(`core.forfeit reason "${p.reason}" is the withdrawal cascade's alone (PF-2) — the console's forfeit dialog never offers it`);
+  }
+  const who =
+    p.by === "both" ? "both" : p.by === ctx.entrants.home ? "home" : p.by === ctx.entrants.away ? "away" : undefined;
+  if (who === undefined) {
+    throw new Error(
+      `core.forfeit by "${String(p.by)}" matches neither home ("${ctx.entrants.home}") nor away ("${ctx.entrants.away}") nor "both"`,
+    );
+  }
+  if (who === "both" && p.reason !== "walkover") {
+    throw new Error(`core.forfeit by "both" with reason "${p.reason}" — the dialog's Neither only walks over (X-DW-1)`);
   }
   return [
     { kind: "testid", testid: FORFEIT_TESTID },
-    { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}${side}` },
-    { kind: "text", testid: PROMPT_REASON_TESTID, value: p.reason },
-    { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
+    { kind: "testid", testid: `${FORFEIT_WHO_TESTID_PREFIX}${who}` },
+    { kind: "testid", testid: `${FORFEIT_WHY_TESTID_PREFIX}${p.reason}` },
+    { kind: "testid", testid: FORFEIT_CONFIRM_TESTID },
   ];
 }
 

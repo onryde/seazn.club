@@ -29,12 +29,12 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DOCK_CHIP_TESTID_PREFIX,
   FINALIZE_TESTID,
-  FORFEIT_SIDE_TESTID_PREFIX,
+  FORFEIT_CONFIRM_TESTID,
   FORFEIT_TESTID,
+  FORFEIT_WHO_TESTID_PREFIX,
+  FORFEIT_WHY_TESTID_PREFIX,
   organiserStepsFor,
   playMatchByTaps,
-  PROMPT_REASON_TESTID,
-  PROMPT_SUBMIT_TESTID,
   selectorForTapStep,
   SEND_NOW_TESTID,
   START_MATCH_TESTID,
@@ -47,6 +47,8 @@ import {
 import { resolvePayloadRefs } from "../simulate.ts";
 import type { LedgerTransport } from "../ledger.ts";
 import type { RawResult, Session } from "../http.ts";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
+import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import {
   DOCK_AMOUNTS,
   GENERIC_TOLERATED_EXTRA_KEYS,
@@ -923,6 +925,10 @@ describe("no HTTP-capable bypass is reachable from the tap driver's files (I4)",
       // W2a T9: the product's organiser-only predicate — a pure function over (type, payload) in a module that imports
       // nothing, so nothing HTTP-capable comes with it.
       "../../../../apps/web/src/lib/organiser-only-events.ts": ["isOrganiserOnlyEvent"],
+      // W2b T11: the forfeit dialog's vocabulary — the engine's closed list (a constant) and the product's cascade-only
+      // predicate (a pure function in a module that imports only the engine's core).
+      "../../../../apps/web/src/lib/forfeit-phase-refusal.ts": ["isCascadeOnlyForfeitReason"],
+      "@seazn/engine/core": ["FORFEIT_REASONS"],
     },
     "padpage-assignability.ts": {},
     "adapters/generic.ts": { "../scorer.ts": ["START_MATCH_TESTID"] },
@@ -1158,25 +1164,54 @@ describe("genericAdapter mirrors generic.tsx", () => {
 describe("organiserStepsFor — what the scorer pad cannot author, on the fixture console (R59(c))", () => {
   const ctx: TapAdapterContext = { cfg: SCORE_CFG, entrants: ENTRANTS };
 
-  it("maps core.forfeit to the console's toggle, the forfeiting side's own button, the typed reason, and submit", () => {
+  it("W2b T11: maps core.forfeit to the dialog — the opener, the OFFENDING side's choice, the reason radio, the one Confirm", () => {
     expect(organiserStepsFor({ type: "core.forfeit", payload: { by: AWAY_ID, reason: "retired" } }, ctx)).toEqual([
       { kind: "testid", testid: FORFEIT_TESTID },
-      { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}away` },
-      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired" },
-      { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
+      { kind: "testid", testid: `${FORFEIT_WHO_TESTID_PREFIX}away` },
+      { kind: "testid", testid: `${FORFEIT_WHY_TESTID_PREFIX}retired` },
+      { kind: "testid", testid: FORFEIT_CONFIRM_TESTID },
     ]);
-    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: HOME_ID, reason: "walkover" } }, ctx)[1]).toEqual({
+    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: HOME_ID, reason: "walkover" } }, ctx).slice(1, 3)).toEqual([
+      { kind: "testid", testid: `${FORFEIT_WHO_TESTID_PREFIX}home` },
+      { kind: "testid", testid: `${FORFEIT_WHY_TESTID_PREFIX}walkover` },
+    ]);
+    // X-DW-1: Neither walks over — `by: "both"` is the dialog's third side.
+    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }, ctx)[1]).toEqual({
       kind: "testid",
-      testid: `${FORFEIT_SIDE_TESTID_PREFIX}home`,
+      testid: `${FORFEIT_WHO_TESTID_PREFIX}both`,
     });
   });
 
+  it("W2b T11: every (side, reason) of the engine's vocabulary maps exactly when the dialog can offer it — never a cascade-only reason, Neither only walks over", () => {
+    // Expected from the product's declarations, not the driver: the engine's FORFEIT_REASONS, PF-2's
+    // CASCADE_ONLY_FORFEIT_REASONS (the server refuses them from every writer but the cascade), X-DW-1's walkover-only Neither.
+    let mapped = 0;
+    let refused = 0;
+    for (const by of [HOME_ID, AWAY_ID, "both"]) {
+      for (const reason of FORFEIT_REASONS) {
+        const offered = !(CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(reason) && (by !== "both" || reason === "walkover");
+        const run = () => organiserStepsFor({ type: "core.forfeit", payload: { by, reason } }, ctx);
+        if (offered) {
+          expect(run()[2], `${by} ${reason}`).toEqual({ kind: "testid", testid: `${FORFEIT_WHY_TESTID_PREFIX}${reason}` });
+          mapped++;
+        } else {
+          expect(run, `${by} ${reason}`).toThrow((CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(reason) ? /cascade/ : /only walks over/);
+          refused++;
+        }
+      }
+    }
+    expect(mapped + refused, `pairs checked: ${mapped + refused}`).toBe(3 * FORFEIT_REASONS.length);
+    expect(mapped).toBeGreaterThan(0);
+    expect(refused).toBeGreaterThan(0);
+  });
+
   it.each([
-    [{ by: AWAY_ID, reason: " retired" }, /trims/],
-    [{ by: AWAY_ID, reason: "" }, /non-empty/],
-    [{ by: AWAY_ID }, /non-empty/],
-    [{ by: AWAY_ID, reason: "x", note: "y" }, /unknown key/],
-    [{ by: "en-nobody", reason: "x" }, /matches neither/],
+    [{ by: AWAY_ID, reason: " retired" }, /not a choice/],
+    [{ by: AWAY_ID, reason: "no-show" }, /not a choice/],
+    [{ by: AWAY_ID, reason: "" }, /not a choice/],
+    [{ by: AWAY_ID }, /not a choice/],
+    [{ by: AWAY_ID, reason: "retired", note: "y" }, /unknown key/],
+    [{ by: "en-nobody", reason: "retired" }, /matches neither/],
   ] as const)("throws (never maps) core.forfeit %o", (payload, message) => {
     expect(() => organiserStepsFor({ type: "core.forfeit", payload }, ctx)).toThrow(message);
   });
@@ -1191,9 +1226,10 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     const web = (path: string) => readFileSync(new URL(`../../../../apps/web/src/components/v2/${path}`, import.meta.url), "utf8");
     const consoleSrc = web("fixture-console.tsx");
     expect(consoleSrc).toContain(`data-testid="${FORFEIT_TESTID}"`);
-    expect(consoleSrc).toContain("data-testid={`" + FORFEIT_SIDE_TESTID_PREFIX + "${sideKey}`}");
-    expect(consoleSrc).toContain(`data-testid="${PROMPT_REASON_TESTID}"`);
-    expect(consoleSrc).toContain(`data-testid="${PROMPT_SUBMIT_TESTID}"`);
+    const dialogSrc = web("forfeit-dialog.tsx");
+    expect(dialogSrc).toContain("data-testid={`" + FORFEIT_WHO_TESTID_PREFIX + "${w}`}");
+    expect(dialogSrc).toContain("data-testid={`" + FORFEIT_WHY_TESTID_PREFIX + "${r}`}");
+    expect(dialogSrc).toContain(`data-testid="${FORFEIT_CONFIRM_TESTID}"`);
     expect(web("scorepad/v3/detail-dock.tsx")).toContain("data-testid={`" + DOCK_CHIP_TESTID_PREFIX + "${chip.id}`}");
   });
 
@@ -1201,6 +1237,6 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     expect(selectorForTapStep({ kind: "chip", chipId: "points:2" })).toBe('[data-testid="pad-dock-chip-points:2"]');
     expect(selectorForTapStep({ kind: "offeredChip", chipId: "person:p-1" })).toBe('[data-testid="pad-dock-chip-person:p-1"]');
     expect(selectorForTapStep({ kind: "releaseHold" })).toBe(SEND_NOW_SEL);
-    expect(selectorForTapStep({ kind: "text", testid: PROMPT_REASON_TESTID, value: "x" })).toBe(`[data-testid="${PROMPT_REASON_TESTID}"]`);
+    expect(selectorForTapStep({ kind: "text", testid: "some-field", value: "x" })).toBe('[data-testid="some-field"]');
   });
 });
