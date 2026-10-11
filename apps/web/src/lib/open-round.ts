@@ -4,7 +4,10 @@
 // two read ONE list rather than each spelling the reasons out. Every member
 // carries its copy key here; `open-round-copy.test.ts` sweeps every member
 // against all four locales.
-import type { DictionaryKey } from "@/lib/i18n-keys";
+// Relative with `.ts`, not "@/…": api-v1/schemas.ts imports this file, so it is
+// also compiled under tsconfig.scripts.json (nodenext), which refuses an
+// extensionless specifier — the convention of every file in that chain.
+import type { DictionaryKey } from "./i18n-keys.ts";
 
 /** Why a round was NOT opened. Each is refused before anything is written —
  *  no stamp, no invite. */
