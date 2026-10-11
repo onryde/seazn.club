@@ -513,4 +513,45 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(home.userId).toBeNull();
     expect(home.lichess).toBeNull();
   });
+
+  it("loadSides renders the person's name for a singles chess entrant, never 'Entry N' or a uuid (F5)", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+      homeFullName: "Ada Okonkwo",
+      awayFullName: "Bo Lind",
+    });
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    expect(f, "fixture loads").not.toBeNull();
+    const { home, away } = await loadSides(f!);
+    expect([home.displayName, away.displayName]).toEqual(["Ada Okonkwo", "Bo Lind"]);
+    expect(home.members.map((m) => m.full_name)).toEqual(["Ada Okonkwo"]);
+    expect([home.snapshotName, away.snapshotName], "the snapshot really differed").toEqual(["Entry 1", "Entry 2"]);
+    expect(home.kind).toBe("individual");
+    let checked = 0;
+    for (const side of [home, away]) {
+      expect(side.displayName, "never a bare entrant id").not.toMatch(/^[0-9a-f-]{36}$/i);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: sides checked").toBe(2);
+  });
+
+  it("loadSides: a member whose person is a merge tombstone falls back to the SNAPSHOT, never the dead person's name (F5)", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+      homeFullName: "Ada Okonkwo",
+      awayFullName: "Bo Lind",
+    });
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+    await sql`update persons set merged_into = ${s.away.personId} where id = ${s.home.personId}`;
+    const { home } = await loadSides(f);
+    expect(home.members).toEqual([]);
+    expect(home.displayName).toBe("Entry 1");
+  });
 });
