@@ -478,6 +478,10 @@ export type VideoOffCoverage =
     }
   | {
       incomplete: false;
+      /** The connection's own span, ISO — what a match unions across reloads
+       *  and rejoins (T13, controller ruling C1). */
+      joinedAt: string;
+      leftAt: string;
       /** Seconds of [joined_at, left_at] this report covers — the denominator. */
       coveredSeconds: number;
       /** Sum of offIntervals' seconds. */
@@ -580,6 +584,8 @@ export function videoOffCoverage(data: unknown): VideoOffCoverage {
   }
   return {
     incomplete: false,
+    joinedAt: new Date(joined).toISOString(),
+    leftAt: new Date(left).toISOString(),
     coveredSeconds: (left - joined) / 1000,
     offSeconds: offIntervals.reduce((n, iv) => n + iv.seconds, 0),
     offIntervals,
@@ -695,4 +701,79 @@ export async function listPeerIds(
     });
   });
   return peers;
+}
+
+/** The largest page GET /sessions serves that we ask for. A meeting has one
+ *  session per stretch of somebody being in it, so a full page cannot prove
+ *  the list complete. */
+const SESSIONS_PER_PAGE = 100;
+
+export type MeetingSession = {
+  id: string;
+  status: "LIVE" | "ENDED";
+  startedAt: string;
+  /** Null while LIVE, and when the API omits it. */
+  endedAt: string | null;
+};
+
+function malformedSessions(what: string): RealtimeKitError {
+  return new RealtimeKitError(502, "unavailable", `RealtimeKit sessions are malformed: ${what}`);
+}
+
+/** Every session one meeting ever had (T13, controller ruling C1). A reload
+ *  is a new PEER in the same session; a rejoin after everyone left is a new
+ *  SESSION — so a match's camera evidence is read over all of them.
+ *
+ *  `GET /sessions?associated_id=<meeting id>` (Cloudflare's API reference,
+ *  "Fetch all sessions of an App": `data.sessions[]` with id, associated_id,
+ *  status LIVE | ENDED, started_at, ended_at). NOT measured live — T17 owes
+ *  that. Rows of another meeting are dropped by `associated_id` whatever the
+ *  filter did; a row whose meeting cannot be read, a malformed row of ours,
+ *  and a FULL page all THROW: a short list would hide a rejoin's coverage and
+ *  read as "camera off", and an outage must never read as that. */
+export async function listMeetingSessions(meetingId: string, deps: RealtimeKitDeps = {}): Promise<MeetingSession[]> {
+  if (!meetingId) throw new Error("listMeetingSessions needs a meeting id");
+  const cfg = requireConfig();
+  const data = (await cf(
+    cfg,
+    `/sessions?associated_id=${encodeURIComponent(meetingId)}&per_page=${SESSIONS_PER_PAGE}`,
+    { method: "GET" },
+    deps,
+  )) as { sessions?: unknown };
+  if (!Array.isArray(data.sessions)) throw malformedSessions("no sessions list");
+  const rows = data.sessions as unknown[];
+  if (rows.length >= SESSIONS_PER_PAGE) {
+    throw malformedSessions(`${SESSIONS_PER_PAGE}+ rows; the session list is not provable from one page`);
+  }
+  const out: MeetingSession[] = [];
+  rows.forEach((r, i) => {
+    const row = r as {
+      id?: unknown;
+      associated_id?: unknown;
+      status?: unknown;
+      started_at?: unknown;
+      ended_at?: unknown;
+    } | null;
+    if (typeof row !== "object" || row === null || typeof row.associated_id !== "string") {
+      throw malformedSessions(`sessions[${i}] has no associated_id`);
+    }
+    if (row.associated_id !== meetingId) return;
+    if (typeof row.id !== "string" || row.id === "") throw malformedSessions(`sessions[${i}] has no id`);
+    if (row.status !== "LIVE" && row.status !== "ENDED") {
+      throw malformedSessions(`sessions[${i}] has a status outside LIVE | ENDED`);
+    }
+    const startedAt = new Date(parseSessionTime(row.started_at, `sessions[${i}].started_at`)).toISOString();
+    const endedAt =
+      row.ended_at === null || row.ended_at === undefined
+        ? null
+        : new Date(parseSessionTime(row.ended_at, `sessions[${i}].ended_at`)).toISOString();
+    out.push({ id: row.id, status: row.status, startedAt, endedAt });
+  });
+  return out;
+}
+
+function parseSessionTime(v: unknown, what: string): number {
+  const ms = typeof v === "string" ? Date.parse(v) : Number.NaN;
+  if (!Number.isFinite(ms)) throw malformedSessions(`${what} is not a date`);
+  return ms;
 }

@@ -361,6 +361,13 @@ describe("videoOffCoverage — the events cross-check", () => {
   });
 });
 
+describe("videoOffCoverage — the connection's own span (T13, C1)", () => {
+  it("a final report carries its joined_at / left_at, so a match can union connections", () => {
+    const c = complete(videoOffCoverage(report({ joined: 12, left: 345, samples: every(12, 345) })));
+    expect({ joinedAt: c.joinedAt, leftAt: c.leftAt }).toEqual({ joinedAt: at(12), leftAt: at(345) });
+  });
+});
+
 describe("videoOffCoverage — incomplete and malformed reports", () => {
   it("incomplete until left_at is set AND duration > 0 (the caller retries)", () => {
     const cases: { name: string; r: ReturnType<typeof report>; reason: string }[] = [
