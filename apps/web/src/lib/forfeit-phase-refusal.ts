@@ -2,8 +2,10 @@
 // admits. The engine's refusal carries both (`EngineError.data`: `phase`, `allowed`, `both` — core/events.ts, the one
 // `forfeitReasonsAllowed` list the guard judges by), `server/api-v1/http.ts` forwards them on the wire, and the copy
 // renders them in the reader's language (`lib/scoring-vocab.ts` `scoringErrorText`). A static sentence cannot be
-// right: chess admits a walkover after the start, the default modules do not. No `server-only`: the pad and the
-// console read it too.
+// right, because what a phase admits depends on the sport and on whether anything has been played:
+//   - chess admits a walkover while play is under way;
+//   - every other sport admits one after the Start only until something is played (ruling 112).
+// No `server-only`: the pad and the console read it too.
 import { FORFEIT_REASONS, type ForfeitPhase, type ForfeitReason } from "@seazn/engine/core";
 
 /** The phases the guard refuses in — never "over" (R0: the module's own done/final guard answers there). */
