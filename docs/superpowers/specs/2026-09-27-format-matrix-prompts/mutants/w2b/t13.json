@@ -842,5 +842,35 @@
         "name": "a double walkover says so"
       }
     ]
+  },
+  {
+    "id": "m5-centre-score-lines-swapped",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,",
+    "replace": "    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "every builtin sport: the header shows the engine's credited lines"
+      }
+    ]
+  },
+  {
+    "id": "m5-whatif-ignores-credit",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  return isOneSidedAwardBye(f) || !awardAddsToLedger;",
+    "replace": "  return isOneSidedAwardBye(f) || awardAddsToLedger;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "X-WO-1 \\(review M-5\\): every sport whose walkover credits GOALS"
+      }
+    ]
   }
 ]

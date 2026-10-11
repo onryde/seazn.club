@@ -23,6 +23,11 @@ const say = (key: string, params: Record<string, string> = {}) => {
 
 const STEP_MS = 20_000;
 const WIDTHS = [1280, 768, 320] as const;
+// Single sport (review M-5), on purpose: what this file proves is the BROWSER — the tag's role/name, the sentence in
+// the match centre, the 320 row — and no surface here branches on sport (the tag and sentence come from the outcome's
+// kind and reason alone). The credited score per sport is swept below the browser: the engine's X-WO-1 (every declared
+// cfg), its C1 summary sweep (sets/games shown), and match-centre-forfeit.test.ts's every-sport header sweep. Football
+// is the sport whose credit (awardScore) differs from the played 0–0, so a surface that showed the board would fail.
 const SPORT = "football";
 const VARIANT = "11-a-side";
 const football = builtinModules.find((m) => m.key === SPORT)!;

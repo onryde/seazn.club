@@ -12,7 +12,7 @@ import {
 } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { cricket } from "@seazn/engine/sports/cricket";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { buildMatchCentre, type MatchCentreInput } from "../match-centre";
 import type { PublicFixture } from "../data";
 import type { MsgT, SideT } from "../match-centre-schema";
@@ -136,6 +136,38 @@ describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2
     expect(credit.perSide[0].gf, "premise: the credit is not 0–0").toBeGreaterThan(0);
     expect(FOOTBALL.summary(state as never).perSide.map((p) => p.line)).toEqual(doc.header.scoreLines);
     expect(words(doc.header.statusLine)).toBe("Harbour United didn't show up — walkover.");
+  });
+});
+
+// W2b T13 fix round 1 (review M-5) — the football case above is one sport; the credited score and the sentence are owed
+// by EVERY sport. The expected lines are the engine's own summary of the folded walkover (never typed), and the header
+// must carry them in side order beside the sentence. Each sport's cfg is its simulator cfg (SIM_CONFIGS), else its first
+// declared variant, else the schema default — the same order the engine's sweeps use.
+describe("match centre — a walkover's credited score and sentence, every sport (review M-5)", () => {
+  const cfgOf = (m: Module): unknown =>
+    m.configSchema.parse((SIM_CONFIGS as Record<string, unknown>)[m.key] ?? Object.values(m.variants ?? {})[0] ?? {});
+
+  it("every builtin sport: the header shows the engine's credited lines (home, away) and names the side that did not show", () => {
+    let checked = 0;
+    let credited = 0;
+    for (const m of builtinModules) {
+      const cfg = cfgOf(m);
+      const { doc, state, outcome } = centre({ m, cfg, status: "forfeited", ledger: forfeit("walkover") });
+      expect(outcome, `${m.key}: the fold credits home`).toMatchObject({ kind: "award", reason: "walkover" });
+      const lines = (m.summary(state as never) as { perSide: { entrantId: string; line: string }[] }).perSide;
+      const [home, away] = [doc.header.sides[0].entrantId, doc.header.sides[1].entrantId];
+      expect(doc.header.scoreLines, m.key).toEqual([
+        lines.find((p) => p.entrantId === home)?.line ?? null,
+        lines.find((p) => p.entrantId === away)?.line ?? null,
+      ]);
+      expect(doc.header.statusLine, m.key).toEqual({ key: "forfeit.sentence.walkover", params: { loser: "Harbour United" } });
+      if (doc.header.scoreLines[0] !== null && doc.header.scoreLines[0] !== doc.header.scoreLines[1]) credited++;
+      checked++;
+    }
+    expect(checked, "every builtin sport").toBe(builtinModules.length);
+    expect(checked).toBeGreaterThan(0);
+    // Anti-vacuity: the lines compared are a CREDIT, not two empty or level lines in every sport.
+    expect(credited, "sports whose header reads a non-level credited score").toBeGreaterThan(builtinModules.length / 2);
   });
 });
 

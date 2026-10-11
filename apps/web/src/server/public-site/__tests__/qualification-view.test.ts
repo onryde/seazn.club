@@ -1156,6 +1156,39 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const misread = must(view({ ...o4, fixtures }, { awardAddsToLedger: false })).rows.D!;
     expect(misread.whatIf).not.toBe(d.whatIf);
   });
+  it("X-WO-1 (review M-5): every sport whose walkover credits GOALS counts it in the what-if, at the engine's own credit", () => {
+    // The hockey case above, swept. The what-if decides on goal difference here (RULE), so the sports it can read a
+    // walkover in are those whose engine credit carries goals; every other sport's credit (sets, points, a chess win,
+    // a quota) never enters a goal average — and which modules' awards reach the ledger at all is pinned for EVERY
+    // sport by the divisionAwardAddsToLedger test above. The scene is chosen so the answer moves with ANY credit c > 0:
+    // D played one 6–6 match and lost the walkover 0–c, so D's average match is (12 + c) / 2 goals and the margin it
+    // needs is 6 + c — more than that average for every c > 0 (values, not a target), but within ONE match's 12 + c
+    // goals (the misreading that ignores the credit would set a target).
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const goalSports: string[] = [];
+    let swept = 0;
+    for (const m of builtinModules) {
+      const cfg = m.configSchema.safeParse({}).success ? m.configSchema.parse({}) : m.configSchema.parse(Object.values(m.variants ?? {})[0]);
+      const l = defaultLineupPair(m.positions);
+      const credit = m.forfeitCredit(cfg as never, m.init(cfg as never, l) as never, "walkover", "away");
+      swept++;
+      const c = credit.perSide[0].gf ?? 0;
+      if (c <= 0) continue;
+      goalSports.push(m.key);
+      expect(credit.perSide[1].gf, `${m.key}: the side that did not show is credited nothing`).toBe(0);
+      expect(divisionAwardAddsToLedger(m, cfg), m.key).toBe(true);
+      const o4 = open4({ D: [6, 6 + c], B: [7, 2] });
+      const d = must(view({ ...o4, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(m, cfg) })).rows.D!;
+      expect(d.whatIf, m.key).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -${c}, Bo +5.`);
+      const misread = must(view({ ...o4, fixtures }, { awardAddsToLedger: false })).rows.D!;
+      expect(misread.whatIf, `${m.key}: the pair that ignores the credit`).toBe(
+        `If you finish level on points with Bo, ${RULE} decides: win your next match by ${6 + c} or more to finish ahead.`,
+      );
+    }
+    expect(swept, "every builtin sport").toBe(builtinModules.length);
+    // Membership from the engine's credit, pinned so a sport that starts (or stops) crediting goals is a visible change.
+    expect(goalSports.sort()).toEqual(["football", "hockey", "icehockey"]);
+  });
   it("…but a one-sided bye adds no goals even there (the adapter folds it from a fresh 0–0 state): still out of the average", () => {
     const d = must(view(swiss5(), { awardAddsToLedger: divisionAwardAddsToLedger(ICEHOCKEY, {}) })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 4 or more to finish ahead.`);
