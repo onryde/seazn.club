@@ -677,5 +677,20 @@
     "name": "re-review N-1: Neither withheld at a match with no next match"
    }
   ]
+ },
+ {
+  "id": "driver-neither-accepted-passes",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    throw new NeitherWithheldButAccepted(fixtureId, accepted);\n",
+  "replace": "    return { posted: accepted, via: \"http\" };\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-3: a withheld Neither the server ACCEPTS"
+   }
+  ]
  }
 ]

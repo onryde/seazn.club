@@ -26,7 +26,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -2308,6 +2308,26 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(3);
     expect(driver.paths.forfeit).toEqual({ browser: 1, http: 2 });
     expect(forfeits).toHaveLength(2);
+  });
+
+  it("re-review N-3: a withheld Neither the server ACCEPTS over http is NeitherWithheldButAccepted by name — the dialog hid a choice the product takes, so the case goes red", async () => {
+    const forfeits: unknown[][] = [];
+    const h = stubHttp({
+      listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "scheduled", last_seq: 0, outcome: null }),
+      ledger: async () => [],
+      // The page read "no next match" where the server does not: it takes the double walkover.
+      forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(1, "forfeited")]; },
+      listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+    });
+    const { driver } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (_c, row) => { throw new ConsoleChoiceNotOffered(row.id, FORFEIT_NEITHER_TESTID, true); } } });
+    await built(driver, spec("knockout"));
+    const e = await driver.forfeit("f1", "both", "walkover", "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(NeitherWithheldButAccepted);
+    expect((e as NeitherWithheldButAccepted).fixtureId).toBe("f1");
+    expect((e as Error).message).toMatch(/seq 1/);
+    expect(forfeits.map((a) => a.slice(0, 3)), "the one http forfeit was sent").toEqual([["f1", "both", "walkover"]]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 1 });
   });
 
   it("re-review N-1: only Neither withheld WITH the no-next-match guidance falls back — any other withheld choice is the product's finding and propagates by name, with nothing posted over http", async () => {

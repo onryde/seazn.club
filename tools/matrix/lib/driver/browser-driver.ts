@@ -151,7 +151,8 @@ export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "a forfeit with generated play
  *  guidance in its place, by design — so a double walkover asked of the console there (DW-ALL's refusal probe at a
  *  final or a third-place match) cannot be tapped. The page object says so by name (ConsoleChoiceNotOffered, with the
  *  guidance shown), and the driver posts that ONE request over http so the server answers it: its 409
- *  DOUBLE_WALKOVER_NO_NEXT_MATCH is the RefusedCall the scenario records and judges (Task 11 re-review N-1). Any other
+ *  DOUBLE_WALKOVER_NO_NEXT_MATCH is the RefusedCall the scenario records and judges (Task 11 re-review N-1). An
+ *  ACCEPTED answer there is NeitherWithheldButAccepted by name (re-review N-3). Any other
  *  choice the dialog withholds is the product's finding and propagates. A case that needed both this route and
  *  FORFEIT_DIALOG_ROUTE would be refused by MixedLedger.exempt (one route per type); no scenario does: the refusal
  *  probe is DW-ALL's, which posts no play. */
@@ -169,6 +170,19 @@ export class ConsoleVoidUnproven extends Error {
   constructor(fixtureId: string, why: string) {
     super(`browser: the console's Void last entry on fixture ${fixtureId} — ${why}`);
     this.name = "ConsoleVoidUnproven";
+    this.fixtureId = fixtureId;
+  }
+}
+
+/** The console's dialog withheld Neither on a fixture (ConsoleChoiceNotOffered, its no-next-match guidance shown), yet the
+ *  server ACCEPTED the double walkover NEITHER_WITHHELD_ROUTE then posted over http. The page's D19 reading and the
+ *  server's disagree — the dialog hid a choice the product takes — so the case is refused by name rather than passing on
+ *  the http answer (Task 11 re-review N-3). */
+export class NeitherWithheldButAccepted extends Error {
+  readonly fixtureId: string;
+  constructor(fixtureId: string, posted: readonly PostedEvent[]) {
+    super(`browser: fixture ${fixtureId}'s forfeit dialog withheld Neither (its no-next-match guidance), but the server accepted the double walkover over http (seq ${posted.map((p) => p.seq).join(", ") || "none"}) — the page reads "no next match" where the server does not`);
+    this.name = "NeitherWithheldButAccepted";
     this.fixtureId = fixtureId;
   }
 }
@@ -1021,7 +1035,10 @@ export class BrowserDriver implements OrganiserDriver {
       this.#ledger.record("forfeit", via);
     }
     this.#ledger.exempt("forfeit", NEITHER_WITHHELD_ROUTE);
-    return { posted: await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play)), via: "http" };
+    // The withheld Neither is the server's to REFUSE (its RefusedCall propagates from here); an acceptance means the
+    // dialog hid a choice the product takes (re-review N-3).
+    const accepted = await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play));
+    throw new NeitherWithheldButAccepted(fixtureId, accepted);
   }
 
   /** The fixture's ledger rows after `sinceSeq`: a read, always HTTP (a scenario that needs to prove a void asks). */
