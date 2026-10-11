@@ -37,9 +37,13 @@ import { boardgame } from "@seazn/engine/sports/boardgame";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
-import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { stampFixtureCheckIn } from "../me";
+import { withdrawEntrantCascade } from "../withdrawal";
+import { mintOrgOwnerAuth } from "../external-play/auth";
+import { createGameIfReady } from "../external-play/create-game";
 import { openRound } from "../external-play/open-round";
+import { act } from "../external-play/play";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import {
   playableWindow,
@@ -202,8 +206,10 @@ type Board = SeedOnlineChessFixtureResult & {
 /** A round-1 league board whose round the organiser opened a minute ago
  *  through T19's REAL action. The TIMETABLE says three hours from now, so a
  *  sweep that anchored on `scheduled_at` would see a different window. */
-async function openedBoard(o: { checkedIn: readonly Side[]; kind?: string } = { checkedIn: [] }): Promise<Board> {
-  const opened = new Date(Date.now() - 60_000);
+async function openedBoard(
+  o: { checkedIn: readonly Side[]; kind?: string; openedMinutesAgo?: number } = { checkedIn: [] },
+): Promise<Board> {
+  const opened = new Date(Date.now() - (o.openedMinutesAgo ?? 1) * 60_000);
   const s = await seedOnlineChessFixture({
     onlinePlay: "lichess",
     divisionStarted: true,
@@ -300,5 +306,224 @@ describe.runIf(HAS_DB)("the sweep never touches a round the organiser has not op
       expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
       expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Games, through the real producers (T9 creates, T10 moves).
+// ---------------------------------------------------------------------------
+/** T9's REAL createGameIfReady at `min` minutes after the open: White's
+ *  token challenges, Black's accepts (Board API module-mocked). 'ready'. */
+async function readyGame(b: Board, min = 5): Promise<string> {
+  const gameId = `gm-${randomUUID().slice(0, 12)}`;
+  board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
+  board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+  expect(await createGameIfReady(b.fixtureId, { now: b.at(min), publish: async () => {} }), "premise: T9 created the game")
+    .toEqual({ created: true, gameId });
+  return gameId;
+}
+
+/** T10's REAL act: White (home, by the seed's pairing) plays e2e4 at
+ *  `min` minutes — ready -> live, started_at stamped by T10 itself. */
+async function liveGame(b: Board, min = 6): Promise<string> {
+  const gameId = await readyGame(b, min - 1);
+  const out = await act(
+    { fixtureId: b.fixtureId, personId: b.home.personId, action: { kind: "move", uci: "e2e4" } },
+    { now: b.at(min), accessToken: async (u) => `tok-${u}`, publish: async () => {}, submitMove: async () => ({ ok: true }) },
+  );
+  expect(out, "premise: T10 accepted the first move").toEqual({ ok: true, applied: true });
+  const [r] = await sql<{ status: string }[]>`select status from fixture_external_play where fixture_id = ${b.fixtureId}`;
+  expect(r!.status, "premise: T10 moved the row to live").toBe("live");
+  return gameId;
+}
+
+// ---------------------------------------------------------------------------
+// Job 1 — the T+20 no-show.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other test covers)", () => {
+  // swiss-withdrawal-walkover.test.ts forfeits an unstarted board too, but it
+  // is badminton, whose engine tolerates `pre`. boardgame does not until W2b,
+  // and no test anywhere drives a chess pre-game forfeit: this one does.
+  it("ONE player absent forfeits by THAT entrant, reason 'walkover', under the organiser's authority — each side", async () => {
+    let checked = 0;
+    for (const present of ["home", "away"] as const) {
+      const absent: Side = present === "home" ? "away" : "home";
+      const b = await openedBoard({ checkedIn: [present] });
+      const report = await sweep(b, { now: b.at(45) });
+      const tried = forfeitsAttempted(b.fixtureId);
+      expect(tried.length, `${absent} absent: one attempt`).toBe(1);
+      expect(tried[0]!.input.payload, `${absent} absent`).toEqual({ by: b[absent].entrantId, reason: WALKOVER });
+      expect(tried[0]!.input.expected_seq, "a board that never began holds no event").toBe(0);
+      expect(tried[0]!.input.idempotency_key).toBe(`extplay-noshow:${b.fixtureId}`);
+      // W2a: core.forfeit is organiser-only — the org OWNER's session, never a player's.
+      expect(tried[0]!.auth).toMatchObject({ via: "session", role: "owner", userId: b.ownerUserId });
+      if (W2B) {
+        expect(report.noShows).toBe(1);
+        expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: b[absent].entrantId, reason: WALKOVER }]);
+        const fx = await fixtureRow(b.fixtureId);
+        expect(fx.status).toBe("forfeited");
+        expect(fx.outcome).toMatchObject({ kind: "award", winner: b[present].entrantId, loser: b[absent].entrantId });
+      } else {
+        expect(report.noShows).toBe(0);
+        expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
+        expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
+        expect((await fixtureRow(b.fixtureId)).status, "refused: nothing moved").toBe("scheduled");
+      }
+      checked++;
+    }
+    expect(checked, "both sides checked").toBe(2);
+  });
+
+  it("BOTH absent is a DOUBLE walkover: by 'both', and nobody advances", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    const report = await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload)).toEqual([{ by: "both", reason: WALKOVER }]);
+    if (W2B) {
+      expect(report.noShows).toBe(1);
+      const fx = await fixtureRow(b.fixtureId);
+      expect(fx.status).toBe("forfeited");
+      expect(fx.outcome, "no winner for anyone").toEqual({ kind: "double_walkover" });
+    } else {
+      expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
+    }
+  });
+
+  it("BOTH present at the deadline with no game is NOT a no-show", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.scanned, "the board was looked at").toBeGreaterThanOrEqual(1);
+    expect(report.noShows).toBe(0);
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+  });
+
+  it("BEFORE the deadline nobody is ruled absent — the minute before, and the deadline itself", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    const { deadline } = playableWindow(b.opened);
+    await sweep(b, { now: new Date(deadline.getTime() - 1) });
+    expect(forfeitsAttempted(b.fixtureId), "one millisecond before T+20").toEqual([]);
+    await sweep(b, { now: deadline });
+    expect(forfeitsAttempted(b.fixtureId).length, "at T+20 exactly: the room has closed").toBe(1);
+  });
+
+  it("a SECOND pass does not forfeit the same board twice", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    await sweep(b, { now: b.at(45) });
+    const second = await sweep(b, { now: b.at(50) });
+    expect(second.noShows).toBe(0);
+    if (W2B) {
+      // Forfeited ⇒ no longer playable ⇒ not a candidate at all.
+      expect(forfeitsAttempted(b.fixtureId).length).toBe(1);
+      expect((await forfeitsWritten(b.fixtureId)).length).toBe(1);
+    } else {
+      // Refused ⇒ still open ⇒ asked again, under the SAME key, and refused again.
+      const tried = forfeitsAttempted(b.fixtureId);
+      expect(tried.length).toBe(2);
+      expect(new Set(tried.map((c) => c.input.idempotency_key)).size).toBe(1);
+      expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
+    }
+  });
+
+  it("a LATE arrival before the deadline is seated, not swallowed by an idempotency guard", async () => {
+    // AGENTS.md rule 13: an `if (already) return` also swallows a legitimate
+    // new arrival. The first pass runs before the deadline with one player in.
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const first = await sweep(b, { now: b.at(15) });
+    expect(first.noShows, "not past the deadline yet").toBe(0);
+    await stampFixtureCheckIn(b.away.personId, b.fixtureId, b.orgId);
+    await sweep(b, { now: b.at(25) });
+    expect(forfeitsAttempted(b.fixtureId), "they came — no forfeit").toEqual([]);
+  });
+
+  it("the other direction: a check-in stamped AFTER the deadline does not count — still a no-show", async () => {
+    // The round opened 30 minutes ago in real time, so Black's check-in,
+    // stamped now, lands outside its window (checkInCounts, spec §7.2) and
+    // the board is a DOUBLE walkover. Its pair is the one-absent case above,
+    // where the same stamp inside the window made it Black's opponent alone.
+    const b = await openedBoard({ checkedIn: ["away"], openedMinutesAgo: 30 });
+    const [ci] = await sql<{ checked_in_at: Date }[]>`
+      select checked_in_at from fixture_availability where fixture_id = ${b.fixtureId} and person_id = ${b.away.personId}`;
+    expect(ci!.checked_in_at.getTime(), "premise: stamped past T+20").toBeGreaterThanOrEqual(playableWindow(b.opened).deadline.getTime());
+    await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload)).toEqual([{ by: "both", reason: WALKOVER }]);
+  });
+
+  it("a board whose game EXISTS is never a no-show, however late — ready (never started) or live", async () => {
+    // Spec §3.6: "T+20 is the deadline to be seated and have the game created
+    // — not a cap on the game."
+    let checked = 0;
+    for (const make of [readyGame, liveGame]) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      await make(b);
+      await sweep(b, { now: b.at(240) });
+      expect(forfeitsAttempted(b.fixtureId), make.name).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a possibly-sent create (T9's create_sent_at marker) is never ruled a no-show", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    // Stands for T9's createAtDequeue: the marker it writes before the HTTP
+    // call, whose outcome is unknown (T9 I2) — a game may exist.
+    await sql`update fixture_external_play set create_sent_at = ${b.at(19)} where fixture_id = ${b.fixtureId}`;
+    await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+  });
+
+  it("a create IN FLIGHT (a live mint claim) is left to T9; a STALE claim is not a game", async () => {
+    const live = await openedBoard({ checkedIn: [] });
+    const stale = await openedBoard({ checkedIn: [] });
+    const now = live.at(45);
+    // Stand for T9's claim (mint_claimed_at), live and abandoned.
+    await sql`update fixture_external_play set mint_claimed_at = ${new Date(now.getTime() - 1_000)} where fixture_id = ${live.fixtureId}`;
+    await sql`update fixture_external_play set mint_claimed_at = ${new Date(now.getTime() - MINT_CLAIM_STALE_MS - 1_000)}
+               where fixture_id = ${stale.fixtureId}`;
+    await sweepExternalPlay({ now, orgIds: [live.orgId, stale.orgId] });
+    expect(forfeitsAttempted(live.fixtureId), "in flight: wait").toEqual([]);
+    expect(forfeitsAttempted(stale.fixtureId).length, "stale: nothing is in flight").toBe(1);
+  });
+
+  it("a pending row that names a challenge is a game on file (invite.ts's predicate), never a no-show", async () => {
+    // Defence: no writer leaves a challenge on a 'pending' row today (T9
+    // records one only with ready / needs_organiser), but a row that names
+    // a game is a row a game may sit behind.
+    const b = await openedBoard({ checkedIn: [] });
+    await sql`update fixture_external_play set challenge_id = ${`gm-${randomUUID().slice(0, 12)}`} where fixture_id = ${b.fixtureId}`;
+    await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+  });
+
+  it("online play switched OFF after the open: the board went back to the table, and the guard says so", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    // Stands for the organiser's settings save (divisions.config.onlinePlay).
+    await sql`update divisions set config = config || '{"onlinePlay":"off"}'::jsonb where id = ${b.divisionId}`;
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.scanned, "still a candidate by the open").toBeGreaterThanOrEqual(1);
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(report.failures).toEqual([]);
+  });
+
+  it("a board held for the organiser's decision (needs_decision) is never forfeited", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    // Stands for W2a's held level result (V432): played, not finished.
+    await sql`update fixtures set status = 'needs_decision' where id = ${b.fixtureId}`;
+    const report = await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(report.failures).toEqual([]);
+  });
+
+  it("after a WITHDRAWAL the board is the withdrawal's, never the sweep's", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+    const status = (await fixtureRow(b.fixtureId)).status;
+    expect(status, "premise: a league withdrawal settles the board").not.toBe("scheduled");
+    await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+  });
+
+  it("an EMPTY org scope is a scope with nothing in it, never every org", async () => {
+    const report = await sweepExternalPlay({ now: new Date(), orgIds: [] });
+    expect(report).toMatchObject({ scanned: 0, noShows: 0, failures: [] });
+    expect(scoring.calls).toEqual([]);
   });
 });

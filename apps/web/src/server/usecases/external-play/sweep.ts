@@ -21,7 +21,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
-import { windowFor } from "@/server/external-play/window";
+import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
@@ -96,6 +96,8 @@ async function each<T extends { fixtureId: string }>(
   }
 }
 
+/** An EMPTY scope matches nothing — postgres.js renders `in ()` of an empty
+ *  list as `in (null)` — and is never read as "every org" (tested). */
 function orgScope(pass: Pass) {
   return pass.orgIds === undefined ? sql`` : sql`and f.org_id in ${sql(pass.orgIds as string[])}`;
 }
@@ -103,10 +105,12 @@ function orgScope(pass: Pass) {
 // ─── Job 1: the T+20 no-show ───────────────────────────────────────────────
 //
 // A board is a no-show candidate only when its round was OPENED (inner join),
-// the round's window has closed, the fixture is still playable, and no game
-// is — or may be — on file: no bridge row, or a `pending` one with no
-// challenge, no possibly-sent create (`create_sent_at`, T9 I2) and no live
-// mint claim (a create in flight past the deadline is T9's to finish).
+// the fixture is still playable (T8's predicate — never needs_decision, never a
+// withdrawn or settled board), and no game is — or may be — on file: no bridge
+// row, or a `pending` one with no challenge, no possibly-sent create
+// (`create_sent_at`, T9 I2) and no live mint claim (a create in flight past the
+// deadline is T9's to finish) — invite.ts's `bridgeTakesInvites`, plus the
+// claim. The window is then judged per board, and the guard loads it.
 
 type NoShowCandidate = { fixtureId: string; openedAt: Date };
 
@@ -114,22 +118,24 @@ async function noShowCandidates(pass: Pass): Promise<NoShowCandidate[]> {
   return sql<NoShowCandidate[]>`
     select f.id as "fixtureId", o.opened_at as "openedAt"
       from fixtures f
-      join divisions d on d.id = f.division_id
       join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
       left join fixture_external_play ep on ep.fixture_id = f.id
-     where d.sport_key = 'boardgame'
-       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
-       and f.status in ${sql(PLAYABLE_STATUSES as string[])}
+     where f.status in ${sql(PLAYABLE_STATUSES as string[])}
        and (ep.fixture_id is null
-            or (ep.status = 'pending' and ep.challenge_id is null and ep.create_sent_at is null))
+            or (ep.status = 'pending' and ep.challenge_id is null and ep.create_sent_at is null
+                and (ep.mint_claimed_at is null
+                     or ep.mint_claimed_at < ${new Date(pass.now.getTime() - MINT_CLAIM_STALE_MS)})))
        ${orgScope(pass)}
      order by o.opened_at, f.id`;
 }
 
 async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   if (pass.now.getTime() < playableWindow(c.openedAt).deadline.getTime()) return;
+  // THE guard (spec §6): online play still on, a boardgame, both entrants.
+  // An organiser who switched online play off after the open has taken the
+  // board back to the table.
   const f = await loadOnlinePlayFixture(c.fixtureId);
-  if (!f || !isPlayableFixtureStatus(f.fixtureStatus)) return;
+  if (!f) return;
   const { home, away } = await loadSides(f);
   const came = await checkIns(f, home, away, c.openedAt);
   if (came.home && came.away) return;
@@ -157,8 +163,6 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
     scanned: 0,
     failures: [],
   };
-  // An empty scope is a scope with nothing in it — never "every org".
-  if (deps.orgIds !== undefined && deps.orgIds.length === 0) return report;
   const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
 
   await each(pass, "no_show", await noShowCandidates(pass), (c) => noShow(pass, c));
