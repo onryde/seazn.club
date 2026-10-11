@@ -720,14 +720,14 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       if (isChess) {
         await insertLegacyEvents(m1.id, [
           { type: "core.start", payload: {} },
-          { type: "boardgame.result", payload: { winner: m1.home_entrant_id, method: "forfeit" } },
+          { type: "boardgame.result", payload: { winner: m1.home_entrant_id, method: "forfeit" } }, // legacy row
         ]);
         await post(s.auth, m1.id, "core.note", { text: "arbiter's report" });
       } else {
         await post(s.auth, m1.id, "core.forfeit", { by: m1.away_entrant_id, reason: "walkover" });
       }
       const forfeited = await fixtureRow(m1.id);
-      expect(forfeited.outcome, `${shape.label}: rig — the forfeit shape`).toMatchObject(isChess ? { kind: "win", method: "forfeit" } : { kind: "award" });
+      expect(forfeited.outcome, `${shape.label}: rig — the forfeit shape`).toMatchObject(isChess ? { kind: "win", method: "forfeit" } : { kind: "award" }); // legacy chess fold
       await win(m2.id);
       const lb = await fixtureRow(lbId);
       expect([lb.status, lb.outcome], `${shape.label}: rig — the losers' line walked m2's loser over m1's dead loser edge`).toEqual(["forfeited", seatWalkover(m2.away_entrant_id!)]);

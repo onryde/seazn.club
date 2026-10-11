@@ -271,17 +271,19 @@ describe("seating / readiness helpers", () => {
   });
 
   it("a forfeited row whose outcome is a WIN blocks Unpair", () => {
-    // Not hypothetical: `boardgame` is the one module whose `core.forfeit`
-    // folds to `{kind:"win", method:"forfeit"}` rather than an award
-    // (boardgame.ts decideResult), so a chess walkover is status `forfeited`
-    // with a `win` outcome. Nothing but the status list can refuse it.
+    // Not hypothetical: a chess walkover written before W2b
+    // (`boardgame.result{method:"forfeit"}`) still replays to
+    // `{kind:"win", method:"forfeit"}` (boardgame.ts decideResult), so it is
+    // status `forfeited` with a `win` outcome. W2b's own chess `core.forfeit`
+    // folds to an award; the legacy row is the case. Nothing but the status
+    // list can refuse it.
     expect(
       swissRoundHasPlayedResult(
         [
           {
             round_no: 1,
             status: "forfeited",
-            outcome: { kind: "win", winner: "a", loser: "b", method: "forfeit" },
+            outcome: { kind: "win", winner: "a", loser: "b", method: "forfeit" }, // legacy chess forfeit
             ext_key: "sw-r1-b1",
             home_entrant_id: "a",
             away_entrant_id: "b",

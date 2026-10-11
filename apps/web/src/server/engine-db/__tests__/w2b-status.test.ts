@@ -121,7 +121,7 @@ describe.skipIf(!HAS_DB)("W2b append guards and the status rule, through scoreEv
   it("D15: chess boardgame.result{forfeit | double_forfeit} is refused INVALID_EVENT chess_forfeit_method_retired; nothing is written", async () => {
     // single-sport: the two retired methods are boardgame's own (spec §5.2, finding 15).
     let checked = 0;
-    for (const payload of [{ method: "forfeit", side: "home" }, { method: "double_forfeit", side: null }] as const) {
+    for (const payload of [{ method: "forfeit", side: "home" }, { method: "double_forfeit", side: null }] as const) { // legacy methods
       const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
       const id = s.fixtureIds[0]!;
       const f = await fixtureRow(id);
@@ -149,7 +149,7 @@ describe.skipIf(!HAS_DB)("W2b append guards and the status rule, through scoreEv
     const fb = await fixtureRow(b!);
     await insertLegacyEvents(b!, [
       { type: "core.start", payload: {} },
-      { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } },
+      { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } }, // legacy row
     ]);
     const folded = await withTenant(s.auth.orgId, (tx) => foldFixture(tx, b!));
     expect(folded?.outcome, "a legacy double forfeit replays to the double walkover (BG-DW-1)").toEqual({ kind: "double_walkover" });

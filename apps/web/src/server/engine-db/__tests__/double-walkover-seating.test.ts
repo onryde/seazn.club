@@ -96,8 +96,8 @@ describe("advancingSides / bracketWinnerLoser: one reading per engine outcome ki
     expect(bracketWinnerLoser({ kind: "award", winner: "h", loser: null, reason: "bye" }, "h", null)).toEqual({ winner: "h" });
     expect(bracketWinnerLoser({ kind: "award", winner: "h" }, "h", null)).toEqual({ winner: "h" });
     expect(bracketWinnerLoser({ kind: "award", winner: "h" }, "h", "a")).toEqual({ winner: "h", loser: "a", walkedOver: "loser" });
-    expect(advancingSides({ kind: "win", winner: "h", loser: "a", method: "forfeit" })).toEqual({ winner: "h", loser: undefined });
-    expect(bracketWinnerLoser({ kind: "win", winner: "h", loser: "a", method: "forfeit" }, "h", "a")).toEqual({ winner: "h", loser: "a", walkedOver: "loser" });
+    expect(advancingSides({ kind: "win", winner: "h", loser: "a", method: "forfeit" })).toEqual({ winner: "h", loser: undefined }); // legacy
+    expect(bracketWinnerLoser({ kind: "win", winner: "h", loser: "a", method: "forfeit" }, "h", "a")).toEqual({ winner: "h", loser: "a", walkedOver: "loser" }); // legacy
     // The negative pair: a played method keeps its loser.
     expect(advancingSides({ kind: "win", winner: "h", loser: "a", method: "checkmate" })).toEqual({ winner: "h", loser: "a" });
   });
@@ -204,7 +204,7 @@ describe.skipIf(!HAS_DB)("X-DW-2: a double walkover seats nobody; the cascade wa
         // Written before W2b retired the method on write (D15): raw SQL, then the next append folds it.
         await insertLegacyEvents(wb1.id, [
           { type: "core.start", payload: {} },
-          { type: "boardgame.result", payload: { winner: wb1.home_entrant_id, method: "forfeit" } },
+          { type: "boardgame.result", payload: { winner: wb1.home_entrant_id, method: "forfeit" } }, // legacy row
         ]);
         await post(s.auth, wb1.id, "core.note", { text: "arbiter's report" });
       }

@@ -2702,7 +2702,8 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
         division: divisionChampion(stages, fixtures, []),
       };
     };
-    const forfeit = (winner: string, loser: string) => ({ kind: "win", winner, loser, method: "forfeit" });
+    // What a forfeit writes since W2b, chess included: an award naming its loser and reason.
+    const forfeit = (winner: string, loser: string) => ({ kind: "award", winner, loser, reason: "walkover" });
 
     it("a final won by FORFEIT crowns its winner — a forfeit is written with one, and the engine counts it settled", async () => {
       expect(await both([cup], eight({ status: "forfeited", outcome: forfeit("e2", "e1") }))).toEqual({

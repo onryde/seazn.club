@@ -154,15 +154,11 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     const { fixtures } = await generateStageFixtures(auth, stage!.id);
     await startDivision(auth, division.id);
     const f = fixtures[0]!;
+    // A no-show is a walkover, recorded before play (X-RS-1): no START first — W2b refuses a walkover once live.
     await scoreEvent(auth, f.id, {
       expected_seq: 0,
-      type: "core.start",
-      payload: {},
-    });
-    await scoreEvent(auth, f.id, {
-      expected_seq: 1,
       type: "core.forfeit",
-      payload: { by: f.away_entrant_id, reason: "no-show" },
+      payload: { by: f.away_entrant_id, reason: "walkover" },
     });
     const standings = await getStandings(auth, stage!.id);
     const rows = standings.rows as {

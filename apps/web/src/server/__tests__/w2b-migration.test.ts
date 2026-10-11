@@ -83,7 +83,7 @@ function counts(notices: readonly string[]): { examined: number; changed: number
 
 const chess = { sport: "boardgame", variant: declaredVariant("boardgame", "classical") };
 /** The legacy (pre-W2b) chess double forfeit, as the pad wrote it before D15 retired the method. */
-const DF = { winner: null, method: "double_forfeit" };
+const DF = { winner: null, method: "double_forfeit" }; // legacy row
 /** What V432 stored for it: a held no_result. */
 const LEGACY_HELD = { kind: "no_result", method: "double_forfeit" };
 

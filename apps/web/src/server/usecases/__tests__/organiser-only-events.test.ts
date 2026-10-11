@@ -383,8 +383,8 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     expect(isOrganiserOnlyEvent("boardgame.result", null)).toBe(false);
     expect(isOrganiserOnlyEvent("boardgame.result", "forfeit")).toBe(false);
     expect(isOrganiserOnlyEvent("boardgame.result", {})).toBe(false);
-    expect(isOrganiserOnlyEvent("constructor", { method: "forfeit" })).toBe(false); // no prototype key is a table row
-    expect(isOrganiserOnlyEvent("generic.result", { method: "forfeit" })).toBe(false);
+    expect(isOrganiserOnlyEvent("constructor", { method: "forfeit" })).toBe(false); // no prototype key is a table row (legacy value)
+    expect(isOrganiserOnlyEvent("generic.result", { method: "forfeit" })).toBe(false); // legacy value, wrong type
     let checked = 0;
     for (const t of ORGANISER_ONLY_EVENT_TYPES) {
       expect(isOrganiserOnlyEvent(t, undefined), t).toBe(true);
@@ -444,7 +444,7 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     // The real double forfeit (the boardgame walk's own shape, and the pad's drawn action) is among them.
     const df = flagged.find((i) => i.type === "boardgame.result" && i.value === "double_forfeit");
     expect(df, "boardgame's double forfeit is flagged").toBeDefined();
-    expect([...df!.decisive.values()]).toEqual(expect.arrayContaining([{ winner: null, method: "double_forfeit" }, { method: "double_forfeit" }]));
+    expect([...df!.decisive.values()]).toEqual(expect.arrayContaining([{ winner: null, method: "double_forfeit" }, { method: "double_forfeit" }])); // legacy
   });
 
   it("N2: every value outside the vocabulary that decides a match as itself (a win under its own method) is a named played result", () => {
@@ -483,9 +483,9 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     const posted = RETIRED_ROWS.map((r) => ({ type: r.type, payload: r.payload({ home: "HOME-ID", away: "AWAY-ID" }) }));
     expect(posted).toEqual(
       expect.arrayContaining([
-        { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } },
-        { type: "boardgame.result", payload: { method: "double_forfeit" } },
-        { type: "boardgame.result", payload: { winner: "HOME-ID", method: "forfeit" } },
+        { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } }, // legacy, refused
+        { type: "boardgame.result", payload: { method: "double_forfeit" } }, // legacy, refused
+        { type: "boardgame.result", payload: { winner: "HOME-ID", method: "forfeit" } }, // legacy, refused
       ]),
     );
   });

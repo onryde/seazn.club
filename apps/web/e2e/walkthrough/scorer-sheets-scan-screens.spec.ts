@@ -997,9 +997,9 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
      *  `release` puts the bracket back on its way when the status seats nobody
      *  (the home side advancing, as every other match here). */
     const REACH_STATUS: Record<string, { reach: (f: Fx, homeWins: boolean) => Promise<void>; release?: (f: Fx, homeWins: boolean) => Promise<void> }> = {
-      // the organiser records the other side's no-show: decided, nothing held
+      // the organiser records the other side's no-show before kick-off — a walkover: decided, nothing held
       forfeited: {
-        reach: (f, homeWins) => post(f.id, "core.forfeit", { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "no-show" }),
+        reach: (f, homeWins) => post(f.id, "core.forfeit", { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "walkover" }),
       },
       // 0–0 at full time: 11-a-side configures no extra time or shootout, so a
       // knockout HOLDS it (X-BR-2); the organiser's settle then seats the winner

@@ -730,7 +730,7 @@ describe("boardgameDetail", () => {
     const detail = boardgameDetail({
       t,
       eventType: RESULT_TYPE,
-      payload: { winner: null, method: "double_forfeit" },
+      payload: { winner: null, method: "double_forfeit" }, // legacy (pre-W2b) result: replays, refused on write (D15)
       state: v.state,
       personNames: NAMES,
     });

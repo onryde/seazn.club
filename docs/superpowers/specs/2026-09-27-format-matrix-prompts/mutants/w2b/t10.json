@@ -1,0 +1,182 @@
+[
+ {
+  "id": "scan-vacuous",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "const files = gitGrep([\"-l\", \"-e\", \"core.forfeit\", \"--\", ...SCOPES, \":!*.golden.json\"]);",
+  "replace": "const files: string[] = [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan is not vacuous"
+   }
+  ]
+ },
+ {
+  "id": "scan-regex-blind",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "const PAYLOAD = /[\"'`]core\\.forfeit[\"'`](?:(?![\"'`][a-z]+\\.[a-z_.]+[\"'`])[\\s\\S]){0,240}?reason:\\s*[\"'`]([^\"'`]+)[\"'`]/g;",
+  "replace": "const PAYLOAD = /x-rs-1-never-matches(.)/g;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan is not vacuous"
+   }
+  ]
+ },
+ {
+  "id": "scan-envelope-only",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "const PAYLOAD = /[\"'`]core\\.forfeit[\"'`](?:(?![\"'`][a-z]+\\.[a-z_.]+[\"'`])[\\s\\S]){0,240}?reason:\\s*[\"'`]([^\"'`]+)[\"'`]/g;",
+  "replace": "const PAYLOAD = /type:\\s*[\"']core\\.forfeit[\"'][\\s\\S]{0,240}?reason:\\s*[\"']([^\"']+)[\"']/g;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan reads every call shape"
+   }
+  ]
+ },
+ {
+  "id": "scan-borrows-neighbour",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "(?:(?![\"'`][a-z]+\\.[a-z_.]+[\"'`])[\\s\\S]){0,240}?",
+  "replace": "[\\s\\S]{0,240}?",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan reads every call shape"
+   }
+  ]
+ },
+ {
+  "id": "scan-self-not-excluded",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "const SCOPES = [\"apps/web/src\", \"apps/web/e2e\", \"scripts\", \"tools/bench/packs/build-packs\", `:!${SELF}`];",
+  "replace": "const SCOPES = [\"apps/web/src\", \"apps/web/e2e\", \"scripts\", \"tools/bench/packs/build-packs\"];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the scan is not vacuous"
+   }
+  ]
+ },
+ {
+  "id": "grep-swallows-every-error",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "if ((e as { status?: number }).status === 1) return [];",
+  "replace": "return [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the grep wrapper reads no match"
+   }
+  ]
+ },
+ {
+  "id": "grep-no-match-throws",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "if ((e as { status?: number }).status === 1) return [];",
+  "replace": "if (false) return [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the grep wrapper reads no match"
+   }
+  ]
+ },
+ {
+  "id": "retired-grep-blind",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "'method: \"double_forfeit\"', \"-e\", 'method: \"forfeit\"'",
+  "replace": "'x-rs-1-no-such-method-a', \"-e\", 'x-rs-1-no-such-method-b'",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written nowhere"
+   }
+  ]
+ },
+ {
+  "id": "legacy-exemption-off",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "hits.filter((h) => !/legacy/i.test(h))",
+  "replace": "hits.filter((h) => !/x-rs-1-never/i.test(h))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written nowhere"
+   }
+  ]
+ },
+ {
+  "id": "legacy-exemption-case-sensitive",
+  "file": "apps/web/src/server/__tests__/forfeit-vocabulary-scan.test.ts",
+  "find": "hits.filter((h) => !/legacy/i.test(h))",
+  "replace": "hits.filter((h) => !/legacy/.test(h))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/forfeit-vocabulary-scan.test.ts"
+    ],
+    "name": "the retired chess forfeit methods are written nowhere"
+   }
+  ]
+ },
+ {
+  "id": "bench-validate-pack-module-summary",
+  "file": "tools/bench/lib/validate-pack.ts",
+  "find": "summary: summaryOf(sportModule, facts),",
+  "replace": "summary: sportModule.summary(state),",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam"
+   }
+  ]
+ },
+ {
+  "id": "bench-reconstruct-module-summary",
+  "file": "tools/bench/lib/reconstruct.ts",
+  "find": "const parsed = SetLedgerDetail.safeParse(summaryOf(sportModule, folded).detail);",
+  "replace": "const parsed = SetLedgerDetail.safeParse(sportModule.summary(folded.state).detail);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/summary-seam.test.ts"
+    ],
+    "name": "PF-1 seam"
+   }
+  ]
+ }
+]

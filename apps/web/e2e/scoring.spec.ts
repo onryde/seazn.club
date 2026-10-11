@@ -151,14 +151,15 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   // the whole reason `fixture-console-no-native-prompt.test.ts` exists.
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
-  await dialog.locator('input[name="reason"]').fill("no-show");
+  // An unstarted fixture: the side never turned up, which the closed vocabulary calls a walkover (X-RS-1).
+  await dialog.locator('input[name="reason"]').fill("walkover");
   await dialog.getByRole("button", { name: "Apply", exact: true }).click();
 
   await expect
     .poll(async () => (await ledger(request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.forfeit");
   const forfeit = (await ledger(request, fixtureId)).find((e) => e.type === "core.forfeit")!;
-  expect(forfeit.payload.reason, "the reason the scorer typed must reach the ledger").toBe("no-show");
+  expect(forfeit.payload.reason, "the reason the scorer typed must reach the ledger").toBe("walkover");
   expect(
     forfeit.payload.by,
     "the payload must name the side whose menu item was clicked — the engine awards the OTHER one",

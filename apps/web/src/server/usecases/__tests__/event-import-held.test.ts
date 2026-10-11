@@ -85,7 +85,7 @@ describe.skipIf(!HAS_DB)("M-2: the importer holds a level bracket result the way
   });
 
   it("D15: the retired chess double forfeit is refused through the importer, writes nothing, and runs no side effect", async () => {
-    const { fixtureId, report, status } = await importChess({ winner: null, method: "double_forfeit" }, "retired");
+    const { fixtureId, report, status } = await importChess({ winner: null, method: "double_forfeit" }, "retired"); // legacy method
     expect(report.results[0]).toMatchObject({ status: "rejected", eventsAppended: 0, error: { code: "import.fold_rejected" } });
     expect(status, "the fixture is untouched").toBe("scheduled");
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;

@@ -120,9 +120,9 @@ describe("fixture console: the organiser's forfeit controls carry stable hooks",
       expect(textOf(sideButtons[0]!)).not.toContain(other.name);
 
       (propsOf(sideButtons[0]!).onClick as () => void)();
-      (propsOf(promptElement(island.tree())).onSubmit as (reason: string) => void)("retired hurt");
+      (propsOf(promptElement(island.tree())).onSubmit as (reason: string) => void)("retired");
       expect(send).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledWith("core.forfeit", { by: own.id, reason: "retired hurt" });
+      expect(send).toHaveBeenCalledWith("core.forfeit", { by: own.id, reason: "retired" });
     },
   );
 
