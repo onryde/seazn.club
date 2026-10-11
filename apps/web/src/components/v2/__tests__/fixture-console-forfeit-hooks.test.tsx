@@ -9,13 +9,14 @@
 // two sides fails even though both still render. The dialog renders only after a click, which `renderToStaticMarkup`
 // can never show, so this file uses `_hook-harness.tsx`'s `renderIsland` (one level: the console, then the dialog).
 //
-// Expected values are the rules': X-RS-1 / D3 for the chips (before play a walkover or Neither; after play retired or
-// disqualified; never withdrew — PF-2), §7 for the refusal (the dialog closes, the reason shows on the console).
+// Expected values are the rules': X-RS-1 / D3 as amended by ruling 112 for the chips (until something is played a
+// walkover or Neither — after a bare Start too; once something is played retired or disqualified; never withdrew —
+// PF-2), §7 for the refusal (the dialog closes, the reason shows on the console).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import type { EventEnvelope } from "@seazn/engine/core";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import { ForfeitDialog, forfeitDialogModel } from "@/components/v2/forfeit-dialog";
@@ -48,18 +49,30 @@ const sport: SportInfo = { key: "generic", config: {}, scorerLabel: "Scorer", po
 
 const HOME: SideInfo = { id: "home-1", name: "Riverside FC", members: [], lineup: [] };
 const AWAY: SideInfo = { id: "away-1", name: "Summit Athletic", members: [], lineup: [] };
-const STARTED = foldMatch(generic, CFG, defaultLineupPair(generic.positions), [makeEnvelope(1, { type: "core.start", payload: {} })]);
+const LINEUPS = defaultLineupPair(generic.positions);
+const START = makeEnvelope(1, { type: "core.start", payload: {} });
+/** Ruling 112's "something is played": generic's own generator draws the event, never a typed one. */
+const PLAY = onePlayEvent(generic, CFG, LINEUPS, [START]);
+if (PLAY === null) throw new Error("generic: its generator draws no sport event after the start");
+/** The two in-play ledgers: a bare Start (nothing played), and the Start then the sport's own event. */
+const LEDGERS = { started: [START], in_play: [START, PLAY] };
+/** A ledger as the console holds it: the page's `listEvents` rows. */
+const rowsOf = (ledger: readonly EventEnvelope[]): EventIn[] =>
+  ledger.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, recorded_at: "2026-10-09T10:00:00Z", voids_event_id: e.voids ?? null }));
 
-type Shape = "in_play" | "scheduled";
+/** `in_play`: something was played; `started`: Start pressed, nothing played (ruling 112); `scheduled`: before the start. */
+type Shape = "in_play" | "started" | "scheduled";
 function baseProps(shape: Shape, noNextMatch = false) {
-  const live = { status: shape, last_seq: shape === "in_play" ? 1 : 0, summary: null, state: shape === "in_play" ? STARTED : null, outcome: null };
+  const ledger = shape === "scheduled" ? [] : LEDGERS[shape];
+  const status = shape === "scheduled" ? "scheduled" : "in_play";
+  const live = { status, last_seq: ledger.length, summary: null, state: shape === "scheduled" ? null : foldMatch(generic, CFG, LINEUPS, ledger), outcome: null };
   return {
-    fixture: { id: "f1", status: shape, scheduled_at: null, venue_name: null, court_name: null, round_no: 1, no_next_match: noNextMatch },
+    fixture: { id: "f1", status, scheduled_at: null, venue_name: null, court_name: null, round_no: 1, no_next_match: noNextMatch },
     sport,
     home: HOME,
     away: AWAY,
     initialState: live,
-    initialEvents: [] as EventIn[],
+    initialEvents: rowsOf(ledger),
     canEdit: true,
     canOrganise: true,
     stageKind: null,
@@ -122,7 +135,7 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
   ] as const)("after play: forfeit-who-%s names ITS OWN side and forfeits ITS OWN entrant; why is retired/disqualified only", async (sideKey, own, other) => {
     const { el } = openConsole("in_play");
     const d = driveDialog(el);
-    expect(byTestid(d.tree(), "forfeit-who-both"), "no Neither once play started").toHaveLength(0);
+    expect(byTestid(d.tree(), "forfeit-who-both"), "no Neither once something is played").toHaveLength(0);
     const who = byTestid(d.tree(), `forfeit-who-${sideKey}`);
     expect(who, `exactly one data-testid="forfeit-who-${sideKey}"`).toHaveLength(1);
     expect(who[0]!.type).toBe("button");
@@ -136,7 +149,7 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     expect(propsOf(byTestid(d.tree(), `forfeit-who-${sideKey}`)[0]!)["aria-pressed"]).toBe(true);
     expect(propsOf(confirm()).disabled, "Confirm is blocked with only the side chosen").toBe(true);
     const offered = ["walkover", "retired", "disqualified", "withdrew"].filter((r) => byTestid(d.tree(), `forfeit-why-${r}`).length > 0);
-    expect(offered, "after play: retired or disqualified (X-RS-1); withdrew is the cascade's (PF-2)").toEqual(["retired", "disqualified"]);
+    expect(offered, "after play: retired or disqualified (X-RS-1, ruling 112); withdrew is the cascade's (PF-2)").toEqual(["retired", "disqualified"]);
     const retired = byTestid(d.tree(), "forfeit-why-retired")[0]!;
     expect(retired.type).toBe("input");
     expect(propsOf(retired).type).toBe("radio");
@@ -144,12 +157,50 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
 
     expect(propsOf(confirm()).disabled).toBe(false);
     expect(textOf(confirm()), "one specific Confirm").toBe(en("forfeitDialog.confirm.retired"));
-    expect(textOf(byTestid(d.tree(), "forfeit-preview")[0]!), "generic credits no score (GN-WO-1)").toBe(en("forfeitDialog.preview.none"));
+    // GN-RT-1: a generic retirement is the walkover credit (GN-WO-1: no score) KEEPING THE RECORDED SCORE — the one
+    // played event's points, read off the ledger this console holds.
+    const played = PLAY.payload as { by: string; points: number };
+    const [homeScore, awayScore] = played.by === LINEUPS.home.entrantId ? [played.points, 0] : [0, played.points];
+    expect(homeScore + awayScore, "rig: the played event scored").toBeGreaterThan(0);
+    expect(textOf(byTestid(d.tree(), "forfeit-preview")[0]!), "GN-RT-1: the recorded score stands").toBe(
+      tRuntime(messages, "forfeitDialog.preview", { home: HOME.name, homeScore, away: AWAY.name, awayScore }),
+    );
     click(confirm());
     await vi.waitFor(() => expect(d.onClose).toHaveBeenCalledTimes(1));
     expect(d.forfeit).toHaveBeenCalledTimes(1);
     expect(d.forfeit).toHaveBeenCalledWith({ by: own.id, reason: "retired" });
     expect(d.onRefused).not.toHaveBeenCalled();
+  });
+
+  it("X-RS-1 (ruling 112): after Start with nothing played, the console offers Neither and the walkover — a side's walkover names the OTHER side's win", async () => {
+    // The console-wiring witness: the same fixture `in_play` above offers neither (its ledger holds a played event).
+    // What decides it is the console's reading of its own ledger, handed to the engine's admission.
+    const { el } = openConsole("started");
+    const d = driveDialog(el);
+    for (const w of ["home", "away", "both"]) expect(byTestid(d.tree(), `forfeit-who-${w}`), w).toHaveLength(1);
+    click(byTestid(d.tree(), "forfeit-who-away")[0]);
+    const offered = ["walkover", "retired", "disqualified", "withdrew"].filter((r) => byTestid(d.tree(), `forfeit-why-${r}`).length > 0);
+    expect(offered, "a bare Start: the walkover beside retired and disqualified (R4); withdrew is the cascade's (PF-2)").toEqual(["walkover", "retired", "disqualified"]);
+    (propsOf(byTestid(d.tree(), "forfeit-why-walkover")[0]!).onChange as () => void)();
+    const confirm = byTestid(d.tree(), "forfeit-confirm")[0]!;
+    expect(textOf(confirm)).toBe(en("forfeitDialog.confirm.walkover"));
+    click(confirm);
+    await vi.waitFor(() => expect(d.onClose).toHaveBeenCalledTimes(1));
+    expect(d.forfeit).toHaveBeenCalledWith({ by: AWAY.id, reason: "walkover" });
+  });
+
+  it("X-RS-1 (ruling 112): after Start with nothing played, Neither walks over — a double walkover, `by: \"both\"`", async () => {
+    const { el } = openConsole("started");
+    const d = driveDialog(el);
+    click(byTestid(d.tree(), "forfeit-who-both")[0]);
+    const offered = ["walkover", "retired", "disqualified", "withdrew"].filter((r) => byTestid(d.tree(), `forfeit-why-${r}`).length > 0);
+    expect(offered).toEqual(["walkover"]);
+    (propsOf(byTestid(d.tree(), "forfeit-why-walkover")[0]!).onChange as () => void)();
+    const confirm = byTestid(d.tree(), "forfeit-confirm")[0]!;
+    expect(textOf(confirm)).toBe(en("forfeitDialog.confirm.doubleWalkover"));
+    click(confirm);
+    await vi.waitFor(() => expect(d.onClose).toHaveBeenCalledTimes(1));
+    expect(d.forfeit).toHaveBeenCalledWith({ by: "both", reason: "walkover" });
   });
 
   it("before play: Neither walks over — a double walkover, its own Confirm, `by: \"both\"`", async () => {
@@ -238,8 +289,8 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
 // Fix round 1 (review M-1, M-2).
 describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal does not outlive the next write", () => {
   it("M-1: the console hands the open dialog its CURRENT model as `live`; the chips stay the snapshot taken at open", async () => {
-    // A resync while the dialog is open (here the one a SEQ_CONFLICT answer triggers) brings a ledger whose start was
-    // voided: the match is back before play. `live` follows it (Neither returns); `model`, the chips, does not.
+    // A resync while the dialog is open (here the one a SEQ_CONFLICT answer triggers) brings an empty ledger: the match
+    // is back before play. `live` follows it (Neither returns); `model`, the chips, does not.
     vi.mocked(apiV1).mockImplementationOnce(() => Promise.reject(new ApiV1Error("Score moved", 409, "SEQ_CONFLICT")));
     const { el, dialogEl } = openConsole("in_play");
     type M = { who: readonly string[] };
@@ -259,7 +310,8 @@ describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal d
     const fold = (goals: number) => {
       const ledger: EventEnvelope[] = [makeEnvelope(1, { type: "core.start", payload: {} })];
       for (let i = 0; i < goals; i++) ledger.push(makeEnvelope(i + 2, { type: "football.goal", payload: { by: l.home.entrantId } }));
-      return forfeitDialogModel(football, cfg, foldMatch(football, cfg, l, ledger), { noNextMatch: false });
+      // Ruling 112: a goal is the sport's own event — something is played whenever one was scored.
+      return forfeitDialogModel(football, cfg, foldMatch(football, cfg, l, ledger), { noNextMatch: false, playRecorded: goals > 0 });
     };
     const props = (live: ReturnType<typeof fold> | null) => ({
       msg: (key: MessageKey, vars?: Record<string, string | number>) => tRuntime(messages, key, vars),

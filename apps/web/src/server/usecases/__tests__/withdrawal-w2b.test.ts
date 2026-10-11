@@ -947,7 +947,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     await voidLatest(s.auth, a.id);
     expect((await fixtureRow(a.id)).status, "back into play").toBe("in_play");
     // A disqualification of BOTH is not a recordable event: the engine's `core.forfeit` schema admits `by: "both"` only
-    // as a walkover (core/events.ts), and football records a walkover only before the start (R2, walkoverPhases).
+    // as a walkover (core/events.ts), and football records a walkover only until something is played (R2, walkoverPhases;
+    // ruling 112) — this semi's goals were played.
     await expect(post(s.auth, a.id, "core.forfeit", { by: "both", reason: "disqualified" })).rejects.toMatchObject({ code: "INVALID_EVENT" });
     await expect(post(s.auth, a.id, "core.forfeit", { by: "both", reason: "walkover" })).rejects.toMatchObject({ code: "FORFEIT_REASON_WRONG_PHASE" });
     // Step 2, a disqualification forfeit for either side — the console's Forfeit… with the reason "disqualified". Its

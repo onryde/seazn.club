@@ -671,7 +671,10 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // The real chess module, typed through `forfeitAdmission`'s own parameter and spread into it: no cast, and no field
     // named here, so the engine reads its walkover phases from the module itself. Only the phase is pinned to "play".
     const chess: Parameters<typeof forfeitAdmission<null>>[0] = builtinModules.find((m) => m.key === "boardgame")!;
-    const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null);
+    // The game below holds only its Start: nothing played (ruling 112). Chess declares walkovers in play too, so the
+    // fact moves nothing for it — asserted, so the e2e's expectation cannot hang on which way it is read.
+    const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: false });
+    expect(forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: true }), "chess: ruling 112's fact changes nothing").toEqual(admitted);
     const cascadeOnly: readonly string[] = CASCADE_ONLY_FORFEIT_REASONS;
     const wantReasons = admitted.reasons.filter((r) => !cascadeOnly.includes(r));
     expect(wantReasons.length, "the engine admits a reason for a chess game in play").toBeGreaterThan(0);

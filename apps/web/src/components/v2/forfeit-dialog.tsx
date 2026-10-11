@@ -14,7 +14,7 @@
 // The visual pattern is the settle dialog's (needs-decision.tsx `SettleDialog`): a bottom sheet on phones, buttons for
 // the side, radios for the reason, Cancel + Confirm, focus trapped, Escape closes unless sending.
 import { useEffect, useRef, useState } from "react";
-import { forfeitAdmission, type ForfeitReason, type LineupPair } from "@seazn/engine/core";
+import { forfeitAdmission, playRecorded, type ForfeitReason, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { isCascadeOnlyForfeitReason, type WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import type { MessageKey } from "@/lib/messages";
@@ -56,18 +56,31 @@ const CONFIRM_KEY: Record<ForfeitReason, ForfeitConfirmKey> = {
 
 const SIDES = ["home", "away"] as const;
 
+/** One ledger row as the console holds it (fixture-console.tsx `EventIn`): a void names its target in `voids_event_id`. */
+export type ForfeitLedgerRow = { readonly id: string; readonly seq: number; readonly type: string; readonly voids_event_id: string | null };
+
+/**
+ * Ruling 112's fact for the dialog: has anything been played on this fixture — the engine's own `playRecorded` (the
+ * reading its fold guard judges a walkover by), asked of the console's ledger rows in seq order.
+ */
+export function forfeitPlayRecorded(rows: readonly ForfeitLedgerRow[]): boolean {
+  return playRecorded([...rows].sort((a, b) => a.seq - b.seq).map((r) => ({ id: r.id, type: r.type, voids: r.voids_event_id })));
+}
+
 /**
  * The dialog's model (spec §5.5). `state` is the module's folded state for this fixture (`forfeitBaseState` for a
  * scheduled one). `noNextMatch` is the page's server-side D19 reading: a feeding bracket kind on a line that feeds no
- * next match, where the server refuses a double walkover (DOUBLE_WALKOVER_NO_NEXT_MATCH).
+ * next match, where the server refuses a double walkover (DOUBLE_WALKOVER_NO_NEXT_MATCH). `playRecorded` is ruling 112's
+ * fact, read from the same ledger the state folds (`forfeitPlayRecorded`): a walkover stays on offer after the Start
+ * until something is played.
  */
 export function forfeitDialogModel(
   module: ForfeitModule,
   cfg: unknown,
   state: unknown,
-  f: { noNextMatch: boolean },
+  f: { noNextMatch: boolean; playRecorded: boolean },
 ): ForfeitDialogModel {
-  const admission = forfeitAdmission(module, state);
+  const admission = forfeitAdmission(module, state, { playRecorded: f.playRecorded });
   // PF-2: the engine admits withdrew in every phase; the server refuses it from every writer but the cascade.
   const sideReasons = admission.reasons.filter((r): r is WriterForfeitReason => !isCascadeOnlyForfeitReason(r));
   const sides: ForfeitWho[] = sideReasons.length > 0 ? [...SIDES] : [];

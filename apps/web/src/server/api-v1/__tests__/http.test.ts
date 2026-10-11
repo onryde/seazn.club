@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EngineError, EngineErrorCode, FORFEIT_REASONS, foldMatch } from "@seazn/engine/core";
-import { defaultLineupPair, makeEnvelope, sportCases } from "@seazn/engine/testkit";
+import { defaultLineupPair, makeEnvelope, onePlayEvent, sportCases } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { scoringErrorText } from "@/lib/scoring-vocab";
@@ -424,36 +424,46 @@ describe("cursor pagination", () => {
 
 // W2b loop-F review M-4 (plan D3): FORFEIT_REASON_WRONG_PHASE names the phase it judged and the reasons that phase
 // admits. Driven through the REAL engine fold for every sport (the refusal's data is the engine's, never typed here),
-// then the real v1 envelope, then the copy. The expected list is the rulebook's (spec X-RS-1): a walkover only in the
-// module's declared walkover phases (default "pre", R2), a retirement or disqualification only once play started (R4),
-// a withdrawal in any phase (R5) — in FORFEIT_REASONS order.
+// then the real v1 envelope, then the copy. The expected list is the rulebook's (spec X-RS-1 as amended by ruling 112):
+// a walkover only in the module's declared walkover phases (default "pre", R2) — and the phase reads "pre" for a walkover
+// while nothing is played after the start —, a retirement or disqualification only once play started (R4), a withdrawal
+// in any phase (R5) — in FORFEIT_REASONS order.
 describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons to the wire and the copy", () => {
-  const rulebookAllowed = (phase: string, walkoverPhases: readonly string[]) =>
-    FORFEIT_REASONS.filter((r) => (r === "walkover" ? walkoverPhases.includes(phase) : r === "withdrew" ? true : phase !== "pre"));
+  const rulebookAllowed = (phase: string, walkoverPhases: readonly string[], played: boolean) =>
+    FORFEIT_REASONS.filter((r) => (r === "walkover" ? walkoverPhases.includes(played ? phase : "pre") : r === "withdrew" ? true : phase !== "pre"));
   // Spec PF-2: `withdrew` is recorded by the withdrawal cascade alone; every writer this refusal reaches is refused it,
   // so the wire and the sentence never offer it (loop-F R-3).
   const PF2_CASCADE_ONLY: readonly string[] = ["withdrew"];
   const enM = (k: string, v?: Record<string, string | number>) => interpolate((uiEn as Record<string, string>)[k]!, v);
 
-  it("every sport, before the start and once play started: the refusal's phase and reasons reach the wire and the sentence", async () => {
+  it("every sport, before the start, after a bare start and once something is played: the refusal's phase and reasons reach the wire and the sentence", async () => {
     let refused = 0;
+    let refusedAfterPlay = 0;
     let nothingToRefuse = 0;
     let onlyCascade = 0;
     for (const { key, module: mod } of sportCases()) {
-      const cfg = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
+      const first = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
       const lineups = defaultLineupPair(mod.positions);
       const walkoverPhases = mod.walkoverPhases ?? ["pre"];
-      for (const prefix of [[], [{ type: "core.start", payload: {} }]] as const) {
-        const head = prefix.map((e, i) => makeEnvelope(i + 1, e));
+      const start = makeEnvelope(1, { type: "core.start", payload: {} });
+      // Ruling 112's "something is played": the module's own generator draws it (chess's one event decides a plain game,
+      // so under its bracket deciders a draw is held instead).
+      const scene = [first, mod.configSchema.parse({ ...(first as object), ...mod.bracketDeciders(first as never) })]
+        .map((cfg) => ({ cfg, played: onePlayEvent(mod, cfg, lineups, [start]) }))
+        .find((x) => x.played !== null);
+      if (scene === undefined) throw new Error(`${key}: its generator draws no sport event after the start`);
+      for (const at of ["before", "bare start", "played"] as const) {
+        const cfg = at === "played" ? scene.cfg : first;
+        const head = at === "before" ? [] : at === "bare start" ? [start] : [start, scene.played!];
         const phase = mod.forfeitPhase(foldMatch(mod as never, cfg, lineups, head) as never);
-        const engineAllowed = rulebookAllowed(phase, walkoverPhases);
+        const engineAllowed = rulebookAllowed(phase, walkoverPhases, at === "played");
         const allowed = engineAllowed.filter((r) => !PF2_CASCADE_ONLY.includes(r));
         const reason = FORFEIT_REASONS.find((r) => !engineAllowed.includes(r));
         if (reason === undefined) {
           nothingToRefuse++;
           continue;
         }
-        const label = `${key} ${phase} ${reason}`;
+        const label = `${key} ${at} ${phase} ${reason}`;
         let caught: unknown = null;
         try {
           foldMatch(mod as never, cfg, lineups, [...head, makeEnvelope(head.length + 1, { type: "core.forfeit", payload: { by: "e-home", reason } })]);
@@ -480,10 +490,14 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
           enM("engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named", { phase: enM(`forfeit.phase.${phase}`), allowed: words }),
         );
         refused++;
+        if (at === "played") refusedAfterPlay++;
       }
     }
-    // Every sport refuses a retirement before the start (R4), so at least one refusal per sport.
+    // Every sport refuses a retirement before the start (R4), so at least one refusal per sport; and once something is
+    // played, every sport whose walkover phases stop at "pre" refuses the walkover (ruling 112).
     expect(refused, `refused (nothing to refuse in ${nothingToRefuse}, only the cascade's reason in ${onlyCascade} sport×phase cases)`).toBeGreaterThanOrEqual(sportCases().length);
+    expect(refusedAfterPlay, "walkovers refused once something is played").toBe(sportCases().filter(({ module: m }) => m.walkoverPhases === undefined).length);
+    expect(refusedAfterPlay).toBeGreaterThan(0);
   });
 
   it("the empty case: an unreadable shape forwards code + message only, and the copy is the code's own", async () => {

@@ -578,8 +578,8 @@ const CORE_ROWS: Gated[] = RULED_CORE_TYPES.map((type) => ({
   type,
   payload: (f) => {
     if (type === "core.settle") return { winner: f.home, method: "lot" };
-    // W2b D3: the row is posted on a STARTED fixture (`ready`), where a forfeit is a retirement — a walkover is
-    // refused there (FORFEIT_REASON_WRONG_PHASE), which X-RS-3 below proves per reason.
+    // W2b D3: the row is posted on a STARTED fixture (`ready`), where a retirement is recordable (R4); a walkover is
+    // too until something is played (ruling 112), so the retirement is the row's one reason for every authority.
     if (type === "core.forfeit") return { by: f.away, reason: "retired" };
     return { reason: "rain" };
   },

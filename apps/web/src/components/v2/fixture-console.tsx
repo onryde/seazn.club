@@ -70,7 +70,7 @@ import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
-import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
+import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
 import { lineupPairFrom } from "@/components/v2/scorepad/registry";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
@@ -891,16 +891,19 @@ export function FixtureConsole({
   // scheduled fixture's null read as the module's init), the cfg the pad folds against, and the page's D19 reading.
   const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
   const noNextMatch = fixture.no_next_match === true;
+  // Ruling 112: a walkover stays on offer after the Start until something is played — the engine's own reading of the
+  // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state).
+  const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);
   const forfeitModel = useMemo((): ForfeitDialogModel | null => {
     if (sportModule === null || home === null || away === null) return null;
     try {
       const state = forfeitBaseState(sportModule, forfeitCfg, live.state, lineupPairFrom(home, away));
-      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch });
+      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded });
     } catch {
       // A state the module cannot read here is not a dialog to guess at; the console stays up without the Forfeit.
       return null;
     }
-  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch]);
+  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded]);
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.

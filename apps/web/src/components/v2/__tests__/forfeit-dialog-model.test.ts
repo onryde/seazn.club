@@ -9,13 +9,14 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { foldMatch, FORFEIT_REASONS, type EventEnvelope, type ForfeitReason } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "@/lib/forfeit-phase-refusal";
 import {
   forfeitBaseState,
   forfeitConfirmBlocked,
   forfeitDialogModel,
   forfeitPayload,
+  forfeitPlayRecorded,
   forfeitPreviewNow,
   pickForfeit,
   NO_FORFEIT_PICK,
@@ -47,7 +48,23 @@ function fixtureOf(key: string, ledger: (l: ReturnType<typeof defaultLineupPair>
 }
 const PRE = () => [];
 const STARTED = () => [ev(1, "core.start")];
-const model = (fx: { m: Module; cfg: unknown; state: unknown }, noNextMatch = false) => forfeitDialogModel(fx.m, fx.cfg, fx.state, { noNextMatch });
+/** The ledger as the console holds it (fixture-console.tsx `EventIn`): a void names its target in `voids_event_id`. */
+const rowsOf = (events: readonly EventEnvelope[]) => events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, voids_event_id: e.voids ?? null }));
+/** Ruling 112: the start, then ONE real sport event — the module's own generator draws it (never a typed event name),
+ *  under the first cfg or, for chess (whose one event decides a plain game), the bracket deciders' held draw. */
+function playedOf(key: string) {
+  const m = mod(key);
+  const l = defaultLineupPair(m.positions);
+  const base = firstCfg(m);
+  for (const cfg of [base, m.configSchema.parse({ ...(base as object), ...m.bracketDeciders(base as never) })]) {
+    const played = onePlayEvent(m, cfg, l, STARTED());
+    if (played !== null) return fixtureOf(key, () => [...STARTED(), played], cfg);
+  }
+  throw new Error(`${key}: its generator draws no sport event after the start`);
+}
+/** The dialog's model for a fixture, fed the console's own reading of its ledger (`forfeitPlayRecorded`). */
+const model = (fx: { m: Module; cfg: unknown; state: unknown; events: readonly EventEnvelope[] }, noNextMatch = false) =>
+  forfeitDialogModel(fx.m, fx.cfg, fx.state, { noNextMatch, playRecorded: forfeitPlayRecorded(rowsOf(fx.events)) });
 
 describe("UI-1 forfeit dialog model (spec §5.5)", () => {
   it("empty case first: a decided fixture offers nothing — no side, no reason, no guidance", () => {
@@ -67,18 +84,31 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(d.guidance).toBeNull();
   });
 
-  it("X-RS-1: after play started — no Neither; retired or disqualified", () => {
+  it("X-RS-1 (ruling 112): after Start with nothing played — Home, Away, Neither; a side walks over, retires or is disqualified", () => {
+    // Ruling 112: the walkover (and Neither) reads "pre" until something is played; retired and disqualified are
+    // recordable from the Start (R4, unchanged). The organiser who pressed Start for a no-show records the walkover.
     const d = model(fixtureOf("generic", STARTED));
-    expect(d.who).toEqual(["home", "away"]);
-    expect(d.why("away")).toEqual(["retired", "disqualified"]);
-    expect(d.why("both"), "Neither is not a choice once play started").toEqual([]);
+    expect(d.who).toEqual(["home", "away", "both"]);
+    expect(d.why("away")).toEqual(["walkover", "retired", "disqualified"]);
+    expect(d.why("both")).toEqual(["walkover"]);
   });
 
-  it("X-RS-1 after a void: voiding the start takes the match back before play — Neither and the walkover return", () => {
-    // The take-back sequence (TEST-STRATEGY rule 1): start, then void the start.
-    const d = model(fixtureOf("generic", () => [ev(1, "core.start"), ev(2, "core.void", {}, "e-1")]));
-    expect(d.who).toEqual(["home", "away", "both"]);
-    expect(d.why("away")).toEqual(["walkover"]);
+  it("X-RS-1 (ruling 112): once the sport's own event is played — no Neither; retired or disqualified", () => {
+    const d = model(playedOf("generic"));
+    expect(d.who).toEqual(["home", "away"]);
+    expect(d.why("away")).toEqual(["retired", "disqualified"]);
+    expect(d.why("both"), "Neither is not a choice once something is played").toEqual([]);
+  });
+
+  it("X-RS-1 (ruling 112) after a void: voiding the one played event, or the start, takes the match back to nothing played — Neither and the walkover return", () => {
+    // The take-back sequences (TEST-STRATEGY rule 1): start, play, void the play; and start, void the start.
+    const played = playedOf("generic");
+    const back = model(fixtureOf("generic", () => [...played.events, ev(3, "core.void", {}, played.events[1]!.id)]));
+    expect(back.who).toEqual(["home", "away", "both"]);
+    expect(back.why("away")).toEqual(["walkover", "retired", "disqualified"]);
+    const unstarted = model(fixtureOf("generic", () => [ev(1, "core.start"), ev(2, "core.void", {}, "e-1")]));
+    expect(unstarted.who).toEqual(["home", "away", "both"]);
+    expect(unstarted.why("away")).toEqual(["walkover"]);
   });
 
   it("PF-2: no sport, in no phase, offers a cascade-only reason (withdrew) for any side", () => {
@@ -87,7 +117,7 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     let sports = 0;
     for (const m of builtinModules) {
       sports++;
-      const scenes = [fixtureOf(m.key, PRE), fixtureOf(m.key, STARTED)];
+      const scenes = [fixtureOf(m.key, PRE), fixtureOf(m.key, STARTED), playedOf(m.key)];
       if (m.key === "boardgame") scenes.push(fixtureOf(m.key, () => [ev(1, "core.start"), ev(2, DRAWN.type, DRAWN.payload)], chessKoCfg()));
       for (const fx of scenes) {
         for (const noNextMatch of [false, true]) {
@@ -109,10 +139,11 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(d.who).toEqual(["home", "away"]);
     expect(d.why("both")).toEqual([]);
     expect(d.guidance).toBe("noNextMatch");
-    // The pairs: the same fixture with a next match offers Neither and no guidance; a final after the start has no
-    // Neither to replace, so no guidance either.
+    // The pairs: the same fixture with a next match offers Neither and no guidance; a final once something is played
+    // has no Neither to replace, so no guidance either — but after a bare start it still has (ruling 112).
     expect(model(fixtureOf("generic", PRE), false).guidance).toBeNull();
-    expect(model(fixtureOf("generic", STARTED), true).guidance).toBeNull();
+    expect(model(playedOf("generic"), true).guidance).toBeNull();
+    expect(model(fixtureOf("generic", STARTED), true).guidance).toBe("noNextMatch");
   });
 
   it("X-WO-1: the preview is the engine's credit — hockey walkover reads 5–0 against the away side", () => {
@@ -192,7 +223,7 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     for (const m of builtinModules) {
       const l = defaultLineupPair(m.positions);
       const base = forfeitBaseState(m, firstCfg(m), null, l);
-      const d = forfeitDialogModel(m, firstCfg(m), base, { noNextMatch: false });
+      const d = forfeitDialogModel(m, firstCfg(m), base, { noNextMatch: false, playRecorded: forfeitPlayRecorded([]) });
       expect(d.who, m.key).toEqual(["home", "away", "both"]);
       expect(d.why("away"), m.key).toEqual(["walkover"]);
       checked++;
@@ -206,7 +237,7 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
 
 describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
   it("Confirm stays blocked until who AND why are chosen, and while sending", () => {
-    const d = model(fixtureOf("generic", STARTED));
+    const d = model(playedOf("generic"));
     let s: ForfeitSelection = NO_FORFEIT_PICK;
     expect(forfeitConfirmBlocked(d, s, false), "nothing chosen").toBe(true);
     s = pickForfeit(d, s, { kind: "who", who: "away" });
@@ -227,8 +258,8 @@ describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
 
   it("rule 10: any sequence of taps keeps the selection offered, never picks withdrew, and every Confirmable choice is one the engine records", () => {
     const KEYS = builtinModules.map((m) => m.key);
-    type Scene = "pre" | "play" | "tiebreak";
-    const sceneArb = fc.constantFrom<Scene>("pre", "play", "tiebreak");
+    type Scene = "pre" | "started" | "played" | "tiebreak";
+    const sceneArb = fc.constantFrom<Scene>("pre", "started", "played", "tiebreak");
     const pickArb = fc.oneof(
       fc.record({ kind: fc.constant("who" as const), who: fc.constantFrom<ForfeitWho>("home", "away", "both") }),
       fc.record({ kind: fc.constant("why" as const), reason: fc.constantFrom<ForfeitReason>(...FORFEIT_REASONS) }),
@@ -238,8 +269,10 @@ describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
     fc.assert(
       fc.property(fc.constantFrom(...KEYS), sceneArb, fc.boolean(), fc.array(pickArb, { minLength: 1, maxLength: 12 }), (key, scene, noNextMatch, picks) => {
         const chess = key === "boardgame";
-        const ledger = scene === "pre" ? PRE : scene === "play" || !chess ? STARTED : () => [ev(1, "core.start"), ev(2, DRAWN.type, DRAWN.payload)];
-        const fx = fixtureOf(key, ledger, chess && scene === "tiebreak" ? chessKoCfg() : undefined);
+        // Ruling 112's two sides of the start: nothing played (a bare start), and the sport's own event played.
+        const fx = scene === "played" ? playedOf(key)
+          : scene === "tiebreak" && chess ? fixtureOf(key, () => [ev(1, "core.start"), ev(2, DRAWN.type, DRAWN.payload)], chessKoCfg())
+          : fixtureOf(key, scene === "pre" ? PRE : STARTED);
         const d = model(fx, noNextMatch);
         let s: ForfeitSelection = NO_FORFEIT_PICK;
         for (const p of picks) {
@@ -274,9 +307,9 @@ describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
 // offered pair, so through it each guard is covered for by the other; these hand the guard a pair the dialog does not
 // offer — a selection carried over from a snapshot the match has since moved past.
 describe("UI-1 forfeit dialog: a choice the dialog does not offer (review M-3)", () => {
-  it("Confirm stays blocked on a side or reason the model no longer offers — Neither and the walkover once play started", () => {
-    const d = model(fixtureOf("generic", STARTED));
-    expect(d.who, "X-RS-1: no Neither once play started").not.toContain("both");
+  it("Confirm stays blocked on a side or reason the model no longer offers — Neither and the walkover once something is played", () => {
+    const d = model(playedOf("generic"));
+    expect(d.who, "X-RS-1 (ruling 112): no Neither once something is played").not.toContain("both");
     expect(forfeitConfirmBlocked(d, { who: "both", reason: "walkover" }, false), "Neither after play").toBe(true);
     expect(forfeitConfirmBlocked(d, { who: "home", reason: "walkover" }, false), "a walkover after play").toBe(true);
     // The positive pair: an offered choice is Confirmable.
