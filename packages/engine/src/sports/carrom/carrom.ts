@@ -568,6 +568,19 @@ function carromForfeitCredit(cfg: CarromCfg, state: CarromState, reason: AwardRe
   return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };
 }
 
+/** X-WO-1 (Task 13 review C1) — the games a decided match READS: the credited ones for a forfeit (the same
+ *  `carromForfeitCredit` `standingsDelta` lays over the table — CA-WO-1/CA-RT-1), the games won otherwise; a bye keeps
+ *  its played games (C-5). Mirrors football's `displayedGoals`. */
+function displayedGames(state: CarromState): { home: number; away: number } {
+  const outcome = state.outcome;
+  if (outcome?.kind !== "award") return state.gamesWon;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return state.gamesWon;
+  const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+  const credit = carromForfeitCredit(state.cfg, state, reason, offender);
+  return { home: credit.perSide[0].sets_won ?? state.gamesWon.home, away: credit.perSide[1].sets_won ?? state.gamesWon.away };
+}
+
 // ---------------------------------------------------------------------------
 // Positions — carrom.md §5: catalog empty (doubles = pair entrant).
 // ---------------------------------------------------------------------------
@@ -956,8 +969,10 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
   summary(state): ScoreSummary {
     const current = state.games.find((game) => game.winner === null);
+    // A forfeit reads its credited games (X-WO-1); the per-game detail below stays as played.
+    const won = displayedGames(state);
     const line = (side: Side): string => {
-      const games = `${state.gamesWon[side]}`;
+      const games = `${won[side]}`;
       return current === undefined ? games : `${games} (${current.score[side]})`;
     };
     const breaker =
@@ -967,7 +982,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
           ]
         : null;
     return {
-      headline: `${state.gamesWon.home} — ${state.gamesWon.away}`,
+      headline: `${won.home} — ${won.away}`,
       perSide: [
         { entrantId: state.entrants.home, line: line("home") },
         { entrantId: state.entrants.away, line: line("away") },

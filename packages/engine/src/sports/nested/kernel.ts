@@ -2083,6 +2083,19 @@ export function makeNestedModule(
     };
   };
 
+  /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
+   *  `nestedForfeitCredit` `standingsDelta` lays over the table — TN-WO-1/TN-RT-1 straight sets), the sets won
+   *  otherwise; a bye keeps its played sets (C-5). Mirrors football's `displayedGoals`. */
+  const displayedSets = (state: NestedState): { home: number; away: number } => {
+    const outcome = state.outcome;
+    if (outcome?.kind !== "award") return state.setsWon;
+    const reason = awardReasonOf(outcome);
+    if (reason === "bye") return state.setsWon;
+    const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+    const credit = nestedForfeitCredit(state.cfg, state, reason, offender);
+    return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
+  };
+
   return {
     key: preset.key,
     version: preset.version,
@@ -2190,14 +2203,16 @@ export function makeNestedModule(
                 ? ` (${gameScoreLine(state.points)})`
                 : "")
           : "";
+      // A forfeit reads its credited sets (X-WO-1); the played strip beside them stays as played.
+      const sets = displayedSets(state);
       return {
         headline:
-          `${state.setsWon.home} — ${state.setsWon.away}` +
+          `${sets.home} — ${sets.away}` +
           (strip === "" ? "" : ` · ${strip}`) +
           liveGames,
         perSide: [
-          { entrantId: state.entrants.home, line: `${state.setsWon.home}` },
-          { entrantId: state.entrants.away, line: `${state.setsWon.away}` },
+          { entrantId: state.entrants.home, line: `${sets.home}` },
+          { entrantId: state.entrants.away, line: `${sets.away}` },
         ],
         detail: {
           // Closed sets + (when play is under way) one open entry with the

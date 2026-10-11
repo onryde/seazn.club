@@ -866,3 +866,94 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     expect(checked).toBe(262);
   });
 });
+
+// W2b Task 13 fix round 1 (review C1; X-WO-1 "one credited score on every surface") — the SUMMARY a forfeit folds to
+// reads the module's own credit: the headline and each side's line show the credit's primary metric (the module's
+// first declared metric — goals, sets, games, wins), so the tile, the hub card, the schedule and the match centre
+// cannot show a played 0–0 (or a retiree leading) beside a credited result. Expected values are the module's own
+// `forfeitCredit` over the folded state, never a typed score. Every declared cfg, both seats, for a walkover; every
+// X-RT-1 row (all 11 sports) for a retirement.
+describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never the played one (review C1)", () => {
+  /** The number a summary line shows for a side: its leading integer ("3", "1 (12)", "3 (2p)"), or null. */
+  const shown = (line: string): number | null => {
+    const n = /^(\d+)/.exec(line);
+    return n === null ? null : Number(n[1]);
+  };
+  /** Summaries that are not a scoreline for a forfeit, each with why — and each exemption ASSERTED on the fold (the
+   *  summary, the credit and the side at fault), never assumed. */
+  const NOT_A_SCORELINE: Record<string, { why: string; holds: (lines: string[], want: (number | null)[], offenderAt: 0 | 1) => void }> = {
+    cricket: {
+      why: "the summary is the innings scorecard ('—' before a ball); the credit is the table's NRR charge (CK-WO-1), with no runs to show",
+      holds: (_lines, want) => expect(want, "a cricket forfeit credits no runs").toEqual([0, 0]),
+    },
+    generic: {
+      why: "a generic forfeit's summary is the result marker ('W/O' / 'L'), not a score: GN-WO-1 credits 0-0 and GN-RT-1 keeps the recorded score",
+      holds: (lines, _want, offenderAt) => {
+        expect(lines.map(shown), "a generic forfeit shows no number").toEqual([null, null]);
+        expect(lines[offenderAt], "the side at fault is the one marked lost").not.toBe(lines[1 - offenderAt]);
+        expect(lines[1 - offenderAt], "the winner carries the walkover marker").toMatch(/W\/O/);
+      },
+    },
+  };
+
+  function expectShowsCredit(key: string, cfg: unknown, spec: Spec, offender: string, reason: string, tag: string): "checked" | "exempt" {
+    const m = mod(key);
+    const l = defaultLineupPair(m.positions);
+    const f = foldMatchWithStoppage(m as never, cfg as never, l, spec.map(([t, p], i) => ev(i + 1, t, p ?? {})));
+    expect(outcomeOf(m as never, f as never)?.kind, `${tag}: the forfeit decided it`).toBe("award");
+    const summary = summaryOf(m as never, f as never);
+    const offenderSide = offender === l.home.entrantId ? "home" : "away";
+    const credit = m.forfeitCredit(cfg as never, f.state as never, reason as never, offenderSide);
+    const primary = (m.metrics as readonly { key: string }[])[0]!.key;
+    const want = credit.perSide.map((side) => side[primary] ?? null);
+    const lines = summary.perSide.map((side) => side.line);
+    const exemption = NOT_A_SCORELINE[key];
+    if (exemption !== undefined && lines.every((line) => shown(line) === null || key === "cricket")) {
+      exemption.holds(lines, want, offenderSide === "home" ? 0 : 1);
+      return "exempt";
+    }
+    expect(lines.map(shown), `${tag}: perSide ${JSON.stringify(summary.perSide)}`).toEqual(want);
+    expect(summary.headline.startsWith(`${want[0]} — ${want[1]}`), `${tag}: headline "${summary.headline}"`).toBe(true);
+    const [w, o] = offenderSide === "home" ? [want[1]!, want[0]!] : [want[0]!, want[1]!];
+    expect(w > o || (w === 0 && o === 0), `${tag}: the side that did not play on never leads or levels (${o} vs ${w})`).toBe(true);
+    return "checked";
+  }
+
+  it("a walkover, every declared cfg of every sport, either seat at fault: the summary is the credit", () => {
+    let checked = 0;
+    let exempt = 0;
+    const sports = new Set<string>();
+    forEachSport(({ key, module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const l = defaultLineupPair(m.positions);
+        for (const at of [l.home.entrantId, l.away.entrantId]) {
+          const verdict = expectShowsCredit(key, cfg, [["core.forfeit", { by: at, reason: "walkover" }]], at, "walkover", `${key}/${name} walkover by ${at}`);
+          if (verdict === "checked") checked++;
+          else exempt++;
+          sports.add(key);
+        }
+      }
+    });
+    expect(sports.size, "every builtin module").toBe(builtinModules.length);
+    expect(checked, `cases checked (${exempt} exempt)`).toBeGreaterThan(0);
+    expect(exempt, "only the named exemptions").toBeGreaterThan(0);
+  });
+
+  it("a retirement (every X-RT-1 row, all 11 sports): the summary is the credit, and the retiree never leads", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      expectShowsCredit(r.key, r.cfg, [["core.start"], ...r.played, ["core.forfeit", { by: H, reason: "retired" }]], H, "retired", r.id);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    expect(new Set(ROWS.map((r) => r.key)).size).toBe(builtinModules.length);
+  });
+
+  it("the played strip stays: a badminton retirement after a game each keeps both games' scores beside the credit", () => {
+    // single-sport: the strip is the set kernels' detail; badminton's BD-RT-1 row has two closed games to keep.
+    const r = row("BD-RT-1");
+    const m = mod("badminton");
+    const f = foldMatchWithStoppage(m as never, r.cfg as never, defaultLineupPair(m.positions), [["core.start"], ...r.played, ["core.forfeit", { by: H, reason: "retired" }]].map(([t, p], i) => ev(i + 1, t as string, p ?? {})));
+    expect(summaryOf(m as never, f as never).headline).toContain(" · 21–15, 18–21");
+  });
+});

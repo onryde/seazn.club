@@ -2329,6 +2329,20 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };
   };
 
+  /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
+   *  `setBasedForfeitCredit` `standingsDelta` lays over the table), the sets won otherwise; a bye keeps its played
+   *  sets (C-5). Mirrors football's `displayedGoals`: the headline and the table cannot disagree, a walkover never reads
+   *  0–0, and a retiree who led on sets never reads as leading the match it lost. */
+  const displayedSets = (state: SetBasedState): { home: number; away: number } => {
+    const outcome = state.outcome;
+    if (outcome?.kind !== "award") return state.setsWon;
+    const reason = awardReasonOf(outcome);
+    if (reason === "bye") return state.setsWon;
+    const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+    const credit = setBasedForfeitCredit(state.cfg, state, reason, offender);
+    return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
+  };
+
   return {
     key: preset.key,
     version: preset.version,
@@ -2464,11 +2478,13 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       // tally ("1 — 0 · 21–15 (14–11)") so rally scoring is visible too.
       const open = openSet(state);
       const inSet = open === null ? "" : ` (${open.set.home}–${open.set.away})`;
+      // A forfeit reads its credited sets (X-WO-1); the played strip and points beside them stay as played.
+      const sets = displayedSets(state);
       return {
-        headline: `${state.setsWon.home} — ${state.setsWon.away}${setLine}${inSet}`,
+        headline: `${sets.home} — ${sets.away}${setLine}${inSet}`,
         perSide: [
-          { entrantId: state.entrants.home, line: `${state.setsWon.home}` },
-          { entrantId: state.entrants.away, line: `${state.setsWon.away}` },
+          { entrantId: state.entrants.home, line: `${sets.home}` },
+          { entrantId: state.entrants.away, line: `${sets.away}` },
         ],
         detail: {
           sets: state.sets.map((set) => ({ home: set.home, away: set.away, closed: set.closed })),

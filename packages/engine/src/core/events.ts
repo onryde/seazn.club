@@ -201,10 +201,15 @@ export function outcomeOf<Cfg, State>(
 /** THE summary of a fold (W2b PF-1, review I-1; X-WO-1's one-score rule). Exactly `module.summary(state)`, except
  *  when the kernel admitted a withdrawal over a held level result: the module never saw that event, so its state
  *  still reads the draw while `outcomeOf` reads the award. The overlay hands the module its own state with the
- *  effective award in `outcome`, so the module renders the credit it already renders for any award — the same
- *  `forfeitCredit` its `standingsDelta` reads — and the headline and the table cannot disagree. Every module keeps
- *  its decision in `state.outcome`; a state without that field is refused rather than silently left on the draw.
- *  A settlement is deliberately NOT overlaid: a settled level game shows the score that was played. */
+ *  effective award in `outcome`, so the module renders the credit it renders for any award. Each module's summary
+ *  reads a non-bye award's score from its own `forfeitCredit` — the one its `standingsDelta` lays over the table:
+ *  football `displayedGoals`, the period kernel's `officialScore` (hockey, ice hockey), the set kernel's and the
+ *  nested kernel's `displayedSets` (volleyball, badminton, table tennis; tennis), carrom's `displayedGames`, and
+ *  boardgame's award line. Cricket's summary is its innings scorecard and generic's its W/O marker, neither a
+ *  scoreline. So the headline and the table cannot disagree; `forfeit-credit.test.ts` sweeps every module for a
+ *  walkover and a retirement (Task 13 review C1, which found the three set kernels reading played sets).
+ *  Every module keeps its decision in `state.outcome`; a state without that field is refused rather than silently
+ *  left on the draw. A settlement is deliberately NOT overlaid: a settled level game shows the score that was played. */
 export function summaryOf<State>(
   module: { summary(state: State): ScoreSummary; outcome(state: State): MatchOutcome | null },
   folded: FoldedOutcomeFacts<State>,
