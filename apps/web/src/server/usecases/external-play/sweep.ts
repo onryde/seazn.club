@@ -25,6 +25,7 @@ import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
+import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { ensureBridgeRow, loadOnlinePlayFixture, loadSides } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { holdForOrganiser } from "./result";
@@ -49,6 +50,8 @@ export type SweepReport = {
 
 export type SweepDeps = {
   now?: Date;
+  /** T9's create, judged on the sweep's clock. */
+  createGameIfReady?: (fixtureId: string, deps: { now: Date }) => Promise<CreateOutcome>;
   /** TEST SEAM — scope every job to these orgs. Production passes none and
    *  sweeps every org; the shared test database holds other suites' opened
    *  rounds, which an unscoped sweep would act on. */
@@ -169,6 +172,56 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   pass.report.noShows++;
 }
 
+// ─── Job 2: the mint retry (M3) ────────────────────────────────────────────
+//
+// A create that met Lichess's 429 wall leaves the board `pending` with no
+// claim and T9's marker in `last_error`:
+//   create:rate_limited (<reason>) retry_at=<ISO | unknown>
+// (create-game.ts noteThrottled — "recorded for the cron's mint retry, which
+// is what honours retryAt"). The queue never waits a hold out; this job does:
+// a board is retried only once `retry_at` has passed, and only inside its
+// round's window — past T+20 no game can be made (T9's createAtDequeue
+// refuses), and the board belongs to job 1 or the organiser.
+
+const THROTTLED_MARKER = "create:rate_limited";
+
+type RetryCandidate = { fixtureId: string; openedAt: Date; lastError: string };
+
+async function retryCandidates(pass: Pass): Promise<RetryCandidate[]> {
+  return sql<RetryCandidate[]>`
+    select f.id as "fixtureId", o.opened_at as "openedAt", ep.last_error as "lastError"
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+      join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
+     where ep.status = 'pending' and ep.challenge_id is null and ep.create_sent_at is null
+       and ep.mint_claimed_at is null
+       and ep.last_error like ${THROTTLED_MARKER + "%"}
+       and f.status in ${sql(PLAYABLE_STATUSES as string[])}
+       ${orgScope(pass)}
+     order by o.opened_at, f.id`;
+}
+
+/** When T9's marker says the hold ends. `null` — retry now — for `unknown`
+ *  (T9's spelling of a hold with no time) and for anything unreadable: a
+ *  retry the queue would still refuse costs one refusal, while a marker read
+ *  as "never" would strand the board. */
+function throttledRetryAt(lastError: string): Date | null {
+  const at = /retry_at=(\S+)$/.exec(lastError)?.[1];
+  if (at === undefined || at === "unknown") return null;
+  const t = Date.parse(at);
+  return Number.isNaN(t) ? null : new Date(t);
+}
+
+async function mintRetry(pass: Pass, c: RetryCandidate, create: NonNullable<SweepDeps["createGameIfReady"]>): Promise<void> {
+  // Only the deadline bounds it: a marker is written after the open, so a
+  // pass can never see one before the window opened.
+  if (pass.now.getTime() >= playableWindow(c.openedAt).deadline.getTime()) return;
+  const retryAt = throttledRetryAt(c.lastError);
+  if (retryAt !== null && pass.now.getTime() < retryAt.getTime()) return;
+  pass.report.mintRetries++;
+  await create(c.fixtureId, { now: pass.now });
+}
+
 // ─── The pass ──────────────────────────────────────────────────────────────
 
 export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepReport> {
@@ -183,6 +236,8 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
   };
   const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
 
+  const create = deps.createGameIfReady ?? ((id, d) => createGameIfReady(id, { now: d.now }));
+  await each(pass, "mint_retry", await retryCandidates(pass), (c) => mintRetry(pass, c, create));
   await each(pass, "no_show", await noShowCandidates(pass), (c) => noShow(pass, c));
   return report;
 }
