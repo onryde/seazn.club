@@ -156,7 +156,20 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   if (!f) return;
   const { home, away } = await loadSides(f);
   const came = await checkIns(f, home, away, c.openedAt);
-  if (came.home && came.away) return;
+  if (came.home && came.away) {
+    // Controller ruling C2 (spec §3.2; §9's deadlineReason): both players
+    // came and no game was made — a create Lichess throttled to the end, or
+    // one that never landed. Not a no-show, and not a board to leave silent:
+    // a stuck board blocks the next round. The organiser's, as not_started.
+    await ensureBridgeRow(f);
+    const held = await holdForOrganiser({
+      fixtureId: f.fixtureId,
+      reason: "not_started",
+      detail: `sweep: both players checked in, no game was made by the deadline (${playableWindow(c.openedAt).deadline.toISOString()})`,
+    });
+    if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
+    return;
+  }
   const by = !came.home && !came.away ? "both" : !came.home ? f.homeEntrantId : f.awayEntrantId;
   const auth = await mintOrgOwnerAuth(f.orgId);
   const state = await getFixtureState(auth, f.fixtureId);

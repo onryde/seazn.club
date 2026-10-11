@@ -352,8 +352,9 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
 
   // Design §3.6: a token revoked mid-match is NOT a no-show and must not be
   // recorded as one; a blocked double walkover is its own state. Both are
-  // written by T12, so the vocabulary has to admit them here.
-  it.each(["token_revoked", "double_walkover_blocked"])(
+  // written by T12, so the vocabulary has to admit them here. `not_started`
+  // is T13's (controller ruling C2): both players came, no game was made.
+  it.each(["token_revoked", "double_walkover_blocked", "not_started"])(
     "accepts needs_reason %s",
     async (reason) => {
       expect(await tryInsert("needs_organiser", reason)).toEqual({

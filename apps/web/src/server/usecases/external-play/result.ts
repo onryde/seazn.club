@@ -46,6 +46,9 @@ export const HOLD_REASONS = [
   "token_revoked",
   "provider_error",
   "double_walkover_blocked",
+  // T13 (controller ruling C2): both players came, no game was made by the
+  // deadline — the sweep's, spec §9's deadlineReason.
+  "not_started",
 ] as const satisfies readonly NeedsReason[];
 export type HoldReason = (typeof HOLD_REASONS)[number];
 
