@@ -28,6 +28,7 @@ import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
 import { getLichessLink } from "@/server/usecases/external-accounts";
+import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { lichessConfigured } from "@/lib/oauth";
 import {
   DisplayNameForm,
@@ -222,9 +223,13 @@ export default async function SettingsPage({
   const orgMembersMap = new Map<string, OrgMember[]>();
   let lichessUsername: string | null = null;
   const lichessOk = lichessConfigured();
+  // T20: linking a Lichess account starts online chess, offered per club (the PostHog flag `online-chess`). The card
+  // shows while this club is offered it — or while the player is linked, so they can still unlink.
+  let lichessOffered = false;
   if (tab === "account") {
     const linked = await getLichessLink(user.id);
     lichessUsername = linked?.username ?? null;
+    lichessOffered = await onlineChessOffered(auth);
     for (const org of orgs) {
       if (org.role === "owner") {
         const members = await sql<OrgMember[]>`
@@ -668,7 +673,9 @@ export default async function SettingsPage({
                   <ChangeEmailForm currentEmail={user.email} />
                 </section>
 
-                <LichessLinkCard linkedUsername={lichessUsername} configured={lichessOk} />
+                {(lichessOffered || lichessUsername) && (
+                  <LichessLinkCard linkedUsername={lichessUsername} configured={lichessOk} orgSlug={active.slug} />
+                )}
 
                 {/* Export */}
                 <section className="card p-5">

@@ -92,6 +92,7 @@ function mount(stages: StageProp[], locked: boolean) {
     canAutoPost: false,
     showSeeds: true,
     viewerPlan: "community",
+    onlineChessOffered: true,
   });
 }
 

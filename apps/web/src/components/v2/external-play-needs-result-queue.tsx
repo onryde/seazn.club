@@ -38,8 +38,18 @@ const RESOLVE_KINDS: { kind: "home_forfeit" | "away_forfeit" | "draw" | "no_resu
   { kind: "no_result", labelKey: "externalPlay.resolve.noResult" },
 ];
 
-/** Organiser queue for online-play fixtures stuck in needs_organiser. */
-export function ExternalPlayNeedsResultQueue({ rows }: { rows: NeedsOrganiserRow[] }) {
+/** Organiser queue for online-play fixtures stuck in needs_organiser.
+ *
+ *  `resendOffered` (T20): the club is offered online chess (the PostHog flag `online-chess`, asked by the page).
+ *  Re-sending an invite STARTS play, so with it off the Resend control is not rendered; resolving a board FINISHES
+ *  it, so those controls never depend on the flag. */
+export function ExternalPlayNeedsResultQueue({
+  rows,
+  resendOffered,
+}: {
+  rows: NeedsOrganiserRow[];
+  resendOffered: boolean;
+}) {
   const msg = useMsg();
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -99,22 +109,24 @@ export function ExternalPlayNeedsResultQueue({ rows }: { rows: NeedsOrganiserRow
               )}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={busyId === row.fixtureId}
-                data-testid="external-play-resend"
-                onClick={() => {
-                  setBusyId(row.fixtureId);
-                  setError(null);
-                  void apiV1(`/api/v1/fixtures/${row.fixtureId}/external-play/resend`, { method: "POST" })
-                    .then(() => setError(null))
-                    .catch(() => setError(msg("externalPlay.queue.resendFailed")))
-                    .finally(() => setBusyId(null));
-                }}
-                className="inline-flex min-h-11 items-center rounded border border-slate-200 px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                {msg("externalPlay.queue.resend")}
-              </button>
+              {resendOffered && (
+                <button
+                  type="button"
+                  disabled={busyId === row.fixtureId}
+                  data-testid="external-play-resend"
+                  onClick={() => {
+                    setBusyId(row.fixtureId);
+                    setError(null);
+                    void apiV1(`/api/v1/fixtures/${row.fixtureId}/external-play/resend`, { method: "POST" })
+                      .then(() => setError(null))
+                      .catch(() => setError(msg("externalPlay.queue.resendFailed")))
+                      .finally(() => setBusyId(null));
+                  }}
+                  className="inline-flex min-h-11 items-center rounded border border-slate-200 px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {msg("externalPlay.queue.resend")}
+                </button>
+              )}
               {RESOLVE_KINDS.map((opt) => (
                 <button
                   key={opt.kind}

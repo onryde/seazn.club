@@ -103,6 +103,7 @@ function mount() {
     canAutoPost: false,
     showSeeds: true,
     viewerPlan: "community",
+    onlineChessOffered: true,
   });
 }
 
