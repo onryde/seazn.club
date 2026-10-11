@@ -489,7 +489,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| X-RS-1 | A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover = before play started (chess also after the session starts, FIDE 6.7.1), retired/disqualified = after. | product rule W2b-R1 | signed 83 2026-10-08 | — | — |
+| X-RS-1 | A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover = before play started (chess also after the session starts, FIDE 6.7.1), retired/disqualified = after. Amended by ruling 112 (2026-10-11): for a walkover and a double walkover, play has not started while no sport (module-owned) event is active after `core.start` — kernel admin events are not play — so a walkover stays recordable after Start until something is played; retired/disqualified still from the Start. | product rule W2b-R1 | signed 83 2026-10-08 | — | — |
 | X-RS-2 | Public results name the reason: "w/o" for walkover/withdrew, "ret." for retired, "DQ" for disqualified, in all 4 locales. | product rule W2b-R1 | signed 83 2026-10-08 | — | — |
 | X-RS-3 | Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate. | product rule W2a D-O1 (f-w2 owner) + W2b-R1 | signed 83 2026-10-08 | — | — |
 | X-DW-1 | A double walkover is its own outcome: both sides lose, nobody advances. | FDC 2025 Art. 28 (each side forfeits); FIDE Laws Art. 11.8 ("lost by both") | signed 84 2026-10-08 | — | — |

@@ -1,0 +1,358 @@
+[
+ {
+  "id": "played-void-ignored",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "    if (voided.has(e.id)) continue;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "a played event that is VOIDED does not count"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "seq order, not array order"
+   }
+  ]
+ },
+ {
+  "id": "played-before-start-counts",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "else if (started && !isCoreEventType(e.type)) return true;",
+  "replace": "else if (!isCoreEventType(e.type)) return true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "a sport event BEFORE the start is not play"
+   }
+  ]
+ },
+ {
+  "id": "played-kernel-counts",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "else if (started && !isCoreEventType(e.type)) return true;",
+  "replace": "else if (started) return true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "kernel admin events between the start and the walkover are not play"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "every kernel type is admin, never play"
+   }
+  ]
+ },
+ {
+  "id": "played-never",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "else if (started && !isCoreEventType(e.type)) return true;",
+  "replace": "else if (started && false) return true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-guard.test.ts"
+    ],
+    "name": "11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "once the sport's own event is played a walkover is refused"
+   }
+  ]
+ },
+ {
+  "id": "walkover-phase-pre-112",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "const walkoverPhase = played ? phase : \"pre\";",
+  "replace": "const walkoverPhase = phase;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "the stored production walkover still folds"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-guard.test.ts"
+    ],
+    "name": "11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}"
+   }
+  ]
+ },
+ {
+  "id": "walkover-phase-always-pre",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "const walkoverPhase = played ? phase : \"pre\";",
+  "replace": "const walkoverPhase = \"pre\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-guard.test.ts"
+    ],
+    "name": "11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "once the sport's own event is played a walkover is refused"
+   }
+  ]
+ },
+ {
+  "id": "fold-fact-true",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)))",
+  "replace": "forfeitReasonsAllowed(phase, walkoverPhases, true)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "the stored production walkover still folds"
+   }
+  ]
+ },
+ {
+  "id": "fold-fact-false",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)))",
+  "replace": "forfeitReasonsAllowed(phase, walkoverPhases, false)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "once the sport's own event is played a walkover is refused"
+   }
+  ]
+ },
+ {
+  "id": "admission-fact-ignored",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);",
+  "replace": "module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, true);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-admission.test.ts"
+    ],
+    "name": "after a bare start the walkover too"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-112.test.ts"
+    ],
+    "name": "the admission after a bare start is the ruling's"
+   }
+  ]
+ },
+ {
+  "id": "dialog-fact-dropped",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "forfeitAdmission(module, state, { playRecorded: f.playRecorded })",
+  "replace": "forfeitAdmission(module, state, { playRecorded: true })",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "after Start with nothing played — Home, Away, Neither"
+   }
+  ]
+ },
+ {
+  "id": "dialog-rows-unsorted",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "[...rows].sort((a, b) => a.seq - b.seq)",
+  "replace": "[...rows]",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "seq order, not array order"
+   }
+  ]
+ },
+ {
+  "id": "dialog-void-dropped",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "voids: r.voids_event_id }",
+  "replace": "voids: null }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "seq order, not array order"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "voiding the one played event, or the start"
+   }
+  ]
+ },
+ {
+  "id": "console-fact-true",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);",
+  "replace": "const playRecorded = useMemo(() => true, [events]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "after Start with nothing played, the console offers Neither and the walkover"
+   }
+  ]
+ },
+ {
+  "id": "console-fact-false",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);",
+  "replace": "const playRecorded = useMemo(() => false, [events]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "names ITS OWN side and forfeits ITS OWN entrant"
+   }
+  ]
+ },
+ {
+  "id": "matrix-model-pre-112",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "!walkoverPhases.includes(played ? phase : \"pre\")",
+  "replace": "!walkoverPhases.includes(phase)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "accepted after a bare Start, and wherever the sport declares walkovers in play"
+   }
+  ]
+ },
+ {
+  "id": "matrix-model-never-played",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "!walkoverPhases.includes(played ? phase : \"pre\")",
+  "replace": "!walkoverPhases.includes(\"pre\")",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "accepted after a bare Start, and wherever the sport declares walkovers in play"
+   }
+  ]
+ },
+ {
+  "id": "matrix-playof-no-started",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "? { kind: \"in_progress\" } : { kind: \"started\" };",
+  "replace": "? { kind: \"in_progress\" } : { kind: \"in_progress\" };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "forfeitPlayOf reads the play from the stream the harness posted"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-started-walkover-pre",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const walkoverPhase = s.play.kind === \"started\" ? \"pre\" : phase;",
+  "replace": "const walkoverPhase = phase;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-started-not-in-play",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "return s.play.kind === \"in_progress\" || s.play.kind === \"started\" ? \"play\" : \"pre\";",
+  "replace": "return s.play.kind === \"in_progress\" ? \"play\" : \"pre\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-empty-sheet-is-play",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const playedAny = sheet !== undefined && [sheet.home, sheet.away].some((xs) => Array.isArray(xs) && xs.length > 0);",
+  "replace": "const playedAny = sheet !== undefined;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "a walkover or a double walkover with a scoresheet holding play is refused in every sport but chess"
+   },
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "an empty scoresheet is a Start with nothing played"
+   }
+  ]
+ }
+]
