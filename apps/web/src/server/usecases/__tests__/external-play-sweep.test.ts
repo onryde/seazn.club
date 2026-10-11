@@ -36,7 +36,7 @@ import { EngineError, foldMatch } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
-import { __resetCreationQueue } from "@/server/external-play/creation-queue";
+import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { stampFixtureCheckIn } from "../me";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -151,8 +151,19 @@ vi.mock("@/server/usecases/scoring", async (importOriginal) => {
   };
 });
 
+/** Every Board API call refuses unless a test scripts it. */
+const UNSCRIPTED = { ok: false, code: "unavailable", raw: "unscripted Board API call" } as const;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps queued once-values: a value a test scripted but never
+  // reached would leak into the next test. Reset, then refuse by default.
+  for (const fn of Object.values(board)) {
+    fn.mockReset();
+    fn.mockResolvedValue(UNSCRIPTED);
+  }
+  board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [] });
+  board.listOngoingGames.mockResolvedValue({ ok: true, games: [], complete: true });
   __resetCreationQueue();
   lichess.reset();
   scoring.calls = [];
@@ -665,5 +676,159 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     const report = await sweep(b, { now: b.at(45) });
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job 2 — the mint retry (M3).
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall (M3)", () => {
+  /** Model time for the creation queue too: it stamps `retry_at` from its
+   *  own clock, so that clock is the sweep's. */
+  const queueAt = (t: Date) => __setCreationQueueDeps({ now: () => t.getTime() });
+
+  /** T9's REAL createGameIfReady meeting a Lichess 429 at `min`: the claim
+   *  is released, the queue holds White for CREATION_429_HOLD_MS, and T9
+   *  records `retry_at` for THIS job on a still-pending row. */
+  async function throttled(b: Board, min: number): Promise<Date> {
+    queueAt(b.at(min));
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests. Try again later." });
+    expect(await createGameIfReady(b.fixtureId, { now: b.at(min), publish: async () => {} }), "premise: T9 was throttled")
+      .toEqual({ created: false, reason: "provider_error" });
+    const [r] = await sql<{ status: string; challenge_id: string | null; last_error: string | null }[]>`
+      select status, challenge_id, last_error from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(r!.status).toBe("pending");
+    expect(r!.challenge_id).toBeNull();
+    const at = /retry_at=(\S+)$/.exec(r!.last_error ?? "")?.[1];
+    expect(at, `premise: T9 recorded when to retry (${r!.last_error})`).toBeDefined();
+    const retryAt = new Date(at!);
+    expect(retryAt.getTime(), "premise: Lichess's hold, from the queue's own constant").toBe(b.at(min).getTime() + CREATION_429_HOLD_MS);
+    return retryAt;
+  }
+
+  /** The real T9 behind a recorder, so the test can see what was retried. */
+  function recordingCreate() {
+    const tried: { fixtureId: string; now: Date }[] = [];
+    const createGame: NonNullable<SweepDeps["createGameIfReady"]> = async (fixtureId, d) => {
+      tried.push({ fixtureId, now: d.now });
+      queueAt(d.now);
+      return createGameIfReady(fixtureId, { now: d.now, publish: async () => {} });
+    };
+    return { tried, createGame };
+  }
+  const bridgeStatus = async (fixtureId: string) => {
+    const [r] = await sql<{ status: string; challenge_id: string | null }[]>`
+      select status, challenge_id from fixture_external_play where fixture_id = ${fixtureId}`;
+    return r!;
+  };
+
+  it("past retry_at and inside the window, the create is retried — and lands", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttled(b, 3);
+    const { tried, createGame } = recordingCreate();
+    const gameId = `gm-${randomUUID().slice(0, 12)}`;
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    const now = new Date(retryAt.getTime() + 1_000);
+    const report = await sweep(b, { now, createGameIfReady: createGame });
+    expect(tried).toEqual([{ fixtureId: b.fixtureId, now }]);
+    expect(report.mintRetries).toBe(1);
+    expect(await bridgeStatus(b.fixtureId)).toEqual({ status: "ready", challenge_id: gameId });
+  });
+
+  it("BEFORE retry_at it waits: the hold Lichess asked for is honoured", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttled(b, 3);
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now: new Date(retryAt.getTime() - 1_000), createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+    expect(report.mintRetries).toBe(0);
+    const second = await sweep(b, { now: retryAt, createGameIfReady: createGame });
+    expect(second.mintRetries, "at retry_at itself the hold is over").toBe(1);
+  });
+
+  it("OUTSIDE the window it is not retried: past T+20 no game can be made", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await throttled(b, 19);
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now: playableWindow(b.opened).deadline, createGameIfReady: createGame });
+    expect(tried, "at the deadline").toEqual([]);
+    await sweep(b, { now: b.at(45), createGameIfReady: createGame });
+    expect(tried, "long after").toEqual([]);
+  });
+
+  it("a board whose create LANDED since (a player's own check-in) is not retried", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await throttled(b, 3);
+    queueAt(b.at(5));
+    await readyGame(b, 5); // T9 again, this time through: the 429 marker is cleared with the ready commit
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now: b.at(6), createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+  });
+
+  it("a retry that is throttled AGAIN stays pending with a fresh retry_at — never held — and the next one lands", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const first = await throttled(b, 3);
+    const { tried, createGame } = recordingCreate();
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests." });
+    const t1 = new Date(first.getTime() + 1_000);
+    await sweep(b, { now: t1, createGameIfReady: createGame });
+    expect((await bridgeStatus(b.fixtureId)).status, "still pending: the next pass tries again").toBe("pending");
+    const [r] = await sql<{ last_error: string }[]>`select last_error from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    const again = new Date(/retry_at=(\S+)$/.exec(r!.last_error)![1]!);
+    expect(again.getTime(), "a NEW hold, from the retry's own 429").toBe(t1.getTime() + CREATION_429_HOLD_MS);
+    const gameId = `gm-${randomUUID().slice(0, 12)}`;
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: gameId });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+    await sweep(b, { now: new Date(again.getTime() + 1_000), createGameIfReady: createGame });
+    expect(tried.length).toBe(2);
+    expect(await bridgeStatus(b.fixtureId)).toEqual({ status: "ready", challenge_id: gameId });
+  });
+
+  it("a pending board that was never throttled is not the retry's — check-in mints it", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now: b.at(5), createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+    expect(report.mintRetries).toBe(0);
+  });
+
+  it("retry_at=unknown (T9's spelling of a hold with no time) is retried at once; an unreadable time likewise", async () => {
+    let checked = 0;
+    for (const marker of ["create:rate_limited (lichess_429) retry_at=unknown", "create:rate_limited (lichess_429) retry_at=not-a-time"]) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      // Stands for T9's noteThrottled with a null retryAt / a mangled one.
+      await sql`update fixture_external_play set last_error = ${marker} where fixture_id = ${b.fixtureId}`;
+      const { tried, createGame } = recordingCreate();
+      board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
+      board.acceptChallenge.mockResolvedValueOnce({ ok: true });
+      await sweep(b, { now: b.at(5), createGameIfReady: createGame });
+      expect(tried.length, marker).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a throttled board HELD since is the organiser's, never retried", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttled(b, 3);
+    // Stands for any hold landing on the throttled row (T12's hold keeps an
+    // earlier last_error when it is given no detail): the marker survives.
+    await sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'provider_error'
+               where fixture_id = ${b.fixtureId}`;
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now: new Date(retryAt.getTime() + 1_000), createGameIfReady: createGame });
+    expect(tried).toEqual([]);
+    expect(report.mintRetries).toBe(0);
+  });
+
+  it("a throttled board withdrawn since is not retried", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const retryAt = await throttled(b, 3);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+    const { tried, createGame } = recordingCreate();
+    await sweep(b, { now: new Date(retryAt.getTime() + 1_000), createGameIfReady: createGame });
+    expect(tried).toEqual([]);
   });
 });
