@@ -1281,7 +1281,11 @@ export async function getPublicFixture(
     // the unversioned key to `-v2` for its own change, so a `-v2` entry
     // written by either one lacks the other's. The merged document retires
     // both rather than serve one for a REVALIDATE_FAST window.
-    ["pub-fixture-v3", fixtureId],
+    //
+    // v4 (W2b Task 13, review M-1): the document gained the forfeit tag and
+    // sentence and the set sports' credited summary; a v3 entry would show a
+    // walkover as a bare "Forfeited" over a played 0 — 0.
+    ["pub-fixture-v4", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;

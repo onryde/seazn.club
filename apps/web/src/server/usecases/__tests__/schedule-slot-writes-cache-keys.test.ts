@@ -197,7 +197,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const hubKey = (competitionId: string) => `pub:v1:hub:${competitionId}`;
-const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v2:${fixtureId}`;
+const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v3:${fixtureId}`;
 /** The division's own public documents (schedule, standings, entrants), DEL'd
  *  by name in the same DEL since review r2-m4 replaced the keyspace SCAN.
  *  Spelled out, so a drift in the production spelling reds. */

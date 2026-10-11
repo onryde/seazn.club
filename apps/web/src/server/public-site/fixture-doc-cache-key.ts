@@ -12,8 +12,12 @@
 // during a rolling deploy an old pod reading a v2 entry prints a raw key it
 // has no dictionary line for. Retiring the name isolates the two.
 //
+// `v3` (W2b Task 13, review M-1): the document gained the forfeit tag and
+// sentence and the set sports' credited summary; a v2 entry would show a
+// walkover as a bare "Forfeited" over a played 0 — 0 for its whole TTL.
+//
 // The `pub:v1:fixture:` prefix is kept on purpose: it is the family every
 // "literal key, never through a SCAN" guard filters on.
 export function publicFixtureCacheKey(fixtureId: string): string {
-  return `pub:v1:fixture:v2:${fixtureId}`;
+  return `pub:v1:fixture:v3:${fixtureId}`;
 }

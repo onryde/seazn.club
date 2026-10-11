@@ -13,6 +13,12 @@
 //     `-v2` entry holds only its own change, so the merge of the two retires
 //     both under `-v3`.
 //
+// W2b Task 13 (review M-1): the document gained the forfeit tag and sentence
+// (`match_centre.header.forfeit`, the status line's credited result and the set
+// sports' credited summary), so an entry built before the deploy would show a
+// walkover as "Forfeited" with a played 0 — 0 for its whole window. Both names
+// move again: Redis `pub:v1:fixture:v3:{id}`, Next `["pub-fixture-v4", id]`.
+//
 // The Redis READER's key is pinned here as a literal — the same literal the
 // invalidator suites (`hub-cache-invalidation`, `score-revalidate-in-request`,
 // `schedule-*-cache-keys`) expect a write to DEL — so the reader and the
@@ -62,17 +68,17 @@ beforeEach(() => {
   probe.keyParts.length = 0;
 });
 
-describe("the public fixture document's cache names (v2, 2026-09-16)", () => {
-  it("publicFixture reads Redis under pub:v1:fixture:v2:{id}, never the pre-change name", async () => {
+describe("the public fixture document's cache names (v3/v4, W2b T13 M-1)", () => {
+  it("publicFixture reads Redis under pub:v1:fixture:v3:{id}, never a pre-W2b name", async () => {
     await expect(publicFixture(FIXTURE_ID)).resolves.toEqual({ cached: true });
-    expect(probe.gets).toEqual([`pub:v1:fixture:v2:${FIXTURE_ID}`]);
-    expect(probe.gets).not.toContain(`pub:v1:fixture:${FIXTURE_ID}`);
+    expect(probe.gets).toEqual([`pub:v1:fixture:v3:${FIXTURE_ID}`]);
+    for (const old of [`pub:v1:fixture:${FIXTURE_ID}`, `pub:v1:fixture:v2:${FIXTURE_ID}`]) expect(probe.gets).not.toContain(old);
   });
 
-  it("getPublicFixture caches the page's document under [pub-fixture-v3, id]", async () => {
+  it("getPublicFixture caches the page's document under [pub-fixture-v4, id]", async () => {
     const out = await getPublicFixture("org", "comp", "div", FIXTURE_ID);
     expect(out?.fixture).toEqual({ id: FIXTURE_ID });
     const fixtureEntries = probe.keyParts.filter((parts) => parts[0]?.startsWith("pub-fixture"));
-    expect(fixtureEntries).toEqual([["pub-fixture-v3", FIXTURE_ID]]);
+    expect(fixtureEntries).toEqual([["pub-fixture-v4", FIXTURE_ID]]);
   });
 });

@@ -612,5 +612,35 @@
         "name": "the walked-over semi reads its Spanish sentence"
       }
     ]
+  },
+  {
+    "id": "m1-redis-fixture-key-v2",
+    "file": "apps/web/src/server/public-site/fixture-doc-cache-key.ts",
+    "find": "return `pub:v1:fixture:v3:${fixtureId}`;",
+    "replace": "return `pub:v1:fixture:v2:${fixtureId}`;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
+        ],
+        "name": "publicFixture reads Redis under pub:v1:fixture:v3"
+      }
+    ]
+  },
+  {
+    "id": "m1-next-fixture-key-v3",
+    "file": "apps/web/src/server/public-site/data.ts",
+    "find": "[\"pub-fixture-v4\", fixtureId],",
+    "replace": "[\"pub-fixture-v3\", fixtureId],",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
+        ],
+        "name": "getPublicFixture caches the page's document under \\[pub-fixture-v4, id\\]"
+      }
+    ]
   }
 ]

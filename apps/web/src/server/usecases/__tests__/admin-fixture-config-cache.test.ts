@@ -205,7 +205,7 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
       expect.arrayContaining([
         `pub:v1:org-live:${s.orgId}`,
         `pub:v1:hub:${s.competitionId}`,
-        `pub:v1:fixture:v2:${s.fixtureId}`,
+        `pub:v1:fixture:v3:${s.fixtureId}`,
         `pub:v1:div:${s.divisionId}:schedule`,
         `pub:v1:div:${s.divisionId}:standings`,
         `pub:v1:div:${s.divisionId}:entrants-v2`,
@@ -227,7 +227,7 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
       select home_entrant_id from fixtures where id = ${s.finalId}`;
     expect(final!.home_entrant_id, "premise: the winner was taken back out of the final").toBeNull();
     expect(deleted()).toEqual(
-      expect.arrayContaining([`pub:v1:fixture:v2:${s.fixtureId}`, `pub:v1:fixture:v2:${s.finalId}`]),
+      expect.arrayContaining([`pub:v1:fixture:v3:${s.fixtureId}`, `pub:v1:fixture:v3:${s.finalId}`]),
     );
     expect(cacheDel).toHaveBeenCalledTimes(1);
   });

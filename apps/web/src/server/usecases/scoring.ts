@@ -363,7 +363,7 @@ async function invalidateAndPush(
   // settled, whichever way it went), never before, and without holding this
   // response. Both channels have public receivers that refetch a Redis-cached
   // document on a push: `fixture:{id}` → the match centre and overlay
-  // (`pub:v1:fixture:v2:{id}`), `division:{id}` → the hub
+  // (`pub:v1:fixture:v3:{id}`), `division:{id}` → the hub
   // (`pub:v1:hub:{competitionId}`). A refetch that beat the delete read the old
   // copy, and a subscribed page only polls as a slow safety net.
   //
