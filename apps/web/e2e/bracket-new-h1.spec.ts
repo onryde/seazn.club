@@ -60,7 +60,7 @@ test("NEW-H1: an abandoned badminton semi-final leaves the final's seat empty an
   expect((await read(sf1!.id)).outcome).toBeNull(); // the NEW-H1 shape: abandoned, no outcome
 
   // Semi 2: a walkover decides it, which runs the seat cascade (onDecided → resolveBracketSeats). No START first: a
-  // walkover is recorded before play (X-RS-1), and W2b refuses one once the match is live.
+  // walkover is recorded before play (X-RS-1), and W2b refuses one once something is played (ruling 112).
   expect((await apiJson(request, `/api/v1/fixtures/${sf2!.id}/events`, "POST", { expected_seq: await tip(sf2!.id), type: "core.forfeit", payload: { by: sf2!.away_entrant_id, reason: "walkover" } })).status).toBeLessThan(300);
   await expect.poll(async () => [(await read(final!.id)).home_entrant_id, (await read(final!.id)).away_entrant_id].filter(Boolean).length, { timeout: 15_000 }).toBe(1);
 

@@ -164,17 +164,19 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   request,
 }) => {
   // W2b Task 11 (ruling 4): the old version typed "walkover" into a prompt PREFILLED with "walkover", so a console that
-  // ignored the field passed it. Now play is under way (core.start through the API) and the dialog's NON-default
-  // reason is picked — `retired` — so the ledger's reason can only be the one the organiser chose.
+  // ignored the field passed it. Now play is under way (core.start and one rally through the API — ruling 112: a bare
+  // Start still offers the walkover) and the dialog's NON-default reason is picked — `retired` — so the ledger's
+  // reason can only be the one the organiser chose.
   const { fixtureId, home, homeId } = await seedLiveFixture(request, "Forfeit");
   await postEvent(request, fixtureId, "core.start");
+  await postEvent(request, fixtureId, "badminton.rally", { wonBy: homeId });
   await page.goto(await fixturePath(page.request, fixtureId));
 
   await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
   // Not a native prompt — the in-app `ForfeitDialog` (forfeit-dialog.tsx).
   const dialog = page.getByTestId("forfeit-dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
-  // After play: no Neither (X-RS-1). The NAMED side — the payload's `by` is asserted against it below, so a swapped
+  // After play: no Neither (X-RS-1, ruling 112: something was played). The NAMED side — the payload's `by` is asserted against it below, so a swapped
   // side has to fail here rather than pass on a merely-truthy id.
   await expect(dialog.getByTestId("forfeit-who-both")).toHaveCount(0);
   const homeChoice = dialog.getByTestId("forfeit-who-home");

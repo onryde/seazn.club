@@ -203,7 +203,62 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       .toEqual([2, 0, 42, 0]);
   });
 
-  test("X-RS-1: a retirement after play — Neither is gone, the walkover too; the played score stands", async ({ page, request }) => {
+  test("X-RS-1 (ruling 112): a walkover after Start with nothing played — Home, Away, Neither; walkover, retired, disqualified; recorded on the started ledger, credited like one before play", async ({ page, request }) => {
+    // The stored production shape (ruling 112): the organiser pressed Start, the opponent did not show.
+    const { fx, home, away } = await badmintonLeague(request);
+    await post(request, fx.id, "core.start");
+    expect((await read(request, fx.id)).status, "started, nothing played").toBe("in_play");
+    expect((await ledger(request, fx.id)).map((e) => e.type)).toEqual(["core.start"]);
+    await page.goto(await fixturePath(request, fx.id));
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      const d = await openDialog(page);
+      expect(await sidesShown(d), `${w}: nothing played — Neither is still offered`).toEqual(["home", "away", "both"]);
+      await d.getByTestId("forfeit-who-away").click();
+      expect(await reasonsShown(d), `${w}: the walkover beside retired and disqualified (R4); withdrew is the cascade's`).toEqual(["walkover", "retired", "disqualified"]);
+      await d.getByTestId("forfeit-who-both").click();
+      expect(await reasonsShown(d), `${w}: Neither only walks over`).toEqual(["walkover"]);
+      await expectNoHorizontalScroll(page);
+      await crop(d, "console-forfeit-dialog-after-start", w);
+      await page.keyboard.press("Escape");
+      await expect(dialogOf(page)).toHaveCount(0);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const d = await openDialog(page);
+    await d.getByTestId("forfeit-who-away").click();
+    await d.getByTestId("forfeit-why-walkover").check();
+    // BD-WO-1: the walkover credit — 2-0 in games — exactly as before the start (nothing was played).
+    await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview", { home, homeScore: 2, away, awayScore: 0 }));
+    await expect(d.getByTestId("forfeit-confirm")).toHaveText(ui("forfeitDialog.confirm.walkover"));
+    await d.getByTestId("forfeit-confirm").click();
+
+    await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
+    const rows = await ledger(request, fx.id);
+    expect(rows.map((e) => [e.type, e.payload]), "the stored shape: start, then the walkover").toEqual([
+      ["core.start", {}],
+      ["core.forfeit", { by: fx.away_entrant_id, reason: "walkover" }],
+    ]);
+    await expect(dialogOf(page)).toHaveCount(0);
+    await expect(page.getByTestId("score-forfeit"), "decided: no Forfeit").toHaveCount(0, { timeout: 20_000 });
+    expect(await read(request, fx.id)).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: fx.home_entrant_id, reason: "walkover" } });
+    // The page still loads the started walkover (the fold replays it): a reload shows the decided fixture, no error.
+    await page.reload();
+    await expect(page.getByTestId("score-forfeit")).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.getByTestId("score-start-match")).toHaveCount(0);
+    // The table carries the walkover credit (BD-WO-1 — 2-0 in games, each 21-0), as before the start.
+    await expect
+      .poll(async () => {
+        const st = await apiJson<{ rows: { entrantId: string; metrics: Record<string, number> }[] }>(request, `/api/v1/stages/${fx.stage_id}/standings`);
+        const row = (st.data?.rows ?? []).find((x) => x.entrantId === fx.home_entrant_id);
+        return row ? [row.metrics.sets_won, row.metrics.sets_lost, row.metrics.points_won, row.metrics.points_lost] : null;
+      }, { timeout: 30_000 })
+      .toEqual([2, 0, 42, 0]);
+  });
+
+  test("X-RS-1 (ruling 112): a retirement once something is played — Neither is gone, the walkover too; the played score stands", async ({ page, request }) => {
     const { fx, home, away } = await badmintonLeague(request);
     await post(request, fx.id, "core.start");
     for (let i = 0; i < 3; i++) await post(request, fx.id, "badminton.rally", { wonBy: fx.home_entrant_id });
