@@ -1,10 +1,11 @@
 # Capture record upload — design (approved)
 
 **Status:** **approved** by the owner on 2026-10-12 ("approve all", relayed by the coordinating session): every
-proposal P1–P11 and the owner questions Q1, Q2, Q3, Q5 and Q9. The questions to capture (Q4, Q6–Q8) stay open. This
-is still a design: nothing is implemented, with no route, no use case, no migration and no zod twin. Every server
-change it names is owed by the implementing PR.
-**Contract:** `docs/contracts/capture-record.v1.json` (approved design, no route yet), with fixtures in
+proposal P1–P11 and the owner questions Q1, Q2, Q3, Q5 and Q9. The questions to capture (Q4, Q6–Q8) were answered by
+the capture team on 2026-10-12, relayed by the coordinating session (§12). The owner ruled the same day that a bad line
+is DROPPED, not refused (ruling RL, §0). Implemented by the PR that adds `POST /api/v1/capture/codes/{code}/records`
+(branch `feat/capture-record-upload`).
+**Contract:** `docs/contracts/capture-record.v1.json` (served by the records route, twinned in `capture-schemas.ts`), with fixtures in
 `docs/contracts/fixtures/capture-record.v1/`. Its sha256 and fixtures are pinned by
 `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts`.
 **Builds on:** `2026-10-01-capture-qr-v2-design.md` (§4 envelope, §5.1 code machine, §6.3 phone API, §10 security,
@@ -23,11 +24,12 @@ sessions; the owner then approved A1's reading of "belongs" (Q9).
 | R3 | Only the operator's tap sends, with _Send record to Seazn_. Nothing uploads by itself. | **Owner ruling**, 2026-10-11 |
 | R4 | The server accepts a record from any currently valid token of the code, including a replaced phone's. The app keeps the token for 24 h after an unpair, for uploads only. | **Owner ruling**, 2026-10-11 |
 | RD | The app shows only the ref ("Sent — ref R-7K2Q") and says nothing about dropped lines. The server still returns `dropped`, and the app ignores it. | **Owner ruling**, 2026-10-12 |
+| RL | **A bad line is DROPPED, never the body refused.** A line that fails the line check — a secret-shaped value (S1–S5), a key off the allow-list, a value off its class (`sid`, `tokenTag`, `at` included), a line that is not JSON or not UTF-8 — is dropped and never stored, logged or echoed; the rest of the record is stored. The count of such lines is stored apart (`invalid_lines`, §9) and shown to staff, so a scrub leak can be spotted. The wire answer stays `{ref, kept, dropped}`, `dropped` covering both kinds; the app ignores it (RD). Body-level refusals stay: 413 `too_large` (the line or byte limits, the decompression cap), 401, 429, and 422 for a body that cannot be read as lines or has none (P10). If every line is dropped, the answer is still 201 with `kept: 0`. | **Owner ruling**, 2026-10-12 (relayed by the coordinating session) |
 | A1, A2 | Cross-code attribution (§6) | Agreed rule (web and capture); A1's pairing-based reading **Approved** (owner, 2026-10-12), Q9 |
 | P1 | Path `POST /api/v1/capture/codes/{code}/records` | **Approved** (owner, 2026-10-12) |
 | P2 | 10 records an hour per code, in a bucket of its own (§8) | **Approved** (owner, 2026-10-12) (capture's number) |
 | P3 | 413 answers a new word, `too_large` | **Approved** (owner, 2026-10-12), Q2 |
-| P4 | 422 `invalid` for a disallowed key or a secret-shaped value | **Approved** (owner, 2026-10-12); it is the house word every capture route uses |
+| P4 | 422 `invalid` for a disallowed key or a secret-shaped value | **Retired** by ruling RL (owner, 2026-10-12): such a LINE is dropped. `invalid` stays the 422 word for a body that cannot be read as lines or has none |
 | P5 | Storage shape (§9), including recording `dropped_lines` with the record | **Approved** (owner, 2026-10-12) |
 | P6 | 30-day retention | **Approved** (owner, 2026-10-12) |
 | P7 | Admin view placement (§10): staff, in `/admin`, beside the session | **Approved** (owner, 2026-10-12), Q5 |
@@ -42,11 +44,11 @@ sessions; the owner then approved A1's reading of "belongs" (Q9).
 |---|---|---|
 | "Every line has `at` (ms epoch)" | **False.** Both of capture's writers write ISO 8601 UTC with milliseconds, e.g. `2026-10-11T21:19:03.123Z` (`IsoTime.utc` in `Json.kt`, `toISOString` in `src/services/sessionRecord.ts`). | `at` reuses the beat's R5 shape (§5). A ms-epoch `at` is refused (fixture `line-invalid-at-epoch-ms`). |
 | "Every line has `level`" | **False.** `level` is left out when it is `info` (CD7). Native masks a level it does not vet as `***`. | `level` is optional, and absent means `info`. |
-| "`tokenTag` derivation is an open question" | **It is defined.** It is FNV-1a 32-bit over the token's UTF-16 code units, as 8 lowercase hex digits (`src/domain/credentials/tokenTag.ts`, `TokenTag.kt`, `modules/capture-engine/src/wire/token-tag-vectors.json`, carry 2). Only the `pair` line carries it (`Pairings.kt:41`). | Q8 asks capture to confirm it is final. |
+| "`tokenTag` derivation is an open question" | **It is defined.** It is FNV-1a 32-bit over the token's UTF-16 code units, as 8 lowercase hex digits (`src/domain/credentials/tokenTag.ts`, `TokenTag.kt`, `modules/capture-engine/src/wire/token-tag-vectors.json`, carry 2). Only the `pair` line carries it (`Pairings.kt:41`). | Q8: capture confirmed it final (2026-10-12). |
 | "Re-pairs mint new tokens for the code" | **Not on this server.** A code row holds exactly one tok (`fixture_stream_codes.tok_hash`). Revoke & reissue mints a **new code**, with a new code string and a new tok (`reissueStreamCode`, `mintLocked`). A re-scan of the same QR presents the same tok. | Today, "every token ever issued for this code" is one token: the Bearer that sent the record. |
 | "The server must derive the tag from what it stores per pairing" | Pairings store no token. A code stores `sha256(tok)`, which is kept, and a sealed tok, which is wiped when the code ends. FNV-1a(tok) cannot be computed from `sha256(tok)`. | **No dependency today:** the server computes `tokenTag(Bearer)` on each request and stores nothing. **D1:** if a code can ever hold more than one tok, each tok's tag must be stored when it is minted, because the sealed tok is wiped. |
 | "Admin view next to the session in /admin" | `/admin` has no stream-session view. The only staff page for a single fixture is `/admin/fixtures?id=` (a lookup by id). | §10 places it beside the session in `/admin` (P7, Q5, approved). |
-| The scrub drops what is not allowed | **It masks instead.** An unexpected key leaves the phone as `"key":"***"`, a never key as `"tok":"***"`, and a number, boolean or null passes under **any** key (`scrub.ts`, `SessionRecord.kt`). | A strict server allow-list refuses such a body. See Q4. |
+| The scrub drops what is not allowed | **It masks instead.** An unexpected key leaves the phone as `"key":"***"`, a never key as `"tok":"***"`, and a number, boolean or null passes under **any** key (`scrub.ts`, `SessionRecord.kt`). | Capture drops unlisted keys before Send (Q4, answered); a line the server still finds off the list is dropped, not the body refused (ruling RL). |
 | A credential in free text leaves the phone as a secret | **It is masked in place.** Capture's `vectors.json` case 22 turns `srt://h:1?passphrase=pass%2Bphrase%2F6d1e8b0c&x=1` into `srt://h:1?passphrase=***&x=1`. | Every secret-shaped rule skips the mask, so capture's correct output is admitted (§5, review fix 1). |
 | `capturePhoneRoute` lets a route choose its budget | **It does not.** It spends `CAPTURE_CODE_LIMIT` on every route (`capture-http.ts:137`). | The records route needs a branch there (§8). |
 | Where the record is shown | Capture's brief asks for "the console next to the session, for org admins only". This dispatch says `/admin`, for staff. | The owner chose staff in `/admin`, beside the session (Q5). |
@@ -134,8 +136,8 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
 - **Zip-bomb defence:** the server inflates the body as a stream with a hard output cap of 1 MB + 1 byte, using zlib
   `maxOutputLength` or a counting transform that aborts. Reaching the cap is 413, and inflation stops there. The raw
   body read is also capped at 1 MB.
-- **Keys:** the line keys come from capture's `modules/capture-engine/src/scrub/allow-list.json` (capture `7ea8f63`),
-  92 of them:
+- **Keys:** the line keys come from capture's `modules/capture-engine/src/scrub/allow-list.json` (capture `ebac190`,
+  branch `feat/s1-d3-fixes`), 97 of them:
   - `at` (required), `kind` (required) and `level` (optional) are the line's own keys;
   - each `plain`, `publicUrl`, `text` and `scalars` key is accepted in its class;
   - the field `kind` is written as `field_kind`, because `kind` is the line's own key;
@@ -147,14 +149,21 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
     29 February only in a leap year), seconds required, and a value with no zone refused. The server normalises it to
     UTC. Capture sends Z with milliseconds. One `at` shape across the capture wire beats a second Z-only one, because
     the stored time is normalised either way.
-  - **`sid`** is the server's uuid (the beat's sid shape), the mask `***`, or null. A number or a boolean is refused
-    (`line-invalid-sid-number`, `line-invalid-sid-boolean`), because neither A1 nor A2 could judge it.
+  - **`sid`** is the server's uuid (the beat's sid shape), the mask `***`, or null. A number or a boolean is off the
+    class (`line-invalid-sid-number`, `line-invalid-sid-boolean`), because neither A1 nor A2 could judge it; such a
+    line is dropped (ruling RL).
   - **`tokenTag`** is `^[0-9a-f]{8}$`, as the allow-list's own reason says.
 
-  **Any other key is `422 invalid`, including a never key** (`tok`, `code`, `streamKey`, …) even when masked, and so is
-  a value outside its key's class. When capture adds a key, it is a contract change here (a new sha256) in step with
+  Capture ebac190 added five keys (2026-10-12), each with a reason line in its allow-list. `pickSource` (preview-size:
+  which rule chose the preview's size, `ours` or `vendor`) is a plain key. Four are scalars the reasons narrow, as
+  `tokenTag`'s narrows it: `bytes` (record.send's body size), `failures` (rejoin-retry's failed connects) and
+  `retryMs` (rejoin-retry's wait) are integers of at least 0, and `pickAspect16x9` (preview-size: is the preview
+  16:9) is a boolean. None of the four admits null or the mask; capture writes each from a typed field.
+
+  **A line with any other key is dropped (ruling RL), including a never key** (`tok`, `code`, `streamKey`, …) even when
+  masked, and so is a line with a value outside its key's class. When capture adds a key, it is a contract change here (a new sha256) in step with
   capture's change.
-- **Secret-shaped values (P8, approved).** The server refuses the body with 422 when any string value, under any key,
+- **Secret-shaped values (P8, approved).** The server drops the LINE (ruling RL) when any string value, under any key,
   is secret-shaped:
   - **S1** is the Bearer that sent the record, in any of capture's three forms: raw, percent-encoded or form-encoded
     (the scrub's `formsOf`). The server holds the Bearer, so this match is exact. No schema can state it, so it is
@@ -176,8 +185,8 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
       `…/live/***.` and `(streamid=***)` are capture's correct output.
     - A partial mask, `***` with a letter or digit after it (`…/live/***K3Y`), still trips its rule. The test pins
       that too.
-    - Without the skip, capture's correct output would be refused. One bad line refuses the whole body, and each 422
-      spends the 10-an-hour budget, so such a record could never be sent.
+    - Without the skip, capture's correct output would be dropped as secret-shaped, so every line carrying a masked
+      credential would vanish from the record (before ruling RL, it refused the whole body).
   - **The near misses are pinned.** These nine are fixtures the server must ADMIT, and the contract test proves each
     trips no rule while masked and exactly its rule once unmasked:
     - `line-valid-scrubbed-srt-passphrase` (capture's case 22, verbatim), near S3;
@@ -193,12 +202,17 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
 
   These are regular expressions with no entropy test, because an entropy test fires on class names such as
   `SocketTimeoutException` and on UUIDs. The phone's scrub is the first line of defence and these rules are the
-  server's own second line. Each rule has a vector the line shape admits but the server refuses (`line-secret-*`),
+  server's own second line. Each rule has a vector the line shape admits but the server drops (`line-secret-*`),
   and each vector trips its own rule alone.
-- **Whole body or nothing.** One bad line refuses the whole body, and nothing is stored. The 422 `message` names the
-  line number, the key and the rule (for example "line 7: message is secret-shaped (S2)"), never the value.
-- **Order:** rate limit, then auth (401/404), then size (413), then shape and allow-list (422), then secret-shaped
-  values (422), then attribution, storage and the 201. A stranger's body is never inflated.
+- **Line by line (owner ruling RL, 2026-10-12; it replaces "whole body or nothing").** A bad line is dropped and the
+  rest of the record is stored. A bad line is one the line shape refuses (a key off the allow-list, a value off its
+  class, a line that is not a JSON object), one that is not UTF-8 (the body is split on the LF byte, so a bad byte
+  spoils only its own line), or one with a secret-shaped value. It is counted in `dropped` and apart in
+  `invalid_lines` (§9), and never stored, logged, quoted or echoed: no message names it. §6 says how a bad line meets
+  attribution.
+- **Order:** rate limit, then auth (401/404), then size (413), then a body that cannot be read as lines or has none
+  (422), then each line's shape and allow-list, then its secret-shaped values, then attribution, storage and the 201.
+  A stranger's body is never inflated.
 
 ## 6. Line attribution: the cross-code rule (A1, A2)
 
@@ -221,12 +235,19 @@ line.
 - **A2, a line whose `sid` is null or absent:** kept if and only if it falls inside a pairing window of the sending
   code.
   - A window **opens** at a `pair` line whose `tokenTag` is in T(code), and that `pair` line is kept.
-  - It **closes** through the next `unpaired` or `ended` line, which belongs to the window, or just before the next
-    `pair` line, which opens the next window. Whichever comes first closes it.
+  - It **closes** through the next `unpaired`, `ended`, `pair-refused`, `engine-error` or `reset` line, which belongs
+    to the window (Q7, answered by capture 2026-10-12), or just before the next `pair` line, which opens the next
+    window, or just before the next unreadable line (below). Whichever comes first closes it.
   - **T(code)** is the set of tags of every tok ever issued for the code. Today it holds one tag: `tokenTag(Bearer)`
     (§0.1).
 - A line before the record's first `pair` line is in no window, so it is dropped. This fails closed. See Q6.
 - A1 decides a uuid-sid line on its own, wherever it falls, inside or outside a window.
+- **Bad lines (ruling RL).** A secret-shaped line has a good shape, so attribution reads it like any other line (it may
+  open or close a window), and it is then dropped. A line the server cannot read (not UTF-8, not JSON, not an object, a
+  key off the allow-list, a value off its class) is dropped and closes any open window just before it, as a `pair` of
+  no known code would: it may be another code's `pair` line, and a window run through it could keep that code's
+  lines. This fails closed, like Q6. A1 still judges the uuid-sid lines after it. `keptLines` in
+  `domain/capture-record.ts` is this policy, in one function.
 - **A dropped line** is counted and nothing more. It is never stored (not even hashed), logged, quoted in an error or
   echoed.
 
@@ -250,11 +271,11 @@ The answer is `201 {ref, kept: 3, dropped: 5}`, and the app shows only the ref (
 
 | Status | Body | When |
 |---|---|---|
-| 201 | `{ref, kept, dropped}` | Received. `kept + dropped` is the number of non-empty lines received. If every line was dropped, the answer is still 201 with `kept: 0` (P10). |
+| 201 | `{ref, kept, dropped}` | Received. `kept + dropped` is the number of non-empty lines received; `dropped` counts another code's lines and bad lines alike (ruling RL). If every line was dropped, for either reason, the answer is still 201 with `kept: 0` (P10). |
 | 401 | `code_ended` | missing, malformed or wrong Bearer; unknown code; a code `codeServes` refuses for `record` (§4, Q1) |
 | 404 | `not_a_stream_code` | malformed code |
 | 413 | `too_large` (new word, P3) | over 1000 lines or 1 MB decompressed; the inflate cap is reached |
-| 422 | `invalid` | not NDJSON; a line that is not an object; 0 non-empty lines; a key off the allow-list; a value off its class; a secret-shaped value; an unsupported Content-Encoding |
+| 422 | `invalid` | a body that cannot be read as lines (an unsupported Content-Encoding, a gzip that will not decode) or has no non-empty line (P10). Never a bad line: since ruling RL a bad line is dropped |
 | 429 | `rate_limited` + `Retry-After` | the 11th record in the hour for the code |
 | 503 | `unavailable` | anything unmapped (house) |
 
@@ -279,7 +300,8 @@ The route never answers `replaced` (R4). The fixture `invalid-replaced` pins thi
 The implementing PR owes the migration. The approved shape:
 
 - `capture_records`: `id`, `org_id`, `competition_id`, `fixture_id`, `code_id`, `slot` (the code's slot, 0 today),
-  `ref` (unique), `received_lines`, `kept_lines`, `dropped_lines`, `body_bytes`, `lines` (the kept NDJSON, verbatim),
+  `ref` (unique), `received_lines`, `kept_lines`, `dropped_lines`, `invalid_lines` (ruling RL: the bad lines among the
+  dropped, a count only, at most `dropped_lines`), `body_bytes`, `lines` (the kept NDJSON, verbatim),
   `created_at`, `expires_at`. Returning `dropped` is the owner's ruling (RD). Recording `dropped_lines` is part
   of P5, approved with it.
 - `capture_record_sessions(record_id, session_id)`: the sessions that the kept sid lines name, with a cascading
@@ -301,7 +323,8 @@ The implementing PR owes the migration. The approved shape:
   session, and then the fixture's records that name no session.
 - Each record shows:
   - its ref, time, slot and code id (never the tok);
-  - its received, kept and dropped counts;
+  - its received, kept and dropped counts, and how many of the dropped were bad lines (ruling RL: a scrub leak shows
+    up there);
   - its kept lines as a table: `at`, `kind`, `level`, `sid`, and the other fields as `key=value`.
 - No dropped line can be shown, because none is stored.
 
@@ -309,17 +332,17 @@ The implementing PR owes the migration. The approved shape:
 
 - **What a line can hold:** only allow-list keys, which means closed words, numbers, public URLs and scrubbed text. A
   line holds no name, no email and no device model (`appVersion` only). It holds no token, code, stream key or
-  passphrase: never keys are refused and S1–S5 catch these values in text, while the mask capture writes in their
-  place passes.
+  passphrase: a line with a never key is dropped and S1–S5 drop a line carrying such a value in text (ruling RL),
+  while the mask capture writes in their place passes.
 - **Org isolation:** A1 and A2 drop other codes' lines before storage, so club X's lines never land in club Y's record.
   `dropped` is a count, and staff see only the count.
 - **Logs:** the route logs no body and no header (QR v2 §10.2 redaction: `req.headers.authorization`), and Sentry drops
-  the request body on capture routes. The 422 message names the line, the key and the rule, never a value.
+  the request body on capture routes. No answer names a dropped line, its key or its value (ruling RL).
 - **Who sees a record:** staff only (P7) under RLS, for 30 days (P6). The owner ruled out an org-admin console view for
   now (Q5).
 - **Consent:** the operator's tap is the only trigger (R3).
 
-## 12. Questions: the owner's are answered, capture's stay open
+## 12. Questions: all answered (the owner's, and capture's on 2026-10-12)
 
 - **Q1 (owner): ENDED codes beyond C1(b). ANSWERED 2026-10-12: yes.** Uploads are accepted for 24 h after the code
   last served (C1(c), §4), with no phone condition. The owner accepted the trade-off: a revoked tok, perhaps from a
@@ -332,16 +355,18 @@ The implementing PR owes the migration. The approved shape:
   scoring-link files, and capture re-vendors all of them. So records get their own refusal twin when the route lands,
   and no other file changes.
 - **Q3 (owner). ANSWERED 2026-10-12:** P1–P11 are approved as written.
-- **Q4 (capture): mask or drop.** Capture's scrub writes `"key":"***"` for an unexpected key and lets a scalar through
+- **Q4 (capture): mask or drop. ANSWERED 2026-10-12 (capture, relayed): as recommended** — capture drops keys that are
+  not on the list before Send. A line the server still finds off the list is dropped, not the body refused (ruling RL).
+  The question as it was put: capture's scrub writes `"key":"***"` for an unexpected key and lets a scalar through
   under any key, but this server refuses both. **Recommended:** before Send, capture drops keys that are not on the
   list. Its port already pre-checks the lines and records `refused-local`. The alternative is to let the server drop
   masked unlisted keys instead of refusing the body. A masked VALUE under a listed key, or inside text, is admitted
   either way (§5).
   Two more items for capture to confirm (review minors):
   - **`SrtTarget.toString()` is never logged into the record.** It prints `streamId=<32 chars>` (`SessionConfig.kt`).
-    That is a length, not a secret, but S3 reads `streamId=<32` as a `streamid=` pair, so one such line makes the
-    server refuse the whole record with 422. `Engine.kt` writes `failure.toString()` into `engine-error` lines,
-    which is the path to check.
+    That is a length, not a secret, but S3 reads `streamId=<32` as a `streamid=` pair, so one such line is dropped
+    (ruling RL; before it, the server refused the whole record with 422). `Engine.kt` writes `failure.toString()`
+    into `engine-error` lines, which is the path to check.
   - **Capture's own SRT prose stays as it is.** `srt passphrase is not 10–79 characters` and `srt streamId is blank`
     (`SessionConfig.kt` `problems()`, logged as a `pair-refused` line's `problems`) trip no rule. They are pinned as
     admitted fixtures (`line-valid-prose-srt-passphrase-length`, `line-valid-prose-srt-streamid-blank`). A rewording
@@ -349,12 +374,15 @@ The implementing PR owes the migration. The approved shape:
 - **Q5 (owner): who sees records. ANSWERED 2026-10-12: staff, in `/admin`, beside the session** (desktop only,
   verified at 1280). There is no org-admin console view for now. Capture's brief asked for "the console next to the
   session, for org admins only". That would need its own privacy review if it is ever asked for again.
-- **Q6 (capture): a truncated first window.** Lines before the record's first `pair` are dropped. On a long pairing
+- **Q6 (capture): a truncated first window. ANSWERED 2026-10-12: confirmed as stated.** Lines before the record's
+  first `pair` are dropped. On a long pairing
   whose `pair` line has fallen out of the 1000-line ring, every line without a sid is lost. Capture could begin each
   sent record with the current pairing's `pair` line.
-- **Q7 (capture):** confirm that `unpaired` and `ended` are the only kinds that end a pairing. This design reads them
-  from the allow-list's `kinds` descriptions.
-- **Q8 (capture):** confirm that FNV-1a 32 (carry 2) is the final `tokenTag`. The server's test will use
+- **Q7 (capture). ANSWERED 2026-10-12:** `unpaired` and `ended` are not the only kinds that end a pairing:
+  `pair-refused`, `engine-error` and `reset` end it too. All five close a window through themselves (§6); the
+  contract's prose and `WINDOW_CLOSING_KINDS` (`domain/capture-record.ts`) say so.
+- **Q8 (capture). ANSWERED 2026-10-12: final** — `tokenTag` is FNV-1a 32 over the token's UTF-16 code units, as 8
+  lowercase hex digits (carry 2). The server's test will use
   `token-tag-vectors.json` as its rulebook. D1 (§0.1) applies if a code can ever hold more than one tok.
 - **Q9 (owner): "a session belongs to this code". ANSWERED 2026-10-12: the session's pairing.** The line's session
   was joined by a pairing of this code: `pairing_id` leads to a pairing whose `code_id` is the sending code. A null
@@ -411,7 +439,8 @@ The implementing PR owes the migration. The approved shape:
 **Transitions and empty cases come first (rule 1):**
 
 - **A second call:** two taps store two records with two refs, and the 11th in an hour is 429.
-- **An empty input:** 0 lines is 422; only blank lines is 422; all lines foreign is 201 with `kept: 0`.
+- **An empty input:** 0 lines is 422; only blank lines is 422; all lines foreign, or all bad (ruling RL), is 201 with
+  `kept: 0`.
 - **After a withdrawal or void:**
   - a reissued code with its open session alive is accepted (C1(b) for `record`);
   - once that session closes, it is accepted for 24 h more (C1(c)), and then it is 401;
@@ -432,8 +461,8 @@ The implementing PR owes the migration. The approved shape:
     of the code's end and its last session's end) taken as an input.
 - `attribute(lines, {sessionsOfCode, tagsOfCode})` is table-driven from §6's text: the worked example row for row, plus
   X→Y, Y→X, X→Y→X, a truncated first window, X's sid inside Y's window (kept), Y's sid inside X's window (dropped), a
-  masked sid (dropped), a null-pairing session's sid (dropped), and closing by `unpaired`, `ended` and a foreign
-  `pair`. Expected values come from the table, never from the function.
+  masked sid (dropped), a null-pairing session's sid (dropped), closing by each of Q7's five kinds and by a foreign
+  `pair`, and an unreadable line as a boundary (ruling RL). Expected values come from the table, never from the function.
 - **fast-check (rule 10):** random sequences of `pair(tag)`, `unpaired`, `ended`, sid lines and device lines across 2–3
   codes, with each line's owner known from the generator. After every step these must hold: kept lines are all the
   sending code's, no foreign line is kept, and `kept + dropped = received`. Runs with `kept > 0` and runs with
@@ -442,7 +471,7 @@ The implementing PR owes the migration. The approved shape:
   zeros is 413, and the test asserts the inflated-bytes counter stays at or under the cap plus one chunk. Corrupt gzip
   is 422, `br` is 422, and a trailing newline is fine.
 - **Secret rules:** the server's S2–S5 are the contract's `$defs` patterns, read from the vendored file, never retyped.
-  Every `line-secret-*` vector must be refused and every near miss admitted. S1 is tested in all three forms, worked
+  Every `line-secret-*` vector must be dropped and every near miss admitted. S1 is tested in all three forms, worked
   by hand. `tokenTag(Bearer)` is checked against capture's 9 vectors, a pinned count.
 - **Twin parity:** the line twin joins `DIRS` and the input-and-output parity test. The tripwire forces this.
 
@@ -495,3 +524,6 @@ test.
 - M11: the `record` C1(b) row requires the open session's phone.
 - M12: the 24 h tail is anchored on the lazy `ended_at`, or on the code's end alone (a session that outlived the
   reissue must then die).
+- M13 (ruling RL): the drop is made a refusal (a 422 when any line is bad); a use-case test must go red.
+- M14 (Q7): a closing kind removed from the set; the Q7 test must go red.
+- M15 (ruling RL): an unreadable line made transparent to attribution; the boundary test must go red.
