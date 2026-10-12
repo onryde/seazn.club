@@ -34,6 +34,7 @@ import {
   type RoomDeps,
 } from "../external-play/room";
 import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
+import { log } from "@/server/logger";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
@@ -745,5 +746,48 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
     const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
     expect(mintRealtime, "premise: the slow step ran").toHaveBeenCalledTimes(1);
     expect(Date.parse(snap.serverNow) - started).toBeGreaterThanOrEqual(SLOW_MS);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — a broken game row (review N2: one error per board, not one per poll)", () => {
+  /** A live board whose game carries no recorded colours — SQL damage, as in
+   *  play's guard test: T9 writes them in the same update as the game id. */
+  async function brokenBoard() {
+    const s = await seed();
+    const gameId = await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    await sql`update fixture_external_play set white_side = null where fixture_id = ${s.fixtureId}`;
+    return { s, gameId };
+  }
+  const brokenLogs = (spy: { mock: { calls: unknown[][] } }, fixtureId: string) =>
+    spy.mock.calls.filter((c) => (c[0] as { fixtureId?: string } | undefined)?.fixtureId === fixtureId && /no recorded colours/.test(String(c[1]))).length;
+
+  it("many polls by both players log the board ONCE; a second broken board logs its own once; every read stays in the true state — nobody may act", async () => {
+    const errors = vi.spyOn(log, "error");
+    try {
+      const a = await brokenBoard();
+      const b = await brokenBoard();
+      let reads = 0;
+      for (let i = 0; i < 4; i += 1) {
+        for (const side of ["home", "away"] as const) {
+          const snap = await readRoom({ kind: "session", userId: a.s[side].userId }, a.s.fixtureId, deps());
+          expect(snap.canAct, `read ${i} / ${side}: nobody may act on a broken row`).toBe(false);
+          expect(snap.opponentPresence).toBeNull();
+          reads += 1;
+        }
+      }
+      expect(reads, "anti-vacuity: polls").toBe(8);
+      expect(brokenLogs(errors, a.s.fixtureId), "one error for the board, not one per poll").toBe(1);
+      expect(brokenLogs(errors, b.s.fixtureId), "premise: the second board not read yet").toBe(0);
+      const snapB = await readRoom({ kind: "session", userId: b.s.home.userId }, b.s.fixtureId, deps());
+      await readRoom({ kind: "session", userId: b.s.away.userId }, b.s.fixtureId, deps());
+      expect(snapB.canAct).toBe(false);
+      expect(brokenLogs(errors, b.s.fixtureId), "the dedupe is per board, not per process").toBe(1);
+      expect(errors.mock.calls.find((c) => (c[0] as { fixtureId?: string }).fixtureId === b.s.fixtureId)?.[0]).toMatchObject({
+        fixtureId: b.s.fixtureId,
+        gameId: b.gameId,
+      });
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

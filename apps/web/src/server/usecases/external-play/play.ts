@@ -201,6 +201,20 @@ function frozenSeats(b: { status: string; needs_reason: string | null; revoked_s
   return null;
 }
 
+/** Broken game rows already reported by this process (review N2): the room
+ *  polls this predicate every few seconds per player, so one error per board
+ *  is the signal — one per poll is noise that buries it. Bounded: past the
+ *  cap it starts over, and a board still broken then is reported again. */
+const BROKEN_ROWS_REPORTED = new Set<string>();
+const BROKEN_ROWS_REPORTED_MAX = 1_000;
+function reportBrokenRowOnce(fixtureId: string, gameId: string): void {
+  const key = `${fixtureId}:${gameId}`;
+  if (BROKEN_ROWS_REPORTED.has(key)) return;
+  if (BROKEN_ROWS_REPORTED.size >= BROKEN_ROWS_REPORTED_MAX) BROKEN_ROWS_REPORTED.clear();
+  BROKEN_ROWS_REPORTED.add(key);
+  log.error({ fixtureId, gameId }, "lichess: a game on file carries no recorded colours — no move can be attributed");
+}
+
 /** The game a player may act on, or null. A ready or live bridge with a
  *  game id, on a board that is still playable. Exported so the match room
  *  (room.ts) tells a player they may act by THIS predicate — one authority,
@@ -218,10 +232,7 @@ export function playableGame(f: OnlinePlayFixture): Game | null {
   // id, so a game without them is a broken row, not a state. Colour is READ,
   // never assigned or guessed (global constraint) — without it nobody moves.
   if (b.white_side === null || b.white_lichess_id === null || b.black_lichess_id === null) {
-    log.error(
-      { fixtureId: f.fixtureId, gameId: b.challenge_id },
-      "lichess: a game on file carries no recorded colours — no move can be attributed",
-    );
+    reportBrokenRowOnce(f.fixtureId, b.challenge_id);
     return null;
   }
   return {
