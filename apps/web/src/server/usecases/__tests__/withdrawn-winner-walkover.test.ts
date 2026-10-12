@@ -53,6 +53,8 @@ import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { buildDivisionSlides, buildPublicDivisionSlides } from "@/server/slideshow-data";
 import { fixturesPlayedInStats } from "@/server/usecases/player-stats";
 import { buildDivisionDocModel } from "../exports";
+import { createPerson } from "../persons";
+import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
 import { playedFixtureIds } from "../fixture-results-sql";
 
 // The public reads go through `unstable_cache`, which has no incrementalCache outside a real request: a passthrough,
@@ -536,4 +538,24 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const dqNode = await posterNode(dq.divisionId, dq.auth, sib.parentId);
     expect([dqNode.includes(BYE), dqNode.includes(dqName)], "the poster keeps the bye").toEqual([true, false]);
   }, 240_000);
+
+  it("R116-3: the arriving side's player page lists the line it played, naming its opponent, and not the tie — as it lists no walkover", async () => {
+    // single-sport: badminton — the page's list is the stats reader's played set (ruling 115) and a seat read, not the
+    // sport. Her opponent's person is the arriving side's only member.
+    const { sport, variant, play } = SPORTS[0]!;
+    const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+    await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+    const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
+    const w1 = (await play(s.auth, a.id)).home_entrant_id!;
+    await withdrawEntrantCascade(s.auth, w1);
+    const played = await play(s.auth, b.id);
+    const [arriving, beaten] = [played.home_entrant_id!, played.away_entrant_id!];
+    expect((await fixtureRow(parentId)).outcome, "premise: ruling 116's walkover").toEqual({ kind: "award", winner: arriving, loser: w1, reason: "withdrew" });
+    const person = await createPerson(s.auth, { full_name: "Arriving Player", consent: {}, dob: null, gender: null, external_ref: null });
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${arriving}, ${person.id}, ${s.auth.orgId})`;
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${s.auth.orgId}`;
+    const [comp] = await sql<{ slug: string }[]>`select slug from competitions where id = ${s.competitionId}`;
+    const lines = await readPlayerMatchLines(sql, { personId: person.id, competitionId: s.competitionId, orgSlug: org!.slug, compSlug: comp!.slug, locale: "en" });
+    expect(lines.map((l) => [l.fixtureId, l.opponentName]), "the line it played, naming its opponent; never the tie").toEqual([[b.id, await nameOf(beaten)]]);
+  }, 120_000);
 });

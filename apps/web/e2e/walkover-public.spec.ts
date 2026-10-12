@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W2b Task 13 (spec §5.5, UI-2 option A; X-RS-2, X-DW-1) — a credited result says which one, on every public surface:
@@ -36,6 +36,7 @@ const CREDIT = (football.configSchema.parse(football.variants[VARIANT]) as { awa
 
 interface Fx {
   id: string;
+  fixture_no: number;
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
@@ -73,7 +74,7 @@ async function publicKnockout(r: APIRequestContext) {
   const final = all.find((f) => !f.home_entrant_id && !f.away_entrant_id);
   expect(final, "a final waiting on both").toBeTruthy();
   const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
-  return { compSlug: comp.data!.slug, divSlug: div.data!.slug, semis, final: final!, nameOf };
+  return { divId: div.data!.id, compSlug: comp.data!.slug, divSlug: div.data!.slug, semis, final: final!, nameOf };
 }
 
 async function crop(target: Locator, name: string) {
@@ -419,5 +420,107 @@ test.describe("W2b — a credited result says which one, on every public surface
       screens++;
     }
     expect(screens).toBe(WIDTHS.length * 5);
+  });
+});
+
+// R116-3 (W2b Task 16; owner ruling 116): the ORGANISER's surfaces — the division's run sheet (`?tab=fixtures`) and the
+// bracket panel above it — read the same tie as a walkover naming her in her seat, never "{name} has a bye" and never
+// the bye label. The positive pair is the same locator before the arrival, where her dead seat reads the bye word; and a
+// DQ'd winner's dead seat (a bare status write: the award names nobody) stays a bye on both, after the arrival too.
+test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 116's walkover as a walkover", () => {
+  test("her name in her seat on the run sheet and the bracket panel at 1280/768/320; a DQ'd winner's dead seat stays a bye", async ({ page, request }) => {
+    test.setTimeout(4 * 60_000);
+    await activeOrg(page);
+    const UI = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const bye = UI["bracket.slot.bye"]!;
+    const hasBye = UI["schedule.bye"]!;
+    expect([bye, hasBye].every(Boolean), "ui.json's bye words").toBe(true);
+    // No word boundary: the run sheet's seat spans glue to their neighbours in innerText ("ByevsWinner of R1·2"). None
+    // of this draw's names holds the letters, so the bare word is the probe.
+    const BYE = new RegExp(bye, "i");
+
+    /** A knockout whose final waits on SF2 with SF1's winner gone from it: `depart` empties her seat. */
+    const deadSeatFinal = async (depart: (her: string) => Promise<void>) => {
+      const ko = await publicKnockout(request);
+      const [sf1, sf2] = ko.semis;
+      const her = sf1!.home_entrant_id!;
+      await depart(her);
+      await post(request, sf1!.id, "core.forfeit", { by: sf1!.away_entrant_id, reason: "walkover" });
+      return { ko, sf2: sf2!, her };
+    };
+    const arrive = async (ko: Awaited<ReturnType<typeof publicKnockout>>, sf2: Fx) => {
+      await post(request, sf2.id, "core.forfeit", { by: sf2.away_entrant_id, reason: "walkover" });
+      await expect.poll(async () => (await read(request, ko.final.id)).status, { timeout: STEP_MS }).toBe("forfeited");
+      return read(request, ko.final.id);
+    };
+    const surfaces = (no: number) => ({
+      row: page.getByTestId("run-sheet").locator(`li[data-fixture-no="${no}"]`),
+      byeRows: page.getByTestId("run-sheet").getByTestId("run-sheet-bye"),
+      node: page.getByTestId("bracket-panel").locator(`a[href$="/f/${no}"]`),
+    });
+
+    // Ruling 116's tie: SF1's winner reaches the final and withdraws (the final's other seat TBD), SF2's winner arrives.
+    const w = await deadSeatFinal(async () => {});
+    await expect.poll(async () => { const f = await read(request, w.ko.final.id); return [f.home_entrant_id, f.away_entrant_id].includes(w.her); }, { timeout: STEP_MS }).toBe(true);
+    const withdrew = await apiJson(request, `/api/v1/entrants/${w.her}/withdraw`, "POST");
+    expect(withdrew.status, JSON.stringify(withdrew.error)).toBeLessThan(300);
+    const herName = w.ko.nameOf.get(w.her)!;
+    expect([...w.ko.nameOf.values()].filter((x) => BYE.test(x)), "premise: no name holds the bye word's letters").toEqual([]);
+    const fixtures = await divisionPath(request, w.ko.divId, "?tab=fixtures");
+    const s = surfaces(w.ko.final.fixture_no);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(fixtures);
+    await dismissCookieBanner(page);
+    await expect(s.row, "before: her dead seat reads the bye word on the run sheet").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
+    await expect(s.node, "before: and on the bracket panel").toContainText(BYE, { useInnerText: true });
+    const final = await arrive(w.ko, w.sf2);
+    const arriving = w.sf2.home_entrant_id!;
+    expect(final.outcome, "a walkover naming who withdrew").toEqual({ kind: "award", winner: arriving, loser: w.her, reason: "withdrew" });
+    const arrivingName = w.ko.nameOf.get(arriving)!;
+
+    let screens = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(fixtures);
+      await dismissCookieBanner(page);
+      await expect(s.row, `${width}: the final is an ordinary run-sheet row`).toBeVisible({ timeout: STEP_MS });
+      await expect(s.byeRows, `${width}: no bye row on this draw`).toHaveCount(0);
+      for (const [where, at] of [["run sheet row", s.row], ["bracket node", s.node]] as const) {
+        await expect(at, `${width}: the ${where} names her`).toContainText(herName);
+        await expect(at, `${width}: the ${where} names the arriving side`).toContainText(arrivingName);
+        await expect(at, `${width}: the ${where} prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+        console.log(`R116-3 ${width} ${where}: ${(await at.innerText()).replace(/\s+/g, " ").trim()}`);
+        screens++;
+      }
+      await expect(s.row, `${width}: no "has a bye"`).not.toContainText(hasBye.replace("{name}", arrivingName));
+      await expectNoHorizontalScroll(page);
+      await crop(s.row, `organiser-run-sheet-withdrew-final-${width}`);
+      await crop(s.node, `organiser-bracket-withdrew-final-${width}`);
+    }
+    expect(screens).toBe(WIDTHS.length * 2);
+
+    // The pair: a DQ'd winner's dead seat. Her disqualification is the bare status write v1's entrant patch makes, so the
+    // award names no loser — a bye on both surfaces, and never her name.
+    const dq = await deadSeatFinal(async (her) => {
+      const left = await apiJson(request, `/api/v1/entrants/${her}`, "PATCH", { status: "disqualified" });
+      expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
+    });
+    const dqFinal = await arrive(dq.ko, dq.sf2);
+    const dqArriving = dq.sf2.home_entrant_id!;
+    expect(dqFinal.outcome, "a walkover by bye, naming nobody").toEqual({ kind: "award", winner: dqArriving, loser: null, reason: "bye" });
+    const dqName = dq.ko.nameOf.get(dq.her)!;
+    const dqArrivingName = dq.ko.nameOf.get(dqArriving)!;
+    const d = surfaces(dqFinal.fixture_no);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(await divisionPath(request, dq.ko.divId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const dqBye = d.byeRows.filter({ hasText: hasBye.replace("{name}", dqArrivingName) });
+    await expect(dqBye, "the run sheet keeps the bye row").toHaveCount(1, { timeout: STEP_MS });
+    await expect(d.byeRows, "and it is the only bye row").toHaveCount(1);
+    await expect(dqBye, "naming nobody else").not.toContainText(dqName);
+    await expect(d.node, "the bracket panel keeps the bye").toContainText(BYE, { useInnerText: true });
+    await expect(d.node, "and never prints her").not.toContainText(dqName);
+    console.log(`R116-3 DQ run sheet: ${(await dqBye.innerText()).replace(/\s+/g, " ").trim()}`);
+    console.log(`R116-3 DQ bracket node: ${(await d.node.innerText()).replace(/\s+/g, " ").trim()}`);
   });
 });
