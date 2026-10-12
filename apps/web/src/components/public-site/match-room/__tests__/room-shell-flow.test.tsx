@@ -17,7 +17,9 @@ vi.mock("../camera-loader", async (actual) => ({
   joinOwnCamera: (token: string) => join.fn(token),
 }));
 
-import { RoomShell } from "../room-shell";
+import { RoomShell, Screen } from "../room-shell";
+import { initialRoomState } from "../room-state";
+import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "../camera-session";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
@@ -533,6 +535,77 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     await settle(1_500);
     expect(seatPosts(), "back: the seat is asked again").toBe(2);
     expect(screenOf(island)).toBe("creating");
+    island.unmount();
+  });
+  // T14 fix round 5, ruling 2: the re-join keeps failing (a network error,
+  // not our guard) → after RECOVER_MAX_ATTEMPTS the camera gives up: the
+  // stamp closes, the player is told to reload — and the Reload reloads.
+  it("re-joins that keep failing GIVE UP: the stamp opens then closes, the status is gave_up (never off or failed), nothing joins after", async () => {
+    stubFetch();
+    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    seatAnswers = [() => ({ snapshot: getAnswer(), seat: { seated: true, participant: PARTICIPANT } })];
+    const first = faultingCamera();
+    join.fn.mockResolvedValueOnce(first.cam).mockRejectedValue(new Error("network: join timed out"));
+    const island = renderIsland(RoomShell, { initial: live, token: "tok", selfPath: "/x" });
+    await settle();
+    expect(cameraStatus(island), "premise: live").toBe("live");
+    first.fault();
+    await settle();
+    expect(cameraStatus(island)).toBe("recovering");
+    const total = Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i): number => RECOVER_BACKOFF_MS[Math.min(i, RECOVER_BACKOFF_MS.length - 1)]!).reduce((a, b) => a + b, 0);
+    await settle(total - 1);
+    expect(cameraStatus(island), "a moment before the last wait ends: still trying").toBe("recovering");
+    await settle(1_000);
+    expect(cameraStatus(island), "out of attempts: told to reload").toBe("gave_up");
+    expect(join.fn, "the first join, then exactly N re-joins").toHaveBeenCalledTimes(1 + RECOVER_MAX_ATTEMPTS);
+    expect(stamps.map((x) => (x.body as { state: string }).state), "our window, closed by the give-up").toEqual(["start", "end"]);
+    expect(stamps.map((x) => (x.body as { participantId: string }).participantId)).toEqual(["p-own", "p-own"]);
+    await settle(60_000);
+    expect(join.fn, "given up: nothing joins by itself").toHaveBeenCalledTimes(1 + RECOVER_MAX_ATTEMPTS);
+    expect(screenOf(island)).toBe("live");
+    island.unmount();
+  });
+
+  it("on a refused check-in, a camera that gave up keeps the player on the check-in — never the camera-required card", async () => {
+    stubFetch();
+    seatAnswers = [() => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } })];
+    const first = faultingCamera();
+    join.fn.mockResolvedValueOnce(first.cam).mockRejectedValue(new Error("network"));
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    first.fault();
+    await settle(120_000);
+    expect(cameraStatus(island), "premise: given up").toBe("gave_up");
+    expect(screenOf(island), "ours: the check-in, with the notice — not card 2").toBe("checkin");
+    island.unmount();
+  });
+
+  it("the Reload reloads the page (the fresh page's join is the way back)", async () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { reload });
+    const s0 = snap({ you, game: LIVE_GAME, cameraPolicy: "required" });
+    const state = initialRoomState(s0, T0);
+    const noop = async () => null;
+    const island = renderIsland(Screen, {
+      screen: { kind: "live" },
+      state,
+      room: { state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never,
+      camera: { status: "gave_up", stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} },
+      busy: false,
+      tryAgain: () => {},
+      relinkHref: "/x",
+      locale: "en",
+      t: ((k: string) => k) as never,
+      plural: ((k: string) => k) as never,
+    });
+    // The harness's walk can meet one element more than once: count elements, not visits.
+    const notices = [...new Set(walk(island.tree()).filter((e) => typeof propsOf(e).onReload === "function"))];
+    expect(notices, "one give-up notice, with its reload").toHaveLength(1);
+    expect(reload).not.toHaveBeenCalled();
+    (propsOf(notices[0]!).onReload as () => void)();
+    expect(reload).toHaveBeenCalledTimes(1);
     island.unmount();
   });
 });

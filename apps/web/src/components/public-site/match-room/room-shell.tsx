@@ -25,6 +25,7 @@ import { GameOver } from "./game-over";
 import { RoomHeader } from "./room-header";
 import {
   CameraCard,
+  CameraGaveUpNotice,
   CameraOffBanner,
   CameraReconnectingNotice,
   ClosedCard,
@@ -157,9 +158,13 @@ export function RoomShell({
   }, [refusedForCamera, camera.status, state.pending, retries, claim]);
   // While the camera is coming up and the seat is still being retried, the
   // player stays on the check-in; card 2/3 is for a camera that will not come.
-  // Recovering is OUR guard re-joining (I-1): never the camera-required card.
+  // Recovering is OUR guard re-joining (I-1), and a give-up is ours too (fix
+  // round 5): never the camera-required card — the check-in says reload.
   const cameraSettling =
-    camera.status === "joining" || camera.status === "recovering" || (camera.status === "live" && retries < SEAT_RETRIES);
+    camera.status === "joining" ||
+    camera.status === "recovering" ||
+    camera.status === "gave_up" ||
+    (camera.status === "live" && retries < SEAT_RETRIES);
   const screen = roomScreen(state, { cameraSettling });
 
   const tryAgain = useCallback(() => {
@@ -193,6 +198,9 @@ export function RoomShell({
   );
 }
 
+/** The give-up notice's way back: a fresh page joins afresh (fix round 5). */
+const reloadPage = () => location.reload();
+
 // Exported for its first-paint test (room-shell.test.tsx): the camera-off
 // banner reads the camera hook, which a server render never runs.
 export function Screen({
@@ -207,6 +215,7 @@ export function Screen({
   locale,
   t,
   plural,
+  reload = reloadPage,
 }: {
   screen: ReturnType<typeof roomScreen>;
   state: RoomState;
@@ -220,8 +229,12 @@ export function Screen({
   locale: string;
   t: RoomT;
   plural: ReturnType<typeof usePlural>;
+  /** The give-up notice's Reload (a test seam; the page reloads). */
+  reload?: () => void;
 }) {
   const snap = state.snap;
+  // Re-joining gave up (fix round 5): wherever the player is, the one way back.
+  const gaveUp = snap.cameraPolicy !== "off" && camera.status === "gave_up" ? <CameraGaveUpNotice onReload={reload} t={t} /> : null;
   const now = useServerNow(state.skewMs, 1_000);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
   const countdownTo = (iso: string | null) => (iso !== null && now !== null ? formatCountdown(Date.parse(iso) - now) : null);
@@ -248,17 +261,20 @@ export function Screen({
       return <ClosedCard closedAt={timeOf(snap.deadline)} fixtureHref={snap.links.fixture} t={t} />;
     case "checkin":
       return (
-        <Checkin
-          snap={snap}
-          closesIn={countdownTo(snap.deadline)}
-          closesAt={timeOf(snap.deadline)}
-          stream={camera.stream}
-          cameraOn={camera.status === "live"}
-          busy={busy}
-          onCheckIn={() => void room.claim()}
-          t={t}
-          plural={plural}
-        />
+        <>
+          {gaveUp}
+          <Checkin
+            snap={snap}
+            closesIn={countdownTo(snap.deadline)}
+            closesAt={timeOf(snap.deadline)}
+            stream={camera.stream}
+            cameraOn={camera.status === "live"}
+            busy={busy}
+            onCheckIn={() => void room.claim()}
+            t={t}
+            plural={plural}
+          />
+        </>
       );
     case "over": {
       const g = snap.game;
@@ -329,6 +345,7 @@ export function Screen({
               <CameraReconnectingNotice t={t} />
             </div>
           ) : null}
+          {gaveUp !== null ? <div className="order-0 md:col-span-2">{gaveUp}</div> : null}
           <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
             <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} t={t} />
           </div>

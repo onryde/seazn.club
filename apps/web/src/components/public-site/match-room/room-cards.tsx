@@ -252,6 +252,28 @@ export function CameraReconnectingNotice({ t }: { t: RoomT }) {
   );
 }
 
+/** Re-joining kept failing (fix round 5, ruling 2): ours, and the way back
+ *  is a reload — never "your camera is off". */
+export function CameraGaveUpNotice({ onReload, t }: { onReload: () => void; t: RoomT }) {
+  return (
+    <div
+      data-testid="room-camera-gave-up"
+      role="status"
+      className="flex flex-col gap-2.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]"
+    >
+      <span className="text-[13px] leading-[1.45]">{t("externalPlay.room.state.cameraGaveUp.body")}</span>
+      <button
+        type="button"
+        data-testid="room-camera-reload"
+        onClick={onReload}
+        className="min-h-11 rounded-[10px] border-0 bg-[#713f12] text-[15px] font-semibold text-white"
+      >
+        {t("externalPlay.room.state.cameraGaveUp.reload")}
+      </button>
+    </div>
+  );
+}
+
 export function CameraOffBanner({ onEnable, t }: { onEnable: () => void; t: RoomT }) {
   return (
     <div

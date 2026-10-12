@@ -349,3 +349,74 @@ describe("I-1: our guard re-joining is ours — the reconnecting notice, never t
   });
 
 });
+
+// T14 fix round 5, ruling 2: re-joining that keeps failing GIVES UP — one
+// amber notice telling the player to reload, a Reload button, never the
+// camera-off banner. On the check-in too: never the camera-required card.
+describe("fix round 5: the give-up — reload, never blamed", () => {
+  const RULED_EN = "We couldn't reconnect your camera. Reload the page — if it keeps happening, tell your organiser.";
+  const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+  function paintIn(s: RoomSnapshot, kind: "live" | "checkin", cameraStatus: "gave_up" | "recovering" | "off", locale: keyof typeof LOCALES) {
+    const state = initialRoomState(s, T0);
+    const noop = async () => null;
+    const dict = LOCALES[locale] as unknown as Record<string, string>;
+    return renderToStaticMarkup(
+      <DictProvider dict={dict as unknown as Dict} locale={locale}>
+        <Screen
+          screen={{ kind } as never}
+          state={state}
+          room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
+          camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+          busy={false}
+          tryAgain={() => {}}
+          relinkHref="/x"
+          locale={locale}
+          t={((k: string) => dict[k] ?? k) as never}
+          plural={((k: string) => k) as never}
+        />
+      </DictProvider>,
+    );
+  }
+  const esc = (x: string) => x.replace(/&/g, "&amp;").replace(/'/g, "&#x27;");
+
+  it("the ruled words, exactly, in en; every locale its own copy and its own Reload label", () => {
+    expect(en["externalPlay.room.state.cameraGaveUp.body" as keyof typeof en]).toBe(RULED_EN);
+    expect(en["externalPlay.room.state.cameraGaveUp.reload" as keyof typeof en]).toBe("Reload");
+    for (const l of ["es", "fr", "nl"] as const) {
+      const d = LOCALES[l] as unknown as Record<string, string>;
+      expect(d["externalPlay.room.state.cameraGaveUp.body"], l).toBeTruthy();
+      expect(d["externalPlay.room.state.cameraGaveUp.body"], `${l} is not English`).not.toBe(RULED_EN);
+      expect(d["externalPlay.room.state.cameraGaveUp.reload"], l).toBeTruthy();
+    }
+  });
+
+  it("gave_up, live AND on the check-in, under every policy with a camera, in every locale: the notice with its Reload — never the camera-off banner, never 'reconnecting'", () => {
+    let checked = 0;
+    for (const kind of ["live", "checkin"] as const) {
+      for (const policy of ["optional", "required"] as const) {
+        for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+          const s = snap({ ...(kind === "live" ? { game: GAME, you } : {}), cameraPolicy: policy, opponentPresence: { participantId: "rtk-opp" } });
+          const html = paintIn(s, kind, "gave_up", locale);
+          const d = LOCALES[locale] as unknown as Record<string, string>;
+          const tag = `${kind}/${policy}/${locale}`;
+          expect(ids(html), tag).toContain("room-camera-gave-up");
+          expect(ids(html), `${tag}: the button`).toContain("room-camera-reload");
+          expect(html, `${tag}: the copy`).toContain(esc(d["externalPlay.room.state.cameraGaveUp.body"]!));
+          expect(html, `${tag}: the label`).toContain(esc(d["externalPlay.room.state.cameraGaveUp.reload"]!));
+          expect(ids(html), `${tag}: never blamed`).not.toContain("room-camera-off");
+          expect(ids(html), `${tag}: not still reconnecting`).not.toContain("room-camera-reconnecting");
+          expect(html.match(/data-testid="room-camera-gave-up"/g), "a single notice").toHaveLength(1);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: screen × policy × locale").toBe(16);
+    // The pairs: recovering is still the reconnecting line; off still the banner; off policy shows nothing.
+    const live = snap({ game: GAME, you, cameraPolicy: "required" });
+    expect(ids(paintIn(live, "live", "recovering", "en"))).not.toContain("room-camera-gave-up");
+    expect(ids(paintIn(live, "live", "off", "en"))).toEqual(expect.arrayContaining(["room-camera-off"]));
+    expect(ids(paintIn(live, "live", "off", "en"))).not.toContain("room-camera-gave-up");
+    expect(ids(paintIn(snap({ game: GAME, you, cameraPolicy: "off" }), "live", "gave_up", "en"))).not.toContain("room-camera-gave-up");
+  });
+
+});
