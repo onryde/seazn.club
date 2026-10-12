@@ -6013,6 +6013,7 @@
   "externalPlay.room.notice.offline.body": "Your clock keeps running.",
   "externalPlay.room.notice.refused.title": "That move didn't go through.",
   "externalPlay.room.notice.refused.body": "Your position has been restored — try again.",
+  "externalPlay.room.notice.failed": "That didn't go through. Try again.",
   "externalPlay.room.notice.invalid": "That move isn't allowed here.",
   "externalPlay.room.pieceCredit": "Chess pieces by Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Your board",

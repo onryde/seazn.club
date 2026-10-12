@@ -6013,6 +6013,7 @@
   "externalPlay.room.notice.offline.body": "Votre pendule continue de tourner.",
   "externalPlay.room.notice.refused.title": "Ce coup n'est pas passé.",
   "externalPlay.room.notice.refused.body": "Votre position a été rétablie — réessayez.",
+  "externalPlay.room.notice.failed": "Cela n'est pas passé. Réessayez.",
   "externalPlay.room.notice.invalid": "Ce coup n'est pas autorisé ici.",
   "externalPlay.room.pieceCredit": "Pièces d'échecs de Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Votre échiquier",

@@ -389,7 +389,7 @@ export function OffForClubCard({ fixtureHref, t }: { fixtureHref: string; t: Roo
 
 /** C1–C3 · The live room's move notices: offline and refused in amber, an
  *  invalid move as the purple inline line. `className` places it (order). */
-export function MoveNoticeView({ kind, className = "", t }: { kind: "offline" | "refused" | "invalid"; className?: string; t: RoomT }) {
+export function MoveNoticeView({ kind, className = "", t }: { kind: "offline" | "refused" | "invalid" | "failed"; className?: string; t: RoomT }) {
   if (kind === "invalid") {
     return (
       <p
@@ -406,6 +406,22 @@ export function MoveNoticeView({ kind, className = "", t }: { kind: "offline" | 
     );
   }
   const offline = kind === "offline";
+  if (kind === "failed") {
+    // The generic C2 (notice routing ruling): C2's style and place, one line.
+    return (
+      <div
+        data-testid="room-move-notice"
+        data-kind="failed"
+        role="status"
+        className={`flex min-w-0 items-start gap-2.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] px-3 py-2.5 text-[#713f12] ${className}`}
+      >
+        <LineIcon size={18} colour="#713f12" className="mt-px shrink-0">
+          {RESTORED}
+        </LineIcon>
+        <span className="min-w-0 text-sm font-semibold leading-[1.35]">{t("externalPlay.room.notice.failed")}</span>
+      </div>
+    );
+  }
   return (
     <div
       data-testid="room-move-notice"

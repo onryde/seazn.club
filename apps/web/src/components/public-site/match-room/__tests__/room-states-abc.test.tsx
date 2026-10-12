@@ -24,6 +24,7 @@ import { Screen } from "../room-shell";
 import { initialRoomState, roomReducer, type RoomState } from "../room-state";
 import { roomScreen } from "../room-screen";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
+import type { RoomActBody } from "../room-api";
 
 const LOCALES = { en, es, fr, nl } as const;
 type Locale = keyof typeof LOCALES;
@@ -48,6 +49,8 @@ const CANVAS = {
   refusedTitle: "That move didn't go through.",
   refusedBody: "Your position has been restored — try again.",
   invalid: "That move isn't allowed here.",
+  // Notice routing ruling (2026-10-12): the generic C2, for a non-move.
+  failed: "That didn't go through. Try again.",
 } as const;
 
 const GAME: RoomGame = {
@@ -238,7 +241,8 @@ describe("Seam B — online chess off: one calm card", () => {
 describe("Seam C — the live room's move notices, reached through the reducer", () => {
   const live = () => initialRoomState(snap({ game: GAME }), T0);
   const sentMove = (s: RoomState) => roomReducer(s, { type: "act_sent", action: { kind: "move", uci: "g1f3" } });
-  const cases: [string, () => RoomState, "offline" | "refused" | "invalid", string[]][] = [
+  const sentAct = (s: RoomState, action: RoomActBody) => roomReducer(s, { type: "act_sent", action });
+  const cases: [string, () => RoomState, "offline" | "refused" | "invalid" | "failed", string[]][] = [
     ["C1 a read with no answer", () => roomReducer(live(), { type: "fetch_failed", status: 0 }), "offline", [CANVAS.offlineTitle, CANVAS.offlineBody]],
     ["C1 a move with no answer", () => roomReducer(sentMove(live()), { type: "act_failed", status: 0 }), "offline", [CANVAS.offlineTitle, CANVAS.offlineBody]],
     [
@@ -248,6 +252,17 @@ describe("Seam C — the live room's move notices, reached through the reducer",
       [CANVAS.refusedTitle, CANVAS.refusedBody],
     ],
     ["C3 refused by our server", () => roomReducer(sentMove(live()), { type: "act_failed", status: 404 }), "invalid", [CANVAS.invalid]],
+    // Notice routing: a server failure on a move is C2, never C3.
+    ["C2 a move our server failed (503)", () => roomReducer(sentMove(live()), { type: "act_failed", status: 503 }), "refused", [CANVAS.refusedTitle, CANVAS.refusedBody]],
+    // …and a non-move never fails silently: the generic C2.
+    [
+      "C2 generic: a resign Lichess refused",
+      () => roomReducer(sentAct(live(), { kind: "resign" }), { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } }),
+      "failed",
+      [CANVAS.failed],
+    ],
+    ["C2 generic: a draw offer our server failed (500)", () => roomReducer(sentAct(live(), { kind: "draw", accept: true }), { type: "act_failed", status: 500 }), "failed", [CANVAS.failed]],
+    ["C2 generic: a decline the board refused (404)", () => roomReducer(sentAct(live(), { kind: "draw", accept: false }), { type: "act_failed", status: 404 }), "failed", [CANVAS.failed]],
   ];
 
   it("each notice, its words, its colour — amber for C1/C2, the purple inline for C3 — and the board plays on under it", () => {
@@ -262,21 +277,20 @@ describe("Seam C — the live room's move notices, reached through the reducer",
       const cls = classOf(html, "room-move-notice");
       if (kind === "invalid") expect(cls, name).toContain("bg-[#f3effc]");
       else expect(cls, name).toContain("bg-[#fef3c7]");
+      if (kind !== "invalid") expect(textOf(html), `${name}: never "isn't allowed"`).not.toContain(CANVAS.invalid);
       expect(ids(html), `${name}: the controls stay`).toContain("room-controls");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: notices").toBe(4);
+    expect(checked, "anti-vacuity: notices").toBe(cases.length);
+    expect(new Set(cases.map((c) => c[2])), "every kind reached").toEqual(new Set(["offline", "refused", "invalid", "failed"]));
   });
 
-  it("the empty case and the pairs: no notice on a clean board, after the act went through, for a refused resign; none on a held or revoked board", () => {
+  it("the empty case and the pairs: no notice on a clean board, or after an act went through (a move or a resign); none on a held or revoked board", () => {
     expect(ids(paint(live()))).not.toContain("room-move-notice");
     const ok = roomReducer(sentMove(live()), { type: "act_answered", answer: { ok: true, applied: true } });
     expect(ids(paint(ok))).not.toContain("room-move-notice");
-    const resign = roomReducer(roomReducer(live(), { type: "act_sent", action: { kind: "resign" } }), {
-      type: "act_answered",
-      answer: { ok: false, reconcile: true, reason: "rejected" },
-    });
-    expect(ids(paint(resign)), "a resign is not a move").not.toContain("room-move-notice");
+    const resigned = roomReducer(sentAct(live(), { kind: "resign" }), { type: "act_answered", answer: { ok: true, applied: true } });
+    expect(ids(paint(resigned)), "a resign that went through").not.toContain("room-move-notice");
     const heldOffline = roomReducer(initialRoomState(snap({ game: GAME, canAct: false }), T0), { type: "fetch_failed", status: 0 });
     expect(roomScreen(heldOffline).kind).toBe("held");
     expect(ids(paint(heldOffline))).not.toContain("room-move-notice");
@@ -305,7 +319,7 @@ describe("Seam C — the live room's move notices, reached through the reducer",
       expect(asideMd > board, `${name}: the aside places after the board`).toBe(true);
       checked += 1;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(cases.length);
   });
 });
 
@@ -327,6 +341,10 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
         "C3",
         () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), { type: "act_failed", status: 404 }),
       ],
+      [
+        "C2 generic",
+        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "resign" } }), { type: "act_failed", status: 503 }),
+      ],
     ];
     const english = Object.values(CANVAS).filter((w) => w !== CANVAS.back);
     let checked = 0;
@@ -338,6 +356,6 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: locale × state").toBe(4 * 5);
+    expect(checked, "anti-vacuity: locale × state").toBe(4 * 6);
   });
 });
