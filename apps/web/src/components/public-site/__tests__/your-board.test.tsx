@@ -14,6 +14,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
@@ -30,6 +31,13 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(DICTS[current.locale as Loc], key, vars),
 }));
 
+const apiV1Mock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-v1", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  apiV1: apiV1Mock,
+}));
+
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { YourBoard, YourBoardCard, loadYourBoard } from "../your-board";
 
 const ROOM = "/shared/club/cup/open/fixtures/f1/play";
@@ -121,5 +129,58 @@ describe("YourBoardCard — every lobby state", () => {
       }
     }
     expect(checked).toBe(LOBBY_STATES.length * LOCALES.length);
+  });
+});
+
+describe("YourBoard — after hydration, and across a navigation", () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  /** The lobby's answers, each released by hand, so the ORDER they land in is the test's. */
+  function lobby() {
+    const pending = new Map<string, (v: unknown) => void>();
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(
+      (url: string) => new Promise((resolve) => pending.set(/fixtures\/([^/]+)\//.exec(url)![1]!, resolve)),
+    );
+    return async (fixtureId: string, state: ExternalPlayLobby["state"]) => {
+      const room = `/shared/club/cup/open/fixtures/${fixtureId}/play`;
+      pending.get(fixtureId)!(state === "online_chess_off" ? { state, roomPath: null } : { state, roomPath: room, opensAt: null, deadline: null });
+      await flush();
+    };
+  }
+  const cards = (island: { tree: () => ReactElement[] }) =>
+    island.tree().filter((el) => el.type === YourBoardCard).map((el) => propsOf(el).view as ExternalPlayLobby);
+
+  it("draws nothing until the lobby answers, then the player's own board", async () => {
+    const answer = lobby();
+    current.locale = "en";
+    const island = renderIsland(YourBoard, { fixtureId: "f1" });
+    await flush();
+    expect(cards(island), "before the answer").toEqual([]);
+    await answer("f1", "check_in");
+    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["check_in", "/shared/club/cup/open/fixtures/f1/play"]]);
+  });
+
+  it("a navigation to another fixture never shows the previous fixture's door while its own is on the way", async () => {
+    const answer = lobby();
+    const island = renderIsland(YourBoard, { fixtureId: "f1" });
+    await flush();
+    await answer("f1", "check_in");
+    expect(cards(island)).toHaveLength(1);
+    island.rerender({ fixtureId: "f2" });
+    await flush();
+    expect(cards(island), "f2's page, f2's answer not in yet").toEqual([]);
+    await answer("f2", "playing");
+    expect(cards(island).map((v) => v.roomPath)).toEqual(["/shared/club/cup/open/fixtures/f2/play"]);
+  });
+
+  it("a late answer for the fixture left behind does not overwrite the current one", async () => {
+    const answer = lobby();
+    const island = renderIsland(YourBoard, { fixtureId: "f1" });
+    await flush();
+    island.rerender({ fixtureId: "f2" });
+    await flush();
+    await answer("f2", "playing");
+    await answer("f1", "check_in"); // lands last
+    expect(cards(island).map((v) => [v.state, v.roomPath])).toEqual([["playing", "/shared/club/cup/open/fixtures/f2/play"]]);
   });
 });
