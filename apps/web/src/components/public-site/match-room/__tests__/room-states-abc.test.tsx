@@ -251,7 +251,10 @@ describe("Seam C — the live room's move notices, reached through the reducer",
       "refused",
       [CANVAS.refusedTitle, CANVAS.refusedBody],
     ],
-    ["C3 refused by our server", () => roomReducer(sentMove(live()), { type: "act_failed", status: 404 }), "invalid", [CANVAS.invalid]],
+    ["C3 a rule refused it (400)", () => roomReducer(sentMove(live()), { type: "act_failed", status: 400 }), "invalid", [CANVAS.invalid]],
+    // T14 re-review 5, I-1: play's 404 is the board, the seat or the account
+    // — never a rule — so a move it refused is C2, never C3.
+    ["C2 a move play refused (404)", () => roomReducer(sentMove(live()), { type: "act_failed", status: 404 }), "refused", [CANVAS.refusedTitle, CANVAS.refusedBody]],
     // Notice routing: a server failure on a move is C2, never C3.
     ["C2 a move our server failed (503)", () => roomReducer(sentMove(live()), { type: "act_failed", status: 503 }), "refused", [CANVAS.refusedTitle, CANVAS.refusedBody]],
     // …and a non-move never fails silently: the generic C2.
@@ -339,7 +342,7 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
       ],
       [
         "C3",
-        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), { type: "act_failed", status: 404 }),
+        () => roomReducer(roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "act_sent", action: { kind: "move", uci: "g1f3" } }), { type: "act_failed", status: 400 }),
       ],
       [
         "C2 generic",
