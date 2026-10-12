@@ -144,10 +144,12 @@ const I2: InvariantSpec = {
   abstainOnStageConfig: [],
   requiresCompletedStage: true,
   stepSafe: false, // it needs a completed bracket
-  check(stages) {
+  check(stages, run) {
     const fails: string[] = [];
     let checked = 0;
     const unread: string[] = [];
+    const notes: string[] = [];
+    const departed = new Set(run.departed ?? []);
     for (const s of stages) {
       const unobserved = divisionWideLaterStage(s);
       if (unobserved !== null) { fails.push(unobserved); continue; }
@@ -158,6 +160,12 @@ const I2: InvariantSpec = {
       checked += rankItems(ranks, s.field, new Set(), "not in the field", fails);
       if (s.kind === "knockout" && s.field.length > 0) {
         checked++;
+        // Ruling R16-5: a withdrawn case is judged on the departures the product stored, so a run that never read them
+        // is refused by name — read as nobody departed, every withdrawn winner would red as unbeaten.
+        if (run.departed === undefined && run.facts.includes("withdrawn")) {
+          fails.push(`stage seq ${s.seq}: a withdrawn case whose stored departures were never read (the run carries no departed)`);
+          continue;
+        }
         const lost = new Set<string>();
         for (const f of s.fixtures.filter(twoSided)) {
           // W2b Task 16 (ruling R16-1): a double walkover the product STORED beats both its sides (X-DW-1) — read from
@@ -167,6 +175,12 @@ const I2: InvariantSpec = {
           if (w === null) { if (isTerminal(f.status) && f.outcome !== null) fails.push(`${f.id}: bracket fixture ended ${f.outcome.kind}`); continue; }
           lost.add(w === f.home ? f.away! : f.home!);
         }
+        // W2b Task 16 (ruling R16-5; X-WD-3, X-WD-5): a departed entrant's seat is dead and never seated again, so it
+        // never loses a stored fixture by design — the product's stored status eliminates it. One that never departed
+        // and never lost is still unbeaten.
+        const gone = s.field.filter((e) => departed.has(e) && !lost.has(e));
+        for (const e of gone) lost.add(e);
+        if (gone.length > 0) notes.push(`${gone.length} departed entrant(s) counted eliminated (stored status): ${gone.join(",")}`);
         const unbeaten = s.field.filter((e) => !lost.has(e));
         if (unbeaten.length !== 1) fails.push(`${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
         else if (ranks[0] !== unbeaten[0]) fails.push(`rank 1 is ${ranks[0] ?? "nobody"}, unbeaten is ${unbeaten[0]}`);
@@ -183,7 +197,7 @@ const I2: InvariantSpec = {
     }
     const why = `completed, but /complete answered 409 ${SEEDING_FAILED_AFTER_COMMIT} — its finalRanks were never read`;
     if (unread.length > 0 && checked === 0 && fails.length === 0) return ABSTAIN(`${unread.join(", ")} ${why} (the advance check owns the seeding failure)`);
-    return result(fails, checked, unread.length > 0 ? [`skipped ${unread.join(", ")}: ${why}`] : []);
+    return result(fails, checked, [...(unread.length > 0 ? [`skipped ${unread.join(", ")}: ${why}`] : []), ...notes]);
   },
 };
 

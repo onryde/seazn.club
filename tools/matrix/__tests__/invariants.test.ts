@@ -230,6 +230,38 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
     });
     expect(evaluateInvariant(I2, run([vacant])).evidence.join(" ")).toMatch(/0 unbeaten entrants/);
   });
+  // W2b Task 16, controller ruling R16-5 (X-WD-3, X-WD-5): a withdrawn entrant's seat is dead and never seated again, so
+  // "never loses a stored fixture" is the design — I2 counts an entrant the product STORES as departed (its entrant
+  // status, the run's `departed`, never the scenario's intent) as eliminated. Here b wins its opener and withdraws; its
+  // final seat dies and a walks over by bye. Before the ruling b read as unbeaten beside the champion (WD-CASC's "3
+  // unbeaten" in all 11 cells).
+  const wdBracket = (finalRanks: string[]) => stage({
+    kind: "knockout", field: ["a", "b", "c", "d"],
+    fixtures: [
+      fx({ roundNo: 1, home: "a", away: "d", outcome: win("a") }),
+      fx({ roundNo: 1, home: "b", away: "c", outcome: win("b") }),
+      fx({ roundNo: 2, home: "a", away: null, status: "forfeited", outcome: BYE }),
+    ],
+    complete: { status: 200, code: null, completed: true, finalRanks },
+  });
+  it("R16-5: an entrant stored as departed counts as eliminated — the champion is the one unbeaten, and the departure is reported", () => {
+    const v = evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["b"] }));
+    expect(v).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(v.evidence).toEqual(["1 departed entrant(s) counted eliminated (stored status): b"]);
+  });
+  it("R16-5: I2 still reds an unbeaten entrant who has NOT withdrawn — none departed, another departed, or the departed one crowned", () => {
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { departed: [] })).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,b/);
+    // c departed, but c had already lost: b is still unbeaten and never withdrew.
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["c"] })).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,b/);
+    expect(evaluateInvariant(I2, run([wdBracket(["b", "a", "d", "c"])], { facts: facts("withdrawn"), departed: ["b"] })).evidence.join(" ")).toMatch(/rank 1 is b, unbeaten is a/);
+    // Everyone left in departed: nobody is unbeaten, which is no champion (a vacant title fails, as R16-1's does).
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["a", "b"] })).evidence.join(" ")).toMatch(/0 unbeaten entrants/);
+  });
+  it("R16-5: a withdrawn run whose stored departures were never read fails by name, never reads as none departed", () => {
+    const v = evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn") }));
+    expect(v.verdict).toBe("fail");
+    expect(v.evidence.join(" ")).toMatch(/withdrawn case whose stored departures were never read/);
+  });
   it("abstain: stage not completed; shared place declared", () => {
     expect(evaluateInvariant(I2, run([bracket(null, false)])).verdict).toBe("abstain");
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"])], { facts: facts("shared_place_declared") })).verdict).toBe("abstain");

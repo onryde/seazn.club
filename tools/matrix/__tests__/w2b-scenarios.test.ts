@@ -15,6 +15,7 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogu
 import { RefusedCall, type FixtureRow, type StandingsRowWire, type WithdrawOut } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { foldStream } from "../lib/fold.ts";
+import { INVARIANTS, evaluateInvariant } from "../lib/invariants.ts";
 import type { ObservedFixture, ObservedOutcome } from "../lib/observed.ts";
 import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1116,6 +1117,8 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
     const failures: string[] = [];
     let judged = 0;
     const halves = { crowned: 0, vacant: 0 };
+    const I2 = INVARIANTS.find((x) => x.id === "I2-bracket-one-champion-ranks-permutation")!;
+    let i2Passed = 0;
     for (const { row, sport } of cells) {
       const variant = variantFor(sport);
       const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|WD-CASC`, row, sport, variant, scenario: "WD-CASC", canary: false };
@@ -1138,7 +1141,25 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
       expect(out.assertions.some((x) => x.id === "w2b-withdrawal-final-vacant"), `${sport}: the final-vacant check runs in the vacant half only`).toBe(half === "vacant");
       expect(out.assertions.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("pass");
       expect(out.notes.filter((n) => n.includes("(exempt)")), sport).toEqual([]);
+      // Ruling R16-5, through the real snapshot: the run carries the departures the fake STORES (its entrants' status)
+      // — the choreography's four (w1, QF2's home, QF3's home, a3), and the vacant half's a2 — and I2 counts them
+      // eliminated. The crowned half's champion is then the one unbeaten; the vacant half has none (its title is W4's).
+      // Only I2's champion items are judged here: this fake's finalRanks leave the departed entrants out ("not ranked"),
+      // where the product ranks the whole field (the L3 run's rank items pass) — a fake divergence, not this ruling's.
+      expect(out.observed.departed?.length, `${sport}: departed`).toBe(half === "crowned" ? 4 : 5);
+      const i2 = evaluateInvariant(I2, out.observed);
+      const champion = i2.evidence.filter((e) => !/ not ranked$/.test(e));
+      if (half === "crowned") {
+        // w1 and a3 won a match before withdrawing; QF2's and QF3's home sides lost theirs by walkover.
+        expect(champion, `${sport}: I2`).toEqual([expect.stringMatching(/^2 departed entrant\(s\) counted eliminated \(stored status\): /)]);
+        expect(i2.checked, sport).toBe(9);
+        i2Passed++;
+      } else {
+        expect(i2.verdict, `${sport}: I2`).toBe("fail");
+        expect(champion.filter((e) => /unbeaten|rank 1/.test(e)), sport).toEqual(["0 unbeaten entrants: "]);
+      }
     }
+    expect(i2Passed, "I2 judged the crowned half").toBe(halves.crowned);
     expect(failures).toEqual([]);
     expect(halves.crowned, "the crowned half ran").toBeGreaterThan(0);
     expect(halves.vacant, "the vacant half ran").toBeGreaterThan(0);

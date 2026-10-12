@@ -1007,5 +1007,7 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     stages,
     withdrawal: extra.withdrawal,
     configEdit: extra.configEdit,
+    // Ruling R16-5: who the product holds as departed, from the entrants' stored status (I2 reads it).
+    departed: (await ctx.driver.listEntrants(setup.division.id)).filter((e) => DEPARTED_STATUSES.includes(e.status)).map((e) => e.id),
   };
 }

@@ -129,6 +129,11 @@ export interface ObservedRun {
   stages: ObservedStage[];
   withdrawal: WithdrawalObs | null;
   configEdit: ConfigEditObs | null;
+  /** W2b Task 16 (ruling R16-5): the division's entrants the product STORES as departed (DEPARTED_STATUSES) when the
+   *  run was observed — read from the entrants' status (scenarios/common.ts snapshot), never from the scenario's own
+   *  record. Absent where nothing read it (the fast-check model's step runs, a denied case); I2 refuses a withdrawn
+   *  case without it by name rather than read it as nobody departed. */
+  departed?: readonly string[];
 }
 
 export interface InvariantResult { verdict: Verdict; checked: number; evidence: string[] }
