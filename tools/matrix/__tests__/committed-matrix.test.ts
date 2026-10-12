@@ -9,7 +9,7 @@
 //  - 24 distinct cases, no canary, a clean harness commit, no secret-shaped
 //    string anywhere (the repo is public; writeResults guarded only the write).
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findSecrets } from "../lib/redact.ts";
@@ -100,12 +100,21 @@ function uncitedPictures(pictures: readonly string[], markdownOf: (dir: string) 
 const sweepItems = (f: string, text: string): string[] | null =>
   f.endsWith(".json") ? stringsIn(JSON.parse(text)) : f.endsWith(".md") || f.endsWith(".py") ? text.split("\n") : null;
 
+/** The secret sweep's budget, from the bytes it reads (T16 review m9; AGENTS.md class 20: a flat timeout beside a
+ *  derived cost is a latent red). Measured 2026-10-12: 672 files, 41.3 MB, 4.38 s, about 106 ms/MB, against vitest's 5 s
+ *  default; every committed run adds to it. 600 ms/MB is about 5.6x that rate, over a 5 s floor for the parse and
+ *  setup. */
+const SWEEP_BASE_MS = 5_000;
+const SWEEP_MS_PER_MB = 600;
+const sweepBudgetMs = (bytes: number): number => Math.max(SWEEP_BASE_MS, SWEEP_BASE_MS + Math.ceil((bytes / 1e6) * SWEEP_MS_PER_MB));
+
 describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
   const tracked = trackedUnder(TRUTH_RUNS);
   const pictures = tracked.filter(isPicture);
   const evidence = tracked.filter((f) => !isPicture(f));
   const catalogue = trackedUnder(CATALOGUE);
   const all = [...evidence, ...catalogue];
+  const sweptBytes = all.reduce((n, f) => n + statSync(resolve(REPO, f)).size, 0);
   it("discovery: every evidence directory still contributes, and neither root shrank", () => {
     const dirs = new Set(evidence.map(runDirOf));
     expect(EVIDENCE_DIRS.filter((d) => !dirs.has(d)), "an evidence directory vanished").toEqual([]);
@@ -214,7 +223,7 @@ describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
     expect(pyFiles.length, "the catalogue's generators").toBeGreaterThanOrEqual(7);
     expect(byExt.get(".py") ?? 0, ".py lines scanned").toBe(pyLines);
     expect(pyLines).toBeGreaterThan(0);
-  });
+  }, sweepBudgetMs(sweptBytes));
 });
 
 describe("the committed slices", () => {
