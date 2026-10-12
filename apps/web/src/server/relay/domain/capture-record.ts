@@ -129,8 +129,10 @@ export type AttributableLine = { kind: string; sid?: string | null; tokenTag?: s
 /** The sending code, read at upload time: the sessions its pairings joined (A1, Q9) and T(code) (A2, §0.1). */
 export type AttributionContext = { sessionsOfCode: ReadonlySet<string>; tagsOfCode: ReadonlySet<string> };
 /** A window closes THROUGH these: the closing line belongs to the window it closes. `unpaired` and `ended` from the
- *  allow-list's kinds; `pair-refused`, `engine-error` and `reset` added by capture's answer to Q7 (2026-10-12). */
-export const WINDOW_CLOSING_KINDS: ReadonlySet<string> = new Set(["unpaired", "ended", "pair-refused", "engine-error", "reset"]);
+ *  allow-list's kinds; `pair-refused` and `reset` added by capture's answer to Q7 (2026-10-12). NOT `engine-error`
+ *  (capture's correction to Q7, the same day): native also writes it on non-fatal paths where the pairing goes on, and
+ *  both fatal paths write `ended {reason: "fatal-error", wasLive}`, which closes the window as `ended`. */
+export const WINDOW_CLOSING_KINDS: ReadonlySet<string> = new Set(["unpaired", "ended", "pair-refused", "reset"]);
 const MASK = "***";
 
 /**

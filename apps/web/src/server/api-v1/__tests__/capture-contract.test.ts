@@ -54,7 +54,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "eeeb9711f0de4c5ed9b1b284f505c2fb0fa8a5a30873b49b74f7a8600043f638",
+  "capture-record.v1.json": "48a798649e24d6b779c745a017e897a9bac5b3a83d3731eaa0824c181fb78334",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1413,6 +1413,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const prose = String(contract(RECORD).description);
     expect(prose).toContain(`at most ${CS.CAPTURE_RECORD_MAX_LINES} non-empty lines`);
     expect(prose).toContain(`at most 1 MB (${CS.CAPTURE_RECORD_MAX_BYTES} bytes)`);
+    // A2's closing kinds are Q7's as capture answered and then CORRECTED it (2026-10-12): `engine-error` is not one.
+    const closing = /runs through the next ((?:`[a-z-]+`(?:, | or )?)+) line/.exec(prose)?.[1] ?? "";
+    expect([...closing.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort()).toEqual(["ended", "pair-refused", "reset", "unpaired"]);
     expect(CS.CAPTURE_RECORD_REF_RE.source).toBe((defOf(contract(RECORD), "ok").properties as Record<string, Json>).ref!.pattern);
   });
 });

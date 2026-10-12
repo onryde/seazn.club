@@ -6,7 +6,8 @@
 // Expected values come from the RULEBOOKS, never from the module:
 //  - the contract's own fixtures and its `$defs` patterns, read from the vendored file and run under ajv;
 //  - capture's `modules/capture-engine/src/wire/token-tag-vectors.json` (the spec names it the test's rulebook, Q8);
-//  - §6's worked example and its rules, transcribed row for row; Q7's five closing kinds as capture answered them.
+//  - §6's worked example and its rules, transcribed row for row; Q7's four closing kinds as capture answered them and
+//    then corrected them (2026-10-12: `engine-error` is NOT fatal-only, so it closes nothing).
 // Every sweep counts what it checked, and the counts are pinned: zero checked fails.
 //
 // ONE SPORT, on purpose: not applicable — the capture surface reads no sport (spec §13.2 "Another sport").
@@ -298,9 +299,13 @@ const device = (kind = "thermal"): AttributableLine => ({ kind });
 const sidLine = (sid: string | null): AttributableLine => ({ kind: "live", sid });
 const unpaired = (): AttributableLine => ({ kind: "unpaired" });
 const ended = (): AttributableLine => ({ kind: "ended" });
-/** Q7, as capture answered it (2026-10-12): the five kinds that end a pairing window. Typed here, never read off the
- *  module. */
-const CLOSING_KINDS = ["unpaired", "ended", "pair-refused", "engine-error", "reset"] as const;
+/** Q7, as capture answered it and then corrected it (2026-10-12): the four kinds that end a pairing window. Typed here,
+ *  never read off the module. `engine-error` is not one: native also writes it on non-fatal paths (Engine.kt:136;
+ *  BridgeCore.kt:608) plus an error raised while already Ended (Engine.kt:138; capture's feat/s1-d3-fixes), and both
+ *  fatal paths write `ended {reason: "fatal-error", wasLive}`, which closes the window as `ended`. */
+const CLOSING_KINDS = ["unpaired", "ended", "pair-refused", "reset"] as const;
+/** Q7 corrected: a kind native writes INSIDE a pairing that goes on. It closes nothing. */
+const ENGINE_ERROR = "engine-error";
 /** The sending code's context: Y unless named. `sessionsOfCode` is what A1 reads at upload time (pairing-based, Q9). */
 const asY = { sessionsOfCode: new Set([S_Y]), tagsOfCode: new Set([TAG_Y]) };
 const asX = { sessionsOfCode: new Set([S_X]), tagsOfCode: new Set([TAG_X]) };
@@ -358,9 +363,9 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
     expect(lines).toBeGreaterThan(40);
   });
 
-  it("Q7 (capture's answer, 2026-10-12): a no-sid line after `pair-refused`, `engine-error` or `reset` is DROPPED — the closing line is the window's; a uuid sid line after it is still A1's", () => {
+  it("Q7 (capture's answer, 2026-10-12): a no-sid line after `pair-refused` or `reset` is DROPPED — the closing line is the window's; a uuid sid line after it is still A1's", () => {
     let checked = 0;
-    for (const kind of ["pair-refused", "engine-error", "reset"]) {
+    for (const kind of ["pair-refused", "reset"]) {
       expect(attributeLines([pair(TAG_Y), device(), { kind }, device("network")], asY), kind).toEqual([true, true, true, false]);
       expect(attributeLines([pair(TAG_Y), { kind }, sidLine(null)], asY), `${kind}, then a null sid`).toEqual([true, true, false]);
       expect(attributeLines([pair(TAG_Y), { kind }, sidLine(S_Y)], asY), `${kind}, then the sender's sid`).toEqual([true, true, true]);
@@ -368,16 +373,58 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
       expect(attributeLines([pair(TAG_Y), { kind }, device(), pair(TAG_Y), device()], asY), `${kind}, then a new pair`).toEqual([true, true, false, true, true]);
       checked++;
     }
-    expect(checked).toBe(3);
-    // The same holds for all five of Q7's kinds — the two the spec named first and the three capture added.
+    expect(checked).toBe(2);
+    // The same holds for all four of Q7's kinds — the two the spec named first and the two capture added.
     let all = 0;
     for (const kind of CLOSING_KINDS) {
       expect(attributeLines([pair(TAG_Y), { kind }, device()], asY), kind).toEqual([true, true, false]);
       all++;
     }
-    expect(all).toBe(5);
+    expect(all).toBe(4);
     // Positive pair: a kind that closes nothing (a vendor log line) keeps the window open.
     expect(attributeLines([pair(TAG_Y), { kind: "vendor-log" }, device()], asY)).toEqual([true, true, true]);
+  });
+
+  it("Q7 CORRECTED by capture (2026-10-12): a non-fatal `engine-error` closes nothing — a no-sid line after it is KEPT; after `engine-error` then the fatal path's `ended` it is DROPPED", () => {
+    // Non-fatal: the pairing goes on, so the sender's no-sid lines after it are the sender's — once, and on a second
+    // and third error in a row (each of native's non-fatal paths can write one, and a path can write one again).
+    expect(attributeLines([pair(TAG_Y), device(), { kind: ENGINE_ERROR }, device("network")], asY)).toEqual([true, true, true, true]);
+    expect(attributeLines([pair(TAG_Y), { kind: ENGINE_ERROR }, sidLine(null)], asY), "then a null sid").toEqual([true, true, true]);
+    expect(attributeLines([pair(TAG_Y), { kind: ENGINE_ERROR }, { kind: ENGINE_ERROR }, { kind: ENGINE_ERROR }, device()], asY), "three in a row")
+      .toEqual([true, true, true, true, true]);
+    // Fatal: native writes `ended {reason: "fatal-error", wasLive}` after the error; `ended` closes through itself.
+    expect(attributeLines([pair(TAG_Y), device(), { kind: ENGINE_ERROR }, ended(), device("network"), sidLine(null)], asY), "fatal")
+      .toEqual([true, true, true, true, false, false]);
+    // It opens nothing either: before the first pair, and inside another code's window, it is no window of the sender's.
+    expect(attributeLines([{ kind: ENGINE_ERROR }, device()], asY), "before any pair").toEqual([false, false]);
+    expect(attributeLines([pair(TAG_X), { kind: ENGINE_ERROR }, device()], asY), "inside X's window, sent by Y").toEqual([false, false, false]);
+    // And it does not carry a window past a foreign pair: X's pair still closes Y's window just before it.
+    expect(attributeLines([pair(TAG_Y), { kind: ENGINE_ERROR }, pair(TAG_X), device()], asY), "then a foreign pair").toEqual([true, true, false, false]);
+  });
+
+  it("Q7 CORRECTED, through the REAL screen: the lines as native writes them (engine-error's `message`, ended's `reason: \"fatal-error\"` and `wasLive`) are admitted by the published contract and its twin, then attributed — the line after the error kept, the line after `ended` dropped", () => {
+    const tag = tokenTag(OTHER_TOK);
+    const native: [object, boolean][] = [
+      [{ at: AT, kind: "pair", claim: "new", slot: 0, tokenTag: tag }, true],
+      [{ at: AT, kind: ENGINE_ERROR, message: "java.lang.IllegalStateException: snapshot not whole", suppressed: 0 }, true],
+      [{ at: AT, kind: "thermal", level: "warn", status: 3 }, true],                       // after a non-fatal error: kept
+      [{ at: AT, kind: ENGINE_ERROR, message: "java.lang.IllegalStateException: machine failed" }, true],
+      [{ at: AT, kind: "ended", reason: "fatal-error", wasLive: true }, true],              // the fatal path's own line
+      [{ at: AT, kind: "thermal", level: "warn", status: 3 }, false],                      // after `ended`: dropped
+    ];
+    const ctx = { sessionsOfCode: new Set<string>(), tagsOfCode: new Set([tag]) };
+    let admitted = 0;
+    const screened = native.map(([line]) => {
+      expect(fileReads(line), `the contract reads ${JSON.stringify(line)}`).toBe(true);
+      const s = screenRecordLine(JSON.stringify(line), OTHER_TOK);
+      expect(s.ok, `the twin admits ${JSON.stringify(line)}`).toBe(true);
+      admitted++;
+      return s;
+    });
+    expect(admitted).toBe(6);
+    // `wasLive` false is the same class: a fatal error before the broadcast went live.
+    expect(screenRecordLine(JSON.stringify({ at: AT, kind: "ended", reason: "fatal-error", wasLive: false }), OTHER_TOK).ok).toBe(true);
+    expect(keptLines(screened, ctx)).toEqual(native.map(([, kept]) => kept));
   });
 
   it("an UNREADABLE line (null) is dropped and closes the window before it — it may be another code's pair — while A1 still judges uuid sids after it", () => {
@@ -449,8 +496,9 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
     { tag: "b24bb97b", sessions: ["b0000000-0000-4000-8000-000000000001", "b0000000-0000-4000-8000-000000000002"] },
     { tag: "2cc4e08d", sessions: ["c0000000-0000-4000-8000-000000000001", "c0000000-0000-4000-8000-000000000002"] },
   ];
-  /** `owner` is the code whose record the line belongs in, decided by the generator; null = no record keeps it. */
-  type Owned = { line: ScreenedLine; owner: number | null };
+  /** `owner` is the code whose record the line belongs in, decided by the generator; null = no record keeps it.
+   *  `afterEngineError`: a no-sid line that follows an `engine-error` inside the same window (the generator knows). */
+  type Owned = { line: ScreenedLine; owner: number | null; afterEngineError?: true };
   const item = fc.oneof(
     fc.constant({ t: "device" as const }),
     fc.record({ t: fc.constant("sid" as const), code: fc.integer({ min: 0, max: 2 }), i: fc.integer({ min: 0, max: 1 }) }),
@@ -458,6 +506,8 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
     fc.constant({ t: "masked" as const }),
     fc.constant({ t: "unreadable" as const }),
     fc.constant({ t: "secret" as const }),
+    // Q7 corrected (capture, 2026-10-12): a NON-closing kind — a window line, owned like a device line.
+    fc.constant({ t: "engine-error" as const }),
   );
   const segment = fc.record({
     code: fc.integer({ min: 0, max: 2 }),
@@ -474,15 +524,21 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
 
   function build(p: Phone): Owned[] {
     const out: Owned[] = [];
+    /** Whether an `engine-error` fell earlier in the current window (reset whenever the window ends or a new opens). */
+    let errored = false;
     /** Emits one item inside the window owned by `w` (null: no window); returns the window owner after it. */
     const emit = (it: Item, w: number | null): number | null => {
-      if (it.t === "device") out.push({ line: ok({ kind: "thermal" }), owner: w });
-      else if (it.t === "sid") out.push({ line: ok({ kind: "live", sid: CODES[it.code]!.sessions[it.i]! }), owner: it.code });
+      if (it.t === "device") out.push({ line: ok({ kind: "thermal" }), owner: w, ...(errored && w !== null ? { afterEngineError: true as const } : {}) });
+      else if (it.t === "engine-error") {
+        out.push({ line: ok({ kind: "engine-error" }), owner: w });   // the model's reading of Q7 corrected: closes nothing
+        errored = w !== null;
+      } else if (it.t === "sid") out.push({ line: ok({ kind: "live", sid: CODES[it.code]!.sessions[it.i]! }), owner: it.code });
       else if (it.t === "null-pairing") out.push({ line: ok({ kind: "live", sid: S_NULL_PAIRING }), owner: null });
       else if (it.t === "masked") out.push({ line: ok({ kind: "live", sid: "***" }), owner: null });
       else if (it.t === "secret") out.push({ line: secretOf({ kind: "vendor-log" }), owner: null });
       else {
         out.push({ line: unreadable, owner: null });
+        errored = false;
         return null;   // the model's own reading of the rule: an unreadable line ends the window it falls in
       }
       return w;
@@ -493,17 +549,19 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
       const pairLine = { kind: "pair", tokenTag: CODES[s.code]!.tag };
       out.push({ line: s.secretPair ? secretOf(pairLine) : ok(pairLine), owner: s.secretPair ? null : s.code });
       w = s.code;
+      errored = false;
       for (const it of s.body) w = emit(it, w);
       if (s.close === "none") continue;   // an open window runs to the next pair: no "after" lines outside it
       out.push({ line: ok({ kind: s.close }), owner: w });
       w = null;
+      errored = false;
       for (const it of s.after) w = emit(it, w);
     }
     return out;
   }
 
-  it("after EVERY step: kept lines are all the sender's and none is bad, every good sender's line is kept, kept + dropped = received; runs with kept, dropped, unreadable, secret and every closing kind all seen", () => {
-    let runs = 0, keptRuns = 0, droppedRuns = 0, steps = 0, unreadableRuns = 0, secretRuns = 0;
+  it("after EVERY step: kept lines are all the sender's and none is bad, every good sender's line is kept, kept + dropped = received; runs with kept, dropped, unreadable, secret, every closing kind and a no-sid line KEPT after a non-fatal engine-error all seen", () => {
+    let runs = 0, keptRuns = 0, droppedRuns = 0, steps = 0, unreadableRuns = 0, secretRuns = 0, engineErrorRuns = 0, keptAfterErrorRuns = 0;
     const closers = new Set<string>();
     fc.assert(fc.property(phone, (p) => {
       const lines = build(p);
@@ -528,6 +586,9 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
       if (lines.some((o) => !o.line.ok && o.line.why === "shape")) unreadableRuns++;
       if (lines.some((o) => !o.line.ok && o.line.why === "secret")) secretRuns++;
       for (const o of lines) if (o.line.ok && CLOSING_KINDS.includes(o.line.line.kind as (typeof CLOSING_KINDS)[number])) closers.add(o.line.line.kind);
+      if (lines.some((o) => o.line.ok && o.line.line.kind === ENGINE_ERROR)) engineErrorRuns++;
+      // The witness for Q7 corrected: the sender's no-sid line after an engine-error in the sender's window, kept.
+      if (lines.some((o) => o.afterEngineError && o.owner === p.sender)) keptAfterErrorRuns++;
     }), { numRuns: 400, seed: 20261012 });
     expect(runs).toBe(400);
     expect(keptRuns, "runs with kept > 0").toBeGreaterThan(0);
@@ -535,6 +596,8 @@ describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
     expect(unreadableRuns, "runs with an unreadable line").toBeGreaterThan(0);
     expect(secretRuns, "runs with a secret line").toBeGreaterThan(0);
     expect([...closers].sort(), "every closing kind generated").toEqual([...CLOSING_KINDS].sort());
+    expect(engineErrorRuns, "runs with an engine-error line").toBeGreaterThan(0);
+    expect(keptAfterErrorRuns, "runs keeping the sender's no-sid line after an engine-error").toBeGreaterThan(0);
     expect(steps).toBeGreaterThan(runs);
   });
 });
