@@ -47,6 +47,7 @@ vi.mock("@/server/external-play/lichess/board-api", () => board);
 
 import { openRound } from "../open-round";
 import { claimSeat, releaseSeat, resendExternalPlayNotice } from "../invite";
+import { readRoom } from "../room";
 import { createGameIfReady } from "../create-game";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import { addFixture } from "../../stages";
@@ -197,6 +198,33 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 2 });
     expect(mail.sent.map((m) => m.to).sort()).toEqual([b.home.email, b.away.email].sort());
     expect(mail.sent.every((m) => m.fixtureUrl.startsWith(ORIGIN) && m.fixtureUrl.includes(b.fixtureId))).toBe(true);
+  });
+
+  it("T14: each invite links the player's OWN match room, and its personal link resolves to their seat with no session", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    await open(r);
+    mail.sent.length = 0;
+    await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN);
+    let checked = 0;
+    for (const player of [b.home, b.away]) {
+      const sent = mail.sent.find((m) => m.to === player.email)!;
+      const link = new URL(sent.fixtureUrl);
+      expect(link.origin).toBe(new URL(ORIGIN).origin);
+      expect(link.pathname).toMatch(new RegExp(`^/shared/[^/]+/[^/]+/[^/]+/fixtures/${b.fixtureId}/play$`));
+      const t = link.searchParams.get("t");
+      expect(t, "a personal link token").toBeTruthy();
+      const byLink = await readRoom({ kind: "token", token: t! }, b.fixtureId);
+      // The link is THIS player's seat: the same view their own session reads.
+      const bySession = await readRoom({ kind: "session", userId: player.userId }, b.fixtureId);
+      expect([byLink.you.name, byLink.you.colour, byLink.opponent.name]).toEqual([
+        bySession.you.name,
+        bySession.you.colour,
+        bySession.opponent.name,
+      ]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both seats' links resolved").toBe(2);
   });
 
   it("stamps a seat whose open-round send failed, so the next open does not mail it a second time", async () => {

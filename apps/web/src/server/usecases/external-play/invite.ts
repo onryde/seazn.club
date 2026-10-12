@@ -21,6 +21,7 @@ import { appOrigin, sendExternalPlayInviteEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
+import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { roundOpenAt } from "@/server/external-play/round-open";
 import { roomPhase, windowFor } from "@/server/external-play/window";
@@ -127,12 +128,27 @@ export async function sendFixtureInvite(a: {
   fixture: OnlinePlayFixture;
   seat: InviteSeat;
   roundNo: number;
+  /** The round's open (`stage_round_opens`): the personal link is bound to
+   *  it (T14, T19 review M4), and its window is the deadline the mail names. */
+  roundOpenId: string;
   roundOpenedAt: Date;
   origin?: string;
 }): Promise<boolean> {
   const { fixture: f, seat } = a;
   const origin = (a.origin ?? appOrigin()).replace(/\/$/, "");
-  const fixtureUrl = `${origin}${routes.sharedFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId)}`;
+  // T14: the player's own match room, with a personal link that identifies
+  // them without a session. A seat with no single person (an empty side)
+  // gets the room without a link — they sign in.
+  const token =
+    seat.player.personId === null
+      ? undefined
+      : await mintMatchRoomToken({
+          fixtureId: f.fixtureId,
+          personId: seat.player.personId,
+          roundOpenId: a.roundOpenId,
+          roundOpenedAt: a.roundOpenedAt.toISOString(),
+        });
+  const fixtureUrl = `${origin}${routes.sharedFixturePlay(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId, token)}`;
   const deadline = windowFor(a.roundOpenedAt).deadline;
   let accepted = 0;
   for (const r of seat.player.recipients) {
@@ -144,8 +160,6 @@ export async function sendFixtureInvite(a: {
           orgName: f.orgName,
           opponentName: seat.opponent.displayName,
           roundNo: a.roundNo,
-          // No start time ⇒ the game is on from the round's open (D12).
-          scheduledLabel: utcLabel(f.scheduledAt ?? a.roundOpenedAt, locale),
           deadlineLabel: utcLabel(deadline, locale),
           fixtureUrl,
         },
@@ -290,6 +304,7 @@ export async function resendExternalPlayNotice(
         fixture: f,
         seat,
         roundNo: pos.roundNo,
+        roundOpenId: decision.open.id,
         roundOpenedAt: decision.open.roundOpenedAt,
         origin,
       });
