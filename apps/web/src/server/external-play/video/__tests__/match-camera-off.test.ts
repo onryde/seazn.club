@@ -132,3 +132,39 @@ describe("matchCameraOff — the union over connections", () => {
     expect(() => matchCameraOff(win(200, 100), [])).toThrow(/window/);
   });
 });
+
+// T14 re-review 3, I-1 (controller ruling 2026-10-12): a gap OUR safeguard
+// made — it left the meeting because it could not refuse a remote stream,
+// and re-joined — is never the player's camera off. The stamped interval
+// counts as covered; only what lies outside it is judged.
+describe("matchCameraOff — our guard's faults are not the player's (I-1)", () => {
+  const span = (from: number, to: number) => ({ from: new Date(at(from)), to: new Date(at(to)) });
+
+  it("the positive pair: a 60 s gap is off; the same gap inside a stamped fault is not", () => {
+    const reports = [onThroughout(0, 300), onThroughout(360, 900)];
+    expect(offs(matchCameraOff(win(60, 840), reports)), "no stamp: the player's").toEqual([[at(300), at(360), 60]]);
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(300, 360)])), "stamped: ours").toEqual([]);
+  });
+
+  it("only the stamped part is excused — the rest of the gap, past 15 s, is still the player's", () => {
+    const reports = [onThroughout(0, 300), onThroughout(400, 900)];
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(300, 320)]))).toEqual([[at(320), at(400), 80]]);
+    // …and a remainder of 15 s or less is under the threshold, as any gap.
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(300, 385)]))).toEqual([]);
+  });
+
+  it("a fault with no camera at all (re-join never landed) excuses the window it covers, and no more", () => {
+    expect(offs(matchCameraOff(win(60, 840), [onThroughout(0, 300)], [span(300, 840)]))).toEqual([]);
+    expect(offs(matchCameraOff(win(60, 840), [onThroughout(0, 300)], [span(300, 600)]))).toEqual([[at(600), at(840), 240]]);
+  });
+
+  it("a fault outside the window changes nothing, and the empty list is the old answer", () => {
+    const reports = [onThroughout(0, 300), onThroughout(360, 900)];
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(0, 50), span(850, 900)]))).toEqual([[at(300), at(360), 60]]);
+    expect(matchCameraOff(win(60, 840), reports, [])).toEqual(matchCameraOff(win(60, 840), reports));
+  });
+
+  it("an inverted fault is refused — a stamp whose end precedes its start is not evidence", () => {
+    expect(() => matchCameraOff(win(60, 840), [], [span(400, 300)])).toThrow(/fault/);
+  });
+});

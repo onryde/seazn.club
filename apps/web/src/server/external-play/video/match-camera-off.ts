@@ -15,6 +15,12 @@
 // cadence), at the smallest cadence a single report can measure, so a quick
 // reload is not a camera loss and no gap one report calls off is lost to the
 // union's rounding. Evidence for the organiser, never a sanction (D10).
+//
+// OUR faults are not the player's (T14 re-review 3, I-1): when the player's
+// browser cannot refuse a remote stream it leaves the meeting and re-joins
+// (camera-loader.ts, D7), and stamps the gap on the server
+// (fixture_video_guard_faults). Each stamped interval counts as covered, so
+// only what lies outside it is judged — never a camera_lost for our gap.
 import {
   PEER_REPORT_MIN_CADENCE_MS,
   VIDEO_OFF_GAP_CADENCES,
@@ -38,6 +44,8 @@ type Span = [number, number];
 export function matchCameraOff(
   window: { from: Date; to: Date },
   reports: readonly CompleteCoverage[],
+  /** Intervals our D7 safeguard held the camera out of the meeting. */
+  guardFaults: readonly { from: Date; to: Date }[] = [],
 ): CameraOffInMatch {
   const w0 = window.from.getTime();
   const w1 = window.to.getTime();
@@ -46,6 +54,14 @@ export function matchCameraOff(
   }
 
   const on: Span[] = [];
+  for (const g of guardFaults) {
+    const a = g.from.getTime();
+    const b = g.to.getTime();
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) {
+      throw new Error("matchCameraOff: a guard fault must be two dates, from <= to");
+    }
+    on.push([a, b]);
+  }
   const confirmedOff: Span[] = [];
   for (const r of reports) {
     let cursor = Date.parse(r.joinedAt);

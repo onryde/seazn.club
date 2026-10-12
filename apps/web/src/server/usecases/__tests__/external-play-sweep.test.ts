@@ -46,6 +46,7 @@ import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS, isBoardApiPlayable, type TimeControl } from "@/server/external-play/time-controls";
 import { getFixtureState } from "../fixtures";
@@ -2900,6 +2901,79 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const flags = await flagsOf(m.b.fixtureId);
     expect(flags.map((f) => f.person_id).sort()).toEqual([m.b.home.personId, m.b.away.personId].sort());
     for (const f of flags) expect(f.note).toContain(`${iso(mid)} to ${iso(mid + 60_000)}`);
+  });
+
+  // T14 re-review 3, I-1 (controller ruling 2026-10-12): OUR safeguard left
+  // the meeting (it could not refuse a remote stream) and re-joined. The gap
+  // it stamped is Seazn's, never the player's: no camera_lost for it. The
+  // stamps go through the writers the room's camera-fault endpoint uses.
+  describe("our guard's faults (I-1): the stamped gap is never the player's", () => {
+    /** home's camera: on to `leave`, back at `back`; away on throughout. */
+    async function gapMatch(gapMs: number) {
+      const m = await playedMatch();
+      const leave = m.startedAt + 300_000;
+      const back = leave + gapMs;
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
+      connect(m, x, "home", { joined: back, left: m.endedAt });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+      return { m, leave, back };
+    }
+    const seat = (m: Match, side: Side) => ({ fixtureId: m.b.fixtureId, personId: m.b[side].personId });
+
+    it("the positive pair: a 60 s gap with NO stamp is a camera_lost flag; the same gap stamped as our fault is none", async () => {
+      expect(60_000, "premise: the gap is past the 15 s threshold").toBeGreaterThan(15_000);
+      const plain = await gapMatch(60_000);
+      const r0 = await pass(plain.m, after(plain.m, CAMERA_EVIDENCE_AFTER_MS));
+      expect([r0.cameraSettled, r0.cameraFlags], "no stamp: the player's").toEqual([1, 1]);
+      const [f] = await flagsOf(plain.m.b.fixtureId);
+      expect([f!.kind, f!.person_id]).toEqual(["camera_lost", plain.m.b.home.personId]);
+      expect(f!.note).toContain(`${iso(plain.leave)} to ${iso(plain.back)}`);
+
+      const ours = await gapMatch(60_000);
+      expect(await openGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.leave) }), "premise: opened").toBe(true);
+      expect(await closeGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.back) }), "premise: closed").toBe(true);
+      const r1 = await pass(ours.m, after(ours.m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r1)).toEqual([]);
+      expect([r1.cameraSettled, r1.cameraFlags], "stamped: ours").toEqual([1, 0]);
+      expect(await flagsOf(ours.m.b.fixtureId)).toEqual([]);
+    });
+
+    it("only the stamped part is excused: a fault that ended early leaves the rest of the gap the player's", async () => {
+      const { m, leave, back } = await gapMatch(90_000);
+      await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) });
+      await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(leave + 20_000) });
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(r.cameraFlags).toBe(1);
+      const [f] = await flagsOf(m.b.fixtureId);
+      expect(f!.person_id).toBe(m.b.home.personId);
+      expect(f!.note).toContain(`camera off 70 s`);
+      expect(f!.note).toContain(`${iso(leave + 20_000)} to ${iso(back)}`);
+    });
+
+    it("a fault still OPEN (the re-join never landed) excuses to the match's end; the OTHER player's stamp excuses nobody else", async () => {
+      // home's camera never came back: the stamp is open.
+      const m = await playedMatch();
+      const leave = m.startedAt + 300_000;
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: leave });
+      await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) });
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(r.cameraFlags, "away left too, with no stamp of their own").toBe(1);
+      const flags = await flagsOf(m.b.fixtureId);
+      expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
+    });
+
+    it("a fault opened AFTER the game's end and never closed is outside the match: settled as before, nothing thrown", async () => {
+      const m = await playedMatch();
+      bothOnThroughout(m);
+      expect(m.endedAt - m.overAt, "premise: the room outlived the game").toBeGreaterThan(60_000);
+      await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.overAt + 30_000) });
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
+    });
   });
 
   it("a report NOT READY yet: nothing stored; the next pass, once final, settles it (the retry)", async () => {

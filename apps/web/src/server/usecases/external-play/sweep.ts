@@ -30,6 +30,7 @@ import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
 import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
+import { guardFaultSpans } from "@/server/external-play/video/guard-faults";
 import {
   endMeeting,
   fetchVideoOffCoverage,
@@ -798,7 +799,15 @@ async function readCameraEvidence(
     // contradicts our own record the same way. A player with no camera
     // participant at all, absent from sessions that WERE read, is evidence.
     if (participantIds.length > 0 && peers === 0) return "not_ready";
-    const off = matchCameraOff(window, reports);
+    // OUR safeguard's gaps are never the player's (T14 re-review 3, I-1): a
+    // stamped interval counts as covered; one still open runs to the
+    // window's end — the re-join never landed, and that is ours too. One
+    // opened after the window (the room outlives the game) covers nothing.
+    const faults = (await guardFaultSpans(sql, { fixtureId: c.fixtureId, personId })).map((f) => ({
+      from: f.from,
+      to: f.to ?? new Date(Math.max(f.from.getTime(), window.to.getTime())),
+    }));
+    const off = matchCameraOff(window, reports, faults);
     if (off.offIntervals.length === 0) continue;
     const intervals = off.offIntervals
       .map((iv) => `${iv.from} to ${iv.to}${iv.confirmedByEvents ? " (its own off/on events agree)" : ""}`)
