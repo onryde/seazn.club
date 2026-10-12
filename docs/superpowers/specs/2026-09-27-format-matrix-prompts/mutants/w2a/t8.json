@@ -128,7 +128,7 @@
   {
     "id": "settle-withdrawn",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "if (w?.status === \"withdrawn\") {",
+    "find": "if (w !== undefined && DEPARTED_STATUSES.has(w.status)) {",
     "replace": "if (false) {",
     "killers": [
       {
@@ -136,7 +136,7 @@
         "files": [
           "src/server/engine-db/__tests__/settle-seating.test.ts"
         ],
-        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\) on a LEGACY row"
       }
     ]
   },

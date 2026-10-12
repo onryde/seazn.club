@@ -17,8 +17,8 @@
   {
     "id": "abandon-before-level",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "  if (has(\"core.abandon\")) return \"abandoned\";\n  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n",
-    "replace": "  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n  if (has(\"core.abandon\")) return \"abandoned\";\n",
+    "find": "  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";\n  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided, nobody seated, closed by a settle.\n  if (levelInBracket) return \"needs_decision\";\n",
+    "replace": "  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided, nobody seated, closed by a settle.\n  if (levelInBracket) return \"needs_decision\";\n  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";\n",
     "killers": [
       {
         "cwd": "apps/web",
@@ -32,8 +32,8 @@
   {
     "id": "level-draw",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"tie\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"tie\" || outcome.kind === \"no_result\");",
     "killers": [
       {
         "cwd": "apps/web",
@@ -47,8 +47,8 @@
   {
     "id": "level-tie",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"draw\" || outcome.kind === \"no_result\");",
     "killers": [
       {
         "cwd": "apps/web",
@@ -62,8 +62,8 @@
   {
     "id": "level-nr",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"tie\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"draw\" || outcome.kind === \"tie\");",
     "killers": [
       {
         "cwd": "apps/web",

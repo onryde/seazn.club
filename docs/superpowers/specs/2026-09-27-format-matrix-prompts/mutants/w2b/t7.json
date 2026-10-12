@@ -60,9 +60,9 @@
   },
   {
     "id": "dw-no-next-off",
-    "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "    needsNextMatchForDoubleWalkover(stageKind) &&\n",
-    "replace": "    false &&\n",
+    "file": "apps/web/src/lib/double-walkover-next-match.ts",
+    "find": "  return doubleWalkoverNeedsNextMatch(stageKind) && !feedsNext;",
+    "replace": "  return false && !feedsNext;",
     "killers": [
       {
         "cwd": "apps/web",
@@ -75,9 +75,9 @@
   },
   {
     "id": "dw-no-next-ladder",
-    "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "  forbidsLevelResult(stageKind) && stageKind !== \"ladder\";",
-    "replace": "  forbidsLevelResult(stageKind);",
+    "file": "apps/web/src/lib/double-walkover-next-match.ts",
+    "find": "  return forbidsLevelResult(stageKind) && stageKind !== \"ladder\";",
+    "replace": "  return forbidsLevelResult(stageKind);",
     "killers": [
       {
         "cwd": "apps/web",

@@ -62,8 +62,8 @@
  {
   "id": "r1-i5-append-old-check",
   "file": "apps/web/src/server/engine-db/append-event.ts",
-  "find": "    !feedsNextMatch(fixture)\n  ) {",
-  "replace": "    fixture.winner_to_fixture === null && fixture.loser_to_fixture === null\n  ) {",
+  "find": "doubleWalkoverRefused(stageKind, feedsNextMatch(fixture))",
+  "replace": "doubleWalkoverRefused(stageKind, !(fixture.winner_to_fixture === null && fixture.loser_to_fixture === null))",
   "killers": [
    {
     "cwd": "apps/web",
