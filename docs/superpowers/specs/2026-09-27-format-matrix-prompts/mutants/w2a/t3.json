@@ -99,8 +99,8 @@
   {
     "id": "period-drop-shootout-null",
     "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;",
-    "replace": "return DRAW_KINDS.has(stage) && cfg.overtime === null;",
+    "find": "return cfg.overtime === null && cfg.shootout === null;",
+    "replace": "return cfg.overtime === null;",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -174,8 +174,8 @@
   {
     "id": "period-overtime-check-true",
     "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;",
-    "replace": "return DRAW_KINDS.has(stage) && true && cfg.shootout === null;",
+    "find": "return cfg.overtime === null && cfg.shootout === null;",
+    "replace": "return true && cfg.shootout === null;",
     "killers": [
       {
         "cwd": "packages/engine",

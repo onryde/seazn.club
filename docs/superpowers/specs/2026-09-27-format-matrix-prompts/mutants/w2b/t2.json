@@ -1383,9 +1383,9 @@
   ]
  },
  {
-  "id": "wdcasc-sf1-bye-unchecked",
+  "id": "wdcasc-sf1-withdrew-unchecked",
   "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
-  "find": " && a.winner === r.a2 && a.loser === null && a.reason === \"bye\", note:",
+  "find": " && a.winner === r.a2 && a.loser === r.w1 && a.reason === WITHDREW, note:",
   "replace": " && a.winner === r.a2, note:",
   "killers": [
    {
@@ -1497,7 +1497,7 @@
  {
   "id": "fake-bye-award-bare",
   "file": "tools/matrix/__tests__/fake-driver.ts",
-  "find": "Object.assign(target, { status: \"forfeited\", outcome: { kind: \"award\", winner, loser: null, reason: \"bye\" } });",
+  "find": "Object.assign(target, { status: \"forfeited\", outcome: { kind: \"award\", winner, loser, reason: loser === null ? \"bye\" : \"withdrew\" } });",
   "replace": "Object.assign(target, { status: \"forfeited\", outcome: { kind: \"award\", winner } });",
   "killers": [
    {
@@ -1579,8 +1579,8 @@
  {
   "id": "fake-tbd-seat-kept",
   "file": "tools/matrix/__tests__/fake-driver.ts",
-  "find": "        Object.assign(f, { [slot]: null });\n        this.killSlot(f.id, slot, true);",
-  "replace": "        this.killSlot(f.id, slot, true);",
+  "find": "        Object.assign(f, { [slot]: null });\n        if (this.winnerFed(f.id, slot))",
+  "replace": "        if (this.winnerFed(f.id, slot))",
   "killers": [
    {
     "cwd": ".",

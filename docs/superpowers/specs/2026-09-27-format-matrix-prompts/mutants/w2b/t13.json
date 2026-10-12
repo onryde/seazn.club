@@ -60,7 +60,7 @@
   {
     "id": "abandon-tag-from-status",
     "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})\n                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (",
+    "find": "  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})\n                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n                    or (${f}.outcome is null and ${f}.status = 'abandoned') then (",
     "replace": "  return tx`(case when ${f}.status = 'abandoned' then (",
     "killers": [
       {
@@ -713,8 +713,8 @@
   {
     "id": "m3-level-kinds-dropped",
     "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (",
-    "replace": "or false then (",
+    "find": "or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n",
+    "replace": "or false\n",
     "killers": [
       {
         "cwd": "apps/web",

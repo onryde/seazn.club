@@ -292,8 +292,8 @@
   {
     "id": "walked-over-loser-dropped",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "      return loser === null ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: \"loser\" };",
-    "replace": "      return loser === null ? { winner: o.winner } : { winner: o.winner, loser };",
+    "find": "      return loser === null || (loser !== home && loser !== away) ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: \"loser\" };",
+    "replace": "      return loser === null || (loser !== home && loser !== away) ? { winner: o.winner } : { winner: o.winner, loser };",
     "killers": [
       {
         "cwd": "apps/web",
@@ -374,8 +374,8 @@
   {
     "id": "bye-reason-walkover",
     "file": "apps/web/src/server/usecases/stages.ts",
-    "find": "'loser', null, 'reason', 'bye')",
-    "replace": "'loser', null, 'reason', 'walkover')",
+    "find": "'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)",
+    "replace": "'reason', case when lines.withdrawn is null then 'walkover' else 'withdrew' end)",
     "killers": [
       {
         "cwd": "apps/web",
