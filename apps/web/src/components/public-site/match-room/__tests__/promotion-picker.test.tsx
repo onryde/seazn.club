@@ -24,4 +24,13 @@ describe("PromotionPicker", () => {
     const black = renderToStaticMarkup(<PromotionPicker square="e1" colour="black" onPick={() => {}} onCancel={() => {}} t={t} />);
     expect([...black.matchAll(/<piece class="(queen|rook|bishop|knight) black">/g)].length).toBe(4);
   });
+
+  it("a piece face is built from the closed tables only: a colour outside them is refused, never written into the markup", () => {
+    // The face is raw HTML (chessground's <piece> is no React element), so the
+    // types are not the guard — a value that lies past them must still stop.
+    const hostile = 'white"><img src=x onerror=alert(1)>' as unknown as "white";
+    expect(() =>
+      renderToStaticMarkup(<PromotionPicker square="d8" colour={hostile} onPick={() => {}} onCancel={() => {}} t={t} />),
+    ).toThrow(/no piece face/);
+  });
 });

@@ -5,12 +5,23 @@
 // the server refuses a suffixless promotion, so the board waits for this.
 // The piece faces are chessground's own cburnett set, styled by its stylesheet
 // — this file is reached only from board.tsx, inside the board's chunk.
-import { createElement } from "react";
 import { PROMOTION_PIECES, type PromotionPiece } from "./promotion";
 import type { Colour } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
 const ROLE: Record<PromotionPiece, string> = { q: "queen", r: "rook", b: "bishop", n: "knight" };
+const SIDE: Record<Colour, string> = { white: "white", black: "black" };
+
+/** chessground's own `<piece>` element, so its stylesheet draws the face. Not
+ *  JSX: React warns on an unknown lowercase tag (a console error on every
+ *  open, found by the room e2e). Built only from the two closed tables above
+ *  — a value outside them is refused, never interpolated. */
+function pieceHtml(p: PromotionPiece, colour: Colour): string {
+  const role = ROLE[p];
+  const side = SIDE[colour];
+  if (role === undefined || side === undefined) throw new Error(`promotion picker: no piece face for ${String(p)}/${String(colour)}`);
+  return `<piece class="${role} ${side}"></piece>`;
+}
 const LABEL = {
   q: "externalPlay.room.promote.q",
   r: "externalPlay.room.promote.r",
@@ -54,10 +65,11 @@ export function PromotionPicker({
                 p === "q" ? "border-2 border-[#7c3aed] bg-[#f3effc]" : "border border-[#e7e3f3] bg-white"
               }`}
             >
-              <span aria-hidden className="seazn-promo-piece cg-wrap h-10 w-10">
-                {/* chessground's own custom element, so its stylesheet draws the face. */}
-                {createElement("piece", { className: `${ROLE[p]} ${colour}` })}
-              </span>
+              <span
+                aria-hidden
+                className="seazn-promo-piece cg-wrap h-10 w-10"
+                dangerouslySetInnerHTML={{ __html: pieceHtml(p, colour) }}
+              />
               <span className="text-xs font-semibold">{t(LABEL[p])}</span>
             </button>
           ))}

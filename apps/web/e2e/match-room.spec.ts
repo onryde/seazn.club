@@ -74,8 +74,28 @@ async function cold(browser: Browser): Promise<BrowserContext> {
   return ctx;
 }
 
+/** Every console error a room page logged in this test: a room that works
+ *  says nothing (React's dev warnings land here too — an unknown element, a
+ *  hydration mismatch, a missing key). Checked after each test. */
+const consoleErrors: string[] = [];
+/** Chrome's notice about the SITE's report-only CSP header (proxy.ts, every
+ *  page) — not the room's to fix. Matched whole, so nothing else hides here. */
+const SITE_WIDE = new Set([
+  "The Content Security Policy directive 'upgrade-insecure-requests' is ignored when delivered in a report-only policy.",
+]);
+test.beforeEach(() => {
+  consoleErrors.length = 0;
+});
+test.afterEach(() => {
+  expect(consoleErrors, "the room's browser console stays quiet").toEqual([]);
+});
+
 async function openRoom(ctx: BrowserContext, room: SeededRoom, token: string, width = 1280): Promise<Page> {
   const page = await ctx.newPage();
+  page.on("console", (m) => {
+    if (m.type() === "error" && !SITE_WIDE.has(m.text())) consoleErrors.push(m.text().slice(0, 300));
+  });
+  page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message.slice(0, 300)}`));
   await page.setViewportSize({ width, height: 900 });
   const res = await page.goto(`${room.roomPath}?t=${encodeURIComponent(token)}`);
   expect(res?.status(), "the room renders").toBe(200);
