@@ -273,10 +273,19 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
   });
 
   it("a second opened round replaces the first in view; a later-opened EARLIER round number does not win by number", async () => {
-    const r = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
-    await openRound(r, 2, new Date(OPENED.getTime() + 60_000));
-    await openRound(r, 1, OPENED);
-    expect((await loadArbiterRound(r.owner, r.divisionId))!.roundNo).toBe(2);
+    // Forward: round 1 opened, then round 2 — round 2 is in view.
+    const forward = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
+    await openRound(forward, 1, OPENED);
+    await openRound(forward, 2, new Date(OPENED.getTime() + 60_000));
+    expect((await loadArbiterRound(forward.owner, forward.divisionId))!.roundNo, "round 2 opened second").toBe(2);
+    // O1 (re-review 2), the differential: round 2 opened FIRST, round 1
+    // LATER. The later opening is in view (the module's contract: the most
+    // recently opened round), so round 1, never round 2 by its higher number.
+    // The forward case alone cannot tell number from time; this one can.
+    const back = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
+    await openRound(back, 2, OPENED);
+    await openRound(back, 1, new Date(OPENED.getTime() + 60_000));
+    expect((await loadArbiterRound(back.owner, back.divisionId))!.roundNo, "round 1 opened second").toBe(1);
   });
 
   it("camera policy, and whether the camera report is still to come", async () => {
