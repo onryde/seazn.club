@@ -1,4 +1,5 @@
 import Link from "@/components/ui/console-link";
+import { requireStaff } from "@/lib/admin";
 import { getDictionary, t } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { captureRecordByRef, normaliseRecordRef } from "@/server/usecases/admin-capture-records";
@@ -8,9 +9,11 @@ export const dynamic = "force-dynamic";
 
 /**
  * Capture records by ref (spec 2026-10-12 §10, P7/Q5) — the support path: the operator reads the ref aloud, the
- * organiser passes it on, staff look it up here. Staff-only (the admin layout's requireStaff) and desktop-only.
+ * organiser passes it on, staff look it up here. Staff-only — the page asks itself (review fix 3: a Next layout
+ * does not gate its segments), and so does each read it calls — and desktop-only.
  */
 export default async function AdminCaptureRecordsPage({ searchParams }: { searchParams: Promise<{ ref?: string }> }) {
+  await requireStaff();
   const { ref } = await searchParams;
   const typed = (ref ?? "").trim();
   const normalised = normaliseRecordRef(typed);

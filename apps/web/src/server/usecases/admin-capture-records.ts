@@ -1,10 +1,12 @@
-// Capture record upload (spec 2026-10-12 §10, P7/Q5): the staff read of the stored records, for /admin only. The admin
-// layout's `requireStaff` is the door (as for admin-fixture-config.ts); these reads take no auth of their own and run on
-// the non-tenant client — capture_records is RLS FORCEd with no policy (V437).
+// Capture record upload (spec 2026-10-12 §10, P7/Q5): the staff read of the stored records, for /admin only. Each read
+// asks for staff ITSELF (review fix 3, PR #943): a Next layout does not gate the segments under it
+// (node_modules/next/dist/docs/01-app/02-guides/authentication.md), so the admin layout's requireStaff is not a door
+// these reads can lean on. They run on the non-tenant client — capture_records is RLS FORCEd with no policy (V437).
 //
 // What a record shows: its ref, time, slot and code id (never the tok — no tok is stored), its received / kept / dropped
 // counts and how many of the dropped were bad lines (owner ruling RL), and its KEPT lines as rows of `at`, `kind`,
 // `level`, `sid` and the other fields as `key=value`. A dropped line cannot be shown: none is stored.
+import { requireStaff } from "@/lib/admin";
 import { sql } from "@/lib/db";
 import { CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
 
@@ -66,6 +68,7 @@ const COLUMNS = sql`
 
 /** §10: `/admin/capture-records?ref=` — the support path (operator → organiser → staff). */
 export async function captureRecordByRef(raw: string): Promise<AdminCaptureRecord | null> {
+  await requireStaff();
   const ref = normaliseRecordRef(raw);
   if (ref === null) return null;
   const [row] = await sql<Row[]>`select ${COLUMNS} from capture_records r where r.ref = ${ref}`;
@@ -75,6 +78,7 @@ export async function captureRecordByRef(raw: string): Promise<AdminCaptureRecor
 /** §10: `/admin/fixtures?id=` — the records beside each of the fixture's sessions (newest first), then the records
  *  that name no session. A record naming two sessions is listed under both. */
 export async function captureRecordsOfFixture(fixtureId: string): Promise<AdminFixtureRecords> {
+  await requireStaff();
   const rows = await sql<Row[]>`select ${COLUMNS} from capture_records r where r.fixture_id = ${fixtureId} order by r.created_at desc, r.ref`;
   const records = rows.map(toRecord);
   const sessionRows = await sql<{ id: string; state: string; created_at: Date }[]>`

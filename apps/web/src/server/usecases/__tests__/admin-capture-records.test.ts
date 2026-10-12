@@ -2,10 +2,26 @@
 // records are produced by the REAL `postCaptureRecord` (never inserted by hand), so the read is proven against what the
 // write path actually stores.
 //
+// Review fix 3 (PR #943): a Next layout does not gate its segments, so each read asks for staff itself. The session is
+// the REAL one — createSession signs it into a cookie jar standing in for next/headers, and requireStaff reads it back.
+//
 // ONE SPORT, on purpose: not applicable — the capture surface reads no sport.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+
+const jar = vi.hoisted(() => new Map<string, string>());
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) => (jar.has(name) ? { name, value: jar.get(name)! } : undefined),
+    set: (name: string, value: string) => { jar.set(name, value); },
+    delete: (name: string) => { jar.delete(name); },
+  }),
+  headers: async () => new Headers(),
+}));
+
+import { createSession } from "@/lib/auth";
 import { sql } from "@/lib/db";
+import { AuthError } from "@/lib/errors";
 import { tokenTag } from "@/server/relay/domain/capture-record";
 import { captureRecordByRef, captureRecordsOfFixture, normaliseRecordRef } from "../admin-capture-records";
 import { postCaptureRecord } from "../capture-record";
@@ -32,6 +48,17 @@ afterAll(async () => {
 });
 
 const AT = "2026-10-11T21:19:03.123Z";
+
+/** A fresh user, signed in (the jar holds only their session). `staff` sets users.is_staff. */
+async function signInAs(staff: boolean): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, is_staff, staff_role)
+    values (${`caprec-admin-${randomUUID()}@example.test`}, 'Capture records reader', true, ${staff}, ${staff ? "support" : null})
+    returning id`;
+  jar.clear();
+  await createSession(id);
+  return id;
+}
 const post = (lines: object[]) => new Request("http://localhost/x", { method: "POST", body: lines.map((l) => JSON.stringify(l)).join("\n") });
 
 describe("normaliseRecordRef (P9)", () => {
@@ -50,6 +77,33 @@ describe("normaliseRecordRef (P9)", () => {
 });
 
 describe.skipIf(!HAS_DB)("the staff reads (§10)", () => {
+  beforeEach(async () => { await signInAs(true); });
+
+  it("review fix 3: both reads ask for staff themselves — no session and a signed-in NON-staff user are each refused, by ref and by fixture; the same reads as staff return the record (the positive pair)", async () => {
+    const r = await captureRig();
+    const sent = await postCaptureRecord(r.code, r.tok, post([
+      { at: AT, kind: "pair", claim: "new", slot: 0, tokenTag: tokenTag(r.tok) },
+    ]), r.now());
+    const refusals: [who: string, signIn: () => Promise<unknown>, message: string][] = [
+      ["no session", async () => { jar.clear(); }, "Not authenticated"],
+      ["a non-staff user", () => signInAs(false), "Staff access required"],
+    ];
+    let refused = 0;
+    for (const [who, signIn, message] of refusals) {
+      await signIn();
+      for (const read of [() => captureRecordByRef(sent.ref), () => captureRecordsOfFixture(r.fixtureId)]) {
+        const e = await read().then(() => null, (err: unknown) => err);
+        expect(e, who).toBeInstanceOf(AuthError);
+        expect((e as Error).message, who).toBe(message);
+        refused++;
+      }
+    }
+    expect(refused).toBe(4);
+    await signInAs(true);
+    expect(await captureRecordByRef(sent.ref)).toMatchObject({ ref: sent.ref, kept: 1 });
+    expect((await captureRecordsOfFixture(r.fixtureId)).unlinked.map((x) => x.ref)).toEqual([sent.ref]);
+  });
+
   it("the empty case first: a fixture with no record lists its sessions with none and no unlinked record; an unknown and a malformed ref read null", async () => {
     const r = await captureRig({ credits: 1 });
     const S = await r.start(phoneId("a"));
