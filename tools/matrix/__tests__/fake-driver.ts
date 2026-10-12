@@ -1035,6 +1035,22 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
         if (lo === undefined || this.deadSlots.has(`${lo.to}:${lo.slot}`)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
         if (!this.feeds.has(f.id)) champion = w;
       }
+      // T16 review m8: rank every entrant the stage's fixtures name, as the product's `bracketRanks` does (engine
+      // stage.ts): a double walkover's two sides, and a loser an award names, are out at that fixture's round (X-DW-2,
+      // X-DE-1: `walkedOver`); an entrant no stored fixture puts out (a winner who then withdrew, X-WD-3) is eliminated
+      // nowhere (-1) and ranks below every elimination, by seed.
+      const ranked = new Set<string>([...out.map((x) => x.id), ...(champion === null ? [] : [champion])]);
+      const rank = (id: string | null | undefined, round: number) => {
+        if (typeof id !== "string" || ranked.has(id)) return;
+        out.push({ id, round });
+        ranked.add(id);
+      };
+      for (const f of this.fixtures) {
+        const o = f.outcome as { kind?: unknown; loser?: unknown } | null;
+        if (o?.kind === "double_walkover") for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, f.round_no ?? 0);
+        else if (typeof o?.loser === "string") rank(o.loser, f.round_no ?? 0);
+      }
+      for (const f of this.fixtures) for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, -1);
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
       if (this.thirdPlace) {
         // The final's winner, then its loser, then the third-place match's winner and loser, then the rest by round.

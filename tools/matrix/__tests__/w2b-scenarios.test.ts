@@ -1144,19 +1144,16 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
       // Ruling R16-5, through the real snapshot: the run carries the departures the fake STORES (its entrants' status)
       // — the choreography's four (w1, QF2's home, QF3's home, a3), and the vacant half's a2 — and I2 counts them
       // eliminated. The crowned half's champion is then the one unbeaten; the vacant half has none (its title is W4's).
-      // Only I2's champion items are judged here: this fake's finalRanks leave the departed entrants out ("not ranked"),
-      // where the product ranks the whole field (the L3 run's rank items pass) — a fake divergence, not this ruling's.
+      // The fake ranks the whole field, as the product's bracketRanks does (T16 review m8), so I2 is judged whole.
       expect(out.observed.departed?.length, `${sport}: departed`).toBe(half === "crowned" ? 4 : 5);
       const i2 = evaluateInvariant(I2, out.observed);
-      const champion = i2.evidence.filter((e) => !/ not ranked$/.test(e));
       if (half === "crowned") {
         // w1 and a3 won a match before withdrawing; QF2's and QF3's home sides lost theirs by walkover.
-        expect(champion, `${sport}: I2`).toEqual([expect.stringMatching(/^2 departed entrant\(s\) counted eliminated \(stored status\): /)]);
-        expect(i2.checked, sport).toBe(9);
+        expect(i2, `${sport}: I2`).toMatchObject({ verdict: "pass", checked: 9, evidence: [expect.stringMatching(/^2 departed entrant\(s\) counted eliminated \(stored status\): /)] });
         i2Passed++;
       } else {
         expect(i2.verdict, `${sport}: I2`).toBe("fail");
-        expect(champion.filter((e) => /unbeaten|rank 1/.test(e)), sport).toEqual(["0 unbeaten entrants: "]);
+        expect(i2.evidence.filter((e) => /unbeaten|rank 1|not ranked/.test(e)), sport).toEqual(["0 unbeaten entrants: "]);
       }
     }
     expect(i2Passed, "I2 judged the crowned half").toBe(halves.crowned);
