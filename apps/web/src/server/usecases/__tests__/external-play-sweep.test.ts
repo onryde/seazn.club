@@ -3880,9 +3880,9 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
   });
 
   it("a watch whose room already ended (no stamp on file) is stamped with no vendor call — INACTIVE keeps every token out", async () => {
+    // Still an admin, a minute old, not seated: the ended room is the ONLY reason.
     const w = await watched();
     await sql`update fixture_video_meetings set ended_at = now() where meeting_id = ${w.meetingId}`;
-    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
     const r = await sweep(w.b, { now: new Date(w.createdAt + 60_000), ...quiet });
     expect([r.arbitersRemoved, removals()]).toEqual([1, []]);
     expect(await removedAt(w.participantId)).not.toBeNull();

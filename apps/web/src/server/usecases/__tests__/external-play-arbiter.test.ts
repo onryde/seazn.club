@@ -558,6 +558,8 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
       ["a player's participant", () => leaveAsArbiter(r.owner, board.fixtureId, white, { video }), [404, "NOT_FOUND"]],
       ["my participant, named on another board", () => leaveAsArbiter(elsewhere.r.owner, elsewhere.board.fixtureId, mine.participantId, { video }), [404, "NOT_FOUND"]],
       ["another club", () => leaveAsArbiter(stranger, board.fixtureId, mine.participantId, { video }), [404, "NOT_FOUND"]],
+      // The same user, under another club's authority: the board is not that club's.
+      ["my participant, under another club", () => leaveAsArbiter({ ...r.owner, orgId: stranger.orgId }, board.fixtureId, mine.participantId, { video }), [404, "NOT_FOUND"]],
       ["no session", () => leaveAsArbiter({ ...r.owner, userId: null }, board.fixtureId, mine.participantId, { video }), [403, "ARBITER_NEEDS_SESSION"]],
     ];
     let checked = 0;
@@ -565,9 +567,19 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
       expect(await codeOf(call()), why).toEqual(refusal);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
     expect(calls.filter((c) => c.startsWith("remove:"))).toEqual([]);
     expect((await arbiterRows(board.fixtureId)).map((x) => x.removed_at)).toEqual([null, null]);
+  });
+
+  it("I2: leaving after the room was torn down stamps the watch with no vendor call — INACTIVE keeps every token out", async () => {
+    const { r, board } = await liveRequired();
+    const { video, calls } = fakeVideo();
+    const out = await joinAsArbiter(r.owner, board.fixtureId, { video });
+    await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${board.fixtureId}`;
+    expect(await leaveAsArbiter(r.owner, board.fixtureId, out.participantId, { video })).toEqual({ removed: true });
+    expect(calls.filter((c) => c.startsWith("remove:"))).toEqual([]);
+    expect((await arbiterRows(board.fixtureId))[0]!.removed_at).toBeInstanceOf(Date);
   });
 
   it("I2: a vendor outage on leave is a 503 and the watch stays OPEN — the sweep retries it", async () => {
