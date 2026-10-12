@@ -25,6 +25,7 @@ import "server-only";
 //     opponent sees no pill (not "camera off") while it is open.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { CAMERA_FAULT_PING_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
@@ -32,7 +33,7 @@ import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
 import { checkInCounts } from "@/server/external-play/window";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
-import { closeGuardFault, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
+import { closeGuardFault, GUARD_FAULT_MAX_STAMPS, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { stampFixtureCheckIn } from "@/server/usecases/me";
 import {
@@ -521,6 +522,12 @@ export type CameraFaultReport = { state: "start" | "end"; participantId: string 
  * someone else's seat, a player never seated in the meeting and an ended
  * meeting are the room's one 404, like every identity failure. A change pings
  * the room, so the opponent's pill is withdrawn (or restored) at once.
+ *
+ * Fix round 6, M-2: past GUARD_FAULT_MAX_STAMPS on file a start is refused
+ * (429 CAMERA_FAULT_CAP_REACHED, nothing written) — logged once, at the stamp
+ * that reaches the cap; an end is always taken. The ping is rate-limited per
+ * seat (CAMERA_FAULT_PING_LIMIT): past it the stamp is written, the ping
+ * skipped.
  */
 export async function reportCameraFault(
   identity: RoomIdentity,
@@ -537,8 +544,33 @@ export async function reportCameraFault(
      where p.fixture_id = ${fixtureId} and p.person_id = ${r.player.personId} and p.preset = 'player'
        and p.participant_id = ${body.participantId} and m.ended_at is null`;
   if (!own) throw ROOM_NOT_FOUND();
-  const seat = { fixtureId, personId: r.player.personId, at: now };
-  const changed = body.state === "start" ? await openGuardFault(sql, seat) : await closeGuardFault(sql, seat);
-  if (changed) await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
+  const personId = r.player.personId;
+  const seat = { fixtureId, personId, at: now };
+  let changed: boolean;
+  if (body.state === "start") {
+    const o = await openGuardFault(sql, seat);
+    if (o.outcome === "capped") throw CAMERA_FAULT_CAP_REACHED();
+    if (o.outcome === "opened" && o.stamps === GUARD_FAULT_MAX_STAMPS) {
+      log.warn({ fixtureId, personId, stamps: o.stamps }, "camera-fault: a seat reached the stamp cap; its further starts are refused");
+    }
+    changed = o.outcome === "opened";
+  } else {
+    changed = await closeGuardFault(sql, seat);
+  }
+  if (changed && (await cameraFaultPingAllowed(fixtureId, personId))) await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
   return { open: body.state === "start" };
+}
+
+const CAMERA_FAULT_CAP_REACHED = () =>
+  new HttpError(429, "Too many camera reconnects on this seat for this match.", "CAMERA_FAULT_CAP_REACHED");
+
+/** The ping's budget (M-2): spent only by a change; a 429 skips the ping. */
+async function cameraFaultPingAllowed(fixtureId: string, personId: string): Promise<boolean> {
+  try {
+    await rateLimit(`room-camera-fault-ping:${fixtureId}:${personId}`, CAMERA_FAULT_PING_LIMIT);
+    return true;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 429) return false;
+    throw err;
+  }
 }
