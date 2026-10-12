@@ -5,9 +5,11 @@
 // it reads), never a copy of it kept in the test.
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as TS from "typescript";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { WEEKLY_EVENTS, WORKFLOW } from "../ci/gh.ts";
 import { slugRunId } from "../lib/run-id.ts";
@@ -1102,43 +1104,169 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
   });
 });
 
+// The probe's trigger names its INPUTS one by one (2026-10-12), never a `packages/engine/stryker*` glob: that glob also took the
+// RECORDED data (an equivalent recorded, a floor raised, a leg re-measured), and each such PR spent 45-60 minutes on a probe its
+// change could not move. A push to main on the same inputs runs the probe too, so main holds the warm incremental file a PR's
+// restore key reaches (GitHub lets a PR restore its base branch's cache, never another PR's).
+/** The `paths:` filter of one trigger under `on:`, in order. */
+function triggerPaths(event: "pull_request" | "push"): string[] {
+  const block = triggerBlock(event);
+  const list = /^ {4}paths:\n((?: {6}- "[^"]+"\n)+)/m.exec(block)?.[1];
+  if (list === undefined) throw new Error(`mutation.yml's ${event} trigger has no paths list`);
+  return list.split("\n").filter(Boolean).map((l) => /^ {6}- "([^"]+)"$/.exec(l)![1]!);
+}
+/** The text of one trigger under `on:` (its indented lines). */
+function triggerBlock(event: string): string {
+  const block = new RegExp(`^ {2}${event}:\\n((?: {4,}\\S.*\\n)+)`, "m").exec(MUT)?.[1];
+  if (block === undefined) throw new Error(`mutation.yml has no \`${event}:\` trigger`);
+  return block;
+}
+/** GitHub's path filter: `*` is any run of characters but `/`, `**` is any run at all. */
+const globRe = (g: string): RegExp => new RegExp(`^${g.split("**").map((deep) => deep.split("*").map((t) => t.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")).join(".*")}$`);
+const coveredBy = (paths: readonly string[], f: string): boolean => paths.some((g) => globRe(g).test(f));
+/** The engine's files named for Stryker, at its top level and in scripts/, as repo paths: what the tree holds, never typed. */
+function strykerFilesInTree(): string[] {
+  return [...readdirSync(ENGINE_DIR), ...readdirSync(join(ENGINE_DIR, "scripts")).map((f) => `scripts/${f}`)]
+    .filter((f) => /stryker/.test(f) && statSync(join(ENGINE_DIR, f)).isFile())
+    .map((f) => `packages/engine/${f}`);
+}
+/** What the probe's run and its plan REACH, read from the code, never typed: the files reached from the Stryker config (what
+ *  `pnpm mutation` loads: the groups, the cuts, the runner plugin it names, the vitest config it hands the runner and the base that
+ *  merges) and from the plan's script (the matrix: the legs, their timeouts and their cut fingerprints), following every STRING in
+ *  their code that names a file at the engine's top level or in its scripts/ (comments are not tokens, so a note naming a file is
+ *  not a reach), and the Stryker data files those strings name. The steps after Stryker (stryker-floor.ts --check-selection and
+ *  --survivors) are deliberately not roots: they judge what the run produced and never change which mutants it generates or kills
+ *  (the survivors step reads stryker-equivalent.json only to leave recorded equivalents out of its list). */
+function probeReach(): { code: string[]; data: string[] } {
+  const ts = createRequire(import.meta.url)("typescript") as typeof TS;
+  const inScope = (abs: string): boolean => {
+    const rel = relative(ENGINE_DIR, abs);
+    return !rel.startsWith("..") && (dirname(rel) === "." || dirname(rel) === "scripts");
+  };
+  const code = new Set<string>();
+  const data = new Set<string>();
+  const queue = ["stryker.config.mjs", "scripts/stryker-matrix.mjs"].map((f) => join(ENGINE_DIR, f));
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (code.has(file)) continue;
+    code.add(file);
+    const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, false, /\.m?ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+    const strings: string[] = [];
+    const walk = (n: TS.Node): void => {
+      if (ts.isStringLiteralLike(n)) strings.push(n.text);
+      ts.forEachChild(n, walk);
+    };
+    walk(sf);
+    for (const s of strings) {
+      // relative to the file (an import, `new URL("../x", import.meta.url)`), to the engine (Stryker's cwd: `configFile`, `plugins`)
+      // and to the repository (a path a message spells)
+      for (const abs of new Set([resolve(dirname(file), s), resolve(ENGINE_DIR, s), resolve(REPO, s)])) {
+        if (!inScope(abs) || !existsSync(abs) || !statSync(abs).isFile()) continue;
+        if (abs.endsWith(".json")) { if (/stryker/.test(basename(abs))) data.add(relative(REPO, abs)); }
+        else if (/\.m?[jt]s$/.test(abs)) queue.push(abs);
+      }
+    }
+  }
+  return { code: [...code].map((f) => relative(REPO, f)).sort(), data: [...data].sort() };
+}
+/** The Stryker data files that RECORD results and never decide what the probe runs: a PR that edits only these must not spend
+ *  45-60 minutes on the probe. Each is named by nothing on the probe's path (probeReach), which the test below holds. */
+const RECORDED_DATA: Record<string, string> = {
+  "packages/engine/stryker-equivalent.json": "mutants a reviewer judged equivalent: stryker-floor.ts leaves them out of the survivors list and the score, after the run",
+  "packages/engine/stryker-floor.json": "the families' floors: read by the floors job (a probe-only plan skips it) and by ci.yml's --check-file-against",
+  "packages/engine/stryker-measured.json": "what each leg took on the measuring run: test/stryker-sizing.test.ts derives the timeouts from it",
+  "packages/engine/stryker-unscored.json": "the mutants a member cut never scores: test/stryker-sizing.test.ts holds the cuts to it",
+};
+
 describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3)", () => {
-  it("schedule + workflow_dispatch + its own pull_request paths, and no push, no workflow_call, no pull_request_target", () => {
+  it("schedule + workflow_dispatch + its own pull_request paths + a push to main on the SAME paths, and no workflow_call, no pull_request_target", () => {
     expect(MUT).toMatch(/schedule:\s*\n\s*- cron: "23 3 \* \* 0"/);
     expect(MUT.match(/^\s*- cron:/gm)).toHaveLength(1);   // one weekly firing: a second cron line would run the whole matrix again
-    for (const t of ["workflow_dispatch:", "pull_request:"]) expect(MUT).toContain(t);
-    expect(MUT).not.toMatch(/^\s{2}push:/m);
+    for (const t of ["workflow_dispatch:", "pull_request:", "push:"]) expect(MUT).toContain(t);
     expect(MUT).not.toContain("workflow_call");
     expect(MUT).not.toContain("pull_request_target");
-    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/vitest\.config\.ts"\s*\n\s*- "packages\/engine\/vitest\.stryker\.config\.ts"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+    // the explicit list: the probe's inputs, no `stryker*` glob (it took the recorded data with it)
+    expect(triggerPaths("pull_request")).toEqual([
+      ".github/workflows/mutation.yml",
+      "packages/engine/stryker.config.mjs",
+      "packages/engine/stryker.groups.mjs",
+      "packages/engine/stryker.groups.d.mts",
+      "packages/engine/stryker-anchors.json",
+      "packages/engine/stryker-timeouts.json",
+      "packages/engine/vitest.config.ts",
+      "packages/engine/vitest.stryker.config.ts",
+      "packages/engine/scripts/stryker-*",
+    ]);
+    // the push is the warm-up for those same inputs, on main alone: a push to any other branch is a PR's business (its own probe)
+    expect(triggerPaths("push"), "the push names the pull request's paths, in its order").toEqual(triggerPaths("pull_request"));
+    const push = triggerBlock("push").split("\n").filter(Boolean);
+    expect(push.filter((l) => !/^ {4}paths:$|^ {6}- "/.test(l)), "the push's only other filter is main").toEqual(["    branches: [main]"]);
+    expect(MUT.match(/^ {2}push:$/gm), "one push trigger").toHaveLength(1);
   });
 
-  it("the probe's pull_request paths cover every Stryker file of the engine, and the vitest config the runner is handed (T20-FIX1, M3)", () => {
-    // `packages/engine/stryker*` does not match `vitest.stryker.config.ts` (it starts with `vitest.`), so a PR that changed the
+  it("the probe runs on every file its run and its plan reach: the code from the Stryker config and the plan's script, and the data that code names, each derived from the code (a dropped stryker.config.mjs is red here)", () => {
+    const reach = probeReach();
+    // controls: the reader follows the config to what it loads and the plan to what it reads (a reader that saw nothing would make
+    // every check below vacuous)
+    for (const f of ["stryker.config.mjs", "stryker.groups.mjs", "scripts/stryker-cuts.mjs", "scripts/stryker-vitest-runner.mjs", "vitest.stryker.config.ts", "vitest.config.ts", "scripts/stryker-matrix.mjs", "scripts/stryker-files.mjs"]) {
+      expect(reach.code, `the probe's path reaches ${f}`).toContain(`packages/engine/${f}`);
+    }
+    expect(reach.data, "the plan reads the timeouts and the anchors").toEqual(expect.arrayContaining(["packages/engine/stryker-timeouts.json", "packages/engine/stryker-anchors.json"]));
+    let checked = 0;
+    for (const event of ["pull_request", "push"] as const) {
+      const paths = triggerPaths(event);
+      expect(coveredBy(paths, "packages/engine/stryker.config.mjs"), `${event}: the probe runs on its own config`).toBe(true);
+      expect(coveredBy(paths, "packages/engine/test/stryker-sizing.test.ts"), `${event}: and its filter is not a catch-all (a control: the matcher refuses)`).toBe(false);
+      for (const f of [...reach.code, ...reach.data]) {
+        expect(coveredBy(paths, f), `${event}: ${f} decides what the probe runs, and the trigger does not name it`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "files on the probe's path, checked against both triggers").toBe(2 * (reach.code.length + reach.data.length));
+    expect(reach.code.length + reach.data.length).toBeGreaterThan(9);
+  });
+
+  it("a recorded data file never triggers the probe, stryker-equivalent.json and stryker-floor.json above all: each exists, nothing on the probe's path names it, and neither trigger takes it", () => {
+    const reach = probeReach();
+    const recorded = Object.keys(RECORDED_DATA);
+    expect(recorded, "the two a mutation-debt PR edits most").toEqual(expect.arrayContaining(["packages/engine/stryker-equivalent.json", "packages/engine/stryker-floor.json"]));
+    let checked = 0;
+    for (const f of recorded) {
+      expect(existsSync(join(REPO, f)), `${f} exists (a renamed file would leave this exclusion vacuous)`).toBe(true);
+      expect(reach.data, `${f} is named on the probe's path, so it is an INPUT: take it out of RECORDED_DATA and into the trigger`).not.toContain(f);
+      for (const event of ["pull_request", "push"] as const) {
+        expect(coveredBy(triggerPaths(event), f), `${event}: ${f} is recorded data (${RECORDED_DATA[f]}) and must not trigger the probe`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(recorded.length * 2);
+    expect(recorded.length).toBe(4);
+    // every Stryker data file in the tree is one or the other: a new one must be classified, never silently left out
+    const data = strykerFilesInTree().filter((f) => f.endsWith(".json"));
+    expect(data.length, "Stryker data files in the tree").toBeGreaterThan(4);
+    expect(data.filter((f) => !reach.data.includes(f) && !recorded.includes(f)), "Stryker data files neither on the probe's path nor recorded").toEqual([]);
+  });
+
+  it("every other Stryker file of the engine is in the trigger, and the vitest config the runner is handed (T20-FIX1, M3)", () => {
+    // `packages/engine/stryker*` did not match `vitest.stryker.config.ts` (it starts with `vitest.`), so a PR that changed the
     // reporters the Stryker runs use, the fix T20-PRE made, would not have run the probe that proves them. The files are read
     // from the TREE (every file named for Stryker, in the engine and its scripts) and from the config's own declaration of the
-    // runner's vitest config, never typed here. GitHub's filter: `*` is any run of characters but `/`, `**` is any run at all.
-    const paths = /pull_request:\n\s+paths:\n((?:\s+- ".+"\n)+)/.exec(MUT)![1]!.split("\n").map((l) => /- "(.+)"/.exec(l)?.[1]).filter((x): x is string => x !== undefined);
-    expect(paths.length, "the trigger names paths").toBeGreaterThan(2);
-    const esc = (t: string): string => t.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-    const glob = (g: string): RegExp => new RegExp(`^${g.split("**").map((deep) => deep.split("*").map(esc).join("[^/]*")).join(".*")}$`);
-    const covered = (f: string): boolean => paths.some((g) => glob(g).test(f));
-    expect(covered("packages/engine/stryker.config.mjs"), "the filter matches a plain Stryker file (a control: the matcher works)").toBe(true);
-    expect(covered("packages/engine/test/stryker-sizing.test.ts"), "and refuses a file the probe does not depend on (a control: it is not a catch-all)").toBe(false);
-    const engine = join(REPO, "packages/engine");
-    const named = [...readdirSync(engine).map((f) => f), ...readdirSync(join(engine, "scripts")).map((f) => `scripts/${f}`)]
-      .filter((f) => /stryker/.test(f) && statSync(join(engine, f)).isFile())
-      .map((f) => `packages/engine/${f}`);
+    // runner's vitest config, never typed here; the recorded data alone is left out (the test above holds each of those).
+    const engine = ENGINE_DIR;
+    const named = strykerFilesInTree();
     const declared = /configFile:\s*"([^"]+)"/.exec(readFileSync(join(engine, "stryker.config.mjs"), "utf8"))![1]!;
     // and what that config MERGES (T20-FIX2, m3): vitest.stryker.config.ts is `mergeConfig(base, ...)`, so a change to the base it
     // imports (`./vitest.config.ts`) alters every Stryker run, and the probe must run on it
     const imported = [...readFileSync(join(engine, declared), "utf8").matchAll(/from "\.\/([^"]+)"/g)].map((m) => m[1]!);
     expect(imported, "the runner's vitest config imports the engine's own vitest config").toContain("vitest.config.ts");
-    const files = [...new Set([...named, `packages/engine/${declared}`, ...imported.map((f) => `packages/engine/${f}`)])];
+    const files = [...new Set([...named, `packages/engine/${declared}`, ...imported.map((f) => `packages/engine/${f}`)])].filter((f) => RECORDED_DATA[f] === undefined);
     expect(files.length, "Stryker files read from the tree").toBeGreaterThan(6);
     expect(files, "the runner's vitest config is among them").toContain("packages/engine/vitest.stryker.config.ts");
     expect(files, "and the base it merges").toContain("packages/engine/vitest.config.ts");
-    expect(files.filter((f) => !covered(f)), "Stryker files the probe's trigger does not cover").toEqual([]);
+    expect(files, "and the groups' type declarations").toContain("packages/engine/stryker.groups.d.mts");
+    for (const event of ["pull_request", "push"] as const) {
+      expect(files.filter((f) => !coveredBy(triggerPaths(event), f)), `${event}: Stryker files the probe's trigger does not cover`).toEqual([]);
+    }
   });
 
   it("the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout", () => {
@@ -1150,7 +1278,7 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     expect(MJOBS.plan).toContain("outputs:\n      matrix: ${{ steps.matrix.outputs.matrix }}");
   });
 
-  it("plan and mutate spell the fork condition in their own `if:` (plan the weekly gate beside it), and floors runs only when the plan holds a leg with a floor: each evaluated over every event, with the matrix the plan step really writes (9 cases x 3 jobs = 27 evaluations)", () => {
+  it("plan and mutate spell the fork condition in their own `if:` (plan the weekly gate beside it), and floors runs only when the plan holds a leg with a floor: each evaluated over every event, with the matrix the plan step really writes (10 cases x 3 jobs = 30 evaluations)", () => {
     let evaluated = 0;
     const plan = ifOf(MJOBS.plan!);
     const mutate = ifOf(MJOBS.mutate!);
@@ -1175,6 +1303,8 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
       { name: "PR from the same repository", ctx: ctxOf(ran("pull_request", "")), plan: true, mutate: true, floors: false },
       { name: "PR from a fork", ctx: ctxOf({ event: "pull_request", head: "someone-else/seazn.club", planResult: "skipped" }), plan: false, mutate: false, floors: false },
       { name: "PR whose head repository was deleted", ctx: ctxOf({ event: "pull_request", head: null, planResult: "skipped" }), plan: false, mutate: false, floors: false },
+      // a push to main on the probe's inputs plans the probe (the warm-up main's cache is kept by); the weekly switch does not gate it
+      { name: "push to main, weekly switch off", ctx: ctxOf({ ...ran("push", ""), weekly: "" }), plan: true, mutate: true, floors: false },
       // plan itself failed: there is no matrix, so nothing for floors to judge
       { name: "workflow_dispatch whose plan failed", ctx: ctxOf({ event: "workflow_dispatch", planResult: "failure" }), plan: true, mutate: true, floors: false },
     ];
@@ -1184,8 +1314,8 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
       expect(evalIf(floors, c.ctx), `floors: ${c.name}`).toBe(c.floors);
       evaluated += 3;
     }
-    expect(evaluated).toBe(27);
-  }, spawnBudget(5));
+    expect(evaluated).toBe(30);
+  }, spawnBudget(6));
 
   it("a push to a pull request cancels the run it supersedes and nothing else is ever cancelled: one top-level `concurrency:` whose group is the PR's number for a PR and the run's own id otherwise", () => {
     const blocks = MUT.match(/^concurrency:\n(?: {2}.*\n)+/gm);
@@ -1206,9 +1336,10 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     // taken before any job's `if:` skips the fork's run). Same head_ref, different PR number.
     expect(groupOf(pr(9, "feat/a", "14")), "a fork PR reusing a same-repo branch name").not.toBe(groupOf(pr(7, "feat/a", "10")));
     expect(cancels(pr(7, "feat/a", "10"))).toBe(true);
-    // every other event: its own group per run, and never cancelling, so a weekly run or a dispatch is never aborted by a later push
+    // every other event: its own group per run, and never cancelling, so a weekly run, a dispatch or main's warm-up push run is
+    // never aborted by a later push (a second push to main is a second run, never a cancel of the first one's cache save)
     let others = 0;
-    for (const event of ["schedule", "workflow_dispatch"]) {
+    for (const event of ["schedule", "workflow_dispatch", "push"]) {
       const a = ctxOf({ event, headRef: "", runId: "100" });
       const b = ctxOf({ event, headRef: "", runId: "101" });
       expect(groupOf(a), event).toBe("mutation-run-100");
@@ -1216,7 +1347,7 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
       expect(cancels(a), event).toBe(false);
       others++;
     }
-    expect(others).toBe(2);
+    expect(others).toBe(3);
     // a dispatch from a branch whose name equals a PR's head ref does not share its group (head_ref is empty outside a PR), and a run
     // id that equals a PR number is another group (the two namespaces are prefixed)
     expect(groupOf(ctxOf({ event: "workflow_dispatch", headRef: "feat/a", runId: "7" }))).toBe("mutation-run-7");
@@ -1346,6 +1477,17 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     }
     expect(compared).toBe(names.length * (names.length - 1));
   });
+
+  it("the warm-up's point: the key main's push run saves the probe under is one a PR probe's restore key reaches (the same group, cut and runner from the real plan step; only the sha differs)", () => {
+    const probeOf = (event: string) => (JSON.parse(planMatrix(event, "")) as { include: { group: string; timeout: number; cut: string }[] }).include;
+    const push = probeOf("push");
+    const pr = probeOf("pull_request");
+    expect(push.map((e) => e.group), "a push plans the probe alone").toEqual(["probe"]);
+    expect(push, "the push's plan is the PR's").toEqual(pr);
+    const mainKey = keyOf("probe", push[0]!.cut).replace("0123abc", "fedcba9");   // saved by the push run, at main's sha
+    expect(mainKey.startsWith(restoreOf("probe", pr[0]!.cut)), `a PR's restore prefix "${restoreOf("probe", pr[0]!.cut)}" reaches main's key "${mainKey}"`).toBe(true);
+    expect(mainKey, "and it is not the PR's own key").not.toBe(keyOf("probe", pr[0]!.cut));
+  }, spawnBudget(2));
 
   it("the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)", () => {
     const names = Object.keys(STRYKER_GROUPS);
@@ -1576,11 +1718,11 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     expect(CORE).toHaveLength(CORE_FILES.length);
   });
 
-  it("against the real plan, for every dispatch group and the weekly and the PR: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)", () => {
+  it("against the real plan, for every dispatch group and the weekly, the PR and main's push: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)", () => {
     const floors = ifOf(MJOBS.floors!);
     const legsExpr = /^ {6}LEGS: \$\{\{\s*(.+?)\s*\}\}/m.exec(MJOBS.floors!)![1]!;
     const keys = Object.keys(STRYKER_GROUPS);
-    const plans = [...keys.map((group) => ({ event: "workflow_dispatch", group })), { event: "workflow_dispatch", group: "all" }, { event: "schedule", group: "" }, { event: "pull_request", group: "" }];
+    const plans = [...keys.map((group) => ({ event: "workflow_dispatch", group })), { event: "workflow_dispatch", group: "all" }, { event: "schedule", group: "" }, { event: "pull_request", group: "" }, { event: "push", group: "" }];
     let ran = 0;
     for (const p of plans) {
       const matrix = planMatrix(p.event, p.group);
@@ -1597,10 +1739,10 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
       }
     }
     // anti-vacuity: every plan was looked at, and the jobs that ran are every leg dispatched alone, group=all and the weekly
-    // (the probe dispatched alone and the pull request, the two probe-only plans, are the rest, each checked above)
-    expect(plans.length).toBe(keys.length + 3);
+    // (the probe dispatched alone, the pull request and the push, the three probe-only plans, are the rest, each checked above)
+    expect(plans.length).toBe(keys.length + 4);
     expect(ran).toBe(keys.length - 1 + 2);
-  }, spawnBudget(Object.keys(STRYKER_GROUPS).length + 3));   // one plan spawn per dispatch group, plus all, the weekly and the PR
+  }, spawnBudget(Object.keys(STRYKER_GROUPS).length + 4));   // one plan spawn per dispatch group, plus all, the weekly, the PR and the push
 
   it("what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option", () => {
     const legsExpr = /^ {6}LEGS: \$\{\{\s*(.+?)\s*\}\}/m.exec(MJOBS.floors!)![1]!;

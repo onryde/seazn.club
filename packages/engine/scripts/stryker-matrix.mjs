@@ -4,6 +4,8 @@
 // and nothing else on stdout (the line is appended to $GITHUB_OUTPUT). Plain .mjs on purpose: the workflow's `plan` job runs
 // it with `node` alone, before any install.
 //   pull_request       -> the probe only (the PR self-proof, D3); a stray --group does not widen it
+//   push               -> the probe only, as a pull_request (mutation.yml takes a push to main on the probe's own inputs, so
+//                         main keeps a warm probe file for the PRs to restore); a stray --group does not widen it
 //   schedule           -> every STRYKER_GROUPS key except the probe
 //   workflow_dispatch  -> --group all: every key except the probe; --group <key>: that key alone, the probe included
 //   anything else      -> refused
@@ -42,7 +44,7 @@ import { STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
 import { filesOf } from "./stryker-files.mjs";
 
 const MAX_MINUTES = 300; // ONE cap, everywhere (D14, Step 4, Task 20)
-const USAGE = 'usage: stryker-matrix.mjs --event <pull_request|schedule|workflow_dispatch> [--group <all|group>]';
+const USAGE = 'usage: stryker-matrix.mjs --event <pull_request|push|schedule|workflow_dispatch> [--group <all|group>]';
 
 function refuse(message) {
   process.stderr.write(`stryker-matrix: ${message}\n`);
@@ -113,6 +115,7 @@ const nonProbe = all.filter((g) => g !== "probe");
 function select(event, group) {
   switch (event) {
     case "pull_request":
+    case "push":
       return ["probe"];
     case "schedule":
       return nonProbe;
@@ -122,7 +125,7 @@ function select(event, group) {
       if (!all.includes(group)) return refuse(`unknown group "${group}": expected all or one of ${all.join(", ")}`);
       return [group];
     default:
-      return refuse(`unsupported event "${event ?? ""}": expected pull_request, schedule or workflow_dispatch\n${USAGE}`);
+      return refuse(`unsupported event "${event ?? ""}": expected pull_request, push, schedule or workflow_dispatch\n${USAGE}`);
   }
 }
 

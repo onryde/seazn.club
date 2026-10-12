@@ -8,7 +8,19 @@ name: Stryker mutation
 #    all of PR-A's state.
 #  - workflow_dispatch: `group` is `all` (every group but the probe) or one STRYKER_GROUPS key, the probe included; the choices
 #    are held equal to the keys by matrix-workflow.test.ts. inject_visibility proves the guard live.
-#  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
+#  - pull_request on the probe's INPUTS: the probe, so the workflow proves itself on its own PR. The inputs are named one by one,
+#    never a `packages/engine/stryker*` glob: this file, the Stryker config and groups (and the groups' type declarations), the
+#    vitest configs the runner is handed, the scripts (scripts/stryker-*: the plan, the cuts, the runner, the floor CLI), and the two
+#    data files the PLAN reads: stryker-timeouts.json (the probe's own job timeout comes from it) and stryker-anchors.json (parsed by
+#    the plan on every event, and the cut fingerprints the cache keys carry). The RECORDED data never triggers it:
+#    stryker-equivalent.json (read only after the run, to leave recorded equivalents out of the survivors list and the score),
+#    stryker-floor.json (the floors job, which a probe-only plan skips, and ci.yml's --check-file-against), stryker-measured.json and
+#    stryker-unscored.json (the sizing test alone). None of them changes which mutants the probe generates or kills, and a PR that
+#    only records a result must not spend the probe's 45-60 minutes. tools/matrix/__tests__/matrix-workflow.test.ts derives what
+#    the run and the plan reach from their code and holds this list to it.
+#  - push to main on the same inputs: the probe alone, so main keeps a warm incremental file. A PR may restore its base branch's
+#    cache (never another PR's), so a PR probe's restore key reaches the file main's run saved for the same cut and runner. Not
+#    gated by MATRIX_WEEKLY_ENABLED, like the PR probe.
 # The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
 # packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE FROM THE FIRST FULL RUN (run
 # 37371368951, sha 78c7ef3e6, ubuntu-latest, concurrency 3): packages/engine/stryker-measured.json records what each leg took, and a
@@ -126,7 +138,23 @@ on:
   pull_request:
     paths:
       - ".github/workflows/mutation.yml"
-      - "packages/engine/stryker*"
+      - "packages/engine/stryker.config.mjs"
+      - "packages/engine/stryker.groups.mjs"
+      - "packages/engine/stryker.groups.d.mts"
+      - "packages/engine/stryker-anchors.json"
+      - "packages/engine/stryker-timeouts.json"
+      - "packages/engine/vitest.config.ts"
+      - "packages/engine/vitest.stryker.config.ts"
+      - "packages/engine/scripts/stryker-*"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mutation.yml"
+      - "packages/engine/stryker.config.mjs"
+      - "packages/engine/stryker.groups.mjs"
+      - "packages/engine/stryker.groups.d.mts"
+      - "packages/engine/stryker-anchors.json"
+      - "packages/engine/stryker-timeouts.json"
       - "packages/engine/vitest.config.ts"
       - "packages/engine/vitest.stryker.config.ts"
       - "packages/engine/scripts/stryker-*"
@@ -138,7 +166,7 @@ permissions:
 # new proof of the same files). The group is the PR's NUMBER, not its branch: a fork PR whose branch is named like a same-repo
 # PR's would otherwise share the group and cancel that PR's run (the group is taken before any job's `if:` skips the fork's run).
 # Every other run is its OWN group (run_id) and is never cancelled: a weekly run or a dispatch is hours of measurement that a
-# later push to some branch must not abort.
+# later push to some branch must not abort, and a push to main's probe run must keep the file it saves for the PRs.
 concurrency:
   group: mutation-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -259,7 +287,8 @@ jobs:
       - run: pnpm install --frozen-lockfile --filter @seazn/engine...
       # The incremental file can carry the last run's results forward, so an unchanged mutant is not re-run, but only while the
       # cache entry survives: GitHub evicts an entry not read for 7 days, and a weekly run sits on that edge, so budget it as cold
-      # (MUTATION.md section 9). Restore and save are
+      # (MUTATION.md section 9). The probe's file is also saved by main's push run (the `push:` trigger), which a PR probe restores
+      # through the restore key below: a PR can read its base branch's cache, and its own saves stay its own. Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
       # The key is `stryker-<group>@<cut>@<runner>@<sha>` and the restore key stops after the third '@': a group name is lowercase
@@ -327,7 +356,7 @@ jobs:
   # a red or timed-out one (always(): a family whose leg left no report is REFUSED here, exit 2, never skipped), and reads the
   # legs' artifacts. --legs is the legs the plan scheduled: a family is judged only when all its legs were (a dispatch of one leg
   # prints the family as not judged). The probe has no floor and --check-all refuses it, so a plan that holds ONLY the probe (a
-  # pull request, or a dispatch of group=probe) skips this job: the condition reads the plan's own output, so any future probe-only
+  # pull request, a push to main, or a dispatch of group=probe) skips this job: the condition reads the plan's own output, so any future probe-only
   # path is covered too, and it comes last so a skipped or failed plan (no matrix written) is stopped by the term before it. A
   # weekly firing the plan job skipped (the MATRIX_WEEKLY_ENABLED gate) is skipped by `needs.plan.result` the same way.
   floors:
