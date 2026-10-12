@@ -71,6 +71,7 @@ type Cmd =
   | { k: "arbiterJoin" }
   | { k: "drop" }
   | { k: "rejoin" }
+  | { k: "mediaRejoin" }
   | { k: "wait"; ms: number };
 // Weighted towards what it takes to REACH "live" (opponent in, camera on,
 // settled) so all three outcomes are visited often, not by luck.
@@ -85,6 +86,7 @@ const cmd: fc.Arbitrary<Cmd> = fc.oneof(
   { arbitrary: fc.constant({ k: "arbiterJoin" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "drop" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "rejoin" } as const), weight: 1 },
+  { arbitrary: fc.constant({ k: "mediaRejoin" } as const), weight: 1 },
   {
     arbitrary: fc.constantFrom(500, PRESENCE_TICK_MS, PRESENCE_SETTLE_MS - 1, PRESENCE_SETTLE_MS, 7_000).map((ms) => ({ k: "wait", ms }) as const),
     weight: 5,
@@ -168,7 +170,12 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
                 }
                 break;
               case "rejoin":
-                m.reconnect();
+                await m.reconnect();
+                model.connected = true;
+                model.joinedAt = now;
+                break;
+              case "mediaRejoin":
+                await m.mediaReconnect();
                 model.connected = true;
                 model.joinedAt = now;
                 break;
@@ -184,6 +191,7 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
             else seen.none += 1;
             // D7 holds throughout, whatever the pill says.
             expect(m.participants.videoSubscribed.size).toBe(0);
+            expect(m.consumedVideo).toEqual([]);
           }
           await cam.leave();
           expect(opponentPresenceView(cam.link(), { participantId: OPP.user }, now), "left ⇒ no pill").toBeNull();
@@ -199,7 +207,7 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
     expect(seen.off, "off reached").toBeGreaterThan(50);
     expect(seen.none, "no pill reached").toBeGreaterThan(50);
     // Every event kind applied.
-    for (const k of ["oppJoin", "oppLeave", "camOn", "camPause", "camResume", "camClose", "screen", "arbiterJoin", "drop", "rejoin", "wait"]) {
+    for (const k of ["oppJoin", "oppLeave", "camOn", "camPause", "camResume", "camClose", "screen", "arbiterJoin", "drop", "rejoin", "mediaRejoin", "wait"]) {
       expect(applied.get(k) ?? 0, `applied: ${k}`).toBeGreaterThan(20);
     }
   });
