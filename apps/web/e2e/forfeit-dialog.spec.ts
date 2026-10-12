@@ -104,6 +104,9 @@ async function confirmNeither(page: Page) {
   expect(await sidesShown(d), "before play, with a next match (or a table): Neither is offered").toEqual(["home", "away", "both"]);
   await d.getByTestId("forfeit-who-both").click();
   expect(await reasonsShown(d), "Neither only walks over").toEqual(["walkover"]);
+  // Design audit 1.1: the one reason comes with the side — no second tap that decides nothing.
+  await expect(d.getByTestId("forfeit-why-walkover"), "the walkover is chosen with Both sides").toBeChecked();
+  await expect(d.getByTestId("forfeit-confirm"), "Confirm is ready on the side alone").toBeEnabled();
   await d.getByTestId("forfeit-why-walkover").check();
   // X-DW-4: no score is credited to either side.
   await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview.none"));
@@ -206,7 +209,9 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     await expect(d.getByTestId("forfeit-guidance-no-next-match"), "a league has no final to protect").toHaveCount(0);
     await d.getByTestId("forfeit-who-away").click();
     expect(await reasonsShown(d), "before play: a walkover only (withdrew is the cascade's, PF-2)").toEqual(["walkover"]);
-    await expect(d.getByTestId("forfeit-confirm")).toBeDisabled();
+    // Design audit 1.1: a side offered one reason has it chosen with the side; Confirm already names it.
+    await expect(d.getByTestId("forfeit-why-walkover"), "the one reason is chosen with the side").toBeChecked();
+    await expect(d.getByTestId("forfeit-confirm")).toHaveText(ui("forfeitDialog.confirm.walkover"));
     await d.getByTestId("forfeit-why-walkover").check();
     // BD-WO-1: 2-0 in games — the credited headline, not the played 0-0.
     await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview", { home, homeScore: 2, away, awayScore: 0 }));

@@ -300,6 +300,35 @@ describe("UI-1 forfeit dialog selection (Confirm gating, the payload)", () => {
     expect(forfeitPayload(both, { home: "H", away: "A" })).toEqual({ by: "both", reason: "walkover" });
   });
 
+  // Design audit 1.1: a side that is offered ONE reason has it chosen with the side — "Both sides" then "Walkover:
+  // didn't turn up" was a second tap that decided nothing. Swept over every sport and both sides of the start; the
+  // expected reason is the model's own offer (the engine's phase guard), never a value typed here. The pair: a side
+  // offered two reasons is chosen with none, so the organiser still picks.
+  it("audit 1.1: a side offered one reason has it chosen with the side; two reasons leave the choice open", () => {
+    let single = 0;
+    let open = 0;
+    for (const m of builtinModules) {
+      for (const [scene, fx] of [["pre", fixtureOf(m.key, PRE)], ["started", fixtureOf(m.key, STARTED)], ["played", playedOf(m.key)]] as const) {
+        const d = model(fx);
+        for (const w of d.who) {
+          const offered = d.why(w);
+          const s = pickForfeit(d, NO_FORFEIT_PICK, { kind: "who", who: w });
+          if (offered.length === 1) {
+            expect(s, `${m.key} ${scene} ${w}: the one reason comes with the side`).toEqual({ who: w, reason: offered[0] });
+            expect(forfeitConfirmBlocked(d, s, false), `${m.key} ${scene} ${w}: Confirm is ready`).toBe(false);
+            single++;
+          } else {
+            expect(s, `${m.key} ${scene} ${w}: ${offered.length} reasons, none chosen for the organiser`).toEqual({ who: w, reason: null });
+            open++;
+          }
+        }
+      }
+    }
+    // Every sport offers "Both sides" before play (one reason), and a side two reasons after the Start.
+    expect(single, `single-reason sides checked: ${single}`).toBeGreaterThanOrEqual(builtinModules.length);
+    expect(open, `two-reason sides checked: ${open}`).toBeGreaterThanOrEqual(builtinModules.length);
+  });
+
   it("rule 10: any sequence of taps keeps the selection offered, never picks withdrew, and every Confirmable choice is one the engine records", () => {
     const KEYS = builtinModules.map((m) => m.key);
     type Scene = "pre" | "started" | "played" | "tiebreak";

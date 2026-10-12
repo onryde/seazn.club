@@ -150,12 +150,14 @@ export const NO_FORFEIT_PICK: ForfeitSelection = { who: null, reason: null };
 export type ForfeitPick = { kind: "who"; who: ForfeitWho } | { kind: "why"; reason: WriterForfeitReason };
 
 /** One tap. A side or reason the model does not offer is not taken (the selection is returned as it was); changing the
- *  side keeps a reason the new side is also offered. */
+ *  side keeps a reason the new side is also offered. Design audit 1.1: a side offered ONE reason has it chosen with the
+ *  side ("Both sides" is always a walkover; so is a side before play) — a second tap there would decide nothing. */
 export function pickForfeit(model: ForfeitDialogModel, sel: ForfeitSelection, pick: ForfeitPick): ForfeitSelection {
   if (pick.kind === "who") {
     if (!model.who.includes(pick.who)) return sel;
-    const keep = sel.reason !== null && model.why(pick.who).includes(sel.reason);
-    return { who: pick.who, reason: keep ? sel.reason : null };
+    const offered = model.why(pick.who);
+    const keep = sel.reason !== null && offered.includes(sel.reason);
+    return { who: pick.who, reason: keep ? sel.reason : offered.length === 1 ? offered[0]! : null };
   }
   if (sel.who === null || !model.why(sel.who).includes(pick.reason)) return sel;
   return { ...sel, reason: pick.reason };

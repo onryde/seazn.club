@@ -62,3 +62,23 @@ describe("the forfeit dialog's labels can be told apart (review I-3)", () => {
     expect(reads("Dar por perdido…")).not.toBe(reads("Abandonar…"));
   });
 });
+
+// Design audit 1.1: "Who forfeits?" is answered by the parties. The both-sides chip once read "Neither side turned up" —
+// "nobody", the opposite of a double walkover. Its label names the parties in every locale (no negation), and the
+// no-next-match guidance, which names that chip, quotes its label exactly.
+describe("the both-sides chip names the parties (audit 1.1)", () => {
+  // The negations each locale would use to say "nobody" — the shape the label must not take.
+  const NOBODY: Record<string, RegExp> = { en: /\b(neither|nobody|no one|none)\b/iu, fr: /\b(aucun|personne|ni)\b/iu, es: /\b(ning[uú]n[oa]?|nadie|ni)\b/iu, nl: /\b(geen|niemand|noch)\b/iu };
+  it("in every locale: no negation, and the guidance quotes the chip's own label", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      const label = d["forfeitDialog.who.both"]!;
+      expect(NOBODY[locale], `${locale}: a negation pattern for every shipped locale`).toBeDefined();
+      expect(label, `${locale}: "${label}" names the parties`).not.toMatch(NOBODY[locale]!);
+      expect(d["forfeitDialog.guidance.noNextMatch"], `${locale}: the guidance quotes "${label}"`).toContain(label);
+      checked++;
+    }
+    expect(checked, `locales checked: ${checked}`).toBe(LOCALES.length);
+  });
+});
