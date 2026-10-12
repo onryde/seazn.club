@@ -14,6 +14,8 @@ check passes, with `checked > 0` wherever it applies. But 23 of the 246 scenario
 - DW-ALL is 110/110 `works`.
 - WD-CASC, after ruling R16-5 (`local/L3/w2b-final-r165-wd-casc`): 6 cells `works` (the crowned half), 5 red (the
   vacant half). The 5 red cells are all W4's (vacant title; MB-004/005, ruling R16-2), so W2b has no red left.
+- WD-CASC, after owner ruling 116 (`local/L3/w2b-final-r116-wd-casc`): the same 6 `works` and the same 5 W4 reds,
+  cell for cell. The X-WD-3 tie now reads `w/o` and names the withdrawn winner on every public surface (below).
 
 ## The run
 
@@ -218,9 +220,9 @@ The tie is SF1, `se-r1-i0`:
   walkover."
 - The final reads `Matrix Team 4` · `Bye` (`Ended` on the schedule, `TBD` on the bracket). The banner reads
   `Champion` / `Matrix Team 4`.
-- **Question for the owner (not changed):** X-WD-3 says the arriving opponent "advances by walkover". The product
+- **Question for the owner:** X-WD-3 says the arriving opponent "advances by walkover". The product
   stores it, and every surface shows it, as a bye. Separately, the bracket prints `TBD` on two finished bye tiles
-  (SF1 and the final).
+  (SF1 and the final). **Ruled: owner ruling 116 — see "Ruling 116", below.** The `TBD` on a bye tile stays W4's.
 
 ### "Abandoned with both seats empty"
 
@@ -240,3 +242,43 @@ This is SF2, `se-r1-i1`, line b's semi-final in every WD-CASC cell (hockey fixtu
 - **Display, for the owner (not changed):** the public schedule and bracket show SF2 as `TBD` · `Bye` · `Winner of
   Quarter-finals, match 4`. That is a void match labelled TBD, naming a winner QF4's double walkover can never
   produce.
+
+## Ruling 116: the withdrawn winner's next tie (`local/L3/w2b-final-r116-wd-casc`)
+
+Owner ruling 116 (`_INDEX.md`): when a knockout winner withdraws while her next tie's opponent is TBD, the arriving
+side walks over HER. The tie reads `w/o` and names the withdrawn side on the schedule, the bracket and the match page.
+Her seat stays dead, and she is never seated. The change is commit `4d09b7bf3`:
+- `awardSeededByes` (`stages.ts`) stores the walkover itself: `{kind:"award", winner, loser: <her>, reason:"withdrew"}`.
+  It names her only when the dead seat's own WINNER edge delivers an entrant now `withdrawn`.
+- A genuine bye, a void's or a double walkover's dead seat, a disqualified winner, a generation-time departure (F14)
+  and a loser-edge seat (X-WD-5) all stay a bye, byte for byte.
+- `bracketWinnerLoser` reads an award whose loser holds no seat as no loss, so the ranks do not move.
+
+The re-run:
+- Server rebuilt at `4d09b7bf3` (`NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` baked in; the bundle carries the new SQL).
+- Harness `4d09b7bf3`, clean tree, 2026-10-12 11:22:15 – 11:22:25 UTC, `EXIT=0`. The plan is byte-identical to r165's
+  (lock-append-only: 282 compared, 1 added).
+- The same 6 cells `works` and the same 5 W4 reds (Generate 500, MB-004/005) as r165, cell for cell. I2 passes,
+  checked 9, in the crowned half.
+- `w2b-withdrawal-tbd-seat` now demands loser w1, reason withdrew, on SF1. It passes in all 11 cells (checked 4 in
+  the crowned half, 5 in the vacant half). Every W2b check passes in every cell.
+
+Stored, in the hockey cell (`m-w2b-final-r116-wd-casc-11`):
+- SF1 (`se-r1-i0`) is `forfeited`, `{kind:"award", winner: Team 4, loser: Team 1, reason:"withdrew"}`. Its home seat
+  is empty (slot label `bracket.slot.bye`), it has no score event, and Team 1 is `withdrawn`.
+- The final (`se-r2-i0`) stays `{kind:"award", winner: Team 4, loser: null, reason:"bye"}`. SF2's void delivers no
+  winner, so nobody withdrew from that seat: the positive pair, live.
+
+Read in a browser at 1280, 768 and 320 (no horizontal page scroll at any width; at 320 the bracket chip sits inside
+the bracket's own scroll rail):
+
+| surface | before (r165) | after (r116) |
+|---|---|---|
+| schedule tab, SF1 | `Ended` · `Bye` · `Matrix Team 4` | `Ended` · `Bye` · `w/o` · `Matrix Team 4`; the chip's title and aria-label read "Matrix Team 1 withdrew — walkover." |
+| bracket (Standings tab), SF1 | `Bye` · `Matrix Team 4` · `TBD` | `Bye` · `Matrix Team 4` · `w/o` (same sentence) |
+| match page, SF1 | title `Bye vs Matrix Team 4 — Matrix hockey (Forfeited)`; body `BYE — MATRIX TEAM 4 — Forfeited` | title `Bye vs Matrix Team 4 — Matrix hockey (Matrix Team 1 withdrew — walkover.)`; body `BYE — M4 MATRIX TEAM 4 — Matrix Team 1 withdrew — walkover.` |
+| final | `Ended` · `Matrix Team 4` · `Bye` (bracket footer `TBD`) | unchanged: a genuine bye, no chip |
+
+- The champion banner still reads `Champion` / `Matrix Team 4`.
+- Unchanged and out of scope (W4's): the empty seat's own word still reads `Bye`, the final's bye tile still prints
+  `TBD`, and SF2's void still reads `TBD` · `Bye` · `Winner of Quarter-finals, match 4`.
