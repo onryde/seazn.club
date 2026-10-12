@@ -14,8 +14,10 @@
 //  - literal: a string literal "Bye" in code.
 // Each site must be ROUTED — an enclosing function names the reader (imported from lib/forfeit-tag) or a registered
 // carrier of it (below, each itself checked to call the reader) — or EXEMPT, by file and enclosing function, with the
-// reason that tie can never reach it. A stale exemption fails; a carrier no site uses fails; zero sites fails; and an
-// independent census (a regex over the comment-stripped text — not the parser) must count the same sites.
+// reason that tie can never reach it, and the NUMBER of sites it covers — so a new render inside an exempt function
+// turns this red, as a new function does (there are no whole-file exemptions). An exemption covering more or fewer
+// sites than it pins fails; a carrier no site uses fails; zero sites fails; and an independent census (a regex over the
+// comment-stripped text — not the parser) must count the same sites.
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -65,12 +67,15 @@ const CARRIERS: readonly Carrier[] = [
   },
 ];
 
-/** A site the tie cannot reach, by file and nearest named enclosing function ("<module>" at top level, "*" for a whole
- *  file that renders no stored fixture). `via`, when given, is where the surface's names ARE read through the reader —
- *  each declaration is checked to call it. */
+/** A site the tie cannot reach, by file and nearest named enclosing function ("<module>" at top level) — never a whole
+ *  file, so a new function is a new site to route or exempt. `sites` pins how many unrouted sites it covers: a render
+ *  added inside an exempt function is one more, and reds until it is read (and routed, or the pin raised with a reason
+ *  that still holds). `via`, when given, is where the surface's names ARE read through the reader — each declaration is
+ *  checked to call it. */
 interface Exemption {
   readonly file: string;
   readonly fn: string;
+  readonly sites: number;
   readonly reason: string;
   readonly via?: readonly { readonly file: string; readonly decl: string }[];
 }
@@ -81,79 +86,90 @@ const PUBLIC_VIA = [
 ];
 const EXEMPT: readonly Exemption[] = [
   // The public seat namer's own fallback: library code its callers (namer sites, checked) sit above.
-  { file: "src/server/public-site/feeder-slot-label.ts", fn: "publicSlotLabel", reason: "the public seat namer's own fallback; its callers are checked as namer sites" },
+  { file: "src/server/public-site/feeder-slot-label.ts", fn: "publicSlotLabel", sites: 1, reason: "the public seat namer's own fallback; its callers are checked as namer sites" },
   // Fallback namers handed to a reader that names her first.
   {
     file: "src/server/public-site/match-centre-load.ts",
-    fn: "slot",
+    fn: "slot", sites: 1,
     reason: "the match centre's fallback seat namer; `sides` takes the dead seat from `unseated` (read through the reader) before calling it",
     via: [{ file: "src/server/public-site/match-centre-load.ts", decl: "loadMatchCentre" }],
   },
   {
     file: "src/server/public-site/match-centre-load.ts",
-    fn: "loadMatchCentre",
+    fn: "loadMatchCentre", sites: 1,
     reason: "the same fallback namer, re-pointed at the public seat namer",
     via: [{ file: "src/server/public-site/match-centre-load.ts", decl: "loadMatchCentre" }],
   },
   {
     file: "src/server/public-site/competition-hub.ts",
-    fn: "slot",
+    fn: "slot", sites: 1,
     reason: "the hub's fallback seat namer (`ctx.slot`); hubSides takes `seated ?? unseatedForfeitLoser(...)` before calling it",
     via: [{ file: "src/server/public-site/competition-hub.ts", decl: "hubSides" }],
   },
   {
     file: "src/app/(public)/shared/[orgSlug]/[competitionSlug]/poster.pdf/route.ts",
-    fn: "seatText",
+    fn: "seatText", sites: 1,
     reason: "buildDrawModel's `seatText` names only a seat with no id, after `id ?? unseatedForfeitLoser(...)`",
     via: [{ file: "src/lib/poster-draw.ts", decl: "buildDrawModel" }],
   },
   {
     file: "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
-    fn: "DivisionHomePage",
+    fn: "DivisionHomePage", sites: 2,
     reason: "`slotLabels` feeds <Schedule>/<Bracket>, which ask the reader before reading it",
     via: PUBLIC_VIA,
   },
   {
     file: "src/app/embed/divisions/[id]/[widget]/page.tsx",
-    fn: "EmbedWidgetPage",
+    fn: "EmbedWidgetPage", sites: 2,
     reason: "`slotLabels` feeds <Schedule>/<Bracket>, which ask the reader before reading it",
     via: PUBLIC_VIA,
   },
   // Names arrive already resolved by a read that asks the reader.
   {
     file: "src/components/me/officiating-lane.tsx",
-    fn: "CompletedCard",
+    fn: "CompletedCard", sites: 2,
     reason: "home_name/away_name arrive from getMyOfficiating's finished duties, which name her (unseatedForfeitLoserName)",
     via: [{ file: "src/server/usecases/me-officiating.ts", decl: "getMyOfficiating" }],
   },
   {
     file: "src/components/me/officiating-lane.tsx",
-    fn: "AssignmentCard",
+    fn: "AssignmentCard", sites: 2,
     reason: "outstanding duties (scheduled/in_play/needs_decision) — never a settled tie; names from getMyOfficiating",
     via: [{ file: "src/server/usecases/me-officiating.ts", decl: "getMyOfficiating" }],
   },
   // Status-gated: the tie is `forfeited` (settled), and these list only unplayed or live fixtures.
-  { file: "src/components/v2/stages-panel.tsx", fn: "StagesPanel", reason: "the Now Playing strip lists in_play fixtures only (`nowPlaying`)" },
-  { file: "src/server/usecases/org-posts.ts", fn: "assembleDigestUpcoming", reason: "the digest's upcoming list: `status = 'scheduled'` only" },
-  { file: "src/server/public-site/public-player-matches.ts", fn: "opponentSeatNamer", reason: "a player's UPCOMING matches: `status = 'scheduled'` only" },
-  { file: "src/server/public-site/public-player-matches.ts", fn: "readPlayerUpcoming", reason: "the upcoming read's own bye exclusion: `status = 'scheduled'` only" },
-  { file: "src/server/usecases/exports.ts", fn: "buildOfficialsRotaDoc", reason: "the officials rota: `status in ('scheduled','in_play')` only" },
-  { file: "src/server/usecases/exports.ts", fn: "buildMyRotaDoc", reason: "my rota: getMyOfficiating's outstanding duties (scheduled/in_play/needs_decision) only" },
-  { file: "src/lib/scorer-sheets.ts", fn: "isBye", reason: "printable scorer sheets: PRINTABLE_STATUSES (scheduled, in_play) only" },
-  { file: "src/server/usecases/scorer-sheets.ts", fn: "listSheetDays", reason: "the printable days: PRINTABLE_STATUSES (scheduled, in_play) only" },
-  { file: "src/server/usecases/scan-match-names.ts", fn: "seat", reason: "seat names reach the scan page's Waiting screen (scheduled, a seat empty) and printable sheets (scheduled/in_play) only; a settled tie is view_only" },
-  { file: "src/server/usecases/schedule.ts", fn: "moveFixture", reason: "the officials-change email on a MOVE: the board holds a settled tie (`playedFixtureIds`), so it never moves" },
+  { file: "src/components/v2/stages-panel.tsx", fn: "StagesPanel", sites: 2, reason: "the Now Playing strip lists in_play fixtures only (`nowPlaying`)" },
+  { file: "src/server/usecases/org-posts.ts", fn: "assembleDigestUpcoming", sites: 2, reason: "the digest's upcoming list: `status = 'scheduled'` only" },
+  { file: "src/server/public-site/public-player-matches.ts", fn: "opponentSeatNamer", sites: 2, reason: "a player's UPCOMING matches: `status = 'scheduled'` only" },
+  { file: "src/server/public-site/public-player-matches.ts", fn: "readPlayerUpcoming", sites: 2, reason: "the upcoming read's own bye exclusion: `status = 'scheduled'` only" },
+  { file: "src/server/usecases/exports.ts", fn: "buildOfficialsRotaDoc", sites: 2, reason: "the officials rota: `status in ('scheduled','in_play')` only" },
+  { file: "src/server/usecases/exports.ts", fn: "buildMyRotaDoc", sites: 2, reason: "my rota: getMyOfficiating's outstanding duties (scheduled/in_play/needs_decision) only" },
+  { file: "src/lib/scorer-sheets.ts", fn: "isBye", sites: 2, reason: "printable scorer sheets: PRINTABLE_STATUSES (scheduled, in_play) only" },
+  { file: "src/server/usecases/scorer-sheets.ts", fn: "listSheetDays", sites: 2, reason: "the printable days: PRINTABLE_STATUSES (scheduled, in_play) only" },
+  { file: "src/server/usecases/scan-match-names.ts", fn: "seat", sites: 1, reason: "seat names reach the scan page's Waiting screen (scheduled, a seat empty) and printable sheets (scheduled/in_play) only; a settled tie is view_only" },
+  { file: "src/server/usecases/schedule.ts", fn: "moveFixture", sites: 2, reason: "the officials-change email on a MOVE: the board holds a settled tie (`playedFixtureIds`), so it never moves" },
   // Not a stored seat's occupant.
-  { file: "src/components/v2/progression-panel.tsx", fn: "destinationSlotLabelText", reason: "names a progression DESTINATION slot in the editor, never a seat's occupant" },
-  {
-    file: "src/server/usecases/stages.ts",
-    fn: "*",
-    reason: "writes the bye label (generation, seeding, departures, seeded-bye awards) and previews generated fixtures, which carry no outcome; renders no stored fixture",
-  },
-  { file: "src/server/engine-db/fed-seats.ts", fn: "*", reason: "the cascade's dead-seat writer: stamps and reads the stored bye label to WRITE seats; renders nothing" },
+  { file: "src/components/v2/progression-panel.tsx", fn: "destinationSlotLabelText", sites: 1, reason: "names a progression DESTINATION slot in the editor, never a seat's occupant" },
+  // The format preview: generated fixtures, which carry no stored outcome.
+  { file: "src/server/usecases/stages.ts", fn: "previewDivisionFixtures", sites: 1, reason: "the format preview's own bye seat (`f.award`), over generated fixtures — no stored outcome" },
+  { file: "src/server/usecases/stages.ts", fn: "slot", sites: 1, reason: "the format preview's seat namer, over generated fixtures — no stored outcome" },
+  // Writers: the stored bye label as a value they WRITE, or a predicate a write is gated on. They render nothing.
+  { file: "src/server/usecases/stages.ts", fn: "swissGen", sites: 1, reason: "writes the bye label onto a Swiss round's bye shell" },
+  { file: "src/server/usecases/stages.ts", fn: "byeSlotLabel", sites: 1, reason: "the label generation stamps on a bye seat (a value, written by its caller)" },
+  { file: "src/server/usecases/stages.ts", fn: "generateStageFixturesWrite", sites: 2, reason: "the generator's INSERT stamps the bye label on a generated bye seat" },
+  { file: "src/server/usecases/stages.ts", fn: "generateProgressionSetupFixtures", sites: 4, reason: "writes the bye label on a progression seat, guarded on a seat not already stamped" },
+  { file: "src/server/usecases/stages.ts", fn: "stampDepartedSeat", sites: 1, reason: "writes the bye label onto a departed entrant's seat" },
+  { file: "src/server/usecases/stages.ts", fn: "awardSeededByes", sites: 2, reason: "selects the bye-stamped seats to WRITE their award (ruling 116's award, reason withdrew, is born here)" },
+  { file: "src/server/usecases/stages.ts", fn: "writeDepartedSeat", sites: 1, reason: "writes the bye label onto a dead seat" },
+  { file: "src/server/usecases/stages.ts", fn: "resolveBracketSeats", sites: 6, reason: "reads and writes seat labels to resolve the bracket's seats; writes, never renders" },
+  { file: "src/server/usecases/stages.ts", fn: "confirmSeedProposal", sites: 2, reason: "writes the bye label on a confirmed seeding's bye seats" },
+  { file: "src/server/engine-db/fed-seats.ts", fn: "seatIsStamped", sites: 1, reason: "the cascade's predicate: is this dead seat bye-stamped — gates a write" },
+  { file: "src/server/engine-db/fed-seats.ts", fn: "planRevive", sites: 1, reason: "plans the cascade's seat revive (a write)" },
+  { file: "src/server/engine-db/fed-seats.ts", fn: "writePlan", sites: 1, reason: "the cascade's dead-seat write" },
+  { file: "src/server/engine-db/fed-seats.ts", fn: "writeRevives", sites: 1, reason: "the cascade's revive write" },
   // Keyed by the forfeit KIND (`forfeitCopyKind`, the classifier forfeitTag reads): her award's reason is `withdrew`.
-  { file: "src/components/v2/scorepad/v3/ribbon.ts", fn: "coreRibbonKey", reason: "the pad ribbon's copy by forfeit kind; her award is `withdrew`, never `bye`" },
-  { file: "src/lib/event-copy.ts", fn: "forfeitSentence", reason: "the timeline's copy by forfeit kind; her award is `withdrew`, never `bye`" },
+  { file: "src/components/v2/scorepad/v3/ribbon.ts", fn: "coreRibbonKey", sites: 1, reason: "the pad ribbon's copy by forfeit kind; her award is `withdrew`, never `bye`" },
+  { file: "src/lib/event-copy.ts", fn: "forfeitSentence", sites: 2, reason: "the timeline's copy by forfeit kind; her award is `withdrew`, never `bye`" },
 ];
 
 interface Site {
@@ -409,7 +425,7 @@ describe("R116-4: every bye render site reads `unseatedForfeitLoser` (ruling 116
   const { sites, nullLabels, carriersUsed, astCensus } = scan();
   const key = (s: Site) => `${s.file}::${s.fn}`;
   const exemptBy = new Map(EXEMPT.map((e) => [`${e.file}::${e.fn}`, e]));
-  const exemptionOf = (s: Site): Exemption | undefined => exemptBy.get(key(s)) ?? exemptBy.get(`${s.file}::*`);
+  const exemptionOf = (s: Site): Exemption | undefined => exemptBy.get(key(s));
 
   it("checks a non-empty set of sites, and the parser and an independent census count the same ones", () => {
     const summary = {
@@ -433,9 +449,14 @@ describe("R116-4: every bye render site reads `unseatedForfeitLoser` (ruling 116
     expect(loose, "a bye render site that decides without `unseatedForfeitLoser` — route it, or exempt it with a reason").toEqual([]);
   });
 
-  it("no exemption is stale: each one absorbs a site the reader does not reach, and each `via` calls the reader", () => {
-    const stale = EXEMPT.filter((e) => !sites.some((s) => !s.routed && exemptionOf(s) === e)).map((e) => `${e.file}::${e.fn}`);
-    expect(stale, "an exemption with no unrouted site — drop it").toEqual([]);
+  it("each exemption covers exactly the sites it pins (none stale, none grown), and each `via` calls the reader", () => {
+    expect(exemptBy.size, "one exemption per file and function").toBe(EXEMPT.length);
+    const covered = (e: Exemption) => sites.filter((s) => !s.routed && exemptionOf(s) === e);
+    const drift = EXEMPT.filter((e) => covered(e).length !== e.sites).map(
+      (e) => `${e.file}::${e.fn} pins ${e.sites}, covers ${covered(e).length}: ${covered(e).map((s) => `:${s.line} [${s.kind}]`).join(" ")}`,
+    );
+    expect(drift, "an exemption covering more or fewer sites than it pins — read the new site: route it, or re-pin with a reason that holds").toEqual([]);
+    expect(EXEMPT.reduce((n, e) => n + e.sites, 0), "the pins sum to the exempt sites").toBe(sites.filter((s) => !s.routed && exemptionOf(s) !== undefined).length);
     let vias = 0;
     for (const e of EXEMPT) {
       for (const v of e.via ?? []) {
