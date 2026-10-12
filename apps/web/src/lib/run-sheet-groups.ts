@@ -25,6 +25,8 @@
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import type { CameraPolicy } from "@/lib/camera-policy";
+import type { NeedsReason } from "@/server/external-play/types";
 
 /** The fixture fields this builder (and Task 4's rendering of its rows) reads,
  *  derived from the wire row rather than retyped — a hand-written twin is how
@@ -68,6 +70,23 @@ export type RunSheetFixture = Pick<
 >;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };
+
+/** T16 — an online chess board as the run sheet reads it (canvas
+ *  RunSheetDesktop): its camera policy, its OPEN flags, and whether it is held
+ *  for the organiser. Keyed by fixture id beside the fixtures — the same
+ *  posture as the stream chips (`streamStates`) — never a field of the wire
+ *  row, so `buildRunSheet`'s grouping cannot see it. */
+export type RunSheetOnlinePlay = {
+  cameraPolicy: CameraPolicy;
+  /** Open `camera_lost` + `camera_connection_problems` flags. */
+  cameraFlagCount: number;
+  /** Open `out_of_band_play` flags: moves made off Seazn. */
+  offSeaznFlagCount: number;
+  /** Held for the organiser (needs_organiser) while still to be played. */
+  held: NeedsReason | null;
+  /** A game is running at Lichess now (bridge `live`). */
+  live: boolean;
+};
 
 export type RunSheetInput = {
   fixtures: RunSheetFixture[];

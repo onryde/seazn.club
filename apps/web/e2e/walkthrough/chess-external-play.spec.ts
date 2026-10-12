@@ -110,9 +110,11 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
   await expect(page.getByTestId("external-play-needs-result-queue")).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByTestId(`external-play-queue-row-${fx.fixtureId}`)).toBeVisible();
-
-  await page.getByTestId("external-play-resolve-draw").click();
+  const row = page.getByTestId(`external-play-queue-row-${fx.fixtureId}`);
+  await expect(row).toBeVisible();
+  // T16: the four outcomes sit behind the card's "Settle" toggle (canvas HoldQueue).
+  await row.getByTestId("external-play-settle-toggle").click();
+  await row.getByTestId("external-play-resolve-draw").click();
   await expect(page.getByTestId(`external-play-queue-row-${fx.fixtureId}`)).toHaveCount(0, {
     timeout: 20_000,
   });

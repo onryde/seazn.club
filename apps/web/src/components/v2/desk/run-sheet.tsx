@@ -17,7 +17,7 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
-import { isBye, type RunSheetBlock, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { isBye, type RunSheetBlock, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
@@ -46,7 +46,17 @@ export type RunSheetKeepContext = {
   nowMs: number;
   matchMinutes: number;
   streamStates?: Record<string, HoldState>;
+  /** T16 — online chess boards (`listRunSheetOnlinePlay`, organisers only): a board HELD for the organiser owes its
+   *  result even before its slot has run, so "Needs result" keeps it and counts it. */
+  onlinePlay?: Record<string, RunSheetOnlinePlay>;
 };
+
+/** "Needs result": a fixture past its slot with no result (division-phase.ts), or an online board held for the
+ *  organiser (T16) — one predicate for the filter and its count. */
+function owesResult(f: RunSheetFixture, ctx: Pick<RunSheetKeepContext, "nowMs" | "matchMinutes" | "onlinePlay">): boolean {
+  if ((ctx.onlinePlay?.[f.id]?.held ?? null) !== null) return true;
+  return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes: ctx.matchMinutes }, ctx.nowMs);
+}
 
 // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
 //
@@ -82,8 +92,7 @@ export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: R
   if (stageId !== null && f.stage_id !== stageId) return false;
   if (filter === "all") return true;
   if (isBye(f)) return false;
-  if (filter === "needs_result")
-    return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
+  if (filter === "needs_result") return owesResult(f, { nowMs, matchMinutes, onlinePlay: ctx.onlinePlay });
   if (filter === "unscheduled") return isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
   // "today": a fixture with a stream up, and otherwise only a TIMED fixture landing on today's venue-zone day.
   if (ctx.streamStates?.[f.id] !== undefined) return true;
@@ -111,6 +120,8 @@ export function RunSheet({
   streamStates,
   awaitingSettle,
   feedLabels,
+  onlinePlay,
+  arbiterHrefFor,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -164,6 +175,11 @@ export function RunSheet({
   /** W2a fix round 1 (M10) — ids of the recorded abandons awaiting their settle (the division page's
    *  `listFixturesAwaitingSettle`); each such row is held (chip + Settle). Absent = none. */
   awaitingSettle?: readonly string[];
+  /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
+   *  organisers), keyed by fixture id; every row gets ITS OWN entry. Absent = no chips. */
+  onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  /** T16 — the arbiter panel opened on one board: where a row's camera / off-Seazn chip leads. */
+  arbiterHrefFor?: (fixtureId: string) => string;
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
@@ -274,12 +290,11 @@ export function RunSheet({
   // itself (`RunSheetRow`), and this component no longer restates it at all.
   const isUnscheduled = (f: RunSheetFixture) =>
     isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
-  const needsResult = (f: RunSheetFixture) =>
-    isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
+  const needsResult = (f: RunSheetFixture) => owesResult(f, { nowMs, matchMinutes, onlinePlay });
 
   // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
   const keep = (f: RunSheetFixture): boolean =>
-    runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates });
+    runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates, onlinePlay });
 
   // Filter counts read over EVERY block's fixtures, unfiltered — a filter's
   // own count must not shrink just because it is the one currently selected.
@@ -353,6 +368,8 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                onlinePlay={onlinePlay?.[f.id]}
+                arbiterHref={arbiterHrefFor?.(f.id)}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
               />
@@ -437,6 +454,8 @@ export function RunSheet({
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
                     streamState={streamStates?.[f.id]}
+                    onlinePlay={onlinePlay?.[f.id]}
+                    arbiterHref={arbiterHrefFor?.(f.id)}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
                   />
@@ -475,6 +494,8 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                onlinePlay={onlinePlay?.[f.id]}
+                arbiterHref={arbiterHrefFor?.(f.id)}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
@@ -516,6 +537,8 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                onlinePlay={onlinePlay?.[f.id]}
+                arbiterHref={arbiterHrefFor?.(f.id)}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
@@ -751,6 +774,9 @@ function RowWithNow({
   streamState?: HoldState;
   /** M10 — survives `...rest` into `RunSheetRow`, like `streamState`. */
   awaitsSettle?: boolean;
+  /** T16 — survive `...rest` into `RunSheetRow`, like `streamState`. */
+  onlinePlay?: RunSheetOnlinePlay;
+  arbiterHref?: string;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;

@@ -4,15 +4,15 @@
 // in this workspace): the element tree includes what a collapsed Group holds, so a control inside one is still seen.
 //
 //  - division Settings: the "Online play" select and the camera Group (chess only — sport gate unchanged);
-//  - the needs-a-result queue: "Resend link" (an invite is a start), while the resolve buttons — which FINISH a board —
-//    stay whatever the flag says;
+//  - the needs-a-result queue: T16 removed its "Resend link" (the server refuses an invite for every held board, 409
+//    BOARD_HELD), so it takes no flag at all — every control left on it FINISHES a board;
 //  - the Lichess card: its link names the club (the start route asks that club's flag).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 
 vi.mock("next/navigation", () => ({
@@ -40,7 +40,13 @@ const EN_UI: Dict = JSON.parse(
 ) as Dict;
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
-  return { ...actual, useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars) };
+  return {
+    ...actual,
+    useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
+    // T16: the queue reads plurals and the locale through the arbiter's shared formatter.
+    usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(EN_UI, key, count, "en", vars),
+    useLocale: () => "en",
+  };
 });
 
 import { ApiV1Error } from "@/lib/client-v1";
@@ -178,26 +184,26 @@ describe("division Settings: a save refused because the club is not offered onli
   });
 });
 
-describe("needs-a-result queue: Resend is a start, resolving is not", () => {
+describe("needs-a-result queue: nothing on it starts play, so it takes no flag", () => {
   const ROW = {
     fixtureId: "f1",
-    fixtureNo: 3,
     homeName: "Ann",
     awayName: "Bo",
-    scheduledAt: null,
-    lastError: "no_show_grace_elapsed",
-    href: "/o/org/c/comp/d/div/fixtures/3",
+    reason: "aborted" as const,
+    whiteSide: "home" as const,
+    revokedSeat: null,
+    roundNo: 1,
+    boardNo: 3,
+    stageName: "League",
+    canResync: true,
+    seated: false,
   };
-  it("flag ON shows Resend; flag OFF renders no Resend — and the four resolve buttons either way", () => {
-    let checked = 0;
-    for (const resendOffered of [true, false]) {
-      const tree = renderIsland(ExternalPlayNeedsResultQueue, { rows: [ROW], resendOffered }).tree();
-      expect(byTestId(tree, "external-play-resend"), `offered ${resendOffered}`).toHaveLength(resendOffered ? 1 : 0);
-      const resolves = tree.filter((n) => String(propsOf(n)["data-testid"] ?? "").startsWith("external-play-resolve-"));
-      expect(resolves, `offered ${resendOffered}: resolving finishes a board`).toHaveLength(4);
-      checked++;
-    }
-    expect(checked).toBe(2);
+  it("no Resend at all; the four settle buttons and Resync — the controls that FINISH a board", () => {
+    const tree = renderIsland(ExternalPlayNeedsResultQueue, { held: [ROW], flagged: [], ownFlagged: 0, slugs: { org: "o", comp: "c", div: "d" } }).tree();
+    expect(byTestId(tree, "external-play-resend")).toHaveLength(0);
+    const resolves = new Set(tree.filter((n) => String(propsOf(n)["data-testid"] ?? "").startsWith("external-play-resolve-")));
+    expect(resolves.size, "resolving finishes a board").toBe(4);
+    expect(new Set(byTestId(tree, "external-play-resync")).size).toBe(1);
   });
 });
 

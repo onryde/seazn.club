@@ -58,7 +58,12 @@ import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
-import { listNeedsOrganiserExternalPlay, onlineChessOffered } from "@/server/usecases/external-play";
+import {
+  listFlaggedExternalPlay,
+  listNeedsOrganiserExternalPlay,
+  listRunSheetOnlinePlay,
+  onlineChessOffered,
+} from "@/server/usecases/external-play";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -518,18 +523,23 @@ export default async function DivisionPage({
   const streamStates =
     tab === "fixtures" && canEdit ? await openStreamStates(auth, fixtures.map((f) => f.id)) : {};
 
-  const needsOrganiserExternalPlay =
-    tab === "fixtures" && editable
-      ? await listNeedsOrganiserExternalPlay(auth, id)
-      : [];
-  // T20: the controls that START online chess (turning it on, the camera policy, re-sending an invite) render only
-  // while the club is offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess
-  // division's settings, or a queue that has rows.
+  // T16: the online-play queue (Held | Flagged) above the run sheet, and the sheet's own chips (camera, flags, held).
+  // An organiser who can act, on a chess division's fixtures tab. Read whether or not online play is switched on now:
+  // a board held or flagged before it was switched off is still owed its decision. Every control these feed FINISHES
+  // or reviews play, so none is gated by the online-chess flag (T20).
+  const onlineDesk = tab === "fixtures" && editable && division.sport_key === "boardgame";
+  const [needsOrganiserExternalPlay, flaggedExternalPlay, runSheetOnlinePlay] = onlineDesk
+    ? await Promise.all([
+        listNeedsOrganiserExternalPlay(auth, id),
+        listFlaggedExternalPlay(auth, id),
+        listRunSheetOnlinePlay(auth, id),
+      ])
+    : [[], { boards: [], ownBoards: 0 }, {}];
+  // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
+  // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings.
+  // (The queue no longer offers the invite resend: the server refuses it for every held board — 409 BOARD_HELD.)
   const onlineChessOn =
-    division.sport_key === "boardgame" &&
-    ((tab === "settings" && canEdit) || needsOrganiserExternalPlay.length > 0)
-      ? await onlineChessOffered(auth)
-      : false;
+    division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
 
   // T15: the way into the arbiter panel — organisers, only where there is a
   // board to watch (an online chess division with fixtures); it renders
@@ -790,17 +800,15 @@ export default async function DivisionPage({
                 <span className="min-w-0 text-sm text-slate-600">{t(dict, "arbiter.entry.body")}</span>
               </div>
             )}
-            {needsOrganiserExternalPlay.length > 0 && (
-              <div className="mb-4">
+            {onlineDesk && (
+              // Mounted for every chess desk, even with nothing held: the queue keeps the answer to the last decision
+              // on screen after the refresh that takes its row away (it renders nothing when there is neither).
+              <div className="mb-4 empty:hidden">
                 <ExternalPlayNeedsResultQueue
-                  resendOffered={onlineChessOn}
-                  rows={needsOrganiserExternalPlay.map((r) => ({
-                    ...r,
-                    href:
-                      r.fixtureNo != null
-                        ? routes.fixture(orgSlug, compSlug, divSlug, r.fixtureNo)
-                        : routes.division(orgSlug, compSlug, divSlug, "fixtures"),
-                  }))}
+                  held={needsOrganiserExternalPlay}
+                  flagged={flaggedExternalPlay.boards}
+                  ownFlagged={flaggedExternalPlay.ownBoards}
+                  slugs={{ org: orgSlug, comp: compSlug, div: divSlug }}
                 />
               </div>
             )}
@@ -834,6 +842,7 @@ export default async function DivisionPage({
               viewerPlan={viewerPlan}
               streamStates={streamStates}
               awaitingSettle={[...awaitingSettle]}
+              onlinePlay={runSheetOnlinePlay}
             />
           </>
         )}

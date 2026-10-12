@@ -1,8 +1,9 @@
 // T20 — the division page asks the club's online-chess flag (PostHog `online-chess`, fallback off) and hands the
-// answer to the two islands that render online-chess START controls: DivisionSettings (`onlineChessOffered` — the
-// Online play select and the camera control) and the needs-a-result queue (`resendOffered` — Resend link). The islands'
-// own suite (online-chess-flag-controls.test.tsx) proves what each prop hides; this one proves the PAGE passes the
-// flag's real answer, asked for this user in this club, and asks nothing for a division that is not chess.
+// answer to the island that renders online-chess START controls: DivisionSettings (`onlineChessOffered` — the Online
+// play select and the camera control). The islands' own suite (online-chess-flag-controls.test.tsx) proves what the
+// prop hides; this one proves the PAGE passes the flag's real answer, asked for this user in this club, and asks nothing
+// for a division that is not chess. T16: the needs-a-result queue lost its Resend (the server refuses it for every held
+// board, 409 BOARD_HELD) — what is left on it FINISHES play, so the fixtures tab never asks the flag.
 //
 // Same scaffold as public-hub-link.test.tsx beside it: no jsdom, the async server component called directly, its
 // returned tree walked. The flag is asked through the REAL helper, PostHog doubled at its boundary.
@@ -12,7 +13,11 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const division = vi.hoisted(() => ({ sport_key: "boardgame" }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
-const queue = vi.hoisted(() => ({ listNeedsOrganiserExternalPlay: vi.fn() }));
+const queue = vi.hoisted(() => ({
+  listNeedsOrganiserExternalPlay: vi.fn(),
+  listFlaggedExternalPlay: vi.fn(),
+  listRunSheetOnlinePlay: vi.fn(),
+}));
 
 vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => ({
@@ -87,10 +92,10 @@ vi.mock("@/server/external-play/camera-policy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/external-play/camera-policy")>();
   return { ...actual, competitionCameraPolicy: vi.fn(async () => "off") };
 });
-// The queue's rows are a database read; the flag helper beside it in the same module stays REAL.
+// The queue's and the run sheet's reads are database reads; the flag helper beside them stays REAL.
 vi.mock("@/server/usecases/external-play", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/external-play")>();
-  return { ...actual, listNeedsOrganiserExternalPlay: queue.listNeedsOrganiserExternalPlay };
+  return { ...actual, ...queue };
 });
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -100,6 +105,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 import DivisionPage from "../page";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
+import { StagesPanel } from "@/components/v2/stages-panel";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 
 function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
@@ -150,6 +156,8 @@ beforeEach(() => {
   division.sport_key = "boardgame";
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
+  queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
+  queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
   forgetOnlineChessFlagCache();
   flags.isServerFeatureEnabled.mockReset().mockRejectedValue(new Error("flag asked while the override was on"));
 });
@@ -174,17 +182,62 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("Fixtures tab with a board needing a result: the queue's Resend follows the flag", async () => {
+  it("T16 — fixtures tab with a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says — and the flag is never asked", async () => {
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
+    const FLAGGED = { boards: [{ fixtureId: "f2" }], ownBoards: 1 };
+    const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
+    queue.listFlaggedExternalPlay.mockResolvedValue(FLAGGED);
+    queue.listRunSheetOnlinePlay.mockResolvedValue(SHEET);
     let checked = 0;
     for (const s of FLAG_STATES) {
       flagIs(s);
-      const queues = findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue);
+      const tree = await renderPage("fixtures");
+      const queues = findAll(tree, ExternalPlayNeedsResultQueue);
       expect(queues, `${s.label}: the queue mounted once`).toHaveLength(1);
-      expect((queues[0]!.props as { resendOffered: unknown }).resendOffered, s.label).toBe(s.offered);
+      const props = queues[0]!.props as Record<string, unknown>;
+      expect([props.held, props.flagged, props.ownFlagged, props.slugs], s.label).toEqual([
+        [ROW],
+        FLAGGED.boards,
+        1,
+        { org: "org", comp: "comp", div: "div" },
+      ]);
+      expect("resendOffered" in props, `${s.label}: no start control on the queue`).toBe(false);
+      const panels = findAll(tree, StagesPanel);
+      expect((panels[0]!.props as { onlinePlay: unknown }).onlinePlay, `${s.label}: the run sheet's chips`).toBe(SHEET);
+      // Asked for THIS division by THIS organiser.
+      for (const read of [queue.listNeedsOrganiserExternalPlay, queue.listFlaggedExternalPlay, queue.listRunSheetOnlinePlay]) {
+        expect(read, s.label).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
+      }
+      expect(flags.isServerFeatureEnabled, `${s.label}: never asked on the fixtures tab`).not.toHaveBeenCalled();
       checked++;
     }
     expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("T16 — the empty case: a chess fixtures tab with nothing held or flagged still mounts the queue (it renders nothing), and asks nothing", async () => {
+    flagIs(FLAG_STATES[0]!);
+    const queues = findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue);
+    expect(queues).toHaveLength(1);
+    expect((queues[0]!.props as { held: unknown }).held).toEqual([]);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("T16 — not chess, or a viewer: no queue, and none of the three reads", async () => {
+    const cells: [string, () => void][] = [
+      ["another sport", () => (division.sport_key = "generic")],
+      ["a viewer", () => pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false })],
+    ];
+    let checked = 0;
+    for (const [label, arm] of cells) {
+      division.sport_key = "boardgame";
+      pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
+      for (const read of Object.values(queue)) read.mockClear();
+      arm();
+      expect(findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue), label).toHaveLength(0);
+      for (const read of Object.values(queue)) expect(read, label).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(cells.length);
   });
 
   it("not chess: DivisionSettings gets false and the flag is never asked", async () => {
@@ -196,9 +249,4 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
   });
 
-  it("a fixtures tab with an empty queue asks nothing", async () => {
-    flagIs(FLAG_STATES[0]!);
-    expect(findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue)).toHaveLength(0);
-    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
-  });
 });

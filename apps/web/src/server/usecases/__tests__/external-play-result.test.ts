@@ -33,6 +33,7 @@ import { act } from "../external-play/play";
 import { HOLD_REASONS, holdForOrganiser, holdRefusedNoShow, resultIdempotencyKey, writeResultFrom } from "../external-play/result";
 import { getFixtureState } from "../fixtures";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
+import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
 import { scoreEvent } from "../scoring";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -1123,6 +1124,10 @@ describe.runIf(HAS_DB)("I1 — a game's final outcome replaces a mid-game hold, 
       expect(await writeResultFrom(snap(g, { status: t.status, winner: t.winner }), g.fixtureId), t.status).toEqual(t.answer);
       const b = await bridgeOf(g.fixtureId);
       expect(b!.needs_reason, t.status).toBe(t.reason);
+      // T16: what the organiser is shown — the queue's reason, and no seat
+      // left over from the token hold it replaced.
+      expect((await queueOf(g)).map((r) => [r.reason, r.revokedSeat]), `${t.status}: the queue`).toEqual([[t.reason, null]]);
+      expect((await listRunSheetOnlinePlay(await mintOrgOwnerAuth(g.orgId), g.divisionId))[g.fixtureId]?.held, `${t.status}: the run sheet`).toBe(t.reason);
       expect(b!.last_error, `${t.status}: last_error refreshed`).toMatch(new RegExp(t.status));
       expect(await typesOf(g.fixtureId), `${t.status}: a hold writes no event`).toEqual([]);
       // Reverse.
