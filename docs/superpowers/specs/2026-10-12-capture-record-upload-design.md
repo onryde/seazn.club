@@ -2,7 +2,8 @@
 
 **Status:** **approved** by the owner on 2026-10-12 ("approve all", relayed by the coordinating session): every
 proposal P1–P11 and the owner questions Q1, Q2, Q3, Q5 and Q9. The questions to capture (Q4, Q6–Q8) were answered by
-the capture team on 2026-10-12, relayed by the coordinating session (§12). The owner ruled the same day that a bad line
+the capture team on 2026-10-12, relayed by the coordinating session (§12); capture corrected its Q7 answer the same day
+(`engine-error` closes no window). The owner ruled the same day that a bad line
 is DROPPED, not refused (ruling RL, §0). Implemented by the PR that adds `POST /api/v1/capture/codes/{code}/records`
 (branch `feat/capture-record-upload`).
 **Contract:** `docs/contracts/capture-record.v1.json` (served by the records route, twinned in `capture-schemas.ts`), with fixtures in
@@ -247,9 +248,12 @@ line.
 - **A2, a line whose `sid` is null or absent:** kept if and only if it falls inside a pairing window of the sending
   code.
   - A window **opens** at a `pair` line whose `tokenTag` is in T(code), and that `pair` line is kept.
-  - It **closes** through the next `unpaired`, `ended`, `pair-refused`, `engine-error` or `reset` line, which belongs
-    to the window (Q7, answered by capture 2026-10-12), or just before the next `pair` line, which opens the next
-    window, or just before the next unreadable line (below). Whichever comes first closes it.
+  - It **closes** through the next `unpaired`, `ended`, `pair-refused` or `reset` line, which belongs to the window
+    (Q7, answered by capture 2026-10-12 and corrected by capture the same day), or just before the next `pair` line,
+    which opens the next window, or just before the next unreadable line (below). Whichever comes first closes it.
+  - An `engine-error` line does **not** close a window (capture's correction to Q7, 2026-10-12). Native also writes
+    it on non-fatal paths where the pairing goes on, so it is an ordinary window line. A fatal error is followed by
+    an `ended {reason: "fatal-error", wasLive}` line, and that `ended` closes the window.
   - **T(code)** is the set of tags of every tok ever issued for the code. Today it holds one tag: `tokenTag(Bearer)`
     (§0.1).
 - A line before the record's first `pair` line is in no window, so it is dropped. This fails closed. See Q6.
@@ -392,9 +396,16 @@ each call `requireStaff()` themselves (review fix 3).
   first `pair` are dropped. On a long pairing
   whose `pair` line has fallen out of the 1000-line ring, every line without a sid is lost. Capture could begin each
   sent record with the current pairing's `pair` line.
-- **Q7 (capture). ANSWERED 2026-10-12:** `unpaired` and `ended` are not the only kinds that end a pairing:
-  `pair-refused`, `engine-error` and `reset` end it too. All five close a window through themselves (§6); the
-  contract's prose and `WINDOW_CLOSING_KINDS` (`domain/capture-record.ts`) say so.
+- **Q7 (capture). ANSWERED 2026-10-12, then CORRECTED by capture on 2026-10-12:** `unpaired` and `ended` are not
+  the only kinds that end a pairing: `pair-refused` and `reset` end it too. All four close a window through
+  themselves (§6); the contract's prose and `WINDOW_CLOSING_KINDS` (`domain/capture-record.ts`) say so.
+  - **Capture's correction (2026-10-12).** The first answer also named `engine-error`. That was wrong: `engine-error`
+    is not fatal-only. Native also writes it on three non-fatal paths where the pairing goes on (`Engine.kt:135`,
+    `:137`; `BridgeCore.kt:608`, line numbers as capture cited them). So `engine-error` no longer closes a window; a
+    no-sid line after a non-fatal one is kept. On both fatal paths native writes `ended {reason: "fatal-error",
+    wasLive}`, and `ended` already closes the window. `pair-refused` (always fatal) and `reset` (the backstop) still
+    close. The contract admits that `ended` line as it is: `reason` is a plain key (a short word, `fatal-error`
+    included) and `wasLive` is a scalars key (a boolean), both already on capture's allow-list.
 - **Q8 (capture). ANSWERED 2026-10-12: final** — `tokenTag` is FNV-1a 32 over the token's UTF-16 code units, as 8
   lowercase hex digits (carry 2). The server's test will use
   `token-tag-vectors.json` as its rulebook. D1 (§0.1) applies if a code can ever hold more than one tok.
@@ -475,10 +486,11 @@ each call `requireStaff()` themselves (review fix 3).
     of the code's end and its last session's end) taken as an input.
 - `attribute(lines, {sessionsOfCode, tagsOfCode})` is table-driven from §6's text: the worked example row for row, plus
   X→Y, Y→X, X→Y→X, a truncated first window, X's sid inside Y's window (kept), Y's sid inside X's window (dropped), a
-  masked sid (dropped), a null-pairing session's sid (dropped), closing by each of Q7's five kinds and by a foreign
-  `pair`, and an unreadable line as a boundary (ruling RL). Expected values come from the table, never from the function.
+  masked sid (dropped), a null-pairing session's sid (dropped), closing by each of Q7's four kinds and by a foreign
+  `pair`, a non-fatal `engine-error` that closes nothing (Q7 corrected), and an unreadable line as a boundary (ruling
+  RL). Expected values come from the table, never from the function.
 - **fast-check (rule 10):** random sequences of `pair(tag)`, `unpaired`, `ended`, sid lines and device lines across 2–3
-  codes, with each line's owner known from the generator. After every step these must hold: kept lines are all the
+  codes, with `engine-error` in the alphabet as a non-closing kind (Q7 corrected), with each line's owner known from the generator. After every step these must hold: kept lines are all the
   sending code's, no foreign line is kept, and `kept + dropped = received`. Runs with `kept > 0` and runs with
   `dropped > 0` are each counted, and zero of either is a failure. A shrunk failure is committed as a named seed.
 - **Body reader:** 1000 lines pass and 1001 are 413; 1,048,576 bytes pass and one more byte is 413. A gzip of 10 MB of
@@ -540,6 +552,8 @@ test.
   reissue must then die).
 - M13 (ruling RL): the drop is made a refusal (a 422 when any line is bad); a use-case test must go red.
 - M14 (Q7): a closing kind removed from the set; the Q7 test must go red.
+- M14b (Q7 corrected, 2026-10-12): `engine-error` put back in the closing set; the Q7-corrected tests (attribution,
+  the real screen, the use-case) and the fast-check sequence test must go red.
 - M15 (ruling RL): an unreadable line made transparent to attribution; the boundary test must go red.
 - Review fixes (PR #943), one mutant each: the verbatim bytes stored again; the duplicate-key check removed; the
   twin's `__proto__` refusal removed; a read's `requireStaff` removed; the tail's session filter put back on the lazy
