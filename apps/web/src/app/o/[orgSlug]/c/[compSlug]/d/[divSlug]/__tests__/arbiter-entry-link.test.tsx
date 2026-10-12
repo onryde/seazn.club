@@ -103,6 +103,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 import DivisionPage from "../page";
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
+import { StagesPanel } from "@/components/v2/stages-panel";
 
 function findAll(node: ReactNode, pred: (el: ReactElement) => boolean, out: ReactElement[] = []): ReactElement[] {
   if (Array.isArray(node)) {
@@ -183,5 +184,27 @@ describe("division page: the arbiter panel link", () => {
       checked++;
     }
     expect(checked).toBe(6);
+  });
+});
+
+// T16 (T19 carry) — the same link reaches the stage cards: a refused Unpair / Rebuild over a board an online game
+// stands behind sends the organiser there (OnlineGameExistsNotice).
+describe("division page: the stage cards know where the arbiter panel is", () => {
+  const panelHref = async () => {
+    const panels = findAll(await renderPage("fixtures"), (el) => el.type === StagesPanel);
+    expect(panels, "premise: the stages panel is mounted").toHaveLength(1);
+    return (panels[0]!.props as { arbiterHref?: unknown }).arbiterHref;
+  };
+
+  it("the empty case first: no panel to link to (over the board, no fixtures) ⇒ null", async () => {
+    division.config = { variant: "classical" };
+    expect(await panelHref()).toBeNull();
+    division.config = { variant: "classical", onlinePlay: "lichess" };
+    fx.rows = [];
+    expect(await panelHref()).toBeNull();
+  });
+
+  it("an online chess division with fixtures ⇒ the arbiter panel's own route", async () => {
+    expect(await panelHref()).toBe(ARBITER);
   });
 });
