@@ -432,6 +432,25 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
     expect(expectBracketFinish({ ...base, play: { kind: "level", as: "no_result" } })).toEqual({ status: "needs_decision", advances: null, refused: [] });
   });
 
+  it("BG-KO-1: only a DRAWN chess game goes to a tie-break — a chess level result of every other X-BR-1 kind is held by X-BR-2 and its tie-break is refused TIEBREAK_NOT_APPLICABLE, every rung", () => {
+    // single-sport: BG-KO-1 is chess's row ("a drawn chess game goes to a tie-break"); the other level kinds are X-BR-1's
+    const others = LEVEL_KINDS_FROM_ROWS.filter((as) => as !== DRAWN);
+    expect(others.length, "X-BR-1 names level kinds besides a draw").toBeGreaterThan(0);
+    let checked = 0;
+    for (const as of others) {
+      // the row that answers a chess `as` is X-BR-2 (BG-KO-1 names only a draw), so the hold is read from the rows
+      expect(levelAnswer(CHESS, as), as).toEqual({ id: "X-BR-2", want: HELD_BY_X_BR_2, naming: 0 });
+      for (const rung of ["rapid", "blitz", "armageddon"] as const) {
+        const tb: Action = { kind: "tiebreak", rung, winner: "home" };
+        expect(expectBracketFinish({ ...base, sport: CHESS, play: { kind: "level", as }, actions: [tb] }), `${as} ${rung}`).toEqual({ ...HELD_BY_X_BR_2, refused: [{ index: 0, code: "TIEBREAK_NOT_APPLICABLE" }] });
+        // the positive pair: the same tie-break on a DRAWN game decides it
+        expect(expectBracketFinish({ ...base, sport: CHESS, actions: [tb] }).advances, `draw ${rung}`).toEqual({ winner: "home", loser: null, method: `tiebreak_${rung}` });
+        checked++;
+      }
+    }
+    expect(checked, `non-draw chess level kinds × rungs checked: ${checked}`).toBe(others.length * 3);
+  });
+
   it("BG-KO-1: a void of the tie-break puts the game back in its tie-break phase — then the organiser's lot, or a new tie-break, decides it", () => {
     const tb: Action = { kind: "tiebreak", rung: "rapid", winner: "home" };
     // single-sport: BG-KO-1 is chess's row (boardgame)
