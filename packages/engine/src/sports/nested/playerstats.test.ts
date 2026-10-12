@@ -270,7 +270,7 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
         ],
       },
     };
-    const mod = makeNestedModule(preset);
+    const mod = makeNestedModule(preset, () => mod);
     const metric = mod.playerStats!.metrics.find((m) => m.key === "points_won");
     expect(metric?.label).toBe("OVERRIDDEN BY PRESET");
     expect(metric?.field).toBe("custom_person_field");
@@ -319,7 +319,7 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
         },
       },
     };
-    const mod = makeNestedModule(preset);
+    const mod = makeNestedModule(preset, () => mod);
     const lineup: LineupPair = {
       home: { entrantId: "E1", slots: [{ personId: "p1", slot: "starting", orderNo: 1 }] },
       away: { entrantId: "E2", slots: [{ personId: "p2", slot: "starting", orderNo: 1 }] },

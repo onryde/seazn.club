@@ -1998,6 +1998,10 @@ function mergePlayerStats(
 
 export function makeNestedModule(
   preset: NestedPreset,
+  /** The module this call returns, as the caller's own binding (`makeNestedModule({...}, () => tennis)`, as hockey hands
+   *  `() => hockey` to its keeper fold): the matches fold reads its declarations when it runs (ruling 120), never a
+   *  copy. A thunk the caller owns lets the module stay the returned object literal the Stryker split names. */
+  self: () => StatsPlayDeclaration,
 ): SportModule<NestedCfg, NestedEv, NestedState> {
   const configSchema = makeNestedConfigSchema(preset.defaults);
   const pointType = `${preset.key}.point`;
@@ -2096,7 +2100,7 @@ export function makeNestedModule(
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
   };
 
-  const sportModule: SportModule<NestedCfg, NestedEv, NestedState> = {
+  return {
     key: preset.key,
     version: preset.version,
     configSchema,
@@ -2313,7 +2317,7 @@ export function makeNestedModule(
     playerStats: mergePlayerStats(
       {
         metrics: [nestedPointsWonMetric(pointType)],
-        folded: nestedMatchOutcomesFold(preset, configSchema, () => sportModule),
+        folded: nestedMatchOutcomesFold(preset, configSchema, self),
       },
       preset.playerStats,
     ),
@@ -2480,5 +2484,4 @@ export function makeNestedModule(
     },
     // Stryker restore all
   };
-  return sportModule;
 }
