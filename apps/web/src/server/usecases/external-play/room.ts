@@ -300,8 +300,10 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const seat = playable === null ? null : actAcceptance(playable, player);
   const canAct = seat !== null && seat.refused === null;
   // The seat's account is not the game's: re-linking THAT account is the
-  // remedy, so the room shows A with the account's own line.
-  const otherAccount = seat?.refused === "account";
+  // remedy, so the room shows A with the account's own line, NAMING the
+  // account T9 recorded (re-review 6, N-2) — Lichess links whichever account
+  // the browser is signed in to, so the player must know which to sign in as.
+  const otherAccount = seat?.refused === "account" ? seat.recorded : null;
   // A hold the game is not still playing through (T12's mid-game diagnoses
   // are token_revoked / provider_error; anything else, or any hold once the
   // game is over, waits on the organiser).

@@ -98,10 +98,13 @@ export type RoomSnapshot = {
   /** You may not act because your linked Lichess account is not the one
    *  this game was created on (re-linked to another, or unlinked) — play.ts's
    *  own acceptance (`actAcceptance`), never a second reading (T14 re-review
-   *  5, I-2). The room shows A with the account's line; re-linking that
-   *  account is the remedy. false whenever another reason comes first (a
-   *  frozen seat, a held, finished or withdrawn board). */
-  otherAccount: boolean;
+   *  5, I-2). The value is the account the game IS on: T9's recorded Lichess
+   *  id for your seat (Lichess's lowercased username, which it signs in by),
+   *  read by the server — the room names it (re-review 6, N-2). The room
+   *  shows A with that line; re-linking that account is the remedy. null
+   *  whenever you may act, or another reason comes first (a frozen seat, a
+   *  held, finished or withdrawn board). */
+  otherAccount: string | null;
   /** No game on file and the club is not offered online chess (T20). The
    *  client renders a plain state and STOPS polling. */
   onlineChessOff: boolean;

@@ -1071,7 +1071,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     opponentPresence: { participantId: "rtk-opp" },
     frozen: null,
     canAct: true,
-    otherAccount: false,
+    otherAccount: null,
     onlineChessOff: false,
     creation: null,
     game: null,

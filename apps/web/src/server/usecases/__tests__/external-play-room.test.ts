@@ -543,7 +543,9 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
           const accountOk = seat === "black" || linkedAsRecorded;
           const v = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
           expect(v.canAct, `${label}: canAct`).toBe(boardAllows && accountOk);
-          expect(v.otherAccount, `${label}: the account line`).toBe(boardAllows && !accountOk);
+          // The account line names the account T9 RECORDED for White's seat
+          // (re-review 6, N-2) — never the one linked now.
+          expect(v.otherAccount, `${label}: the account line`).toBe(boardAllows && !accountOk ? s.home.lichessId : null);
           if (seat === "white") {
             expect(v.held, `${label}: held`).toBe(c.held);
             expect(v.game?.clockRunning, `${label}: clocks`).toBe(c.clockRunning);
@@ -564,7 +566,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
             refusedWithoutCanAct += 1;
           }
           if (!v.canAct) expect(outcome, `${label}: !canAct ⇒ never accepted`).not.toBe("accepted");
-          if (v.otherAccount) otherAccountSeen += 1;
+          if (v.otherAccount !== null) otherAccountSeen += 1;
           rows += 1;
         }
       }
@@ -582,17 +584,21 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     const s = await seed();
     await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
     const before = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
-    expect([before.canAct, before.otherAccount], "the pair: as recorded").toEqual([true, false]);
+    expect([before.canAct, before.otherAccount], "the pair: as recorded").toEqual([true, null]);
+    const relinkedTo = `x-${randomUUID().slice(0, 8)}`;
     await sql`
-      update user_external_accounts set external_user_id = ${`x-${randomUUID().slice(0, 8)}`}
+      update user_external_accounts set external_user_id = ${relinkedTo}, username = ${relinkedTo}
        where user_id = ${s.home.userId} and provider = 'lichess'`;
     const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
-    expect(white).toMatchObject({ canAct: false, otherAccount: true, frozen: null, held: false });
+    // Re-review 6, N-2: the line names the account the game IS on — T9's
+    // recorded one — never the account linked now.
+    expect(s.home.lichessId, "premise: the two accounts differ").not.toBe(relinkedTo);
+    expect(white).toMatchObject({ canAct: false, otherAccount: s.home.lichessId, frozen: null, held: false });
     await expect(
       actInRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, { kind: "draw", accept: false }, deps({ reconcile: vi.fn() })),
     ).rejects.toMatchObject({ status: 404 });
     const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
-    expect(black).toMatchObject({ canAct: true, otherAccount: false });
+    expect(black).toMatchObject({ canAct: true, otherAccount: null });
   });
 
   it("a hold the game is not playing through (a no-show) is `held`, and no seat is frozen", async () => {

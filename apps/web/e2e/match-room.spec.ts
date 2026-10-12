@@ -690,9 +690,11 @@ test("Seam A, the game on ANOTHER Lichess account (re-review 5 I-2): White re-li
   // The pair first: the account the game was created on ⇒ the live board.
   expect(await screenOf(p)).toBe("live");
   await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  const linkedNow = `x-${Date.now().toString(36)}`;
+  expect(linkedNow, "premise: a different account").not.toBe(room.white.lichessId);
   const relinked = await withDb(
     (sql) => sql`
-      update user_external_accounts set external_user_id = ${`x-${Date.now().toString(36)}`}
+      update user_external_accounts set external_user_id = ${linkedNow}, username = ${linkedNow}
        where user_id = ${room.white.userId} and provider = 'lichess'
       returning user_id`,
   );
@@ -700,7 +702,10 @@ test("Seam A, the game on ANOTHER Lichess account (re-review 5 I-2): White re-li
   await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the other account" }).toBe("revoked");
   const notice = p.getByTestId("room-revoked-notice");
   await expect(notice).toHaveAttribute("data-reason", "account");
-  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.otherAccount"]!);
+  // Re-review 6, N-2: the line names the account the game IS on (the
+  // server's record), never the one linked now.
+  await expect(notice).toContainText(fill("externalPlay.room.state.revoked.otherAccount", { username: room.white.lichessId }));
+  await expect(notice).not.toContainText(linkedNow);
   // Nothing was revoked and no organiser was told: never those words here.
   await expect(notice).not.toContainText(uiEn["externalPlay.room.state.revoked.title"]!);
   await expect(notice).not.toContainText(uiEn["externalPlay.room.state.revoked.body"]!);
@@ -714,7 +719,19 @@ test("Seam A, the game on ANOTHER Lichess account (re-review 5 I-2): White re-li
   await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "false");
   for (const id of ["room-resign", "room-draw", "room-abort", "room-controls", "room-move-notice"]) await expect(p.getByTestId(id), id).toHaveCount(0);
   await inAside(p, "room-revoked-notice");
+  // A long recorded name (longer than Lichess's 20 allows) WRAPS on a phone:
+  // whole, never truncated — it is what the player signs in with.
+  const long = "maximiliana_featherstonehaugh_w";
+  await withDb((sql) => sql`update fixture_external_play set white_lichess_id = ${long}, updated_at = now() where fixture_id = ${room.fixtureId}`);
+  await expect(notice, "a poll reads the long name").toContainText(fill("externalPlay.room.state.revoked.otherAccount", { username: long }), { timeout: 20_000 });
   await p.setViewportSize({ width: 320, height: 800 });
+  const fit = await p.getByTestId("room-revoked-account").evaluate((el) => ({
+    scroll: el.scrollWidth,
+    client: el.clientWidth,
+    lines: Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)),
+  }));
+  expect(fit.scroll, "the name is not clipped at 320").toBeLessThanOrEqual(fit.client);
+  expect(fit.lines, "it wraps onto more lines").toBeGreaterThan(1);
   expect(await stackedTopDown(p, ["room-clocks-strip", "room-revoked-notice", "room-board", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(3);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "a-other-account");

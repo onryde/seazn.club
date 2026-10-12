@@ -286,6 +286,8 @@ describe("actAcceptance — the one predicate act and the room's canAct share", 
     for (const r of rows) {
       const got = actAcceptance(game(r.frozen, r.whiteSide), { side: r.side, lichess: r.lichess === null ? null : { id: r.lichess, username: "x" }, userId: r.userId });
       expect([got.colour, got.refused], JSON.stringify(r)).toEqual([r.colour, r.want]);
+      // The account refusal names the account the game is on (re-review 6, N-2).
+      if (got.refused === "account") expect(got.recorded, "the seat's recorded account").toBe(r.colour === "white" ? "lw" : "lb");
       if (got.refused === null) expect(got.userId, "an accepted seat carries its user").toBe(r.userId);
       tally[r.want ?? "none"] += 1;
       checked += 1;

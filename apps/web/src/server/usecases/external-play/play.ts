@@ -253,7 +253,9 @@ export type ActRefusal =
   | "frozen"
   /** The seat's linked Lichess account is not the one T9 recorded for this
    *  game — re-linked to another account, or unlinked — or the seat has no
-   *  user to hold a token. That account is not a player in the game. */
+   *  user to hold a token. That account is not a player in the game. The
+   *  answer carries the RECORDED account, so the room can name it (T14
+   *  re-review 6, N-2). */
   | "account";
 
 /**
@@ -268,11 +270,14 @@ export type ActRefusal =
 export function actAcceptance(
   game: Game,
   me: Pick<SidePlayer, "side" | "lichess" | "userId">,
-): { colour: Colour; refused: ActRefusal } | { colour: Colour; refused: null; userId: string } {
+):
+  | { colour: Colour; refused: "frozen" }
+  | { colour: Colour; refused: "account"; recorded: string }
+  | { colour: Colour; refused: null; userId: string } {
   const colour: Colour = game.whiteSide === me.side ? "white" : "black";
   if (game.frozen.includes(colour)) return { colour, refused: "frozen" };
   const recorded = colour === "white" ? game.whiteLichessId : game.blackLichessId;
-  if (me.lichess?.id !== recorded || me.userId === null) return { colour, refused: "account" };
+  if (me.lichess?.id !== recorded || me.userId === null) return { colour, refused: "account", recorded };
   return { colour, refused: null, userId: me.userId };
 }
 

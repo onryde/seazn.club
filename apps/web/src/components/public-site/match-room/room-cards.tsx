@@ -344,17 +344,21 @@ const RESTORED = (
 /** A's notice. `otherAccount` (T14 re-review 5, I-2): the game is on another
  *  Lichess account than the one linked — nothing was revoked and no organiser
  *  was told, so the account's own line stands in for those words; the action
- *  (re-link) is the same. */
-export function RevokedNotice({ relinkHref, otherAccount = false, t }: { relinkHref: string; otherAccount?: boolean; t: RoomT }) {
+ *  (re-link) is the same. The line names the account the game IS on (re-review
+ *  6, N-2): Lichess links whichever account the browser is signed in to. The
+ *  name wraps anywhere, never truncates — it is what the player signs in with. */
+export function RevokedNotice({ relinkHref, otherAccount = null, t }: { relinkHref: string; otherAccount?: string | null; t: RoomT }) {
   return (
     <div
       data-testid="room-revoked-notice"
-      data-reason={otherAccount ? "account" : "revoked"}
+      data-reason={otherAccount !== null ? "account" : "revoked"}
       role="status"
       className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:gap-2 md:p-3.5"
     >
-      {otherAccount ? (
-        <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.otherAccount")}</span>
+      {otherAccount !== null ? (
+        <span data-testid="room-revoked-account" className="min-w-0 text-[15px] font-semibold leading-[1.35] [overflow-wrap:anywhere] md:text-base">
+          {t("externalPlay.room.state.revoked.otherAccount", { username: otherAccount })}
+        </span>
       ) : (
         <>
           <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.title")}</span>

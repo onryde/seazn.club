@@ -31,6 +31,8 @@ type Locale = keyof typeof LOCALES;
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
 const FIXTURE = "/shared/org/comp/div/fixtures/f1";
 const RELINK = "/api/auth/lichess?org=org&next=%2Fshared%2Forg%2Fcomp%2Fdiv%2Ffixtures%2Ff1%2Fplay%3Ft%3Dtok";
+/** The Lichess account T9 recorded for the viewer's seat (re-review 6, N-2). */
+const RECORDED = "ada_recorded";
 
 // The canvas's words (RevokedPhone/Desktop, ChessOffPhone/Desktop,
 // MoveOfflinePhone, MoveRefusedPhone, MoveInvalidPhone), and owner tweak 1.
@@ -38,8 +40,10 @@ const CANVAS = {
   revokedTitle: "Your Lichess link was revoked, so we can't play your moves.",
   revokedBody: "Your organiser has been told and will decide what happens next.",
   relink: "Link Lichess again",
-  // T14 re-review 5, I-2 (controller ruling): A's line when the game is on another account.
-  otherAccount: "This game is on a different Lichess account — link that account again to keep playing.",
+  // T14 re-review 5, I-2 + re-review 6, N-2 (controller rulings): A's line
+  // when the game is on another account, naming the account it IS on
+  // (RECORDED, from the server's snapshot).
+  otherAccount: "This game is on your Lichess account ada_recorded — sign in to Lichess as ada_recorded, then link it again to keep playing.",
   seatOnHold: "Seat on hold",
   whiteSeatOnHold: "White · seat on hold",
   holdCamera: "Keep your camera on while your seat is on hold. If your video drops, we note when for your organiser, who decides what happens.",
@@ -86,7 +90,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     opponentPresence: null,
     frozen: null,
     canAct: true,
-    otherAccount: false,
+    otherAccount: null,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -224,7 +228,7 @@ describe("Seam A — the Lichess link revoked: the frozen player's own room", ()
 
 describe("Seam A — the game is on another Lichess account (T14 re-review 5, I-2)", () => {
   const otherState = (over: Partial<RoomSnapshot> = {}) =>
-    initialRoomState(snap({ game: GAME, frozen: null, canAct: false, otherAccount: true, ...over }), T0);
+    initialRoomState(snap({ game: GAME, frozen: null, canAct: false, otherAccount: RECORDED, ...over }), T0);
 
   it("A's layout with the account's own line in place of the revoked words, and the same one action: Link Lichess again", () => {
     const s = otherState();
@@ -250,9 +254,35 @@ describe("Seam A — the game is on another Lichess account (T14 re-review 5, I-
     expect(textOf(frozen)).toContain(CANVAS.revokedTitle);
     expect(textOf(frozen)).not.toContain(CANVAS.otherAccount);
     expect(attrOf(frozen, "room-revoked-notice", "data-reason")).toBe("revoked");
-    const live = initialRoomState(snap({ game: GAME, canAct: true, otherAccount: false }), T0);
+    const live = initialRoomState(snap({ game: GAME, canAct: true, otherAccount: null }), T0);
     expect(roomScreen(live).kind).toBe("live");
     expect(textOf(paint(live))).not.toContain(CANVAS.otherAccount);
+  });
+
+  it("re-review 6 N-2: the line NAMES the account the game is on — the snapshot's, in every locale, twice (the account and who to sign in as)", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      for (const name of [RECORDED, "someone_else_42"]) {
+        const text = textOf(paint(otherState({ otherAccount: name }), { locale }));
+        expect(text.split(name).length - 1, `${locale} ${name}: named twice`).toBe(2);
+        expect(text, `${locale}: no raw placeholder`).not.toMatch(/\{username\}/);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: locales × names").toBe(4 * 2);
+  });
+
+  it("re-review 6 N-2: a long account name WRAPS — never truncated (it is what the player signs in with); min-w-0 on the notice", () => {
+    // Lichess usernames run to 20 characters; a longer unbroken string proves the wrap.
+    const long = "maximilianafeatherstonehaugh_wolstenholme";
+    const html = paint(otherState({ otherAccount: long }));
+    expect(textOf(html)).toContain(long);
+    const line = /<span[^>]*data-testid="room-revoked-account"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(line, "the account line is its own element").not.toBe("");
+    const cls = /class="([^"]*)"/.exec(line)?.[1] ?? "";
+    expect(cls).toContain("[overflow-wrap:anywhere]");
+    expect(cls, "never truncated").not.toMatch(/(^|\s)(truncate|text-ellipsis|line-clamp-\d+)(\s|$)/);
+    expect(classOf(html, "room-revoked-notice")).toMatch(/(^|\s)min-w-0(\s|$)/);
   });
 });
 
@@ -367,7 +397,7 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
   it("each state paints in its own language", () => {
     const states: [string, () => RoomState][] = [
       ["A", () => revokedState({ cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } })],
-      ["A, another account", () => revokedState({ frozen: null, otherAccount: true })],
+      ["A, another account", () => revokedState({ frozen: null, otherAccount: RECORDED })],
       ["B", () => initialRoomState(snap({ onlineChessOff: true }), T0)],
       ["C1", () => roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "fetch_failed", status: 0 })],
       [
