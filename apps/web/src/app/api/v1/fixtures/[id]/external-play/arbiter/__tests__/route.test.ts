@@ -89,25 +89,26 @@ async function member(orgId: string, role: "admin" | "viewer"): Promise<string> 
   return u!.id;
 }
 
-/** One opened round, its board live on Lichess under policy `required`,
- *  both players' cameras in the meeting (T8's writer). */
-async function liveBoard(policy: "required" | "optional" = "required") {
-  const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: policy });
+/** One opened round, its boards live on Lichess under `policy`, both
+ *  players' cameras in each board's meeting (T8's writer). `b` is board 1. */
+async function liveBoard(policy: "required" | "optional" = "required", fixtures = 1) {
+  const r = await seedOnlineChessRound({ fixtures, cameraPolicy: policy });
   await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
             values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
-  const b = r.boards[0]!;
-  // T9/T10's writer: a game on file, two plies played.
-  await sql`
-    insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side,
-      white_lichess_id, black_lichess_id, moves_uci, move_count, started_at, last_move_at, white_ms, black_ms, clock_increment_s)
-    values (${b.fixtureId}, ${r.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home',
-      ${b.home.lichessId}, ${b.away.lichessId}, ${sql.json(["e2e4", "e7e5"])}, 2, now(), now(), 600000, 600000, 10)`;
-  await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-            values (${b.fixtureId}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
-  await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values
-    (${b.fixtureId}, ${b.home.personId}, 'player', ${`pw-${b.fixtureId.slice(0, 6)}`}),
-    (${b.fixtureId}, ${b.away.personId}, 'player', ${`pb-${b.fixtureId.slice(0, 6)}`})`;
-  return { r, b };
+  for (const b of r.boards) {
+    // T9/T10's writer: a game on file, two plies played.
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side,
+        white_lichess_id, black_lichess_id, moves_uci, move_count, started_at, last_move_at, white_ms, black_ms, clock_increment_s)
+      values (${b.fixtureId}, ${r.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home',
+        ${b.home.lichessId}, ${b.away.lichessId}, ${sql.json(["e2e4", "e7e5"])}, 2, now(), now(), 600000, 600000, 10)`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
+              values (${b.fixtureId}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
+    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values
+      (${b.fixtureId}, ${b.home.personId}, 'player', ${`pw-${b.fixtureId.slice(0, 6)}`}),
+      (${b.fixtureId}, ${b.away.personId}, 'player', ${`pb-${b.fixtureId.slice(0, 6)}`})`;
+  }
+  return { r, b: r.boards[0]! };
 }
 
 const arbiters = (fixtureId: string) =>
@@ -136,12 +137,11 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("the arbiter's routes — who may call them", () => {
-  it("a player of the board, another club's organiser and a viewer are refused by every route; none writes", async () => {
+  it("another club's organiser and a viewer are refused by every route; none writes", async () => {
     const { r, b } = await liveBoard();
     const stranger = await seedOwner();
     const viewer = await member(r.orgId, "viewer");
     const callers: [string, string, number][] = [
-      ["player", b.home.userId, 401],
       ["other club's organiser", stranger.userId!, 401],
       ["viewer", viewer, 403],
     ];
@@ -154,13 +154,28 @@ describe.skipIf(!HAS_DB)("the arbiter's routes — who may call them", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: three routes × three callers").toBe(9);
+    expect(checked, "anti-vacuity: three routes × two callers").toBe(6);
     expect(await arbiters(b.fixtureId)).toHaveLength(0);
     expect(await overrides(b.fixtureId)).toHaveLength(0);
     expect(rtk.minted).toEqual([]);
     // The positive pair: an ADMIN of the same club may watch.
     authState.userId = await member(r.orgId, "admin");
     expect((await CALLS[0]!.send(r, b.fixtureId)).status).toBe(200);
+  });
+
+  it("C1: an org ADMIN who plays on the board is refused the watch for THAT reason — and may watch another board", async () => {
+    const { r, b } = await liveBoard("required", 2);
+    // A full organiser of the club, so membership cannot be what refuses them.
+    await sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${b.home.userId}, 'admin')`;
+    authState.userId = b.home.userId;
+    const res = await read(await CALLS[0]!.send(r, b.fixtureId));
+    expect([res.status, res.body.error?.code]).toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+    expect(await arbiters(b.fixtureId)).toHaveLength(0);
+    expect(rtk.minted).toEqual([]);
+    // The positive pair: the same admin, a board of the same club they do not play on.
+    const other = r.boards[1]!;
+    expect((await read(await CALLS[0]!.send(r, other.fixtureId))).status).toBe(200);
+    expect(rtk.minted.map((m) => m.split(":")[0])).toEqual(["arbiter"]);
   });
 
   it("an API key with manage scope is refused at the door by every route (NEVER_KEY_ROUTES)", async () => {

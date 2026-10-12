@@ -5984,6 +5984,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "No hemos podido volver a conectar tu cámara. Recarga la página — si sigue pasando, avisa a tu organizador.",
   "externalPlay.room.state.cameraGaveUp.reload": "Recargar",
   "externalPlay.flag.cameraConnectionProblems": "Problemas de conexión de la cámara (por nuestra parte) — {duration}",
+  "arbiter.ownRound": "Juegas en esta ronda: otro organizador debe supervisarla.",
+  "arbiter.tile.own": "Juegas en este tablero: otro organizador debe vigilarlo",
   "arbiter.title": "Árbitro",
   "arbiter.back": "Volver a la hoja de ronda",
   "arbiter.roundLine": "{stage} · Ronda {round}",

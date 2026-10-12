@@ -41,6 +41,7 @@ import { gameClocks, resultFor, turnAfter } from "@/components/public-site/match
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
+import { fixturesSeating, isSeatedOn } from "./seated";
 
 // ---------------------------------------------------------------------------
 // The round in view
@@ -137,8 +138,13 @@ export async function loadArbiterRound(auth: AuthCtx, divisionId: string): Promi
            where fixture_id in ${sql(rows.map((r) => r.fixtureId))} and org_id = ${auth.orgId}
            order by opened_at, id`;
 
+  // C1 (D7): a board the viewer plays on is never listed — not watchable,
+  // not offered, not joined. Counted, so the panel can say why it is missing.
+  const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
+
   const boards: ArbiterBoard[] = [];
   for (const [i, r] of rows.entries()) {
+    if (own.has(r.fixtureId)) continue;
     const sides = await loadSides(r);
     const whiteSide: Side = r.whiteSide ?? (await whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }));
     const white = whiteSide === "home" ? sides.home : sides.away;
@@ -209,7 +215,7 @@ export async function loadArbiterRound(auth: AuthCtx, divisionId: string): Promi
       flags,
     });
   }
-  return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards };
+  return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size };
 }
 
 async function flagView(
@@ -319,6 +325,12 @@ export async function joinAsArbiter(
   const userId = auth.userId;
   const f = await loadOnlinePlayFixture(fixtureId);
   if (f === null || f.orgId !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+  // C1 (D7 safeguarding): a player never watches their opponent's camera,
+  // and an organiser who plays on this board is its player. Refused before
+  // any meeting is made or participant minted.
+  if (await isSeatedOn(userId, fixtureId)) {
+    throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
+  }
   if ((await fixtureCameraPolicy(fixtureId)) === "off") {
     throw new HttpError(409, "this board plays without cameras", "VIDEO_NOT_IN_USE");
   }

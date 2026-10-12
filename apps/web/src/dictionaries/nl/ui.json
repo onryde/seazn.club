@@ -5984,6 +5984,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "We konden je camera niet opnieuw verbinden. Laad de pagina opnieuw — blijft het gebeuren, laat het je organisator weten.",
   "externalPlay.room.state.cameraGaveUp.reload": "Opnieuw laden",
   "externalPlay.flag.cameraConnectionProblems": "Problemen met de cameraverbinding (aan onze kant) — {duration}",
+  "arbiter.ownRound": "Je speelt mee in deze ronde: een andere organisator moet die controleren.",
+  "arbiter.tile.own": "Je speelt op dit bord: een andere organisator moet meekijken",
   "arbiter.title": "Arbiter",
   "arbiter.back": "Terug naar het rondeschema",
   "arbiter.roundLine": "{stage} · Ronde {round}",

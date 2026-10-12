@@ -82,6 +82,7 @@ const ROUND: ArbiterRound = {
   stageName: "Open Swiss",
   roundNo: 3,
   timeControl: "10+5",
+  ownBoards: 0,
   boards: [
     board({ fixtureId: "f1", boardNo: 1, white: { name: "Ada Okonkwo", personId: "a" }, black: { name: "Tomasz Wieczorek", personId: "b" }, state: { kind: "live", moveNo: 23 } }),
     board({
@@ -150,7 +151,18 @@ describe("the empty cases first", () => {
   it("a round with no boards: says so, nothing to press", () => {
     const h = html(props({ round: { ...ROUND, boards: [] }, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
     expect(text(h)).toContain(EN["arbiter.emptyBoards"]);
+    expect(text(h)).not.toContain(EN["arbiter.ownRound"]);
     expect(count(h, "<button")).toBe(0);
+  });
+
+  it("C1: every board of the round is the viewer's own — the plain 'you're playing' state, never 'no boards', nothing to press or watch", () => {
+    const h = html(props({ round: { ...ROUND, boards: [], ownBoards: 2 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.ownRound"]);
+    expect(EN["arbiter.ownRound"]).toMatch(/another organiser/);
+    expect(t).not.toContain(EN["arbiter.emptyBoards"]);
+    expect(count(h, "<button")).toBe(0);
+    expect(count(h, "<figure"), "no tile").toBe(0);
   });
 
   it("a board with no flags says so; no pending card when no report is owed", () => {
@@ -267,6 +279,7 @@ describe("the two tiles", () => {
       [{ kind: "unavailable" }, EN["arbiter.tile.unavailable"]!],
       [{ kind: "fault" }, EN["arbiter.tile.fault"]!],
       [{ kind: "error" }, EN["arbiter.tile.error"]!],
+      [{ kind: "own" }, EN["arbiter.tile.own"]!],
       [
         { kind: "watching", white: { present: false, live: false, offSinceMs: null, track: null }, black: { present: false, live: false, offSinceMs: null, track: null } },
         EN["arbiter.tile.absent"]!,
@@ -281,17 +294,17 @@ describe("the two tiles", () => {
       expect(count(h, "<video"), `${video.kind}: no video element`).toBe(0);
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
   });
 
   it("a fault or an error offers ONE retry; no other state does", () => {
     let checked = 0;
-    for (const kind of ["fault", "error", "connecting", "unavailable", "none"] as const) {
+    for (const kind of ["fault", "error", "connecting", "unavailable", "none", "own"] as const) {
       const t = text(html(props({ video: { kind } })));
       expect(count(t, EN["arbiter.tile.retry"]!), kind).toBe(kind === "fault" || kind === "error" ? 1 : 0);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 });
 
@@ -528,6 +541,7 @@ describe("the camera join, as pure decisions", () => {
       [new ApiV1Error("x", 409, "VIDEO_NOT_IN_USE"), "none"],
       [new ApiV1Error("x", 409, "VIDEO_OVERRIDDEN"), "overridden"],
       [new ApiV1Error("x", 409, "VIDEO_MEETING_ENDED"), "ended"],
+      [new ApiV1Error("x", 403, "ARBITER_PLAYS_THIS_BOARD"), "own"],
       [new ArbiterGuardError(new Error("audio")), "fault"],
       [new ApiV1Error("x", 404, "NOT_FOUND"), "error"],
       [new Error("network"), "error"],
@@ -537,7 +551,7 @@ describe("the camera join, as pure decisions", () => {
       expect(arbiterJoinStateFromError(err).kind).toBe(kind);
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(8);
   });
 
   it("'camera off since' starts when this browser first sees a present player's camera off, holds, and clears when it is back", () => {
@@ -559,6 +573,8 @@ describe("every locale", () => {
       props({ video: { kind: "unavailable" } }),
       props({ video: { kind: "fault" }, decision: initialArbiterDecision("f2") }),
       props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
+      props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
+      props({ video: { kind: "own" } }),
       props({
         round: {
           ...ROUND,
@@ -575,7 +591,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked).toBe(24);
+    expect(checked).toBe(32);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {
