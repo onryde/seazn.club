@@ -948,8 +948,13 @@ function buildHeader(
   },
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
+  // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one (the status line, below) — `forfeitTag` is the one
+  // reader, answering only for a decided outcome, so a live or scheduled match is untouched.
+  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events));
 
-  const perSide = fixture.summary?.perSide ?? [];
+  // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 is not a score, so the court card carries no
+  // score lines (the schedule's rule, `schedule.tsx`, read through the same tag), and its sentence says what happened.
+  const perSide = tag?.kind === "double_walkover" ? [] : (fixture.summary?.perSide ?? []);
   const scoreLines: [string | null, string | null] = [
     perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,
     perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,
@@ -1047,7 +1052,6 @@ function buildHeader(
   // `forfeitTag` is the one reader; it answers only for a decided outcome, so a live or scheduled match is untouched.
   // It outranks the status word on purpose: a double walkover stored under the pre-W2b `needs_decision` must never
   // read "Level — winner to be decided" (spec §5.5), and a `forfeited` row now says more than "Forfeited".
-  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events));
   if (tag !== null) {
     const resolve = forfeitExtra.resolveMsg;
     // An abandon's result is the SAME sentence the decided branch above words (the same margins, by method), so the

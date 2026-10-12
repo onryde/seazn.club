@@ -395,7 +395,11 @@ export function hubHeader(
   generatedAt: string,
 ): MatchCentreHeaderT {
   const { status, live } = hubLiveness(fixture.status);
-  const perSide = fixture.summary?.perSide ?? [];
+  // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 would read as an unplayed (or a played 0–0)
+  // match, so the card and the draw node show its tag alone, as the schedule does (`schedule.tsx`), through the same
+  // reader (`forfeitTag`).
+  const creditsNobody = forfeitTag(fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason))?.kind === "double_walkover";
+  const perSide = creditsNobody ? [] : (fixture.summary?.perSide ?? []);
   const lineOf = (entrantId: string): string | null =>
     entrantId === "" ? null : (perSide.find((p) => p.entrantId === entrantId)?.line ?? null);
 

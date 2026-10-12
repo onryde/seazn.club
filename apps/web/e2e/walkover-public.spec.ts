@@ -246,9 +246,40 @@ test.describe("W2b — a credited result says which one, on every public surface
       await page.goto(`${base}/fixtures/${dw!.id}`);
       await dismissCookieBanner(page);
       await expect(page.getByTestId("mc-status-line"), `${w}: the match centre`).toHaveText(withNext);
+      // Audit 3.1: the court card carries no score lines over "Neither side showed up" — its own no-score dash, never
+      // the summary's 0 / 0.
+      for (const i of [0, 1]) await expect(page.getByTestId(`mc-score-${i}`), `${w}: the court card's score ${i}`).toHaveText("—");
       await expectNoHorizontalScroll(page);
       await crop(page.locator("main"), `match-centre-double-walkover-${w}`);
       screens++;
+
+      // Audit 3.1's pair: the other semi, walked over N–0, keeps its credited score on the same card.
+      await page.goto(`${base}/fixtures/${other!.id}`);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("mc-score-1"), `${w}: the walked-over semi's credited nil`).toHaveText("0");
+
+      // Audit 3.1: the hub's results card reads no 0 / 0 for the double walkover; the same probe finds the other semi's
+      // lone "0".
+      await hubResults(page, `/shared/${org.slug}/${ko.compSlug}?tab=matches`);
+      const dwCard = page.getByTestId(`mh-match-${dw!.id}`);
+      await expect(dwCard, `${w}: the double walkover's results card`).toBeVisible({ timeout: STEP_MS });
+      await expect(dwCard.getByText("0", { exact: true }), `${w}: the results card reads no 0 / 0`).toHaveCount(0);
+      await expect(page.getByTestId(`mh-match-${other!.id}`).getByText("0", { exact: true }), `${w}: the probe's positive pair`).toHaveCount(1);
+      await expectNoHorizontalScroll(page);
+      await crop(dwCard, `hub-card-double-walkover-${w}`);
+      screens++;
+
+      // The knockout draw (drawn from 1024 up; the phone reads the cards above): its node reads no 0 / 0 either.
+      if (w >= 1024) {
+        await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout`);
+        await dismissCookieBanner(page);
+        const node = page.getByTestId(`mh-knockout-node-${dw!.id}`);
+        await expect(node, `${w}: the double walkover's draw node`).toBeVisible({ timeout: STEP_MS });
+        await expect(node.getByText("0", { exact: true }), `${w}: the draw node reads no 0 / 0`).toHaveCount(0);
+        await expect(page.getByTestId(`mh-knockout-node-${other!.id}`).getByText("0", { exact: true }), `${w}: the node probe's positive pair`).toHaveCount(1);
+        await crop(node, `hub-knockout-node-double-walkover-${w}`);
+        screens++;
+      }
 
       await page.goto(`${base}?tab=standings`);
       await dismissCookieBanner(page);
@@ -275,7 +306,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await crop(dwRow, `schedule-double-walkover-${w}`);
       screens++;
     }
-    expect(screens).toBe(WIDTHS.length * 3);
+    expect(screens).toBe(WIDTHS.length * 4 + WIDTHS.filter((w) => w >= 1024).length);
   });
 
   // Owner ruling 116 and R116-1 (W2b Task 16): a semi-final winner withdraws while the final's other seat is TBD, so her
