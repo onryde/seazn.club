@@ -334,6 +334,9 @@ describe("move notices (C1–C3): raised, kept and ended by the room's own event
     const stale = read(staleBack, T0 + 1000);
     expect([moveNotice(stale), ply(stale)]).toEqual([null, 2]);
     expect(moveNotice(roomReducer(back, { type: "fetch_failed", status: 0 })), "a second drop").toBe("offline");
+    // A broadcast is not a read: the poll that failed has not come back, and
+    // ending C1 on it would flicker the notice off until the next failed poll.
+    expect(moveNotice(roomReducer(off, { type: "broadcast", b: bc(3), receivedAt: T0 + 100 })), "a broadcast").toBe("offline");
   });
 
   it("C1: a move that never reached us is offline too (the board is put back), and stays so while reads keep failing", () => {
