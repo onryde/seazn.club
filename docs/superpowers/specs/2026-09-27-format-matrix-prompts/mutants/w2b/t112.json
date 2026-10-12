@@ -755,5 +755,72 @@
     "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
    }
   ]
+ },
+ {
+  "id": "r113-retired-phase-conjunct",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "if (reason === \"retired\") return played && phase !== \"pre\";",
+  "replace": "if (reason === \"retired\") return played;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "R112 fix round 2, m1"
+   }
+  ]
+ },
+ {
+  "id": "r114-nonscoring-not-play",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "    else if (started && !isCoreEventType(e.type)) return true;",
+  "replace": "    else if (started && !isCoreEventType(e.type) && !/\\.(period|penalty|shot|sinbin|clock|interruption|sanction|sub|timeout|expedite)/.test(e.type)) return true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-114.test.ts"
+    ],
+    "name": "X-RS-1 \\(ruling 114\\): a NON-SCORING sport event"
+   }
+  ]
+ },
+ {
+  "id": "m3-ref-generic-winloss-tally-dropped",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const w = p === null ? 0 : sum(p.win);",
+  "replace": "const w = p === null || mode === \"win_loss\" ? 0 : sum(p.win);",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode"
+   }
+  ]
+ },
+ {
+  "id": "m3-ref-generic-winloss-refused",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "  const w = p === null ? 0 : sum(p.win);\n",
+  "replace": "  if (p !== null && mode === \"win_loss\" && p.win.length > 0) throw new CreditRefused(\"played-malformed\", \"generic: a win/loss match records no score\");\n  const w = p === null ? 0 : sum(p.win);\n",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode"
+   },
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "every case is answered"
+   }
+  ]
  }
 ]
