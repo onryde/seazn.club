@@ -64,6 +64,7 @@ describe("matchKeyRoute", () => {
       "POST /fixtures/:id/external-play/room",
       "POST /fixtures/:id/external-play/room/act",
       "POST /fixtures/:id/external-play/room/clock-zero",
+      "POST /fixtures/:id/external-play/room/camera-fault",
       // F2: shipped before T14 and classified nowhere (T16 deletes lobby + resolve).
       "GET /fixtures/:id/external-play/lobby",
       "POST /fixtures/:id/external-play/lobby",
@@ -77,7 +78,7 @@ describe("matchKeyRoute", () => {
       expect(matchKeyRoute(method, `/api/v1${path.replace(/:id/g, "seg")}`), e).toBeNull();
       checked += 1;
     }
-    expect(checked, "anti-vacuity: external-play routes checked").toBe(8);
+    expect(checked, "anti-vacuity: external-play routes checked").toBe(9);
   });
 
   it("capture QR v2 (T8c, A16; W27): the phone's start and its scoring link are never key-reachable — and an org API key on EACH of the four phone routes finds no key rule", () => {

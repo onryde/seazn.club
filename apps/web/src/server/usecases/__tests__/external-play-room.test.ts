@@ -30,6 +30,7 @@ import {
   actInRoom,
   claimRoomSeat,
   readRoom,
+  reportCameraFault,
   reportClockZero,
   type RoomDeps,
 } from "../external-play/room";
@@ -746,6 +747,116 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
     const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
     expect(mintRealtime, "premise: the slow step ran").toHaveBeenCalledTimes(1);
     expect(Date.parse(snap.serverNow) - started).toBeGreaterThanOrEqual(SLOW_MS);
+  });
+
+  // T14 re-review 3, I-1 (controller ruling 2026-10-12): when the player's
+  // browser cannot refuse a remote stream it leaves the meeting and re-joins,
+  // stamping the gap as OUR fault — so job 5 never flags it, and the opponent
+  // sees no pill rather than "camera off" while it lasts.
+  describe("a guard fault (I-1): our gap, stamped on the server's clock", () => {
+    const faultsOf = (fixtureId: string) =>
+      sql<{ person_id: string; started_at: Date; ended_at: Date | null }[]>`
+        select person_id, started_at, ended_at from fixture_video_guard_faults
+         where fixture_id = ${fixtureId} order by started_at, id`;
+    const t1 = new Date(now.getTime() + 1_000);
+    const t2 = new Date(now.getTime() + 9_000);
+
+    it("start → a second start (a no-op) → end: ONE interval, on the server's clock, each change pinged to the opponent", async () => {
+      const { s, part } = await cameraBoard();
+      const me = { kind: "session" as const, userId: s.home.userId };
+      const d1 = deps({ now: t1 });
+      expect(await reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, d1)).toEqual({ open: true });
+      expect(d1.publish, "the opponent re-reads").toHaveBeenCalledWith(s.fixtureId);
+      const again = deps({ now: t2 });
+      expect(await reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, again)).toEqual({ open: true });
+      expect(again.publish, "nothing changed: no ping").not.toHaveBeenCalled();
+      expect((await faultsOf(s.fixtureId)).map((f) => [f.person_id, f.started_at, f.ended_at])).toEqual([[s.home.personId, t1, null]]);
+      const d2 = deps({ now: t2 });
+      expect(await reportCameraFault(me, s.fixtureId, { state: "end", participantId: part.home }, d2)).toEqual({ open: false });
+      expect(d2.publish).toHaveBeenCalledWith(s.fixtureId);
+      expect((await faultsOf(s.fixtureId)).map((f) => [f.started_at, f.ended_at])).toEqual([[t1, t2]]);
+      // The empty case: an end with nothing open writes nothing.
+      const d3 = deps({ now: t2 });
+      expect(await reportCameraFault(me, s.fixtureId, { state: "end", participantId: part.home }, d3)).toEqual({ open: false });
+      expect(d3.publish).not.toHaveBeenCalled();
+      expect(await faultsOf(s.fixtureId)).toHaveLength(1);
+    });
+
+    it("the personal link token stamps its own seat the same way", async () => {
+      const { s, part } = await cameraBoard();
+      const tok = await tokenFor(s, s.away.personId);
+      expect(await reportCameraFault({ kind: "token", token: tok }, s.fixtureId, { state: "start", participantId: part.away }, deps({ now: t1 }))).toEqual({ open: true });
+      expect((await faultsOf(s.fixtureId)).map((f) => f.person_id)).toEqual([s.away.personId]);
+    });
+
+    it("the opponent's pill: NONE while a fault is open (never 'camera off'), back once it closes — and the faulted player's own pill is untouched", async () => {
+      const { s, part } = await cameraBoard();
+      const read = (side: "home" | "away") => readRoom({ kind: "session", userId: s[side].userId }, s.fixtureId, deps());
+      expect((await read("away")).opponentPresence, "premise: before, the pill").toEqual({ participantId: part.home });
+      await reportCameraFault({ kind: "session", userId: s.home.userId }, s.fixtureId, { state: "start", participantId: part.home }, deps({ now: t1 }));
+      expect((await read("away")).opponentPresence, "our fault: no pill").toBeNull();
+      expect((await read("home")).opponentPresence, "home still sees away").toEqual({ participantId: part.away });
+      await reportCameraFault({ kind: "session", userId: s.home.userId }, s.fixtureId, { state: "end", participantId: part.home }, deps({ now: t2 }));
+      expect((await read("away")).opponentPresence, "closed: the pill again").toEqual({ participantId: part.home });
+    });
+
+    it("refused with the room's one 404, nothing written: someone else's seat; a player with no seat in the meeting; a fixture the caller does not play; an ended meeting", async () => {
+      let refused = 0;
+      const expectRefused = async (p: Promise<unknown>, fixtureId: string, why: string) => {
+        await expect(p, why).rejects.toMatchObject({ status: 404 });
+        expect(await faultsOf(fixtureId), why).toEqual([]);
+        refused += 1;
+      };
+      const { s, part } = await cameraBoard();
+      const home = { kind: "session" as const, userId: s.home.userId };
+      await expectRefused(reportCameraFault(home, s.fixtureId, { state: "start", participantId: part.away }, deps()), s.fixtureId, "the opponent's seat");
+      await expectRefused(reportCameraFault(home, s.fixtureId, { state: "start", participantId: `pt-${randomUUID()}` }, deps()), s.fixtureId, "a seat that does not exist");
+
+      // The away player never reached the meeting (no participant row).
+      const lone = await seed({ cameraPolicy: "required" });
+      await gameOnFile(lone, { status: "live", moves });
+      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${lone.fixtureId}, ${lone.orgId}, ${`mtg-${randomUUID()}`})`;
+      const ph = `ph-${randomUUID()}`;
+      await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values (${lone.fixtureId}, ${lone.home.personId}, 'player', ${ph})`;
+      await expectRefused(
+        reportCameraFault({ kind: "session", userId: lone.away.userId }, lone.fixtureId, { state: "start", participantId: ph }, deps()),
+        lone.fixtureId,
+        "unseated player naming the seated one",
+      );
+
+      // home of ANOTHER board posts to this one.
+      const other = await cameraBoard();
+      await expectRefused(
+        reportCameraFault({ kind: "session", userId: other.s.home.userId }, s.fixtureId, { state: "start", participantId: other.part.home }, deps()),
+        s.fixtureId,
+        "not a player of this fixture",
+      );
+
+      const ended = await cameraBoard();
+      await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${ended.s.fixtureId}`;
+      await expectRefused(
+        reportCameraFault({ kind: "session", userId: ended.s.home.userId }, ended.s.fixtureId, { state: "start", participantId: ended.part.home }, deps()),
+        ended.s.fixtureId,
+        "the meeting has ended",
+      );
+      expect(refused, "anti-vacuity: refusals").toBe(5);
+
+      // The positive pair: home's OWN seat on the first board is accepted.
+      expect(await reportCameraFault(home, s.fixtureId, { state: "start", participantId: part.home }, deps())).toEqual({ open: true });
+    });
+
+    it("a seat taken again (a reload's way back) closes an open fault; a REFUSED seat leaves it open", async () => {
+      const { s, part } = await cameraBoard();
+      const me = { kind: "session" as const, userId: s.home.userId };
+      await reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, deps({ now: t1 }));
+      const refusedSeat = vi.fn(async () => ({ seated: false as const, reason: "camera_lost" as const, participant: { participantId: part.home, authToken: "x" } }));
+      await claimRoomSeat(me, s.fixtureId, deps({ now: t2, seat: refusedSeat as never }));
+      expect(refusedSeat, "premise: the seat was asked").toHaveBeenCalled();
+      expect((await faultsOf(s.fixtureId)).map((f) => f.ended_at), "refused: still ours, still open").toEqual([null]);
+      const seated = vi.fn(async () => ({ seated: true as const, participant: { participantId: part.home, authToken: "x" } }));
+      await claimRoomSeat(me, s.fixtureId, deps({ now: t2, seat: seated as never }));
+      expect((await faultsOf(s.fixtureId)).map((f) => f.ended_at), "seated: closed at the seat").toEqual([t2]);
+    });
   });
 });
 

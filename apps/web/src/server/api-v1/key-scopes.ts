@@ -354,12 +354,14 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /capture/codes/:code/records",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
-  // Lichess OAuth token, and report their clock at zero. A credential-backed,
+  // Lichess OAuth token, report their clock at zero, and stamp a camera gap
+  // our safeguard caused (I-1). A credential-backed,
   // session/link-token surface — the device-links reasoning, never key-reachable.
   "GET /fixtures/:id/external-play/room",
   "POST /fixtures/:id/external-play/room",
   "POST /fixtures/:id/external-play/room/act",
   "POST /fixtures/:id/external-play/room/clock-zero",
+  "POST /fixtures/:id/external-play/room/camera-fault",
   // F2 (T14): shipped before the room and classified nowhere. The lobby is the
   // pre-room seat surface (T16 deletes it); a resolve writes a result under
   // organiser authority with a named user, which a key does not have.

@@ -1395,6 +1395,15 @@ export const RoomAct = z.discriminatedUnion("kind", [
 ]);
 export type RoomAct = z.infer<typeof RoomAct>;
 
+/** POST /fixtures/{id}/external-play/room/camera-fault (T14 re-review 3,
+ *  I-1) — the caller's browser left the meeting because it could not refuse
+ *  a remote stream (D7), or is back. `participantId` names the caller's OWN
+ *  seat in the meeting; the server checks it and stamps its own clock. */
+export const RoomCameraFault = z
+  .object({ state: z.enum(["start", "end"]), participantId: z.string().min(1).max(200) })
+  .strict();
+export type RoomCameraFault = z.infer<typeof RoomCameraFault>;
+
 /** Every reason T10 answers `reconcile: true` with: a Board API failure
  *  class, or a ledger that no longer replays. Typed both ways against the
  *  source unions, so a new code there fails compilation here. */

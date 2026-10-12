@@ -110,6 +110,54 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
     )).toEqual({ accepted: true });
   });
 
+  // V436 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
+  // player's camera out of the meeting. Every write is rolled back.
+  describe("guard faults (I-1): our safeguard's gap, never the player's", () => {
+    const fault = (tx: typeof sql, o: { startedAt?: string; endedAt?: string | null; fixture?: string } = {}) => tx`
+      insert into fixture_video_guard_faults (fixture_id, person_id, started_at, ended_at)
+      values (${o.fixture ?? fixtureId}, ${personId}, ${o.startedAt ?? "2026-10-12T10:00:00Z"}, ${o.endedAt ?? null})`;
+
+    it("an open fault, and a closed one whose end follows its start, are accepted", async () => {
+      expect(await rolledBack((tx) => fault(tx))).toEqual({ accepted: true });
+      expect(await rolledBack((tx) => fault(tx, { endedAt: "2026-10-12T10:00:20Z" }))).toEqual({ accepted: true });
+      expect(await rolledBack((tx) => fault(tx, { endedAt: "2026-10-12T10:00:00Z" })), "a zero-length fault").toEqual({ accepted: true });
+    });
+
+    it("an end BEFORE its start is refused, by name", async () => {
+      expect(await rolledBack((tx) => fault(tx, { endedAt: "2026-10-12T09:59:59Z" }))).toEqual({
+        accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_guard_faults_interval_check",
+      });
+    });
+
+    it("at most ONE open fault per player per fixture — and any number of closed ones beside it", async () => {
+      expect(await rolledBack(async (tx) => {
+        await fault(tx);
+        await fault(tx, { startedAt: "2026-10-12T10:05:00Z" });
+      })).toEqual({ accepted: false, code: "23505", constraint: "fixture_video_guard_faults_open_idx" });
+      expect(await rolledBack(async (tx) => {
+        await fault(tx, { endedAt: "2026-10-12T10:00:10Z" });
+        await fault(tx, { startedAt: "2026-10-12T10:01:00Z", endedAt: "2026-10-12T10:01:10Z" });
+        await fault(tx, { startedAt: "2026-10-12T10:02:00Z" });
+      })).toEqual({ accepted: true });
+    });
+
+    it("a fault needs the fixture's MEETING — a real fixture with none is refused", async () => {
+      expect(meetinglessFixtureId).not.toBe(fixtureId);
+      expect(await rolledBack((tx) => fault(tx, { fixture: meetinglessFixtureId }))).toEqual({
+        accepted: false, code: FK_VIOLATION, constraint: "fixture_video_guard_faults_fixture_id_fkey",
+      });
+    });
+
+    it("sealed: row security enabled AND forced, with no policy (reached only through the privileged client)", async () => {
+      const [t] = await sql<{ enabled: boolean; forced: boolean; policies: number }[]>`
+        select c.relrowsecurity as enabled, c.relforcerowsecurity as forced,
+               (select count(*)::int from pg_policies p where p.tablename = c.relname and p.schemaname = n.nspname) as policies
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where c.relname = 'fixture_video_guard_faults' and n.nspname = current_schema()`;
+      expect(t).toEqual({ enabled: true, forced: true, policies: 0 });
+    });
+  });
+
   it("D6: two participants for ONE person are accepted — N angles are config, not a migration", async () => {
     for (const n of ["a", "b"]) {
       expect(await attempt(sql`

@@ -18,6 +18,11 @@ import "server-only";
 //     server's own arithmetic agrees, reconcile(clock_zero) asks Lichess
 //     (the measured read + one re-read live in reconcile). We never declare
 //     a flag from arithmetic.
+//   - reportCameraFault — POST camera-fault (T14 re-review 3, I-1). The
+//     player's browser left the meeting because it could not refuse a remote
+//     stream (D7) and is re-joining: OUR fault, stamped on the server's clock
+//     for the caller's OWN seat, so T13 job 5 never flags the gap and the
+//     opponent sees no pill (not "camera off") while it is open.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
@@ -27,6 +32,7 @@ import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
 import { checkInCounts } from "@/server/external-play/window";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
+import { closeGuardFault, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { stampFixtureCheckIn } from "@/server/usecases/me";
 import {
@@ -316,8 +322,15 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   // never before the game, on a held or finished board, or for a frozen seat.
   // An opponent with no person on file cannot be named in the meeting: no
   // pill, rather than a "camera off" nobody can verify.
+  // While OUR safeguard holds the opponent's camera out of the meeting (a
+  // guard fault, I-1) their absence is not theirs: no pill, never "off".
   const opponentPresence: RoomSnapshot["opponentPresence"] =
-    cameraPolicy === "off" || facts.videoOverrideAt !== null || over || !canAct || opponent.personId === null
+    cameraPolicy === "off" ||
+    facts.videoOverrideAt !== null ||
+    over ||
+    !canAct ||
+    opponent.personId === null ||
+    (await hasOpenGuardFault(sql, { fixtureId: f.fixtureId, personId: opponent.personId }))
       ? null
       : { participantId: await opponentParticipant(f.fixtureId, opponent.personId) };
 
@@ -412,6 +425,11 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
   }
 
   const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId }, { now });
+  // Seated again (a reload's way back after a guard fault): our gap is over,
+  // even if the page that opened it never said so (I-1).
+  if (seat.seated && (await closeGuardFault(sql, { fixtureId, personId: r.player.personId, at: now }))) {
+    await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
+  }
   let create: CreateOutcome | null = null;
   const anchor = r.open?.roundOpenedAt ?? null;
   if (seat.seated && !gameOnFile && roomPhaseWire({ now, roundOpenedAt: anchor }) === "open") {
@@ -489,4 +507,38 @@ export async function reportClockZero(
   }
   await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "clock_zero");
   return { reconciled: true };
+}
+
+export type CameraFaultReport = { state: "start" | "end"; participantId: string };
+
+/**
+ * POST camera-fault (I-1). The caller's browser left the meeting because it
+ * could not refuse a remote stream (D7), and is re-joining — OUR fault, not
+ * the player's camera. `start` opens the interval, `end` closes it, both on
+ * the SERVER's clock; a repeated start (or an end with none open) changes
+ * nothing and pings nobody. Only the caller's OWN seat: `participantId` must
+ * be their player participant in this fixture's meeting, still open —
+ * someone else's seat, a player never seated in the meeting and an ended
+ * meeting are the room's one 404, like every identity failure. A change pings
+ * the room, so the opponent's pill is withdrawn (or restored) at once.
+ */
+export async function reportCameraFault(
+  identity: RoomIdentity,
+  fixtureId: string,
+  body: CameraFaultReport,
+  deps: RoomDeps = {},
+): Promise<{ open: boolean }> {
+  const now = deps.now ?? new Date();
+  const r = await resolveRoom(identity, fixtureId);
+  const [own] = await sql<{ participantId: string }[]>`
+    select p.participant_id as "participantId"
+      from fixture_video_participants p
+      join fixture_video_meetings m on m.fixture_id = p.fixture_id
+     where p.fixture_id = ${fixtureId} and p.person_id = ${r.player.personId} and p.preset = 'player'
+       and p.participant_id = ${body.participantId} and m.ended_at is null`;
+  if (!own) throw ROOM_NOT_FOUND();
+  const seat = { fixtureId, personId: r.player.personId, at: now };
+  const changed = body.state === "start" ? await openGuardFault(sql, seat) : await closeGuardFault(sql, seat);
+  if (changed) await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
+  return { open: body.state === "start" };
 }

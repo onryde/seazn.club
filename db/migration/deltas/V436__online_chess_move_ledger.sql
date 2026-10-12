@@ -146,3 +146,31 @@ alter table fixture_video_meetings
   add column camera_evidence_at timestamptz null,
   add constraint fixture_video_meetings_camera_evidence_check
     check (camera_evidence_at is null or ended_at is not null);
+
+-- fixture_video_guard_faults — when OUR safeguard, not the player, took a
+--   player's camera out of the meeting (T14 re-review 3, I-1, controller
+--   ruling 2026-10-12). The player's browser refuses every remote stream
+--   (D7, spec §5.3); when it cannot — a remote peer is subscribed and the
+--   SDK will not unsubscribe it — it leaves the meeting and re-joins a fresh
+--   one. That gap is Seazn's fault: the client stamps its start before
+--   leaving and its end once re-joined (POST …/room/camera-fault), and the
+--   sweep's camera evidence (job 5) counts the stamped interval as ON, so it
+--   never becomes a camera_lost flag against the player; while one is open,
+--   the opponent's room shows no presence pill rather than "camera off".
+--   One row per fault, per player per fixture; at most one OPEN per player
+--   (the partial unique index), and an end never precedes its start. The
+--   times are the SERVER's, never the client's. Sealed like the other video
+--   tables: FORCE RLS, no app_user policy, reached only through `sql`.
+create table fixture_video_guard_faults (
+  id         uuid primary key default gen_random_uuid(),
+  fixture_id uuid not null references fixture_video_meetings(fixture_id) on delete cascade,
+  person_id  uuid not null references persons(id) on delete cascade,
+  started_at timestamptz not null,
+  ended_at   timestamptz null,
+  constraint fixture_video_guard_faults_interval_check
+    check (ended_at is null or ended_at >= started_at)
+);
+create unique index fixture_video_guard_faults_open_idx
+  on fixture_video_guard_faults (fixture_id, person_id) where ended_at is null;
+alter table fixture_video_guard_faults enable row level security;
+alter table fixture_video_guard_faults force  row level security;
