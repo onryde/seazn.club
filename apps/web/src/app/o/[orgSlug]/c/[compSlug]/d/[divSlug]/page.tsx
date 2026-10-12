@@ -531,6 +531,18 @@ export default async function DivisionPage({
       ? await onlineChessOffered(auth)
       : false;
 
+  // T15: the way into the arbiter panel — organisers, on the fixtures tab,
+  // only where there is a board to watch (an online chess division with
+  // fixtures). The panel page itself 404s everywhere else.
+  const arbiterHref =
+    tab === "fixtures" &&
+    canEdit &&
+    division.sport_key === "boardgame" &&
+    (division.config as { onlinePlay?: unknown } | null)?.onlinePlay === "lichess" &&
+    fixtures.length > 0
+      ? routes.divisionArbiter(orgSlug, compSlug, divSlug)
+      : null;
+
   return (
     <>
       <main className="mx-auto max-w-6xl px-4 py-8">
@@ -771,6 +783,14 @@ export default async function DivisionPage({
                 canEdit={editable}
               />
             ))}
+            {arbiterHref && (
+              <div className="mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-[#e7e3f3] bg-white px-4 py-2">
+                <Link href={arbiterHref} className="min-h-11 content-center text-sm font-semibold text-[#5b21b6]">
+                  {t(dict, "arbiter.entry.link")}
+                </Link>
+                <span className="min-w-0 text-sm text-slate-600">{t(dict, "arbiter.entry.body")}</span>
+              </div>
+            )}
             {needsOrganiserExternalPlay.length > 0 && (
               <div className="mb-4">
                 <ExternalPlayNeedsResultQueue
