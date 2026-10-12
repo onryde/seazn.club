@@ -52,6 +52,8 @@ const SPORTS: readonly AnySportModule[] = [...new Map(builtinModules.map((m) => 
 const kindsOf = (m: AnySportModule): readonly Kind[] => effectiveEntrantModel(m.entrantModel).kinds;
 const TEAM_SPORTS = SPORTS.filter((m) => kindsOf(m).includes("team"));
 const INDIVIDUAL_SPORTS = SPORTS.filter((m) => kindsOf(m).includes("individual"));
+/** Every sport with a non-team entrant kind — volleyball's pair (beach) among them, which declares no individual. */
+const NON_TEAM_SPORTS = SPORTS.filter((m) => kindsOf(m).includes("individual") || kindsOf(m).includes("pair"));
 
 async function seedOrg(): Promise<{ auth: AuthCtx; orgSlug: string }> {
   const suffix = randomUUID().slice(0, 8);
@@ -273,18 +275,21 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
 
   it("every individual-entrant sport is unchanged: the roster credits whoever is on it, whatever their lane", async () => {
     const { auth, orgSlug } = await seedOrg();
-    const n = { sports: 0, persons: 0, pairs: 0 };
-    for (const m of INDIVIDUAL_SPORTS) {
+    const n = { sports: 0, persons: 0, singles: 0, pairs: 0 };
+    for (const m of NON_TEAM_SPORTS) {
       const d = await seedDivision(auth, m);
-      // A person registered under the coach lane, on an individual entrant: credited by the roster as always.
-      const solo = await person(auth, `${m.key} Solo`, "coach");
-      const rival = await person(auth, `${m.key} Rival`, "player");
-      const soloE = await entrant(auth, d.divisionId, "individual", "Solo", [solo]);
-      const rivalE = await entrant(auth, d.divisionId, "individual", "Rival", [rival]);
-      await settle(await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE));
-      for (const personId of [solo, rival]) {
-        expect(await ask(personId, await claim(personId), d, orgSlug), `${m.key}: individual`).toEqual({ byPerson: 1, byUser: 1, seeds: 1, carded: true });
-        n.persons++;
+      if (kindsOf(m).includes("individual")) {
+        // A person registered under the coach lane, on an individual entrant: credited by the roster as always.
+        const solo = await person(auth, `${m.key} Solo`, "coach");
+        const rival = await person(auth, `${m.key} Rival`, "player");
+        const soloE = await entrant(auth, d.divisionId, "individual", "Solo", [solo]);
+        const rivalE = await entrant(auth, d.divisionId, "individual", "Rival", [rival]);
+        await settle(await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE));
+        for (const personId of [solo, rival]) {
+          expect(await ask(personId, await claim(personId), d, orgSlug), `${m.key}: individual`).toEqual({ byPerson: 1, byUser: 1, seeds: 1, carded: true });
+          n.persons++;
+        }
+        n.singles++;
       }
       if (kindsOf(m).includes("pair")) {
         const a = await person(auth, `${m.key} Pair A`, "player");
@@ -302,8 +307,10 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
       }
       n.sports++;
     }
-    expect(n.sports).toBe(INDIVIDUAL_SPORTS.length);
-    const pairSports = INDIVIDUAL_SPORTS.filter((m) => kindsOf(m).includes("pair")).length;
+    // Anti-vacuity: every sport with an individual or pair kind, each kind it declares.
+    expect(n.sports).toBe(NON_TEAM_SPORTS.length);
+    expect(n.singles).toBe(INDIVIDUAL_SPORTS.length);
+    const pairSports = NON_TEAM_SPORTS.filter((m) => kindsOf(m).includes("pair")).length;
     expect(n.pairs).toBe(pairSports);
     expect(pairSports).toBeGreaterThan(0);
     expect(n.persons).toBe(INDIVIDUAL_SPORTS.length * 2 + pairSports * 2);
