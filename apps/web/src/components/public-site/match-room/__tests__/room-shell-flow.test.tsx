@@ -123,6 +123,10 @@ function meetingCamera() {
       current = l;
       for (const cb of [...listeners]) cb();
     },
+    /** A producer change: the SDK emits nothing for it (review I8). */
+    setSilently(l: MeetingLink | null) {
+      current = l;
+    },
   };
 }
 type Island = { tree: () => ReturnType<typeof walk> };
@@ -352,7 +356,8 @@ describe("I8: the opponent pill comes from the player's own meeting join — nev
     expect(presenceOf(island), "settled, the opponent on camera").toBe(true);
 
     // Producer changes emit nothing in the SDK: the local tick reads them.
-    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: false }] });
+    meet.setSilently({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: false }] });
+    expect(presenceOf(island), "premise: nothing re-read yet").toBe(true);
     await settle(PRESENCE_TICK_MS);
     expect(presenceOf(island), "in the meeting, camera off").toBe(false);
     meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-arbiter", videoLive: true }] });
