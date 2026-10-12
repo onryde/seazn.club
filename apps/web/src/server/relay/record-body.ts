@@ -4,12 +4,14 @@
 //  - the raw read is capped at 1 MB (a Content-Length over it is refused before a byte is read);
 //  - `Content-Encoding: gzip` inflates as a STREAM whose output is counted and stopped one chunk past 1 MB — a zip bomb
 //    never inflates whole (§5, the zip-bomb defence); no header (or an empty one) is the identity; anything else is 422;
-//  - the limits are the DECOMPRESSED body's: at most 1,048,576 bytes and 1000 non-empty lines.
+//  - the limits are the DECOMPRESSED body's: at most 1,048,576 bytes and 1000 non-empty lines;
+//  - a line that is not UTF-8 is that line's problem alone (owner ruling RL, 2026-10-12): it reads as null.
 import { createGunzip } from "node:zlib";
 import { CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_MAX_LINES } from "@/server/api-v1/capture-schemas";
 
 export type RecordBody =
-  | { ok: true; lines: string[]; bodyBytes: number }
+  /** `lines`: the non-empty lines in order; `null` is a line that is not UTF-8 (the screen drops it). */
+  | { ok: true; lines: (string | null)[]; bodyBytes: number }
   /** `too_large` is 413, `invalid` is 422. `inflatedBytes` is how far a gzip inflated before it stopped (0 for none). */
   | { ok: false; code: "too_large" | "invalid"; message: string; inflatedBytes: number };
 
@@ -87,13 +89,36 @@ export async function readRecordBody(req: Request): Promise<RecordBody> {
   }
   // The identity body is under the raw cap and the inflated one under the inflate cap: both are within the byte limit.
   if (body.length > CAPTURE_RECORD_MAX_BYTES) throw new RangeError("readRecordBody: a body past both caps");
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    return invalid("the record is not UTF-8");
-  }
-  const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l)).filter((l) => l !== "");
+  const lines = linesOf(body);
   if (lines.length > CAPTURE_RECORD_MAX_LINES) return tooLarge();
   return { ok: true, lines, bodyBytes: body.length };
+}
+
+const LF = 0x0a, CR = 0x0d;
+const BOM = [0xef, 0xbb, 0xbf] as const;
+/**
+ * The non-empty lines, split on LF (a CR before it stripped), each decoded as UTF-8 on its own. The split is on the
+ * BYTE: UTF-8 never puts 0x0A inside a multi-byte character, so a line that is not UTF-8 is that line alone — it reads
+ * as `null` and the screen drops it (owner ruling RL, 2026-10-12: a bad line is dropped, never the body refused). A BOM
+ * opening the body is skipped, as a whole-body decode would; one anywhere else stays in its line.
+ */
+function linesOf(body: Buffer): (string | null)[] {
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const out: (string | null)[] = [];
+  let start = body.length >= 3 && BOM.every((b, i) => body[i] === b) ? 3 : 0;
+  while (start <= body.length) {
+    const lf = body.indexOf(LF, start);
+    const stop = lf === -1 ? body.length : lf;
+    const end = stop > start && body[stop - 1] === CR ? stop - 1 : stop;
+    if (end > start) {
+      try {
+        out.push(decoder.decode(body.subarray(start, end)));
+      } catch {
+        out.push(null);
+      }
+    }
+    if (lf === -1) break;
+    start = lf + 1;
+  }
+  return out;
 }

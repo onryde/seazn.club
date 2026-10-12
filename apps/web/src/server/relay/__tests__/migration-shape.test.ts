@@ -1017,19 +1017,19 @@ async function recordRig() {
   const codeId = await insertCode(r);
   return { ...r, codeId };
 }
-type RecordRow = { ref: string; received: number; kept: number; dropped: number; bytes: number; lines: string; slot: number; expiresIn: string };
+type RecordRow = { ref: string; received: number; kept: number; dropped: number; invalid: number; bytes: number; lines: string; slot: number; expiresIn: string };
 /** A ref drawn fresh per row (the column is unique across the table, and the DB is shared across runs). */
 const freshRef = (): string => `R-${Array.from(randomBytes(6), (b) => "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[b % 32]).join("")}`;
 const goodRecord = (): RecordRow => ({
-  ref: freshRef(), received: 3, kept: 2, dropped: 1, bytes: 120, lines: "{\"a\":1}\n{\"b\":2}", slot: 0, expiresIn: "30 days",
+  ref: freshRef(), received: 3, kept: 2, dropped: 1, invalid: 0, bytes: 120, lines: "{\"a\":1}\n{\"b\":2}", slot: 0, expiresIn: "30 days",
 });
 async function insertRecord(r: Awaited<ReturnType<typeof recordRig>>, over: Partial<RecordRow> = {}) {
   const v = { ...goodRecord(), ...over };
   const [row] = await sql<{ id: string }[]>`
     insert into capture_records (org_id, competition_id, fixture_id, code_id, slot, ref, received_lines, kept_lines,
-                                 dropped_lines, body_bytes, lines, expires_at)
+                                 dropped_lines, invalid_lines, body_bytes, lines, expires_at)
     values (${r.orgId}, ${r.competitionId}, ${r.fixtureId}, ${r.codeId}, ${v.slot}, ${v.ref}, ${v.received}, ${v.kept},
-            ${v.dropped}, ${v.bytes}, ${v.lines}, now() + ${v.expiresIn}::interval)
+            ${v.dropped}, ${v.invalid}, ${v.bytes}, ${v.lines}, now() + ${v.expiresIn}::interval)
     returning id`;
   return row!.id;
 }
@@ -1058,10 +1058,12 @@ describe.skipIf(!HAS_DB)("V437__capture_records.sql — the constraints are real
     expect(n).toBe(0);
   });
 
-  it("the accepted twins land, and every bound refuses: the ref (P9), 0 and 1001 received lines, a kept+dropped mismatch, lines with kept 0 and none with kept > 0 (P10), 0 bytes and 1 MB + 1, slot -1, an expiry not after creation — counted", async () => {
+  it("the accepted twins land, and every bound refuses: the ref (P9), 0 and 1001 received lines, a kept+dropped mismatch, lines with kept 0 and none with kept > 0 (P10), a negative invalid count and one over dropped (ruling RL), 0 bytes and 1 MB + 1, slot -1, an expiry not after creation — counted", async () => {
     const r = await recordRig();
     expect(await refusedBy(insertRecord(r))).toBe("landed");
     expect(await refusedBy(insertRecord(r, { kept: 0, dropped: 3, lines: "" })), "P10: every line dropped is stored as counts").toBe("landed");
+    expect(await refusedBy(insertRecord(r, { kept: 0, dropped: 3, invalid: 3, lines: "" })), "ruling RL: every line bad, all of dropped").toBe("landed");
+    expect(await refusedBy(insertRecord(r, { invalid: 1 })), "ruling RL: the one dropped line was bad").toBe("landed");
     expect(await refusedBy(insertRecord(r, { received: CAPTURE_RECORD_MAX_LINES, kept: CAPTURE_RECORD_MAX_LINES, dropped: 0, bytes: CAPTURE_RECORD_MAX_BYTES })), "the top of every bound").toBe("landed");
     expect(await refusedBy(insertRecord(r, { ref: freshRef().slice(0, 6) })), "a ref of 4").toBe("landed");
     const refusals: [string, Partial<RecordRow>][] = [
@@ -1071,6 +1073,7 @@ describe.skipIf(!HAS_DB)("V437__capture_records.sql — the constraints are real
       [`${CAPTURE_RECORD_MAX_LINES + 1} received`, { received: CAPTURE_RECORD_MAX_LINES + 1, kept: CAPTURE_RECORD_MAX_LINES + 1, dropped: 0 }],
       ["kept + dropped != received", { received: 3, kept: 2, dropped: 2 }],
       ["negative dropped", { received: 3, kept: 4, dropped: -1 }],
+      ["negative invalid", { invalid: -1 }], ["invalid over dropped", { invalid: 2 }],
       ["kept 0 with lines", { kept: 0, dropped: 3 }], ["kept 2 with no lines", { lines: "" }],
       ["0 bytes", { bytes: 0 }], ["1 MB + 1 bytes", { bytes: CAPTURE_RECORD_MAX_BYTES + 1 }],
       ["slot -1", { slot: -1 }], ["expires at creation", { expiresIn: "0 seconds" }],
@@ -1080,7 +1083,7 @@ describe.skipIf(!HAS_DB)("V437__capture_records.sql — the constraints are real
       expect(await refusedBy(insertRecord(r, over)), name).toBe("23514");
       checked++;
     }
-    expect(checked).toBe(15);
+    expect(checked).toBe(17);
   });
 
   it("the ref is unique (P9: the use-case draws again on capture_records_ref_key) and the live check IS the contract's pattern", async () => {

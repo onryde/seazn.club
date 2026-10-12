@@ -120,7 +120,7 @@ async function answer(res: Response, status: number, code?: string): Promise<Rec
 }
 
 describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/records (spec 2026-10-12)", () => {
-  it("201 is the bare {ref, kept, dropped}; gzip is inflated; every refusal is the contract's bare envelope — 401 (no Bearer, wrong tok), 404, 413, 422 (a line, an encoding), all no-store — counted", async () => {
+  it("201 is the bare {ref, kept, dropped}; gzip is inflated; a BAD LINE is a 201 that drops it (owner ruling RL); every refusal is the contract's bare envelope — 401 (no Bearer, wrong tok), 404, 413, 422 (an encoding, an empty body), all no-store — counted", async () => {
     windowedRedis();
     const r = await captureRig();
     answersChecked = 0;
@@ -132,10 +132,13 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/records (spec 2026-1
     await answer(await record("not-a-code!", goodBody(r.tok), { tok: r.tok }), 404, "not_a_stream_code");
     const big = ndjson(Array.from({ length: 1001 }, () => ({ at: AT, kind: "thermal" })));
     expect(await answer(await record(r.code, big, { tok: r.tok }), 413, "too_large")).toEqual({ code: "too_large", message: "the record is over 1000 lines or 1 MB" });
-    await answer(await record(r.code, ndjson([{ at: AT, kind: "x", battery: 1 }]), { tok: r.tok }), 422, "invalid");
+    // Owner ruling RL (2026-10-12): a bad line is dropped, never the body refused — alone, or among good lines.
+    expect(await answer(await record(r.code, ndjson([{ at: AT, kind: "x", battery: 1 }]), { tok: r.tok }), 201)).toMatchObject({ kept: 0, dropped: 1 });
+    expect(await answer(await record(r.code, `${goodBody(r.tok)}{"at":"${AT}","kind":"x","battery":2}\n`, { tok: r.tok }), 201))
+      .toMatchObject({ kept: 2, dropped: 1 });
     await answer(await record(r.code, goodBody(r.tok), { tok: r.tok, extra: { "content-encoding": "br" } }), 422, "invalid");
     await answer(await record(r.code, "", { tok: r.tok }), 422, "invalid");
-    expect(answersChecked).toBe(9);
+    expect(answersChecked).toBe(10);
   });
 
   it("§8: a records call spends its OWN bucket, never the code's; the 11th record in the hour is 429 with Retry-After — while beats on that code still answer 200; it recovers after the hour", async () => {
@@ -160,11 +163,12 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/records (spec 2026-1
     expect((await record(r.code, goodBody(r.tok), { tok: r.tok })).status, "recovered after the hour").toBe(201);
   });
 
-  it("§8: every attempt counts — ten 422s spend the hour's budget, and the valid eleventh is 429; a 401 spends the client IP's failure budget", async () => {
+  it("§8: every attempt counts — five 422s (empty bodies) and five all-bad 201s spend the hour's budget, and the valid eleventh is 429; a 401 spends the client IP's failure budget", async () => {
     const redis = windowedRedis();
     const r = await captureRig();
     for (let i = 0; i < SPEC_RECORD.max; i++) {
-      expect((await record(r.code, ndjson([{ at: AT, kind: "x", battery: i }]), { tok: r.tok })).status).toBe(422);
+      const empty = i % 2 === 0;
+      expect((await record(r.code, empty ? "" : ndjson([{ at: AT, kind: "x", battery: i }]), { tok: r.tok })).status).toBe(empty ? 422 : 201);
     }
     await answer(await record(r.code, goodBody(r.tok), { tok: r.tok }), 429, "rate_limited");
     redis.spent.length = 0;

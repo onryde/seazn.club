@@ -8,6 +8,9 @@
 
 -- 1. One row per accepted upload (§9). `lines` is the KEPT NDJSON verbatim, joined by "\n" — '' when every line was
 --    dropped (P10: a 201 with kept 0 is stored as counts with no lines). A dropped line is never stored, not even hashed.
+--    Owner ruling RL (2026-10-12): a bad line (off the allow-list or its class, not JSON, not UTF-8, or secret-shaped) is
+--    DROPPED, never the body refused. `invalid_lines` counts those apart from another code's lines, so staff can spot a
+--    scrub leak; it is a count only, and a subset of `dropped_lines`.
 create table capture_records (
   id             uuid primary key default gen_random_uuid(),
   org_id         uuid not null references organizations(id) on delete cascade,
@@ -19,11 +22,13 @@ create table capture_records (
   received_lines integer not null check (received_lines between 1 and 1000),   -- §5: 0 lines is a 422, never stored
   kept_lines     integer not null check (kept_lines >= 0),
   dropped_lines  integer not null check (dropped_lines >= 0),
+  invalid_lines  integer not null check (invalid_lines >= 0),                   -- owner ruling RL: the BAD lines among the dropped
   body_bytes     integer not null check (body_bytes between 1 and 1048576),    -- the DECOMPRESSED body (§5)
   lines          text not null,
   created_at     timestamptz not null default now(),
   expires_at     timestamptz not null,                                          -- created_at + 30 days (P6), the sweep's key
   check (kept_lines + dropped_lines = received_lines),
+  check (invalid_lines <= dropped_lines),
   check ((kept_lines = 0) = (lines = '')),
   check (expires_at > created_at)
 );

@@ -1,11 +1,12 @@
 // Capture record upload (spec 2026-10-12-capture-record-upload-design.md, approved by the owner 2026-10-12) — the pure
-// half: domain/capture-record.ts. Validation (§5: the allow-list, S1–S5 with the mask skip), the token tag (§0.1, Q8)
-// and attribution (§6: A1, A2, the cross-code rule). Pure — no DB.
+// half: domain/capture-record.ts. The line screen (§5: the allow-list, S1–S5 with the mask skip), the token tag (§0.1,
+// Q8), attribution (§6: A1, A2, the cross-code rule, Q7's closing kinds) and the owner's ruling RL (2026-10-12): a bad
+// line is DROPPED, never the body refused. Pure — no DB.
 //
 // Expected values come from the RULEBOOKS, never from the module:
 //  - the contract's own fixtures and its `$defs` patterns, read from the vendored file and run under ajv;
 //  - capture's `modules/capture-engine/src/wire/token-tag-vectors.json` (the spec names it the test's rulebook, Q8);
-//  - §6's worked example and its rules, transcribed row for row.
+//  - §6's worked example and its rules, transcribed row for row; Q7's five closing kinds as capture answered them.
 // Every sweep counts what it checked, and the counts are pinned: zero checked fails.
 //
 // ONE SPORT, on purpose: not applicable — the capture surface reads no sport (spec §13.2 "Another sport").
@@ -15,7 +16,10 @@ import { resolve } from "node:path";
 import fc from "fast-check";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
-import { attributeLines, secretRulesOf, tokenTag, validateRecordLines, type AttributableLine } from "../capture-record";
+import type { CaptureRecordLine } from "@/server/api-v1/capture-schemas";
+import {
+  attributeLines, keptLines, screenRecordLine, secretRulesOf, tokenTag, type AttributableLine, type ScreenedLine,
+} from "../capture-record";
 
 type Json = Record<string, unknown>;
 const CONTRACTS = resolve(import.meta.dirname, "../../../../../../../docs/contracts");
@@ -35,8 +39,10 @@ addFormats(ajv);
 ajv.addSchema(CONTRACT);
 const fileTrips = (s: string): string[] => (["S2", "S3", "S4", "S5"] as const).filter((r) =>
   ajv.getSchema(`https://seazn.club/contracts/capture-record.v1.json#/$defs/secret${r}`)!(s) as boolean);
+/** The published line shape (the root) under ajv: the rulebook for "the server can read this line". */
+const fileReads = (line: unknown): boolean => ajv.getSchema("https://seazn.club/contracts/capture-record.v1.json")!(line) as boolean;
 
-describe("tokenTag (§0.1, Q8): FNV-1a 32-bit over UTF-16 code units, eight lowercase hex digits", () => {
+describe("tokenTag (§0.1, Q8 — confirmed final by capture 2026-10-12): FNV-1a 32-bit over UTF-16 code units, eight lowercase hex digits", () => {
   /** capture's token-tag-vectors.json, verbatim (the spec's rulebook for this test). */
   const VECTORS: [token: string, tag: string][] = [
     ["", "811c9dc5"], ["a", "e40c292c"], ["foobar", "bf9cf968"], ["cfx", "0076912c"],
@@ -53,44 +59,47 @@ describe("tokenTag (§0.1, Q8): FNV-1a 32-bit over UTF-16 code units, eight lowe
   });
 });
 
-describe("validateRecordLines (§5): the allow-list, then S1–S5, whole body or nothing", () => {
-  it("the empty case first: no lines is a refusal (P10: 0 lines is 422), never an empty success", () => {
-    const r = validateRecordLines([], OTHER_TOK);
-    expect(r.ok).toBe(false);
+describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1–S5 — one verdict per line, never a value", () => {
+  it("the empty cases first: a line that is not UTF-8 (null) and an empty string are unreadable, never ok", () => {
+    expect(screenRecordLine(null, OTHER_TOK)).toEqual({ ok: false, why: "shape" });
+    expect(screenRecordLine("", OTHER_TOK)).toEqual({ ok: false, why: "shape" });
   });
 
-  it("every contract line fixture: valid* admitted, invalid*/tampered refused, each secret vector refused on its OWN rule — counted per kind", () => {
+  it("every contract line fixture: valid* ok, invalid*/tampered unreadable (dropped), each secret vector dropped on its OWN rule — the verdict agrees with the file's shape, counted per kind", () => {
     const SECRET_RULE: Record<string, string> = {
       "line-secret-sending-tok": "S1", "line-secret-ingest-url": "S2", "line-secret-srt-streamid": "S3",
       "line-secret-streamid-space": "S3", "line-secret-userinfo": "S4", "line-secret-bearer": "S5",
     };
     let valid = 0, invalid = 0, secret = 0;
     for (const name of lineNames) {
-      const text = JSON.stringify(fixture(name));
-      const r = validateRecordLines([text], SENDING_TOK);
+      const value = fixture(name);
+      const r = screenRecordLine(JSON.stringify(value), SENDING_TOK);
       if (/^line-valid/.test(name)) {
-        expect(r.ok, `${name}: admitted`).toBe(true);
+        expect(r.ok, `${name}: ok`).toBe(true);
+        expect(fileReads(value), `${name}: premise — the file reads it`).toBe(true);
         valid++;
       } else if (/^line-(invalid-.+|tampered)$/.test(name)) {
-        expect(r.ok, `${name}: refused`).toBe(false);
-        if (!r.ok) expect(r.message, name).toMatch(/^line 1: /);
+        expect(r, `${name}: unreadable, dropped`).toEqual({ ok: false, why: "shape" });
+        expect(fileReads(value), `${name}: premise — the file refuses it`).toBe(false);
         invalid++;
       } else if (/^line-secret-/.test(name)) {
-        expect(r.ok, `${name}: refused`).toBe(false);
-        if (!r.ok) expect(r.message, name).toMatch(new RegExp(`^line 1: \\w+ is secret-shaped \\(${SECRET_RULE[name]}\\)$`));
+        expect(r.ok, `${name}: dropped`).toBe(false);
+        expect(r.ok ? null : r.why === "secret" ? r.rule : r.why, name).toBe(SECRET_RULE[name]);
+        expect(fileReads(value), `${name}: premise — the file's shape admits it`).toBe(true);
         secret++;
       } else expect.fail(`${name}: an unrouted line fixture`);
     }
-    expect(valid).toBe(19);
-    expect(invalid).toBe(13);
+    expect(valid).toBe(22);
+    expect(invalid).toBe(16);
     expect(secret).toBe(6);
-    expect(valid + invalid + secret).toBe(38);
+    expect(valid + invalid + secret).toBe(44);
   });
 
-  it("S1 is the SENDING Bearer: its vector passes under another Bearer (a plain word), and is refused under its own", () => {
+  it("S1 is the SENDING Bearer: its vector is ok under another Bearer (a plain word), and dropped as S1 under its own", () => {
     const text = JSON.stringify(fixture("line-secret-sending-tok"));
-    expect(validateRecordLines([text], OTHER_TOK).ok).toBe(true);
-    expect(validateRecordLines([text], SENDING_TOK)).toEqual({ ok: false, message: "line 1: state is secret-shaped (S1)" });
+    expect(screenRecordLine(text, OTHER_TOK).ok).toBe(true);
+    const own = screenRecordLine(text, SENDING_TOK);
+    expect(own.ok === false && own.why === "secret" ? own.rule : null).toBe("S1");
   });
 
   it("S1 in all three of capture's forms (formsOf), worked by hand: raw, percent-encoded and form-encoded", () => {
@@ -125,60 +134,63 @@ describe("validateRecordLines (§5): the allow-list, then S1–S5, whole body or
     expect(tripping).toBeGreaterThanOrEqual(17);
   });
 
-  it("every near miss — capture's own scrubbed output — is ADMITTED whole (review fix 1, re-review fixes 1–2)", () => {
+  it("every near miss — capture's own scrubbed output — is ok (review fix 1, re-review fixes 1–2), counted", () => {
     const near = lineNames.filter((n) => n.startsWith("line-valid-scrubbed-"));
-    const r = validateRecordLines(near.map((n) => JSON.stringify(fixture(n))), OTHER_TOK);
-    expect(r.ok).toBe(true);
+    let ok = 0;
+    for (const n of near) if (screenRecordLine(JSON.stringify(fixture(n)), OTHER_TOK).ok) ok++;
     expect(near).toHaveLength(10);   // the nine near misses and capture's cases 21/24 (`-vectors`)
+    expect(ok).toBe(10);
   });
 
-  it("one bad line refuses the WHOLE body; the message names the line number, the key and the rule — never the value", () => {
-    const good = JSON.stringify(fixture("line-valid"));
-    const bad = fixture("line-secret-ingest-url");
-    const r = validateRecordLines([good, good, JSON.stringify(bad), good], OTHER_TOK);
-    expect(r).toEqual({ ok: false, message: "line 3: message is secret-shaped (S2)" });
-    expect(r.ok ? "" : r.message).not.toContain("FAKE-STREAM-KEY");
-    // Shape before secrets: a body with a shape error on line 4 and a secret on line 2 answers the shape error.
-    const both = validateRecordLines([good, JSON.stringify(bad), good, JSON.stringify({ ...fixture("line-valid"), cred: "x" })], OTHER_TOK);
-    expect(both).toEqual({ ok: false, message: "line 4: key cred is not on the allow-list" });
-  });
-
-  it("a line that is not JSON, or JSON that is not an object, is refused by line number; a value is never quoted", () => {
-    const good = JSON.stringify(fixture("line-valid"));
-    const cases: [string, string][] = [
-      ["{not json", "line 2: not JSON"],
-      ["[1,2]", "line 2: not a JSON object"],
-      ["null", "line 2: not a JSON object"],
-      ["\"FAKE-SECRET\"", "line 2: not a JSON object"],
+  it("not JSON, JSON that is not an object, an off-class value, a missing key and an unlisted key are each unreadable — and the verdict carries no value and no key name, counted", () => {
+    const valid = fixture("line-valid");
+    const cases: string[] = [
+      "{not json FAKE-SECRET", "[1,2]", "null", "\"FAKE-SECRET\"",
+      JSON.stringify({ ...valid, transport: "two words FAKE-SECRET" }),
+      JSON.stringify({ at: "2026-10-11T21:19:03.123Z" }),
+      JSON.stringify(fixture("line-invalid-unlisted-scalar")),
+      JSON.stringify({ ...valid, "Bearer FAKE-SECRET-0123456789abcdef": 1 }),
     ];
     let checked = 0;
-    for (const [text, message] of cases) {
-      expect(validateRecordLines([good, text], OTHER_TOK), text).toEqual({ ok: false, message });
+    for (const text of cases) {
+      const r = screenRecordLine(text, OTHER_TOK);
+      expect(r, text).toEqual({ ok: false, why: "shape" });
+      expect(JSON.stringify(r)).not.toMatch(/FAKE-SECRET|battery|transport/);
       checked++;
     }
-    expect(checked).toBe(4);
-    // Off-class and missing keys name the key only.
-    expect(validateRecordLines([JSON.stringify({ ...fixture("line-valid"), transport: "two words FAKE" })], OTHER_TOK))
-      .toEqual({ ok: false, message: "line 1: key transport is off its class" });
-    expect(validateRecordLines([JSON.stringify({ at: "2026-10-11T21:19:03.123Z" })], OTHER_TOK))
-      .toEqual({ ok: false, message: "line 1: key kind is missing" });
+    expect(checked).toBe(8);
+    // A secret verdict carries the parsed line (attribution reads it) but no rule ever names the value.
+    const secret = screenRecordLine(JSON.stringify(fixture("line-secret-ingest-url")), OTHER_TOK);
+    expect(secret.ok === false && secret.why === "secret" ? secret.rule : null).toBe("S2");
   });
 
-  it("the contract's own 422 example (`valid-invalid`: an unlisted `battery` on line 3) is the message the server writes", () => {
-    const want = fixture("valid-invalid");
-    const good = JSON.stringify(fixture("line-valid"));
-    const r = validateRecordLines([good, good, JSON.stringify(fixture("line-invalid-unlisted-scalar"))], OTHER_TOK);
-    expect(want.code).toBe("invalid");
-    expect(r).toEqual({ ok: false, message: want.message });
-    // A key that does not look like a key is not echoed either: the refusal says only that a key is unlisted.
-    const odd = validateRecordLines([JSON.stringify({ ...fixture("line-valid"), "Bearer FAKE-0123456789abcdef": 1 })], OTHER_TOK);
-    expect(odd).toEqual({ ok: false, message: "line 1: a key is not on the allow-list" });
-  });
-
-  it("§0.1's premise, as capture's writers write: an ISO `at` with ms, no `level` for info, field_kind, a masked plain value — admitted; an epoch `at` refused", () => {
+  it("§0.1's premise, as capture's writers write: an ISO `at` with ms, no `level` for info, field_kind, a masked plain value — ok; an epoch `at` unreadable", () => {
     const line = { at: "2026-10-11T21:19:03.123Z", kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 };
-    expect(validateRecordLines([JSON.stringify(line)], OTHER_TOK).ok).toBe(true);
-    expect(validateRecordLines([JSON.stringify({ ...line, at: 1791797943123 })], OTHER_TOK)).toEqual({ ok: false, message: "line 1: key at is off its class" });
+    expect(screenRecordLine(JSON.stringify(line), OTHER_TOK).ok).toBe(true);
+    expect(screenRecordLine(JSON.stringify({ ...line, at: 1791797943123 }), OTHER_TOK)).toEqual({ ok: false, why: "shape" });
+  });
+
+  it("the five fields capture added (ebac190): each is read in its class — rejoin-retry, preview-size and record.send ok as capture writes them; a negative wait, a fractional size and a numeric 16:9 flag unreadable", () => {
+    const written: [Json, boolean][] = [
+      [fixture("line-valid-rejoin-retry"), true],
+      [fixture("line-valid-preview-size"), true],
+      [fixture("line-valid-record-send"), true],
+      [{ ...fixture("line-valid-preview-size"), pickSource: "vendor" }, true],
+      [{ ...fixture("line-valid-preview-size"), pickSource: "***" }, true],
+      [{ ...fixture("line-valid-record-send"), bytes: 0, status: null }, true],
+      [fixture("line-invalid-retryMs-negative"), false],
+      [fixture("line-invalid-bytes-fraction"), false],
+      [fixture("line-invalid-pickAspect16x9-number"), false],
+      [{ ...fixture("line-valid-rejoin-retry"), failures: null }, false],
+      [{ ...fixture("line-valid-preview-size"), pickSource: "ours vendor" }, false],
+    ];
+    let checked = 0;
+    for (const [line, ok] of written) {
+      expect(screenRecordLine(JSON.stringify(line), OTHER_TOK).ok, JSON.stringify(line)).toBe(ok);
+      expect(fileReads(line), `the file agrees: ${JSON.stringify(line)}`).toBe(ok);
+      checked++;
+    }
+    expect(checked).toBe(11);
   });
 });
 
@@ -194,6 +206,9 @@ const device = (kind = "thermal"): AttributableLine => ({ kind });
 const sidLine = (sid: string | null): AttributableLine => ({ kind: "live", sid });
 const unpaired = (): AttributableLine => ({ kind: "unpaired" });
 const ended = (): AttributableLine => ({ kind: "ended" });
+/** Q7, as capture answered it (2026-10-12): the five kinds that end a pairing window. Typed here, never read off the
+ *  module. */
+const CLOSING_KINDS = ["unpaired", "ended", "pair-refused", "engine-error", "reset"] as const;
 /** The sending code's context: Y unless named. `sessionsOfCode` is what A1 reads at upload time (pairing-based, Q9). */
 const asY = { sessionsOfCode: new Set([S_Y]), tagsOfCode: new Set([TAG_Y]) };
 const asX = { sessionsOfCode: new Set([S_X]), tagsOfCode: new Set([TAG_X]) };
@@ -251,6 +266,38 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
     expect(lines).toBeGreaterThan(40);
   });
 
+  it("Q7 (capture's answer, 2026-10-12): a no-sid line after `pair-refused`, `engine-error` or `reset` is DROPPED — the closing line is the window's; a uuid sid line after it is still A1's", () => {
+    let checked = 0;
+    for (const kind of ["pair-refused", "engine-error", "reset"]) {
+      expect(attributeLines([pair(TAG_Y), device(), { kind }, device("network")], asY), kind).toEqual([true, true, true, false]);
+      expect(attributeLines([pair(TAG_Y), { kind }, sidLine(null)], asY), `${kind}, then a null sid`).toEqual([true, true, false]);
+      expect(attributeLines([pair(TAG_Y), { kind }, sidLine(S_Y)], asY), `${kind}, then the sender's sid`).toEqual([true, true, true]);
+      // The window is closed, not poisoned: the sender's next pair opens a new one.
+      expect(attributeLines([pair(TAG_Y), { kind }, device(), pair(TAG_Y), device()], asY), `${kind}, then a new pair`).toEqual([true, true, false, true, true]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The same holds for all five of Q7's kinds — the two the spec named first and the three capture added.
+    let all = 0;
+    for (const kind of CLOSING_KINDS) {
+      expect(attributeLines([pair(TAG_Y), { kind }, device()], asY), kind).toEqual([true, true, false]);
+      all++;
+    }
+    expect(all).toBe(5);
+    // Positive pair: a kind that closes nothing (a vendor log line) keeps the window open.
+    expect(attributeLines([pair(TAG_Y), { kind: "vendor-log" }, device()], asY)).toEqual([true, true, true]);
+  });
+
+  it("an UNREADABLE line (null) is dropped and closes the window before it — it may be another code's pair — while A1 still judges uuid sids after it", () => {
+    expect(attributeLines([null], asY)).toEqual([false]);
+    expect(attributeLines([pair(TAG_Y), device(), null, device()], asY)).toEqual([true, true, false, false]);
+    expect(attributeLines([pair(TAG_Y), null, sidLine(S_Y), sidLine(null)], asY)).toEqual([true, false, true, false]);
+    // The leak it guards: Y's window, then X's pair arrives MALFORMED, then X's device lines — none of X's are kept.
+    expect(attributeLines([pair(TAG_Y), device(), null, device(), device("network")], asY)).toEqual([true, true, false, false, false]);
+    // Not a poison pill: Y's next readable pair opens a window again.
+    expect(attributeLines([pair(TAG_Y), null, pair(TAG_Y), device()], asY)).toEqual([true, false, true, true]);
+  });
+
   it("CROSS-CODE (the regression): club X's whole record sent under club Y's token keeps NOTHING", () => {
     const xRecord = [device(), pair(TAG_X), device(), sidLine(S_X), { kind: "live", sid: S_X, level: "warn" }, unpaired(), device()];
     const kept = attributeLines(xRecord, asY);
@@ -261,26 +308,70 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
   });
 });
 
-describe("attributeLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
-  /** Three codes, each a toke from capture's vectors with its known tag (never computed here), two sessions each. */
+// ---------------------------------------------------------------------------------------------------------------
+// keptLines — the owner's ruling RL (2026-10-12): a bad line is dropped, never the body refused.
+// ---------------------------------------------------------------------------------------------------------------
+const asLine = (l: AttributableLine): CaptureRecordLine => ({ at: AT, ...l }) as CaptureRecordLine;
+const ok = (l: AttributableLine): ScreenedLine => ({ ok: true, line: asLine(l) });
+const secretOf = (l: AttributableLine): ScreenedLine => ({ ok: false, why: "secret", rule: "S2", line: asLine(l) });
+const unreadable: ScreenedLine = { ok: false, why: "shape" };
+
+describe("keptLines (owner ruling RL): attribution, then every bad line dropped — and nothing else changes", () => {
+  it("the empty case first, then all-bad: nothing kept, no throw", () => {
+    expect(keptLines([], asY)).toEqual([]);
+    expect(keptLines([unreadable, secretOf(pair(TAG_Y)), unreadable], asY)).toEqual([false, false, false]);
+  });
+
+  it("a SECRET line is read like any other and then dropped: it neither breaks the sender's window nor is kept", () => {
+    expect(keptLines([ok(pair(TAG_Y)), ok(device()), secretOf(device("vendor-log")), ok(device())], asY)).toEqual([true, true, false, true]);
+    // The sender's own pair, secret-shaped elsewhere in it, still opens the window — the pair line itself is dropped.
+    expect(keptLines([secretOf(pair(TAG_Y)), ok(device())], asY)).toEqual([false, true]);
+    // A foreign pair, secret-shaped, still closes the sender's window.
+    expect(keptLines([ok(pair(TAG_Y)), secretOf(pair(TAG_X)), ok(device())], asY)).toEqual([true, false, false]);
+    // A secret line carrying the sender's own sid: A1 would keep it, the ruling drops it.
+    expect(keptLines([secretOf(sidLine(S_Y))], asY)).toEqual([false]);
+  });
+
+  it("an UNREADABLE line is dropped and is a boundary; the lines around it are judged as usual", () => {
+    expect(keptLines([ok(pair(TAG_Y)), ok(device()), unreadable, ok(device()), ok(sidLine(S_Y))], asY)).toEqual([true, true, false, false, true]);
+  });
+
+  it("the drop is the ONLY effect: with every bad line removed, the good lines' verdicts are attribution's on the readable sequence", () => {
+    const seq: ScreenedLine[] = [ok(pair(TAG_Y)), ok(device()), secretOf(device()), ok(sidLine(S_Y)), ok(sidLine(S_X)), ok(unpaired()), ok(device())];
+    const kept = keptLines(seq, asY);
+    const plain = attributeLines(seq.map((s) => (s.ok || s.why === "secret" ? s.line : null)), asY);
+    let compared = 0;
+    seq.forEach((s, i) => {
+      expect(kept[i], `line ${i + 1}`).toBe(s.ok ? plain[i] : false);
+      compared++;
+    });
+    expect(compared).toBe(7);
+    expect(kept.filter(Boolean)).toHaveLength(4);
+  });
+});
+
+describe("keptLines — model-based sequences (TEST-STRATEGY rule 10)", () => {
+  /** Three codes, each a tok from capture's vectors with its known tag (never computed here), two sessions each. */
   const CODES = [
     { tag: "c980ff38", sessions: ["a0000000-0000-4000-8000-000000000001", "a0000000-0000-4000-8000-000000000002"] },
     { tag: "b24bb97b", sessions: ["b0000000-0000-4000-8000-000000000001", "b0000000-0000-4000-8000-000000000002"] },
     { tag: "2cc4e08d", sessions: ["c0000000-0000-4000-8000-000000000001", "c0000000-0000-4000-8000-000000000002"] },
   ];
-  type Owned = { line: AttributableLine; owner: number | null };
-  /** An item the phone logs, its owner decided by the generator: a device line belongs to the window it falls in (or
-   *  none), a sid line to its session's code (a null-pairing or masked sid to none). */
+  /** `owner` is the code whose record the line belongs in, decided by the generator; null = no record keeps it. */
+  type Owned = { line: ScreenedLine; owner: number | null };
   const item = fc.oneof(
     fc.constant({ t: "device" as const }),
     fc.record({ t: fc.constant("sid" as const), code: fc.integer({ min: 0, max: 2 }), i: fc.integer({ min: 0, max: 1 }) }),
     fc.constant({ t: "null-pairing" as const }),
     fc.constant({ t: "masked" as const }),
+    fc.constant({ t: "unreadable" as const }),
+    fc.constant({ t: "secret" as const }),
   );
   const segment = fc.record({
     code: fc.integer({ min: 0, max: 2 }),
+    secretPair: fc.boolean(),
     body: fc.array(item, { maxLength: 4 }),
-    close: fc.constantFrom("unpaired", "ended", "none"),
+    close: fc.constantFrom(...CLOSING_KINDS, "none"),
     after: fc.array(item, { maxLength: 3 }),
   });
   const phone = fc.record({ pre: fc.array(item, { maxLength: 3 }), segments: fc.array(segment, { maxLength: 4 }), sender: fc.integer({ min: 0, max: 2 }) });
@@ -291,34 +382,49 @@ describe("attributeLines — model-based sequences (TEST-STRATEGY rule 10)", () 
 
   function build(p: Phone): Owned[] {
     const out: Owned[] = [];
-    const emit = (it: Item, windowOwner: number | null) => {
-      if (it.t === "device") out.push({ line: { kind: "thermal" }, owner: windowOwner });
-      else if (it.t === "sid") out.push({ line: { kind: "live", sid: CODES[it.code]!.sessions[it.i]! }, owner: it.code });
-      else if (it.t === "null-pairing") out.push({ line: { kind: "live", sid: S_NULL_PAIRING }, owner: null });
-      else out.push({ line: { kind: "live", sid: "***" }, owner: null });
+    /** Emits one item inside the window owned by `w` (null: no window); returns the window owner after it. */
+    const emit = (it: Item, w: number | null): number | null => {
+      if (it.t === "device") out.push({ line: ok({ kind: "thermal" }), owner: w });
+      else if (it.t === "sid") out.push({ line: ok({ kind: "live", sid: CODES[it.code]!.sessions[it.i]! }), owner: it.code });
+      else if (it.t === "null-pairing") out.push({ line: ok({ kind: "live", sid: S_NULL_PAIRING }), owner: null });
+      else if (it.t === "masked") out.push({ line: ok({ kind: "live", sid: "***" }), owner: null });
+      else if (it.t === "secret") out.push({ line: secretOf({ kind: "vendor-log" }), owner: null });
+      else {
+        out.push({ line: unreadable, owner: null });
+        return null;   // the model's own reading of the rule: an unreadable line ends the window it falls in
+      }
+      return w;
     };
-    for (const it of p.pre) emit(it, null);
+    let w: number | null = null;
+    for (const it of p.pre) w = emit(it, w);
     for (const s of p.segments) {
-      out.push({ line: { kind: "pair", tokenTag: CODES[s.code]!.tag }, owner: s.code });
-      for (const it of s.body) emit(it, s.code);
+      const pairLine = { kind: "pair", tokenTag: CODES[s.code]!.tag };
+      out.push({ line: s.secretPair ? secretOf(pairLine) : ok(pairLine), owner: s.secretPair ? null : s.code });
+      w = s.code;
+      for (const it of s.body) w = emit(it, w);
       if (s.close === "none") continue;   // an open window runs to the next pair: no "after" lines outside it
-      out.push({ line: { kind: s.close }, owner: s.code });
-      for (const it of s.after) emit(it, null);
+      out.push({ line: ok({ kind: s.close }), owner: w });
+      w = null;
+      for (const it of s.after) w = emit(it, w);
     }
     return out;
   }
 
-  it("after EVERY step: kept lines are all the sender's, every sender's line is kept, kept + dropped = received; runs with kept > 0 and with dropped > 0 both seen", () => {
-    let runs = 0, keptRuns = 0, droppedRuns = 0, steps = 0;
+  it("after EVERY step: kept lines are all the sender's and none is bad, every good sender's line is kept, kept + dropped = received; runs with kept, dropped, unreadable, secret and every closing kind all seen", () => {
+    let runs = 0, keptRuns = 0, droppedRuns = 0, steps = 0, unreadableRuns = 0, secretRuns = 0;
+    const closers = new Set<string>();
     fc.assert(fc.property(phone, (p) => {
       const lines = build(p);
       const ctx = { sessionsOfCode: new Set(CODES[p.sender]!.sessions), tagsOfCode: new Set([CODES[p.sender]!.tag]) };
       let lastKept = 0, lastDropped = 0;
       for (let n = 0; n <= lines.length; n++) {
         const prefix = lines.slice(0, n);
-        const kept = attributeLines(prefix.map((o) => o.line), ctx);
+        const kept = keptLines(prefix.map((o) => o.line), ctx);
         expect(kept).toHaveLength(n);
-        prefix.forEach((o, i) => expect(kept[i], `line ${i + 1} (${o.line.kind}) owner ${o.owner} sender ${p.sender}`).toBe(o.owner === p.sender));
+        prefix.forEach((o, i) => {
+          expect(kept[i], `line ${i + 1} owner ${o.owner} sender ${p.sender}`).toBe(o.owner === p.sender);
+          if (kept[i]) expect(o.line.ok, `line ${i + 1}: a kept line is never a bad one`).toBe(true);
+        });
         lastKept = kept.filter(Boolean).length;
         lastDropped = kept.filter((k) => !k).length;
         expect(lastKept + lastDropped).toBe(n);
@@ -327,10 +433,16 @@ describe("attributeLines — model-based sequences (TEST-STRATEGY rule 10)", () 
       runs++;
       if (lastKept > 0) keptRuns++;
       if (lastDropped > 0) droppedRuns++;
+      if (lines.some((o) => !o.line.ok && o.line.why === "shape")) unreadableRuns++;
+      if (lines.some((o) => !o.line.ok && o.line.why === "secret")) secretRuns++;
+      for (const o of lines) if (o.line.ok && CLOSING_KINDS.includes(o.line.line.kind as (typeof CLOSING_KINDS)[number])) closers.add(o.line.line.kind);
     }), { numRuns: 400, seed: 20261012 });
     expect(runs).toBe(400);
     expect(keptRuns, "runs with kept > 0").toBeGreaterThan(0);
     expect(droppedRuns, "runs with dropped > 0").toBeGreaterThan(0);
+    expect(unreadableRuns, "runs with an unreadable line").toBeGreaterThan(0);
+    expect(secretRuns, "runs with a secret line").toBeGreaterThan(0);
+    expect([...closers].sort(), "every closing kind generated").toEqual([...CLOSING_KINDS].sort());
     expect(steps).toBeGreaterThan(runs);
   });
 });

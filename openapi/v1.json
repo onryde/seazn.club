@@ -44316,7 +44316,7 @@
     },
     "/api/v1/capture/codes/{code}/records": {
       "post": {
-        "summary": "The operator's Send record (Bearer: the stream code's tok; spec 2026-10-12, capture-record.v1). The body is NDJSON (application/x-ndjson, `Content-Encoding: gzip` or none), ONE line per the request schema: at most 1000 non-empty lines and 1 MB decompressed. Any phone holding a currently valid tok of the code may send (R4): an active or finishing code, an ended one while the fixture's session opened before the end is still open, and for 24 h after. Lines of another code are dropped before storage (A1 by session, A2 by pairing window); a dropped line is never stored, logged or echoed. 201 {ref, kept, dropped} — a record whose every line was dropped is still 201 with kept 0. 401 code_ended, 404 not_a_stream_code, 413 too_large, 422 invalid (not NDJSON, a line that is not an object, no lines, a key off capture's allow-list, a value off its class, a secret-shaped value, an unsupported Content-Encoding — the message names the line, key and rule, never the value), 429 rate_limited with Retry-After (10 records an hour per code, a bucket of its own), 503 unavailable. Served private, no-store. Not idempotent. Never 410, never replaced",
+        "summary": "The operator's Send record (Bearer: the stream code's tok; spec 2026-10-12, capture-record.v1). The body is NDJSON (application/x-ndjson, `Content-Encoding: gzip` or none), ONE line per the request schema: at most 1000 non-empty lines and 1 MB decompressed. Any phone holding a currently valid tok of the code may send (R4): an active or finishing code, an ended one while the fixture's session opened before the end is still open, and for 24 h after. Lines of another code are dropped before storage (A1 by session, A2 by pairing window), and so is every bad line — a key off capture's allow-list, a value off its class, a line that is not a JSON object or not UTF-8, a secret-shaped value — never the body refused (owner ruling, 2026-10-12); a dropped line is never stored, logged or echoed. 201 {ref, kept, dropped} — a record whose every line was dropped is still 201 with kept 0. 401 code_ended, 404 not_a_stream_code, 413 too_large, 422 invalid (a body that cannot be read as lines — an unsupported Content-Encoding, a gzip that will not decode — or one with no non-empty line), 429 rate_limited with Retry-After (10 records an hour per code, a bucket of its own), 503 unavailable. Served private, no-store. Not idempotent. Never 410, never replaced",
         "tags": [
           "capture"
         ],
@@ -44767,6 +44767,23 @@
                     ]
                   },
                   "phase": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pickSource": {
                     "anyOf": [
                       {
                         "type": "string",
@@ -45706,6 +45723,24 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "failures": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "retryMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "pickAspect16x9": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

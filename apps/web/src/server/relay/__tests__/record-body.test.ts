@@ -19,7 +19,7 @@ const lines = (n: number, eol = "\n") => Array.from({ length: n }, (_, i) => `{"
 const oneLineOf = (bytes: number) => "x".repeat(bytes);
 
 describe("readRecordBody (§5)", () => {
-  it("the empty case first: no body and an empty body read as zero lines (the validator answers 422 for those)", async () => {
+  it("the empty case first: no body and an empty body read as zero lines (the use-case answers 422 for those, P10)", async () => {
     expect(await readRecordBody(post(null))).toEqual({ ok: true, lines: [], bodyBytes: 0 });
     expect(await readRecordBody(post(""))).toEqual({ ok: true, lines: [], bodyBytes: 0 });
     expect(await readRecordBody(post("\n\n\r\n"))).toEqual({ ok: true, lines: [], bodyBytes: 4 });
@@ -81,7 +81,23 @@ describe("readRecordBody (§5)", () => {
     expect(r).toMatchObject({ ok: false, code: "too_large", inflatedBytes: 0 });
   });
 
-  it("an encoding that is not gzip, a gzip that will not decode, and bytes that are not UTF-8 are invalid — counted", async () => {
+  it("a line that is not UTF-8 reads as null ALONE (owner ruling RL: the screen drops it) — the lines around it intact, a CRLF one too; a BOM opening the body is skipped, a BOM inside a line stays", async () => {
+    const bad = Buffer.from([0x7b, 0xff, 0xfe, 0x7d]);                 // `{`, two bytes UTF-8 never writes, `}`
+    const truncated = Buffer.from([0x7b, 0x22, 0xe6, 0x97, 0x22, 0x7d]); // `{"` and the first two of 日's three bytes
+    const body = Buffer.concat([Buffer.from("{\"a\":1}\n"), bad, Buffer.from("\r\n{\"b\":\"日本\"}\n"), truncated, Buffer.from("\n{\"c\":3}")]);
+    expect(await readRecordBody(post(body))).toEqual({ ok: true, lines: ["{\"a\":1}", null, "{\"b\":\"日本\"}", null, "{\"c\":3}"], bodyBytes: body.length });
+    // Only bad lines: still a body of lines (the use-case stores a record with kept 0), never a 422.
+    expect(await readRecordBody(post(bad))).toEqual({ ok: true, lines: [null], bodyBytes: 4 });
+    // The BOM: skipped once at the body's start (as a whole-body decode skips it), kept inside a later line.
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    expect(await readRecordBody(post(Buffer.concat([bom, Buffer.from("{\"a\":1}\n"), bom, Buffer.from("{\"b\":2}")]))))
+      .toEqual({ ok: true, lines: ["{\"a\":1}", "﻿{\"b\":2}"], bodyBytes: 21 });
+    expect(await readRecordBody(post(Buffer.concat([bom, Buffer.from("\n")])))).toEqual({ ok: true, lines: [], bodyBytes: 4 });
+    // A gzip carrying a bad line inflates and splits the same way.
+    expect(await readRecordBody(post(gzipSync(body), { "content-encoding": "gzip" }))).toMatchObject({ ok: true, lines: ["{\"a\":1}", null, "{\"b\":\"日本\"}", null, "{\"c\":3}"] });
+  });
+
+  it("an encoding that is not gzip and a gzip that will not decode are invalid (the body cannot be read as lines at all) — counted", async () => {
     const good = Buffer.from(lines(2));
     const gz = gzipSync(good);
     const cases: [string, Request][] = [
@@ -92,14 +108,13 @@ describe("readRecordBody (§5)", () => {
       ["corrupt gzip", post(Buffer.from("not gzip at all"), { "content-encoding": "gzip" })],
       ["truncated gzip", post(gz.subarray(0, gz.length - 6), { "content-encoding": "gzip" })],
       ["empty gzip body", post("", { "content-encoding": "gzip" })],
-      ["not UTF-8", post(Buffer.from([0x7b, 0xff, 0xfe, 0x7d]))],
     ];
     let checked = 0;
     for (const [name, req] of cases) {
       expect(await readRecordBody(req), name).toMatchObject({ ok: false, code: "invalid" });
       checked++;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(7);
   });
 
   it("the gzip header is matched as HTTP says (case-insensitive, trimmed); an empty header is no header", async () => {

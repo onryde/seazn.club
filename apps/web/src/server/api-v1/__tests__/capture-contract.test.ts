@@ -54,7 +54,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "09582e858547dde50c43c9e5e2fff0d77d547716a5117787848b4dbe967a4745",
+  "capture-record.v1.json": "ee52b024e897a9ca67f45e79d0b561d88fb45503ecf5fd9bcd21d2df3ff231cf",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -271,7 +271,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
-  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 52 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 58 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -279,31 +279,37 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 // ---------------------------------------------------------------------------------------------------------------
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 38], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 44], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
-/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 7ea8f63, list for list: the rulebook the
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190 (branch feat/s1-d3-fixes), list for list: the rulebook the
  *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
  *  bump here (the spec's §Body). */
 const ALLOW_LIST = {
   reserved: ["at", "kind", "level"],
   plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
     "failure", "field", "from", "host", "intent", "key", "kind", "lastEnd", "lock", "mode", "ms", "notReady", "op", "phase",
-    "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side", "sid", "site",
-    "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
+    "pickSource", "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side",
+    "sid", "site", "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
   publicUrl: ["url", "playbackUrl", "overlayUrl"],
   text: ["message", "problems"],
   never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
-  scalars: ["audioFps", "camera", "counted", "encodeListed", "exitAtMs", "failed", "gapMs", "granted", "headroom", "held",
-    "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs",
-    "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
-    "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive"],
+  scalars: ["audioFps", "bytes", "camera", "counted", "encodeListed", "exitAtMs", "failed", "failures", "gapMs", "granted",
+    "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on",
+    "outageMs", "pickAspect16x9", "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "retryMs",
+    "sameArea", "sent", "sinceLastMs", "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps",
+    "wasLive"],
 };
+/** The scalars the allow-list's own REASONS narrow (as its reason narrows tokenTag), typed from capture's writers at
+ *  ebac190 and the coordinator's relay of the capture team's answer (2026-10-12): `bytes` is `record.send`'s
+ *  `TextEncoder` length, `failures` a Kotlin Int count, `retryMs` `Rejoin.delayAfter`'s Long, `pickAspect16x9` a
+ *  Kotlin Boolean — none ever null. */
+const NARROWED_SCALARS: Record<string, "count" | "boolean"> = { bytes: "count", failures: "count", retryMs: "count", pickAspect16x9: "boolean" };
 /** The spec's answer table (§Answers): every refusal POST …/records answers, with its status. Never `replaced` (R4). */
 const SPEC_RECORD_REFUSALS: Record<string, number> = {
   code_ended: 401, not_a_stream_code: 404, too_large: 413, invalid: 422, rate_limited: 429, unavailable: 503,
 };
 /** The secret-shaped rules (spec §5, S1–S5): each `line-secret-*` fixture is a line the file's shape ADMITS and the
- *  server refuses on one rule, which the root description states in these words. S2–S5 are also the file's own
+ *  server DROPS on one rule (owner ruling RL, 2026-10-12: dropped, never the body refused), which the root description states in these words. S2–S5 are also the file's own
  *  `$defs.secretS<n>`; S1 needs the Bearer, so it is prose only, and its vector assumes this Bearer (the route's test
  *  sends it). */
 const RECORD_SENDING_TOK = "fake-tok-0000000000000";
@@ -510,7 +516,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 52);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 58);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1122,7 +1128,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       if (/^valid(-.+)?$/.test(kind)) admitted = true;
       else if (/^(invalid-.+|tampered(-.+)?)$/.test(kind)) admitted = false;
       else if (prefix === "line-" && /^secret-.+$/.test(kind)) {
-        // The file's line shape admits it; the server refuses it on the one rule its entry names, which the root states.
+        // The file's line shape admits it; the server drops it on the one rule its entry names, which the root states.
         const entry = RECORD_SERVER_ONLY[name];
         expect(entry, `${name}: a secret-shaped vector names its rule`).toBeDefined();
         expect(root.description, `${name}: the root states "${entry![1]}"`).toContain(entry![1]);
@@ -1138,7 +1144,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(38 + 6 + 8);
+    expect(names).toHaveLength(44 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
@@ -1218,7 +1224,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(19);
+    expect(validLines).toBe(22);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
@@ -1237,7 +1243,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars];
     // Premise: the lists are disjoint once `kind` is renamed, so the key count is their sum.
     expect(new Set(expected).size, "premise: disjoint lists").toBe(lists.reduce((n, l) => n + l.length, 0));
-    expect(expected).toHaveLength(3 + 47 + 3 + 2 + 37);
+    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 41);
     expect(Object.keys(root.properties as Json).sort()).toEqual([...expected].sort());
     expect(root.additionalProperties).toBe(false);
     expect([...(root.required as string[])].sort()).toEqual(["at", "kind"]);
@@ -1276,10 +1282,20 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       for (const v of ["free text, with spaces / and ? and =", "", "***", ...SCALARS]) probe(k, v, true);
       for (const v of [{}, ["a"]]) probe(k, v, false);
     }
-    for (const k of ALLOW_LIST.scalars) {
+    for (const k of ALLOW_LIST.scalars.filter((s) => !(s in NARROWED_SCALARS))) {
       for (const v of SCALARS) probe(k, v, true);
       for (const v of ["word", "***", {}]) probe(k, v, false);
     }
+    // The four narrowed scalars: a count is an integer of at least 0 (the safe-integer ceiling is JSON's own); the
+    // yes/no a boolean only. Neither admits null, the mask or a word.
+    const narrowed = Object.entries(NARROWED_SCALARS);
+    for (const [k, cls] of narrowed) {
+      const admits = cls === "count" ? [0, 1, 4000, 48213, Number.MAX_SAFE_INTEGER] : [true, false];
+      const refuses = cls === "count" ? [-1, 0.5, 48213.5, Number.MAX_SAFE_INTEGER + 1, true, null, "4000", "***", {}] : [0, 1, null, "true", "***", {}];
+      for (const v of admits) probe(k, v, true);
+      for (const v of refuses) probe(k, v, false);
+    }
+    expect(narrowed.map(([k]) => k).every((k) => ALLOW_LIST.scalars.includes(k)), "narrowed keys are capture's scalars").toBe(true);
     // The line's own keys. `at` is the beat's R5 shape (review fix 7): any offset, calendar-exact, seconds required,
     // never epoch milliseconds (spec §0.1) — capture's writers send Z with milliseconds; `kind` a word or the mask;
     // `level` one of four or the mask, and optional.
@@ -1299,11 +1315,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // refused whatever they hold, the mask included.
     const unlisted = [...ALLOW_LIST.never, "battery", "cred", "field_at"];
     for (const k of unlisted) for (const v of ["***", 3, null]) probe(k, v, false);
-    expect(plain).toHaveLength(45);
+    expect(plain).toHaveLength(46);
     expect(unlisted).toHaveLength(11);
-    // plain 45 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 37 × 8, at 12, kind 7, level 9,
-    // unlisted 11 × 3.
-    expect(probes).toBe(45 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 12 + 7 + 9 + 11 * 3);
+    // plain 46 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 37 × 8, the narrowed counts 3 × 14 and
+    // yes/no 1 × 8, at 12, kind 7, level 9, unlisted 11 × 3.
+    expect(probes).toBe(46 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 3 * 14 + 8 + 12 + 7 + 9 + 11 * 3);
   });
 
   it("capture-record.v1 answers: 201 is the closed {ref, kept, dropped} with an upper-case Crockford ref; every refusal word of the spec's table has a fixture the file admits; replaced is none of them (R4)", () => {

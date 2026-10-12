@@ -213,14 +213,15 @@ const publicUrl = () => z.union([RecordPublicUrl, ...Scalar]).optional();
 const text = () => z.union([z.string(), ...Scalar]).optional();
 const scalar = () => z.union([...Scalar]).optional();
 
-/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 7ea8f63, class by class (§5). `kind` and
- *  `sid` and `tokenTag` are plain keys the line narrows below; a plain key named like one of the line's own keys is
- *  written `field_<key>`. A key capture adds is a contract bump here, in step with capture's change. */
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190, class by class (§5). `kind` and
+ *  `sid` and `tokenTag` are plain keys the line narrows below, as are four scalars (RECORD_NARROWED_SCALARS); a plain
+ *  key named like one of the line's own keys is written `field_<key>`. A key capture adds is a contract bump here, in
+ *  step with capture's change. */
 const RECORD_PLAIN_KEYS = [
   "action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
   "failure", "field", "from", "host", "intent", "key", "field_kind", "lastEnd", "lock", "mode", "ms", "notReady", "op",
-  "phase", "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side", "site",
-  "slot", "source", "startFailed", "state", "status", "tag", "to", "transport", "word",
+  "phase", "pickSource", "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed",
+  "side", "site", "slot", "source", "startFailed", "state", "status", "tag", "to", "transport", "word",
 ] as const;
 const RECORD_PUBLIC_URL_KEYS = ["url", "playbackUrl", "overlayUrl"] as const;
 const RECORD_TEXT_KEYS = ["message", "problems"] as const;
@@ -230,12 +231,19 @@ const RECORD_SCALAR_KEYS = [
   "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
   "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive",
 ] as const;
+/** Scalars the allow-list's own reasons narrow (capture ebac190): a size, a count and a wait — integers of at least 0 —
+ *  and a yes/no. Capture writes them from typed fields (Kotlin Int/Long/Boolean, JS `TextEncoder` length), never null. */
+const count = () => z.number().int().min(0).optional();
+const RECORD_NARROWED_SCALARS = {
+  bytes: count(), failures: count(), retryMs: count(), pickAspect16x9: z.boolean().optional(),
+};
 const keyed = <K extends string, T extends z.ZodType>(keys: readonly K[], make: () => T): Record<K, T> =>
   Object.fromEntries(keys.map((k) => [k, make()])) as Record<K, T>;
 
 /** ONE NDJSON line (§5). `at` is the beat's `at`, byte for byte (R5); `level` absent means info; `sid` only what
- *  attribution can judge (a uuid, the mask, null); `tokenTag` eight lowercase hex digits, never masked. Strict: any
- *  other key — a never key included, even masked — is refused (422). The secret-shaped rules run on top (S1–S5). */
+ *  attribution can judge (a uuid, the mask, null); `tokenTag` eight lowercase hex digits, never masked. Strict: a line
+ *  with any other key — a never key included, even masked — is refused by this shape, and the server DROPS it (owner
+ *  ruling RL, 2026-10-12: a bad line is dropped, never the body refused). The secret-shaped rules run on top (S1–S5). */
 export const CaptureRecordLine = z.strictObject({
   at: BeatAt,
   kind: RecordWord,
@@ -246,6 +254,7 @@ export const CaptureRecordLine = z.strictObject({
   ...keyed(RECORD_PUBLIC_URL_KEYS, publicUrl),
   ...keyed(RECORD_TEXT_KEYS, text),
   ...keyed(RECORD_SCALAR_KEYS, scalar),
+  ...RECORD_NARROWED_SCALARS,
 });
 export type CaptureRecordLine = z.infer<typeof CaptureRecordLine>;
 

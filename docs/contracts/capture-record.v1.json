@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/capture-record.v1.json",
   "title": "Seazn capture record, v1: POST /api/v1/capture/codes/{code}/records (APPROVED design, owner 2026-10-12)",
-  "description": "APPROVED design (owner, 2026-10-12; docs/superpowers/specs/2026-10-12-capture-record-upload-design.md): no route serves it yet and no zod twin mirrors it; the implementing PR adds both. The operator's Send record tap (owner rulings R3, R4) posts the phone's scrubbed session record as NDJSON (application/x-ndjson): one JSON object per line, and THIS schema is ONE line. Limits apply to the DECOMPRESSED body: at most 1000 non-empty lines and at most 1 MB (1048576 bytes). Content-Encoding: gzip is accepted; the server inflates at most 1 MB + 1 byte and stops there, so a zip bomb is 413 too_large and is never inflated whole. The keys are capture's modules/capture-engine/src/scrub/allow-list.json (capture 7ea8f63): at, kind and level are the line's own; every plain, publicUrl, text and scalars key under its class, a field named like a line key written field_<key>. Any other key, a never key included (even masked), is 422 invalid, and so is a value off its key's class. Beyond any shape, the server refuses with 422 invalid a body in which any string value is secret-shaped: S1 the Bearer token that sent the record, raw, percent-encoded or form-encoded (the server holds the Bearer; no schema can state it); S2 an RTMP(S) URL that carries a stream key ($defs.secretS2); S3 a streamid or passphrase value, after = or after whitespace ($defs.secretS3); S4 a URL with userinfo ($defs.secretS4); S5 a Bearer credential ($defs.secretS5). A string value that validates against $defs.secretShaped is one of S2–S5. Every rule skips a masked value: a credential the scrub masked in place — *** with no letter or digit after it, whatever punctuation follows — is not secret-shaped, so capture's own scrubbed output (e.g. srt://h:1?passphrase=***&x=1, streamid *** refused, (streamid=***), …/live/***.) is admitted. The 422's message names the line number and the key, never the value. Attribution: the record is the phone's last 1000 lines and can span codes. The server keeps a line only if it belongs to the sending code, and drops every other line before storing: A1 a line whose sid is a uuid is kept iff that session belongs to the sending code (the owner's reading, the spec's Q9: through the session's pairing, so a session with no pairing — an organiser's start with no phone — belongs to no code and its lines are dropped; fixture_stream_sessions.code_id is not used), and a line whose sid is the mask *** is dropped; A2 a line whose sid is null or absent is kept iff it falls inside a pairing window of the sending code: a window opens at a `pair` line whose tokenTag is the tag of a token of the sending code, and runs through the next `unpaired` or `ended` line, or up to (not including) the next `pair` line, whichever comes first. A line before the record's first `pair` line is in no window. A dropped line is counted, never stored, logged or echoed. $defs.ok is the 201 answer and $defs.refusal every refusal body (the capture envelope {code, message}: the phone keys on code; message is a developer string the phone never shows). Its sha256 and fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "description": "APPROVED design (owner, 2026-10-12; docs/superpowers/specs/2026-10-12-capture-record-upload-design.md), served by POST /api/v1/capture/codes/{code}/records and twinned in apps/web/src/server/api-v1/capture-schemas.ts. The operator's Send record tap (owner rulings R3, R4) posts the phone's scrubbed session record as NDJSON (application/x-ndjson): one JSON object per line, and THIS schema is ONE line. Limits apply to the DECOMPRESSED body: at most 1000 non-empty lines and at most 1 MB (1048576 bytes). Content-Encoding: gzip is accepted; the server inflates at most 1 MB + 1 byte and stops there, so a zip bomb is 413 too_large and is never inflated whole. The keys are capture's modules/capture-engine/src/scrub/allow-list.json (capture ebac190): at, kind and level are the line's own; every plain, publicUrl, text and scalars key under its class, a field named like a line key written field_<key>. A bad line is DROPPED and the rest of the record is stored; the body is never refused for a line (owner ruling RL, 2026-10-12). A bad line is one this schema refuses — any other key, a never key included (even masked), a value off its key's class, a line that is not a JSON object or not UTF-8 — or one in which, beyond any shape, any string value is secret-shaped: S1 the Bearer token that sent the record, raw, percent-encoded or form-encoded (the server holds the Bearer; no schema can state it); S2 an RTMP(S) URL that carries a stream key ($defs.secretS2); S3 a streamid or passphrase value, after = or after whitespace ($defs.secretS3); S4 a URL with userinfo ($defs.secretS4); S5 a Bearer credential ($defs.secretS5). A string value that validates against $defs.secretShaped is one of S2–S5. Every rule skips a masked value: a credential the scrub masked in place — *** with no letter or digit after it, whatever punctuation follows — is not secret-shaped, so capture's own scrubbed output (e.g. srt://h:1?passphrase=***&x=1, streamid *** refused, (streamid=***), …/live/***.) is admitted. A bad line is counted twice — in the 201's dropped, and on its own with the stored record so staff can see a scrub leak — and is never stored, logged or echoed. Attribution: the record is the phone's last 1000 lines and can span codes. The server keeps a line only if it belongs to the sending code, and drops every other line before storing: A1 a line whose sid is a uuid is kept iff that session belongs to the sending code (the owner's reading, the spec's Q9: through the session's pairing, so a session with no pairing — an organiser's start with no phone — belongs to no code and its lines are dropped; fixture_stream_sessions.code_id is not used), and a line whose sid is the mask *** is dropped; A2 a line whose sid is null or absent is kept iff it falls inside a pairing window of the sending code: a window opens at a `pair` line whose tokenTag is the tag of a token of the sending code, and runs through the next `unpaired`, `ended`, `pair-refused`, `engine-error` or `reset` line (capture's answer to the spec's Q7), or up to (not including) the next `pair` line or the next line this schema refuses (which may be another code's `pair`, so the window fails closed there), whichever comes first. A secret-shaped line this schema admits is read like any other line and then dropped. A line before the record's first `pair` line is in no window. A dropped line is counted, never stored, logged or echoed. $defs.ok is the 201 answer and $defs.refusal every refusal body (the capture envelope {code, message}: the phone keys on code; message is a developer string the phone never shows). Its sha256 and fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
   "type": "object",
   "properties": {
     "at": {
@@ -477,6 +477,24 @@
         }
       ]
     },
+    "pickSource": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "problem": {
       "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
       "anyOf": [
@@ -914,7 +932,7 @@
       ]
     },
     "message": {
-      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still refuses it if it is secret-shaped (S1, and $defs.secretShaped).",
+      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still drops the line if it is secret-shaped (S1, and $defs.secretShaped).",
       "anyOf": [
         {
           "type": "string"
@@ -931,7 +949,7 @@
       ]
     },
     "problems": {
-      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still refuses it if it is secret-shaped (S1, and $defs.secretShaped).",
+      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still drops the line if it is secret-shaped (S1, and $defs.secretShaped).",
       "anyOf": [
         {
           "type": "string"
@@ -960,6 +978,12 @@
           "type": "null"
         }
       ]
+    },
+    "bytes": {
+      "description": "scalars, narrowed by the allow-list's own reason (\"JS: record.send, the size of the body Send record to Seazn sent or would have sent (R3)\"): a size in bytes, an integer of at least 0. Never a fraction, a boolean, null or the mask.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "camera": {
       "description": "scalars: a number, a boolean or null only.",
@@ -1030,6 +1054,12 @@
           "type": "null"
         }
       ]
+    },
+    "failures": {
+      "description": "scalars, narrowed by the allow-list's own reason (\"native: rejoin-retry, how many of the rejoin's connects have failed\"): a count, an integer of at least 0. Never a fraction, a boolean, null or the mask.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "gapMs": {
       "description": "scalars: a number, a boolean or null only.",
@@ -1227,6 +1257,10 @@
         }
       ]
     },
+    "pickAspect16x9": {
+      "description": "scalars, narrowed by the allow-list's own reason (\"native: preview-size, whether the preview's size has the encode's 16:9 aspect (N30)\"): a boolean only. Never a number, null or the mask.",
+      "type": "boolean"
+    },
     "pickHeight": {
       "description": "scalars: a number, a boolean or null only.",
       "anyOf": [
@@ -1310,6 +1344,12 @@
           "type": "null"
         }
       ]
+    },
+    "retryMs": {
+      "description": "scalars, narrowed by the allow-list's own reason (\"native: rejoin-retry, the wait before the next connect\"): milliseconds, an integer of at least 0. Never a fraction, a boolean, null or the mask.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "sameArea": {
       "description": "scalars: a number, a boolean or null only.",
@@ -1473,7 +1513,7 @@
   "additionalProperties": false,
   "$defs": {
     "ok": {
-      "description": "201: the record was received. The bare shape, never an {ok, data} envelope. Owner ruling 2026-10-12: the app shows ONLY the ref (\"Sent — ref R-7K2Q\") and says nothing about dropped lines; the server still returns dropped, and the app ignores it. kept + dropped is the number of non-empty lines received. Approved (owner, 2026-10-12): the server records both counts with the record (P5), and a record whose every line was dropped is still 201 (kept 0), stored as counts with no lines (P10).",
+      "description": "201: the record was received. The bare shape, never an {ok, data} envelope. Owner ruling 2026-10-12: the app shows ONLY the ref (\"Sent — ref R-7K2Q\") and says nothing about dropped lines; the server still returns dropped, and the app ignores it. kept + dropped is the number of non-empty lines received. dropped counts every line not stored: another code's or an unattributable one (A1, A2), and every bad line (owner ruling RL, 2026-10-12: dropped, not refused). Approved (owner, 2026-10-12): the server records both counts with the record (P5), and a record whose every line was dropped is still 201 (kept 0), stored as counts with no lines (P10).",
       "type": "object",
       "properties": {
         "ref": {
@@ -1488,7 +1528,7 @@
           "maximum": 1000
         },
         "dropped": {
-          "description": "Lines dropped as another code's, or as unattributable. The app ignores it (owner ruling 2026-10-12).",
+          "description": "Lines not stored: another code's or unattributable (A1, A2), and bad lines — off the allow-list or its class, not a JSON object, not UTF-8, or secret-shaped (owner ruling RL, 2026-10-12). The app ignores it (owner ruling 2026-10-12).",
           "type": "integer",
           "minimum": 0,
           "maximum": 1000
@@ -1502,7 +1542,7 @@
       "additionalProperties": false
     },
     "refusal": {
-      "description": "Every refusal: 401 code_ended (a missing, malformed or wrong Bearer, an unknown code, a code that no longer serves a record under the spec's §4 — C1, then 24 h after it last served: one sentence, no oracle), 404 not_a_stream_code (a malformed code), 413 too_large (over 1000 lines or 1 MB decompressed; a new word, approved: Q2), 422 invalid (not NDJSON, an empty record, a key or value off the allow-list, a secret-shaped value, an unsupported Content-Encoding), 429 rate_limited (10 records an hour per code, with Retry-After), 503 unavailable (anything unmapped). Never replaced: a replaced phone may send (R4).",
+      "description": "Every refusal: 401 code_ended (a missing, malformed or wrong Bearer, an unknown code, a code that no longer serves a record under the spec's §4 — C1, then 24 h after it last served: one sentence, no oracle), 404 not_a_stream_code (a malformed code), 413 too_large (over 1000 lines or 1 MB decompressed; a new word, approved: Q2), 422 invalid (a body the server cannot read as lines: an unsupported Content-Encoding, a gzip that will not decode, or no non-empty line at all (P10); a bad LINE is never refused, it is dropped — owner ruling RL, 2026-10-12), 429 rate_limited (10 records an hour per code, with Retry-After), 503 unavailable (anything unmapped). Never replaced: a replaced phone may send (R4).",
       "type": "object",
       "properties": {
         "code": {
@@ -1549,7 +1589,7 @@
       "pattern": "\\b[Bb][Ee][Aa][Rr][Ee][Rr]\\s+[A-Za-z0-9._~+/=-]{16,}"
     },
     "secretShaped": {
-      "description": "A string that is secret-shaped under S2–S5 (S1 needs the Bearer and is the server's alone). The server refuses a body in which any string value validates against this.",
+      "description": "A string that is secret-shaped under S2–S5 (S1 needs the Bearer and is the server's alone). The server drops a line in which any string value validates against this (owner ruling RL, 2026-10-12).",
       "type": "string",
       "anyOf": [
         {

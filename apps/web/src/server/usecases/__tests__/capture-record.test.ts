@@ -5,7 +5,8 @@
 // The state transitions under test: the code ACTIVE → FINISHING → ENDED(expired), and ACTIVE → ENDED(reissued) with
 // its session open, then ended, then 24 h on (§4 C1(a), C1(b), C1(c)); a second upload after a first; the session's
 // pairing moved by a takeover (R4) and the null-pairing session (Q9). The empty cases: an empty body (422) and a
-// record whose every line is dropped (201, kept 0 — P10).
+// record whose every line is dropped (201, kept 0 — P10), foreign or bad (the owner's ruling RL, 2026-10-12: a bad
+// line is dropped, never the body refused).
 //
 // Expected values come from the spec (§4, §6's rules, §9's shape and P6's 30 days) and capture's token-tag vectors;
 // tags are computed by the module's tokenTag only where the tok is the rig's random one, and that function is pinned
@@ -60,7 +61,7 @@ const SPEC_TAIL_MS = 24 * H;                   // §4 C1(c)
 const SPEC_RETENTION_DAYS = 30;                // §9 P6
 const AT = "2026-10-11T21:19:03.123Z";
 const URL_ = "http://localhost/api/v1/capture/codes/x/records";
-const post = (body: string, headers: Record<string, string> = {}) => new Request(URL_, { method: "POST", body, headers });
+const post = (body: BodyInit, headers: Record<string, string> = {}) => new Request(URL_, { method: "POST", body, headers });
 const ndjson = (lines: object[]) => lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
 
 /** Lines as capture writes them. A `note` rides in `message` (a text key) so a test can find the line again. */
@@ -72,8 +73,9 @@ const unpairedLine = (note = "unpaired") => ({ at: AT, kind: "unpaired", message
 const refusalOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
 async function records(fixtureId: string) {
   return sql<{ id: string; ref: string; org_id: string; competition_id: string; code_id: string; slot: number; received_lines: number;
-    kept_lines: number; dropped_lines: number; body_bytes: number; lines: string; created_at: Date; expires_at: Date }[]>`
-    select id, ref, org_id, competition_id, code_id, slot, received_lines, kept_lines, dropped_lines, body_bytes, lines, created_at, expires_at
+    kept_lines: number; dropped_lines: number; invalid_lines: number; body_bytes: number; lines: string; created_at: Date; expires_at: Date }[]>`
+    select id, ref, org_id, competition_id, code_id, slot, received_lines, kept_lines, dropped_lines, invalid_lines, body_bytes, lines,
+           created_at, expires_at
       from capture_records where fixture_id = ${fixtureId} order by created_at, ref`;
 }
 const linksOf = async (recordId: string) =>
@@ -123,7 +125,7 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
       select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${r.fixtureId}`;
     expect(row).toMatchObject({
       ref: first.ref, org_id: r.auth.orgId, competition_id, code_id: await codeIdOf(r.code), slot: 0,
-      received_lines: 4, kept_lines: 4, dropped_lines: 0, body_bytes: Buffer.byteLength(text),
+      received_lines: 4, kept_lines: 4, dropped_lines: 0, invalid_lines: 0, body_bytes: Buffer.byteLength(text),
       lines: lines.map((l) => JSON.stringify(l)).join("\n"),
     });
     expect(row!.expires_at.getTime() - row!.created_at.getTime()).toBe(SPEC_RETENTION_DAYS * 24 * H);
@@ -175,7 +177,7 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     const answer = await postCaptureRecord(r.code, r.tok, post(ndjson([deviceLine("before any pair"), sidLine(randomUUID(), "unknown")])), r.now());
     expect(answer).toMatchObject({ kept: 0, dropped: 2 });
     const [row] = await records(r.fixtureId);
-    expect(row).toMatchObject({ received_lines: 2, kept_lines: 0, dropped_lines: 2, lines: "" });
+    expect(row).toMatchObject({ received_lines: 2, kept_lines: 0, dropped_lines: 2, invalid_lines: 0, lines: "" });
     expect(await linksOf(row!.id)).toEqual([]);
   });
 
@@ -217,20 +219,49 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     expect(pulled).toBe(1);
   });
 
-  it("413 too_large and 422 invalid (a secret-shaped value, a key off the allow-list) store nothing; the 422 names the line, key and rule, never the value", async () => {
-    const r = await captureRig();
+  it("413 too_large stores nothing. Owner ruling RL: a secret-shaped line (S2, and S1 — the sending Bearer), a key off the allow-list, a sid off its class, a line that is not JSON and one that is not UTF-8 are each DROPPED — 201, counted in dropped and apart in invalid_lines, never stored, linked or logged — and the good lines around them are kept", async () => {
+    const r = await captureRig({ credits: 1 });
     const many = Array.from({ length: 1001 }, (_, i) => deviceLine(`n${i}`));
     expect(await refusalOf(postCaptureRecord(r.code, r.tok, post(ndjson(many)), r.now()))).toMatchObject({ status: 413, code: "too_large" });
-    const secret = { at: AT, kind: "vendor-log", message: "publish failed for rtmps://live.cloudflare.com:443/live/FAKE-STREAM-KEY" };
-    const e = await refusalOf(postCaptureRecord(r.code, r.tok, post(ndjson([pairLine(r.tok), secret])), r.now()));
-    expect(e).toMatchObject({ status: 422, code: "invalid", message: "line 2: message is secret-shaped (S2)" });
-    // S1: the SENDING Bearer itself, in a plain word.
-    const s1 = await refusalOf(postCaptureRecord(r.code, r.tok, post(ndjson([{ at: AT, kind: "pair-refused", message: `tok=${r.tok}` }])), r.now()));
-    expect(s1).toMatchObject({ status: 422, message: "line 1: message is secret-shaped (S1)" });
-    expect(await refusalOf(postCaptureRecord(r.code, r.tok, post(ndjson([{ at: AT, kind: "x", battery: 42 }])), r.now())))
-      .toMatchObject({ status: 422, message: "line 1: key battery is not on the allow-list" });
     expect(await records(r.fixtureId)).toEqual([]);
-    for (const entry of logged) expect(entry).not.toContain("FAKE-STREAM-KEY");
+
+    const S = await r.start(phoneId("a"));
+    const good = (l: object) => ({ text: JSON.stringify(l) as string | Buffer, kept: true });
+    const bad = (text: string | Buffer) => ({ text, kept: false });
+    const rows: { text: string | Buffer; kept: boolean }[] = [
+      good(pairLine(r.tok, "own pair")),
+      good(deviceLine("own before")),
+      bad(JSON.stringify({ at: AT, kind: "vendor-log", message: "publish failed for rtmps://live.cloudflare.com:443/live/FAKE-STREAM-KEY" })),
+      bad(JSON.stringify({ at: AT, kind: "vendor-log", message: `connect failed tok=${r.tok}` })),   // S1
+      good(deviceLine("own after the secrets")),     // a secret line is READ: the window runs on through it
+      good(sidLine(S, "own session")),
+      bad(JSON.stringify({ at: AT, kind: "thermal", battery: 42 })),       // a key off the allow-list
+      bad("{not json FAKE-NOT-JSON"),
+      bad(Buffer.from([0x7b, 0xff, 0xfe, 0x7d])),                           // not UTF-8
+      bad(JSON.stringify({ at: AT, kind: "live", sid: 42 })),             // a sid off its class
+      { text: JSON.stringify(deviceLine("after the unreadable")), kept: false },   // the window closed at the unreadable line
+      good(sidLine(S, "own session after")),        // A1 still judges a uuid sid
+    ];
+    const body = Buffer.concat(rows.flatMap((row) => [Buffer.from(row.text), Buffer.from("\n")]));
+    const answer = await postCaptureRecord(r.code, r.tok, post(body), r.now());
+    const keptRows = rows.filter((row) => row.kept);
+    expect(keptRows).toHaveLength(5);
+    expect(answer).toMatchObject({ kept: 5, dropped: 7 });
+    const [row] = await records(r.fixtureId);
+    expect(row).toMatchObject({ received_lines: 12, kept_lines: 5, dropped_lines: 7, invalid_lines: 6, lines: keptRows.map((k) => String(k.text)).join("\n") });
+    expect(await linksOf(row!.id)).toEqual([S]);
+    for (const leaked of ["FAKE-STREAM-KEY", r.tok, "battery", "FAKE-NOT-JSON", "after the unreadable"]) expect(row!.lines, leaked).not.toContain(leaked);
+    for (const entry of logged) for (const leaked of ["FAKE-STREAM-KEY", "battery", "FAKE-NOT-JSON"]) expect(entry).not.toContain(leaked);
+    // The log line carries the counts, the bad lines' count among them.
+    expect(logged.some((e) => e.includes("\"invalid\":6"))).toBe(true);
+  });
+
+  it("ruling RL's empty case: a record whose EVERY line is bad is still 201 with kept 0 (P10), stored as counts — dropped and invalid_lines both all of it", async () => {
+    const r = await captureRig();
+    const answer = await postCaptureRecord(r.code, r.tok, post(ndjson([{ at: AT, kind: "x", battery: 1 }, { at: 1791797943123, kind: "y" }])), r.now());
+    expect(answer).toMatchObject({ kept: 0, dropped: 2 });
+    const [row] = await records(r.fixtureId);
+    expect(row).toMatchObject({ received_lines: 2, kept_lines: 0, dropped_lines: 2, invalid_lines: 2, lines: "" });
   });
 
   it("P11: a REISSUED code's tok still sends while its session is open — from any phone, where a `get` without the session's phone is refused — then for 24 h after the session ends, and is refused 1 ms past that", async () => {
@@ -301,9 +332,27 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     const dir = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/capture-record.v1");
     const near = readdirSync(dir).filter((f) => /^line-valid-(scrubbed|prose)-.+\.json$/.test(f)).sort();
     expect(near).toHaveLength(12);   // the nine near misses, capture's cases 21/24, and the two SRT prose strings (Q4)
-    const lines = [pairLine(r.tok), ...near.map((f) => JSON.parse(readFileSync(resolve(dir, f), "utf8")) as object),
-      { at: AT, kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 }];
+    const read = (f: string) => JSON.parse(readFileSync(resolve(dir, f), "utf8")) as Record<string, unknown>;
+    // capture ebac190's three new writers (rejoin-retry, preview-size, record.send). rejoin-retry's fixture sid is no
+    // session of this code (A1 would drop it), so it is sent as the window line it is when no session is named.
+    const { sid: foreignSid, ...rejoin } = read("line-valid-rejoin-retry.json");
+    expect(typeof foreignSid).toBe("string");
+    // Q7 (capture, 2026-10-12): the two SRT prose strings ride on `pair-refused` lines, which END the window — so, as a
+    // phone would, a new pair follows each one, or the lines after it would be in no window.
+    const Q7_CLOSING = new Set(["unpaired", "ended", "pair-refused", "engine-error", "reset"]);
+    const lines: Record<string, unknown>[] = [pairLine(r.tok)];
+    let reopened = 0;
+    for (const line of [...near.map(read), { at: AT, kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 },
+      rejoin, read("line-valid-preview-size.json"), read("line-valid-record-send.json")]) {
+      lines.push(line);
+      if (Q7_CLOSING.has(String(line.kind))) {
+        lines.push(pairLine(r.tok));
+        reopened++;
+      }
+    }
+    expect(reopened, "the two pair-refused prose lines").toBe(2);
     expect(await postCaptureRecord(r.code, r.tok, post(ndjson(lines)), r.now())).toMatchObject({ kept: lines.length, dropped: 0 });
+    expect((await records(r.fixtureId))[0]).toMatchObject({ kept_lines: lines.length, dropped_lines: 0, invalid_lines: 0 });
   });
 
   it("P9: a ref collision draws again (the stored ref is the second draw); a draw that always collides gives up with the unique violation", async () => {

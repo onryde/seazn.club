@@ -1,8 +1,9 @@
 // Capture record upload (spec 2026-10-12-capture-record-upload-design.md, approved by the owner 2026-10-12) — the pure
-// rules: §5's line validation (the allow-list, then the secret-shaped values S1–S5), §0.1's token tag and §6's
+// rules: §5's line screen (the allow-list, then the secret-shaped values S1–S5), §0.1's token tag and §6's
 // attribution (A1, A2). Pure: no I/O, no clock (domain-purity.test.ts). The use-case reads the body and the database.
 //
-// Nothing here ever returns, logs or quotes a VALUE from a line: a refusal names the line number, the key and the rule.
+// Owner ruling RL (2026-10-12): a bad line is DROPPED, never the body refused — `keptLines` is that policy, alone.
+// Nothing here ever returns, logs or quotes a VALUE from a line, or the name of a key it refused.
 import {
   CaptureRecordLine, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4, CaptureRecordSecretS5,
 } from "@/server/api-v1/capture-schemas";
@@ -49,82 +50,80 @@ export function secretRulesOf(value: string, bearer: string): SecretRule[] {
   return rules;
 }
 
-export type RecordValidation = { ok: true; lines: CaptureRecordLine[] } | { ok: false; message: string };
-const REQUIRED = ["at", "kind"] as const;
-const KNOWN_KEYS = new Set(Object.keys(CaptureRecordLine.shape));
-/** A key is named in a refusal only when it looks like a key: an unknown key's NAME is still something the phone sent,
- *  and a 422 never echoes what it cannot vouch for. */
-const NAMEABLE_KEY = /^[A-Za-z0-9_]{1,64}$/;
-const unlisted = (key: string): string => (NAMEABLE_KEY.test(key) ? `key ${key} is not on the allow-list` : "a key is not on the allow-list");
-
-/** The shape of ONE line (§5), or the refusal's text after `line N: `. */
-function shapeOf(text: string): { ok: true; line: CaptureRecordLine } | { ok: false; why: string } {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return { ok: false, why: "not JSON" };
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return { ok: false, why: "not a JSON object" };
-  const keys = Object.keys(value);
-  const unknown = keys.find((k) => !KNOWN_KEYS.has(k));
-  if (unknown !== undefined) return { ok: false, why: unlisted(unknown) };
-  const missing = REQUIRED.find((k) => !(k in value));
-  if (missing !== undefined) return { ok: false, why: `key ${missing} is missing` };
-  const parsed = CaptureRecordLine.safeParse(value);
-  if (parsed.success) return { ok: true, line: parsed.data };
-  const key = parsed.error.issues[0]?.path[0];
-  // Every key is known and both required ones are present, so the issue sits under a key of the line.
-  if (typeof key !== "string") throw new RangeError("shapeOf: a line refused with no key on its first issue");
-  return { ok: false, why: `key ${key} is off its class` };
-}
 
 /**
- * §5: the whole body or nothing. `texts` are the record's NON-EMPTY lines in order, so "line N" is the Nth of the lines
- * that count toward the 1000. Shape and allow-list are judged on every line before any secret rule runs (§5's order);
- * the first refusal wins. Zero lines is a refusal (P10: 422).
+ * One line's verdict (§5, under the owner's ruling RL of 2026-10-12: a bad line is DROPPED, never the body refused).
+ *  - `ok`: the line's shape is the contract's (the allow-list, each key in its class) and no string value is secret-shaped.
+ *  - `secret`: the shape is good, so the line can still be READ for attribution (its kind, sid and tokenTag are
+ *    validated values), but a string value trips a rule; the line is dropped.
+ *  - `shape`: the line cannot be read — not UTF-8 (`null`, from record-body.ts), not JSON, not an object, a key off the
+ *    allow-list or a value off its class. It is dropped, and attribution reads it as a boundary (`attributeLines`).
+ * The verdict carries no value and no key name: a dropped line is counted and nothing more.
  */
-export function validateRecordLines(texts: readonly string[], bearer: string): RecordValidation {
-  if (texts.length === 0) return { ok: false, message: "the record has no lines" };
-  const lines: CaptureRecordLine[] = [];
-  for (let i = 0; i < texts.length; i++) {
-    const shaped = shapeOf(texts[i]!);
-    if (!shaped.ok) return { ok: false, message: `line ${i + 1}: ${shaped.why}` };
-    lines.push(shaped.line);
+export type ScreenedLine =
+  | { ok: true; line: CaptureRecordLine }
+  | { ok: false; why: "secret"; rule: SecretRule; line: CaptureRecordLine }
+  | { ok: false; why: "shape" };
+
+export function screenRecordLine(text: string | null, bearer: string): ScreenedLine {
+  if (text === null) return { ok: false, why: "shape" };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, why: "shape" };
   }
-  for (let i = 0; i < texts.length; i++) {
-    // The RAW parsed values, not the twin's output: `at` is normalised by the twin, and the rule reads what was sent.
-    const raw = JSON.parse(texts[i]!) as Record<string, unknown>;
-    for (const [key, value] of Object.entries(raw)) {
-      if (typeof value !== "string") continue;
-      const rules = secretRulesOf(value, bearer);
-      if (rules.length > 0) return { ok: false, message: `line ${i + 1}: ${key} is secret-shaped (${rules[0]})` };
-    }
+  const parsed = CaptureRecordLine.safeParse(raw);
+  if (!parsed.success) return { ok: false, why: "shape" };
+  // The RAW parsed values, not the twin's output: `at` is normalised by the twin, and the rule reads what was sent.
+  for (const value of Object.values(raw as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    const rules = secretRulesOf(value, bearer);
+    if (rules.length > 0) return { ok: false, why: "secret", rule: rules[0]!, line: parsed.data };
   }
-  return { ok: true, lines };
+  return { ok: true, line: parsed.data };
 }
 
 /** What attribution reads of a line: its kind, its sid and a pair line's tag. */
 export type AttributableLine = { kind: string; sid?: string | null; tokenTag?: string };
 /** The sending code, read at upload time: the sessions its pairings joined (A1, Q9) and T(code) (A2, §0.1). */
 export type AttributionContext = { sessionsOfCode: ReadonlySet<string>; tagsOfCode: ReadonlySet<string> };
-/** A window closes THROUGH these: the closing line belongs to the window it closes. */
-const CLOSES = new Set(["unpaired", "ended"]);
+/** A window closes THROUGH these: the closing line belongs to the window it closes. `unpaired` and `ended` from the
+ *  allow-list's kinds; `pair-refused`, `engine-error` and `reset` added by capture's answer to Q7 (2026-10-12). */
+export const WINDOW_CLOSING_KINDS: ReadonlySet<string> = new Set(["unpaired", "ended", "pair-refused", "engine-error", "reset"]);
 const MASK = "***";
 
 /**
  * §6: one verdict per line, in order — true = kept. A1: a uuid `sid` is kept iff its session is the sending code's,
  * wherever it falls. A masked sid is dropped. A2: a null or absent sid is kept iff it is inside a window of the
- * sending code — opened by a `pair` whose tokenTag is in T(code), closed through the next `unpaired`/`ended` or just
+ * sending code — opened by a `pair` whose tokenTag is in T(code), closed through the next closing kind (Q7) or just
  * before the next `pair`. A line before the first `pair` is in no window (Q6: fails closed).
+ *
+ * `null` is a line the server could not read (a `shape` verdict). It is dropped, and it closes any open window just
+ * before it, as a `pair` of no known code would: it may BE another code's `pair`, and a window run through it could
+ * keep that code's lines (fails closed, like Q6).
  */
-export function attributeLines(lines: readonly AttributableLine[], ctx: AttributionContext): boolean[] {
+export function attributeLines(lines: readonly (AttributableLine | null)[], ctx: AttributionContext): boolean[] {
   let inWindow = false;
   return lines.map((line) => {
+    if (line === null) {
+      inWindow = false;
+      return false;
+    }
     if (line.kind === "pair") inWindow = line.tokenTag !== undefined && ctx.tagsOfCode.has(line.tokenTag);
     const member = inWindow;
-    if (CLOSES.has(line.kind)) inWindow = false;
+    if (WINDOW_CLOSING_KINDS.has(line.kind)) inWindow = false;
     if (typeof line.sid === "string") return line.sid !== MASK && ctx.sessionsOfCode.has(line.sid.toLowerCase());
     return member;
   });
+}
+
+/**
+ * THE bad-line policy, in one place (owner ruling RL, 2026-10-12): a line is kept iff attribution keeps it AND its
+ * verdict is `ok`. A secret-shaped line is read like any other (it may open or close a window) and then dropped; an
+ * unreadable line is a boundary (`attributeLines`). Nothing else in the record changes because of a bad line.
+ */
+export function keptLines(screened: readonly ScreenedLine[], ctx: AttributionContext): boolean[] {
+  const readable = screened.map((s) => (s.ok || s.why === "secret" ? s.line : null));
+  return attributeLines(readable, ctx).map((kept, i) => kept && screened[i]!.ok);
 }

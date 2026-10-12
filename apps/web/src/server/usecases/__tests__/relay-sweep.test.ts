@@ -281,8 +281,8 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       const ref = `R-${Array.from(randomBytes(6), (b) => "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[b % 32]).join("")}`;
       const [{ id }] = await sql<{ id: string }[]>`
         insert into capture_records (org_id, competition_id, fixture_id, code_id, slot, ref, received_lines, kept_lines,
-                                     dropped_lines, body_bytes, lines, created_at, expires_at)
-        values (${x.orgId}, ${ctx!.competition_id}, ${x.fixtureId}, ${ctx!.code_id}, 0, ${ref}, 1, 1, 0, 10, '{"k":1}',
+                                     dropped_lines, invalid_lines, body_bytes, lines, created_at, expires_at)
+        values (${x.orgId}, ${ctx!.competition_id}, ${x.fixtureId}, ${ctx!.code_id}, 0, ${ref}, 1, 1, 0, 0, 10, '{"k":1}',
                 now() - interval '40 days', now() + make_interval(mins => ${expiresInMinutes}))
         returning id`;
       await sql`insert into capture_record_sessions (record_id, session_id) values (${id}, ${x.sessionId})`;
