@@ -95,6 +95,13 @@ export type RoomSnapshot = {
    *  second reading. false with no game. A game on file you may not act on
    *  is a held board: never rendered live and movable (review I2). */
   canAct: boolean;
+  /** You may not act because your linked Lichess account is not the one
+   *  this game was created on (re-linked to another, or unlinked) — play.ts's
+   *  own acceptance (`actAcceptance`), never a second reading (T14 re-review
+   *  5, I-2). The room shows A with the account's line; re-linking that
+   *  account is the remedy. false whenever another reason comes first (a
+   *  frozen seat, a held, finished or withdrawn board). */
+  otherAccount: boolean;
   /** No game on file and the club is not offered online chess (T20). The
    *  client renders a plain state and STOPS polling. */
   onlineChessOff: boolean;

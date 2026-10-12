@@ -6004,6 +6004,7 @@
   "externalPlay.room.state.revoked.title": "Se ha revocado tu vínculo con Lichess, así que no podemos enviar tus jugadas.",
   "externalPlay.room.state.revoked.body": "Tu organizador ha sido avisado y decidirá qué pasa a continuación.",
   "externalPlay.room.state.revoked.relink": "Vincular Lichess de nuevo",
+  "externalPlay.room.state.revoked.otherAccount": "Esta partida está en otra cuenta de Lichess: vuelve a vincular esa cuenta para seguir jugando.",
   "externalPlay.room.state.revoked.cameraNotice": "Mantén la cámara encendida mientras tu puesto está en espera. Si tu vídeo se corta, anotamos cuándo para tu organizador, que decide qué pasa.",
   "externalPlay.room.state.held.title": "Esta partida está en espera",
   "externalPlay.room.state.held.body": "Tu organizador está revisando este tablero. No se pueden hacer jugadas aquí hasta que lo resuelva.",

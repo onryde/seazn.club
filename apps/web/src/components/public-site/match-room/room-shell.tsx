@@ -335,7 +335,7 @@ export function Screen({
           ) : null}
           <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
             <div className="order-2 min-w-0">
-              <RevokedNotice relinkHref={relinkHref} t={t} />
+              <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} />
             </div>
             {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
             <BackToFixture href={snap.links.fixture} className="order-6" t={t} />

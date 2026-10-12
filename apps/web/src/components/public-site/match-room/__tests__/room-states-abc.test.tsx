@@ -38,6 +38,8 @@ const CANVAS = {
   revokedTitle: "Your Lichess link was revoked, so we can't play your moves.",
   revokedBody: "Your organiser has been told and will decide what happens next.",
   relink: "Link Lichess again",
+  // T14 re-review 5, I-2 (controller ruling): A's line when the game is on another account.
+  otherAccount: "This game is on a different Lichess account — link that account again to keep playing.",
   seatOnHold: "Seat on hold",
   whiteSeatOnHold: "White · seat on hold",
   holdCamera: "Keep your camera on while your seat is on hold. If your video drops, we note when for your organiser, who decides what happens.",
@@ -84,6 +86,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     opponentPresence: null,
     frozen: null,
     canAct: true,
+    otherAccount: false,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -219,6 +222,40 @@ describe("Seam A — the Lichess link revoked: the frozen player's own room", ()
   });
 });
 
+describe("Seam A — the game is on another Lichess account (T14 re-review 5, I-2)", () => {
+  const otherState = (over: Partial<RoomSnapshot> = {}) =>
+    initialRoomState(snap({ game: GAME, frozen: null, canAct: false, otherAccount: true, ...over }), T0);
+
+  it("A's layout with the account's own line in place of the revoked words, and the same one action: Link Lichess again", () => {
+    const s = otherState();
+    expect(roomScreen(s).kind).toBe("revoked");
+    const html = paint(s);
+    const present = ids(html);
+    for (const id of ["room-revoked", "room-clocks-strip", "room-revoked-notice", "room-revoked-relink", "room-board", "room-back-to-fixture"]) expect(present, id).toContain(id);
+    for (const id of ["room-controls", "room-resign", "room-draw", "room-abort", "room-move-notice"]) expect(present, id).not.toContain(id);
+    const text = textOf(html);
+    expect(text).toContain(CANVAS.otherAccount);
+    // Nothing was revoked and nobody was told (an organiser hold for this is
+    // out of scope): those words would be false here.
+    expect(text).not.toContain(CANVAS.revokedTitle);
+    expect(text).not.toContain(CANVAS.revokedBody);
+    expect(attrOf(html, "room-revoked-relink", "href")).toBe(RELINK.replace(/&/g, "&amp;"));
+    expect(textOf(html)).toContain(CANVAS.relink);
+    expect(attrOf(html, "room-revoked-notice", "data-reason")).toBe("account");
+    expect(attrOf(html, "room-board", "data-on-hold")).toBe("true");
+  });
+
+  it("the pairs: a frozen seat keeps the revoked words and never the account line; the account as recorded is the live board", () => {
+    const frozen = paint(revokedState());
+    expect(textOf(frozen)).toContain(CANVAS.revokedTitle);
+    expect(textOf(frozen)).not.toContain(CANVAS.otherAccount);
+    expect(attrOf(frozen, "room-revoked-notice", "data-reason")).toBe("revoked");
+    const live = initialRoomState(snap({ game: GAME, canAct: true, otherAccount: false }), T0);
+    expect(roomScreen(live).kind).toBe("live");
+    expect(textOf(paint(live))).not.toContain(CANVAS.otherAccount);
+  });
+});
+
 describe("Seam B — online chess off: one calm card", () => {
   it("the card's words and its one way back; NO board, clocks, camera or game actions", () => {
     const s = initialRoomState(snap({ onlineChessOff: true, game: null }), T0);
@@ -330,6 +367,7 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
   it("each state paints in its own language", () => {
     const states: [string, () => RoomState][] = [
       ["A", () => revokedState({ cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } })],
+      ["A, another account", () => revokedState({ frozen: null, otherAccount: true })],
       ["B", () => initialRoomState(snap({ onlineChessOff: true }), T0)],
       ["C1", () => roomReducer(initialRoomState(snap({ game: GAME }), T0), { type: "fetch_failed", status: 0 })],
       [
@@ -359,6 +397,6 @@ describe("A, B and C in every locale: no raw key, never English outside en", () 
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: locale × state").toBe(4 * 6);
+    expect(checked, "anti-vacuity: locale × state").toBe(4 * 7);
   });
 });

@@ -60,7 +60,7 @@ import {
 } from "./guard";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
-import { act, fenAfter, playableGame, type PlayAction, type PlayResult } from "./play";
+import { act, actAcceptance, fenAfter, playableGame, type PlayAction, type PlayResult } from "./play";
 import { seatPlayer, type SeatResult } from "./preflight";
 import { reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
@@ -290,11 +290,18 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
       ? frozenFor(bridge.revoked_seat ?? "both", mine)
       : null;
 
-  // Who may act: play.ts's own predicate, never a second reading (review
-  // I2). A seat it freezes, every other hold and a finished board accept
-  // nothing; the room renders that board held, never live and movable.
+  // Who may act: play.ts's own predicates, never a second reading (review
+  // I2; re-review 5 I-2). No playable game (every other hold, a finished or
+  // withdrawn board) accepts nothing; on a playable one, the seat's
+  // acceptance — a frozen seat, or a linked account that is not the game's —
+  // is the SAME function act() asks. A board play refuses is never rendered
+  // live and movable.
   const playable = gameOnFile ? playableGame(f) : null;
-  const canAct = playable !== null && !playable.frozen.includes(mine);
+  const seat = playable === null ? null : actAcceptance(playable, player);
+  const canAct = seat !== null && seat.refused === null;
+  // The seat's account is not the game's: re-linking THAT account is the
+  // remedy, so the room shows A with the account's own line.
+  const otherAccount = seat?.refused === "account";
   // A hold the game is not still playing through (T12's mid-game diagnoses
   // are token_revoked / provider_error; anything else, or any hold once the
   // game is over, waits on the organiser).
@@ -375,6 +382,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     opponentPresence,
     frozen,
     canAct,
+    otherAccount,
     onlineChessOff,
     creation,
     game,

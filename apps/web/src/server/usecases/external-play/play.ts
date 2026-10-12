@@ -34,7 +34,7 @@ import { assertUci, invalidUci } from "@/server/external-play/lichess/uci";
 import type { BoardCall, BoardErrorCode } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
-import { effectiveBridge, loadOnlinePlayFixture, loadSides, type OnlinePlayFixture, type Side } from "./guard";
+import { effectiveBridge, loadOnlinePlayFixture, loadSides, type OnlinePlayFixture, type Side, type SidePlayer } from "./guard";
 import { isPlayableFixtureStatus, playGrantRefusal, type GrantRefusal } from "./preflight";
 import type { Colour } from "./invite";
 import { holdForOrganiser } from "./result";
@@ -174,7 +174,7 @@ function canonicalUci(moves: readonly string[], uci: string): string {
 const turnAt = (ply: number): Colour => (ply % 2 === 0 ? "white" : "black");
 const otherColour = (c: Colour): Colour => (c === "white" ? "black" : "white");
 
-type Game = {
+export type Game = {
   fixture: OnlinePlayFixture;
   gameId: string;
   whiteSide: Side;
@@ -247,6 +247,35 @@ export function playableGame(f: OnlinePlayFixture): Game | null {
   };
 }
 
+/** Why play.ts refuses a seated player's act on the game on file. */
+export type ActRefusal =
+  /** A token_revoked hold froze this seat (ruling M7). */
+  | "frozen"
+  /** The seat's linked Lichess account is not the one T9 recorded for this
+   *  game — re-linked to another account, or unlinked — or the seat has no
+   *  user to hold a token. That account is not a player in the game. */
+  | "account";
+
+/**
+ * Whether play.ts takes this seated player's act on a playable game: the
+ * seat's colour (from the colours T9 RECORDED, never the pairing) and the
+ * refusal, or null with the user whose token plays it. ONE authority (T14
+ * re-review 5, I-2): `act` below and the match room's `canAct` (room.ts)
+ * both read THIS, so the room never offers a live board this refuses. T2's
+ * grant gate is not here: it is asked per act and answered by name (the
+ * room's re-link screen), between the freeze and the account (act's order).
+ */
+export function actAcceptance(
+  game: Game,
+  me: Pick<SidePlayer, "side" | "lichess" | "userId">,
+): { colour: Colour; refused: ActRefusal } | { colour: Colour; refused: null; userId: string } {
+  const colour: Colour = game.whiteSide === me.side ? "white" : "black";
+  if (game.frozen.includes(colour)) return { colour, refused: "frozen" };
+  const recorded = colour === "white" ? game.whiteLichessId : game.blackLichessId;
+  if (me.lichess?.id !== recorded || me.userId === null) return { colour, refused: "account" };
+  return { colour, refused: null, userId: me.userId };
+}
+
 export async function act(
   a: { fixtureId: string; personId: string; action: PlayAction },
   deps: PlayDeps = {},
@@ -268,10 +297,12 @@ export async function act(
   const { home, away } = await loadSides(f);
   const me = [home, away].find((s) => s.personId === a.personId);
   if (!me) throw NOT_FOUND();
-  const colour: Colour = game.whiteSide === me.side ? "white" : "black";
+  // The seat's acceptance — the predicate the room's canAct reads too.
+  const seat = actAcceptance(game, me);
+  const { colour } = seat;
   // A seat a revoked token froze acts on nothing — the same 404 as a held
   // board (ruling M7); its opponent plays on.
-  if (game.frozen.includes(colour)) throw NOT_FOUND();
+  if (seat.refused === "frozen") throw NOT_FOUND();
 
   // 4. THE GRANT, as the seat asks it (T2's one play gate). Named, so T14
   //    can send the player to re-link; a downgraded grant mid-game lands here.
@@ -279,11 +310,9 @@ export async function act(
   if (refused) return { ok: false, reconcile: false, reason: refused };
   // 5. THE ACCOUNT the game was created for. A player who re-linked a
   //    different Lichess account cannot move this game with it: that
-  //    account is not a player in it. (`userId` is non-null whenever the
-  //    grant passed — the gate refuses a null — narrowed here for the token.)
-  const recorded = colour === "white" ? game.whiteLichessId : game.blackLichessId;
-  if (me.lichess?.id !== recorded || me.userId === null) throw NOT_FOUND();
-  const userId = me.userId;
+  //    account is not a player in it (actAcceptance's "account").
+  if (seat.refused !== null) throw NOT_FOUND();
+  const userId = seat.userId;
 
   const now = deps.now ?? new Date();
   const publish = deps.publish ?? publishRoomBroadcast;

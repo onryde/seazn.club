@@ -65,7 +65,10 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   if (snap.result !== null || game?.over === true) return { kind: "over" };
   // A token_revoked hold froze the VIEWER's seat: they cannot move until they
   // re-link (A). The opponent's freeze is theirs to fix; this board plays on.
-  if (snap.frozen === "you" || snap.frozen === "both") return { kind: "revoked" };
+  // The game on ANOTHER Lichess account than the viewer's linked one is A
+  // too: play.ts refuses every act, and re-linking that account is the
+  // remedy (T14 re-review 5, I-2).
+  if (snap.frozen === "you" || snap.frozen === "both" || snap.otherAccount) return { kind: "revoked" };
   // Lichess refused the player's own grant mid-act or at the seat.
   if (s.error === "relink") return { kind: "relink" };
   // A game on file the server will not take an act on (play.ts refuses it:

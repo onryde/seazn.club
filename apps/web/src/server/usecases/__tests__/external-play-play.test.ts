@@ -24,7 +24,7 @@ import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import { holdForOrganiser } from "../external-play/result";
-import { act, fenAfter, type PlayAction, type PlayDeps, type PlayResult } from "../external-play/play";
+import { act, actAcceptance, fenAfter, type Game as PlayableGame, type PlayAction, type PlayDeps, type PlayResult } from "../external-play/play";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg, seedFutureDivision } from "./_seed";
@@ -254,6 +254,44 @@ describe("fenAfter", () => {
 
   it("a rejected FIRST move reports replayed 0 and the start position", () => {
     expect(fenAfter(["e2e5"])).toEqual({ fen: START_FEN, replayed: 0 });
+  });
+});
+
+// T14 re-review 5, I-2: ONE predicate says whether play.ts takes a seated
+// player's act — `act` below and the match room's `canAct` both read it.
+// The expected answers are the rulings', stated per row: M7 (a token_revoked
+// hold freezes the revoked seat) and step 5 (the game's recorded account).
+describe("actAcceptance — the one predicate act and the room's canAct share", () => {
+  const game = (frozen: PlayableGame["frozen"], whiteSide: "home" | "away" = "home"): PlayableGame =>
+    ({ gameId: "g1", whiteSide, whiteLichessId: "lw", blackLichessId: "lb", moves: [], ply: 0, frozen }) as unknown as PlayableGame;
+  it("frozen first, then the account; colour from the RECORDED white side — every row", () => {
+    type Row = { frozen: PlayableGame["frozen"]; whiteSide: "home" | "away"; side: "home" | "away"; lichess: string | null; userId: string | null; colour: "white" | "black"; want: "frozen" | "account" | null };
+    const rows: Row[] = [];
+    for (const frozen of [[], ["white"], ["black"], ["white", "black"]] as PlayableGame["frozen"][]) {
+      for (const whiteSide of ["home", "away"] as const) {
+        for (const side of ["home", "away"] as const) {
+          const colour = side === whiteSide ? "white" : "black";
+          const recorded = colour === "white" ? "lw" : "lb";
+          for (const lichess of [recorded, "someone-else", null]) {
+            for (const userId of ["u1", null]) {
+              const want = frozen.includes(colour) ? "frozen" : lichess !== recorded || userId === null ? "account" : null;
+              rows.push({ frozen, whiteSide, side, lichess, userId, colour, want });
+            }
+          }
+        }
+      }
+    }
+    let checked = 0;
+    const tally = { frozen: 0, account: 0, none: 0 };
+    for (const r of rows) {
+      const got = actAcceptance(game(r.frozen, r.whiteSide), { side: r.side, lichess: r.lichess === null ? null : { id: r.lichess, username: "x" }, userId: r.userId });
+      expect([got.colour, got.refused], JSON.stringify(r)).toEqual([r.colour, r.want]);
+      if (got.refused === null) expect(got.userId, "an accepted seat carries its user").toBe(r.userId);
+      tally[r.want ?? "none"] += 1;
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(4 * 2 * 2 * 3 * 2);
+    for (const [k, n] of Object.entries(tally)) expect(n, `rows answering ${k}`).toBeGreaterThan(0);
   });
 });
 

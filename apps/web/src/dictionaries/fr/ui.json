@@ -6004,6 +6004,7 @@
   "externalPlay.room.state.revoked.title": "Votre lien Lichess a été révoqué, nous ne pouvons donc pas jouer vos coups.",
   "externalPlay.room.state.revoked.body": "Votre organisateur a été prévenu et décidera de la suite.",
   "externalPlay.room.state.revoked.relink": "Relier Lichess à nouveau",
+  "externalPlay.room.state.revoked.otherAccount": "Cette partie se joue sur un autre compte Lichess — reliez à nouveau ce compte pour continuer à jouer.",
   "externalPlay.room.state.revoked.cameraNotice": "Gardez votre caméra allumée tant que votre place est suspendue. Si votre vidéo se coupe, nous notons quand pour votre organisateur, qui décide de la suite.",
   "externalPlay.room.state.held.title": "Cette partie est suspendue",
   "externalPlay.room.state.held.body": "Votre organisateur examine cet échiquier. Aucun coup ne peut être joué ici avant sa décision.",
