@@ -100,6 +100,16 @@ export type ArbiterBoard = {
   canResync: boolean;
   /** Still to be played (no result, not settled): the video override applies. */
   playable: boolean;
+  /** T16: still to be played AND an online board on file (a bridge row) —
+   *  "Settle the result now…" settles it through the resolve route. */
+  canSettle: boolean;
+  /** T16: which side plays White. The settle buttons name the players by
+   *  colour; the server settles by side. */
+  whiteSide: "home" | "away";
+  /** T16: a drawn knockout game waits for the organiser to pick who goes
+   *  through (held `tiebreak_owed`): the settle offers a winner only. */
+  tiebreakOwed: boolean;
+  /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };
 

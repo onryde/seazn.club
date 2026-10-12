@@ -39,6 +39,7 @@ import {
   type ArbiterDecisionAction,
   type ArbiterDecisionState,
   type ArbiterNotice,
+  type SettleChoice,
 } from "./arbiter-decision";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
 
@@ -81,8 +82,10 @@ export type ArbiterScreenProps = {
   on: {
     select(fixtureId: string): void;
     resync(): void;
-    goOn(): void;
+    /** "Let the game go on" for the flags on screen, by id (ruling A). */
+    goOn(flagIds: readonly string[]): void;
     toggleSettle(): void;
+    settle(choice: SettleChoice): void;
     override(): void;
     retryVideo(): void;
   };
@@ -708,7 +711,19 @@ function noticeSentence(n: ArbiterNotice, f: Fmt): string {
     case "resync_failed":
       return f.t("arbiter.notice.resyncFailed");
     case "went_on":
-      return f.t("arbiter.notice.wentOn");
+      return n.stillOpen === 0 ? f.t("arbiter.notice.wentOn") : f.plural("arbiter.notice.wentOnNew", n.stillOpen);
+    case "go_on_failed":
+      return n.code === "ARBITER_PLAYS_THIS_BOARD" ? f.t("arbiter.notice.goOnOwnBoard") : f.t("arbiter.notice.failed");
+    case "settled":
+      return n.status === "tiebreak_owed" ? f.t("arbiter.notice.settledTiebreak") : f.t("arbiter.notice.settled");
+    case "settle_failed":
+      return n.code === "ALREADY_RESOLVED"
+        ? f.t("arbiter.notice.alreadyResolved")
+        : n.code === "TIEBREAK_NEEDS_WINNER"
+          ? f.t("arbiter.notice.needsWinner")
+          : n.code === "ARBITER_PLAYS_THIS_BOARD"
+            ? f.t("arbiter.notice.settleOwnBoard")
+            : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":
@@ -720,6 +735,25 @@ function noticeSentence(n: ArbiterNotice, f: Fmt): string {
             ? f.t("arbiter.notice.ownBoard")
             : f.t("arbiter.notice.failed");
   }
+}
+
+/** The settle buttons, by colour as the panel names the players; the server
+ *  settles by side. A drawn knockout game takes a winner only (spec §3.6). */
+function settleChoices(board: ArbiterBoard, f: Fmt): { choice: SettleChoice; label: string }[] {
+  const white: SettleChoice = board.whiteSide === "home" ? "home_wins" : "away_wins";
+  const black: SettleChoice = board.whiteSide === "home" ? "away_wins" : "home_wins";
+  if (board.tiebreakOwed) {
+    return [
+      { choice: white, label: f.t("externalPlay.settle.goesThrough", { name: board.white.name }) },
+      { choice: black, label: f.t("externalPlay.settle.goesThrough", { name: board.black.name }) },
+    ];
+  }
+  return [
+    { choice: white, label: f.t("externalPlay.settle.wins", { name: board.white.name }) },
+    { choice: black, label: f.t("externalPlay.settle.wins", { name: board.black.name }) },
+    { choice: "draw", label: f.t("externalPlay.resolve.draw") },
+    { choice: "no_result", label: f.t("externalPlay.resolve.noResult") },
+  ];
 }
 
 function Decision({
@@ -741,7 +775,9 @@ function Decision({
   const over = board.state.kind === "result";
   const canResync = board.canResync;
   const canGoOn = !over && board.flags.length > 0;
-  const canSettle = !over;
+  // Settled here when an online game is on file (a bridge row); a board
+  // nobody reached has none, and keeps T15's way to its match page.
+  const canSettle = !over && (board.canSettle || board.fixtureNo !== null);
   // The reducer owns "a notice belongs to the board on screen" (R4: a switch
   // clears it, an answer for the board left behind shows nothing).
   const notice = decision.notice;
@@ -759,7 +795,13 @@ function Decision({
         </button>
       )}
       {canGoOn && (
-        <button type="button" onClick={on.goOn} disabled={busy} className={BUTTON_QUIET}>
+        <button
+          type="button"
+          onClick={() => on.goOn(board.flags.map((x) => x.id))}
+          disabled={busy}
+          aria-busy={decision.busy?.kind === "goOn" || undefined}
+          className={BUTTON_QUIET}
+        >
           {f.t("arbiter.decide.goOn")}
         </button>
       )}
@@ -774,15 +816,42 @@ function Decision({
           >
             {f.t("arbiter.decide.settle")}
           </button>
-          {decision.settleOpen && (
-            <div id={settlePanel} className="flex flex-col gap-1.5 rounded-[10px] border border-[#e7e3f3] bg-white p-3 text-sm">
-              <p className="m-0 leading-[1.45]">{f.t("arbiter.decide.settleBody")}</p>
-              {board.fixtureNo !== null && (
-                <Link href={routes.fixture(slugs.org, slugs.comp, slugs.div, board.fixtureNo)} className="min-h-11 content-center font-semibold text-[#5b21b6]">
-                  {f.t("arbiter.decide.settleLink", { n: board.boardNo })}
-                </Link>
-              )}
+          {decision.settleOpen && !board.canSettle && board.fixtureNo !== null && (
+            <div id={settlePanel} className="flex min-w-0 flex-col gap-1.5 rounded-[10px] border border-[#e7e3f3] bg-white p-3 text-sm">
+              <p className={`m-0 leading-[1.45] ${SOFT}`}>{f.t("arbiter.decide.settleElsewhere")}</p>
+              <Link href={routes.fixture(slugs.org, slugs.comp, slugs.div, board.fixtureNo)} className="min-h-11 content-center font-semibold text-[#5b21b6]">
+                {f.t("arbiter.decide.settleLink", { n: board.boardNo })}
+              </Link>
             </div>
+          )}
+          {decision.settleOpen && board.canSettle && (
+            <fieldset
+              id={settlePanel}
+              data-testid="arbiter-settle"
+              className="m-0 flex min-w-0 flex-col gap-2 rounded-[10px] border border-[#e7e3f3] bg-white p-3 text-sm"
+            >
+              <legend className="float-left mb-0.5 w-full p-0 text-[15px] font-semibold">
+                {board.tiebreakOwed ? f.t("externalPlay.settle.pickLegend") : f.t("externalPlay.settle.legend")}
+              </legend>
+              <p className={`m-0 leading-[1.45] ${SOFT}`}>
+                {board.tiebreakOwed ? f.t("arbiter.decide.tiebreakBody") : f.t("arbiter.decide.settleBody")}
+              </p>
+              <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
+                {settleChoices(board, f).map((c) => (
+                  <button
+                    key={c.choice}
+                    type="button"
+                    data-settle={c.choice}
+                    onClick={() => on.settle(c.choice)}
+                    disabled={busy}
+                    aria-busy={decision.busy?.kind === "settle" || undefined}
+                    className={`${BUTTON_QUIET} min-w-0 truncate`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
           )}
         </>
       )}
@@ -955,8 +1024,13 @@ export function ArbiterPanel({
         resync: () => {
           if (decision.boardId) void runner.resync(decision.boardId);
         },
-        goOn: () => dispatch({ type: "goOn" }),
+        goOn: (flagIds) => {
+          if (decision.boardId) void runner.goOn(decision.boardId, flagIds);
+        },
         toggleSettle: () => dispatch({ type: "toggleSettle" }),
+        settle: (choice) => {
+          if (decision.boardId) void runner.settle(decision.boardId, choice);
+        },
         override: () => {
           if (decision.boardId) void runner.override(decision.boardId);
         },

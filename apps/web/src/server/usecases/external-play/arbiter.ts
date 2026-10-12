@@ -57,6 +57,7 @@ type BoardRow = {
   homeEntrantId: string;
   awayEntrantId: string;
   bridgeStatus: string | null;
+  needsReason: string | null;
   challengeId: string | null;
   whiteSide: Side | null;
   moveCount: number | null;
@@ -144,7 +145,7 @@ export async function loadArbiterRound(
     select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
            f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
-           ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
+           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
            ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
            ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
@@ -257,6 +258,9 @@ export async function loadArbiterRound(
           : null,
       canResync: gameOnFile && playable && r.bridgeStatus !== null && ["ready", "live", "needs_organiser"].includes(r.bridgeStatus),
       playable,
+      canSettle: playable && r.bridgeStatus !== null,
+      whiteSide,
+      tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
       flags,
     };
   }));
