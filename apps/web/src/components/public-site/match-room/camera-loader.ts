@@ -14,11 +14,15 @@
 //   - on every (re)join, switches to the MANUAL view — the SDK resets the view
 //     to ACTIVE_GRID on every socket (re)join, so this is re-asserted each
 //     time;
-//   - watches the subscribed set and unsubscribes anyone who appears in it.
-//     The cap alone is not enough in 2.0.2: for a viewer on stage the SDK's
-//     selection computes `cap - 1` and keeps one peer when the server has
-//     selected two or more (the opponent and an arbiter), see
-//     __tests__/_fake-realtimekit.ts.
+//   - watches the subscribed set and unsubscribes anyone who appears in it,
+//     for BOTH video kinds. The cap alone is not enough in 2.0.2: for a viewer
+//     on stage the SDK's selection computes `cap - 1` and keeps one peer when
+//     the server has selected two or more (the opponent and an arbiter); and
+//     after a socket rejoin that selection runs before `roomJoined` fires, so
+//     only a watch on the map itself is in time. Every participant starts
+//     with every kind allowed (the SDK's TC default), so unsubscribing
+//     "video" alone would leave the opponent subscribed for a screen share.
+//     See __tests__/_fake-realtimekit.ts for the SDK lines.
 // The player preset's `max_video_streams` = 0 on stg and prod is the
 // server-held half (owner, Cloudflare dashboard). A tampered client can still
 // subscribe in a shared meeting; that is the owner's per-player-meeting
@@ -64,7 +68,7 @@ export function makeJoinOwnCamera(load: () => Promise<SdkModule>): JoinOwnCamera
   return async (authToken) => {
     const { default: RealtimeKitClient } = await load();
     const meeting = await RealtimeKitClient.init({ authToken, defaults: { audio: false, video: true } });
-    const { self, participants, meta } = meeting;
+    const { self, participants } = meeting;
 
     // ── D7 ───────────────────────────────────────────────────────────────
     let enforcing = false;
@@ -100,12 +104,9 @@ export function makeJoinOwnCamera(load: () => Promise<SdkModule>): JoinOwnCamera
       void noRemoteVideo();
       changed();
     });
+    // A socket drop or failure and a media-node drop all emit roomLeft (SDK
+    // l.24413, l.24419, l.24423); every rejoin ends in roomJoined.
     self.on("roomLeft", () => {
-      joinedAt = null;
-      changed();
-    });
-    meta.on("socketConnectionUpdate", ({ state }) => {
-      if (state === "connected") return; // roomJoined follows a rejoin
       joinedAt = null;
       changed();
     });

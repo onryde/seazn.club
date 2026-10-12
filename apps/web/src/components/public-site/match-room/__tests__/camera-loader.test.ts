@@ -92,9 +92,26 @@ describe("D7: no remote video is ever received (review NEW-1)", () => {
       before: (m) => (m.peerJoins(OPP.peer, OPP.user), m.peerJoins(ARB.peer, ARB.user), camera(m, OPP.peer)),
       after: (m) => m.select([ARB.peer, OPP.peer]),
     },
+    {
+      label: "opponent AND arbiter selected, the opponent sharing a screen as well as the camera",
+      before: (m) => {
+        m.peerJoins(OPP.peer, OPP.user);
+        m.peerJoins(ARB.peer, ARB.user);
+        camera(m, OPP.peer);
+        m.produce(OPP.peer, { producerId: "opp-screen", kind: "video", screenShare: true });
+        m.select([OPP.peer, ARB.peer]);
+      },
+      after: () => {},
+    },
+    { label: "nobody else in the meeting", before: () => {}, after: () => {} },
+  ];
+  const rejoins: { label: string; run: (m: FakeMeeting) => Promise<void> }[] = [
+    { label: "socket rejoin", run: (m) => m.reconnect() },
+    { label: "media-node rejoin", run: (m) => m.mediaReconnect() },
+    { label: "second socket rejoin", run: (m) => m.reconnect() },
   ];
 
-  it("every scenario, after join AND after each of two reconnects: zero remote video subscribed, zero consumed", async () => {
+  it("every scenario, after join AND after each rejoin (socket, media node, socket): zero remote video subscribed, zero consumed; the view MANUAL and the cap 0 again", async () => {
     let checked = 0;
     for (const s of scenarios) {
       const rtk = fakeRealtimeKit({ setup: s.before });
@@ -103,18 +120,22 @@ describe("D7: no remote video is ever received (review NEW-1)", () => {
       s.after(m);
       await settle();
       expect(received(m), `${s.label}: after join`).toEqual({ subscribed: 0, consumed: 0 });
+      expect(m.participants.viewMode, `${s.label}: after join`).toBe("MANUAL");
       checked += 1;
-      for (const n of [1, 2]) {
-        m.reconnect();
+      for (const r of rejoins) {
+        await r.run(m);
         s.after(m);
         await settle();
-        expect(received(m), `${s.label}: after reconnect ${n}`).toEqual({ subscribed: 0, consumed: 0 });
-        expect(m.participants.maxActiveParticipantsCount, `${s.label}: the cap holds after reconnect ${n}`).toBe(0);
+        expect(received(m), `${s.label}: after ${r.label}`).toEqual({ subscribed: 0, consumed: 0 });
+        // Re-asserted on every rejoin (controller ruling) — even when nobody
+        // else is there to trip the subscription watchdog.
+        expect(m.participants.viewMode, `${s.label}: the view after ${r.label}`).toBe("MANUAL");
+        expect(m.participants.maxActiveParticipantsCount, `${s.label}: the cap after ${r.label}`).toBe(0);
         checked += 1;
       }
       await cam.leave();
     }
-    expect(checked, "anti-vacuity: scenario × (join + 2 reconnects)").toBe(scenarios.length * 3);
+    expect(checked, "anti-vacuity: scenario × (join + 3 rejoins)").toBe(scenarios.length * 4);
   });
 
   it("re-asserted on every rejoin: the cap and the MANUAL view are set again each time the socket rejoins, with no feedback loop", async () => {
@@ -128,8 +149,8 @@ describe("D7: no remote video is ever received (review NEW-1)", () => {
     const before = viewSets();
     expect(m.participants.viewMode).toBe("MANUAL");
     // SOCKET_PEERS resets the view to ACTIVE_GRID inside reconnect(); the
-    // loader's rejoin handler sets MANUAL again in the same turn.
-    m.reconnect();
+    // loader sets MANUAL again (the watchdog, then the rejoin handler).
+    await m.reconnect();
     await settle();
     expect(m.participants.viewMode, "the loader put it back").toBe("MANUAL");
     expect(viewSets(), "set again on the rejoin").toBeGreaterThan(before);
@@ -137,7 +158,7 @@ describe("D7: no remote video is ever received (review NEW-1)", () => {
     // Anything that raises the cap (in MANUAL it selects nobody) is put back
     // at the next rejoin, before that rejoin's selection can consume anyone.
     m.participants.setMaxActiveParticipantsCount(3);
-    m.reconnect();
+    await m.reconnect();
     await settle();
     expect(m.participants.maxActiveParticipantsCount, "put back to 0 on the rejoin").toBe(0);
     expect(m.calls.filter((c) => c === "setMax:0").length).toBeGreaterThan(capSets);
@@ -183,8 +204,15 @@ describe("the meeting link the presence pill reads (review I8: zero network)", (
       expect(cam.link(), "socket down: nothing is known").toBeNull();
       expect(notified).toBeGreaterThan(n0);
       vi.setSystemTime(9_000);
-      m.reconnect();
+      const rejoined = m.reconnect();
+      expect(cam.link(), "SOCKET_PEERS is in, the media join is not: still nothing").toBeNull();
+      await rejoined;
       expect(cam.link()?.joinedAt, "a rejoin restarts the settle").toBe(9_000);
+      vi.setSystemTime(12_000);
+      const media = m.mediaReconnect();
+      expect(cam.link(), "the media node dropped: nothing is known").toBeNull();
+      await media;
+      expect(cam.link()?.joinedAt, "a media-node rejoin restarts the settle too").toBe(12_000);
       m.peerLeaves(OPP.peer);
       expect(cam.link()?.peers.some((p) => p.userId === OPP.user), "left").toBe(false);
       off();

@@ -13,7 +13,26 @@
 //     the active selection (l.18002).
 //   - SOCKET_PEERS on every socket (re)join: clears the joined and subscribed
 //     maps and resets viewMode to ACTIVE_GRID, then re-adds the peers
-//     (l.18385) — a MANUAL view does not survive a reconnect.
+//     (l.18385) — a MANUAL view does not survive a reconnect. Re-adding a peer
+//     selects nobody (onParticipantSocketJoined, l.18990: `joined.add` only);
+//     the selection comes ONCE, over the whole joined set, from the server's
+//     selected-peer broadcast (onSelectedPeers → computeActivateParticipants,
+//     l.18520) — so the cap-0 leak lands a peer in a single update. Whether
+//     the server sends a selection to a room holding nobody else cannot be
+//     read from the client build: modelled as not sent, the stricter case.
+//   - `roomJoined` comes LATER than SOCKET_PEERS: only after the media join's
+//     network awaits (joinMediaRoom, l.24515-24535; on a socket rejoin via
+//     SOCKET_SERVICE_RECONNECTED → resetSelf → joinRoom, l.24416). Anything
+//     the ACTIVE_GRID selection subscribes in between is consumed by the
+//     scheduled sync before `roomJoined` fires — so a guard on `roomJoined`
+//     alone is too late; the map watchdog is what closes that window.
+//   - A media-node reconnect is a separate path: roomLeft then
+//     roomJoined({reconnected: true}) with NO SOCKET_PEERS (l.24411-24413).
+//     A socket drop also emits roomLeft (SOCKET_SERVICE_DISCONNECTED,
+//     l.24419).
+//   - Every participant starts with manualProducerConfig = TC, all four kinds
+//     TRUE (l.4954, l.17469): unsubscribing "video" alone leaves the peer in
+//     videoSubscribed for its screen share (l.18137), which is then consumed.
 //   - ACTIVE_GRID selection, `selectActivePeers` (l.18580), verbatim —
 //     INCLUDING its arithmetic for a viewer on stage: with a cap of 0 it
 //     computes `o = -1` and `slice(0, -1)`, so when the server has selected two
@@ -60,7 +79,13 @@ export type FakeProducer = { producerId: string; kind: "audio" | "video"; pause:
 export class FakePeer extends Emitter {
   stageStatus = "ON_STAGE";
   producers: FakeProducer[] = [];
-  manualProducerConfig: { video?: boolean; screenshareVideo?: boolean; audio?: boolean; screenshareAudio?: boolean } = {};
+  // TC (l.4954): every kind allowed until a MANUAL unsubscribe says otherwise.
+  manualProducerConfig: { video?: boolean; screenshareVideo?: boolean; audio?: boolean; screenshareAudio?: boolean } = {
+    audio: true,
+    video: true,
+    screenshareAudio: true,
+    screenshareVideo: true,
+  };
   constructor(
     public id: string,
     public userId: string,
@@ -209,7 +234,9 @@ export class FakeMeeting {
 
   async join(): Promise<void> {
     this.calls.push("join");
-    this.socketPeers(false);
+    this.socketPeers();
+    await mediaJoinGap();
+    this.self.emit("roomJoined", { reconnected: false });
   }
   async leave(): Promise<void> {
     this.calls.push("leave");
@@ -217,8 +244,9 @@ export class FakeMeeting {
     this.self.emit("roomLeft", { state: "left" });
   }
 
-  /** SOCKET_PEERS (l.18385), then the room-joined notice. */
-  private socketPeers(reconnected: boolean): void {
+  /** SOCKET_PEERS (l.18385). The room-joined notice is NOT here: it follows
+   *  the media join's network awaits (see the callers). */
+  private socketPeers(): void {
     const p = this.participants;
     p.videoSubscribed.clear();
     p.audioSubscribed.clear();
@@ -226,12 +254,9 @@ export class FakeMeeting {
     p.joined.clear();
     p.viewMode = "ACTIVE_GRID";
     this.socketJoined = true;
-    for (const peer of this.roster) {
-      p.joined.add(peer);
-      this.updateActive();
-    }
-    this.meta.emit("socketConnectionUpdate", { state: "connected", reconnected, reconnectionAttempt: 0 });
-    this.self.emit("roomJoined", { reconnected });
+    for (const peer of this.roster) p.joined.add(peer);
+    // The server's selected-peer broadcast that follows.
+    if (this.roster.length > 0) this.updateActive();
   }
 
   /** UPDATE_ACTIVE → updateMediaSubscribedMaps (l.18601), then a consumer
@@ -325,13 +350,31 @@ export class FakeMeeting {
   }
   dropSocket(): void {
     this.socketJoined = false;
-    this.meta.emit("socketConnectionUpdate", { state: "disconnected", reconnected: false, reconnectionAttempt: 1 });
+    this.meta.emit("socketConnectionUpdate", { state: "disconnected", reconnected: false, reconnectionAttempt: 0 });
+    this.self.emit("roomLeft", { state: "disconnected" });
   }
-  /** The socket drops and comes back: SOCKET_PEERS runs again. */
-  reconnect(): void {
+  /** The socket drops and comes back (l.14463, l.24416): connected, then
+   *  SOCKET_PEERS, then — after the media join's awaits — roomJoined. */
+  async reconnect(): Promise<void> {
     this.dropSocket();
-    this.socketPeers(true);
+    this.meta.emit("socketConnectionUpdate", { state: "connected", reconnected: true, reconnectionAttempt: undefined });
+    this.socketPeers();
+    await mediaJoinGap();
+    this.self.emit("roomJoined", { reconnected: true });
   }
+  /** The media node drops and comes back; the socket and its peers stay
+   *  (ROOM_NODE_DISCONNECTED / ROOM_NODE_RECONNECTED, l.24411-24413). */
+  async mediaReconnect(): Promise<void> {
+    this.self.emit("roomLeft", { state: "disconnected" });
+    await mediaJoinGap();
+    this.self.emit("roomJoined", { reconnected: true });
+  }
+}
+
+/** The media join's network round trips: at least one macrotask, so a
+ *  consumer sync scheduled by SOCKET_PEERS runs first. */
+function mediaJoinGap(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 1));
 }
 
 function updateMap(map: PeerMap, ids: string[], joined: PeerMap): void {
