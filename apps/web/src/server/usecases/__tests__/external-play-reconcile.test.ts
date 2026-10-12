@@ -33,6 +33,7 @@ import { exportGame as wiredExportGame, readGameStream as wiredReadGameStream } 
 import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
+import { loadArbiterRound } from "../external-play/arbiter";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import {
@@ -1635,6 +1636,19 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     expect((await flagsOf(g.fixtureId)).length, "never a duplicate on a re-read").toBe(1);
     expect(await resultsOf(g.fixtureId), "never a sanction: no result, no forfeit").toEqual([]);
     expect(await rowOf(g.fixtureId)).toMatchObject({ status: "live", needs_reason: null });
+  });
+
+  it("T15: the arbiter panel's loader reads the flag this producer wrote — the plies it names", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    const view = await loadArbiterRound(await mintOrgOwnerAuth(g.orgId), g.divisionId);
+    const flags = view!.boards.find((b) => b.fixtureId === g.fixtureId)!.flags;
+    // Expected from the recorded line: ply 1 was ours (T10's act), and every
+    // later ply of the line was adopted from Lichess.
+    expect(flags).toEqual([
+      expect.objectContaining({ kind: "out_of_band_play", plies: { from: 2, to: LINE.length } }),
+    ]);
   });
 
   it("each LATER adoption is its own flag, naming only its own plies", async () => {
