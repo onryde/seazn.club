@@ -100,7 +100,7 @@ describe.skipIf(!HAS_DB)("myLichessLink — /me's Lichess card", () => {
     expect([slugA, slugB]).toContain((await ask(user, [a.orgId, b.orgId])).orgSlug);
   });
 
-  it("an entry that needs no link names no club: over the board, withdrawn, in a completed division", async () => {
+  it("an entry that needs no link names no club: over the board, withdrawn, in a completed division, a merged person", async () => {
     const cells: [string, () => Promise<SeedOnlineChessRoundResult>][] = [
       ["over the board", () => seedOnlineChessRound({ fixtures: 1, onlinePlay: "off" })],
       [
@@ -129,6 +129,12 @@ describe.skipIf(!HAS_DB)("myLichessLink — /me's Lichess card", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: entries checked").toBe(cells.length);
+    // A person merged into another (V349) is not this login's player any more, whatever it was entered in.
+    const merged = await seedOnlineChessRound({ fixtures: 1 });
+    const mergedUser = merged.boards[0]!.home.userId;
+    await dropLink(mergedUser);
+    await sql`update persons set merged_into = ${merged.boards[0]!.away.personId} where id = ${merged.boards[0]!.home.personId}`;
+    expect(await ask(mergedUser, [merged.orgId]), "merged person").toEqual({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null });
     // The positive pair: the same seed, untouched, names its club.
     const ok = await seedOnlineChessRound({ fixtures: 1 });
     await dropLink(ok.boards[0]!.home.userId);

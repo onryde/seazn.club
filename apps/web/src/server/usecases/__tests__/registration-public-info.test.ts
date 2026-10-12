@@ -17,8 +17,11 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
   return { ...actual, isServerFeatureEnabled: vi.fn(async (_f: string, _id: string, o: { orgId: string }) => flags.on.has(o.orgId)) };
 });
+import { builtinModules } from "@seazn/engine/sports";
+import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import { publicRegistrationInfo, putRegistrationSettings } from "../registrations";
+import { createDivision } from "../divisions";
 import { asOwner, rig, seedOrg } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -207,6 +210,63 @@ describe.skipIf(!HAS_DB)("publicRegistrationInfo — online play and the camera 
     await putRegistrationSettings(owner, division.id, { enabled: true, entrant_kind: "individual", fee_cents: 0, payment_method: "offline", form_fields: [] });
     const d = (await publicRegistrationInfo(orgSlug, competition.slug)).divisions[0]!;
     expect([d.sport_key, d.online_play, d.camera_policy]).toEqual(["generic", false, "off"]);
+  });
+
+  it("another sport: every registered sport but boardgame plays nothing online, whatever its stored config says (registry sweep)", async () => {
+    // A non-boardgame division cannot SAVE onlinePlay 'lichess' (the API refuses it), so the stored state is forced by
+    // labelled SQL: the answer must come from the sport check, not from the config. A boardgame division that DOES play
+    // online sits beside it, so the club is offered and asked — the sport check is the only thing left to answer.
+    const { orgId, orgSlug, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const chess = await createDivision(owner, competition.id, {
+      name: "Chess",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+    });
+    for (const id of [division.id, chess.id]) {
+      await putRegistrationSettings(owner, id, { enabled: true, entrant_kind: "individual", fee_cents: 0, payment_method: "offline", form_fields: [] });
+    }
+    await sql`update competitions set camera_policy = 'required' where id = ${competition.id}`;
+    flags.on.add(orgId);
+    const byId = async () => {
+      vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+      forgetOnlineChessFlagCache();
+      const info = await publicRegistrationInfo(orgSlug, competition.slug);
+      return new Map(info.divisions.map((d) => [d.division_id, d]));
+    };
+    let checked = 0;
+    for (const mod of builtinModules) {
+      if (mod.key === "boardgame") continue;
+      await sql`
+        update divisions set sport_key = ${mod.key}, camera_policy = 'required',
+               config = config || ${sql.json({ onlinePlay: "lichess" })}
+         where id = ${division.id}`;
+      const got = await byId();
+      expect([got.get(division.id)!.online_play, got.get(division.id)!.camera_policy], mod.key).toEqual([false, "off"]);
+      expect(got.get(chess.id)!.online_play, `${mod.key}: premise — the club is offered, the chess division plays online`).toBe(true);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: sports swept").toBe(builtinModules.length - 1);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a club with no division that could play online asks PostHog nothing", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, { enabled: true, entrant_kind: "individual", fee_cents: 0, payment_method: "offline", form_fields: [] });
+    vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+    forgetOnlineChessFlagCache();
+    vi.mocked(isServerFeatureEnabled).mockClear();
+    expect((await publicRegistrationInfo(orgSlug, competition.slug)).divisions[0]!.online_play).toBe(false);
+    expect(isServerFeatureEnabled).not.toHaveBeenCalled();
+    // The positive pair: the same club with an online chess division asks, once.
+    await sql`update divisions set sport_key = 'boardgame', config = config || ${sql.json({ onlinePlay: "lichess" })} where id = ${division.id}`;
+    forgetOnlineChessFlagCache();
+    await publicRegistrationInfo(orgSlug, competition.slug);
+    expect(isServerFeatureEnabled).toHaveBeenCalledTimes(1);
   });
 
   it("the nearest camera setting wins — the division's own, else the competition's — while the division plays online", async () => {
