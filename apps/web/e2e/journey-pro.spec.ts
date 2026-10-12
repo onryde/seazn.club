@@ -11,6 +11,7 @@ import {
   scoreRemainingFixtures,
   divisionPath,
 } from "./helpers";
+import { futureDayUtc } from "./future-day";
 
 // Full Pro lifecycle as one ordered story: create a competition through the
 // wizard, add divisions (UI + API), enter entrants, generate fixtures, start,
@@ -107,10 +108,21 @@ test.describe.serial("pro lifecycle", () => {
     // This journey used to jump straight from "Start tournament" to a
     // "Score" link on a never-timed fixture; that entry point is retired by
     // design, so this now times every fixture first, the same way a real
-    // organiser would have to. A future date (well past "today" in this
-    // environment) keeps the action "Score" rather than "Assign scorer"
-    // (rule 5 of the ladder: scheduled TODAY with no officials assigned).
-    const base = Date.UTC(2026, 9, 12, 9, 0, 0); // 2026-10-12 09:00Z
+    // organiser would have to. The day must NOT be today: the ladder's
+    // `assign_scorer` rung (scheduled TODAY in the venue zone, no officials)
+    // outranks `score`, and nobody is appointed here.
+    //
+    // RELATIVE ON PURPOSE — never a literal calendar date. This used to be
+    // `Date.UTC(2026, 9, 12, 9, 0, 0)`, written 2026-09-05 as "well past
+    // today"; on 2026-10-12 itself the fifteen fixtures became "today, no
+    // scorer", the run sheet offered "Assign scorer" instead of "Score", and
+    // the next test timed out waiting for a link that was correctly absent.
+    // The ladder was right; the date had expired. So: midnight UTC thirty days
+    // from now, plus 09:00 — fifteen 30-minute slots on a calendar day about a
+    // month out in every zone, never "today" whenever CI runs.
+    // `src/lib/__tests__/e2e-future-day.test.ts` sweeps `futureDayUtc` across
+    // every IANA zone and fails if a literal date comes back into this file.
+    const base = futureDayUtc(Date.now(), 30, 9);
     for (let i = 0; i < fixtureIds.length; i++) {
       const patched = await apiJson(request, `/api/v1/fixtures/${fixtureIds[i]!}`, "PATCH", {
         scheduled_at: new Date(base + i * 30 * 60_000).toISOString(),
