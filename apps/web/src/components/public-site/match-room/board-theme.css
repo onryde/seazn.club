@@ -11,6 +11,16 @@
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
+/* chessground's base sheet sets every .cg-wrap to `position: relative` with
+   no height of its own, and it loads after Tailwind — so the wrapper's
+   `absolute inset-0` lost, chessground measured a 0px-tall wrap when it was
+   built, and drew a board with no squares, pieces or targets (found by the
+   room e2e; a node test cannot see a cascade). Two classes outrank one. */
+.seazn-board .cg-wrap {
+  position: absolute;
+  inset: 0;
+}
+
 .seazn-board cg-board {
   background-color: #b58863;
   /* One 2×2 tile = 25% of the board: top-left light (a8 for White, h1 for
@@ -71,6 +81,9 @@
   bottom: 1px;
   width: 100%;
   height: auto;
+  /* The canvas letters are lower case (a–h); the base sheet uppercases files
+     with a rule as specific as the shared one above, so it is undone here. */
+  text-transform: none;
 }
 
 .seazn-board .cg-wrap coords.files coord {
@@ -81,16 +94,20 @@
 /* Opposite square colour. chessground renders ranks 1..8 and files a..h in
    DOM order, and reverses them with flex for the orientation. From White's
    side a1 is dark: odd ranks and odd files sit on dark squares. From Black's
-   side the left file is h and the bottom rank is 8: the parity flips. */
-.seazn-board .cg-wrap coords.ranks.white coord:nth-child(odd),
-.seazn-board .cg-wrap coords.files.white coord:nth-child(odd),
+   side the left file is h and the bottom rank is 8: the parity flips.
+   chessground 9.2.1 marks only Black's orientation (`coords.ranks.black`);
+   White's carries no class, so White is `:not(.black)` — a `.white`
+   selector matched nothing and left every label in the page's ink (found by
+   the room e2e). */
+.seazn-board .cg-wrap coords.ranks:not(.black) coord:nth-child(odd),
+.seazn-board .cg-wrap coords.files:not(.black) coord:nth-child(odd),
 .seazn-board .cg-wrap coords.ranks.black coord:nth-child(even),
 .seazn-board .cg-wrap coords.files.black coord:nth-child(even) {
   color: #f0d9b5;
 }
 
-.seazn-board .cg-wrap coords.ranks.white coord:nth-child(even),
-.seazn-board .cg-wrap coords.files.white coord:nth-child(even),
+.seazn-board .cg-wrap coords.ranks:not(.black) coord:nth-child(even),
+.seazn-board .cg-wrap coords.files:not(.black) coord:nth-child(even),
 .seazn-board .cg-wrap coords.ranks.black coord:nth-child(odd),
 .seazn-board .cg-wrap coords.files.black coord:nth-child(odd) {
   color: #b58863;

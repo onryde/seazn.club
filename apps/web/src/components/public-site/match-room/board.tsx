@@ -7,7 +7,8 @@
 // string handed to `onMove`; the shell posts it to OUR server, which forwards
 // it with the player's own token (T10). Legal destinations come from chess.js
 // (BSD-2) as hints only — Lichess stays the authority, and a refused move is
-// put back by the shell bumping `syncKey`. A promotion is never guessed: our
+// put back by the shell bumping `syncKey` (a move in flight is left where the
+// player put it). A promotion is never guessed: our
 // own promotion module decides when the picker opens, and the move is sent
 // only with the piece chosen (the server refuses a suffixless promotion).
 import "./board-theme.css";
@@ -75,29 +76,50 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
 
   const turn = sideToMove(fen);
   const check = useMemo(() => inCheck(fen), [fen]);
-  const config: CgConfig = useMemo(
+  // Two halves, applied apart. The POSITION puts pieces on squares: it is
+  // re-applied only when the ledger's position changes or the shell bumps
+  // `syncKey`. INTERACTION is who may move and where: it changes on its own
+  // around every move sent (`movable` is false while the act is pending), and
+  // must not drag the position with it — re-applying the position then would
+  // snap the player's moved piece back for the whole round trip to Lichess
+  // and bring it forward again on the next read (found by the room e2e).
+  // A last move arrives as a fresh tuple on every read: keyed by value.
+  const lastMoveKey = lastMove ? `${lastMove[0]}${lastMove[1]}` : "";
+  const position: CgConfig = useMemo(
     () => ({
       fen,
       orientation,
       turnColor: turn,
       check: check ? turn : false,
-      lastMove: lastMove ? ([lastMove[0], lastMove[1]] as CgKey[]) : undefined,
-      coordinates: true,
-      viewOnly: false,
-      highlight: { lastMove: true, check: true },
-      animation: { enabled: true, duration: 150 },
+      lastMove: lastMoveKey ? ([lastMoveKey.slice(0, 2), lastMoveKey.slice(2, 4)] as CgKey[]) : undefined,
+    }),
+    [fen, orientation, turn, check, lastMoveKey],
+  );
+  const interaction: CgConfig = useMemo(
+    () => ({
       movable: {
         free: false,
         color: movable ? orientation : undefined,
         dests: movable ? legalDests(fen) : new Map(),
         showDests: true,
       },
-      premovable: { enabled: false },
       draggable: { enabled: movable, showGhost: true },
+    }),
+    [fen, orientation, movable],
+  );
+  const config: CgConfig = useMemo(
+    () => ({
+      ...position,
+      ...interaction,
+      coordinates: true,
+      viewOnly: false,
+      highlight: { lastMove: true, check: true },
+      animation: { enabled: true, duration: 150 },
+      premovable: { enabled: false },
       selectable: { enabled: true },
       drawable: { enabled: false },
     }),
-    [fen, orientation, turn, check, lastMove, movable],
+    [position, interaction],
   );
   // The latest props, for the board built after the loader resolves: a
   // snapshot that lands while chessground is still loading must not be lost
@@ -149,20 +171,29 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
       api.current?.destroy();
       api.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- constructed once; later props flow through api.set below
+    // Constructed once, from refs; later props flow through api.set below.
   }, []);
 
-  // Every later prop change, and every syncKey bump, re-applies the position.
+  // A new position, or a syncKey bump (a refused or failed move), puts the
+  // pieces back on the ledger's squares. Declared before the interaction
+  // effect, so a refusal resets the pieces before the dests are recomputed.
   useEffect(() => {
-    api.current?.set(config);
-  }, [config, syncKey]);
+    api.current?.set(position);
+  }, [position, syncKey]);
+
+  // Who may move, and where — never the pieces.
+  useEffect(() => {
+    api.current?.set(interaction);
+  }, [interaction]);
 
   const finishPromotion = (piece: PromotionPiece | null) => {
     const p = promo;
     setPromo(null);
     if (!p) return;
     if (piece === null) {
-      // "Cancel — put the pawn back".
+      // "Cancel — put the pawn back", and give the move back: chessground
+      // cleared the destinations and passed the turn when the pawn moved, and
+      // nothing was sent, so no prop changes to restore them.
       api.current?.set(config);
       return;
     }

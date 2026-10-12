@@ -69,7 +69,9 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, onCh
         ) : (
           <span aria-hidden className="ml-1.5 mr-1 h-2 w-2 shrink-0 rounded-full bg-[#c9bdf0]" />
         )}
-        <span className={`min-w-0 truncate text-sm ${snap.opponent.checkedIn ? "" : "text-[#6b5b8a]"}`}>
+        {/* Wraps, never truncates: it is a sentence about the opponent, and a
+            long name would cut off the part that says whether they are in. */}
+        <span className={`min-w-0 break-words text-sm ${snap.opponent.checkedIn ? "" : "text-[#6b5b8a]"}`}>
           {t(snap.opponent.checkedIn ? "externalPlay.room.checkin.opponentIn" : "externalPlay.room.checkin.opponentNotIn", {
             name: snap.opponent.name,
           })}
