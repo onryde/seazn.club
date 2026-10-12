@@ -55,6 +55,12 @@ export const routes = {
     tab ? `/o/${org}/c/${comp}/d/${div}?tab=${tab}` : `/o/${org}/c/${comp}/d/${div}`,
   divisionSchedule: (org: Slug, comp: Slug, div: Slug) =>
     `/o/${org}/c/${comp}/d/${div}/schedule`,
+  /** T15 — the arbiter panel for the division's open round, optionally on one
+   *  board (a fixture id: the panel is a live surface, not a quotable page). */
+  divisionArbiter: (org: Slug, comp: Slug, div: Slug, fixtureId?: string) =>
+    fixtureId
+      ? `/o/${org}/c/${comp}/d/${div}/arbiter?fixture=${encodeURIComponent(fixtureId)}`
+      : `/o/${org}/c/${comp}/d/${div}/arbiter`,
   /** Fixtures are addressed by per-division ordinal — human-quotable ("match 14"). */
   fixture: (org: Slug, comp: Slug, div: Slug, no: number) =>
     `/o/${org}/c/${comp}/d/${div}/f/${no}`,

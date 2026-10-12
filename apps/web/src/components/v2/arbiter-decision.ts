@@ -5,6 +5,7 @@
 // it answers the request in flight; a notice belongs to the board on screen;
 // "Let the game go on" writes nothing; the settle disclosure closes on a
 // switch.
+import { ApiV1Error } from "@/lib/client-v1";
 
 export type ArbiterRequestKind = "resync" | "override";
 
@@ -27,8 +28,9 @@ export type ArbiterDecisionState = {
 
 export type ArbiterDecisionAction =
   | { type: "select"; boardId: string }
-  | { type: "resync" }
-  | { type: "override" }
+  /** Sent for the board that was on screen when it was pressed. */
+  | { type: "resync"; boardId: string }
+  | { type: "override"; boardId: string }
   | { type: "goOn" }
   | { type: "toggleSettle" }
   | {
@@ -50,7 +52,9 @@ export function arbiterDecision(s: ArbiterDecisionState, a: ArbiterDecisionActio
     case "resync":
     case "override":
       if (s.boardId === null || s.busy !== null) return s;
-      return { ...s, busy: { kind: a.type, boardId: s.boardId }, notice: null };
+      // A press that raced a switch is still THE request in flight, so its
+      // answer frees the panel (R3); it shows nothing on this board (R4).
+      return { ...s, busy: { kind: a.type, boardId: a.boardId }, notice: a.boardId === s.boardId ? null : s.notice };
     case "goOn":
       if (s.boardId === null || s.busy !== null) return s;
       return { ...s, settleOpen: false, notice: { boardId: s.boardId, kind: "went_on" } };
@@ -74,4 +78,47 @@ function noticeFor(a: Extract<ArbiterDecisionAction, { type: "resyncDone" | "ove
     return a.outcome.read ? { boardId, kind: "resynced", adopted: a.outcome.adopted } : { boardId, kind: "resync_nothing" };
   }
   return a.outcome.ok ? { boardId, kind: "overridden" } : { boardId, kind: "override_failed", code: a.outcome.code };
+}
+
+/** The two requests behind the decision buttons, sent at most one at a time.
+ *  The reducer refuses a second press too, but a double tap lands before the
+ *  re-render that disables the button — this guard is what keeps the second
+ *  request off the network. */
+export function decisionRunner(deps: {
+  dispatch: (a: ArbiterDecisionAction) => void;
+  post: (path: string, body?: unknown) => Promise<unknown>;
+  refresh: () => void;
+  overrideNote: string;
+}) {
+  let inflight = false;
+  const run = async (kind: ArbiterRequestKind, boardId: string): Promise<boolean> => {
+    if (inflight) return false;
+    inflight = true;
+    deps.dispatch({ type: kind, boardId });
+    const path = `/api/v1/fixtures/${encodeURIComponent(boardId)}/external-play/${kind === "resync" ? "resync" : "video-override"}`;
+    try {
+      if (kind === "resync") {
+        const r = (await deps.post(path)) as { read: boolean; adopted: number };
+        deps.dispatch({ type: "resyncDone", boardId, outcome: { ok: true, read: r.read, adopted: r.adopted } });
+      } else {
+        await deps.post(path, { note: deps.overrideNote });
+        deps.dispatch({ type: "overrideDone", boardId, outcome: { ok: true } });
+      }
+      deps.refresh();
+    } catch (err) {
+      const code = err instanceof ApiV1Error ? err.code : "UNKNOWN";
+      deps.dispatch(
+        kind === "resync"
+          ? { type: "resyncDone", boardId, outcome: { ok: false, code } }
+          : { type: "overrideDone", boardId, outcome: { ok: false, code } },
+      );
+    } finally {
+      inflight = false;
+    }
+    return true;
+  };
+  return {
+    resync: (boardId: string) => run("resync", boardId),
+    override: (boardId: string) => run("override", boardId),
+  };
 }
