@@ -1337,6 +1337,27 @@ Elsewhere the text is the controller's record.
      - **Why:** one rule everywhere, so a player's record never shows a match nobody played. It also matches cricket,
        where a match abandoned without a ball bowled does not count in players' records.
      - **Amends** X-PS-2 and X-AB-1 (stats clause only). Table and standings treatment is unchanged.
+121. **The core scoring rules get rule rows in their own backfill wave, after W2** (2026-10-12, owner "A", given
+     after my recommendation A).
+     - **The gap:** `packages/engine/rules/` holds about 70 rows, almost all W2 topics (walkover, abandon,
+       retirement, withdrawal, double walkover, knockout tie-break). The core scoring rules live only as prose, in
+       11 `DOMAIN.md` files of about 1,700 lines, so nothing fails when one of them stops being proved. That prose
+       covers:
+       - tennis games, sets and tie-breaks;
+       - serve and rotation;
+       - set targets and win-by;
+       - cricket overs, innings and DLS;
+       - periods, extra time and shoot-outs;
+       - carrom boards;
+       - chess result methods.
+     - **The wave:** turn each sport's `DOMAIN.md` rules into rows, one sport at a time, in the format of
+       `rules/README.md`.
+       - Link each row to the tests that already prove it.
+       - Write a test only where none exists. Each such gap is a finding, recorded as found.
+       - Expected size: a few hundred rows.
+     - **Sequencing:** after W2 merges. It may run in parallel with W3, because it mostly writes docs and tests, not
+       product code. It also underpins the single-reader build guards the owner approved on 2026-10-12.
+     - **W2b:** adds no backfill rows.
 
 ## Recommendations (mine — not rulings)
 
