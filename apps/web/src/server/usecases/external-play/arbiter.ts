@@ -125,15 +125,20 @@ export async function loadArbiterRound(
      where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
   if (!division) throw new HttpError(404, "division not found", "NOT_FOUND");
 
-  const [round] = await sql<{ stageId: string; stageName: string; roundNo: number }[]>`
+  const opened = (pin?: { stageId: string; roundNo: number }) => sql<{ stageId: string; stageName: string; roundNo: number }[]>`
     select o.stage_id as "stageId", s.name as "stageName", o.round_no as "roundNo"
       from stage_round_opens o
       join stages s on s.id = o.stage_id
      where s.division_id = ${divisionId} and o.org_id = ${auth.orgId}
-       ${opts.round ? sql`and o.stage_id = ${opts.round.stageId} and o.round_no = ${opts.round.roundNo}` : sql``}
+       ${pin ? sql`and o.stage_id = ${pin.stageId} and o.round_no = ${pin.roundNo}` : sql``}
      order by o.opened_at desc, o.round_no desc
      limit 1`;
+  const [latest] = await opened();
+  const [round] = opts.round ? await opened(opts.round) : [latest];
   if (!round) return null;
+  // N1: a pinned round is current only when it IS the most recently opened
+  // one — the module's contract above — so the panel can say otherwise.
+  const current = latest !== undefined && latest.stageId === round.stageId && latest.roundNo === round.roundNo;
 
   const rows = await sql<BoardRow[]>`
     select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
@@ -252,7 +257,7 @@ export async function loadArbiterRound(
       flags,
     };
   }));
-  return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size };
+  return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size, current };
 }
 
 async function flagView(

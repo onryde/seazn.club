@@ -112,8 +112,13 @@ export type ArbiterRound = {
   /** Never a board the viewer plays on (C1, D7). */
   boards: ArbiterBoard[];
   /** How many of the round's boards were left out because the viewer plays
-   *  on them: every board left out ⇒ the panel says "you're playing". */
+   *  on them: every board left out ⇒ the panel says "you're playing"; some
+   *  ⇒ one line says why the board numbers skip (N3). */
   ownBoards: number;
+  /** This is the division's most recently OPENED round (D12). false ⇒ a
+   *  `?fixture=` pinned an earlier round while a newer one is open, and the
+   *  panel offers the way to it (N1). */
+  current: boolean;
 };
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;

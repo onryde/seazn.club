@@ -261,6 +261,8 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
         {p.round && <p className={`m-0 ml-auto hidden text-[13px] lg:block ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>}
       </header>
 
+      {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}
+
       {p.requested !== null ? (
         <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
       ) : p.round === null ? (
@@ -394,6 +396,35 @@ function EmptyNotice({ title, body }: { title: string | null; body: string }) {
       {title && <h2 className="m-0 text-[17px] font-semibold">{title}</h2>}
       <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>{body}</p>
     </main>
+  );
+}
+
+/** Re-review 1. N1: a `?fixture=` (a deep link, or a reload after a pick)
+ *  keeps its board's round; when that round is not the division's most
+ *  recently opened one, say so and offer the current round — the board stays
+ *  on screen. N3: boards left out because the viewer plays on them (C1) get
+ *  one line, so skipped board numbers are explained; when EVERY board is
+ *  theirs the "you're playing" state says it instead. Nothing at all when
+ *  neither holds. */
+function RoundNotes({ round, slugs, f }: { round: ArbiterRound; slugs: ArbiterScreenProps["slugs"]; f: Fmt }) {
+  const older = !round.current;
+  const hidden = round.boards.length > 0 && round.ownBoards > 0;
+  if (!older && !hidden) return null;
+  return (
+    <div data-arbiter-notes="" className="mx-auto flex w-full max-w-[1232px] min-w-0 flex-col items-start gap-2 px-4 pt-3 lg:px-6 lg:pt-5">
+      {older && (
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-x-4 rounded-[10px] border border-[#e7e3f3] bg-[#f3effc] px-3 py-1">
+          <p className={`m-0 min-w-0 text-sm leading-[1.5] ${INK}`}>{f.t("arbiter.olderRound")}</p>
+          <Link
+            href={routes.divisionArbiter(slugs.org, slugs.comp, slugs.div)}
+            className="flex min-h-11 items-center text-sm font-semibold text-[#5b21b6] underline underline-offset-2"
+          >
+            {f.t("arbiter.requested.current")}
+          </Link>
+        </div>
+      )}
+      {hidden && <p className={`m-0 min-w-0 text-[13px] leading-[1.45] ${MUTED}`}>{f.plural("arbiter.ownHidden", round.ownBoards)}</p>}
+    </div>
   );
 }
 

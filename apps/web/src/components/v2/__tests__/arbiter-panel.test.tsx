@@ -88,6 +88,7 @@ const ROUND: ArbiterRound = {
   roundNo: 3,
   timeControl: "10+5",
   ownBoards: 0,
+  current: true,
   boards: [
     board({ fixtureId: "f1", boardNo: 1, white: { name: "Ada Okonkwo", personId: "a" }, black: { name: "Tomasz Wieczorek", personId: "b" }, state: { kind: "live", moveNo: 23 } }),
     board({
@@ -176,6 +177,67 @@ describe("the empty cases first", () => {
     const t = text(h);
     expect(t).toContain(EN["arbiter.flags.none"]);
     expect(t).not.toContain(EN["arbiter.flag.pending.chip"]);
+  });
+});
+
+describe("notes above the round (re-review 1: N1, N3) — the empty case first", () => {
+  const CURRENT = 'href="/o/club/c/autumn/d/open/arbiter"';
+  const OLDER = EN["arbiter.olderRound"]!;
+  const HIDDEN_ONE = EN["arbiter.ownHidden.one"]!;
+  const HIDDEN_OTHER = EN["arbiter.ownHidden.other"]!;
+  const notes = (h: string) => {
+    const t = text(h);
+    return {
+      // The notes' box itself: never an empty one on screen.
+      box: count(h, 'data-arbiter-notes=""'),
+      older: t.includes(OLDER),
+      currentLink: h.includes(CURRENT),
+      hiddenOne: t.includes(HIDDEN_ONE),
+      hiddenOther: t.includes(HIDDEN_OTHER.replace("{count}", "2")),
+    };
+  };
+  const NONE = { box: 0, older: false, currentLink: false, hiddenOne: false, hiddenOther: false };
+
+  it("the current round, nothing of the viewer's left out: no note, no link — the board as ever", () => {
+    const h = html(props());
+    expect(notes(h)).toEqual(NONE);
+    expect(count(h, "<figure"), "the board is on screen").toBe(2);
+  });
+
+  it("N1: a pinned EARLIER round while a newer one is open — the plain line and the way to the current round, above the board still shown", () => {
+    const h = html(props({ round: { ...ROUND, current: false } }));
+    expect(notes(h)).toEqual({ ...NONE, box: 1, older: true, currentLink: true });
+    expect(text(h)).toContain(EN["arbiter.requested.current"]);
+    expect(count(h, "<figure"), "the pinned board stays on screen").toBe(2);
+    expect(decode(h).indexOf(OLDER), "the note is in the markup").toBeGreaterThan(-1);
+    expect(decode(h).indexOf(OLDER), "the note sits above the board").toBeLessThan(decode(h).indexOf("<figure"));
+  });
+
+  it("N1: an earlier round whose boards are all the viewer's own — still says a newer round is open", () => {
+    const h = html(props({ round: { ...ROUND, current: false, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
+    expect(notes(h)).toEqual({ ...NONE, box: 1, older: true, currentLink: true });
+    expect(text(h)).toContain(EN["arbiter.ownRound"]);
+  });
+
+  it("N3: some boards left out because the viewer plays on them — one line saying so (one, and more than one); none when nothing was left out", () => {
+    const one = html(props({ round: { ...ROUND, ownBoards: 1 } }));
+    expect(notes(one)).toEqual({ ...NONE, box: 1, hiddenOne: true });
+    expect(count(text(one), HIDDEN_ONE), "one line").toBe(1);
+    const two = html(props({ round: { ...ROUND, ownBoards: 2 } }));
+    expect(notes(two)).toEqual({ ...NONE, box: 1, hiddenOther: true });
+    expect(notes(html(props({ round: { ...ROUND, ownBoards: 0 } }))), "nothing left out").toEqual(NONE);
+  });
+
+  it("N3: EVERY board the viewer's own — the 'you're playing' state alone, never the line as well", () => {
+    const h = html(props({ round: { ...ROUND, boards: [], ownBoards: 2 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
+    expect(notes(h)).toEqual(NONE);
+    expect(text(h)).toContain(EN["arbiter.ownRound"]);
+  });
+
+  it("N1 + N3 together: both notes, one link", () => {
+    const h = html(props({ round: { ...ROUND, current: false, ownBoards: 1 } }));
+    expect(notes(h)).toEqual({ ...NONE, box: 1, older: true, currentLink: true, hiddenOne: true });
+    expect(count(h, CURRENT)).toBe(1);
   });
 });
 
@@ -722,6 +784,8 @@ describe("every locale", () => {
       props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ video: { kind: "own" } }),
+      props({ round: { ...ROUND, current: false, ownBoards: 1 } }),
+      props({ round: { ...ROUND, ownBoards: 2 } }),
       props({ round: null, requested: "unavailable", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
       props({ round: null, requested: "own", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
       props({
@@ -740,7 +804,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked).toBe(40);
+    expect(checked).toBe(48);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {
