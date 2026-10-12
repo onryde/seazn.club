@@ -9,7 +9,7 @@ import { foldMatchWithStoppage, resolveVoids, type EventEnvelope, type FoldableM
 import { FORFEIT_REASONS, MatchOutcome, type LineupPair } from "./types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { awardReasonOf, creditedMetrics } from "../sport/forfeit-credit.ts";
-import { aggregatePlayerStats, forfeitStatsRole, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
+import { aggregatePlayerStats, forfeitStatsRole, playedInStats, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
@@ -218,6 +218,43 @@ describe("stats/stats.ts forfeitStatsRole + the aggregator's appearance skip (X-
     expect(forfeitStatsRole([start, dq(2), ev(3, "x.warning")]), "a sport event only after it").toBe("unplayed");
     // the last forfeit is the effective one, each judged by what was played before IT
     expect(forfeitStatsRole([start, dq(2), ev(3, "x.warning"), dq(4)]), "a DQ after play, following one with nothing played").toBe("played");
+  });
+
+  it("ruling 115 + X-PS-1/2: playedInStats, the one reader the web counts ask — empty is unplayed, no forfeit is played; it resolves voids itself; the model's own unplayed wins on a forfeit", () => {
+    const start = ev(1, "core.start");
+    const play = ev(2, "x.warning");
+    const voidOf = (seq: number, target: EventEnvelope) => makeEnvelope(seq, { type: "core.void", payload: {} }, target.id);
+    const rows: Array<[string, EventEnvelope[], boolean]> = [
+      // X-PS-1: a walkover / double walkover / bye the product settled without writing an event
+      ["no event", [], false],
+      ["every event voided", [start, voidOf(2, start)], false],
+      // X-PS-2: an abandon with a result before anything was played still counts — no forfeit, so played
+      ["a bare Start", [start], true],
+      ["no forfeit, play", [start, play], true],
+      ["a walkover", [forfeit(1, { by: A, reason: "walkover" })], false],
+      ["a DQ after a bare Start", [start, forfeit(2, { by: A, reason: "disqualified" })], false],
+      ["a DQ after play", [start, play, forfeit(3, { by: A, reason: "disqualified" })], true],
+      // stored rows as they are, voids unresolved: the voided play leaves nothing played
+      ["a DQ after a voided play", [start, play, voidOf(3, play), forfeit(4, { by: A, reason: "disqualified" })], false],
+      // a voided walkover is no forfeit at all
+      ["a voided walkover", [start, forfeit(2, { by: A, reason: "walkover" }), voidOf(3, forfeit(2, {}))], true],
+    ];
+    let checked = 0;
+    for (const [label, events, want] of rows) {
+      expect(playedInStats(events), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(9);
+    // On a forfeit the model's own reading outranks the role (chess keeps a classical game played): both directions.
+    const retired = forfeit(3, { by: A, reason: "retired" });
+    expect(playedInStats([forfeit(1, { by: A, reason: "walkover" })], { unplayed: () => false }), "model says played").toBe(true);
+    expect(playedInStats([start, play, retired], { unplayed: () => true }), "model says unplayed").toBe(false);
+    // Without an active forfeit the model is not asked: a ledger it would call unplayed is still played (step 2).
+    let asked = 0;
+    const model = { unplayed: () => (asked++, true) };
+    expect(playedInStats([start, play], model), "no forfeit: played whatever the model says").toBe(true);
+    expect(playedInStats([], model), "empty: unplayed whatever the model says").toBe(false);
+    expect(asked, "the model is asked only about a ledger with a forfeit").toBe(0);
   });
 
   it("an unparseable forfeit is no forfeit — it resets the role rather than reading a field off it", () => {

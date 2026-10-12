@@ -518,6 +518,30 @@ export function forfeitStatsRole(
 }
 
 /**
+ * W2b (X-PS-1, X-PS-2; ruling 115) — is this fixture a match played in players' stats? THE one reader, in this order:
+ * 1. an empty ledger (after voids) is not: nothing was recorded, so nothing was played — the walkovers, byes and double
+ *    walkovers a product settles without writing an event (X-PS-1);
+ * 2. a ledger with no active `core.forfeit` is: X-PS-1 takes a match away only through a forfeit, and a model's own
+ *    `unplayed` reads forfeits only, so it is not asked (an abandon with a result before anything was played is X-PS-2's
+ *    and counts);
+ * 3. otherwise the model's own `unplayed` where it declares one (chess: the classical game before a tie-break walkover
+ *    stays played), else `forfeitStatsRole` — a walkover, a withdrawal, a double walkover and a disqualification with
+ *    nothing played are not; a retirement and an in-match disqualification are.
+ * `events` is one fixture's ledger; voids are resolved here, so a caller may hand it the stored rows as they are. Steps 1
+ * and 2 answer without a model, so a caller holding many ledgers needs to read in full only those holding a
+ * `core.forfeit` or a `core.void` row: any other non-empty ledger is played.
+ *
+ * The shared fold below asks it before crediting an appearance, and apps/web asks it before counting a person's
+ * matches (the career count, the public player's match lines) — so no surface carries a second copy of the rule.
+ */
+export function playedInStats(events: readonly EventEnvelope[], model?: Pick<PlayerStatsModel, "unplayed">): boolean {
+  const active = resolveVoids([...events]);
+  if (active.length === 0) return false;
+  if (!active.some((event) => event.type === "core.forfeit")) return true;
+  return !(model?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+}
+
+/**
  * Fold one fixture's event ledger into per-person stat contributions
  * (Jul3/07 §3), plus the `PlayerStatsDiagnostics` described above.
  * `core.void` drops the voided event entirely — a voided goal takes its
@@ -573,9 +597,7 @@ export function aggregatePlayerStatsWithDiagnostics(
 
   // W2b (X-PS-1): an appearance metric is not credited in a fixture nobody played. Asked once, and only of a model
   // that declares one.
-  const unplayed =
-    model.metrics.some((metric) => metric.appearance === true) &&
-    (model.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+  const unplayed = model.metrics.some((metric) => metric.appearance === true) && !playedInStats(active, model);
 
   for (const event of active) {
     const payload = event.payload as Record<string, unknown>;

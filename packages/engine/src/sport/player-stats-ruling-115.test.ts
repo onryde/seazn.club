@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded, resolveVoids, type EventEnvelope } from "../core/events.ts";
 import type { LineupPair } from "../core/types.ts";
-import { aggregatePlayerStats, forfeitStatsRole, type PlayerStatRow, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
+import { aggregatePlayerStats, forfeitStatsRole, playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
@@ -40,11 +40,15 @@ const PRE: Record<string, { type: string; payload: unknown }[]> = {
 type Step = { type: string; payload: unknown; voidsIndex?: number };
 const forfeit = (reason: string): Step => ({ type: "core.forfeit", payload: { by: A, reason } });
 
-/** The engine's players'-stats reading of a ledger — the matrix's `statsMatch` (reference-walkover-credit.test.ts):
- *  the model's own `unplayed`, else `forfeitStatsRole`, negated. */
+/** The engine's players'-stats reading of a ledger: `playedInStats`, the one reader every surface asks (the shared fold,
+ *  apps/web's match counts). Cross-checked against its two parts — the model's own `unplayed`, else `forfeitStatsRole`
+ *  — so the export cannot drift from what the fold's roles say. */
 function statsMatchOf(model: PlayerStatsModel, events: readonly EventEnvelope[]): boolean {
   const active = resolveVoids([...events]);
-  return !(model.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+  const parts = !(model.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+  const reader = playedInStats(events, model);
+  expect(reader, "playedInStats agrees with the model's unplayed / forfeitStatsRole").toBe(parts);
+  return reader;
 }
 
 function rowsOf(m: AnySportModule, cfg: unknown, l: LineupPair, events: readonly EventEnvelope[]): PlayerStatRow[] {
