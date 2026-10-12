@@ -66,6 +66,20 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
     expect(groupsOf(real("pull_request", "competition-1"))).toEqual(["probe"]); // a PR has no group input; a stray value does not widen it
   });
 
+  spawnIt(3)("a push (to main: mutation.yml's own filter) runs the probe only, whatever group the (absent) input says, so main keeps a warm probe file", () => {
+    expect(groupsOf(real("push", ""))).toEqual(["probe"]);
+    expect(groupsOf(real("push", null))).toEqual(["probe"]);
+    expect(groupsOf(real("push", "all"))).toEqual(["probe"]); // a push has no group input; a stray `all` does not widen it to 81 legs
+  });
+
+  spawnIt(2)("a push plans the probe exactly as a pull request does, cut and timeout included: the key main's run saves under is the one a PR's restore key reaches", () => {
+    const push = parsed(real("push", ""));
+    const pr = parsed(real("pull_request", ""));
+    expect(push).toHaveLength(1);
+    expect(push).toEqual(pr);
+    expect(push[0]!.cut, "a fingerprint, not an empty string").toMatch(/^[0-9a-f]{16}$/);
+  });
+
   spawnIt(3)("a schedule and a dispatch of `all` give every group but the probe, in declaration order, and there is more than one", () => {
     for (const [event, group] of [["schedule", ""], ["schedule", null], ["workflow_dispatch", "all"]] as const) {
       const got = groupsOf(real(event, group));
@@ -106,7 +120,7 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
   });
 
   spawnIt(7)("an unknown group, an empty or missing dispatch group, an unknown event and a missing event are each exit 2, with nothing on stdout", () => {
-    for (const [event, group] of [["workflow_dispatch", "nosuch"], ["workflow_dispatch", ""], ["workflow_dispatch", null], ["push", ""], ["workflow_call", "all"], [null, "all"], ["", ""]] as const) {
+    for (const [event, group] of [["workflow_dispatch", "nosuch"], ["workflow_dispatch", ""], ["workflow_dispatch", null], ["merge_group", ""], ["workflow_call", "all"], [null, "all"], ["", ""]] as const) {
       const r = real(event, group);
       expect({ event, group, status: r.status }).toEqual({ event, group, status: 2 });
       expect(r.stdout, `${String(event)} ${String(group)}`).toBe("");
@@ -118,7 +132,7 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
     const unknown = real("workflow_dispatch", "nosuch");
     expect(unknown.stderr).toContain('unknown group "nosuch"');
     for (const group of ["", null] as const) expect(real("workflow_dispatch", group).stderr, String(group)).toContain("needs --group");
-    expect(real("push", "").stderr).toContain('unsupported event "push"');
+    expect(real("merge_group", "").stderr).toContain('unsupported event "merge_group"');
   });
 
   spawnIt(2)("every entry carries the timeout stryker-timeouts.json holds for its group, a whole number of minutes in (0, 300]", () => {
