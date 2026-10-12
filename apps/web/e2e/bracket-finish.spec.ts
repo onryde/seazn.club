@@ -3,7 +3,7 @@ import { TAG, activeOrg, apiJson, addEntrantsViaApi, createStageAndGenerate, exp
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
-import { forfeitAdmission } from "@seazn/engine/core";
+import { forfeitAdmission, playRecorded } from "@seazn/engine/core";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../src/lib/forfeit-phase-refusal";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { readFileSync } from "node:fs";
@@ -671,17 +671,23 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // The real chess module, typed through `forfeitAdmission`'s own parameter and spread into it: no cast, and no field
     // named here, so the engine reads its walkover phases from the module itself. Only the phase is pinned to "play".
     const chess: Parameters<typeof forfeitAdmission<null>>[0] = builtinModules.find((m) => m.key === "boardgame")!;
-    // The game below holds only its Start: nothing played (ruling 112). Chess declares walkovers in play too, so for the
-    // walkover the fact moves nothing; ruling 113 makes it move the retirement alone (nobody retires from a game never
-    // played) — asserted, so the e2e's expectation cannot hang on which way it is read.
-    const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: false });
+    // The game below holds only its Start. Ruling 113's fact moves the retirement alone (nobody retires from a game
+    // never played) — asserted, so the e2e's expectation cannot hang on which way it is read. Ruling 118: in chess the
+    // Start IS play (Seazn records no moves), so the engine reads this game's own stored ledger as played and the
+    // retirement is on offer — read from the fixture's real events through the engine's `playRecorded`, never typed.
+    const unplayed = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: false });
     const afterPlay = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: true });
-    expect(afterPlay.reasons.filter((r) => !admitted.reasons.includes(r)), "chess: ruling 113's fact adds the retirement only").toEqual(["retired"]);
-    expect(admitted.reasons, "chess: nothing played, no retirement (ruling 113)").not.toContain("retired");
+    expect(afterPlay.reasons.filter((r) => !unplayed.reasons.includes(r)), "chess: ruling 113's fact adds the retirement only").toEqual(["retired"]);
+    const fx = ready[1]!;
+    const ledger = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.id}/events`)).data!;
+    expect(ledger.map((e) => e.type), "the game holds only its Start").toEqual(["core.start"]);
+    const startedIsPlay = playRecorded(ledger.map((e, i) => ({ id: `e-${i}`, type: e.type })), builtinModules.find((m) => m.key === "boardgame")!);
+    expect(startedIsPlay, "ruling 118: a chess game whose Start is pressed is played").toBe(true);
+    const admitted = forfeitAdmission<null>({ ...chess, forfeitPhase: () => "play" }, null, { playRecorded: startedIsPlay });
+    expect(admitted.reasons, "chess after its Start: the retirement is on offer (ruling 118)").toContain("retired");
     const cascadeOnly: readonly string[] = CASCADE_ONLY_FORFEIT_REASONS;
     const wantReasons = admitted.reasons.filter((r) => !cascadeOnly.includes(r));
     expect(wantReasons.length, "the engine admits a reason for a chess game in play").toBeGreaterThan(0);
-    const fx = ready[1]!;
     await page.goto(await fixturePath(request, fx.id));
     let widths = 0;
     for (const w of [1280, 768, 320]) {
@@ -695,6 +701,7 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await d.getByTestId("forfeit-who-away").click();
       const reasons = await d.locator('[data-testid^="forfeit-why-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("forfeit-why-".length)));
       expect(reasons, `${w}: why — the engine's reasons in play, never the cascade's withdrew`).toEqual(wantReasons);
+      expect(reasons, `${w}: the retirement offered after a chess Start (ruling 118)`).toContain("retired");
       // Every control is really tappable at this width: the point at its centre lands on it (paint is not a hit).
       const controls = [...sides.map((x) => `forfeit-who-${x}`), ...reasons.map((x) => `forfeit-why-${x}`), "forfeit-confirm"];
       for (const id of controls) expect(await hitsItself(d.getByTestId(id)), `${w}: ${id} is hit-testable`).toBe(true);
@@ -710,8 +717,8 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       widths++;
     }
     expect(widths).toBe(3);
-    // Record it: the away player is disqualified (ruling 113: a chess game in play has nothing played short of its
-    // result, so the retirement is not on offer).
+    // Record it: the away player is disqualified — one of the reasons offered; the retirement after a chess Start is
+    // recorded and credited by forfeit-dialog.spec.ts's ruling-118 test.
     const d = page.getByTestId("forfeit-dialog");
     await d.getByTestId("forfeit-why-disqualified").check();
     await d.getByTestId("forfeit-confirm").click();
