@@ -75,9 +75,10 @@ export type ArbiterFlag =
       kind: "camera_connection_problems";
       at: string;
       personName: string | null;
-      /** From fixture_video_guard_faults, never from the note. */
-      seconds: number;
-      stamps: number;
+      /** From fixture_video_guard_faults over job 5's window, never from the
+       *  note. Both null when there is no match window to read them over. */
+      seconds: number | null;
+      stamps: number | null;
     };
 
 export type ArbiterBoard = {

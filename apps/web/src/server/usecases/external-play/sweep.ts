@@ -29,8 +29,8 @@ import type { CameraPolicy } from "@/lib/camera-policy";
 import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
-import { matchCameraOff, stampedInMatch, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
-import { guardFaultSpans } from "@/server/external-play/video/guard-faults";
+import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
+import { cameraMatchWindow, matchGuardFaults } from "@/server/external-play/video/match-window";
 import {
   endMeeting,
   fetchVideoOffCoverage,
@@ -679,11 +679,15 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 // (`game_over_at`, held or not), else the latest the clock let the game run
 // (the last move plus the side to move's remaining time). None known: not
 // ready. Never past the room's own end — nobody is on camera in a closed room.
+// An organiser's video override (D11) ends the window at the press (T15 fix
+// round 1, M1, an owner call): video was expected until then, so what came
+// before is still judged; a press before the first move leaves no match to
+// evidence. The window is match-window.ts's cameraMatchWindow — the arbiter
+// panel reads the same one.
 //
 // Under Required only — the policy in force when the match began (review M4;
 // D9 lets it be relaxed later, audited): Off and Optional store nothing and
-// ask RealtimeKit nothing, and an organiser's video override (D11) is "proceed without
-// video" — nothing to evidence. Evidence for the organiser, NEVER a
+// ask RealtimeKit nothing. Evidence for the organiser, NEVER a
 // sanction (D10): a fixture_play_flags row, and nothing else moves.
 //
 // One settle per room: `camera_evidence_at` is stamped, conditionally on
@@ -732,18 +736,6 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
 }
 
 type CameraFlag = { kind: "camera_lost" | "camera_connection_problems"; personId: string; note: string };
-
-/** The GAME's end (ruling I1), in the order of the evidence: the bridge's
- *  close, the first read that saw the game over, the latest the clock let it
- *  run — the last move plus the side to move's remaining time (T10's ledger:
- *  an even count is White to move). Null when none is on file. */
-function gameEndOf(c: CameraCandidate): Date | null {
-  if (c.finishedAt !== null) return c.finishedAt;
-  if (c.gameOverAt !== null) return c.gameOverAt;
-  if (c.lastMoveAt === null || c.moveCount === null) return null;
-  const toMoveMs = c.moveCount % 2 === 0 ? c.whiteMs : c.blackMs;
-  return toMoveMs === null ? null : new Date(c.lastMoveAt.getTime() + toMoveMs);
-}
 
 /** Every player's camera over the window, or `not_ready` while any session
  *  is live or any report is not final. A RealtimeKit failure THROWS. */
@@ -807,15 +799,12 @@ async function readCameraEvidence(
     // stamped interval counts as covered; one still open runs to the
     // window's end — the re-join never landed, and that is ours too. One
     // opened after the window (the room outlives the game) covers nothing.
-    const faults = (await guardFaultSpans(sql, { fixtureId: c.fixtureId, personId })).map((f) => ({
-      from: f.from,
-      to: f.to ?? new Date(Math.max(f.from.getTime(), window.to.getTime())),
-    }));
     // …but a stamp is the player's browser's own claim, so it excuses and
     // never HIDES (fix round 5, ruling 1): many or long stamps in one match
     // are TOLD to the organiser — a neutral flag, never camera_lost. Its note
-    // leads with the stamped total in whole seconds (T16's {duration}).
-    const stamped = stampedInMatch(window, faults);
+    // leads with the stamped total in whole seconds (T16's {duration}). The
+    // arbiter panel shows the same total from the same function (I1).
+    const { faults, stamped } = await matchGuardFaults(sql, { fixtureId: c.fixtureId, personId, window });
     if (stamped.flag) {
       flags.push({
         kind: "camera_connection_problems",
@@ -864,8 +853,9 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
 }
 
 async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
-  // No first move: no match to evidence. Override: no video expected.
-  if (c.startedAt === null || c.overrideAt !== null) {
+  // No first move, or an override pressed before it: no match to evidence.
+  const window = cameraMatchWindow({ ...c, meetingEndedAt: c.endedAt });
+  if (c.startedAt === null || window.kind === "no_match") {
     await settleCamera(pass, c, []);
     return;
   }
@@ -886,13 +876,11 @@ async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDe
     await settleCamera(pass, c, []);
     return;
   }
-  const gameEnd = gameEndOf(c);
   let read: CameraFlag[] | "not_ready";
-  if (gameEnd === null) {
+  if (window.kind === "no_end") {
     // No end on file: no window to judge, so nothing is read.
     read = "not_ready";
   } else {
-    const window = { from: c.startedAt, to: new Date(Math.min(gameEnd.getTime(), c.endedAt.getTime())) };
     try {
       read = await readCameraEvidence(c, window, rtk);
     } catch (err) {

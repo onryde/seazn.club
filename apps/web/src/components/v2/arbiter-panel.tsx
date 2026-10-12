@@ -548,9 +548,15 @@ function FlagCard({ flag, f }: { flag: ArbiterFlag; f: Fmt }) {
     case "camera_connection_problems":
       return (
         <article className={`${CARD} border-[#e7e3f3]`}>
-          <span className={CHIP_NEUTRAL}>{f.t("externalPlay.flag.cameraConnectionProblems", { duration: f.duration(flag.seconds) })}</span>
+          <span className={CHIP_NEUTRAL}>
+            {flag.seconds === null
+              ? f.t("arbiter.flag.connection.chipPlain")
+              : f.t("externalPlay.flag.cameraConnectionProblems", { duration: f.duration(flag.seconds) })}
+          </span>
           <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">
-            {f.plural("arbiter.flag.connection.body", flag.stamps, { name: someone(flag.personName) })}
+            {flag.stamps === null
+              ? f.t("arbiter.flag.connection.unread", { name: someone(flag.personName) })
+              : f.plural("arbiter.flag.connection.body", flag.stamps, { name: someone(flag.personName) })}
           </p>
         </article>
       );

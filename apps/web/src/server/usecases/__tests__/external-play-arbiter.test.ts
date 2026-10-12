@@ -286,6 +286,9 @@ describe.runIf(HAS_DB)("loadArbiterRound — flags, as evidence", () => {
     // the evidence after it: the match window is 19:18 → 19:39.
     await sql`update fixture_external_play set game_over_at = '2026-10-12T19:39:00Z' where fixture_id = ${fid}`;
     await meeting(fid, r.orgId, { evidence: true });
+    // T7 tore the room down after the game; job 5 read it 2+ minutes later.
+    await sql`update fixture_video_meetings set ended_at = '2026-10-12T19:44:00Z', camera_evidence_at = '2026-10-12T19:47:00Z'
+               where fixture_id = ${fid}`;
     // reconcile's writer (I5) — its note shape.
     await sql`insert into fixture_play_flags (fixture_id, org_id, kind, person_id, opened_at, note) values
       (${fid}, ${r.orgId}, 'out_of_band_play', null, '2026-10-12T19:38:00Z',
@@ -327,11 +330,18 @@ describe.runIf(HAS_DB)("loadArbiterRound — flags, as evidence", () => {
     const fid = r.boards[0]!.fixtureId;
     await sql`insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
       (${fid}, ${r.orgId}, 'out_of_band_play', null, 'a note from an older writer'),
-      (${fid}, ${r.orgId}, 'camera_lost', ${r.boards[0]!.home.personId}, null)`;
+      (${fid}, ${r.orgId}, 'camera_lost', ${r.boards[0]!.home.personId}, null),
+      (${fid}, ${r.orgId}, 'camera_connection_problems', ${r.boards[0]!.away.personId}, '999 s stamped')`;
+    // A stamp on file — but the board has no first move, so there is no match
+    // window to read it over (match-window.ts): no number, never the note's.
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${fid}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
+    await sql`insert into fixture_video_guard_faults (fixture_id, person_id, started_at, ended_at)
+              values (${fid}, ${r.boards[0]!.away.personId}, '2026-10-12T19:20:00Z', '2026-10-12T19:22:00Z')`;
     const flags = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.flags;
-    expect(flags.length).toBe(2);
+    expect(flags.length).toBe(3);
     expect(flags.find((f) => f.kind === "out_of_band_play")).toMatchObject({ plies: null });
     expect(flags.find((f) => f.kind === "camera_lost")).toMatchObject({ report: null, personName: "P1W" });
+    expect(flags.find((f) => f.kind === "camera_connection_problems")).toMatchObject({ seconds: null, stamps: null, personName: "P1B" });
   });
 });
 

@@ -6001,6 +6001,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "We couldn't reconnect your camera. Reload the page — if it keeps happening, tell your organiser.",
   "externalPlay.room.state.cameraGaveUp.reload": "Reload",
   "externalPlay.flag.cameraConnectionProblems": "Camera connection problems (our side) — {duration}",
+  "arbiter.flag.connection.chipPlain": "Camera connection problems (our side)",
+  "arbiter.flag.connection.unread": "{name}: Seazn's side lost the camera connection during the game. The details could not be read here.",
   "arbiter.requested.unavailable": "That game isn't available here.",
   "arbiter.requested.own": "You play in that game — another organiser must review it.",
   "arbiter.requested.current": "Go to the current round",

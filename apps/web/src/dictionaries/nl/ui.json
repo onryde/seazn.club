@@ -6001,6 +6001,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "We konden je camera niet opnieuw verbinden. Laad de pagina opnieuw — blijft het gebeuren, laat het je organisator weten.",
   "externalPlay.room.state.cameraGaveUp.reload": "Opnieuw laden",
   "externalPlay.flag.cameraConnectionProblems": "Problemen met de cameraverbinding (aan onze kant) — {duration}",
+  "arbiter.flag.connection.chipPlain": "Problemen met de cameraverbinding (aan onze kant)",
+  "arbiter.flag.connection.unread": "{name}: Seazn verloor tijdens de partij de cameraverbinding. De details kunnen hier niet worden gelezen.",
   "arbiter.requested.unavailable": "Die partij is hier niet beschikbaar.",
   "arbiter.requested.own": "Je speelt die partij zelf: een andere organisator moet die controleren.",
   "arbiter.requested.current": "Naar de huidige ronde",

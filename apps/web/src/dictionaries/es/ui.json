@@ -6001,6 +6001,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "No hemos podido volver a conectar tu cámara. Recarga la página — si sigue pasando, avisa a tu organizador.",
   "externalPlay.room.state.cameraGaveUp.reload": "Recargar",
   "externalPlay.flag.cameraConnectionProblems": "Problemas de conexión de la cámara (por nuestra parte) — {duration}",
+  "arbiter.flag.connection.chipPlain": "Problemas de conexión de la cámara (por nuestra parte)",
+  "arbiter.flag.connection.unread": "{name}: Seazn perdió la conexión de la cámara durante la partida. Los detalles no se pueden leer aquí.",
   "arbiter.requested.unavailable": "Esa partida no está disponible aquí.",
   "arbiter.requested.own": "Juegas esa partida: otro organizador debe supervisarla.",
   "arbiter.requested.current": "Ir a la ronda actual",

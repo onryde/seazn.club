@@ -173,6 +173,8 @@ export type DictionaryKey =
   | "arbiter.flag.cameraOff.unread"
   | "arbiter.flag.connection.body.one"
   | "arbiter.flag.connection.body.other"
+  | "arbiter.flag.connection.chipPlain"
+  | "arbiter.flag.connection.unread"
   | "arbiter.flag.foundAt"
   | "arbiter.flag.outOfBand.chip"
   | "arbiter.flag.outOfBand.range.one"

@@ -447,6 +447,15 @@ describe("flags on this board (canvas cards)", () => {
     expect(t).toContain(EN["arbiter.flag.connection.body.other"]!.replace("{name}", "Elif Demirtaş").replace("{count}", "3"));
   });
 
+  it("camera connection problems with no match window to read the stamps over: still shown, plainly — never a made-up duration", () => {
+    const flag: ArbiterFlag = { id: "fl-cc", kind: "camera_connection_problems", at: at(19, 40), personName: "Elif Demirtaş", seconds: null, stamps: null };
+    const b = { ...ROUND.boards[2]!, flags: [flag] };
+    const t = text(html(props({ round: { ...ROUND, boards: [b] } })));
+    expect(t).toContain(EN["arbiter.flag.connection.chipPlain"]);
+    expect(t).toContain(EN["arbiter.flag.connection.unread"]!.replace("{name}", "Elif Demirtaş"));
+    expect(t).not.toMatch(/\d+ s\b/);
+  });
+
   it("the pending card while the report is still to come, and not once it is settled", () => {
     const t = text(html(props()));
     expect(t).toContain("Camera report · pending");
@@ -640,7 +649,7 @@ describe("every locale", () => {
       props({
         round: {
           ...ROUND,
-          boards: [{ ...ROUND.boards[2]!, flags: [outOfBand(null), { id: "c", kind: "camera_connection_problems", at: at(19, 40), personName: null, seconds: 61, stamps: 1 }, { ...PRIYA_REPORT, report: null, personName: null } as ArbiterFlag] }],
+          boards: [{ ...ROUND.boards[2]!, flags: [outOfBand(null), { id: "c", kind: "camera_connection_problems", at: at(19, 40), personName: null, seconds: 61, stamps: 1 }, { id: "c2", kind: "camera_connection_problems", at: at(19, 41), personName: null, seconds: null, stamps: null }, { ...PRIYA_REPORT, report: null, personName: null } as ArbiterFlag] }],
         },
       }),
     ];

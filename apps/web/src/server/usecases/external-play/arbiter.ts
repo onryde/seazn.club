@@ -28,8 +28,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { type BoardgameClockInput } from "@/server/external-play/clock";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
-import { guardFaultSpans } from "@/server/external-play/video/guard-faults";
-import { stampedInMatch } from "@/server/external-play/video/match-camera-off";
+import { cameraMatchWindow, matchGuardFaults, type MatchTimes } from "@/server/external-play/video/match-window";
 import {
   addParticipant,
   ensureMeeting,
@@ -213,10 +212,9 @@ export async function loadArbiterRound(
 
     const nameOf = (personId: string | null): string | null =>
       personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
-    const gameEnd = r.finishedAt ?? r.gameOverAt ?? r.meetingEndedAt ?? new Date();
     const flags: ArbiterFlag[] = [];
     for (const f of flagRows.filter((x) => x.fixtureId === r.fixtureId)) {
-      flags.push(await flagView(f, { nameOf, startedAt: r.startedAt, gameEnd }));
+      flags.push(await flagView(f, { nameOf, times: r }));
     }
 
     boards.push({
@@ -254,7 +252,7 @@ export async function loadArbiterRound(
 
 async function flagView(
   f: FlagRow,
-  ctx: { nameOf: (personId: string | null) => string | null; startedAt: Date | null; gameEnd: Date },
+  ctx: { nameOf: (personId: string | null) => string | null; times: MatchTimes },
 ): Promise<ArbiterFlag> {
   const at = f.openedAt.toISOString();
   switch (f.kind) {
@@ -267,20 +265,19 @@ async function flagView(
         at,
         personName: ctx.nameOf(f.personId),
         report: parseCameraLostNote(f.note),
-        windowFrom: ctx.startedAt?.toISOString() ?? null,
+        windowFrom: ctx.times.startedAt?.toISOString() ?? null,
       };
     case "camera_connection_problems": {
       // The guard's own stamps are the authority, never the note's number
-      // (controller addendum 2026-10-12): the same window arithmetic the
-      // sweep's job 5 used to decide to tell the organiser.
-      const spans =
-        f.personId === null ? [] : await guardFaultSpans(sql, { fixtureId: f.fixtureId, personId: f.personId });
-      const from = ctx.startedAt ?? ctx.gameEnd;
-      const window = { from, to: new Date(Math.max(from.getTime(), ctx.gameEnd.getTime())) };
-      const stamped = stampedInMatch(
-        window,
-        spans.map((s) => ({ from: s.from, to: s.to ?? new Date(Math.max(s.from.getTime(), window.to.getTime())) })),
-      );
+      // (controller addendum 2026-10-12), over job 5's OWN window through
+      // job 5's own function (T15 fix round 1, I1): what the panel shows is
+      // what the sweep judged. No window (no first move on file now, or a
+      // person-less row): no number at all, never a made-up one.
+      const window = cameraMatchWindow(ctx.times);
+      if (window.kind !== "window" || f.personId === null) {
+        return { id: f.id, kind: "camera_connection_problems", at, personName: ctx.nameOf(f.personId), seconds: null, stamps: null };
+      }
+      const { stamped } = await matchGuardFaults(sql, { fixtureId: f.fixtureId, personId: f.personId, window });
       return {
         id: f.id,
         kind: "camera_connection_problems",
