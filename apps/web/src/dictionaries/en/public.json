@@ -676,12 +676,12 @@
   "forfeit.tag.abandoned": "Aband.",
   "forfeit.tag.abandonedDls": "Aband. · DLS",
   "forfeit.tag.abandonedNoResult": "Aband. · NR",
-  "forfeit.sentence.walkover": "{loser} didn't turn up — walkover.",
-  "forfeit.sentence.withdrew": "{loser} withdrew — walkover.",
-  "forfeit.sentence.retired": "{loser} retired.",
-  "forfeit.sentence.disqualified": "{loser} was disqualified.",
-  "forfeit.sentence.doubleWalkover": "Neither side turned up — both lose.",
-  "forfeit.sentence.doubleWalkoverNext": "Neither side turned up — both lose. Next round: walkover for {next}.",
-  "forfeit.sentence.abandoned": "Abandoned ({reason}) — {result}.",
-  "forfeit.sentence.abandonedBare": "Abandoned ({reason})."
+  "forfeit.sentence.walkover": "{loser} didn't turn up — walkover",
+  "forfeit.sentence.withdrew": "{loser} withdrew — walkover",
+  "forfeit.sentence.retired": "{loser} retired",
+  "forfeit.sentence.disqualified": "{loser} was disqualified",
+  "forfeit.sentence.doubleWalkover": "Neither side turned up — both lose",
+  "forfeit.sentence.doubleWalkoverNext": "Neither side turned up — both lose. Next round: walkover for {next}",
+  "forfeit.sentence.abandoned": "Abandoned ({reason}) — {result}",
+  "forfeit.sentence.abandonedBare": "Abandoned ({reason})"
 }

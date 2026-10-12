@@ -108,7 +108,7 @@ describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2
     expect(rows).toBe(FORFEIT_REASONS.length);
     expect(seen.size, "four reasons, four sentences").toBe(FORFEIT_REASONS.length);
     expect(words(centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: forfeit("walkover") }).doc.header.statusLine)).toBe(
-      "Harbour United didn't turn up — walkover.",
+      "Harbour United didn't turn up — walkover",
     );
   });
 
@@ -137,7 +137,7 @@ describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2
     expect(doc.header.scoreLines).toEqual([String(credit.perSide[0].gf), String(credit.perSide[1].gf)]);
     expect(credit.perSide[0].gf, "premise: the credit is not 0–0").toBeGreaterThan(0);
     expect(FOOTBALL.summary(state as never).perSide.map((p) => p.line)).toEqual(doc.header.scoreLines);
-    expect(words(doc.header.statusLine)).toBe("Harbour United didn't turn up — walkover.");
+    expect(words(doc.header.statusLine)).toBe("Harbour United didn't turn up — walkover");
   });
 });
 
@@ -176,16 +176,16 @@ describe("match centre — a walkover's credited score and sentence, every sport
 describe("match centre — a double walkover (X-DW-1)", () => {
   const dw = () => [ev(1, "core.forfeit", { by: "both", reason: "walkover" })];
 
-  it("X-DW-1: \"Neither side turned up — both lose.\", and the next-round walkover clause only when a seat was fed", () => {
+  it("X-DW-1: \"Neither side turned up — both lose\", and the next-round walkover clause only when a seat was fed", () => {
     const bare = centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: dw });
     expect(bare.outcome).toEqual({ kind: "double_walkover" });
     expect(bare.doc.header.statusLine).toEqual({ key: "forfeit.sentence.doubleWalkover" });
-    expect(words(bare.doc.header.statusLine)).toBe("Neither side turned up — both lose.");
+    expect(words(bare.doc.header.statusLine)).toBe("Neither side turned up — both lose");
     const fed = centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: dw }, { doubleWalkoverNext: "Bears" });
-    expect(words(fed.doc.header.statusLine)).toBe("Neither side turned up — both lose. Next round: walkover for Bears.");
+    expect(words(fed.doc.header.statusLine)).toBe("Neither side turned up — both lose. Next round: walkover for Bears");
     // An empty name is no clause, not "walkover for ."
     const blank = centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: dw }, { doubleWalkoverNext: "" });
-    expect(words(blank.doc.header.statusLine)).toBe("Neither side turned up — both lose.");
+    expect(words(blank.doc.header.statusLine)).toBe("Neither side turned up — both lose");
   });
 
   it("spec §5.5: no fixture whose active result is a chess double forfeit renders \"Level — winner to be decided\"", () => {
@@ -200,7 +200,7 @@ describe("match centre — a double walkover (X-DW-1)", () => {
       expect(outcome).toEqual({ kind: "double_walkover" });
       expect(doc.header.statusLine?.key, status).not.toBe("matchCentre.status.needs_decision");
       expect(words(doc.header.statusLine), status).not.toBe(held);
-      expect(words(doc.header.statusLine), status).toBe("Neither side turned up — both lose.");
+      expect(words(doc.header.statusLine), status).toBe("Neither side turned up — both lose");
       checked++;
     }
     expect(checked).toBe(4);
@@ -229,12 +229,12 @@ describe("match centre — an abandon with a result (X-AB-2)", () => {
     ev(4, "cricket.innings.summary", { runs: 167, wickets: 3, legalBalls: 140 }),
   ];
 
-  it("X-AB-2: \"Abandoned (rain) — Eagles won by N runs (DLS).\" — N is the fold's own margin", () => {
+  it("X-AB-2: \"Abandoned (rain) — Eagles won by N runs (DLS)\" — N is the fold's own margin", () => {
     const { doc, state, outcome } = centre({ m: CRICKET, cfg: ODI, status: "decided", ledger: rainEnded, names: ["Kites", "Eagles"] });
     expect(outcome).toMatchObject({ kind: "win", method: "dls" });
     const margin = (state as { margin: { kind: string; value: number } }).margin;
     expect(margin.kind, "premise: a runs margin").toBe("runs");
-    expect(words(doc.header.statusLine)).toBe(`Abandoned (rain) — Eagles won by ${margin.value} runs (DLS).`);
+    expect(words(doc.header.statusLine)).toBe(`Abandoned (rain) — Eagles won by ${margin.value} runs (DLS)`);
     // Every locale names the reason and the result, with no brace left.
     for (const [locale, dict] of Object.entries(DICTS)) {
       const local = centre(
@@ -262,7 +262,7 @@ describe("match centre — an abandon with a result (X-AB-2)", () => {
     expect(words(doc.header.statusLine) ?? "").not.toMatch(/Abandoned/);
   });
 
-  it("a washout: \"Abandoned (rain) — No result.\"; with no resolver the reason still reads", () => {
+  it("a washout: \"Abandoned (rain) — No result\"; with no resolver the reason still reads", () => {
     const washout = () => [
       ev(1, "core.start"),
       ev(2, "cricket.innings.summary", { runs: 250, wickets: 5, legalBalls: 300 }),
@@ -270,7 +270,7 @@ describe("match centre — an abandon with a result (X-AB-2)", () => {
       ev(4, "core.abandon", { reason: "rain" }),
     ];
     const withWords = centre({ m: CRICKET, cfg: ODI, status: "decided", ledger: washout });
-    expect(words(withWords.doc.header.statusLine)).toBe(`Abandoned (rain) — ${t(EN, "matchCentre.result.no_result")}.`);
+    expect(words(withWords.doc.header.statusLine)).toBe(`Abandoned (rain) — ${t(EN, "matchCentre.result.no_result")}`);
     const bare = centre({ m: CRICKET, cfg: ODI, status: "decided", ledger: washout }, { resolveMsg: undefined });
     expect(bare.doc.header.statusLine).toEqual({ key: "forfeit.sentence.abandonedBare", params: { reason: "rain" } });
   });

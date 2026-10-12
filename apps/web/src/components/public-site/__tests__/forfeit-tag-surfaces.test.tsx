@@ -87,16 +87,16 @@ describe("hubForfeit — the hub card's words (the producer)", () => {
   it("X-DW-1: the next-round clause comes from the division's own next fixture, and only when the line feeds it", () => {
     const next = fixture({ id: "fin", home_entrant_id: "b", away_entrant_id: null, outcome: award("walkover", "b", null as never) as never });
     const dw = fixture({ outcome: { kind: "double_walkover" } as never, winner_to_fixture: "fin", loser_to_fixture: null });
-    expect(hubForfeit(dw, ctx([dw, next]))!.sentence).toBe("Neither side turned up — both lose. Next round: walkover for Bears.");
+    expect(hubForfeit(dw, ctx([dw, next]))!.sentence).toBe("Neither side turned up — both lose. Next round: walkover for Bears");
     // A final (feeds nothing): no clause. A next match still waiting: no clause.
     const final = fixture({ outcome: { kind: "double_walkover" } as never, winner_to_fixture: null, loser_to_fixture: null });
-    expect(hubForfeit(final, ctx([final]))!.sentence).toBe("Neither side turned up — both lose.");
+    expect(hubForfeit(final, ctx([final]))!.sentence).toBe("Neither side turned up — both lose");
     const waiting = fixture({ id: "fin", outcome: null, status: "scheduled" });
-    expect(hubForfeit(dw, ctx([dw, waiting]))!.sentence).toBe("Neither side turned up — both lose.");
+    expect(hubForfeit(dw, ctx([dw, waiting]))!.sentence).toBe("Neither side turned up — both lose");
     // D19 (`feedsNextMatch`): a line whose winner AND loser both go to the same match (a two-entrant double elim's
     // winners' match into the grand final) feeds no NEXT match — even with that match walked over, no clause.
     const both = fixture({ outcome: { kind: "double_walkover" } as never, winner_to_fixture: "fin", loser_to_fixture: "fin" });
-    expect(hubForfeit(both, ctx([both, next]))!.sentence).toBe("Neither side turned up — both lose.");
+    expect(hubForfeit(both, ctx([both, next]))!.sentence).toBe("Neither side turned up — both lose");
   });
 
   it("X-AB-2: an abandon's words read the ledger column, and carry the card's own result sentence", () => {
@@ -104,7 +104,7 @@ describe("hubForfeit — the hub card's words (the producer)", () => {
     expect(hubForfeit(dls, ctx()), "no abandon in the ledger: a played DLS result").toBeNull();
     const w = hubForfeit({ ...dls, abandon_reason: "rain" }, ctx([], () => "Riverside FC won by 12 runs (DLS)"))!;
     expect(w.tag).toBe("Aband. · DLS");
-    expect(w.sentence).toBe("Abandoned (rain) — Riverside FC won by 12 runs (DLS).");
+    expect(w.sentence).toBe("Abandoned (rain) — Riverside FC won by 12 runs (DLS)");
   });
 
   it("M-2: a HELD abandon (status abandoned, a level result owed a settle) carries no result — the card never reads finished", () => {
@@ -150,7 +150,7 @@ describe("MatchCard — the results list (the consumer)", () => {
   });
 
   it("the tag is shown, its accessible name and tooltip are the sentence, and the card is described by it", () => {
-    const sentence = "Harbour United didn't turn up — walkover.";
+    const sentence = "Harbour United didn't turn up — walkover";
     const h = card(hubMatch({ forfeit: { kind: "walkover", tag: "w/o", sentence } }));
     expect(h).toContain(`role="img" aria-label="${html(sentence)}" title="${html(sentence)}"`);
     expect(h).toMatch(/data-testid="mh-match-forfeit-tag"[^>]*>w\/o<\/span>/);
@@ -193,7 +193,7 @@ describe("Bracket — the tile at every width has ONE footer row (the consumer)"
     const row = h.slice(h.indexOf('data-testid="bracket-forfeit"'), h.indexOf('data-testid="bracket-forfeit"') + 900);
     expect(row).toContain("3–0");
     expect(row).toContain(">w/o<");
-    expect(row).toContain(`aria-label="${html("Harbour United withdrew — walkover.")}"`);
+    expect(row).toContain(`aria-label="${html("Harbour United withdrew — walkover")}"`);
     expect(h.match(/data-testid="bracket-forfeit-tag"/g)?.length, "only the forfeited tile").toBe(1);
   });
 
@@ -201,7 +201,7 @@ describe("Bracket — the tile at every width has ONE footer row (the consumer)"
     const fx = two({ outcome: { kind: "double_walkover" } as never });
     fx[2] = { ...fx[2]!, status: "forfeited", outcome: award("walkover", "b", null as never) as never };
     const h = await render(fx);
-    expect(h).toContain(`aria-label="${html("Neither side turned up — both lose. Next round: walkover for Bears.")}"`);
+    expect(h).toContain(`aria-label="${html("Neither side turned up — both lose. Next round: walkover for Bears")}"`);
     expect(h).toContain(">2× w/o<");
   });
 
@@ -364,7 +364,7 @@ describe("LiveScoreBody — the fallback line (no document)", () => {
         entrantNames: NAMES, sportKey: "tennis", decidedTemplates: templates, dict: DICT,
       }),
     );
-    expect(forfeit).toContain("Harbour United retired.");
+    expect(forfeit).toContain("Harbour United retired");
     const played = renderToStaticMarkup(
       createElement(LiveScoreBody, {
         data: { status: "decided", summary: { headline: "2 – 1" }, outcome: { kind: "win", winner: "h", loser: "a" } },

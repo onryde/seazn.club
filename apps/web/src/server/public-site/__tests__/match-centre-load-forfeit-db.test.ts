@@ -82,7 +82,7 @@ describe.skipIf(!HAS_DB)("loadMatchCentre — the forfeit sentence's outside wor
     const next = await nameOf(sf2.home_entrant_id!);
     expect(late.header.statusLine).toEqual({ key: "forfeit.sentence.doubleWalkoverNext", params: { next } });
     expect(t(EN, late.header.statusLine!.key, late.header.statusLine!.params)).toBe(
-      `Neither side turned up — both lose. Next round: walkover for ${next}.`,
+      `Neither side turned up — both lose. Next round: walkover for ${next}`,
     );
   });
 
@@ -107,6 +107,6 @@ describe.skipIf(!HAS_DB)("loadMatchCentre — the forfeit sentence's outside wor
     const winner = await nameOf(row.home_entrant_id!);
     const result = t(EN, "matchCentre.result.regulation", { winner });
     expect(doc.header.statusLine).toEqual({ key: "forfeit.sentence.abandoned", params: { reason: "floodlights", result } });
-    expect(t(EN, doc.header.statusLine!.key, doc.header.statusLine!.params)).toBe(`Abandoned (floodlights) — ${winner} won.`);
+    expect(t(EN, doc.header.statusLine!.key, doc.header.statusLine!.params)).toBe(`Abandoned (floodlights) — ${winner} won`);
   });
 });

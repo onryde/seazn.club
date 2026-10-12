@@ -676,12 +676,12 @@
   "forfeit.tag.abandoned": "Susp.",
   "forfeit.tag.abandonedDls": "Susp. · DLS",
   "forfeit.tag.abandonedNoResult": "Susp. · SR",
-  "forfeit.sentence.walkover": "{loser} no se presentó — victoria por incomparecencia.",
-  "forfeit.sentence.withdrew": "{loser} se retiró del torneo — victoria por incomparecencia.",
-  "forfeit.sentence.retired": "{loser} se retiró.",
-  "forfeit.sentence.disqualified": "{loser} fue descalificado.",
-  "forfeit.sentence.doubleWalkover": "Ninguno de los dos se presentó — ambos pierden.",
-  "forfeit.sentence.doubleWalkoverNext": "Ninguno de los dos se presentó — ambos pierden. Próxima ronda: {next} pasa por incomparecencia.",
-  "forfeit.sentence.abandoned": "Suspendido ({reason}) — {result}.",
-  "forfeit.sentence.abandonedBare": "Suspendido ({reason})."
+  "forfeit.sentence.walkover": "{loser} no se presentó — victoria por incomparecencia",
+  "forfeit.sentence.withdrew": "{loser} se retiró del torneo — victoria por incomparecencia",
+  "forfeit.sentence.retired": "{loser} se retiró",
+  "forfeit.sentence.disqualified": "{loser} fue descalificado",
+  "forfeit.sentence.doubleWalkover": "Ninguno de los dos se presentó — ambos pierden",
+  "forfeit.sentence.doubleWalkoverNext": "Ninguno de los dos se presentó — ambos pierden. Próxima ronda: {next} pasa por incomparecencia",
+  "forfeit.sentence.abandoned": "Suspendido ({reason}) — {result}",
+  "forfeit.sentence.abandonedBare": "Suspendido ({reason})"
 }

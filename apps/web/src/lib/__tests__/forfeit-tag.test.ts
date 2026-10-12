@@ -163,18 +163,18 @@ describe("forfeitTag — one row per member (UI-2's tags, counted)", () => {
       return forfeitWords(forfeitTag(f.outcome, NO_LEDGER)!, en, () => "Harbour United").sentence;
     });
     expect(new Set(words).size).toBe(FORFEIT_REASONS.length);
-    expect(words[FORFEIT_REASONS.indexOf("walkover")]).toBe("Harbour United didn't turn up — walkover.");
+    expect(words[FORFEIT_REASONS.indexOf("walkover")]).toBe("Harbour United didn't turn up — walkover");
   });
 
-  it("X-DW-1: a double walkover → 2× w/o, \"Neither side turned up — both lose.\"; the next-round clause only when a seat was fed", () => {
+  it("X-DW-1: a double walkover → 2× w/o, \"Neither side turned up — both lose\"; the next-round clause only when a seat was fed", () => {
     const f = fold(generic, cfg, () => [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
     expect(f.outcome).toEqual({ kind: "double_walkover" });
     const tag = forfeitTag(f.outcome, NO_LEDGER)!;
     expect(tag).not.toBeNull();
     expect(en(tag.tagKey)).toBe("2× w/o");
-    expect(forfeitWords(tag, en, String).sentence).toBe("Neither side turned up — both lose.");
+    expect(forfeitWords(tag, en, String).sentence).toBe("Neither side turned up — both lose");
     expect(forfeitWords(tag, en, String, { next: "Bears" }).sentence).toBe(
-      "Neither side turned up — both lose. Next round: walkover for Bears.",
+      "Neither side turned up — both lose. Next round: walkover for Bears",
     );
     // The clause's source: a line that feeds a next match, whose match stands walked over (the cascade's seat arrival).
     const walkedOver = { outcome: { kind: "award", winner: "bears", loser: null, reason: "walkover" } };
@@ -201,14 +201,14 @@ describe("forfeitTag — one row per member (UI-2's tags, counted)", () => {
     expect(en(dlsTag.tagKey)).toBe("Aband. · DLS");
     expect(dlsTag.params.reason).toBe("rain");
     expect(forfeitWords(dlsTag, en, String, { result: "Eagles won by 46 runs (DLS)" }).sentence).toBe(
-      "Abandoned (rain) — Eagles won by 46 runs (DLS).",
+      "Abandoned (rain) — Eagles won by 46 runs (DLS)",
     );
     const nr = fold(CRICKET, ODI_DLS, washout);
     expect(nr.outcome).toEqual({ kind: "no_result" });
     const nrTag = forfeitTag(nr.outcome, forfeitLedgerOf(nr.active))!;
     expect(en(nrTag.tagKey)).toBe("Aband. · NR");
     // A surface with no result sentence of its own still names the reason.
-    expect(forfeitWords(nrTag, en, String).sentence).toBe("Abandoned (rain).");
+    expect(forfeitWords(nrTag, en, String).sentence).toBe("Abandoned (rain)");
   });
 
   it("X-AB-2: the abandon tag reads the LEDGER — a DLS win with no abandon (a reduced chase played out) has none, and a voided abandon is none", () => {
@@ -261,7 +261,7 @@ describe("the abandon tags, swept over every sport's own abandon (the engine's, 
         const name = `${m.key}/${policy}: ${JSON.stringify(f.outcome)}`;
         if (f.outcome === null) {
           expect(tag, name).toEqual({ kind: "abandoned", tagKey: "forfeit.tag.abandoned", sentenceKey: "forfeit.sentence.abandoned", params: { reason: "rain" } });
-          expect(en(forfeitSentence(tag!, () => "?").key, { reason: "rain" }), name).toBe("Abandoned (rain).");
+          expect(en(forfeitSentence(tag!, () => "?").key, { reason: "rain" }), name).toBe("Abandoned (rain)");
           noResult++;
         } else {
           expect((ABANDON_RESULT_KINDS as readonly string[]).includes(f.outcome.kind), name).toBe(true);
@@ -431,5 +431,32 @@ describe("one verb for a no-show on the public site (audit 3.4)", () => {
     const shown = Object.entries(pubEn as Record<string, string>).filter(([, v]) => /\bshow(s|ed|n)? up\b/iu.test(v)).map(([k]) => k);
     expect(shown).toEqual([]);
     expect(Object.values(pubEn as Record<string, string>).filter((v) => /\bturn(s|ed)? up\b/iu.test(v)).length, "premise: the timeline's verb is there").toBeGreaterThan(0);
+  });
+});
+
+// Design audit 3.5: a forfeit sentence sits beside, or in place of, a result line — the court card's status line, the
+// live score's decided line, the share title — and those lines carry no full stop ("{winner} won", "Match drawn").
+// Every forfeit sentence (FORFEIT_SENTENCE_KEYS, read) ends the same way in every locale. The premise is the result
+// lines' own form, asserted from the same dictionaries.
+describe("the forfeit sentences end like the result lines they sit beside (audit 3.5)", () => {
+  const PUB: Record<string, Record<string, string>> = { en: pubEn, fr: pubFr, es: pubEs, nl: pubNl } as never;
+  it("every locale: no trailing full stop on a forfeit sentence, as on matchCentre.result.*", () => {
+    let sentences = 0;
+    let results = 0;
+    for (const [locale, d] of Object.entries(PUB)) {
+      for (const [k, v] of Object.entries(d)) {
+        if (!k.startsWith("matchCentre.result.")) continue;
+        expect(v, `${locale} ${k}: premise — a result line has no full stop`).not.toMatch(/\.\s*$/u);
+        results++;
+      }
+      for (const k of FORFEIT_SENTENCE_KEYS) {
+        const v = d[k];
+        expect(v, `${locale} ${k}`).toBeTruthy();
+        expect(v, `${locale} ${k}`).not.toMatch(/\.\s*$/u);
+        sentences++;
+      }
+    }
+    expect(sentences, `forfeit sentences checked: ${sentences}`).toBe(FORFEIT_SENTENCE_KEYS.length * 4);
+    expect(results, `result lines checked: ${results}`).toBeGreaterThan(4);
   });
 });

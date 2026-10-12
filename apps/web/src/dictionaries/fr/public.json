@@ -676,12 +676,12 @@
   "forfeit.tag.abandoned": "Arr.",
   "forfeit.tag.abandonedDls": "Arr. · DLS",
   "forfeit.tag.abandonedNoResult": "Arr. · SR",
-  "forfeit.sentence.walkover": "{loser} ne s'est pas présenté — victoire par forfait.",
-  "forfeit.sentence.withdrew": "{loser} s'est retiré du tournoi — victoire par forfait.",
-  "forfeit.sentence.retired": "{loser} a abandonné.",
-  "forfeit.sentence.disqualified": "{loser} a été disqualifié.",
-  "forfeit.sentence.doubleWalkover": "Aucun des deux ne s'est présenté — défaite pour les deux.",
-  "forfeit.sentence.doubleWalkoverNext": "Aucun des deux ne s'est présenté — défaite pour les deux. Tour suivant : {next} qualifié par forfait.",
-  "forfeit.sentence.abandoned": "Arrêté ({reason}) — {result}.",
-  "forfeit.sentence.abandonedBare": "Arrêté ({reason})."
+  "forfeit.sentence.walkover": "{loser} ne s'est pas présenté — victoire par forfait",
+  "forfeit.sentence.withdrew": "{loser} s'est retiré du tournoi — victoire par forfait",
+  "forfeit.sentence.retired": "{loser} a abandonné",
+  "forfeit.sentence.disqualified": "{loser} a été disqualifié",
+  "forfeit.sentence.doubleWalkover": "Aucun des deux ne s'est présenté — défaite pour les deux",
+  "forfeit.sentence.doubleWalkoverNext": "Aucun des deux ne s'est présenté — défaite pour les deux. Tour suivant : {next} qualifié par forfait",
+  "forfeit.sentence.abandoned": "Arrêté ({reason}) — {result}",
+  "forfeit.sentence.abandonedBare": "Arrêté ({reason})"
 }

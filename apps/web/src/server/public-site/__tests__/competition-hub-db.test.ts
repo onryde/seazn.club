@@ -414,7 +414,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
       const card = (id: string) => doc.matches.find((m) => m.fixtureId === id)!;
       expect(card(wo!).forfeit).toEqual({
-        kind: "walkover", tag: "w/o", sentence: `${await name(row(wo!).away_entrant_id)} didn't turn up — walkover.`,
+        kind: "walkover", tag: "w/o", sentence: `${await name(row(wo!).away_entrant_id)} didn't turn up — walkover`,
       });
       expect(card(ab!).forfeit?.kind).toBe("abandoned");
       expect(card(ab!).forfeit?.tag).toBe("Aband.");

@@ -661,7 +661,7 @@ describe("buildMatchCentre — cricket", () => {
         params: { reason, result: `${HOME_SIDE.name} won by 11 runs (DLS)` },
       });
       expect(t(en, runsDoc.header.statusLine!.key, runsDoc.header.statusLine!.params)).toBe(
-        `Abandoned (${reason}) — ${HOME_SIDE.name} won by 11 runs (DLS).`,
+        `Abandoned (${reason}) — ${HOME_SIDE.name} won by 11 runs (DLS)`,
       );
 
       const wickets = scriptLedger(DLS_REVISED_TARGET_SCRIPT);
