@@ -429,11 +429,14 @@ describe("move notices end with the hold or seat state they were raised on", () 
   const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", action });
   const read = (s: RoomState, at: number, over: Partial<RoomSnapshot> = {}) =>
     roomReducer(s, { type: "snapshot", snap: snap({ serverNow: iso(at), game: game(2), ...over }), receivedAt: at });
-  const raisers: [string, (s: RoomState) => RoomState, "refused" | "invalid" | "failed"][] = [
-    ["C2: play's 404 (the race into a hold)", (s) => roomReducer(sent(s), { type: "act_failed", status: 404 }), "refused"],
-    ["C2: Lichess refused it", (s) => roomReducer(sent(s), { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } }), "refused"],
-    ["C3: a rule refused it (400)", (s) => roomReducer(sent(s), { type: "act_failed", status: 400 }), "invalid"],
-    ["generic C2: a decline play refused (404)", (s) => roomReducer(sent(s, { kind: "draw", accept: false }), { type: "act_failed", status: 404 }), "failed"],
+  const decline = { kind: "draw", accept: false } as const;
+  // [name, raise, the notice, the act it answers]. `raise` sends first; with
+  // an act already in flight that send is a no-op and it answers that one.
+  const raisers: [string, (s: RoomState) => RoomState, "refused" | "invalid" | "failed", RoomActBody][] = [
+    ["C2: play's 404 (the race into a hold)", (s) => roomReducer(sent(s), { type: "act_failed", status: 404 }), "refused", move],
+    ["C2: Lichess refused it", (s) => roomReducer(sent(s), { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } }), "refused", move],
+    ["C3: a rule refused it (400)", (s) => roomReducer(sent(s), { type: "act_failed", status: 400 }), "invalid", move],
+    ["generic C2: a decline play refused (404)", (s) => roomReducer(sent(s, decline), { type: "act_failed", status: 404 }), "failed", decline],
   ];
   // Every way the server says the viewer may not act (room.ts's canAct).
   const holds: [string, Partial<RoomSnapshot>][] = [
@@ -478,6 +481,23 @@ describe("move notices end with the hold or seat state they were raised on", () 
       const onFrozen = raise(initialRoomState(snap({ game: game(2), frozen: "opponent" }), T0));
       const released = read(onFrozen, T0 + 500, { frozen: null });
       expect([released.snap.canAct, moveNotice(released)], `${name}: the opponent released`).toEqual([true, null]);
+      checked += 1;
+    }
+    expect(checked).toBe(raisers.length);
+  });
+
+  it("the poll that reads the hold lands BEFORE the act's answer: the notice it raises ends at the next read still saying nobody may act", () => {
+    // The ordering the change rule alone misses: the seat state is already
+    // "held" when the notice is raised, so the next read changes nothing —
+    // it is canAct false that ends it.
+    let checked = 0;
+    for (const [name, raise, kind, action] of raisers) {
+      const racing = read(sent(live(), action), T0 + 300, { canAct: false });
+      expect(racing.pending, "premise: the act is still in flight").toEqual({ kind: "act", action });
+      const answer = raise(racing);
+      expect(moveNotice(answer), `${name}: raised`).toBe(kind);
+      const stillHeld = read(answer, T0 + 3300, { canAct: false });
+      expect([stillHeld.snap.canAct, moveNotice(stillHeld)], `${name}: the next held read`).toEqual([false, null]);
       checked += 1;
     }
     expect(checked).toBe(raisers.length);
