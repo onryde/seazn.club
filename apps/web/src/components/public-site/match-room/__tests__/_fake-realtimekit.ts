@@ -259,10 +259,10 @@ export class FakeMeeting {
   consumedAudio: { peerId: string; producerId: string }[] = [];
   // ── test seams (not SDK behaviour) ────────────────────────────────────
   /** Make the next N calls of a method throw, as a future SDK might. */
-  failNext: { setViewMode: number; unsubscribe: number } = { setViewMode: 0, unsubscribe: 0 };
+  failNext: { setViewMode: number; unsubscribe: number; leave: number } = { setViewMode: 0, unsubscribe: 0, leave: 0 };
   /** Runs once inside the next unsubscribe — an arrival mid-enforcement. */
   duringNextUnsubscribe: ((m: FakeMeeting) => void) | null = null;
-  injectedFailure(method: "setViewMode" | "unsubscribe"): void {
+  injectedFailure(method: "setViewMode" | "unsubscribe" | "leave"): void {
     if (this.failNext[method] > 0) {
       this.failNext[method] -= 1;
       throw new Error(`injected ${method} failure`);
@@ -287,6 +287,7 @@ export class FakeMeeting {
   }
   async leave(): Promise<void> {
     this.calls.push("leave");
+    this.injectedFailure("leave");
     this.socketJoined = false;
     this.self.emit("roomLeft", { state: "left" });
   }
