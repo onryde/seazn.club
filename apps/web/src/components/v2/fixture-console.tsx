@@ -35,6 +35,8 @@ import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { forfeitLedgerOf, forfeitTag } from "@/lib/forfeit-tag";
+import { outcomeText } from "@/lib/outcome-text";
 import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -1008,14 +1010,24 @@ export function FixtureConsole({
   // that can say who won and how for those sports; `msg`/`entrantNames` are
   // exactly what `decidedOutcomeText` needs and this component already has
   // both.
-  const decidedLine = decidedOutcomeText(
-    outcome,
-    entrantNames,
-    msg,
-    shootoutScoreFromDetail(summary?.detail),
-    undefined,
-    tiebreakScoreFromDetail(summary?.detail),
-  );
+  //
+  // W2b loop H F2: a CREDITED result — a forfeit, a double walkover, an abandon the ledger holds — reads as the run
+  // sheet reads it ("Bears of Brockley won (w/o)"), through the run sheet's own `outcomeText` and `forfeitTag`, the one
+  // reader. The ledger is this console's ACTIVE events (a voided abandon is no abandon), as the match centre reads it.
+  // Any other result keeps this console's own method sentence ("won after extra time").
+  const voidedIds = new Set(events.flatMap((e) => (e.type === "core.void" && e.voids_event_id !== null ? [e.voids_event_id] : [])));
+  const forfeitLedger = forfeitLedgerOf(events.filter((e) => e.type !== "core.void" && !voidedIds.has(e.id)));
+  const decidedLine =
+    forfeitTag(outcome, forfeitLedger) !== null
+      ? outcomeText(msg, outcome, entrantNames, forfeitLedger)
+      : decidedOutcomeText(
+          outcome,
+          entrantNames,
+          msg,
+          shootoutScoreFromDetail(summary?.detail),
+          undefined,
+          tiebreakScoreFromDetail(summary?.detail),
+        );
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
@@ -1198,7 +1210,7 @@ export function FixtureConsole({
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && (
-          <p className="mt-1 text-sm font-medium text-slate-700">
+          <p data-testid="console-decided-line" className="mt-1 text-sm font-medium text-slate-700">
             <ScoreSentence text={decidedLine} />
           </p>
         )}

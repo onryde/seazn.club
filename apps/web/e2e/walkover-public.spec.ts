@@ -840,3 +840,27 @@ test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", ()
   });
 });
 
+// F2 (loop H) — the fixture console's decided line said "Bears of Brockley won" beside the run sheet's "won (w/o)": it now
+// says what the run sheet says, tag and all, over the same rig.
+test.describe("W2b loop H F2 — the fixture console names a credited result as the run sheet does", () => {
+  test("w/o, ret., DQ, Aband. and 2× w/o: the console's decided line is the run sheet's words at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(6 * 60_000);
+    await activeOrg(page);
+    const { rows, lineOf } = await organiserResultRows(request);
+    let consoles = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const r of rows) {
+        await page.goto(await divisionPath(request, r.div, `/f/${r.f.fixture_no}`));
+        await dismissCookieBanner(page);
+        const line = page.getByTestId("console-decided-line");
+        await expect(line, `${width} ${r.name}: the console's decided line`).toHaveText(lineOf(r), { timeout: STEP_MS });
+        await expectNoHorizontalScroll(page);
+        await shot(page.locator("header.card").first(), `f2-console-${r.name}-${width}`);
+        consoles++;
+      }
+    }
+    expect(consoles, "consoles read").toBe(WIDTHS.length * rows.length);
+  });
+});
+
