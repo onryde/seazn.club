@@ -34,7 +34,7 @@ import { Chess } from "chess.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { apiJson, createStageAndGenerate, linkPersonToUserBySql, TAG, withDb } from "./helpers";
+import { apiJson, createStageAndGenerate, linkPersonToUserBySql, loginUi, TAG, withDb } from "./helpers";
 import { CLOCK, fill, longName, seedLichessLink, seedUser, uiEn } from "./match-room-kit";
 
 test.describe.configure({ mode: "parallel" });
@@ -46,7 +46,7 @@ const SHOTS = process.env.ARBITER_SHOTS_DIR;
  *  record as the T15 brief states it, typed here, not imported from the panel. */
 const OVERRIDE_NOTE = "Video unavailable: let this board play without video from the arbiter panel.";
 
-type Player = { name: string; personId: string; lichessId: string };
+type Player = { name: string; personId: string; lichessId: string; userId: string; email: string };
 type Board = { fixtureId: string; home: Player; away: Player };
 type Round = {
   orgId: string;
@@ -60,7 +60,7 @@ type Round = {
 async function seedRound(request: import("@playwright/test").APIRequestContext, names: string[]): Promise<Round> {
   const people: Player[] = [];
   for (const name of names) {
-    const { userId } = await seedUser(name);
+    const { userId, email } = await seedUser(name);
     const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", {
       full_name: name,
       consent: { public_name: true },
@@ -69,7 +69,7 @@ async function seedRound(request: import("@playwright/test").APIRequestContext, 
     await linkPersonToUserBySql(person.data!.id, userId);
     const lichessId = `e2e-arb-${randomBytes(5).toString("hex")}`;
     await seedLichessLink(userId, lichessId);
-    people.push({ name, personId: person.data!.id, lichessId });
+    people.push({ name, personId: person.data!.id, lichessId, userId, email });
   }
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -441,6 +441,88 @@ test.describe("arbiter panel", () => {
     await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
     await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
     await expect(tiles(page)).toHaveCount(2);
+  });
+
+  test("N1: a pinned board of an earlier round says a newer round is open and offers it; the current round's board says nothing", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+    const [b1] = r.boards;
+    // Round 2, opened a minute after round 1 (open-round's stamp, by SQL):
+    // its boards are the stage's own round-2 pairings.
+    const next = await withDb(async (sql) => {
+      await sql`
+        insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+        select o.stage_id, o.org_id, 2, o.opened_at + interval '1 minute', o.opened_by
+          from stage_round_opens o join fixtures f on f.stage_id = o.stage_id and f.round_no = o.round_no
+         where f.id = ${b1.fixtureId}`;
+      return sql<{ id: string }[]>`
+        select n.id from fixtures n join fixtures f on f.stage_id = n.stage_id
+         where f.id = ${b1.fixtureId} and n.round_no = 2
+           and n.home_entrant_id is not null and n.away_entrant_id is not null and n.status <> 'cancelled'
+         order by n.seq_in_round`;
+    });
+    expect(next.length, "round 2 has paired boards").toBeGreaterThan(0);
+    const older = page.getByText(uiEn["arbiter.olderRound"], { exact: true });
+    const toCurrent = page.getByRole("link", { name: uiEn["arbiter.requested.current"] });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    // The current round's board, pinned: its round, nothing to say.
+    await page.goto(`${r.arbiterPath}?fixture=${next[0]!.id}`);
+    await expect(boardsNav(page).getByRole("button")).toHaveCount(next.length);
+    await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+    // The panel's own header (the site's gantry is a <header> too).
+    const panelHeader = page.locator("header", { has: page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] }) });
+    const roundIs = (n: number) => expect(panelHeader).toContainText(fill("arbiter.roundLine", { stage: "", round: n }).trim());
+    await roundIs(2);
+    await expect(older).toHaveCount(0);
+    await expect(toCurrent).toHaveCount(0);
+    // Round 1's board, pinned: still on screen, and the way to round 2.
+    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    await roundIs(1);
+    await expect(boardsNav(page).getByRole("button")).toHaveCount(2);
+    await expect(boardsNav(page).getByRole("button").nth(0)).toContainText(b1.home.name);
+    await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect(older).toBeVisible();
+    await expect(tiles(page), "the pinned board's tiles stay").toHaveCount(2);
+    await shoot(page, "arbiter-older-round");
+    expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await toCurrent.click();
+    await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
+    await roundIs(2);
+    await expect(boardsNav(page).getByRole("button")).toHaveCount(next.length);
+    await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect(older).toHaveCount(0);
+  });
+
+  test("N3: a board the organiser plays on is left out, and one line says why; an organiser who plays nowhere sees both and no line", async ({ browser, page, request }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+    const [b1] = r.boards;
+    const line = uiEn["arbiter.ownHidden.one"]!;
+    // The organiser who plays: board 1's home player, made an admin of the
+    // club, signed in on their own browser (the shared Pro user stays as is).
+    await withDb((sql) => sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${b1.home.userId}, 'admin')`);
+    const own = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: test.info().project.use.baseURL });
+    try {
+      const p = await own.newPage();
+      await loginUi(p, b1.home.email);
+      await p.setViewportSize({ width: 1280, height: 900 });
+      await p.goto(r.arbiterPath);
+      const buttons = boardsNav(p).getByRole("button");
+      await expect(buttons).toHaveCount(1);
+      await expect(buttons.nth(0)).toContainText(fill("arbiter.boardNo", { n: 2 }));
+      await expect(p.getByText(line, { exact: true })).toBeVisible();
+      await expect(p.getByText(uiEn["arbiter.ownRound"]!)).toHaveCount(0);
+      await shoot(p, "arbiter-own-hidden");
+      expect(await noSidewaysScroll(p, [320, 768, 1280])).toBe(3);
+    } finally {
+      await own.close();
+    }
+    // The positive pair: the club's owner plays nowhere — both boards, no line.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    await expect(boardsNav(page).getByRole("button")).toHaveCount(2);
+    await expect(page.getByText(line, { exact: true })).toHaveCount(0);
   });
 
   test("no panel for anyone else: signed out it is the sign-in, over the board it is not found", async ({ browser, page, request }) => {

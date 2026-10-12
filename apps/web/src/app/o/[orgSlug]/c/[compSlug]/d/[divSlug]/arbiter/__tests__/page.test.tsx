@@ -23,7 +23,7 @@ import ArbiterPage from "../page";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
 
 const PAGE = { auth: { orgId: "org-1", userId: "user-1", role: "owner", via: "session" }, canEdit: true, division: { id: "div-1" } };
-const ROUND = { stageId: "st", stageName: "Open", roundNo: 2, timeControl: "10+5", boards: [], ownBoards: 0 };
+const ROUND = { stageId: "st", stageName: "Open", roundNo: 2, timeControl: "10+5", boards: [], ownBoards: 0, current: true };
 const render = (search: Record<string, string | string[] | undefined> = {}) =>
   ArbiterPage({
     params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),

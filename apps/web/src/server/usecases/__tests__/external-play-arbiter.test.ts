@@ -453,6 +453,42 @@ describe.runIf(HAS_DB)("arbiterRequestedRound — ?fixture= opens EXACTLY that b
     expect(await arbiterRequestedRound(admin, r.divisionId, r.boards[0]!.fixtureId)).toEqual({ kind: "own" });
     expect(await arbiterRequestedRound(admin, r.divisionId, r.boards[1]!.fixtureId)).toMatchObject({ kind: "round" });
   });
+
+  // N1 (re-review 1): a pinned board keeps its own round, so the panel must
+  // be able to say a newer round is open. "Current" is the module's own
+  // contract: the division's most recently OPENED round (D12), never the
+  // highest number.
+  it("N1: a pinned EARLIER round is not current while a newer one is open; the latest round, pinned or not, is — by opening order, not round number", async () => {
+    const { r } = await twoRounds();
+    const pin = async (roundNo: number) => (await loadArbiterRound(r.owner, r.divisionId, { round: { stageId: r.stageId, roundNo } }))!;
+    const latest = async () => (await loadArbiterRound(r.owner, r.divisionId))!;
+    let checked = 0;
+    const is = (view: { roundNo: number; current: boolean }, roundNo: number, current: boolean, why: string) => {
+      expect({ roundNo: view.roundNo, current: view.current }, why).toEqual({ roundNo, current });
+      checked++;
+    };
+    is(await latest(), 2, true, "no pin: the latest round, current");
+    is(await pin(1), 1, false, "round 1 pinned, round 2 opened after it");
+    is(await pin(2), 2, true, "the latest round pinned");
+    // Ordering differential: round 1 opened LAST is the current one, whatever
+    // its number — and round 2, pinned, is then the earlier one.
+    await sql`update stage_round_opens set opened_at = ${new Date(OPENED.getTime() + 120_000)} where stage_id = ${r.stageId} and round_no = 1`;
+    is(await latest(), 1, true, "no pin, round 1 re-opened last");
+    is(await pin(1), 1, true, "round 1 pinned, opened last");
+    is(await pin(2), 2, false, "round 2 pinned, opened before round 1");
+    // Stage differential: the division's NEXT stage opens its own round 1
+    // last — the same round number, another stage, so stage 1's round 1 is
+    // no longer current.
+    const [next] = await sql<{ id: string }[]>`
+      insert into stages (division_id, seq, kind, name) values (${r.divisionId}, 2, 'knockout', 'Final') returning id`;
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      values (${next!.id}, ${r.orgId}, 1, ${new Date(OPENED.getTime() + 180_000)}, ${r.ownerUserId})`;
+    is(await pin(1), 1, false, "stage 1 round 1 pinned, stage 2 round 1 opened last");
+    const after = await latest();
+    expect({ stageId: after.stageId, current: after.current }, "no pin: stage 2's round 1").toEqual({ stageId: next!.id, current: true });
+    expect(checked).toBe(7);
+  });
 });
 
 // ---------------------------------------------------------------------------
