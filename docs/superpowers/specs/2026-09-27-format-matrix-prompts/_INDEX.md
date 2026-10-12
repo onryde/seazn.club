@@ -1373,6 +1373,24 @@ Elsewhere the text is the controller's record.
        because no join date is stored. A full appearance rule per sport (starters and the substitutes who came on)
        and join dates belong to the ruling-121 backfill wave or later.
      - **Implementation:** one reader, shared by the career count and the listing. It follows `careerMatchesByDivision`.
+     - **Built (correcting this ruling's premise):** `entrant_members.roles` holds position roles, not player/coach/staff.
+       "Player role" therefore means two things:
+       - on a recorded lineup, `lineups.role = 'player'`;
+       - with no lineup, `persons.lane = 'player'`.
+       The rule lives once, in `apps/web/src/server/appearances.ts`. A source scan
+       (`appearance-rule-one-reader.test.ts`) keeps it there. Bench rows follow the owner's 2026-09-16 bench rule
+       (`benchRowIsAppearance`) in the count as well as the lines.
+     - **Second residue, the mirror of the first:** a player removed from the roster loses credit for earlier
+       matches that had no lineup. The cause is the same (no join or leave dates), and so is the later wave.
+     - **/me "Recent results":** still lists a team's results to its coach. That is a team feed, not match credit,
+       and is exempt from the scan with a reason.
+123. **The lineup decides, not the person's lane** (2026-10-12, owner "A", given after my recommendation A).
+     - **The case:** a person whose lane is coach is named as a player on a match lineup. They get the match. The
+       reverse also holds: a lane-player named as coach on a lineup gets nothing.
+     - **Why:** the lineup is the organiser's record of who took part, and player-coaches are real in grassroots
+       sport.
+     - **Known risk, not a stats rule:** the lineup editor defaults every row to player, so a coach added without a
+       role change is credited. A later wording or default change to the editor may address it.
 
 ## Recommendations (mine — not rulings)
 
