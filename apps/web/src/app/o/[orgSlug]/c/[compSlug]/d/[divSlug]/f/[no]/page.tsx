@@ -17,6 +17,8 @@ import { getDivision } from "@/server/usecases/divisions";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { getCompetition } from "@/server/usecases/competitions";
 import { DEPARTED_STATUSES, getEntrant } from "@/server/usecases/entrants";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import { resolveModule } from "@/server/engine-db";
 import {
   FixtureConsole,
@@ -132,6 +134,20 @@ export default async function FixturePage({
     side(fixture.home_entrant_id),
     side(fixture.away_entrant_id),
   ]);
+  // R116-4 (owner ruling 116): an empty seat a walkover was won over (a withdrawn winner's, walked over by the side that
+  // arrived) is HER side. Only her NAME goes to the console — the header names her as any walkover names the side that
+  // did not play — never a seated side: the pad, the forfeit and settle dialogs all read `home`/`away` as who is IN it.
+  const unseatedName = async (seat: "home" | "away"): Promise<string | null> => {
+    const id = unseatedForfeitLoser(fixture, seat);
+    if (id === null) return null;
+    const entrant = await getEntrant(auth, id);
+    return entrantDisplayName({
+      name: entrant.display_name,
+      kind: entrant.kind,
+      members: entrant.members as SideInfo["members"],
+    });
+  };
+  const [homeUnseatedName, awayUnseatedName] = await Promise.all([unseatedName("home"), unseatedName("away")]);
   // SPEC-1: active suspensions among this fixture's entrants, joined into the
   // pad bootstrap (no client fetch). Returns [] when the org isn't entitled.
   const activeSuspensions = await suspensionsForFixture(auth, fixture.division_id, [
@@ -238,6 +254,8 @@ export default async function FixturePage({
             round_no: fixture.round_no,
             home_slot_label: fixture.home_slot_label,
             away_slot_label: fixture.away_slot_label,
+            home_unseated_name: homeUnseatedName,
+            away_unseated_name: awayUnseatedName,
             feeds_next_match: feedsNext,
             // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
             // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).

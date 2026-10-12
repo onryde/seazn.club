@@ -52,7 +52,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { unseatedForfeitLoser, unseatedForfeitLoserName } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 type Tx = postgres.TransactionSql;
@@ -260,7 +260,7 @@ interface FixtureExportRow {
  *  side that did not play. `unseatedForfeitLoser` is the one reader; a bye (no loser) keeps its label. */
 function seatName(f: FixtureExportRow, seat: "home" | "away"): string | null {
   const label = seat === "home" ? f.home_label : f.away_label;
-  return label ?? (unseatedForfeitLoser(f, seat) !== null ? f.forfeit_loser_name : null);
+  return label ?? unseatedForfeitLoserName(f, seat);
 }
 
 async function exportFixtures(

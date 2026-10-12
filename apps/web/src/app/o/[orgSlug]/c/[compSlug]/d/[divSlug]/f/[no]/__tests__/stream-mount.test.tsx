@@ -16,6 +16,10 @@ const scene = vi.hoisted(() => ({
   open: [] as string[],
   feedsNext: true,
   stageKind: null as string | null,
+  // R116-4: the seats and the stored outcome getFixture returns.
+  homeId: "e-home" as string | null,
+  awayId: "e-away" as string | null,
+  outcome: null as unknown,
 }));
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
@@ -36,8 +40,9 @@ vi.mock("@/server/usecases/fixtures", () => ({
     division_id: "div-1",
     status: scene.status,
     scheduled_at: "2026-09-30T10:00:00Z",
-    home_entrant_id: "e-home",
-    away_entrant_id: "e-away",
+    home_entrant_id: scene.homeId,
+    away_entrant_id: scene.awayId,
+    outcome: scene.outcome,
     venue_name: null,
     court_name: null,
     round_no: 1,
@@ -75,7 +80,7 @@ vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
   DEPARTED_STATUSES: (await importOriginal<typeof import("@/server/usecases/entrants")>()).DEPARTED_STATUSES,
   getEntrant: vi.fn(async (_auth: unknown, id: string) => ({
     id,
-    display_name: id === "e-home" ? "Alpha Athletic" : "Bravo Rangers",
+    display_name: ({ "e-home": "Alpha Athletic", "e-away": "Bravo Rangers", "e-gone": "Charlie Gone" } as Record<string, string>)[id] ?? id,
     kind: "team",
     members: [],
   })),
@@ -130,7 +135,10 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 }
 
 beforeEach(() => {
-  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null });
+  Object.assign(scene, {
+    canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null,
+    homeId: "e-home", awayId: "e-away", outcome: null,
+  });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
@@ -241,6 +249,31 @@ describe("the organiser fixture page hands the console D19's double-walkover rea
       Object.assign(scene, { stageKind, feedsNext: feeds });
       const fixture = (await consoleProps()).fixture as { no_next_match?: boolean };
       expect(fixture.no_next_match, `${String(stageKind)}, feeds ${String(feeds)}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+});
+
+// R116-4 (owner ruling 116): the console's header names the side a walkover was won over whose seat is EMPTY — the page
+// reads her through `unseatedForfeitLoser` and hands down only her name, never a seated side (the pad and the dialogs
+// read `home`/`away` as who is IN the fixture). The pairs: a bye (no loser) and a seated loser hand down nothing.
+describe("the organiser fixture page names ruling 116's withdrawn winner for the console header (R116-4)", () => {
+  it("her name rides on her empty seat, either side; a bye and a seated loser name nobody", async () => {
+    const withdrew = (winner: string) => ({ kind: "award", winner, loser: "e-gone", reason: "withdrew" });
+    const ROWS: [name: string, homeId: string | null, awayId: string | null, outcome: unknown, want: [unknown, unknown]][] = [
+      ["her seat home", null, "e-away", withdrew("e-away"), ["Charlie Gone", null]],
+      ["her seat away", "e-home", null, withdrew("e-home"), [null, "Charlie Gone"]],
+      ["a bye", "e-home", null, { kind: "award", winner: "e-home", loser: null, reason: "bye" }, [null, null]],
+      ["a seated loser", "e-home", "e-away", { kind: "award", winner: "e-home", loser: "e-away", reason: "withdrew" }, [null, null]],
+    ];
+    let checked = 0;
+    for (const [name, homeId, awayId, outcome, want] of ROWS) {
+      Object.assign(scene, { status: "forfeited", homeId, awayId, outcome });
+      const props = await consoleProps();
+      const fixture = props.fixture as { home_unseated_name?: unknown; away_unseated_name?: unknown };
+      expect([fixture.home_unseated_name, fixture.away_unseated_name], name).toEqual(want);
+      expect([props.home === null, props.away === null], `${name}: the seated sides are untouched`).toEqual([homeId === null, awayId === null]);
       checked++;
     }
     expect(checked).toBe(ROWS.length);

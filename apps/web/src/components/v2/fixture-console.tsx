@@ -320,6 +320,11 @@ interface Props {
      *  is null (V360's fixtures.home/away_slot_label). */
     home_slot_label?: SlotLabel | null;
     away_slot_label?: SlotLabel | null;
+    /** R116-4 (owner ruling 116): the name of the side a walkover was won over whose seat is EMPTY — a withdrawn
+     *  winner's dead seat — resolved by the page through `unseatedForfeitLoser`. The header prints it in that seat, as
+     *  any walkover names the side that did not play, before the seat's stored label. Absent or null: no such side. */
+    home_unseated_name?: string | null;
+    away_unseated_name?: string | null;
     /** Loop-F tidy 2: the line feeds a next match (`fixtureFeedsNextMatch`) — the held block's no-choice sentence
      *  reads it (needs-decision.tsx `feedsNextMatch`). */
     feeds_next_match?: boolean;
@@ -1111,7 +1116,7 @@ export function FixtureConsole({
               detailsOpen ? "" : "max-md:truncate"
             }`}
           >
-            {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            {homeName ?? fixture.home_unseated_name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
                 is the token this codebase already uses for legible secondary
@@ -1120,7 +1125,7 @@ export function FixtureConsole({
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
             <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
-            {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
+            {awayName ?? fixture.away_unseated_name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
           {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
           <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>

@@ -29,6 +29,7 @@ import {
   forfeitSentence,
   forfeitTag,
   forfeitWords,
+  unseatedForfeitLoserName,
 } from "../forfeit-tag";
 import { t } from "../i18n-runtime";
 import type { Dict } from "../i18n-constants";
@@ -374,5 +375,35 @@ describe("every tag and sentence key, in all four locales", () => {
       }
     }
     expect(checked).toBe(4 * 15);
+  });
+});
+
+// R116-4: `unseatedForfeitLoserName` — the joined loser's name, printed in an empty seat ONLY where the reader names her.
+// The rows where the outcome names a loser and her name was joined, but the reader names nobody, are the ones that
+// tell the helper from "print whatever was joined": a seated loser, both seats empty, an empty seat facing another side.
+describe("unseatedForfeitLoserName — the reader's answer, by name (R116-4)", () => {
+  it("names her only in the empty seat facing the award's winner; every other row prints nothing", () => {
+    const award = { kind: "award", winner: "w", loser: "her", reason: "withdrew" };
+    const row = (home: string | null, away: string | null, outcome: unknown = award) => ({
+      outcome,
+      home_entrant_id: home,
+      away_entrant_id: away,
+      forfeit_loser_name: "Her Name",
+    });
+    const ROWS: [name: string, r: ReturnType<typeof row>, want: [string | null, string | null]][] = [
+      ["her seat home", row(null, "w"), ["Her Name", null]],
+      ["her seat away", row("w", null), [null, "Her Name"]],
+      ["a seated loser", row("her", "w"), [null, null]],
+      ["both seats empty", row(null, null), [null, null]],
+      ["the empty seat faces another side", row(null, "x"), [null, null]],
+      ["a bye (no loser)", row(null, "w", { kind: "award", winner: "w", loser: null, reason: "bye" }), [null, null]],
+      ["no result", row(null, "w", null), [null, null]],
+    ];
+    let checked = 0;
+    for (const [name, r, want] of ROWS) {
+      expect([unseatedForfeitLoserName(r, "home"), unseatedForfeitLoserName(r, "away")], name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 });

@@ -25,6 +25,7 @@ import { sendOfficialAssignedEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { unseatedForfeitLoserName } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { createClaimInvite, type ClaimRow } from "./person-claims";
 import { parseUpload } from "./import-parse";
@@ -701,17 +702,20 @@ async function assignedNotices(
     court_label: string | null; venue_tz: string | null;
     home_name: string | null; away_name: string | null;
     home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
+    outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null; forfeit_loser_name: string | null;
   }[]>`
     -- venue lane (V305): division override → org timezone → UTC
     select f.id, f.scheduled_at, ven.name as venue, crt.name as court_label,
            coalesce(ss.tz, fo.timezone, 'UTC') as venue_tz,
            h.display_name as home_name, a.display_name as away_name,
-           f.home_slot_label, f.away_slot_label
+           f.home_slot_label, f.away_slot_label,
+           f.outcome, f.home_entrant_id, f.away_entrant_id, le.display_name as forfeit_loser_name
     from fixtures f
     left join schedule_settings ss on ss.division_id = f.division_id
     left join organizations fo on fo.id = f.org_id
     left join entrants h on h.id = f.home_entrant_id
     left join entrants a on a.id = f.away_entrant_id
+    left join entrants le on le.division_id = f.division_id and le.id::text = f.outcome->>'loser'
     left join courts crt on crt.id = f.court_id
     left join venues ven on ven.id = f.venue_id
     where f.id in ${tx(fixtureIds)}`;
@@ -724,8 +728,13 @@ async function assignedNotices(
       .filter((f) => f.official_id === o.id)
       .map((f) => {
         const fx = byId.get(f.fixture_id);
+        // R116-4: an empty seat a walkover was won over (owner ruling 116) names her (`unseatedForfeitLoserName`).
+        const seat = (side: "home" | "away") =>
+          (side === "home" ? fx?.home_name : fx?.away_name) ??
+          (fx ? unseatedForfeitLoserName(fx, side) : null) ??
+          resolveSlotLabel((side === "home" ? fx?.home_slot_label : fx?.away_slot_label) ?? null, lookup, "schedule.tbd");
         return {
-          label: `${fx?.home_name ?? resolveSlotLabel(fx?.home_slot_label ?? null, lookup, "schedule.tbd")} vs ${fx?.away_name ?? resolveSlotLabel(fx?.away_slot_label ?? null, lookup, "schedule.tbd")}`,
+          label: `${seat("home")} vs ${seat("away")}`,
           role_key: f.role_key,
           scheduled_at: fx?.scheduled_at ?? null,
           venue_tz: fx?.venue_tz ?? null,

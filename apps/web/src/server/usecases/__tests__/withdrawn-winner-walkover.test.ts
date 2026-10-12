@@ -56,6 +56,13 @@ import { buildDivisionDocModel } from "../exports";
 import { createPerson } from "../persons";
 import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
 import { playedFixtureIds } from "../fixture-results-sql";
+import { randomUUID } from "node:crypto";
+import { cardTitle, type BoardFixture } from "@/components/v2/board/types";
+import { listDivisionFixturesForBoard } from "../fixtures";
+import { listEntrants } from "../entrants";
+import { createOfficial, inviteOfficial, patchFixtureOfficials } from "../officials";
+import { claimPerson } from "../person-claims";
+import { getMyOfficiating } from "../me-officiating";
 
 // The public reads go through `unstable_cache`, which has no incrementalCache outside a real request: a passthrough,
 // never a memoising double (competition-hub-db.test.ts's own reason).
@@ -63,6 +70,12 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
   revalidateTag: vi.fn(),
   revalidatePath: vi.fn(),
+}));
+// R116-4: the officials' assignment email is read off its send — the real template's input, never a mail transport.
+const mail = vi.hoisted(() => ({ assigned: vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined) }));
+vi.mock("@/lib/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/email")>()),
+  sendOfficialAssignedEmail: mail.assigned,
 }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -476,6 +489,10 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       return [node.home, node.away];
     };
     const held = async (seed: { auth: AuthCtx; divisionId: string }) => withTenant(seed.auth.orgId, (tx) => playedFixtureIds(tx, seed.divisionId));
+    /** R116-4 — each printed scoresheet as its JSON text (a sport template emits its own section shape; the names are
+     *  the strings it was handed, `home` before `away`). */
+    const scoresheets = async (divisionId: string, auth: AuthCtx) =>
+      (await buildDivisionDocModel(auth, divisionId, "scoresheet", { printedAt: PRINTED })).sections.map((x) => JSON.stringify(x));
 
     // Ruling 116's tie, and an ordinary withdrawal walkover in the same division as its oracle — her dead seat on each
     // side of the tie, so either seat's read is reached.
@@ -504,6 +521,15 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       expect(pairs.filter((p) => p.includes(her) && p.includes(them)), `seat ${seat}: the timetable names her in her seat`).toEqual([want]);
       expect(pairs.flat(), `seat ${seat}: nothing on this draw prints "${BYE}"`).not.toContain(BYE);
       expect(await posterNode(s.divisionId, s.auth, sib.parentId), `seat ${seat}: the bracket poster names her in her seat`).toEqual(want);
+      // R116-4: the tie's scoresheet (an undecided line prints one) names her in her seat — each seat's own call site
+      // is reached by one of the two flips.
+      const sheets = (await scoresheets(s.divisionId, s.auth)).filter((x) => x.includes(her));
+      expect(sheets.length, `seat ${seat}: the tie prints a scoresheet naming her`).toBeGreaterThan(0);
+      for (const x of sheets) {
+        expect(x.includes(them), `seat ${seat}: her sheet is the tie's, opposite the side that arrived`).toBe(true);
+        expect(x.indexOf(her) < x.indexOf(them), `seat ${seat}: her name in her seat on the scoresheet`).toBe(seat === 1);
+        expect(x, `seat ${seat}: and no "${BYE}" on it`).not.toContain(`"${BYE}"`);
+      }
       // The board: held, as the ordinary walkover is (its recorded forfeit); ruling 116's by its awarded match state.
       const board = await held(s);
       expect([board.has(sib.parentId), board.has(ordinary.id)], `seat ${seat}: both walkovers are held on the board`).toEqual([true, true]);
@@ -518,6 +544,8 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     for (const r of byes) expect(await posterNode(odd.divisionId, odd.auth, r.id), r.ext_key ?? r.id).toContain(BYE);
     const oddBoard = await held(odd);
     expect(byes.filter((r) => oddBoard.has(r.id)).length, "a bye is not held").toBe(0);
+    const oddSheets = (await scoresheets(odd.divisionId, odd.auth)).filter((x) => x.includes(BYE));
+    expect(oddSheets.length, "R116-4: each bye's scoresheet keeps the bye").toBeGreaterThanOrEqual(2);
 
     // A DQ'd winner's dead seat (a bare status write, as PATCH /entrants writes one): the arriving side walks over by
     // bye, naming nobody — so the exports keep the bye and never print her.
@@ -537,6 +565,9 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect(dqPairs.flat(), "and never prints her there").not.toContain(dqName);
     const dqNode = await posterNode(dq.divisionId, dq.auth, sib.parentId);
     expect([dqNode.includes(BYE), dqNode.includes(dqName)], "the poster keeps the bye").toEqual([true, false]);
+    const dqSheets = (await scoresheets(dq.divisionId, dq.auth)).filter((x) => x.includes(dqThem) && x.includes(BYE));
+    expect(dqSheets.length, "R116-4: the scoresheet keeps the bye opposite the arriving side").toBeGreaterThan(0);
+    expect(dqSheets.filter((x) => x.includes(dqName)), "and never prints her there").toEqual([]);
   }, 240_000);
 
   it("R116-3: the arriving side's player page lists the line it played, naming its opponent, and not the tie — as it lists no walkover", async () => {
@@ -558,4 +589,84 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const lines = await readPlayerMatchLines(sql, { personId: person.id, competitionId: s.competitionId, orgSlug: org!.slug, compSlug: comp!.slug, locale: "en" });
     expect(lines.map((l) => [l.fixtureId, l.opponentName]), "the line it played, naming its opponent; never the tie").toEqual([[b.id, await nameOf(beaten)]]);
   }, 120_000);
+
+  it("R116-4: the board card, an official's finished duty and the assignment email name her in her dead seat; a bye and a DQ'd winner's dead seat keep the bye", async () => {
+    // single-sport: badminton — the board card, the /me lane and the email read the seats and the outcome, never the sport.
+    const { sport, variant, play } = SPORTS[0]!;
+    const enUi = (key: string, vars?: Record<string, string | number>) => msgFor("en", key as MessageKey, vars);
+    /** The organiser board's card title for one fixture, from the board's own read and the page's name map. */
+    const boardCard = async (auth: AuthCtx, divisionId: string, id: string) => {
+      const rows = await listDivisionFixturesForBoard(auth, divisionId);
+      const names = Object.fromEntries((await listEntrants(auth, divisionId)).map((e) => [e.id, e.display_name]));
+      const f = rows.find((r) => r.id === id);
+      if (!f) throw new Error(`rig: ${id} is not on the board`);
+      return cardTitle(f as unknown as BoardFixture, names, {}, enUi);
+    };
+    /** An official linked to a user, appointed to `id` — returns the email's line for it and the user's /me row. */
+    const appoint = async (auth: AuthCtx, id: string) => {
+      const email = `ref-${randomUUID().slice(0, 8)}@test.local`;
+      const [user] = await sql<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${email}, 'Ref', true) returning id`;
+      const official = await createOfficial(auth, { display_name: "Ref R116-4", role_keys: ["referee"] });
+      // A claim invite is minted by a session editor only (person-claims.ts requireSessionEditor): an owner's session.
+      const ownerEmail = `owner-${randomUUID().slice(0, 8)}@test.local`;
+      const [owner] = await sql<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${ownerEmail}, 'Owner', true) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${auth.orgId}, ${owner!.id}, 'owner')`;
+      const invited = await inviteOfficial({ ...auth, via: "session", userId: owner!.id }, official.id, email);
+      await claimPerson(invited.secret, user!.id, email);
+      mail.assigned.mockClear();
+      await patchFixtureOfficials(auth, id, { set: [{ official_id: official.id, role_key: "referee", locked: false }] });
+      const sent = mail.assigned.mock.calls.map((c) => c[1] as { fixtures: { label: string }[] });
+      expect(sent.length, "rig: the appointment sent one email").toBe(1);
+      const row = (await getMyOfficiating(user!.id)).completed.find((a) => a.fixture_id === id);
+      if (!row) throw new Error(`rig: ${id} is not in the official's finished duties`);
+      return { label: sent[0]!.fixtures[0]!.label, me: [row.home_name, row.away_name] };
+    };
+    const vs = (pair: readonly string[]) => pair.join(` ${enUi("schedule.vs")} `);
+
+    const seats = new Set<number>();
+    for (const flip of [false, true]) {
+      const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+      const sib = siblingsInto(await rowsOf(s.stageId));
+      const [mine, other] = flip ? [sib.b, sib.a] : [sib.a, sib.b];
+      const w1 = (await play(s.auth, mine.id)).home_entrant_id!;
+      await withdrawEntrantCascade(s.auth, w1);
+      const arriving = (await play(s.auth, other.id)).home_entrant_id!;
+      expect((await fixtureRow(sib.parentId)).outcome, "premise: ruling 116's walkover").toEqual({ kind: "award", winner: arriving, loser: w1, reason: "withdrew" });
+      const [her, them] = [await nameOf(w1), await nameOf(arriving)];
+      const seat = mine.winner_to_slot!;
+      seats.add(seat);
+      const want = seat === 1 ? [her, them] : [them, her];
+      expect(await boardCard(s.auth, s.divisionId, sib.parentId), `seat ${seat}: the board card names her in her seat`).toBe(vs(want));
+      const { label, me } = await appoint(s.auth, sib.parentId);
+      expect(label, `seat ${seat}: the assignment email names her in her seat`).toBe(vs(want));
+      expect(me, `seat ${seat}: the official's finished duty names her in her seat`).toEqual(want);
+    }
+    expect([...seats].sort(), "both seats reached").toEqual([1, 2]);
+
+    // The pairs: a genuine bye of an odd draw, and a DQ'd winner's dead seat (a walkover by bye, naming nobody), keep
+    // the bye everywhere — the /me lane's empty seat stays null, for the lane to resolve its stored bye label.
+    const odd = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 6 });
+    const bye = (await rowsOf(odd.stageId)).find((r) => (r.outcome as { reason?: unknown } | null)?.reason === "bye");
+    if (!bye) throw new Error("rig: the odd draw has no bye");
+    const byeSeated = await nameOf((bye.home_entrant_id ?? bye.away_entrant_id)!);
+    const byePair = bye.home_entrant_id === null ? [BYE, byeSeated] : [byeSeated, BYE];
+    expect(await boardCard(odd.auth, odd.divisionId, bye.id), "a bye's board card keeps the bye").toBe(vs(byePair));
+    const oddDuty = await appoint(odd.auth, bye.id);
+    expect(oddDuty.label, "a bye's email keeps the bye").toBe(vs(byePair));
+    expect(oddDuty.me, "and the /me lane's empty seat names nobody").toEqual(byePair.map((x) => (x === BYE ? null : x)));
+
+    const dq = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+    const sib = siblingsInto(await rowsOf(dq.stageId));
+    await sql`update entrants set status = 'disqualified' where id = ${sib.a.home_entrant_id}`;
+    const dqd = (await play(dq.auth, sib.a.id)).home_entrant_id!;
+    const dqArriving = (await play(dq.auth, sib.b.id)).home_entrant_id!;
+    expect((await fixtureRow(sib.parentId)).outcome, "premise: a walkover by bye, naming nobody").toEqual({ kind: "award", winner: dqArriving, loser: null, reason: "bye" });
+    const [dqName, dqThem] = [await nameOf(dqd), await nameOf(dqArriving)];
+    const card = await boardCard(dq.auth, dq.divisionId, sib.parentId);
+    expect([card.includes(BYE), card.includes(dqThem), card.includes(dqName)], "the DQ'd winner's board card keeps the bye").toEqual([true, true, false]);
+    const dqDuty = await appoint(dq.auth, sib.parentId);
+    expect([dqDuty.label.includes(BYE), dqDuty.label.includes(dqName)], "and so does the email").toEqual([true, false]);
+    expect(dqDuty.me.filter((x) => x === null).length, "and the /me lane's empty seat names nobody").toBe(1);
+    expect(dqDuty.me, "never her").not.toContain(dqName);
+  }, 240_000);
 });

@@ -50,6 +50,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { DEFAULT_LOCALE } from "@/lib/i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 // P6 fix round 2: resolveLocale() now falls back safely (resolve-locale.ts)
 // when there is no real Next.js request — the direct-invocation shape this
 // repo's own tests use for a server-component "page" function (see
@@ -367,11 +368,14 @@ export default async function DivisionSchedulePage({
             const names = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
             const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
               msgFor(officialsLocale, k, v);
-            const home = f.home_entrant_id
-              ? (names[f.home_entrant_id] ?? lookup("schedule.tbd"))
+            // R116-4 (owner ruling 116): an empty seat a walkover was won over names HER, never its bye label.
+            const homeId = f.home_entrant_id ?? unseatedForfeitLoser(f, "home");
+            const awayId = f.away_entrant_id ?? unseatedForfeitLoser(f, "away");
+            const home = homeId
+              ? (names[homeId] ?? lookup("schedule.tbd"))
               : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
-            const away = f.away_entrant_id
-              ? (names[f.away_entrant_id] ?? lookup("schedule.tbd"))
+            const away = awayId
+              ? (names[awayId] ?? lookup("schedule.tbd"))
               : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
             return {
               id: f.id,

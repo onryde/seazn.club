@@ -279,22 +279,48 @@ describe("BracketPanel — R116-3: ruling 116's walkover names her on every layo
     },
   ];
 
-  it("her name, never the bye label; and a bye (no loser) keeps the bye label — all four layouts", () => {
-    let checked = 0;
+  // R116-4: each layout names its two seats at two separate call sites, so her dead seat is driven on BOTH — the shape as
+  // built, and the awarded tie mirrored (seats and their stored labels swapped). One seat per layout let a mutant that
+  // dropped the reader from the other seat's call site live.
+  type Fx = ReturnType<typeof FIX>;
+  const mirrored = (fx: Fx[]): Fx[] =>
+    fx.map((f) =>
+      f.status === "forfeited"
+        ? {
+            ...f,
+            home_entrant_id: f.away_entrant_id,
+            away_entrant_id: f.home_entrant_id,
+            home_slot_label: f.away_slot_label,
+            away_slot_label: f.home_slot_label,
+          }
+        : f,
+    );
+  const deadSeat = (fx: Fx[]): "home" | "away" => (fx.find((f) => f.status === "forfeited")!.home_entrant_id === null ? "home" : "away");
+
+  it("her name, never the bye label; and a bye (no loser) keeps the bye label — all four layouts, her dead seat on BOTH sides", () => {
+    const seen = new Set<string>();
     for (const l of LAYOUTS) {
-      const render = (o: (w: string) => unknown) => {
-        const fx = l.build(o);
-        return markup({ fixtures: fx as never, divisionFixtures: fx as never, entrantNames: names, ...(l.kind ? { kind: l.kind as never } : {}) });
-      };
-      const walked = render(withdrew);
-      if (l.testid) expect(walked, `${l.name}: the layout rendered`).toContain(l.testid);
-      expect(walked, `${l.name}: her name in her dead seat`).toContain(">Peru<");
-      expect(walked, `${l.name}: no bye label`).not.toContain("bracket.slot.bye");
-      const byed = render(bye);
-      expect(byed, `${l.name}: the bye keeps its label`).toContain("bracket.slot.bye");
-      expect(byed, `${l.name}: and names nobody there`).not.toContain("Peru");
-      checked++;
+      for (const flip of [false, true]) {
+        const shape = (o: (w: string) => unknown) => (flip ? mirrored(l.build(o) as Fx[]) : (l.build(o) as Fx[]));
+        const render = (o: (w: string) => unknown) => {
+          const fx = shape(o);
+          return markup({ fixtures: fx as never, divisionFixtures: fx as never, entrantNames: names, ...(l.kind ? { kind: l.kind as never } : {}) });
+        };
+        const seat = deadSeat(shape(withdrew));
+        const name = `${l.name}, her seat ${seat}`;
+        const walked = render(withdrew);
+        if (l.testid) expect(walked, `${name}: the layout rendered`).toContain(l.testid);
+        expect(walked, `${name}: her name in her dead seat`).toContain(">Peru<");
+        expect(walked, `${name}: no bye label`).not.toContain("bracket.slot.bye");
+        const byed = render(bye);
+        expect(byed, `${name}: the bye keeps its label`).toContain("bracket.slot.bye");
+        expect(byed, `${name}: and names nobody there`).not.toContain("Peru");
+        seen.add(name);
+      }
     }
-    expect(checked).toBe(4);
+    // Both seats on each of the four layouts, by the seat each case actually put her in — not by the loop's count.
+    expect([...seen].sort()).toEqual(
+      LAYOUTS.flatMap((l) => [`${l.name}, her seat away`, `${l.name}, her seat home`]).sort(),
+    );
   });
 });

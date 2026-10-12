@@ -188,6 +188,18 @@ export function unseatedForfeitLoser(
   return mine === null && theirs === winner && loser !== winner ? loser : null;
 }
 
+/**
+ * R116-4 — `unseatedForfeitLoser` for a read that names sides by a SQL join rather than by id: it joined the display
+ * name of the outcome's loser (`forfeit_loser_name`) beside its seats. That name is printed in an empty seat only where
+ * the reader names her; everywhere else this is null, and the caller falls back to the seat's stored label as before.
+ */
+export function unseatedForfeitLoserName(
+  row: Parameters<typeof unseatedForfeitLoser>[0] & { readonly forfeit_loser_name: string | null },
+  seat: "home" | "away",
+): string | null {
+  return unseatedForfeitLoser(row, seat) !== null ? row.forfeit_loser_name : null;
+}
+
 /** A sentence as a dictionary key and EXACTLY the params its template names (the match centre ships it as a `Msg`,
  *  and `match-centre-msg-params.test.ts` fails a param the template drops). Names are resolved by the caller's
  *  `nameOf` — each surface masks names its own way. `result` is the surface's own result sentence for an abandon
