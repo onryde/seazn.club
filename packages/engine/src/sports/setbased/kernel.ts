@@ -42,8 +42,8 @@ import type { EntrantModel } from "../../sport/entrant-model.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
-  forfeitStatsRole,
   personsForEntrant,
+  playedInStats,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -1968,10 +1968,11 @@ function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBas
  * not an exception, the same rule `checkExpedite`/`applyInterruption` follow
  * elsewhere in this file.
  *
- * `matches` needs no cfg at all: it is credited the moment EITHER entrant's
- * event TYPE (a rally or a set summary) appears anywhere in the ledger —
- * both sides of a fixture that was scored at all "played" it, independent of
- * whether either one specifically won a point (see the shutout note below).
+ * `matches` needs no cfg at all: it is `playedInStats` (R115 review M3), the
+ * one players'-stats reader, so both sides of a fixture it calls played are
+ * credited, independent of whether either one specifically won a point (see
+ * the shutout note below) — and of whether anything was scored at all (an
+ * abandon with a result is a match, X-PS-2).
  *
  * Positional summaries (`{home, away}`, no entrant id) cannot bank a set
  * here: attributing one needs a true home/away label this function never has
@@ -2016,11 +2017,9 @@ function setBasedMatchOutcomesFold(
       let state: SetBasedState | undefined = cfgParsed.success
         ? setBasedReplayState(cfgParsed.data, idX, idY)
         : undefined;
-      let played = false;
 
       for (const event of events) {
         if (event.type === rallyType) {
-          played = true;
           if (state === undefined) continue;
           const wonBy = (event.payload as Record<string, unknown>).wonBy;
           if (typeof wonBy !== "string" || (wonBy !== idX && wonBy !== idY)) continue;
@@ -2036,7 +2035,6 @@ function setBasedMatchOutcomesFold(
           continue;
         }
         if (event.type === summaryType) {
-          played = true;
           if (state === undefined) continue;
           const payload = event.payload as Record<string, unknown>;
           const by = payload.by;
@@ -2059,11 +2057,11 @@ function setBasedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      // W2b (X-PS-1/2): a walkover, a withdrawal or a double walkover is no match for anybody, even after a rally;
-      // a retirement or an in-match disqualification is one for both sides, even before the first rally (a warning is
-      // play, ruling 114). Ruling 115: a disqualification with nothing played reads "unplayed", as a walkover does.
-      const forfeit = forfeitStatsRole(events);
-      if ((played && forfeit !== "unplayed") || forfeit === "played") {
+      // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
+      // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
+      // walkover, a withdrawal, a double walkover and a disqualification with nothing played are none (ruling 115); a
+      // retirement, an in-match disqualification and an abandon with a result are one, scored or not (X-PS-2).
+      if (playedInStats(events)) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }

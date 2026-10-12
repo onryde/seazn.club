@@ -587,7 +587,7 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
     expect(rows.find((r) => r.personId === "A-p1")?.stats).toEqual({ matches: 1, wins: 0 });
   });
 
-  it("a void over the decisive board un-counts matches, wins and boards_won", () => {
+  it("a void over the decisive board un-counts wins and boards_won; matches stays the one reader's (R115 review M3)", () => {
     const ctx = ctxFor(
       [
         { id: "H", persons: ["H-p1"] },
@@ -608,7 +608,14 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
       ...decisive,
       makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[1]!.id),
     ];
-    expect(aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx)).toEqual([]);
+    // R115 review M3: `matches` is `playedInStats`, the one players'-stats reader — a ledger with no forfeit is a match
+    // (its step 2), so the Start left behind still reads as one, on carrom as on every surface that asks it (a fixture
+    // whose play is all voided is back in play, and apps/web folds no fixture in play). The void un-counts what the
+    // board decided: the win and the board.
+    expect(aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx)).toEqual([
+      { personId: "A-p1", stats: { matches: 1 } },
+      { personId: "H-p1", stats: { matches: 1 } },
+    ]);
   });
 
   it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {

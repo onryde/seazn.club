@@ -59,8 +59,8 @@ import type {
 } from "../../sport/module.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
-  forfeitStatsRole,
   personsForEntrant,
+  playedInStats,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -1825,8 +1825,7 @@ function nestedGamesOf(state: NestedState, side: Side): number {
  * Positional set summaries here need no special case, unlike the set-based
  * kernel's: `NestedSetSummary` has only ONE shape (`{home, away, tb?}`,
  * always positional) — there is no entrant-keyed alternative to prefer, so
- * every well-formed summary in the ledger is evidence both sides "played",
- * and it is always fed to the replay (which needs no entrant id to bank a
+ * every well-formed summary in the ledger is always fed to the replay (which needs no entrant id to bank a
  * games score, only two numbers to compare against `idX`'s/`idY`'s already-
  * known positions).
  */
@@ -1861,11 +1860,9 @@ function nestedMatchOutcomesFold(
       let state: NestedState | undefined = cfgParsed.success
         ? nestedReplayState(cfgParsed.data, idX, idY)
         : undefined;
-      let played = false;
 
       for (const event of events) {
         if (event.type === pointType) {
-          played = true;
           if (state === undefined) continue;
           const by = (event.payload as Record<string, unknown>).by;
           if (typeof by !== "string" || (by !== idX && by !== idY)) continue;
@@ -1877,7 +1874,6 @@ function nestedMatchOutcomesFold(
           continue;
         }
         if (event.type === summaryType) {
-          played = true; // no entrant id on this shape — see the doc comment above
           if (state === undefined) continue;
           const payload = event.payload as Record<string, unknown>;
           if (typeof payload.home !== "number" || typeof payload.away !== "number") continue;
@@ -1889,7 +1885,6 @@ function nestedMatchOutcomesFold(
           continue;
         }
         if (event.type === gameAwardType) {
-          played = true;
           if (state === undefined) continue;
           const winner = (event.payload as Record<string, unknown>).winner;
           if (typeof winner !== "string" || (winner !== idX && winner !== idY)) continue;
@@ -1908,11 +1903,11 @@ function nestedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      // W2b (X-PS-1/2): a walkover, a withdrawal or a double walkover is no match for anybody, even after a rally;
-      // a retirement or an in-match disqualification is one for both sides, even before the first rally (a warning is
-      // play, ruling 114). Ruling 115: a disqualification with nothing played reads "unplayed", as a walkover does.
-      const forfeit = forfeitStatsRole(events);
-      if ((played && forfeit !== "unplayed") || forfeit === "played") {
+      // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
+      // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
+      // walkover, a withdrawal, a double walkover and a disqualification with nothing played are none (ruling 115); a
+      // retirement, an in-match disqualification and an abandon with a result are one, scored or not (X-PS-2).
+      if (playedInStats(events)) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }

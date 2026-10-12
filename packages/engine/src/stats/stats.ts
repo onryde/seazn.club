@@ -558,8 +558,10 @@ export function playedInStats(events: readonly EventEnvelope[], model?: Pick<Pla
  * History: 1 — every fold before the version existed (its md5 carried none); 2 — W2b's X-PS-1/X-PS-2 and ruling 115
  * (an unplayed forfeit is no match; a disqualification with nothing played is unplayed; a bye is no match, R115-3);
  * 3 — ruling 118 (chess: a disqualification after a bare Start is a game both players played).
+ * 4 — R115 review M3 (the set-based, nested and carrom folds count `matches` through `playedInStats`: an abandon
+ * settled with nothing scored is a match for both sides' players, X-PS-2).
  */
-export const STATS_FOLD_VERSION = 3;
+export const STATS_FOLD_VERSION = 4;
 
 /**
  * Fold one fixture's event ledger into per-person stat contributions

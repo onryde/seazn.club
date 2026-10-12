@@ -1,766 +1,766 @@
 [
-  {
-    "id": "fb-wo-played",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "metrics: creditedMetrics(sideMetrics(state, side, false), credit, side),\n",
-    "replace": "metrics: sideMetrics(state, side, false),\n",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "period-official-award-played",
-    "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
-    "replace": "if (false) {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: football, hockey and ice hockey headlines"
-      }
-    ]
-  },
-  {
-    "id": "fb-headline-played",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "if (outcome?.kind !== \"award\") return state.goals;\n  const reason = awardReasonOf(outcome);",
-    "replace": "if (outcome?.kind !== \"award\" || true) return state.goals;\n  const reason = awardReasonOf(outcome);",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: football, hockey and ice hockey headlines"
-      }
-    ]
-  },
-  {
-    "id": "setbased-wo-played",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "metrics: creditedMetrics(sideMetrics(state, side), credit, side),\n",
-    "replace": "metrics: sideMetrics(state, side),\n",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "nested-wo-played",
-    "file": "packages/engine/src/sports/nested/kernel.ts",
-    "find": "metrics: creditedMetrics(sideMetrics(state, side), credit, side),\n",
-    "replace": "metrics: sideMetrics(state, side),\n",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "cricket-wo-played",
-    "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "creditedMetrics(zeroLedger(), credit, offender)",
-    "replace": "zeroLedger()",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "carrom-wo-played",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "metrics: creditedMetrics(sideLedger(state, side), credit, side),",
-    "replace": "metrics: sideLedger(state, side),",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "generic-wo-keeps-tally",
-    "file": "packages/engine/src/sports/generic/generic.ts",
-    "find": "const recorded = reason === \"walkover\" ? null :",
-    "replace": "const recorded = false ? null :",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "GN-WO-1: generic walkover"
-      }
-    ]
-  },
-  {
-    "id": "boardgame-wo-no-win",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "perSide: creditFor(by, sideMetrics(unplayed, winner, true), sideMetrics(unplayed, by, false)),",
-    "replace": "perSide: creditFor(by, sideMetrics(unplayed, winner, false), sideMetrics(unplayed, by, false)),",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "X-WO-1: every declared cfg of every sport"
-      }
-    ]
-  },
-  {
-    "id": "fb-rt-awarded",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });",
-    "replace": "const credited = { winner: cfg.awardScore.goals, offender: 0 };",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "FB-RT-1: football retirement"
-      }
-    ]
-  },
-  {
-    "id": "period-rt-awarded",
-    "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });",
-    "replace": "const credited = { winner: cfg.awardScore.goals, offender: 0 };",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "HK-RT-1: hockey retirement"
-      },
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "IH-RT-1: ice hockey retirement"
-      }
-    ]
-  },
-  {
-    "id": "goal-credit-equal-margin",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "return real.winner - real.offender > awarded ? real :",
-    "replace": "return real.winner - real.offender >= awarded ? real :",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "FB-RT-1: football retirement"
-      }
-    ]
-  },
-  {
-    "id": "hockey-award-3",
-    "file": "packages/engine/src/sports/hockey/hockey.ts",
-    "find": "awardScore: { goals: 5 },",
-    "replace": "awardScore: { goals: 3 },",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "HK-WO-1: hockey's default walkover"
-      }
-    ]
-  },
-  {
-    "id": "fb-dw-point",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "...build(side, 0, 0, 1, 0), metrics:",
-    "replace": "...build(side, 0, 0, 1, 1), metrics:",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "period-dw-point",
-    "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "...build(side, 0, 0, 1, 0), metrics:",
-    "replace": "...build(side, 0, 0, 1, 1), metrics:",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "setbased-dw-point",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "...build(side, 0, 1, 0), metrics:",
-    "replace": "...build(side, 0, 1, 1), metrics:",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "nested-dw-point",
-    "file": "packages/engine/src/sports/nested/kernel.ts",
-    "find": "...build(side, 0, 1, 0), metrics:",
-    "replace": "...build(side, 0, 1, 1), metrics:",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "cricket-dw-point",
-    "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
-    "replace": "build(\"home\", 0, 0, 1, 1, creditedMetrics(zeroLedger(), credit, \"home\")),",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "boardgame-dw-point",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "...build(side, 0, 0, 1, 0, false), metrics:",
-    "replace": "...build(side, 0, 0, 1, 1, false), metrics:",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "carrom-dw-point",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "return [credited(\"home\", 0, 1, 0, credit), credited(\"away\", 0, 1, 0, credit)];",
-    "replace": "return [credited(\"home\", 0, 1, 1, credit), credited(\"away\", 0, 1, 0, credit)];",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "generic-dw-point",
-    "file": "packages/engine/src/sports/generic/generic.ts",
-    "find": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
-    "replace": "build(\"home\", 0, 0, 1, 1, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: every declared cfg of every sport, both sides"
-      }
-    ]
-  },
-  {
-    "id": "dw-credit-not-excluded",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "return { perSide: [zero, zero], excluded: keys };",
-    "replace": "return { perSide: [zero, zero], excluded: [] };",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/double-walkover.test.ts"
-        ],
-        "name": "X-DW-4: forfeitCredit"
-      }
-    ]
-  },
-  {
-    "id": "carrom-abandon-no-result",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "return { ...state, phase: \"abandoned\" };",
-    "replace": "return { ...state, phase: \"abandoned\", outcome: { kind: \"no_result\" } };",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/abandon-result.test.ts"
-        ],
-        "name": "CA-AB-1: carrom abandon is a replay"
-      }
-    ]
-  },
-  {
-    "id": "generic-abandon-no-result",
-    "file": "packages/engine/src/sports/generic/generic.ts",
-    "find": "return { ...state, phase: \"abandoned\" };",
-    "replace": "return { ...state, phase: \"abandoned\", outcome: { kind: \"no_result\" } };",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/abandon-result.test.ts"
-        ],
-        "name": "GN-AB-1: generic abandon is a replay"
-      }
-    ]
-  },
-  {
-    "id": "fb-d8-method-dropped",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "      method: \"abandoned\",\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/abandon-result.test.ts"
-        ],
-        "name": "FB-AB-1: football award-policy abandon"
-      }
-    ]
-  },
-  {
-    "id": "period-d8-method-dropped",
-    "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "      method: \"abandoned\",\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/abandon-result.test.ts"
-        ],
-        "name": "HK-AB-1: hockey award-policy abandon"
-      },
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/abandon-result.test.ts"
-        ],
-        "name": "IH-AB-1: ice hockey award-policy abandon"
-      }
-    ]
-  },
-  {
-    "id": "fb-ps-clean-sheet-skip",
-    "file": "packages/engine/src/sports/football/football.ts",
-    "find": "if (spell !== undefined && !spell.conceded && !unplayed) bump(",
-    "replace": "if (spell !== undefined && !spell.conceded) bump(",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "period-ps-clean-sheet-skip",
-    "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "if (spell !== undefined && !spell.conceded && !unplayed) bump(",
-    "replace": "if (spell !== undefined && !spell.conceded) bump(",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "setbased-ps-matches-skip",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "if ((played && forfeit !== \"unplayed\") || forfeit === \"played\") {",
-    "replace": "if (played || forfeit === \"played\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "setbased-ps-matches-retired",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "if ((played && forfeit !== \"unplayed\") || forfeit === \"played\") {",
-    "replace": "if (played && forfeit !== \"unplayed\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
-      }
-    ]
-  },
-  {
-    "id": "nested-ps-matches-retired",
-    "file": "packages/engine/src/sports/nested/kernel.ts",
-    "find": "if ((played && forfeit !== \"unplayed\") || forfeit === \"played\") {",
-    "replace": "if (played && forfeit !== \"unplayed\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
-      }
-    ]
-  },
-  {
-    "id": "carrom-ps-matches-retired",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "if (entrantIdsIn(events).length > 0 && forfeit !== \"unplayed\") {",
-    "replace": "if (entrantIdsIn(events).length > 1 && forfeit !== \"unplayed\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
-      }
-    ]
-  },
-  {
-    "id": "nested-ps-matches-skip",
-    "file": "packages/engine/src/sports/nested/kernel.ts",
-    "find": "if ((played && forfeit !== \"unplayed\") || forfeit === \"played\") {",
-    "replace": "if (played || forfeit === \"played\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "carrom-ps-matches-skip",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "if (entrantIdsIn(events).length > 0 && forfeit !== \"unplayed\") {",
-    "replace": "if (entrantIdsIn(events).length > 0) {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "carrom-ps-wl-skip",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "if (forfeit === \"unplayed\") {\n        // nothing: the match was not played\n      } else if",
-    "replace": "if (false) {\n        // nothing: the match was not played\n      } else if",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "generic-ps-wdl-skip",
-    "file": "packages/engine/src/sports/generic/generic.ts",
-    "find": "if (forfeitStatsRole(events) === \"unplayed\") {",
-    "replace": "if (false) {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "stats-appearance-skip",
-    "file": "packages/engine/src/stats/stats.ts",
-    "find": "if (unplayed && metric.appearance === true) continue;",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "stats-role-withdrew-played",
-    "file": "packages/engine/src/stats/stats.ts",
-    "find": "reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\"",
-    "replace": "reason === \"walkover\" ? \"unplayed\" : \"played\"",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-      }
-    ]
-  },
-  {
-    "id": "stats-role-decided-ignored",
-    "file": "packages/engine/src/stats/stats.ts",
-    "find": "if (decided) role = null;\n    else role =",
-    "replace": "role =",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "BG-WO-3: a chess draw then a tie-break walkover"
-      }
-    ]
-  },
-  {
-    "id": "boardgame-ps-default-unplayed",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "    unplayed: boardgameUnplayed,\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "BG-WO-3: a chess draw then a tie-break walkover"
-      }
-    ]
-  },
-  {
-    "id": "boardgame-ps-forfeit-wl",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "if (forfeitStatsRole(events, isGameResult, boardgame) === \"played\") {",
-    "replace": "if (false) {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/player-stats-forfeit.test.ts"
-        ],
-        "name": "X-PS-2: a retirement or an in-match disqualification"
-      }
-    ]
-  },
-  {
-    "id": "bg-result-double-forfeit-winner-ok",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": ".refine((result) => result.method !== \"double_forfeit\" || result.winner == null, {",
-    "replace": ".refine(() => true, {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sports/boardgame/boardgame.test.ts"
-        ],
-        "name": "W2b f-w2: the method and the winner agree"
-      }
-    ]
-  },
-  {
-    "id": "bg-result-forfeit-no-winner-ok",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": ".refine((result) => result.method !== \"forfeit\" || typeof result.winner === \"string\", {",
-    "replace": ".refine(() => true, {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sports/boardgame/boardgame.test.ts"
-        ],
-        "name": "W2b f-w2: the method and the winner agree"
-      }
-    ]
-  },
-  {
-    "id": "bye-reads-walkover",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
-    "replace": "return \"walkover\";",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/bye-credit.test.ts"
-        ],
-        "name": "C-5: standingsDelta\\(award\\{loser:null, reason:\"bye\"\\}\\)"
-      }
-    ]
-  },
-  {
-    "id": "legacy-award-not-bye",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
-    "replace": "return legacy.loser === null ? \"bye\" : (legacy.reason ?? \"walkover\");",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/bye-credit.test.ts"
-        ],
-        "name": "C-5: a legacy award with no reason"
-      }
-    ]
-  },
-  {
-    "id": "bg-headline-award",
-    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "} else if (outcome?.kind === \"win\" || outcome?.kind === \"award\") {",
-    "replace": "} else if (outcome?.kind === \"win\") {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "BG-WO-1: a chess forfeit's headline reads the credited 1-0"
-      }
-    ]
-  },
-  {
-    "id": "award-offender-not-loser",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "const side = sideOfEntrant(loser);",
-    "replace": "const side = winnerSide === \"home\" ? \"away\" : \"home\";",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "every sport: the typed loser is the offender"
-      }
-    ]
-  },
-  {
-    "id": "award-offender-winner-seat-ok",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "if (side === winnerSide) {",
-    "replace": "if (false) {",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "every sport: the typed loser is the offender"
-      }
-    ]
-  },
-  {
-    "id": "vb-deciding-set-at-setto",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);",
-    "replace": "points[winner] += cfg.setTo;",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "a deciding set the retiree never reached"
-      }
-    ]
-  },
-  {
-    "id": "award-offender-bye-winner-seat",
-    "file": "packages/engine/src/sport/forfeit-credit.ts",
-    "find": "if (loser == null) return winnerSide === \"home\" ? \"away\" : \"home\";",
-    "replace": "if (loser == null) return winnerSide;",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "every sport: the typed loser is the offender"
-      }
-    ]
-  }
+ {
+  "id": "fb-wo-played",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "metrics: creditedMetrics(sideMetrics(state, side, false), credit, side),\n",
+  "replace": "metrics: sideMetrics(state, side, false),\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "period-official-award-played",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: football, hockey and ice hockey headlines"
+   }
+  ]
+ },
+ {
+  "id": "fb-headline-played",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "if (outcome?.kind !== \"award\") return state.goals;\n  const reason = awardReasonOf(outcome);",
+  "replace": "if (outcome?.kind !== \"award\" || true) return state.goals;\n  const reason = awardReasonOf(outcome);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: football, hockey and ice hockey headlines"
+   }
+  ]
+ },
+ {
+  "id": "setbased-wo-played",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "metrics: creditedMetrics(sideMetrics(state, side), credit, side),\n",
+  "replace": "metrics: sideMetrics(state, side),\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "nested-wo-played",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "metrics: creditedMetrics(sideMetrics(state, side), credit, side),\n",
+  "replace": "metrics: sideMetrics(state, side),\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "cricket-wo-played",
+  "file": "packages/engine/src/sports/cricket/cricket.ts",
+  "find": "creditedMetrics(zeroLedger(), credit, offender)",
+  "replace": "zeroLedger()",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "carrom-wo-played",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "metrics: creditedMetrics(sideLedger(state, side), credit, side),",
+  "replace": "metrics: sideLedger(state, side),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "generic-wo-keeps-tally",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "const recorded = reason === \"walkover\" ? null :",
+  "replace": "const recorded = false ? null :",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "GN-WO-1: generic walkover"
+   }
+  ]
+ },
+ {
+  "id": "boardgame-wo-no-win",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "perSide: creditFor(by, sideMetrics(unplayed, winner, true), sideMetrics(unplayed, by, false)),",
+  "replace": "perSide: creditFor(by, sideMetrics(unplayed, winner, false), sideMetrics(unplayed, by, false)),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WO-1: every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "fb-rt-awarded",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });",
+  "replace": "const credited = { winner: cfg.awardScore.goals, offender: 0 };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "FB-RT-1: football retirement"
+   }
+  ]
+ },
+ {
+  "id": "period-rt-awarded",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });",
+  "replace": "const credited = { winner: cfg.awardScore.goals, offender: 0 };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "HK-RT-1: hockey retirement"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "IH-RT-1: ice hockey retirement"
+   }
+  ]
+ },
+ {
+  "id": "goal-credit-equal-margin",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "return real.winner - real.offender > awarded ? real :",
+  "replace": "return real.winner - real.offender >= awarded ? real :",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "FB-RT-1: football retirement"
+   }
+  ]
+ },
+ {
+  "id": "hockey-award-3",
+  "file": "packages/engine/src/sports/hockey/hockey.ts",
+  "find": "awardScore: { goals: 5 },",
+  "replace": "awardScore: { goals: 3 },",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "HK-WO-1: hockey's default walkover"
+   }
+  ]
+ },
+ {
+  "id": "fb-dw-point",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "...build(side, 0, 0, 1, 0), metrics:",
+  "replace": "...build(side, 0, 0, 1, 1), metrics:",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "period-dw-point",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "...build(side, 0, 0, 1, 0), metrics:",
+  "replace": "...build(side, 0, 0, 1, 1), metrics:",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "setbased-dw-point",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "...build(side, 0, 1, 0), metrics:",
+  "replace": "...build(side, 0, 1, 1), metrics:",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "nested-dw-point",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "...build(side, 0, 1, 0), metrics:",
+  "replace": "...build(side, 0, 1, 1), metrics:",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "cricket-dw-point",
+  "file": "packages/engine/src/sports/cricket/cricket.ts",
+  "find": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
+  "replace": "build(\"home\", 0, 0, 1, 1, creditedMetrics(zeroLedger(), credit, \"home\")),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "boardgame-dw-point",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "...build(side, 0, 0, 1, 0, false), metrics:",
+  "replace": "...build(side, 0, 0, 1, 1, false), metrics:",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "carrom-dw-point",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "return [credited(\"home\", 0, 1, 0, credit), credited(\"away\", 0, 1, 0, credit)];",
+  "replace": "return [credited(\"home\", 0, 1, 1, credit), credited(\"away\", 0, 1, 0, credit)];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "generic-dw-point",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
+  "replace": "build(\"home\", 0, 0, 1, 1, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: every declared cfg of every sport, both sides"
+   }
+  ]
+ },
+ {
+  "id": "dw-credit-not-excluded",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "return { perSide: [zero, zero], excluded: keys };",
+  "replace": "return { perSide: [zero, zero], excluded: [] };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/double-walkover.test.ts"
+    ],
+    "name": "X-DW-4: forfeitCredit"
+   }
+  ]
+ },
+ {
+  "id": "carrom-abandon-no-result",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "return { ...state, phase: \"abandoned\" };",
+  "replace": "return { ...state, phase: \"abandoned\", outcome: { kind: \"no_result\" } };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/abandon-result.test.ts"
+    ],
+    "name": "CA-AB-1: carrom abandon is a replay"
+   }
+  ]
+ },
+ {
+  "id": "generic-abandon-no-result",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "return { ...state, phase: \"abandoned\" };",
+  "replace": "return { ...state, phase: \"abandoned\", outcome: { kind: \"no_result\" } };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/abandon-result.test.ts"
+    ],
+    "name": "GN-AB-1: generic abandon is a replay"
+   }
+  ]
+ },
+ {
+  "id": "fb-d8-method-dropped",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "      method: \"abandoned\",\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/abandon-result.test.ts"
+    ],
+    "name": "FB-AB-1: football award-policy abandon"
+   }
+  ]
+ },
+ {
+  "id": "period-d8-method-dropped",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "      method: \"abandoned\",\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/abandon-result.test.ts"
+    ],
+    "name": "HK-AB-1: hockey award-policy abandon"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/abandon-result.test.ts"
+    ],
+    "name": "IH-AB-1: ice hockey award-policy abandon"
+   }
+  ]
+ },
+ {
+  "id": "fb-ps-clean-sheet-skip",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "if (spell !== undefined && !spell.conceded && !unplayed) bump(",
+  "replace": "if (spell !== undefined && !spell.conceded) bump(",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "period-ps-clean-sheet-skip",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "if (spell !== undefined && !spell.conceded && !unplayed) bump(",
+  "replace": "if (spell !== undefined && !spell.conceded) bump(",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "setbased-ps-matches-skip",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (events.length > 0) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "setbased-ps-matches-retired",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
+   }
+  ]
+ },
+ {
+  "id": "nested-ps-matches-retired",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
+   }
+  ]
+ },
+ {
+  "id": "carrom-ps-matches-retired",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
+   }
+  ]
+ },
+ {
+  "id": "nested-ps-matches-skip",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (events.length > 0) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "carrom-ps-matches-skip",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (events.length > 0) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "carrom-ps-wl-skip",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "if (forfeit === \"unplayed\") {\n        // nothing: the match was not played\n      } else if",
+  "replace": "if (false) {\n        // nothing: the match was not played\n      } else if",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "generic-ps-wdl-skip",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "if (forfeitStatsRole(events) === \"unplayed\") {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "stats-appearance-skip",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "if (unplayed && metric.appearance === true) continue;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "stats-role-withdrew-played",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\"",
+  "replace": "reason === \"walkover\" ? \"unplayed\" : \"played\"",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "stats-role-decided-ignored",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "if (decided) role = null;\n    else role =",
+  "replace": "role =",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "BG-WO-3: a chess draw then a tie-break walkover"
+   }
+  ]
+ },
+ {
+  "id": "boardgame-ps-default-unplayed",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "    unplayed: boardgameUnplayed,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "BG-WO-3: a chess draw then a tie-break walkover"
+   }
+  ]
+ },
+ {
+  "id": "boardgame-ps-forfeit-wl",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "if (forfeitStatsRole(events, isGameResult, boardgame) === \"played\") {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-2: a retirement or an in-match disqualification"
+   }
+  ]
+ },
+ {
+  "id": "bg-result-double-forfeit-winner-ok",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": ".refine((result) => result.method !== \"double_forfeit\" || result.winner == null, {",
+  "replace": ".refine(() => true, {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/boardgame/boardgame.test.ts"
+    ],
+    "name": "W2b f-w2: the method and the winner agree"
+   }
+  ]
+ },
+ {
+  "id": "bg-result-forfeit-no-winner-ok",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": ".refine((result) => result.method !== \"forfeit\" || typeof result.winner === \"string\", {",
+  "replace": ".refine(() => true, {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/boardgame/boardgame.test.ts"
+    ],
+    "name": "W2b f-w2: the method and the winner agree"
+   }
+  ]
+ },
+ {
+  "id": "bye-reads-walkover",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
+  "replace": "return \"walkover\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/bye-credit.test.ts"
+    ],
+    "name": "C-5: standingsDelta\\(award\\{loser:null, reason:\"bye\"\\}\\)"
+   }
+  ]
+ },
+ {
+  "id": "legacy-award-not-bye",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
+  "replace": "return legacy.loser === null ? \"bye\" : (legacy.reason ?? \"walkover\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/bye-credit.test.ts"
+    ],
+    "name": "C-5: a legacy award with no reason"
+   }
+  ]
+ },
+ {
+  "id": "bg-headline-award",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "} else if (outcome?.kind === \"win\" || outcome?.kind === \"award\") {",
+  "replace": "} else if (outcome?.kind === \"win\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "BG-WO-1: a chess forfeit's headline reads the credited 1-0"
+   }
+  ]
+ },
+ {
+  "id": "award-offender-not-loser",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "const side = sideOfEntrant(loser);",
+  "replace": "const side = winnerSide === \"home\" ? \"away\" : \"home\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "every sport: the typed loser is the offender"
+   }
+  ]
+ },
+ {
+  "id": "award-offender-winner-seat-ok",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "if (side === winnerSide) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "every sport: the typed loser is the offender"
+   }
+  ]
+ },
+ {
+  "id": "vb-deciding-set-at-setto",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);",
+  "replace": "points[winner] += cfg.setTo;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "a deciding set the retiree never reached"
+   }
+  ]
+ },
+ {
+  "id": "award-offender-bye-winner-seat",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "if (loser == null) return winnerSide === \"home\" ? \"away\" : \"home\";",
+  "replace": "if (loser == null) return winnerSide;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "every sport: the typed loser is the offender"
+   }
+  ]
+ }
 ]

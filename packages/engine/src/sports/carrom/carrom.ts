@@ -44,7 +44,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { forfeitStatsRole, personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { forfeitStatsRole, personsForEntrant, playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -827,19 +827,16 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
     for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key, by);
   };
 
-  // "matches" — attendance. Gated on the ledger naming SOME entrant at all
-  // (the same entrant-id scan `discipline.extractCards` already uses, so an
-  // empty/pre-match stream credits nobody) — but once gated open, BOTH
-  // `ctx.entrants` are credited, not just whichever one a payload happens to
-  // name: a whitewash where the loser never wins a board, never covers a
-  // queen and never draws a penalty would otherwise leave the loser's own
-  // roster with no "matches" row at all, despite unambiguously having played.
-  //
-  // W2b (X-PS-1/2): a forfeit's `by` names an entrant too, so the gate alone would count a walkover. A walkover, a
-  // withdrawal or a double walkover is no match for anybody. A retirement or an in-match disqualification is one for
-  // both sides even before the first board — which the gate already gives it, through that same `by`.
+  // "matches" — attendance: `playedInStats` (R115 review M3), the one players'-stats reader every other surface asks
+  // (the shared fold's appearance, apps/web's career count), never a local "does a payload name an entrant" — which
+  // counted no match for an abandon settled before the first board (X-PS-2 counts it). An empty ledger credits nobody;
+  // a walkover, a withdrawal, a double walkover and a disqualification with nothing played are no match for anybody
+  // (X-PS-1, ruling 115); a retirement or an in-match disqualification is one for both sides even before the first
+  // board. Once it says played, BOTH `ctx.entrants` are credited, not just whichever one a payload happens to name: a
+  // whitewash where the loser never wins a board, never covers a queen and never draws a penalty would otherwise leave
+  // the loser's own roster with no "matches" row at all, despite unambiguously having played.
   const forfeit = forfeitStatsRole(events);
-  if (entrantIdsIn(events).length > 0 && forfeit !== "unplayed") {
+  if (playedInStats(events)) {
     for (const entrant of ctx.entrants) creditEach(entrant, "matches", 1);
   }
 

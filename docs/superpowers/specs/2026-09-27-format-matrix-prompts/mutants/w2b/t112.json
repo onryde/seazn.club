@@ -1437,5 +1437,50 @@
     "name": "X-RS-1 \\+ rulings 113, 118"
    }
   ]
+ },
+ {
+  "id": "r115-m3-setbased-matches-scored-only",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-matches-reader.test.ts"
+    ],
+    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+   }
+  ]
+ },
+ {
+  "id": "r115-m3-nested-matches-scored-only",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-matches-reader.test.ts"
+    ],
+    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+   }
+  ]
+ },
+ {
+  "id": "r115-m3-carrom-matches-scored-only",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "if (playedInStats(events)) {",
+  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-matches-reader.test.ts"
+    ],
+    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+   }
+  ]
  }
 ]
