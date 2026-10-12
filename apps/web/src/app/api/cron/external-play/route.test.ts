@@ -46,6 +46,7 @@ describe("POST /api/cron/external-play", () => {
       cameraSettled: 6,
       cameraFlags: 7,
       connectionFlags: 8,
+      arbitersRemoved: 9,
       scanned: 15,
       failures: [
         {

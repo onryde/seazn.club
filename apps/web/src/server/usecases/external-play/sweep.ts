@@ -10,7 +10,9 @@ import "server-only";
 //                             T11's reconcile — the abandoned-board sweep and
 //                             the main detector of moves made at Lichess;
 //   5. the camera evidence    after an ended room, every player's peer reports
-//                             → a camera_lost flag (controller ruling C1).
+//                             → a camera_lost flag (controller ruling C1);
+//   6. the arbiter removal    an organiser's watch of a board (T15) ends when
+//                             their role does, or after a TTL (fix round 1, I2).
 // The T-10 notice is NOT here: under D12 the organiser's open-round action
 // sends the invites and stamps the window (T19).
 //
@@ -36,8 +38,10 @@ import {
   fetchVideoOffCoverage,
   listMeetingSessions,
   listPeerIds,
+  removeParticipant,
   type RealtimeKitDeps,
 } from "@/server/external-play/video/realtimekit";
+import { EDITOR_ROLES } from "@/lib/types";
 import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
@@ -48,8 +52,9 @@ import { isPlayableFixtureStatus } from "./preflight";
 import { RECONCILED_WHILE_HELD, reconcile, type ReconcileOutcome } from "./reconcile";
 import { holdForOrganiser, holdRefusedNoShow } from "./result";
 import { checkIns } from "./room";
+import { isSeatedOn } from "./seated";
 
-export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence";
+export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence" | "arbiter_revoke";
 
 export type SweepReport = {
   /** Review M8: another pass held the lock, so this one did nothing — every
@@ -69,6 +74,9 @@ export type SweepReport = {
    *  safeguard's stamps past a threshold in one match — told, never an
    *  accusation (T14 fix round 5). */
   connectionFlags: number;
+  /** Arbiter watches ended this pass (job 6): removed at RealtimeKit and
+   *  stamped, or stamped for a room already torn down. */
+  arbitersRemoved: number;
   /** Candidates examined across every job — a pass that looked at nothing
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
@@ -930,6 +938,72 @@ async function giveUpUnread(pass: Pass, c: CameraCandidate, cause?: unknown): Pr
 // overlap harmless, the lock is what makes it rare.
 const SWEEP_LOCK = "external-play-sweep";
 
+// ─── Job 6: the arbiter watches the server removes (T15 fix round 1, I2) ───
+//
+// An organiser's watch of a board is a RealtimeKit participant whose token
+// lasts 100 days. The panel removes it when it closes (leaveAsArbiter), but
+// a browser that crashes or loses the network never says so — and a role can
+// be taken away mid-watch. So every pass looks at every watch not yet
+// removed, and ends one when:
+//   - its user is gone (the account deleted: ON DELETE SET NULL, M5);
+//   - its user is no longer an owner or admin of the club (mayWatchBoards's
+//     roles — the route's `write`);
+//   - its user now PLAYS on the board (C1's predicate: a sub seated after the
+//     watch began never keeps watching their opponent);
+//   - it is ARBITER_PARTICIPANT_TTL_MS old: a panel left open runs longer
+//     than any game on the ship-1 clocks, and re-opening mints a fresh one.
+// A watch whose room has ended needs no vendor call (the teardown kicked
+// everyone and INACTIVE keeps every token out): it is stamped. Otherwise it
+// is kicked and deleted at RealtimeKit (removeParticipant), THEN stamped; a
+// vendor failure leaves it open, reported, for the next pass.
+
+/** How long one arbiter participant may live (I2). Three hours: longer than
+ *  any ship-1 game's clock, short enough that a forgotten panel stops. */
+export const ARBITER_PARTICIPANT_TTL_MS = 3 * 60 * 60_000;
+
+type ArbiterCandidate = {
+  id: string;
+  fixtureId: string;
+  participantId: string;
+  userId: string | null;
+  createdAt: Date;
+  meetingId: string;
+  meetingEndedAt: Date | null;
+  organiser: boolean;
+};
+
+async function arbiterCandidates(pass: Pass): Promise<ArbiterCandidate[]> {
+  return sql<ArbiterCandidate[]>`
+    select vp.id, vp.fixture_id as "fixtureId", vp.participant_id as "participantId", vp.user_id as "userId",
+           vp.created_at as "createdAt", m.meeting_id as "meetingId", m.ended_at as "meetingEndedAt",
+           exists (select 1 from org_members om
+                    where om.org_id = f.org_id and om.user_id = vp.user_id
+                      and om.role in ${sql(EDITOR_ROLES as unknown as string[])}) as organiser
+      from fixture_video_participants vp
+      join fixtures f on f.id = vp.fixture_id
+      join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+     where vp.preset = 'arbiter' and vp.removed_at is null
+       ${orgScope(pass)}
+     order by vp.created_at, vp.id`;
+}
+
+async function arbiterMustGo(pass: Pass, c: ArbiterCandidate): Promise<boolean> {
+  if (c.meetingEndedAt !== null) return true;
+  if (c.userId === null || !c.organiser) return true;
+  if (pass.now.getTime() - c.createdAt.getTime() >= ARBITER_PARTICIPANT_TTL_MS) return true;
+  return isSeatedOn(c.userId, c.fixtureId);
+}
+
+async function arbiterRevoke(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDeps): Promise<void> {
+  if (!(await arbiterMustGo(pass, c))) return;
+  if (c.meetingEndedAt === null) {
+    await removeParticipant({ meetingId: c.meetingId, participantId: c.participantId }, rtk);
+  }
+  const stamped = await sql`
+    update fixture_video_participants set removed_at = ${pass.now} where id = ${c.id} and removed_at is null`;
+  pass.report.arbitersRemoved += stamped.count;
+}
+
 function emptyReport(skipped: boolean): SweepReport {
   return {
     skipped,
@@ -941,6 +1015,7 @@ function emptyReport(skipped: boolean): SweepReport {
     cameraSettled: 0,
     cameraFlags: 0,
     connectionFlags: 0,
+    arbitersRemoved: 0,
     scanned: 0,
     failures: [],
   };
@@ -984,5 +1059,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   // After the teardown: a room ended in THIS pass is not readable for 2 minutes.
   const rtk = deps.realtimeKit ?? {};
   await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));
+  // After the teardown too: a room ended in THIS pass took its watches with it.
+  await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, rtk));
   return report;
 }

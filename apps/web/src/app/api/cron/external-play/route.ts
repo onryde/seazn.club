@@ -5,8 +5,10 @@ import { sweepExternalPlay } from "@/server/usecases/external-play";
 
 /** POST /api/cron/external-play — the 5-minute cron (chess in-page board
  *  design §4): one pass of the external-play sweep (T13) — the T+20 no-show,
- *  the mint retry for a create Lichess throttled, meeting teardown, and the
- *  reconcile sweep that reads every game on file. Answers the sweep's report
+ *  the mint retry for a create Lichess throttled, meeting teardown, the
+ *  reconcile sweep that reads every game on file, the camera evidence after
+ *  a match and the removal of arbiter watches that must end (T15 fix round
+ *  1, I2). Answers the sweep's report
  *  (counts, and failures by code — never a message; `skipped` when another
  *  pass was still running, T13 M8). Wired in the separate
  *  cron repo (onryde/seazn.club.workflow).

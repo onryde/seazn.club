@@ -1366,13 +1366,22 @@ export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 /** POST /fixtures/{id}/external-play/resolve — organiser settles a needs_organiser bridge. */
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3) — the
  *  arbiter's OWN RealtimeKit token for the board's meeting (preset `arbiter`,
- *  receive-only), and the two players' participant ids by colour, which its
- *  client subscribes to. Never a player's token (spec §10). */
+ *  receive-only), a FRESH participant per open (fix round 1, I2) whose id
+ *  the client hands back when it leaves, and the two players' participant
+ *  ids by colour, which its client subscribes to. Never a player's token
+ *  (spec §10). */
 export const ArbiterJoinOut = z.object({
   authToken: z.string(),
+  participantId: z.string(),
   white: z.array(z.string()),
   black: z.array(z.string()),
 });
+
+/** DELETE /fixtures/{id}/external-play/arbiter/{participantId} (T15 fix
+ *  round 1, I2) — the panel closed: the server removes the caller's own
+ *  arbiter participant from the meeting. `removed: false` when it was
+ *  already removed (a repeat, the sweep, the room's teardown). */
+export const ArbiterLeaveOut = z.object({ removed: z.boolean() });
 
 /** POST /fixtures/{id}/external-play/resync (T15) — the organiser's
  *  reconcile (trigger `organiser`): did a read bring Lichess's truth, how many
