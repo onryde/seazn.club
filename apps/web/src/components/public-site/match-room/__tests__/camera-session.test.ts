@@ -3,7 +3,8 @@
 // join lands. The RealtimeKit join is the injected seam; the real one is the
 // e2e's (with camera policy off the room never loads it — asserted there).
 import { describe, expect, it } from "vitest";
-import { cameraSession, RECOVER_BACKOFF_MS, type CameraView } from "../camera-session";
+import fc from "fast-check";
+import { cameraSession, RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, type CameraView } from "../camera-session";
 import { D7GuardError, makeJoinOwnCamera, type MeetingLink, type OwnCamera } from "../camera-loader";
 import { fakeRealtimeKit, type FakeMeeting } from "./_fake-realtimekit";
 import { matchCameraOff } from "@/server/external-play/video/match-camera-off";
@@ -367,6 +368,125 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     await flush();
     expect(j.tokens).toEqual(["seat-1", "seat-2"]);
     expect(r.statuses()).toEqual(["joining", "live", "recovering", "live"]);
+  });
+});
+
+// T14 fix round 5, ruling 2: a re-join that keeps failing — for ANY reason,
+// not only our guard's — stops after RECOVER_MAX_ATTEMPTS and says so, never
+// "reconnecting" for ever. The open stamp closes with the give-up, so the gap
+// still counts toward ruling 1's neutral flag. The way back is a reload.
+describe("cameraSession — giving up: fail → retry × N → give-up → reload → recover (fix round 5)", () => {
+  function joins(...outcomes: (OwnCamera | Error)[]) {
+    let n = 0;
+    const join = async () => {
+      n += 1;
+      const next = outcomes.shift();
+      if (next === undefined) throw new Error("no more joins scripted");
+      if (next instanceof Error) throw next;
+      return next;
+    };
+    return { join, count: () => n };
+  }
+  function stamps() {
+    const seen: ("start" | "end")[] = [];
+    return { seen, stamp: async (state: "start" | "end") => void seen.push(state) };
+  }
+  const flush = async (n = 5) => {
+    for (let i = 0; i < n; i += 1) await new Promise((res) => setTimeout(res, 0));
+  };
+  /** The wait before re-join attempt i, on the declared ladder. */
+  const waitBefore = (i: number) => RECOVER_BACKOFF_MS[Math.min(i, RECOVER_BACKOFF_MS.length - 1)]!;
+  const failure = (i: number) => (i % 2 === 0 ? new Error("network: join timed out") : new D7GuardError(new Error("cap")));
+
+  it("the give-up comes after roughly 60–90 s of back-off — the ruled band, from the declared ladder and attempt count", () => {
+    const total = Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i): number => waitBefore(i)).reduce((a, b) => a + b, 0);
+    expect(total).toBeGreaterThanOrEqual(60_000);
+    expect(total).toBeLessThanOrEqual(90_000);
+  });
+
+  it("N attempts that all fail (network AND our guard's): recovering throughout, then gave_up — never off or failed; ONE interval, closed by the give-up; nothing more by itself", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const j = joins(first.cam, ...Array.from({ length: RECOVER_MAX_ATTEMPTS + 3 }, (_, i) => failure(i)));
+    const waits: number[] = [];
+    const st = stamps();
+    const s = cameraSession(j.join, r.emit, {
+      stamp: st.stamp,
+      sleep: async (ms) => {
+        waits.push(ms);
+        await new Promise((res) => setTimeout(res, 0));
+      },
+    });
+    await s.start("t");
+    first.fault();
+    for (let i = 0; i < 4 * RECOVER_MAX_ATTEMPTS && r.views.at(-1)?.status === "recovering"; i += 1) await flush(1);
+    expect(r.statuses()).toEqual(["joining", "live", "recovering", "gave_up"]);
+    expect(r.views.at(-1)).toEqual({ status: "gave_up", track: null });
+    expect(j.count(), "the first join, then exactly N re-joins").toBe(1 + RECOVER_MAX_ATTEMPTS);
+    expect(waits).toEqual(Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i) => waitBefore(i)));
+    expect(st.seen, "the give-up closes our window").toEqual(["start", "end"]);
+    await flush(20);
+    expect(j.count(), "given up: no join by itself").toBe(1 + RECOVER_MAX_ATTEMPTS);
+    await s.enable();
+    await s.stop();
+    expect(st.seen, "nothing open to close at stop").toEqual(["start", "end"]);
+    expect(r.statuses().at(-1)).toBe("gave_up");
+  });
+
+  it("…then the reload: a fresh page's session joins and is live, nothing of ours left open", async () => {
+    const r = record();
+    const st = stamps();
+    const reloaded = cameraSession(joins(fakeCamera(TRACK).cam).join, r.emit, { stamp: st.stamp });
+    await reloaded.start("t");
+    expect(r.statuses()).toEqual(["joining", "live"]);
+    expect(st.seen).toEqual([]);
+  });
+
+  it("property: any run of failures then (maybe) a success — live at the first success inside N, else gave_up after exactly N; one interval either way; never off or failed", async () => {
+    const seen = { recovered: 0, gaveUp: 0, lastChance: 0, firstMiss: 0 };
+    await fc.assert(
+      fc.asyncProperty(
+        // Where the first good join lands (≥ N ⇒ never inside the budget),
+        // weighted onto the two edges, and each failure's kind.
+        fc.oneof(fc.constantFrom(RECOVER_MAX_ATTEMPTS - 1, RECOVER_MAX_ATTEMPTS), fc.integer({ min: 0, max: RECOVER_MAX_ATTEMPTS + 2 })),
+        fc.array(fc.boolean(), { minLength: RECOVER_MAX_ATTEMPTS + 3, maxLength: RECOVER_MAX_ATTEMPTS + 3 }),
+        async (okAt, d7) => {
+          const r = record();
+          const st = stamps();
+          const first = fakeCamera(TRACK);
+          const outcomes: (OwnCamera | Error)[] = Array.from({ length: RECOVER_MAX_ATTEMPTS + 3 }, (_, i) =>
+            i === okAt ? fakeCamera(TRACK).cam : d7[i] ? new D7GuardError(new Error("cap")) : new Error("network"),
+          );
+          const j = joins(first.cam, ...outcomes);
+          const s = cameraSession(j.join, r.emit, { stamp: st.stamp, sleep: () => new Promise<void>((res) => setTimeout(res, 0)) });
+          await s.start("t");
+          first.fault();
+          for (let i = 0; i < 4 * RECOVER_MAX_ATTEMPTS && r.views.at(-1)?.status === "recovering"; i += 1) await flush(1);
+          const statuses = r.statuses();
+          expect(statuses.filter((x) => x === "off" || x === "failed"), "never the player's").toEqual([]);
+          expect(st.seen, "one interval, closed").toEqual(["start", "end"]);
+          if (okAt < RECOVER_MAX_ATTEMPTS) {
+            expect(statuses).toEqual(["joining", "live", "recovering", "live"]);
+            expect(j.count()).toBe(1 + okAt + 1);
+            seen.recovered += 1;
+            if (okAt === RECOVER_MAX_ATTEMPTS - 1) seen.lastChance += 1;
+          } else {
+            expect(statuses).toEqual(["joining", "live", "recovering", "gave_up"]);
+            expect(j.count()).toBe(1 + RECOVER_MAX_ATTEMPTS);
+            seen.gaveUp += 1;
+            if (okAt === RECOVER_MAX_ATTEMPTS) seen.firstMiss += 1;
+          }
+          await s.stop();
+        },
+      ),
+      { numRuns: 60 },
+    );
+    // Anti-vacuity: both outcomes, and both edges of the budget, were reached.
+    expect(seen.recovered + seen.gaveUp).toBe(60);
+    expect(seen.recovered).toBeGreaterThan(0);
+    expect(seen.gaveUp).toBeGreaterThan(0);
+    expect(seen.lastChance, "a success on the LAST attempt is live").toBeGreaterThan(0);
+    expect(seen.firstMiss, "a success one attempt too late is a give-up").toBeGreaterThan(0);
   });
 });
 
