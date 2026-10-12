@@ -79,9 +79,10 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
     expect(noPlay, "only chess's plain cfgs have no play short of the result").toBe(declaredCfgs(builtinModules.find((x) => x.key === "boardgame")! as never).length);
   });
 
-  it("sequence: an awarded abandon decides the fixture whether a side leads or it is level (D8, FB-AB-1) — the goal sports", () => {
+  it("sequence: an awarded abandon ends the match whether a side leads or it is level (D8, FB-AB-1) — the leader wins; level is a draw where the cfg takes one, no result where it refuses one (R16-3) — the goal sports", () => {
     // Single-sport family: only the goal sports declare `abandonPolicy` (football, hockey, ice hockey).
     let checked = 0;
+    let refused = 0;
     forEachSport(({ module: m }) => {
       const parsed = m.configSchema.safeParse({ abandonPolicy: "award" });
       if (!parsed.success || (parsed.data as { abandonPolicy?: string }).abandonPolicy !== "award") return; // not declared here
@@ -90,12 +91,16 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
       for (const [label, goals] of [["level", 0], ["home leads", 1]] as const) {
         const spec: Array<[string, unknown]> = [["core.start", {}], ...Array.from({ length: goals }, (): [string, unknown] => [`${m.key}.goal`, { by: l.home.entrantId }]), ["core.abandon", { reason: "floodlights" }]];
         const f = foldMatchWithStoppage(m as never, cfg as never, l, spec.map(([type, payload], i) => makeEnvelope(i + 1, { type, payload })));
-        expect(outcomeOf(m as never, f as never)?.kind, `${m.key} ${label}`).toBe(goals === 0 ? "draw" : "win");
+        // R16-3: whether the level half is a draw is the sport's own declaration (`supportsDraws` in a league), never typed.
+        const levelKind = m.supportsDraws(cfg as never, "league") ? "draw" : undefined;
+        if (goals === 0 && levelKind === undefined) refused++;
+        expect(outcomeOf(m as never, f as never)?.kind, `${m.key} ${label}`).toBe(goals === 0 ? levelKind : "win");
         expect(m.forfeitPhase(f.state as never), `${m.key} ${label}`).toBe("over");
         checked++;
       }
     });
     expect(checked).toBe(6);
+    expect(refused, "ice hockey's default (iihf) configures overtime and a shootout: its level abandon has no result").toBeGreaterThan(0);
   });
 
   it("X-DW-1: generic's result card reads a loss for both sides — and a walkover reads W/O for the winner only", () => {

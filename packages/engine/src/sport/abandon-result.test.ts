@@ -2,6 +2,7 @@
 // abandoned match folds to, per sport. Expectations are the rule rows, written out.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../core/events.ts";
+import { DRAW_KINDS } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
 
@@ -23,9 +24,23 @@ function fold(key: string, raw: Record<string, unknown>, spec: Spec) {
 }
 
 const GOAL_SPORTS = [["football", "football.goal"], ["hockey", "hockey.goal"], ["icehockey", "icehockey.goal"]] as const;
+/** The award policy on a cfg where a draw STANDS: the default, or else the first declared variant that takes one (the
+ *  sport's `supportsDraws` in a league). Ice hockey's default (iihf) configures overtime and a shootout, so its level
+ *  abandon has no result there (R16-3, below); FB-AB-1's draw is judged where the sport takes a draw at all. */
+function awardWhereDrawStands(key: string): Record<string, unknown> {
+  const m = mod(key);
+  const candidates = [{}, ...Object.values(m.variants)] as Record<string, unknown>[];
+  const raw = candidates.find((c) => {
+    const p = m.configSchema.safeParse({ ...c, abandonPolicy: "award" });
+    return p.success && m.supportsDraws(p.data as never, "league");
+  });
+  if (raw === undefined) throw new Error(`${key}: no cfg takes a draw - FB-AB-1's level half has nothing to judge`);
+  return { ...raw, abandonPolicy: "award" };
+}
+
 /** FB-AB-1 / HK-AB-1 / IH-AB-1, the award policy: the leader wins with the real score; level is a draw with it (D8). */
 function expectAwardPolicyAbandon(key: string, goalType: string) {
-  const award = { abandonPolicy: "award" };
+  const award = awardWhereDrawStands(key);
   const led = fold(key, award, [["core.start"], [goalType, { by: H }], [goalType, { by: H }], [goalType, { by: A }], ["core.abandon", { reason: "floodlights" }]]);
   expect(led.outcome, `${key} 2-1`).toEqual({ kind: "win", winner: H, loser: A, method: "abandoned" });
   const level = fold(key, award, [["core.start"], [goalType, { by: H }], [goalType, { by: A }], ["core.abandon", { reason: "floodlights" }]]);
@@ -94,5 +109,79 @@ describe("abandon results per sport (spec §5.2; D8, D16)", () => {
     expect(resumed.outcome).toBeNull();
     expect(resumed.state.phase).toBe("live");
     expect(resumed.state.running).toEqual({ home: 2, away: 0 });
+  });
+});
+
+// W2b Task 16, controller ruling R16-3. FB-AB-1 (which HK-AB-1 and IH-AB-1 inherit) gives a level award-policy abandon a
+// draw in draw kinds only, and X-AB-1 keeps a match with no result out of the table, flagged for replay or settle. So
+// where the cfg refuses a draw (`supportsDraws` false: an overtime or a shootout is configured), a level award-policy
+// abandon folds to NO result, flagged for replay, as the replay policy's does. It folded to a draw, which the server
+// then refused 422 DRAW_NOT_ALLOWED: the organiser could not record the abandon at all (the truth run's IIHF cell).
+// Swept over every declared variant of every module that keeps the award policy, against every draw kind - the
+// engine's own declarations (`variants`, `configSchema`, `supportsDraws`, `DRAW_KINDS`), never a typed list.
+describe("R16-3: a level award-policy abandon where the cfg refuses a draw has no result", () => {
+  const CASES = builtinModules.flatMap((m) =>
+    Object.entries(m.variants).flatMap(([variant, declared]) => {
+      const raw = { ...(declared as Record<string, unknown>), abandonPolicy: "award" };
+      const parsed = m.configSchema.safeParse(raw);
+      return parsed.success && (parsed.data as { abandonPolicy?: unknown }).abandonPolicy === "award" ? [{ m, variant, raw, cfg: parsed.data }] : [];
+    }),
+  );
+  /** Whether the cfg takes a draw in a draw kind. The fold cannot see the stage kind, so the sport's answer must be the
+   *  same in every draw kind - asserted, not assumed. */
+  const drawStands = (c: (typeof CASES)[number]): boolean => {
+    const answers = [...DRAW_KINDS].map((k) => c.m.supportsDraws(c.cfg as never, k));
+    expect(new Set(answers).size, `${c.m.key}/${c.variant}: supportsDraws differs between draw kinds`).toBe(1);
+    return answers[0]!;
+  };
+  const level = (key: string): Spec => [["core.start"], [`${key}.goal`, { by: H }], [`${key}.goal`, { by: A }], ["core.abandon", { reason: "floodlights" }]];
+
+  it("the sweep is not vacuous: both halves are reached, and the truth run's cell (ice hockey's iihf) is a refusing one", () => {
+    const refusing = CASES.filter((c) => !drawStands(c)).map((c) => `${c.m.key}/${c.variant}`);
+    const standing = CASES.filter((c) => drawStands(c)).map((c) => `${c.m.key}/${c.variant}`);
+    const counted = `${CASES.length} award-policy cfgs: ${refusing.length} refuse a draw (${refusing.join(", ")}), ${standing.length} take one (${standing.join(", ")})`;
+    expect(refusing.length, counted).toBeGreaterThan(0);
+    expect(standing.length, counted).toBeGreaterThan(0);
+    expect(refusing.length + standing.length, counted).toBe(CASES.length);
+    expect(refusing).toContain("icehockey/iihf");
+  });
+
+  it("level, where the cfg refuses a draw: no outcome, phase abandoned, flagged for replay - in every draw kind; where it takes one, a draw with the real score", () => {
+    let refused = 0;
+    let drawn = 0;
+    for (const c of CASES) {
+      const r = fold(c.m.key, c.raw, level(c.m.key));
+      const stands = drawStands(c);
+      for (const kind of DRAW_KINDS) {
+        const name = `${c.m.key}/${c.variant} ${kind}`;
+        if (stands) {
+          expect(r.outcome, name).toEqual({ kind: "draw" });
+          if (r.outcome === null) throw new Error(`${name}: no outcome to credit`);
+          const [home, away] = r.m.standingsDelta(r.outcome, r.cfg as never, { kind }, r.f.state);
+          expect([home.drawn, away.drawn, home.metrics.gf, away.metrics.gf], name).toEqual([1, 1, 1, 1]);
+          drawn++;
+        } else {
+          expect([r.outcome, r.state.phase, r.state.replayFlagged], name).toEqual([null, "abandoned", true]);
+          refused++;
+        }
+      }
+    }
+    expect(refused).toBeGreaterThan(0);
+    expect(drawn).toBeGreaterThan(0);
+    expect(refused + drawn).toBe(CASES.length * DRAW_KINDS.size);
+  });
+
+  it("the negative pair, and the sequence: a LEADER's abandon still wins on the real score where draws are refused; voiding the level abandon resumes play", () => {
+    let checked = 0;
+    for (const c of CASES.filter((x) => !drawStands(x))) {
+      const name = `${c.m.key}/${c.variant}`;
+      const led = fold(c.m.key, c.raw, [["core.start"], [`${c.m.key}.goal`, { by: H }], [`${c.m.key}.goal`, { by: H }], [`${c.m.key}.goal`, { by: A }], ["core.abandon", { reason: "floodlights" }]]);
+      expect(led.outcome, name).toEqual({ kind: "win", winner: H, loser: A, method: "abandoned" });
+      const spec = level(c.m.key);
+      const resumed = fold(c.m.key, c.raw, [...spec, ["core.void", {}, `e-${spec.length}`]]);
+      expect([resumed.outcome, resumed.state.phase === "abandoned", resumed.state.replayFlagged], name).toEqual([null, false, false]);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });

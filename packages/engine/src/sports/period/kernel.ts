@@ -1459,6 +1459,13 @@ function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): Pe
   };
 }
 
+/** A draw stands as a table result only where no decider is configured (v6/00 §3; X-DR-1): an overtime or a shootout
+ *  means every match produces a winner. The cfg half of `supportsDraws` (the stage half is DRAW_KINDS), shared with the
+ *  award-policy abandon below so the two can never disagree about whether a level score may end a match. */
+function drawStands(cfg: PeriodCfg): boolean {
+  return cfg.overtime === null && cfg.shootout === null;
+}
+
 function applyAbandon(state: PeriodState): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
@@ -1470,6 +1477,11 @@ function applyAbandon(state: PeriodState): PeriodState {
   // and a level one is a DRAW on the real score. It was an `award` carrying a `score`, which W2b's award no longer
   // has: nobody forfeited.
   const { home, away } = state.goals;
+  // W2b Task 16, ruling R16-3 (FB-AB-1, which HK-AB-1 and IH-AB-1 inherit: a draw in draw kinds only; X-AB-1): where
+  // the cfg refuses a draw, a level abandon has NO result — flagged for replay (or the desk's settle, in a bracket),
+  // exactly the replay policy's answer. It was a draw the server's no-draw gate refused (DRAW_NOT_ALLOWED), so the
+  // organiser could not record the abandon at all.
+  if (home === away && !drawStands(state.cfg)) return { ...state, phase: "abandoned", replayFlagged: true };
   if (home === away) return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "draw" } };
   const winnerSide: Side = home > away ? "home" : "away";
   return {
@@ -2728,7 +2740,7 @@ export function makePeriodModule(
     // produces a winner. X-DR-1 (ruling 78; americano offered per W2a plan
     // finding 15).
     supportsDraws(cfg, stage: StageKind) {
-      return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;
+      return DRAW_KINDS.has(stage) && drawStands(cfg);
     },
 
     // W2a: none (hockey/ice hockey deciders stay organiser-configured until W2c, spec §5.2)

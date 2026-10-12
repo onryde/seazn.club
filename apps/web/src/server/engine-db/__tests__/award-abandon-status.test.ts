@@ -56,11 +56,17 @@ describe("award-policy abandon status through the server fold (spec §5.4 rule 2
     expect(checked).toBe(AWARD_SPORTS.length * KINDS.length);
   });
 
-  it("FB-AB-1 / HK-AB-1 / IH-AB-1: a level award-policy abandon is abandoned in every bracket kind (not needs_decision) and a decided draw in every draw kind", () => {
+  // R16-3 (W2b Task 16): FB-AB-1's draw is a draw-kind result only where the cfg takes a draw at all. Where it refuses
+  // one (`supportsDraws` false: ice hockey's default configures overtime and a shootout), the level abandon folds to no
+  // result and is `abandoned` in every kind - out of the table, as X-AB-1 has it. Which half a sport's default lands in
+  // is its own declaration, never typed here.
+  it("FB-AB-1 / HK-AB-1 / IH-AB-1: a level award-policy abandon is abandoned in every bracket kind (not needs_decision); in every draw kind a decided draw where the cfg takes one, abandoned with no result where it refuses one (R16-3)", () => {
     let abandoned = 0;
     let decided = 0;
+    let refused = 0;
     for (const m of AWARD_SPORTS) {
       const goal = `${m.key}.goal`;
+      const stands = m.supportsDraws(cfgWith(m, "award")! as never, "league");
       for (const kind of KINDS) {
         const probe = statusOf(m, cfgWith(m, "award")!, [["core.start"]], kind);
         const r = statusOf(
@@ -69,16 +75,19 @@ describe("award-policy abandon status through the server fold (spec §5.4 rule 2
           [["core.start"], [goal, { by: probe.home }], [goal, { by: probe.away }], ["core.abandon", { reason: "floodlights" }]],
           kind,
         );
-        // The fold DID reach a level result — rule 2's level half, not its null half, is what is under test.
-        expect(r.outcome, `${m.key} ${kind} outcome`).toEqual({ kind: "draw" });
-        expect(r.status, `${m.key} ${kind}`).toBe(BRACKET_KINDS.has(kind) ? "abandoned" : "decided");
+        // Where the cfg takes a draw the fold DID reach a level result — rule 2's level half, not its null half, is what
+        // is under test; where it refuses one, the fold has no result (R16-3) and rule 2's null half holds it.
+        expect(r.outcome, `${m.key} ${kind} outcome`).toEqual(stands ? { kind: "draw" } : null);
+        expect(r.status, `${m.key} ${kind}`).toBe(BRACKET_KINDS.has(kind) || !stands ? "abandoned" : "decided");
         expect(r.status, `${m.key} ${kind}`).not.toBe("needs_decision");
+        if (!stands) refused++;
         if (r.status === "abandoned") abandoned++;
         else decided++;
       }
     }
-    expect(abandoned * decided).toBeGreaterThan(0); // both halves of rule 2 vs rule 5 reached
-    expect([abandoned, decided]).toEqual([AWARD_SPORTS.length * BRACKET_KINDS.size, AWARD_SPORTS.length * DRAW_KINDS.size]);
+    expect(abandoned * decided * refused).toBeGreaterThan(0); // both halves of rule 2 vs rule 5 reached, and R16-3's
+    const standing = AWARD_SPORTS.filter((m) => m.supportsDraws(cfgWith(m, "award")! as never, "league")).length;
+    expect([abandoned, decided]).toEqual([AWARD_SPORTS.length * BRACKET_KINDS.size + (AWARD_SPORTS.length - standing) * DRAW_KINDS.size, standing * DRAW_KINDS.size]);
   });
 
   it("FB-AB-1 / HK-AB-1 / IH-AB-1: a leader's award-policy abandon is decided in every kind, bracket and draw alike", () => {
