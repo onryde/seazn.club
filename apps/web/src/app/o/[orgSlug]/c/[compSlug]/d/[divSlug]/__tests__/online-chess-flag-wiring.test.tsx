@@ -3,7 +3,9 @@
 // play select and the camera control). The islands' own suite (online-chess-flag-controls.test.tsx) proves what the
 // prop hides; this one proves the PAGE passes the flag's real answer, asked for this user in this club, and asks nothing
 // for a division that is not chess. T16: the needs-a-result queue lost its Resend (the server refuses it for every held
-// board, 409 BOARD_HELD) — what is left on it FINISHES play, so the fixtures tab never asks the flag.
+// board, 409 BOARD_HELD) — what is left on it FINISHES play, so it never asks the flag. The one START control on the
+// fixtures tab is the Open round control (D12): the flag is asked there only for a division that plays online, and the
+// rounds are read and handed down only while the club is offered online chess.
 //
 // Same scaffold as public-hub-link.test.tsx beside it: no jsdom, the async server component called directly, its
 // returned tree walked. The flag is asked through the REAL helper, PostHog doubled at its boundary.
@@ -11,12 +13,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
-const division = vi.hoisted(() => ({ sport_key: "boardgame" }));
+const division = vi.hoisted(() => ({ sport_key: "boardgame", onlinePlay: "off" as "off" | "lichess" }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
   listRunSheetOnlinePlay: vi.fn(),
+  listOpenRounds: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
@@ -42,7 +45,7 @@ vi.mock("@/server/usecases/divisions", () => ({
     sport_key: division.sport_key,
     variant_key: division.sport_key === "boardgame" ? "classical" : "score",
     module_version: "1.0.0",
-    config: division.sport_key === "boardgame" ? { variant: "classical" } : {},
+    config: division.sport_key === "boardgame" ? { variant: "classical", onlinePlay: division.onlinePlay } : {},
     tiebreakers: undefined,
     auto_posts: false,
     logo_url: null,
@@ -154,7 +157,9 @@ const ROW = {
 
 beforeEach(() => {
   division.sport_key = "boardgame";
+  division.onlinePlay = "off";
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+  queue.listOpenRounds.mockReset().mockResolvedValue([]);
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
   queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
   queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
@@ -182,7 +187,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("T16 — fixtures tab with a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says — and the flag is never asked", async () => {
+  it("T16 — fixtures tab with a board held AND one flagged (online play off now): the queue gets both lists and the run sheet the chips, whatever the flag says — and the flag is never asked", async () => {
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
     const FLAGGED = { boards: [{ fixtureId: "f2" }], ownBoards: 1 };
     const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
@@ -209,9 +214,44 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
         expect(read, s.label).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
       }
       expect(flags.isServerFeatureEnabled, `${s.label}: never asked on the fixtures tab`).not.toHaveBeenCalled();
+      expect(queue.listOpenRounds, `${s.label}: no round to open off-line`).not.toHaveBeenCalled();
+      expect((panels[0]!.props as { openRounds?: unknown }).openRounds, s.label).toBeUndefined();
       checked++;
     }
     expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("T16 (D12) — fixtures tab of a division that plays ONLINE: the rounds to open reach the stage cards only while the club is offered online chess", async () => {
+    division.onlinePlay = "lichess";
+    const R1 = { stageId: "s1", roundNo: 2 };
+    const R2 = { stageId: "s2", roundNo: 1 };
+    const R3 = { stageId: "s1", roundNo: 3 };
+    queue.listOpenRounds.mockResolvedValue([R1, R2, R3]);
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      flagIs(s);
+      queue.listOpenRounds.mockClear();
+      const panels = findAll(await renderPage("fixtures"), StagesPanel);
+      const openRounds = (panels[0]!.props as { openRounds?: unknown }).openRounds;
+      expect(flags.isServerFeatureEnabled, s.label).toHaveBeenCalledWith("online-chess", "user-1", { orgId: "org-1", fallback: false });
+      if (s.offered) {
+        // Grouped by stage, each stage's rounds in the reader's order.
+        expect(openRounds, s.label).toEqual({ s1: [R1, R3], s2: [R2] });
+        expect(queue.listOpenRounds, s.label).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
+      } else {
+        expect(openRounds, `${s.label}: no control, not even disabled`).toBeUndefined();
+        expect(queue.listOpenRounds, `${s.label}: nothing read`).not.toHaveBeenCalled();
+      }
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("T16 (D12) — the empty case: an online division with no round to open hands the stage cards an EMPTY map, not undefined", async () => {
+    division.onlinePlay = "lichess";
+    flagIs(FLAG_STATES[0]!);
+    const panels = findAll(await renderPage("fixtures"), StagesPanel);
+    expect((panels[0]!.props as { openRounds?: unknown }).openRounds).toEqual({});
   });
 
   it("T16 — the empty case: a chess fixtures tab with nothing held or flagged still mounts the queue (it renders nothing), and asks nothing", async () => {
@@ -230,11 +270,13 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     let checked = 0;
     for (const [label, arm] of cells) {
       division.sport_key = "boardgame";
+      division.onlinePlay = "lichess";
       pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
       for (const read of Object.values(queue)) read.mockClear();
       arm();
       expect(findAll(await renderPage("fixtures"), ExternalPlayNeedsResultQueue), label).toHaveLength(0);
       for (const read of Object.values(queue)) expect(read, label).not.toHaveBeenCalled();
+      expect(flags.isServerFeatureEnabled, `${label}: no flag asked`).not.toHaveBeenCalled();
       checked++;
     }
     expect(checked).toBe(cells.length);

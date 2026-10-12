@@ -21,6 +21,7 @@ import { holdForOrganiser } from "../external-play/result";
 import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
+import { addFixture } from "../stages";
 import { seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -231,5 +232,58 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — the run sheet's chips", () =>
     await gameBridge(r, r.boards[0]!);
     const other = await round();
     expect(await codeOf(listRunSheetOnlinePlay(other.owner, r.divisionId))).toEqual([404, "NOT_FOUND"]);
+  });
+});
+
+describe.runIf(HAS_DB)("listRunSheetOnlinePlay — a round nobody has opened (D12)", () => {
+  // Two hours past the boards' slot: by the clock alone every one would read as owing a result.
+  const PAST = new Date(Date.now() - 2 * 60 * 60_000);
+
+  it("the empty case first: over the board, a paired round past its slot has no online entry at all", async () => {
+    const otb = await seedOnlineChessRound({ fixtures: 2, onlinePlay: "off", scheduledAt: PAST });
+    expect(await listRunSheetOnlinePlay(otb.owner, otb.divisionId)).toEqual({});
+  });
+
+  it("every still-playable board of an unopened online round is `unopened` (an empty seat too); a settled one is not; the open clears it", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, unpaired: true, bye: true, scheduledAt: PAST });
+    const [one, two] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await decide(r, two);
+
+    const before = await listRunSheetOnlinePlay(r.owner, r.divisionId);
+    const unopened = Object.entries(before).filter(([, v]) => v.unopened).map(([id]) => id).sort();
+    expect(unopened, "the playable board and the empty-seat board; not the decided one, not the bye").toEqual(
+      [one.fixtureId, r.unpairedFixtureId!].sort(),
+    );
+    expect(before[one.fixtureId]).toMatchObject({ unopened: true, held: null, live: false, cameraFlagCount: 0, offSeaznFlagCount: 0 });
+    expect(before[two.fixtureId]?.unopened ?? false, "decided").toBe(false);
+    expect(before[r.bye!.fixtureId]?.unopened ?? false, "bye").toBe(false);
+
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
+      values (${r.stageId}, ${r.orgId}, 1, ${r.ownerUserId}, now())`;
+    const after = await listRunSheetOnlinePlay(r.owner, r.divisionId);
+    let checked = 0;
+    for (const id of unopened) {
+      expect(after[id]?.unopened ?? false, `${id}: opened`).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: boards checked after the open").toBe(2);
+  });
+
+  it("the grain is (stage, round): opening round 1 leaves round 2 unopened", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, spares: 1, scheduledAt: PAST });
+    const late = r.spares[0]!;
+    const { fixture_id: r2 } = await addFixture(r.owner, r.stageId, {
+      home_entrant_id: late.home.entrantId,
+      away_entrant_id: late.away.entrantId,
+      round_no: 2,
+      scheduled_at: PAST.toISOString(),
+    });
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
+      values (${r.stageId}, ${r.orgId}, 1, ${r.ownerUserId}, now())`;
+    const map = await listRunSheetOnlinePlay(r.owner, r.divisionId);
+    expect(map[r.boards[0]!.fixtureId]?.unopened ?? false).toBe(false);
+    expect(map[r2]?.unopened).toBe(true);
   });
 });

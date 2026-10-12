@@ -52,9 +52,12 @@ export type RunSheetKeepContext = {
 };
 
 /** "Needs result": a fixture past its slot with no result (division-phase.ts), or an online board held for the
- *  organiser (T16) — one predicate for the filter and its count. */
+ *  organiser (T16) — never an online board whose round is not opened (D12) — one predicate for the filter and its
+ *  count. */
 function owesResult(f: RunSheetFixture, ctx: Pick<RunSheetKeepContext, "nowMs" | "matchMinutes" | "onlinePlay">): boolean {
   if ((ctx.onlinePlay?.[f.id]?.held ?? null) !== null) return true;
+  // D12: a board of an online round nobody has opened cannot be played yet, so its slot passing owes nothing.
+  if (ctx.onlinePlay?.[f.id]?.unopened === true) return false;
   return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes: ctx.matchMinutes }, ctx.nowMs);
 }
 

@@ -67,6 +67,7 @@ const online = (o: Partial<RunSheetOnlinePlay> = {}): RunSheetOnlinePlay => ({
   offSeaznFlagCount: 0,
   held: null,
   live: true,
+  unopened: false,
   ...o,
 });
 
@@ -230,6 +231,52 @@ describe("the sheet: a held online board owes its result", () => {
     const rowOf = (no: number) => /<li data-fixture-no="\d+"[\s\S]*?<\/li>/g.exec(h.slice(h.indexOf(`<li data-fixture-no="${no}"`)))![0];
     expect(rowOf(2)).toContain('href="/arbiter?fixture=f2"');
     expect(rowOf(1)).not.toContain("run-sheet-camera-chip");
+  });
+});
+
+describe("D12: a board of an online round nobody has opened owes nothing yet", () => {
+  const STAGES = [{ id: "s1", kind: "league", name: "League", seq: 1 }];
+  // Two hours past its slot (matchMinutes 60, now 19:00): by the clock alone it owes a result.
+  const due = fx({ id: "f1", fixture_no: 1, status: "scheduled", scheduled_at: "2026-10-12T17:00:00.000Z" });
+  const ctx = (onlinePlay?: Record<string, RunSheetOnlinePlay>) => ({ stageId: null, tz: TZ, today: "2026-10-12", nowMs: NOW_MS, matchMinutes: 60, onlinePlay });
+  const unopened = { f1: online({ unopened: true, live: false, cameraPolicy: "off" }) };
+  const sheet = (onlinePlay?: Record<string, RunSheetOnlinePlay>) =>
+    renderToStaticMarkup(
+      <RunSheet
+        blocks={buildRunSheet({ fixtures: [due], stages: STAGES, tz: TZ, nowMs: NOW_MS })}
+        stages={STAGES}
+        tz={TZ}
+        orgTz={TZ}
+        nowMs={NOW_MS}
+        matchMinutes={60}
+        entrantNames={{ e1: "Alpha", e2: "Bravo" }}
+        canEdit
+        hrefFor={(f) => `/f/${f.fixture_no}`}
+        filter="needs_result"
+        onFilter={() => {}}
+        stageId={null}
+        onStageFilter={() => {}}
+        onlinePlay={onlinePlay}
+      />,
+    );
+
+  it("premise: past its slot with no map, it IS kept under 'Needs result' and counted", () => {
+    expect(runSheetKeeps(due, "needs_result", ctx())).toBe(true);
+    expect(chipCount(sheet(), "needs_result")).toBe(1);
+  });
+
+  it("unopened ⇒ not kept, not counted; the positive pair (opened) is", () => {
+    expect(runSheetKeeps(due, "needs_result", ctx(unopened))).toBe(false);
+    expect(chipCount(sheet(unopened), "needs_result")).toBe(0);
+    expect(runSheetKeeps(due, "needs_result", ctx({ f1: online({ unopened: false, live: false }) }))).toBe(true);
+  });
+
+  it("the row says 'Round not opened' — and only for an unopened board", () => {
+    const shown = chips(row({ fixture: due, onlinePlay: unopened.f1 }), "run-sheet-round-unopened");
+    expect(shown).toHaveLength(1);
+    expect(textOf(shown[0])).toBe(messages["runsheet.round.notOpenedChip"]);
+    expect(chips(row({ fixture: due, onlinePlay: online({ live: false }) }), "run-sheet-round-unopened")).toHaveLength(0);
+    expect(chips(row({ fixture: due }), "run-sheet-round-unopened"), "not an online board").toHaveLength(0);
   });
 });
 

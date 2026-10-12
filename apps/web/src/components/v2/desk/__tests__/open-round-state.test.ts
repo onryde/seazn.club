@@ -1,0 +1,204 @@
+// T16 (D12) — the Open round control's actions as one reducer plus the runner
+// that puts them on the network. The rules, each pinned below and then held
+// over random sequences (fast-check) against a model written from the rules —
+// never from the reducer:
+//   R1 one request at a time, across the round's Open AND its pairings' Resend;
+//   R2 the round is opened only from its confirmation: no press sends without
+//      the dialog having stated how many and to whom;
+//   R3 an answer lands only if it answers the request in flight;
+//   R4 while a request is in flight the confirmation can be neither asked for
+//      nor dismissed (its buttons are busy);
+//   R5 the open's answer closes the confirmation and is the round's notice;
+//      a resend's answer is its pairing's notice.
+import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
+import { ApiV1Error } from "@/lib/client-v1";
+import type { OpenRoundResult } from "@/lib/open-round";
+import {
+  initialOpenRoundUi,
+  openRoundRunner,
+  openRoundUi,
+  type OpenRoundUiAction,
+  type OpenRoundUiState,
+} from "../open-round-state";
+
+const OPENED: OpenRoundResult = { opened: true, invited: 4, skipped: [] };
+const s0 = initialOpenRoundUi();
+const run = (...actions: OpenRoundUiAction[]) => actions.reduce(openRoundUi, s0);
+
+describe("open-round reducer — the rules, one at a time", () => {
+  it("the empty case first: nothing pressed ⇒ no dialog, nothing in flight, no notice", () => {
+    expect(s0).toEqual({ confirming: false, busy: null, notice: null, rowNotice: null });
+  });
+
+  it("R2: Open sends nothing until the confirmation is up; from it, it is THE request in flight", () => {
+    expect(run({ type: "open" }), "no dialog ⇒ refused").toEqual(s0);
+    const asked = run({ type: "ask" });
+    expect(asked.confirming).toBe(true);
+    expect(openRoundUi(asked, { type: "open" }).busy).toEqual({ kind: "open" });
+  });
+
+  it("R1: a second Open, or a Resend, while the first is in flight is refused; so is a second Resend", () => {
+    const sending = run({ type: "ask" }, { type: "open" });
+    expect(openRoundUi(sending, { type: "open" })).toBe(sending);
+    expect(openRoundUi(sending, { type: "resend", fixtureId: "f1" })).toBe(sending);
+    const resending = run({ type: "resend", fixtureId: "f1" });
+    expect(resending.busy).toEqual({ kind: "resend", fixtureId: "f1" });
+    expect(openRoundUi(resending, { type: "resend", fixtureId: "f2" })).toBe(resending);
+    expect(openRoundUi(resending, { type: "ask" }), "R4: no dialog over a request in flight").toBe(resending);
+  });
+
+  it("R4: the dialog cannot be dismissed while its request is in flight; before, Cancel closes it and sends nothing", () => {
+    const sending = run({ type: "ask" }, { type: "open" });
+    expect(openRoundUi(sending, { type: "cancel" })).toBe(sending);
+    expect(run({ type: "ask" }, { type: "cancel" })).toEqual(s0);
+  });
+
+  it("R3 + R5: the open's answer closes the dialog and becomes the notice; an answer nobody asked for is dropped", () => {
+    const stray = openRoundUi(s0, { type: "openDone", outcome: { ok: true, result: OPENED } });
+    expect(stray, "no open in flight").toBe(s0);
+    const done = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: true, result: OPENED } });
+    expect(done).toEqual({ confirming: false, busy: null, notice: { kind: "answered", result: OPENED }, rowNotice: null });
+    const failed = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: false, code: "ROUND_CHANGED" } });
+    expect(failed.notice).toEqual({ kind: "failed", code: "ROUND_CHANGED" });
+    expect(failed.confirming).toBe(false);
+  });
+
+  it("R3 + R5: a resend's answer lands on ITS pairing; one for another pairing, or for the open, is dropped", () => {
+    const resending = run({ type: "resend", fixtureId: "f1" });
+    expect(openRoundUi(resending, { type: "resendDone", fixtureId: "f2", outcome: { ok: true, emailed: 2 } })).toBe(resending);
+    expect(openRoundUi(resending, { type: "openDone", outcome: { ok: true, result: OPENED } })).toBe(resending);
+    const done = openRoundUi(resending, { type: "resendDone", fixtureId: "f1", outcome: { ok: true, emailed: 2 } });
+    expect(done).toEqual({ confirming: false, busy: null, notice: null, rowNotice: { fixtureId: "f1", notice: { kind: "resent", emailed: 2 } } });
+  });
+
+  it("a new request clears the answer it replaces (the round's for an open, the pairing's for a resend)", () => {
+    const answered = run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: false, code: "X" } });
+    expect(run({ type: "ask" }, { type: "open" }, { type: "openDone", outcome: { ok: false, code: "X" } }, { type: "ask" }, { type: "open" }).notice).toBeNull();
+    const resent = openRoundUi(openRoundUi(answered, { type: "resend", fixtureId: "f1" }), {
+      type: "resendDone",
+      fixtureId: "f1",
+      outcome: { ok: false, code: "WINDOW_CLOSED" },
+    });
+    expect(resent.notice, "the round's own notice is not the pairing's to clear").toEqual(answered.notice);
+    expect(openRoundUi(resent, { type: "resend", fixtureId: "f2" }).rowNotice).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sequence property: random presses and answers, the reducer against a
+// model of R1–R5 (written from the rules above).
+
+type Model = { confirming: boolean; busy: OpenRoundUiState["busy"] };
+const IDS = ["f1", "f2"] as const;
+const openDone = (ok: boolean): OpenRoundUiAction =>
+  ok ? { type: "openDone", outcome: { ok: true, result: OPENED } } : { type: "openDone", outcome: { ok: false, code: "E" } };
+const resendDone = (fixtureId: string, ok: boolean): OpenRoundUiAction =>
+  ok
+    ? { type: "resendDone", fixtureId, outcome: { ok: true, emailed: 2 } }
+    : { type: "resendDone", fixtureId, outcome: { ok: false, code: "E" } };
+const actionArb: fc.Arbitrary<OpenRoundUiAction> = fc.oneof(
+  fc.constant<OpenRoundUiAction>({ type: "ask" }),
+  fc.constant<OpenRoundUiAction>({ type: "cancel" }),
+  fc.constant<OpenRoundUiAction>({ type: "open" }),
+  fc.constantFrom(...IDS).map((fixtureId): OpenRoundUiAction => ({ type: "resend", fixtureId })),
+  fc.boolean().map(openDone),
+  fc.tuple(fc.constantFrom(...IDS), fc.boolean()).map(([fixtureId, ok]) => resendDone(fixtureId, ok)),
+);
+
+function step(m: Model, a: OpenRoundUiAction): Model {
+  switch (a.type) {
+    case "ask":
+      return m.busy === null ? { ...m, confirming: true } : m;
+    case "cancel":
+      return m.busy === null ? { ...m, confirming: false } : m;
+    case "open":
+      return m.busy === null && m.confirming ? { ...m, busy: { kind: "open" } } : m;
+    case "resend":
+      return m.busy === null && !m.confirming ? { ...m, busy: { kind: "resend", fixtureId: a.fixtureId } } : m;
+    case "openDone":
+      return m.busy?.kind === "open" ? { confirming: false, busy: null } : m;
+    case "resendDone":
+      return m.busy?.kind === "resend" && m.busy.fixtureId === a.fixtureId ? { ...m, busy: null } : m;
+  }
+}
+
+describe("open-round reducer — random sequences hold R1–R5", () => {
+  it("over random sequences the reducer agrees with the rules' model at every step (anti-vacuity: each rule's case reached)", () => {
+    const reached = { opens: 0, refusedSecond: 0, resends: 0, strayDone: 0, cancelBusy: 0 };
+    fc.assert(
+      fc.property(fc.array(actionArb, { minLength: 1, maxLength: 24 }), (actions) => {
+        let s = s0;
+        let m: Model = { confirming: false, busy: null };
+        for (const a of actions) {
+          const before = s;
+          s = openRoundUi(s, a);
+          m = step(m, a);
+          expect({ confirming: s.confirming, busy: s.busy }).toEqual(m);
+          // R1: never two requests, by construction of `busy`; count what the property saw.
+          if (a.type === "open" && before.busy === null && before.confirming) reached.opens += 1;
+          if ((a.type === "open" || a.type === "resend") && before.busy !== null) reached.refusedSecond += 1;
+          if (a.type === "resend" && before.busy === null && !before.confirming) reached.resends += 1;
+          if ((a.type === "openDone" || a.type === "resendDone") && s === before) reached.strayDone += 1;
+          if (a.type === "cancel" && before.busy !== null) reached.cancelBusy += 1;
+          // R5: an open's answer is the round's notice, and only it sets one.
+          if (a.type === "openDone" && before.busy?.kind === "open") {
+            expect(s.notice).toEqual(a.outcome.ok ? { kind: "answered", result: a.outcome.result } : { kind: "failed", code: a.outcome.code });
+          } else if (a.type !== "open") {
+            expect(s.notice).toBe(before.notice);
+          }
+        }
+      }),
+      { numRuns: 300, seed: 160416 },
+    );
+    for (const [rule, n] of Object.entries(reached)) expect(n, `anti-vacuity: ${rule}`).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The runner: what reaches the network.
+
+describe("openRoundRunner — at most one request on the network", () => {
+  it("a double tap sends ONE open; its answer is dispatched and the page refreshes", async () => {
+    const dispatch = vi.fn();
+    let answer!: (v: unknown) => void;
+    const post = vi.fn(() => new Promise((r) => (answer = r)));
+    const refresh = vi.fn();
+    const runner = openRoundRunner({ dispatch, post, refresh });
+    const first = runner.open("s1", 2);
+    expect(await runner.open("s1", 2), "the second tap").toBe(false);
+    expect(await runner.resend("f1"), "a resend while the open is in flight").toBe(false);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith("/api/v1/stages/s1/open-round", { roundNo: 2 });
+    answer(OPENED);
+    expect(await first).toBe(true);
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      { type: "open" },
+      { type: "openDone", outcome: { ok: true, result: OPENED } },
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refusal's CODE is dispatched (never its English message) and nothing is refreshed; the next tap is sent", async () => {
+    const dispatch = vi.fn();
+    const post = vi.fn().mockRejectedValueOnce(new ApiV1Error("Round changed", 409, "ROUND_CHANGED")).mockResolvedValueOnce({ emailed: 2 });
+    const refresh = vi.fn();
+    const runner = openRoundRunner({ dispatch, post, refresh });
+    await runner.open("s1", 1);
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "openDone", outcome: { ok: false, code: "ROUND_CHANGED" } });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(await runner.resend("f 1")).toBe(true);
+    expect(post).toHaveBeenLastCalledWith("/api/v1/fixtures/f%201/external-play/resend", undefined);
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "resendDone", fixtureId: "f 1", outcome: { ok: true, emailed: 2 } });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a thrown non-API error is UNKNOWN, and frees the runner", async () => {
+    const dispatch = vi.fn();
+    const post = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(OPENED);
+    const runner = openRoundRunner({ dispatch, post, refresh: vi.fn() });
+    await runner.open("s1", 1);
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "openDone", outcome: { ok: false, code: "UNKNOWN" } });
+    expect(await runner.open("s1", 1)).toBe(true);
+  });
+});
