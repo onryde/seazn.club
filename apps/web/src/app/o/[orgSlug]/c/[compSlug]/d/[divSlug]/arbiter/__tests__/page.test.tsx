@@ -11,7 +11,7 @@ import { isValidElement, type ReactElement } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const division = vi.hoisted(() => ({ sport_key: "boardgame", config: { onlinePlay: "lichess" } as Record<string, unknown> | null }));
-const usecases = vi.hoisted(() => ({ loadArbiterRound: vi.fn(), joinAsArbiter: vi.fn() }));
+const usecases = vi.hoisted(() => ({ loadArbiterRound: vi.fn(), arbiterRequestedRound: vi.fn(), joinAsArbiter: vi.fn() }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/divisions", () => ({
@@ -23,7 +23,7 @@ import ArbiterPage from "../page";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
 
 const PAGE = { auth: { orgId: "org-1", userId: "user-1", role: "owner", via: "session" }, canEdit: true, division: { id: "div-1" } };
-const ROUND = { stageId: "st", stageName: "Open", roundNo: 2, timeControl: "10+5", boards: [] };
+const ROUND = { stageId: "st", stageName: "Open", roundNo: 2, timeControl: "10+5", boards: [], ownBoards: 0 };
 const render = (search: Record<string, string | string[] | undefined> = {}) =>
   ArbiterPage({
     params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
@@ -36,16 +36,18 @@ beforeEach(() => {
   division.config = { onlinePlay: "lichess" };
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   usecases.loadArbiterRound.mockReset().mockResolvedValue(ROUND);
+  usecases.arbiterRequestedRound.mockReset().mockResolvedValue({ kind: "round", stageId: "st", roundNo: 1 });
   usecases.joinAsArbiter.mockReset();
 });
 
 describe("the arbiter page", () => {
-  it("an organiser on an online chess division: the panel, this division's round, the asked-for board", async () => {
+  it("an organiser on an online chess division: the panel, the asked-for board's OWN round (I3), that board", async () => {
     const tree = (await render({ fixture: "fx-9" })) as ReactElement;
     expect(isValidElement(tree)).toBe(true);
     expect(tree.type).toBe(ArbiterPanel);
-    expect(tree.props).toEqual({ round: ROUND, slugs: { org: "org", comp: "comp", div: "div" }, initialFixtureId: "fx-9" });
-    expect(usecases.loadArbiterRound).toHaveBeenCalledWith(PAGE.auth, "div-1");
+    expect(tree.props).toEqual({ round: ROUND, requested: null, slugs: { org: "org", comp: "comp", div: "div" }, initialFixtureId: "fx-9" });
+    expect(usecases.arbiterRequestedRound).toHaveBeenCalledWith(PAGE.auth, "div-1", "fx-9");
+    expect(usecases.loadArbiterRound).toHaveBeenCalledWith(PAGE.auth, "div-1", { round: { stageId: "st", roundNo: 1 } });
     expect(pageAuth.requireDivisionPage).toHaveBeenCalledWith("org", "comp", "div", { tail: "/arbiter" });
     expect(usecases.joinAsArbiter, "no token is minted for the HTML").not.toHaveBeenCalled();
   });
@@ -54,9 +56,27 @@ describe("the arbiter page", () => {
     usecases.loadArbiterRound.mockResolvedValue(null);
     let checked = 0;
     for (const search of [{}, { fixture: ["a", "b"] }]) {
-      const tree = (await render(search)) as ReactElement<{ initialFixtureId: unknown; round: unknown }>;
+      const tree = (await render(search)) as ReactElement<{ initialFixtureId: unknown; round: unknown; requested: unknown }>;
       expect(tree.props.initialFixtureId).toBeNull();
       expect(tree.props.round).toBeNull();
+      expect(tree.props.requested).toBeNull();
+      expect(usecases.loadArbiterRound).toHaveBeenLastCalledWith(PAGE.auth, "div-1", {});
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(usecases.arbiterRequestedRound, "nothing asked for").not.toHaveBeenCalled();
+  });
+
+  it("I3: a board that is not here (or is the viewer's own) is SAID so — no round loaded, so no other board can open", async () => {
+    let checked = 0;
+    for (const kind of ["unavailable", "own"] as const) {
+      usecases.loadArbiterRound.mockClear();
+      usecases.arbiterRequestedRound.mockResolvedValue({ kind });
+      const tree = (await render({ fixture: "fx-gone" })) as ReactElement<{ initialFixtureId: unknown; round: unknown; requested: unknown }>;
+      expect(tree.props.requested, kind).toBe(kind);
+      expect(tree.props.round, kind).toBeNull();
+      expect(tree.props.initialFixtureId).toBe("fx-gone");
+      expect(usecases.loadArbiterRound, kind).not.toHaveBeenCalled();
       checked++;
     }
     expect(checked).toBe(2);

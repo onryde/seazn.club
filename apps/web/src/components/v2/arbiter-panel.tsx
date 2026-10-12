@@ -70,6 +70,9 @@ export type ArbiterVideoView =
 
 export type ArbiterScreenProps = {
   round: ArbiterRound | null;
+  /** I3: the board `?fixture=` asked for is not here, or is the viewer's own
+   *  (the page then loads no round at all). */
+  requested: "unavailable" | "own" | null;
   decision: ArbiterDecisionState;
   video: ArbiterVideoView;
   /** The viewer's clock; null before mount (no time of day is painted). */
@@ -228,13 +231,19 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
         {p.round && <p className={`m-0 ml-auto hidden text-[13px] lg:block ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>}
       </header>
 
-      {p.round === null ? (
+      {p.requested !== null ? (
+        <RequestedNotice body={f.t(p.requested === "own" ? "arbiter.requested.own" : "arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
+      ) : p.round === null ? (
         <EmptyNotice title={f.t("arbiter.empty.title")} body={f.t("arbiter.empty.body")} />
       ) : p.round.boards.length === 0 && p.round.ownBoards > 0 ? (
         // C1 (D7): every board of the round is one the viewer plays on.
         <EmptyNotice title={null} body={f.t("arbiter.ownRound")} />
-      ) : p.round.boards.length === 0 || board === null ? (
+      ) : p.round.boards.length === 0 ? (
         <EmptyNotice title={null} body={f.t("arbiter.emptyBoards")} />
+      ) : board === null ? (
+        // I3: the board asked for (or on screen) is not in this round — said
+        // so, never another board opened in its place.
+        <RequestedNotice body={f.t("arbiter.requested.unavailable")} slugs={p.slugs} f={f} />
       ) : (
         <main className="mx-auto flex w-full min-w-0 max-w-[1232px] flex-col gap-3 px-4 pt-3 pb-6 lg:grid lg:grid-cols-[248px_minmax(0,1fr)_320px] lg:items-start lg:gap-6 lg:p-6">
           <nav aria-labelledby={ids.boards} className="hidden min-w-0 flex-col gap-1.5 lg:flex">
@@ -354,6 +363,20 @@ function EmptyNotice({ title, body }: { title: string | null; body: string }) {
     <main className="mx-auto flex w-full max-w-[1232px] flex-col gap-2 px-4 py-6 lg:p-6">
       {title && <h2 className="m-0 text-[17px] font-semibold">{title}</h2>}
       <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>{body}</p>
+    </main>
+  );
+}
+
+function RequestedNotice({ body, slugs, f }: { body: string; slugs: ArbiterScreenProps["slugs"]; f: Fmt }) {
+  return (
+    <main className="mx-auto flex w-full max-w-[1232px] flex-col items-start gap-3 px-4 py-6 lg:p-6">
+      <p className={`m-0 max-w-prose text-sm leading-[1.5] ${SOFT}`}>{body}</p>
+      <Link
+        href={routes.divisionArbiter(slugs.org, slugs.comp, slugs.div)}
+        className="flex min-h-11 items-center text-sm font-semibold text-[#5b21b6] underline underline-offset-2"
+      >
+        {f.t("arbiter.requested.current")}
+      </Link>
     </main>
   );
 }
@@ -709,23 +732,21 @@ export const ARBITER_OVERRIDE_NOTE = "Video unavailable: let this board play wit
 
 export function ArbiterPanel({
   round,
+  requested,
   slugs,
   initialFixtureId,
 }: {
   round: ArbiterRound | null;
+  requested: ArbiterScreenProps["requested"];
   slugs: ArbiterScreenProps["slugs"];
   initialFixtureId: string | null;
 }) {
   const router = useRouter();
-  const firstBoard =
-    round?.boards.find((b) => b.fixtureId === initialFixtureId)?.fixtureId ?? round?.boards[0]?.fixtureId ?? null;
+  // I3: the board asked for, EXACTLY — absent from the round, the screen
+  // says so rather than opening another. With nothing asked for, the first.
+  const firstBoard = initialFixtureId ?? round?.boards[0]?.fixtureId ?? null;
   const [decision, dispatch] = useReducer(arbiterDecision, firstBoard, initialArbiterDecision);
   const board = round?.boards.find((b) => b.fixtureId === decision.boardId) ?? null;
-
-  // A refresh that dropped the board on screen falls back to the first.
-  useEffect(() => {
-    if (round && round.boards.length > 0 && board === null) dispatch({ type: "select", boardId: round.boards[0]!.fixtureId });
-  }, [round, board]);
 
   // The viewer's clock: null on the server and the first client render.
   const [nowMs, setNowMs] = useState<number | null>(null);
@@ -839,6 +860,7 @@ export function ArbiterPanel({
   return (
     <ArbiterScreen
       round={round}
+      requested={requested}
       decision={decision}
       video={video}
       nowMs={nowMs}

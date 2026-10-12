@@ -354,6 +354,32 @@ test.describe("arbiter panel", () => {
     expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
   });
 
+  test("I3: a link to a board that is not here says so — never another board — and offers the current round", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+    // Another division of the same organiser: its board is not THIS panel's.
+    const elsewhere = await seedRound(request, ["Eli Novak", "Fay Osei", "Gus Ito", "Hana Berg"]);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    let checked = 0;
+    for (const asked of [randomUUID(), elsewhere.boards[0].fixtureId, "not-a-board"]) {
+      const res = await page.goto(`${r.arbiterPath}?fixture=${encodeURIComponent(asked)}`);
+      expect(res!.status(), asked).toBe(200);
+      await expect(page.getByText(uiEn["arbiter.requested.unavailable"], { exact: true })).toBeVisible();
+      await expect(tiles(page), "no board opened in its place").toHaveCount(0);
+      await expect(boardsNav(page)).toHaveCount(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    await shoot(page, "arbiter-requested-unavailable");
+    expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
+    // The way back: the current round, opened on its first board.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole("link", { name: uiEn["arbiter.requested.current"] }).click();
+    await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
+    await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect(tiles(page)).toHaveCount(2);
+  });
+
   test("no panel for anyone else: signed out it is the sign-in, over the board it is not found", async ({ browser, page, request }) => {
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
     const cold = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: test.info().project.use.baseURL });

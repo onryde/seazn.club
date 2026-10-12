@@ -22,7 +22,15 @@ import { RealtimeKitError, type ParticipantToken } from "@/server/external-play/
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { joinAsArbiter, loadArbiterRound, overrideVideoAsOrganiser, resyncExternalPlay, type ArbiterVideo } from "../external-play/arbiter";
+import { createDivision } from "../divisions";
+import {
+  arbiterRequestedRound,
+  joinAsArbiter,
+  loadArbiterRound,
+  overrideVideoAsOrganiser,
+  resyncExternalPlay,
+  type ArbiterVideo,
+} from "../external-play/arbiter";
 import { seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -324,6 +332,74 @@ describe.runIf(HAS_DB)("loadArbiterRound — flags, as evidence", () => {
     expect(flags.length).toBe(2);
     expect(flags.find((f) => f.kind === "out_of_band_play")).toMatchObject({ plies: null });
     expect(flags.find((f) => f.kind === "camera_lost")).toMatchObject({ report: null, personName: "P1W" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("arbiterRequestedRound — ?fixture= opens EXACTLY that board, or says it cannot (I3)", () => {
+  /** Two rounds of one division: board 1 stays in round 1, board 2 is
+   *  moved to round 2 (the next round's pairing), both opened, round 2 last. */
+  async function twoRounds() {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const [one, two] = r.boards;
+    await sql`update fixtures set round_no = 2, seq_in_round = 1 where id = ${two!.fixtureId}`;
+    await openRound(r, 1, OPENED);
+    await openRound(r, 2, new Date(OPENED.getTime() + 60_000));
+    return { r, one: one!, two: two! };
+  }
+
+  it("an EARLIER round's board: that round, with that board in it — never the latest round", async () => {
+    const { r, one, two } = await twoRounds();
+    expect((await loadArbiterRound(r.owner, r.divisionId))!.roundNo, "premise: the default is the latest round").toBe(2);
+    const asked = await arbiterRequestedRound(r.owner, r.divisionId, one.fixtureId);
+    expect(asked).toEqual({ kind: "round", stageId: r.stageId, roundNo: 1 });
+    const view = (await loadArbiterRound(r.owner, r.divisionId, { round: asked as { stageId: string; roundNo: number } }))!;
+    expect(view.roundNo).toBe(1);
+    expect(view.boards.map((b) => b.fixtureId)).toEqual([one.fixtureId]);
+    // The positive pair: the latest round's own board is its round.
+    expect(await arbiterRequestedRound(r.owner, r.divisionId, two.fixtureId)).toEqual({ kind: "round", stageId: r.stageId, roundNo: 2 });
+  });
+
+  it("unavailable, never another board: an unknown id, a malformed id, another club's board, another division's, a round never opened, a cancelled board", async () => {
+    const { r, one } = await twoRounds();
+    const stranger = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(stranger);
+    const unopened = await seedOnlineChessRound({ fixtures: 1 });
+    const cancelled = await seedOnlineChessRound({ fixtures: 2, unpaired: true });
+    await openRound(cancelled);
+    await sql`update fixtures set status = 'cancelled' where id = ${cancelled.boards[1]!.fixtureId}`;
+    const otherDivision = await createDivision(r.owner, r.competitionId, {
+      name: "Second",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+    });
+    const cases: [string, Promise<unknown>][] = [
+      ["unknown id", arbiterRequestedRound(r.owner, r.divisionId, randomUUID())],
+      ["malformed id", arbiterRequestedRound(r.owner, r.divisionId, "not-a-uuid'; select 1")],
+      ["another club's board", arbiterRequestedRound(r.owner, r.divisionId, stranger.boards[0]!.fixtureId)],
+      ["another club's board, asked of its own division", arbiterRequestedRound(r.owner, stranger.divisionId, stranger.boards[0]!.fixtureId)],
+      ["this club's board, asked of another division", arbiterRequestedRound(r.owner, otherDivision.id, one.fixtureId)],
+      ["a round never opened", arbiterRequestedRound(unopened.owner, unopened.divisionId, unopened.boards[0]!.fixtureId)],
+      ["a cancelled board", arbiterRequestedRound(cancelled.owner, cancelled.divisionId, cancelled.boards[1]!.fixtureId)],
+      ["an unpaired seat", arbiterRequestedRound(cancelled.owner, cancelled.divisionId, cancelled.unpairedFixtureId!)],
+    ];
+    let checked = 0;
+    for (const [why, asked] of cases) {
+      expect(await asked, why).toEqual({ kind: "unavailable" });
+      checked++;
+    }
+    expect(checked).toBe(8);
+    // The positive pair of the last case: the round's other board is there.
+    expect(await arbiterRequestedRound(cancelled.owner, cancelled.divisionId, cancelled.boards[0]!.fixtureId)).toMatchObject({ kind: "round" });
+  });
+
+  it("C1: a board the viewer plays on is 'own' — named, never opened", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    await openRound(r);
+    const admin = await seatedAdmin(r, r.boards[0]!.home.userId);
+    expect(await arbiterRequestedRound(admin, r.divisionId, r.boards[0]!.fixtureId)).toEqual({ kind: "own" });
+    expect(await arbiterRequestedRound(admin, r.divisionId, r.boards[1]!.fixtureId)).toMatchObject({ kind: "round" });
   });
 });
 
