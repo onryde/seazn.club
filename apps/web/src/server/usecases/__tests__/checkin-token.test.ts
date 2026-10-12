@@ -82,7 +82,8 @@ describe("check-in tokens (PROMPT-53)", () => {
     const matchRoom = await mintMatchRoomToken({
       fixtureId: FIXTURE,
       personId: "p1",
-      scheduledAt: new Date(Date.now() + 60_000).toISOString(),
+      roundOpenId: "ro1",
+      roundOpenedAt: new Date(Date.now() + 60_000).toISOString(),
     });
     await expect(verifyCheckinToken(matchRoom)).rejects.toMatchObject({ code: "CHECKIN_INVALID" });
   });
