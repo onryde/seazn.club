@@ -26,7 +26,7 @@ import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlay
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
 import { checkInCounts } from "@/server/external-play/window";
-import { hasLiveVideoPublisher, RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
+import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { stampFixtureCheckIn } from "@/server/usecases/me";
 import {
@@ -56,7 +56,6 @@ import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, fenAfter, playableGame, type PlayAction, type PlayResult } from "./play";
 import { seatPlayer, type SeatResult } from "./preflight";
 import { reconcile } from "./reconcile";
-import { presenceCache, type PresenceCache } from "./room-presence";
 import { throttledRetryAt } from "./sweep";
 
 /** The caller identifies as either a signed-in session (must be one of the
@@ -69,10 +68,6 @@ export type RoomDeps = {
   create?: (fixtureId: string) => Promise<CreateOutcome>;
   publish?: (fixtureId: string) => Promise<void>;
   offered?: (asker: OnlineChessAsker) => Promise<boolean>;
-  presence?: (a: { meetingId: string; participantId: string }) => Promise<boolean>;
-  /** The rationed presence answers (room-presence.ts); the process's own by
-   *  default, a fresh one per test. */
-  presenceCache?: PresenceCache;
   mintRealtime?: typeof mintExternalPlayLobbyToken;
   play?: (a: { fixtureId: string; personId: string; action: PlayAction }) => Promise<PlayResult>;
   reconcile?: (fixtureId: string, trigger: "game_end" | "clock_zero") => Promise<unknown>;
@@ -207,38 +202,23 @@ async function recordedResult(fixtureId: string): Promise<{ winner: string | nul
   return { winner: row.payload.winner ?? null, method: row.payload.method ?? null };
 }
 
-/** This process's presence answers: one per (meeting, participant) per TTL,
- *  shared by concurrent reads, inside a fixed call budget (review I8). */
-const PRESENCE = presenceCache();
-
-/** The opponent's camera as the meeting reports it: joined and not left.
- *  null ⇒ not asked (no meeting, no participant yet, an override), the
- *  vendor did not answer, or the budget is spent with no recent answer — the
- *  pill then shows nothing rather than a guess. */
-async function opponentPresence(
-  fixtureId: string,
-  opponentPersonId: string | null,
-  now: Date,
-  deps: RoomDeps,
-): Promise<boolean | null> {
-  if (opponentPersonId === null) return null;
-  const [row] = await sql<{ meetingId: string; participantId: string }[]>`
-    select m.meeting_id as "meetingId", p.participant_id as "participantId"
+/** Who the opponent is in the fixture's meeting (review I8): their player
+ *  participant id — the one preflight keeps per person, the one their client
+ *  joins with — or null when they hold no seat in a meeting that is still
+ *  open (absent by construction). A DB read only: whether they are in the
+ *  meeting and on camera is the viewer's own client's answer
+ *  (match-room/opponent-presence.ts), so a room read never calls the
+ *  vendor. */
+async function opponentParticipant(fixtureId: string, opponentPersonId: string): Promise<string | null> {
+  const [row] = await sql<{ participantId: string }[]>`
+    select p.participant_id as "participantId"
       from fixture_video_meetings m
       join fixture_video_participants p on p.fixture_id = m.fixture_id
      where m.fixture_id = ${fixtureId} and m.ended_at is null
        and p.person_id = ${opponentPersonId} and p.preset = 'player'
      order by p.created_at, p.id
      limit 1`;
-  if (!row) return false;
-  return (deps.presenceCache ?? PRESENCE).get(`${row.meetingId}:${row.participantId}`, now.getTime(), async () => {
-    try {
-      return await (deps.presence ?? hasLiveVideoPublisher)(row);
-    } catch (err) {
-      if (err instanceof RealtimeKitError) return null;
-      throw err;
-    }
-  });
+  return row?.participantId ?? null;
 }
 
 async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
@@ -332,13 +312,14 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const watchUrl = gameOnFile ? `https://lichess.org/${bridge!.challenge_id}` : null;
 
   const cameraPolicy = await fixtureCameraPolicy(f.fixtureId);
-  // Asked only where the pill shows — a live board the viewer may play on
-  // (review I8): never before the game, on a held or finished board, or for
-  // a frozen seat. Every ask costs the account's shared Cloudflare budget.
-  const opponentCameraLive =
-    cameraPolicy === "off" || facts.videoOverrideAt !== null || over || !canAct
+  // The pill shows only on a live board the viewer may play on (review I8):
+  // never before the game, on a held or finished board, or for a frozen seat.
+  // An opponent with no person on file cannot be named in the meeting: no
+  // pill, rather than a "camera off" nobody can verify.
+  const opponentPresence: RoomSnapshot["opponentPresence"] =
+    cameraPolicy === "off" || facts.videoOverrideAt !== null || over || !canAct || opponent.personId === null
       ? null
-      : await opponentPresence(f.fixtureId, opponent.personId, now, deps);
+      : { participantId: await opponentParticipant(f.fixtureId, opponent.personId) };
 
   let realtime: RoomSnapshot["realtime"] = null;
   try {
@@ -377,7 +358,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     you: { colour: mine, name: player.displayName, checkedIn: youIn },
     opponent: { colour: theirs, name: opponent.displayName, checkedIn: theyIn },
     cameraPolicy,
-    opponentCameraLive,
+    opponentPresence,
     frozen,
     canAct,
     onlineChessOff,

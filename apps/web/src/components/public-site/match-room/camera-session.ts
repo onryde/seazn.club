@@ -6,7 +6,7 @@
 //            └──→ failed             (no permission, no device, no meeting)
 // A second start while joining or joined is a no-op; nothing starts after
 // stop, and a join that lands after stop is left at once.
-import type { JoinOwnCamera, OwnCamera } from "./camera-loader";
+import type { JoinOwnCamera, MeetingLink, OwnCamera } from "./camera-loader";
 
 export type CameraStatus = "idle" | "joining" | "live" | "off" | "failed";
 export type CameraView = { status: CameraStatus; track: MediaStreamTrack | null };
@@ -14,6 +14,13 @@ export type CameraView = { status: CameraStatus; track: MediaStreamTrack | null 
 export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void) {
   let cam: OwnCamera | null = null;
   let unsubscribe: (() => void) | null = null;
+  // The meeting link (review I8) is relayed to listeners that subscribed
+  // before the camera joined — the presence pill's hook mounts first.
+  const linkListeners = new Set<() => void>();
+  const linkChanged = () => {
+    for (const cb of [...linkListeners]) cb();
+  };
+  let unlink: (() => void) | null = null;
   let busy = false;
   let stopped = false;
   return {
@@ -28,6 +35,8 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
           return;
         }
         cam = joined;
+        unlink = joined.onLinkChange(linkChanged);
+        linkChanged();
         unsubscribe = joined.onChange((enabled, track) => {
           if (!stopped) emit({ status: enabled && track ? "live" : "off", track: enabled ? track : null });
         });
@@ -52,9 +61,21 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
       if (stopped) return;
       stopped = true;
       unsubscribe?.();
+      unlink?.();
       const c = cam;
       cam = null;
+      if (c !== null) linkChanged();
       await c?.leave().catch(() => undefined);
+    },
+    /** The meeting as the camera's join sees it; null without one. */
+    link(): MeetingLink | null {
+      return cam?.link() ?? null;
+    },
+    onLinkChange(cb: () => void): () => void {
+      linkListeners.add(cb);
+      return () => {
+        linkListeners.delete(cb);
+      };
     },
   };
 }
