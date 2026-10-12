@@ -563,35 +563,41 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
           expect(box.x, `${s.name} ${width}: inside the left edge`).toBeGreaterThanOrEqual(0);
           expect(box.x + box.width, `${s.name} ${width}: inside the right edge`).toBeLessThanOrEqual(width + 1);
         }
-        // Loop H F3: the who chips wrap at WORD boundaries. Every word of every chip's name sits in ONE line box (a word
-        // broken across two lines has two rects at two heights), unless the word alone is wider than its whole chip —
-        // the last resort `break-words` keeps. The long surname must be among the words measured, never excused.
+        // Loop H F3: the who chips wrap at WORD boundaries. Every unbreakable run of every chip's name sits in ONE line box
+        // (a run broken across two lines has two rects at two heights), unless the run alone is wider than its label —
+        // the last resort `break-words` keeps. A run ends at whitespace or AFTER a hyphen (UAX #14's break opportunity):
+        // "Konstantinopoulou-" / "Vanderbilt" is word wrapping, a break inside "Konstantinopoulou" is not. The long
+        // surname must be among the runs measured, never excused.
         const words = await d.locator('[data-testid^="forfeit-who-"] > span').evaluateAll((spans) => {
           const out = { measured: [] as string[], broken: [] as string[], excused: [] as string[] };
           for (const span of spans) {
-            const chip = span.parentElement!.getBoundingClientRect();
+            const label = span.getBoundingClientRect().width;
             const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
             for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-              for (const m of (n.textContent ?? "").matchAll(/\S+/g)) {
+              for (const m of (n.textContent ?? "").matchAll(/[^\s-]+-*/g)) {
                 const range = document.createRange();
                 range.setStart(n, m.index!);
                 range.setEnd(n, m.index! + m[0].length);
                 const rects = [...range.getClientRects()].filter((r) => r.width > 0);
                 const width = rects.reduce((sum, r) => sum + r.width, 0);
-                if (width > chip.width) {
+                if (width > label) {
                   out.excused.push(m[0]);
                   continue;
                 }
                 out.measured.push(m[0]);
-                if (new Set(rects.map((r) => Math.round(r.top))).size > 1) out.broken.push(m[0]);
+                if (new Set(rects.map((r) => Math.round(r.top))).size > 1) {
+                  out.broken.push(`${m[0]} ${JSON.stringify(rects.map((r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width)]))} in a ${Math.round(label)}px label`);
+                }
               }
             }
           }
           return out;
         });
         expect(words.broken, `${s.name} ${width}: no word of a chip's name breaks across lines`).toEqual([]);
-        expect(words.measured, `${s.name} ${width}: the long surname is measured, not excused`).toContain("Wolfeschlegelsteinhausen");
-        expect(words.excused, `${s.name} ${width}: no word here is wider than its chip`).toEqual([]);
+        expect(words.measured, `${s.name} ${width}: the long surnames are measured, not excused`).toEqual(
+          expect.arrayContaining(["Wolfeschlegelsteinhausen", "Konstantinopoulou-", "Vanderbilt"]),
+        );
+        expect(words.excused, `${s.name} ${width}: no word here is wider than its label`).toEqual([]);
         const confirm = d.getByTestId("forfeit-confirm");
         await confirm.scrollIntoViewIfNeeded();
         const hit = await confirm.evaluate((el) => {
