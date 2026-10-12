@@ -96,12 +96,14 @@ Exit **1**:
   premise 50, a harness defect W2a routed to the controller, unfixed on this branch. So the plan's "EXIT=0" cannot
   hold from these inputs.
 
-The re-key file is **unchanged** in this commit. The removal waits for a ruling on that exit. With the five W2b
-entries removed in a scratch copy, the same judge gives exit 1:
+Controller ruling R16-4 accepted that exit: its only cause is the M1 cell, W2a false premise 50. The five W2b
+entries are now removed from `../w2a-repro/expect-77-rekeys.json`, and its `note` says they were removed by W2b Task 16
+and judged greened here. The same judge, re-run on the same eight inputs (`w2a-expect-after.json`), gives exit 1:
 
     expected 77, found 77: 74 works, 2 red as pinned, 0 greened; 1 unexpected red, 0 wrong reason (2902 case(s) read)
 
-`greened` is `[]`, and the one unexpected red is the same M1 cell.
+- before: `greened` = exactly the five boardgame R4 ids; after: `greened` = `[]`.
+- The one known failing cell, before and after, is `page_playoff_only|generic|score|M1`.
 
 ## Step 3: the probes, ungated
 
