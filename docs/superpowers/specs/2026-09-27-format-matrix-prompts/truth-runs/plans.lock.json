@@ -21779,6 +21779,24 @@
         "knockout|hockey|WD-CASC"
       ],
       "planned": {}
+    },
+    "w2b-final/local/L3/w2b-final-r165-wd-casc": {
+      "plan": "--set w1-driving --scenario WD-CASC",
+      "layered": false,
+      "driven": [
+        "knockout|football|WD-CASC",
+        "knockout|cricket|WD-CASC",
+        "knockout|boardgame|WD-CASC",
+        "knockout|carrom|WD-CASC",
+        "knockout|generic|WD-CASC",
+        "knockout|volleyball|WD-CASC",
+        "knockout|badminton|WD-CASC",
+        "knockout|tabletennis|WD-CASC",
+        "knockout|tennis|WD-CASC",
+        "knockout|icehockey|WD-CASC",
+        "knockout|hockey|WD-CASC"
+      ],
+      "planned": {}
     }
   }
 }

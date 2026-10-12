@@ -12,9 +12,8 @@ check passes, with `checked > 0` wherever it applies. But 23 of the 246 scenario
 **After rulings R16 (see "Rulings R16: the re-run", below):**
 - AB-AWARD is 4/4 `works`.
 - DW-ALL is 110/110 `works`.
-- WD-CASC is still 11/11 red:
-  - 5 cells are W4-owned (MB-004/005, ruling R16-2), so they are not counted as W2b reds.
-  - All 11 still fail I2 for a cause the first read below got wrong. It needs a ruling.
+- WD-CASC, after ruling R16-5 (`local/L3/w2b-final-r165-wd-casc`): 6 cells `works` (the crowned half), 5 red (the
+  vacant half). The 5 red cells are all W4's (vacant title; MB-004/005, ruling R16-2), so W2b has no red left.
 
 ## The run
 
@@ -177,9 +176,67 @@ The three scenarios were re-run whole, on a fresh env:
     walkover, is stored `abandoned` with both seats empty.
   - So no stored fixture records either withdrawn winner losing, and I2 reads both as unbeaten, beside the champion.
   - The W2b checks that judge this cascade pass in every cell.
+  - Ruled in R16-5, below.
 
-  **Open, for a ruling:**
-  - Either I2 counts an entrant the product stored as departed (withdrawn or disqualified) as beaten,
-  - or the product should record the withdrawn winner's next fixture as a walkover the winner lost (X-WD-3's shape),
-    not as a bye.
+## Ruling R16-5: I2 and a departed entrant (`local/L3/w2b-final-r165-wd-casc`)
 
+The ruling is option (a), and the change is commit `ea97cc3fd`:
+- I2 counts an entrant the product STORES as departed as eliminated. "Departed" is a status in `DEPARTED_STATUSES`.
+- `snapshot` reads it from `listEntrants`, never from the scenario.
+- A withdrawn case whose run carries no departures fails by name.
+- An unbeaten entrant who never withdrew still fails I2.
+
+The re-run:
+- A fresh env: `up --label w2b --placement`, then `rebuild` at `ea97cc3fd`. `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` is
+  baked in, and `show data_directory` printed `/tmp/seazn-env/w2b/pg`.
+- Harness `ea97cc3fd`, clean tree, 2026-10-12 07:43:23 – 07:43:34 UTC, `EXIT=0`.
+
+| cells | state | I2 | other fails |
+|---|---|---|---|
+| football, boardgame, generic, badminton, tennis, hockey (crowned half) | **works** | pass, checked 9: "2 departed entrant(s) counted eliminated" (QF1's winner and QF3's walkover winner) | none |
+| cricket, carrom, volleyball, table tennis, ice hockey (vacant half) | red | fail: "0 unbeaten entrants" — the finalist withdrew too, so the title is vacant (W4) | I4, I8, `life-loop-bounded`: Generate 500 (MB-004/005, W4) |
+
+All 38 W2b checks in the run pass.
+
+### The X-WD-3 tie, as the public site shows it (hockey cell, `m-w2b-final-r165-wd-casc-11`, read in a browser at 1280)
+
+The tie is SF1, `se-r1-i0`:
+- QF1's winner (Matrix Team 1) withdrew while this semi-final's other seat was TBD.
+- The tie is stored `forfeited`, `{kind:"award", winner: Team 4, reason:"bye"}`.
+  - It has no `loser` and no `method`.
+  - It has no score event.
+  - Its home slot label is `bracket.slot.bye`.
+
+| surface | text on the tie |
+|---|---|
+| schedule tab (Semi-finals) | `Ended` · `Bye` · `Matrix Team 4` |
+| bracket (Standings tab) | `Bye` · `Matrix Team 4` · `TBD` |
+| match page | title `Bye vs Matrix Team 4 — Matrix hockey (Forfeited)`; body `BYE — MATRIX TEAM 4 — Forfeited`, then "This match was recorded as a result only, with no play-by-play detail." |
+
+- No surface says "w/o" or "walkover" on this tie, or names the withdrawn entrant.
+- QF2 and QF3, the walkovers the withdrawals wrote, show the `w/o` tag, with the sentence "Matrix Team 5 withdrew —
+  walkover."
+- The final reads `Matrix Team 4` · `Bye` (`Ended` on the schedule, `TBD` on the bracket). The banner reads
+  `Champion` / `Matrix Team 4`.
+- **Question for the owner (not changed):** X-WD-3 says the arriving opponent "advances by walkover". The product
+  stores it, and every surface shows it, as a bye. Separately, the bracket prints `TBD` on two finished bye tiles
+  (SF1 and the final).
+
+### "Abandoned with both seats empty"
+
+This is SF2, `se-r1-i1`, line b's semi-final in every WD-CASC cell (hockey fixture `448003af`).
+- Nothing was posted to SF2 itself: it has no score events. The product's seat resolver wrote it after two steps:
+  - QF3's home side withdrew before the start, so QF3 was walked over to Matrix Team 6. That winner then withdrew
+    while SF2's other seat was TBD, so that seat is departed (slot label `bracket.slot.bye`).
+  - QF4 was a recorded double walkover (`core.forfeit{reason:"walkover", by:"both"}`), so SF2's other seat is dead
+    but not departed (slot label "winner of R1 match 4").
+- The resolver (`stages.ts`, "OWNER RULING 2026-09-21 (re-review C2): a walkover REQUIRES A LIVE RECIPIENT") voids a
+  line with no live recipient. So SF2 is stored `abandoned`, with no outcome and nobody seated.
+- **It is neither X-WD-4 nor W4's family:**
+  - X-WD-4 needs BOTH sides withdrawn, which gives a double walkover. The matrix cannot drive that here; it is
+    unit-tested on the fake.
+  - MB-004/005 is the vacant half's Generate 500.
+  - This is the C2 void, which WD-CASC's own `w2b-withdrawal-both-seats-dead` check pins, and it passes.
+- **Display, for the owner (not changed):** the public schedule and bracket show SF2 as `TBD` · `Bye` · `Winner of
+  Quarter-finals, match 4`. That is a void match labelled TBD, naming a winner QF4's double walkover can never
+  produce.
