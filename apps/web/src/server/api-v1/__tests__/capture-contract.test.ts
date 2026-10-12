@@ -15,9 +15,10 @@
 //   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
 //     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
 //     (code 1..8, pool ^[A-Z]$), and `role.kind` as an OPEN string whose prose lists every kind the engine declares.
-//   * the record upload's contract (capture-record.v1, design APPROVED by the owner 2026-10-12): no route and no twin yet, so
-//     its fixtures are judged by the published bytes alone, its keys against capture's allow-list typed here, and a
-//     tripwire fails the day a twin appears without joining the parity test.
+//   * the record upload's contract (capture-record.v1, design APPROVED by the owner 2026-10-12): its twins (the line, the
+//     201, its own refusal and the secret-shaped rules S2–S5) join the parity test and the fixture sweep like every
+//     other file, its keys are checked against capture's allow-list typed here, and the tripwire holds every
+//     record-named export of capture-schemas.ts to the parity list.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
 //
 // Pure — no DB. One "sport" on purpose: the contract reads no sport (the capture surface is sport-agnostic).
@@ -179,6 +180,10 @@ const ZOD_ONLY: Record<string, { sibling: string; field: string; file: string; t
 // Structural helpers.
 // ---------------------------------------------------------------------------------------------------------------
 const PROSE = new Set(["$schema", "$id", "title", "description"]);
+/** `RegExp.prototype.source` writes every `/` as `\/` (so the source can sit between slashes), and zod's
+ *  `toJSONSchema` publishes the source. In an ECMA-262 pattern `\/` and `/` are the same character, so a `pattern`
+ *  is compared with that escape undone on both sides — only an UNescaped backslash's `\/` (an even run before it). */
+const unescapeSlashes = (pattern: string): string => pattern.replace(/(?<!\\)((?:\\\\)*)\\\//g, "$1/");
 /** Drops the prose keys at every level (never a property NAMED like one), sorts `required` and `enum`. */
 function normalise(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(normalise);
@@ -188,6 +193,7 @@ function normalise(node: unknown): unknown {
     if (PROSE.has(k)) continue;
     if (k === "properties") out[k] = Object.fromEntries(Object.entries(v as Json).map(([p, s]) => [p, normalise(s)]));
     else if ((k === "required" || k === "enum") && Array.isArray(v)) out[k] = [...(v as string[])].sort();
+    else if (k === "pattern" && typeof v === "string") out[k] = unescapeSlashes(v);
     else out[k] = normalise(v);
   }
   return out;
@@ -234,8 +240,27 @@ function enumOf(node: Json): string[] {
 // ---------------------------------------------------------------------------------------------------------------
 const QR = "capture-qr.v2.json", DESCRIPTOR = "capture-descriptor.v1.json", BEAT = "capture-beat.v1.json", START = "capture-start.v1.json";
 const SCORING = "capture-scoring-link.v1.json";
+// capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md), twinned by the
+// implementing PR: the line, the 201, its own refusal (Q2) and the secret-shaped rules S2–S5.
+const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
+/** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
+const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
-const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"] };
+const DEFS: Record<string, string[]> = {
+  [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"], [RECORD]: RECORD_DEFS,
+};
+/** The record's twins, by the shape they mirror: the parity test compares each, and the tripwire holds every
+ *  record-named zod export of capture-schemas.ts to exactly this list. `secretShaped` is the union of S2–S5 by `$ref`,
+ *  checked structurally (a zod union inlines its members). */
+const RECORD_TWINS: [pointer: string, twin: Twin, exportName: string][] = [
+  ["", S.CaptureRecordLine, "CaptureRecordLine"],
+  ["#/$defs/ok", S.CaptureRecordOk, "CaptureRecordOk"],
+  ["#/$defs/refusal", S.CaptureRecordRefusal, "CaptureRecordRefusal"],
+  ["#/$defs/secretS2", S.CaptureRecordSecretS2, "CaptureRecordSecretS2"],
+  ["#/$defs/secretS3", S.CaptureRecordSecretS3, "CaptureRecordSecretS3"],
+  ["#/$defs/secretS4", S.CaptureRecordSecretS4, "CaptureRecordSecretS4"],
+  ["#/$defs/secretS5", S.CaptureRecordSecretS5, "CaptureRecordSecretS5"],
+];
 
 /** Per directory: its contract file; [file prefix, twin, the shape's pointer in that file], first match wins; and the
  *  exact fixture count (never 0). */
@@ -246,18 +271,16 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 52 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
-// capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md). No route, no twin.
+// capture-record.v1's rulebook, typed from the spec and from capture's allow-list.
 // ---------------------------------------------------------------------------------------------------------------
-const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
   ["line-", "", 38], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
-/** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
-const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 7ea8f63, list for list: the rulebook the
  *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
  *  bump here (the spec's §Body). */
@@ -309,12 +332,17 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
   // Re-review fix 2: capture's vector 24 output (no `=`, a space, the mask).
   "line-valid-scrubbed-streamid-space": "S3",
 };
-/** Every name capture-schemas.ts exports at runtime today (the record has no twin among them). */
+/** Every name capture-schemas.ts exports at runtime: the 23 before the record, then the record's own (its seven
+ *  twins in RECORD_TWINS, its refusal words, its ref pattern and its two limits). */
 const CAPTURE_SCHEMAS_EXPORTS = [
   "CAPTURE_CODE_RE", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
   "CaptureBeatAnswer", "CaptureCause", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
+  // capture-record.v1 (2026-10-12).
+  "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
+  "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
+  "CaptureRecordSecretS4", "CaptureRecordSecretS5",
 ];
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -340,16 +368,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(checked).toBe(6);
   });
 
-  it("v1 is gone, and every published capture contract is one of the five twinned ones or the design-only record (W4, §6.13; W27; 2026-10-12)", () => {
+  it("v1 is gone, and every published capture contract is twinned — the record included since its route landed (W4, §6.13; W27; 2026-10-12)", () => {
     expect(existsSync(resolve(CONTRACTS, "capture-qr.v1.json")), "the v1 contract").toBe(false);
     expect(existsSync(resolve(FIXTURES, "capture-qr.v1")), "the v1 fixtures").toBe(false);
     const files = readdirSync(CONTRACTS).filter((f) => f.startsWith("capture-")).sort();
     expect(files).toEqual(Object.keys(SHA256).sort());
     const dirs = readdirSync(FIXTURES).filter((f) => f.startsWith("capture-")).sort();
-    expect(dirs).toEqual([...Object.keys(DIRS), RECORD_DIR].sort());
-    // The twinned five are DIRS; the record is the one contract without a twin, and it is not in DIRS.
-    expect(Object.values(DIRS).map((d) => d.file)).not.toContain(RECORD);
-    expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([RECORD]);
+    expect(dirs).toEqual(Object.keys(DIRS).sort());
+    // Every contract has its fixture directory in DIRS, the record's among them: no contract is left without a twin.
+    expect(Object.values(DIRS).map((d) => d.file)).toContain(RECORD);
+    expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([]);
+    expect(Object.keys(DIRS)).toHaveLength(6);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -365,7 +394,10 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       "CaptureNotReady", "CaptureStartFailed", "CaptureWaiting", "CaptureSession", "CaptureDescriptor", "CaptureBeat",
       "CaptureBeatAnswer", "CaptureStartBody", "CaptureStartOk", "CaptureRefusal", "CaptureRefusalCode",
       // W27 / W28 (2026-10-06).
-      "CaptureScoringLinkOk", "CaptureStage"]) {
+      "CaptureScoringLinkOk", "CaptureStage",
+      // capture-record.v1 (2026-10-12): the names the records route and its use-case import.
+      "CaptureRecordLine", "CaptureRecordOk", "CaptureRecordRefusal", "CaptureRecordRefusalCode",
+      "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_MAX_BYTES"]) {
       expect(names, name).toContain(name);
     }
     expect(checked).toBe(names.length);
@@ -373,14 +405,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
 
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
     const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
+    const record = contract(RECORD);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(5);
+    expect(defsChecked).toBe(6);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -392,6 +425,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [SCORING, rootOf(scoring), S.CaptureStartBody],
       [`${SCORING}#/$defs/ok`, defOf(scoring, "ok"), S.CaptureScoringLinkOk],
       [`${SCORING}#/$defs/refusal`, defOf(scoring, "refusal"), S.CaptureRefusal],
+      // capture-record.v1: the line (the root), the 201, its own refusal and the four secret-shaped rules.
+      ...RECORD_TWINS.map(([pointer, twin]): [string, Json, Twin] =>
+        [`${RECORD}${pointer}`, pointer === "" ? rootOf(record) : defOf(record, pointer.slice("#/$defs/".length)), twin]),
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -400,7 +436,22 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         wholeChecked++;
       }
     }
-    expect(wholeChecked).toBe(9 * 2);
+    expect(RECORD_TWINS).toHaveLength(7);
+    expect(wholeChecked).toBe((9 + 7) * 2);
+    // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
+    const shaped = defOf(record, "secretShaped");
+    expect(shaped.type).toBe("string");
+    expect(shaped.anyOf).toEqual(["secretS2", "secretS3", "secretS4", "secretS5"].map((d) => ({ $ref: `#/$defs/${d}` })));
+    // The slash unescape is the only liberty the normaliser takes with a pattern, and it is sound: each record pattern
+    // with a `/` in it compiles to the same RegExp source either way.
+    let slashed = 0;
+    for (const [pointer, twin] of RECORD_TWINS.filter(([p]) => p.startsWith("#/$defs/secret"))) {
+      const filePattern = defOf(record, pointer.slice("#/$defs/".length)).pattern as string;
+      expect(new RegExp(filePattern).source, pointer).toBe((zodJson(twin, "output").pattern as string));
+      if (filePattern.includes("/")) slashed++;
+    }
+    // S2 and S4 in their `://`, S3 and S5 in their token class `[…+/=-]`.
+    expect(slashed, "every secret rule carries a `/`").toBe(4);
 
     const unions: [string, Json, Twin, string[]][] = [
       [DESCRIPTOR, rootOf(desc), S.CaptureDescriptor, Object.keys(DESCRIPTOR_MATRIX)],
@@ -439,6 +490,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         let admitted: boolean;
         if (/^valid(-.+)?$/.test(kind)) admitted = true;
         else if (/^(invalid-.+|tampered(-.+)?|wrong-version)$/.test(kind)) admitted = false;
+        // A record `line-secret-*` vector: the line shape (twin AND file) admits it; only the server's S1–S5 refuse it,
+        // which the record's own tests below prove rule by rule.
+        else if (dir === RECORD_DIR && prefix === "line-" && /^secret-.+$/.test(kind)) admitted = true;
         else expect.fail(`${dir}/${name}: neither valid* nor invalid-*/tampered*/wrong-version`);
         expect(parses(twin, value), `${dir}/${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
         // A ZOD_ONLY fixture breaks a rule the file states in prose only: ajv ADMITS it, and only the twin refuses it.
@@ -456,7 +510,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 52);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1052,7 +1106,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
   });
 
-  it("capture-record.v1 (design only): every fixture is judged by the published bytes under ajv, counted per shape — valid* admitted, invalid-*/tampered* refused, and each line-secret-* ADMITTED, its rule being the server's alone and stated in the root's prose", () => {
+  it("capture-record.v1: every fixture is judged by the published bytes under ajv, counted per shape — valid* admitted, invalid-*/tampered* refused, and each line-secret-* ADMITTED, its rule being the server's alone and stated in the root's prose", () => {
     const fileAdmits = fileValidator();
     const root = rootOf(contract(RECORD));
     const names = readdirSync(resolve(FIXTURES, RECORD_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
@@ -1294,13 +1348,33 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(fileAdmits(RECORD, "#/$defs/refusal", fixture(RECORD_DIR, "invalid-replaced"))).toBe(false);
   });
 
-  it("capture-record.v1 is design only: capture-schemas.ts exports exactly today's names, none of them a record twin (a new export under ANY name trips this; if it is the record's twin, it joins DIRS and the parity test)", () => {
+  it("capture-record.v1's twins joined the parity test: capture-schemas.ts exports exactly the pinned names, and every record zod export is one RECORD_TWINS compares (a new export under ANY name trips this until it joins)", () => {
     const names = Object.keys(CS);
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
-    expect(names.filter((n) => /record/i.test(n))).toEqual([]);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23 + 11);
+    // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
+    // identity — an enum is checked by its options instead, a constant by the contract's prose.
+    const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
+    let joined = 0;
+    for (const name of names.filter((n) => /record/i.test(n))) {
+      const value = (CS as Record<string, unknown>)[name];
+      if (!(value instanceof z.ZodType) || value instanceof z.ZodEnum) continue;
+      expect(twins.get(name)?.twin, `${name}: a record twin outside the parity test`).toBe(value);
+      joined++;
+    }
+    expect(joined, "record twins joined to parity").toBe(RECORD_TWINS.length);
+    expect(joined).toBe(7);
+    // The refusal words twin: the file's closed list exactly, `too_large` among them and `replaced` never (R4) — and
+    // the shared CaptureRefusalCode, which every other capture contract twins, did NOT gain the record's word (Q2).
+    expect([...CS.CaptureRecordRefusalCode.options].sort()).toEqual(Object.keys(SPEC_RECORD_REFUSALS).sort());
+    expect(CS.CaptureRefusalCode.options as readonly string[]).not.toContain("too_large");
+    // The limits are the root's prose, figure for figure.
+    const prose = String(contract(RECORD).description);
+    expect(prose).toContain(`at most ${CS.CAPTURE_RECORD_MAX_LINES} non-empty lines`);
+    expect(prose).toContain(`at most 1 MB (${CS.CAPTURE_RECORD_MAX_BYTES} bytes)`);
+    expect(CS.CAPTURE_RECORD_REF_RE.source).toBe((defOf(contract(RECORD), "ok").properties as Record<string, Json>).ref!.pattern);
   });
 });
 
