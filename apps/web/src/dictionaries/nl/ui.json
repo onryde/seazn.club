@@ -5977,6 +5977,7 @@
   "externalPlay.room.state.cameraOff.title": "Je camera staat uit",
   "externalPlay.room.state.cameraOff.body": "Zet hem weer aan. De partij gaat door; je organisator ziet wanneer hij uit stond.",
   "externalPlay.room.state.cameraOff.cta": "Camera aanzetten",
+  "externalPlay.room.state.cameraReconnecting": "Probleem met de cameraverbinding aan onze kant — opnieuw verbinden…",
   "externalPlay.room.state.revoked.title": "Je Lichess-koppeling is ingetrokken",
   "externalPlay.room.state.revoked.body": "Je organisator is op de hoogte gebracht.",
   "externalPlay.room.state.held.title": "Deze partij staat stil",

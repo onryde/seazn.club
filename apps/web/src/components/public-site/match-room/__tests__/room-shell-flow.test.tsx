@@ -12,7 +12,10 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   useLocale: () => "en",
 }));
 const join = vi.hoisted(() => ({ fn: vi.fn() }));
-vi.mock("../camera-loader", () => ({ joinOwnCamera: (token: string) => join.fn(token) }));
+vi.mock("../camera-loader", async (actual) => ({
+  ...(await actual<typeof import("../camera-loader")>()),
+  joinOwnCamera: (token: string) => join.fn(token),
+}));
 
 import { RoomShell } from "../room-shell";
 import type { RoomSnapshot } from "../room-snapshot";
@@ -102,7 +105,24 @@ function liveCamera(): OwnCamera {
     leave: async () => {},
     link: () => null,
     onLinkChange: () => () => {},
+    onFault: () => () => {},
   };
+}
+/** A live camera whose guard the test can make fail closed (I-1). */
+function faultingCamera() {
+  let listener: (() => void) | null = null;
+  const left = { n: 0 };
+  const cam: OwnCamera = {
+    ...liveCamera(),
+    leave: async () => void (left.n += 1),
+    onFault(cb) {
+      listener = cb;
+      return () => {
+        listener = null;
+      };
+    },
+  };
+  return { cam, left, fault: () => listener?.() };
 }
 /** A camera whose meeting link the test moves, as the SDK's signalling would. */
 function meetingCamera() {
@@ -416,5 +436,103 @@ describe("I8: the opponent pill comes from the player's own meeting join — nev
     expect(join.fn).toHaveBeenCalledTimes(1);
     expect(presenceOf(b)).toBeNull();
     b.unmount();
+  });
+});
+
+// T14 re-review 3, I-1 (controller ruling 2026-10-12), through the REAL shell,
+// hook and session: our guard fails closed → the player sees OUR notice, the
+// stamp goes to the server with their own seat, the camera re-joins with
+// their own token, and the stamp closes.
+describe("I-1: our guard's fault, through the real shell — stamped, re-joined, never blamed", () => {
+  const LIVE_GAME = {
+    gameId: "g1",
+    moves: ["e2e4", "e7e5"],
+    fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+    lastMove: ["e7", "e5"] as [string, string],
+    turn: "white" as const,
+    whiteMs: 590_000,
+    blackMs: 592_000,
+    clockAsOf: new Date(T0).toISOString(),
+    clockRunning: false,
+    drawOfferBy: null,
+    over: false,
+  };
+  const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+  let stamps: { url: string; body: unknown }[] = [];
+  function stubFetch() {
+    stamps = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ method: String(init.method), url });
+        if (init.method === "POST" && url.includes("/external-play/room/camera-fault?")) {
+          const body = JSON.parse(String(init.body)) as { state: string };
+          stamps.push({ url, body });
+          return ok({ open: body.state === "start" });
+        }
+        if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) return ok(seatAnswers.shift()?.());
+        if (init.method === "GET") return ok(getAnswer());
+        return new Response("{}", { status: 500 });
+      }),
+    );
+  }
+  /** What the Screen is handed — the shell's own tree stops at it; the
+   *  notice-vs-banner render for each status is room-shell.test.tsx's. */
+  const cameraStatus = (island: Island) => {
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    return (propsOf(screen!).camera as { status: string }).status;
+  };
+
+  it("live game: recovering (the notice, never the camera-off banner) → the stamp opens on OUR seat → a fresh join with our token → live, the stamp closes", async () => {
+    stubFetch();
+    const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    seatAnswers = [() => ({ snapshot: getAnswer(), seat: { seated: true, participant: PARTICIPANT } })];
+    const first = faultingCamera();
+    join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(liveCamera());
+    const island = renderIsland(RoomShell, { initial: live, token: "tok", selfPath: "/x" });
+    await settle();
+    expect(join.fn.mock.calls, "premise: the re-entry claim joined the camera").toEqual([["own-rtk-token"]]);
+    expect(screenOf(island)).toBe("live");
+    expect(cameraStatus(island), "premise: live").toBe("live");
+
+    first.fault();
+    await Promise.resolve();
+    expect(cameraStatus(island), "ours, said so: recovering — never off or failed").toBe("recovering");
+    expect(stamps.map((x) => x.body), "the stamp opened on OUR seat, by id").toEqual([{ state: "start", participantId: "p-own" }]);
+    expect(stamps[0]!.url, "with the personal link").toContain("t=tok");
+
+    await settle();
+    expect(first.left.n, "the old camera's leave was awaited").toBe(1);
+    expect(join.fn.mock.calls, "a fresh join with the seat's own token").toEqual([["own-rtk-token"], ["own-rtk-token"]]);
+    expect(stamps.map((x) => (x.body as { state: string }).state)).toEqual(["start", "end"]);
+    expect(cameraStatus(island), "back").toBe("live");
+    expect(screenOf(island)).toBe("live");
+    island.unmount();
+  });
+
+  it("on the check-in (refused for camera, camera up): a fault keeps the player on the check-in — never the camera-required card — and the seat is re-asked once back", async () => {
+    stubFetch();
+    seatAnswers = [
+      () => ({ snapshot: snap(), seat: { seated: false, reason: "camera_required", participant: PARTICIPANT } }),
+      () => ({ snapshot: snap({ you, creation: { state: "creating" } }), seat: { seated: true, participant: PARTICIPANT } }),
+    ];
+    const first = faultingCamera();
+    let release!: (c: OwnCamera) => void;
+    join.fn.mockResolvedValueOnce(first.cam).mockReturnValueOnce(new Promise<OwnCamera>((r) => (release = r)));
+    const island = renderIsland(RoomShell, { initial: snap(), token: "tok", selfPath: "/x" });
+    await roomOf(island).claim();
+    await settle();
+    expect(screenOf(island), "premise: camera up, re-claim pending").toBe("checkin");
+    first.fault();
+    await settle(10_000);
+    expect(join.fn, "premise: the re-join is in flight").toHaveBeenCalledTimes(2);
+    expect(screenOf(island), "ours: still the check-in, not card 2").toBe("checkin");
+    expect(seatPosts(), "no re-claim while the camera is away").toBe(1);
+    release(liveCamera());
+    await settle(1_500);
+    expect(seatPosts(), "back: the seat is asked again").toBe(2);
+    expect(screenOf(island)).toBe("creating");
+    island.unmount();
   });
 });

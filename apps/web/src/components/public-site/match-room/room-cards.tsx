@@ -237,6 +237,21 @@ export function RelinkCard({ relinkHref, t }: { relinkHref: string; t: RoomT }) 
 }
 
 /** 9 · Your camera off mid-game: a banner ABOVE the clocks; the board plays on. */
+/** OUR safeguard took the camera out of the meeting and is re-joining
+ *  (T14 re-review 3, I-1): the camera-off banner's amber, one line, no
+ *  action — nothing here is the player's to fix, and nothing is "off". */
+export function CameraReconnectingNotice({ t }: { t: RoomT }) {
+  return (
+    <div
+      data-testid="room-camera-reconnecting"
+      role="status"
+      className="rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[13px] leading-[1.45] text-[#713f12]"
+    >
+      {t("externalPlay.room.state.cameraReconnecting")}
+    </div>
+  );
+}
+
 export function CameraOffBanner({ onEnable, t }: { onEnable: () => void; t: RoomT }) {
   return (
     <div
