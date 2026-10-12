@@ -98,6 +98,10 @@ describe("D3 refusal contract: FORFEIT_REASON_WRONG_PHASE names the phase, the r
     expect(play.data).toMatchObject({ phase: "play", allowed: ALLOWED.play });
     const pre = errOf(() => foldMatchWithStoppage(fake, {}, lineups, [ev(1, "core.forfeit", { by: A, reason: "retired" })]));
     expect(pre.data).toMatchObject({ phase: "pre", allowed: ALLOWED.pre });
+    // MD-1: "pre until an active core.start" — the fake's own event before the start does not start it, so a
+    // disqualification there (admitted from the start on, R4) is still refused in "pre".
+    const beforeStart = errOf(() => foldMatchWithStoppage(fake, {}, lineups, [ev(1, "fake.point"), ev(2, "core.forfeit", { by: A, reason: "disqualified" })]));
+    expect(beforeStart.data).toMatchObject({ eventId: "e-2", phase: "pre", reason: "disqualified", allowed: ALLOWED.pre });
   });
 });
 
@@ -116,6 +120,7 @@ describe("X-AB-4, X-WD-1, D5 refusal contracts", () => {
     const e = errOf(() => fold("generic", cfg, [...level, ev(3, "core.forfeit", { by: "Q", reason: "withdrew" })]));
     expect(e.code).toBe("INVALID_EVENT");
     expect(e.message).toBe('core.forfeit by "Q" is neither side of this fixture');
+    expect(e.data, "the refusal points at the offending row").toEqual({ eventId: "e-3" });
     // The positive pair: the same withdrawal by a side is admitted.
     expect(() => fold("generic", cfg, [...level, ev(3, "core.forfeit", { by: A, reason: "withdrew" })])).not.toThrow();
   });

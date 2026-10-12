@@ -581,3 +581,19 @@ describe("S8/#417 — goalkeeper stats read the FOLD of core.lineup.*, never a k
     expect(playerStatsKeyCollisions(icehockey.playerStats!)).toEqual([]);
   });
 });
+
+describe("MD-1 — a keeperless side at the final whistle closes no spell", () => {
+  it("hockey, goalkeeper optional: nobody on the keeperless side earns a clean sheet, and the other keeper still earns theirs", () => {
+    // Single-sport: a keeperless TEAM SHEET is legal only where the cfg relaxes the keeper (hockey `goalkeeper:
+    // "optional"`, the "records a keeperless side" test above). The clean sheet is the keeper's who conceded nothing.
+    const lineups: LineupPair = {
+      home: sheet({ entrantId: "H", keeper: null, outfield: "DF", size: 11, bench: 5 }),
+      away: sheet({ entrantId: "A", keeper: "GK", outfield: "DF", size: 11, bench: 5 }),
+    };
+    const rows = aggregatePlayerStats([ev(0, "core.start", {}), ev(1, "hockey.goal", { by: "A" })], hockey.playerStats!, lineups);
+    expect(rows.find((r) => r.personId === "A-p1")?.stats.clean_sheets, "the away keeper conceded nothing").toBe(1);
+    const homeRows = rows.filter((r) => r.personId.startsWith("H-"));
+    expect(homeRows.filter((r) => r.stats.clean_sheets !== undefined), "the keeperless side").toEqual([]);
+    expect(rows.length, "rows read").toBeGreaterThan(0);
+  });
+});

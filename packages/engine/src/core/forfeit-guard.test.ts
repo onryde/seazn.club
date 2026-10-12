@@ -46,7 +46,9 @@ const PHASE_TABLE: Record<string, Record<string, ForfeitPhase>> = {
   carrom: LIVE_UNION,
   cricket: { pre: "pre", live: "play", super_over: "play", done: "over", final: "over" },
   boardgame: { pre: "pre", live: "play", tiebreak: "tiebreak", done: "over", final: "over", abandoned: "over" },
-  generic: { pre: "pre", live: "play", done: "over", final: "over" },
+  // GN-AB-1 (plan D16) gave generic the "abandoned" phase; it reads "over" as boardgame's always has (plan premise 20) —
+  // a forfeit over an active abandon is the kernel's X-AB-4 refusal, and the console's dialog reads this hook directly.
+  generic: { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" },
 };
 
 describe("D3: each module reads its own phase union (Task 3 table; ruling 102 Q5)", () => {

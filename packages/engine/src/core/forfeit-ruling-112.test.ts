@@ -213,6 +213,42 @@ describe("ruling 112: the stored shapes, every sport (X-RS-1 as amended)", () =>
     });
     expect(checked).toBe(2 * builtinModules.length);
   });
+
+  it("X-RS-1 (ruling 112): only a core.void voids — a `voids` field on any other event cancels nothing, as resolveVoids reads it", () => {
+    // MD-1. `playRecorded` is the fold's reading of the ACTIVE ledger, and the active ledger is resolveVoids': a target
+    // is cancelled by a `core.void` naming it, never by another event carrying the field. So the sport's play below,
+    // carrying `voids: <the start>`, is still play after a start that still stands.
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const { cfg, l, played } = playedScene(m);
+      const plain = ev(2, played.type, played.payload);
+      const carrying = ev(2, played.type, played.payload, "e-1");
+      expect(playRecorded([START(), carrying]), `${m.key}: play carrying voids`).toBe(true);
+      const walkover = ev(3, "core.forfeit", { by: l.away.entrantId, reason: "walkover" });
+      expect(codeOf(() => fold(m, cfg, l, [START(), carrying, walkover])), `${m.key}: the walkover after it`).toBe(codeOf(() => fold(m, cfg, l, [START(), plain, walkover])));
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  });
+
+  it("X-RS-1 (ruling 112) + guarantee 4: the guard reads the ledger BEFORE the forfeit — play recorded after a walkover is refused ALREADY_DECIDED at that event, never the walkover retroactively", () => {
+    // MD-1. A walkover after a bare start is admitted (nothing played yet); an append after it is guarantee 4's refusal,
+    // naming the event appended — the stored walkover stays what it was.
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const { cfg, l, played } = playedScene(m);
+      const stream = [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "walkover" }), ev(3, played.type, played.payload)];
+      let refusal: unknown;
+      try {
+        fold(m, cfg, l, stream);
+      } catch (e) {
+        refusal = e;
+      }
+      expect(refusal, `${m.key}: ${played.type} after the walkover`).toMatchObject({ code: "ALREADY_DECIDED", data: { eventId: "e-3" } });
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  });
 });
 
 describe("ruling 112: the console's answer agrees with the guard (forfeitAdmission parity)", () => {

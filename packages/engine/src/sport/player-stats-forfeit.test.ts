@@ -241,3 +241,25 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     }
   });
 });
+
+describe("X-PS-1 at the shared fold: a model whose ONLY metric is an appearance", () => {
+  it("X-PS-1 / X-PS-2: an appearance-only model credits no appearance for a walkover, a withdrawal or a double walkover; a retirement keeps it", () => {
+    // Single-model: no shipped sport declares ONLY appearance metrics (chess pairs "games" with "wins"), so the fold's
+    // "does this model declare an appearance at all" gate is witnessed only by a model built for it — the shape the
+    // PlayerStatsModel contract admits.
+    const model: PlayerStatsModel = { metrics: [{ key: "games", label: "Games", from: "x.pairing", agg: "count", appearance: true }] };
+    const games = (tail: Spec) => {
+      const rows = aggregatePlayerStats(evs([["x.pairing", { person: "p1" }], ["core.start"], ...tail]), model);
+      return rows.find((r) => r.personId === "p1")?.stats.games ?? 0;
+    };
+    // the positive pair: played, and a retirement (X-PS-2: a match both players played)
+    expect(games([]), "played").toBe(1);
+    expect(games([["core.forfeit", { by: H, reason: "retired" }]]), "retired").toBe(1);
+    let unplayed = 0;
+    for (const payload of [{ by: H, reason: "walkover" }, { by: H, reason: "withdrew" }, { by: "both", reason: "walkover" }]) {
+      expect(games([["core.forfeit", payload]]), JSON.stringify(payload)).toBe(0);
+      unplayed++;
+    }
+    expect(unplayed).toBe(3);
+  });
+});

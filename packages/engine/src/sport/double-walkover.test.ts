@@ -120,6 +120,15 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
           expect(credit.excluded, `${m.key}/${name}`).toContain(metric.key);
           keys++;
         }
+        // MD-1: the loops above are vacuous over an EMPTY perSide, and blind to a stray key (it would reach the table's
+        // metrics). X-DW-4: two sides, each crediting 0 on exactly "every key either side's ledger carries, and every key
+        // the sport declares" — the ledger's keys read from a single-side walkover's table row, a different arm.
+        const wo = foldMatchWithStoppage(m as never, cfg as never, l, [makeEnvelope(1, { type: "core.forfeit", payload: { by: l.away.entrantId, reason: "walkover" } })]);
+        const woRow = m.standingsDelta(outcomeOf(m as never, wo as never)!, cfg, { kind: "league" } as never, wo.state);
+        const want = [...new Set([...Object.keys(woRow[0].metrics), ...m.metrics.map((metric) => metric.key)])].sort();
+        expect(credit.perSide, `${m.key}/${name}: two sides`).toHaveLength(2);
+        for (const side of credit.perSide) expect(Object.keys(side).sort(), `${m.key}/${name}: the ledger's keys and the declared ones`).toEqual(want);
+        expect([...credit.excluded].sort(), `${m.key}/${name}: excluded`).toEqual(want);
       }
     });
     expect(keys).toBeGreaterThanOrEqual(11);

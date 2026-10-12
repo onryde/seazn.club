@@ -167,6 +167,62 @@ describe("X-WO-1: walkover credit per sport, from the stage's own cfg (spec §5.
     }
     expect(checked).toBeGreaterThanOrEqual(1);
   });
+  it("CK-WO-2 (PF-6): the hook itself says so — an unlimited-overs forfeit credit EXCLUDES the NRR operands, every reason, either side", () => {
+    // Single-sport: unlimited overs is cricket's alone. The table above cannot see `excluded` here (every credited key is
+    // already 0), but `forfeitCredit` is a module hook the console's forfeit dialog and the public qualification view
+    // read directly, and its `excluded` is declared as "keys this match must not feed into a ratio tie-break" (NRR).
+    // The operands are ICC's: NRR = runs scored / overs faced − runs conceded / overs bowled.
+    const NRR_OPERANDS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff"];
+    const m = mod("cricket");
+    const l = defaultLineupPair(m.positions);
+    let checked = 0;
+    for (const { name, cfg } of declaredCfgs(m as never)) {
+      const c = cfg as Record<string, unknown>;
+      if (!unlimitedOvers("cricket", c)) continue;
+      for (const reason of ["walkover", "retired", "disqualified", "withdrew"] as const) {
+        for (const side of ["home", "away"] as const) {
+          const credit = m.forfeitCredit(c, m.init(c, l) as never, reason, side);
+          expect(credit.excluded, `${name} ${reason} ${side}`).toEqual(expect.arrayContaining(NRR_OPERANDS));
+          for (const s of credit.perSide) expect(Object.values(s).every((v) => v === 0), `${name} ${reason} ${side}: no runs, no overs`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(8);
+  });
+  it("BG-WO-1: the hook itself says so — every non-bye chess forfeit credit EXCLUDES the colour keys (out of colour history)", () => {
+    // Single-sport: colour history is chess's alone. As for CK-WO-2 above, the table cannot see `excluded` here (the
+    // credit already carries White and Black at 0), but the hook is read directly and BG-WO-1 says "out of colour history".
+    const m = mod("boardgame");
+    const l = defaultLineupPair(m.positions);
+    let checked = 0;
+    for (const { name, cfg } of declaredCfgs(m as never)) {
+      for (const reason of ["walkover", "retired", "disqualified", "withdrew"] as const) {
+        for (const side of ["home", "away"] as const) {
+          const credit = m.forfeitCredit(cfg, m.init(cfg, l) as never, reason, side);
+          expect(credit.excluded, `${name} ${reason} ${side}`).toEqual(expect.arrayContaining(["white", "black"]));
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(8);
+  });
+  it("C-5: a bye's credit is a PAIR of ledgers and excludes nothing (today's bye delta, the played ledger untouched), every sport", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const state = m.init(cfg, defaultLineupPair(m.positions));
+        for (const side of ["home", "away"] as const) {
+          const credit = m.forfeitCredit(cfg, state as never, "bye", side);
+          expect(credit.perSide, `${m.key}/${name} ${side}: two sides`).toHaveLength(2);
+          for (const s of credit.perSide) expect(typeof s === "object" && s !== null, `${m.key}/${name} ${side}: a ledger`).toBe(true);
+          expect(credit.excluded, `${m.key}/${name} ${side}`).toEqual([]);
+          checked++;
+        }
+      }
+    });
+    expect(checked).toBeGreaterThanOrEqual(22);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -263,6 +319,22 @@ const ROWS: RetirementRow[] = [
       expect([c.bestOf, c.finalSetTo === c.setTo], "a best-of-5 whose deciding set has its own target").toEqual([5, false]);
       const aPts = 20 + 25 + 20 + Math.max(c.setTo as number, 2 + (c.winBy as number)) + (c.finalSetTo as number);
       const hPts = 25 + 20 + 25 + 2;
+      return [
+        { sets_won: 2, sets_lost: 3, points_won: hPts, points_lost: aPts },
+        { sets_won: 3, sets_lost: 2, points_won: aPts, points_lost: hPts },
+      ];
+    },
+  },
+  {
+    // MD-1 (FIVB 6.4.3, VB-RT-1, review M-7): the retiree leads 2-0 (25-20, 25-20) and retires early in set 3 at 2-1. A
+    // completes set 3 to max(setTo, 2 + winBy) and is given TWO further sets, each at its own target: set 4 at setTo,
+    // the deciding set 5 at finalSetTo.
+    id: "VB-RT-1 (2-0 to the retiree: two further sets, the deciding one at finalSetTo)", key: "volleyball", cfg: parsed("volleyball"),
+    played: [...rallies("volleyball.rally", 20, H, 5), ...rallies("volleyball.rally", 20, H, 5), ...rallies("volleyball.rally", 1, H, 1)],
+    want: (c) => {
+      expect([c.bestOf, c.finalSetTo === c.setTo], "a best-of-5 whose deciding set has its own target").toEqual([5, false]);
+      const aPts = 20 + 20 + Math.max(c.setTo as number, 2 + (c.winBy as number)) + (c.setTo as number) + (c.finalSetTo as number);
+      const hPts = 25 + 25 + 2;
       return [
         { sets_won: 2, sets_lost: 3, points_won: hPts, points_lost: aPts },
         { sets_won: 3, sets_lost: 2, points_won: aPts, points_lost: hPts },
@@ -409,6 +481,8 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
   it("VB-RT-1: volleyball retirement — the winner gets the sets and points it needed, the retiree keeps its own", () => expectRetirement(row("VB-RT-1")));
   it("VB-RT-1 (M-7): a deciding set the retiree never reached is credited at its own target, FIVB 6.4.3", () =>
     expectRetirement(row("VB-RT-1 (2-1 to the retiree: the deciding set at finalSetTo)")));
+  it("VB-RT-1 (MD-1): two further sets are each credited at their own target — set 4 at setTo, the deciding set at finalSetTo", () =>
+    expectRetirement(row("VB-RT-1 (2-0 to the retiree: two further sets, the deciding one at finalSetTo)")));
   it("TT-RT-1: table tennis retirement — points stand, the current game completes for the winner, the rest 11-0", () => {
     expectRetirement(row("TT-RT-1 (third game 5-3 to the retiree)"));
     expectRetirement(row("TT-RT-1 (deuce: the current game completes at the retiree + 2, not at setTo)"));
@@ -563,6 +637,14 @@ describe("M-4: an award arm seats its offender from the award's typed `loser`, n
       expect(bye.map((d) => d.won), `${m.key} bye`).toEqual([1, 0]);
       expect(() => delta({ kind: "award", winner: H, loser: "Z", reason: "walkover" }), `${m.key} stranger`).toThrow();
       expect(() => delta({ kind: "award", winner: H, loser: H, reason: "walkover" }), `${m.key} winner as loser`).toThrow(/loser/);
+      // MD-1: the refusal is the taxonomy's INVALID_EVENT (the API maps the code to its status) and names both seats.
+      let refusal: unknown;
+      try {
+        delta({ kind: "award", winner: H, loser: H, reason: "walkover" });
+      } catch (e) {
+        refusal = e;
+      }
+      expect(refusal, `${m.key} winner as loser: code and data`).toMatchObject({ code: "INVALID_EVENT", data: { winner: H, loser: H } });
       checked++;
     });
     expect(checked).toBe(11);
@@ -692,6 +774,40 @@ describe("PF-1 / X-WO-1: a withdrawal over a held level result — the headline 
     expect(() => summaryOf(fake as never, { state: { phase: "done" }, settlement: null, levelWithdrawal: { winner: A, loser: H, eventId: "e-9" } })).toThrow(
       /summaryOf: the module's state has no `outcome` field/,
     );
+  });
+
+  it("guard: a state that is no object at all (null, a primitive) is the same named refusal, never a TypeError", () => {
+    const fake = { summary: () => ({ headline: "x", perSide: [] }), outcome: () => ({ kind: "draw" as const }) };
+    const levelWithdrawal = { winner: A, loser: H, eventId: "e-9" };
+    let checked = 0;
+    for (const state of [null, 7, "done"]) {
+      expect(() => summaryOf(fake as never, { state, settlement: null, levelWithdrawal }), JSON.stringify(state)).toThrow(
+        /^summaryOf: the module's state has no `outcome` field/,
+      );
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a settlement is NOT overlaid (summaryOf's declaration): a settled abandon's summary is the module's own, every sport", () => {
+    let checked = 0;
+    let overlayWouldDiffer = 0;
+    forEachSport(({ module: m }) => {
+      const f = foldMatchWithStoppage(m as never, parsed(m.key) as never, defaultLineupPair(m.positions), [
+        ev(1, "core.start"),
+        ev(2, "core.abandon", { reason: "rain" }),
+        ev(3, "core.settle", { winner: H, method: "lot" }),
+      ]);
+      expect([f.settlement !== null, f.levelWithdrawal], m.key).toEqual([true, null]);
+      expect(summaryOf(m as never, f as never), m.key).toEqual(m.summary(f.state as never));
+      // The witness: a sport whose summary renders the settled winner differently from the played state.
+      const overlaid = m.summary({ ...(f.state as Record<string, unknown>), outcome: outcomeOf(m as never, f as never) });
+      if (JSON.stringify(overlaid) !== JSON.stringify(m.summary(f.state))) overlayWouldDiffer++;
+      checked++;
+    });
+    expect(checked).toBe(11);
+    // measured (MD-1): boardgame and generic
+    expect(overlayWouldDiffer).toBeGreaterThanOrEqual(1);
   });
 });
 
