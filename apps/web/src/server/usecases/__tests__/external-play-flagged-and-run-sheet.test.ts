@@ -242,6 +242,13 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — a round nobody has opened (D1
   it("the empty case first: over the board, a paired round past its slot has no online entry at all", async () => {
     const otb = await seedOnlineChessRound({ fixtures: 2, onlinePlay: "off", scheduledAt: PAST });
     expect(await listRunSheetOnlinePlay(otb.owner, otb.divisionId)).toEqual({});
+    // A board that still has an online fact (evidence from before online play was turned off) gets its entry — and
+    // is still not `unopened`: an over-the-board round is never waiting on an open.
+    const b = otb.boards[0]!;
+    await flag(otb, b.fixtureId, "camera_lost", b.home.personId);
+    const map = await listRunSheetOnlinePlay(otb.owner, otb.divisionId);
+    expect(Object.keys(map)).toEqual([b.fixtureId]);
+    expect(map[b.fixtureId]).toMatchObject({ cameraFlagCount: 1, unopened: false });
   });
 
   it("every still-playable board of an unopened online round is `unopened` (an empty seat too); a settled one is not; the open clears it", async () => {
@@ -255,8 +262,9 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — a round nobody has opened (D1
       [one.fixtureId, r.unpairedFixtureId!].sort(),
     );
     expect(before[one.fixtureId]).toMatchObject({ unopened: true, held: null, live: false, cameraFlagCount: 0, offSeaznFlagCount: 0 });
-    expect(before[two.fixtureId]?.unopened ?? false, "decided").toBe(false);
-    expect(before[r.bye!.fixtureId]?.unopened ?? false, "bye").toBe(false);
+    // Settled with no other online fact: no entry at all (the chips' own empty case), not an all-zero one.
+    expect(Object.keys(before), "decided").not.toContain(two.fixtureId);
+    expect(Object.keys(before), "bye").not.toContain(r.bye!.fixtureId);
 
     await sql`
       insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)

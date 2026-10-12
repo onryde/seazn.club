@@ -170,7 +170,9 @@ export async function listOpenRounds(
         blackName: black.displayName,
         invitedAt,
         owedSeats: owedSeats(b, f.open),
-        canResend: f.open !== null && !f.closed && takesInvites(b) && invitedAt !== null,
+        // No `closed` term: a closed round is shown only as 'reopen' (nobody bound to its open), where nothing is
+        // stamped — invitedAt is null on every board. (A `!closed` here survived its mutant: it was unreachable.)
+        canResend: f.open !== null && takesInvites(b) && invitedAt !== null,
       });
     }
     const openedAt = f.open?.roundOpenedAt ?? null;

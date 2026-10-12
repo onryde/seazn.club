@@ -37,6 +37,8 @@ vi.mock("@/lib/email", async (importOriginal) => {
 import { openRound } from "../open-round";
 import { listOpenRounds } from "../open-round-view";
 import { addFixture } from "../../stages";
+import { getFixtureState } from "../../fixtures";
+import { scoreEvent } from "../../scoring";
 import {
   seedOnlineChessRound,
   seedOnlineSwiss,
@@ -245,6 +247,72 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     mail.sent.length = 0;
     expect(await expectPressAgrees(r, v, at(MIN))).toEqual({ opened: true, invited: 2, skipped: [] });
     expect(mail.sent.sort()).toEqual([late.home.email, late.away.email].sort());
+  });
+
+  it("a division that has not started: nothing to open — and the server agrees (division_not_started)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, divisionStarted: false });
+    expect(await view(r, T0)).toEqual([]);
+    expect(await press(r, 1, T0)).toEqual({ opened: false, reason: "division_not_started" });
+  });
+
+  it("a board decided before the open is no pairing: the list and the count are what the server invites", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const [one, two] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    // The result entered by hand, through the real scoring path.
+    const fs = await getFixtureState(r.owner, two.fixtureId);
+    await scoreEvent(r.owner, two.fixtureId, { expected_seq: fs.last_seq, type: "core.start", payload: {} });
+    await scoreEvent(r.owner, two.fixtureId, { expected_seq: fs.last_seq + 1, type: "boardgame.result", payload: { winner: two.home.entrantId } });
+
+    const v = roundOf(await view(r, T0), 1);
+    expect(v.pairings.map((p) => p.fixtureId)).toEqual([one.fixtureId]);
+    const owed = v.pairings.reduce((n, p) => n + p.owedSeats, 0);
+    const res = await expectPressAgrees(r, v, T0);
+    expect(res).toMatchObject({ opened: true, invited: owed });
+    expect(mail.sent.sort()).toEqual([one.home.email, one.away.email].sort());
+  });
+
+  it("a board whose game exists with no invite on file (the players found their room another way) owes nothing and offers no resend", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const two = r.boards[1]!;
+    mail.fail.add(two.home.email);
+    mail.fail.add(two.away.email);
+    await press(r, 1, T0);
+    expect(await stamps(two.fixtureId), "premise: nothing stamped on board 2").toEqual({ white: null, black: null });
+    // The room created the game when both checked in (labelled SQL: the room's own writer is T9's, not this read's).
+    await sql`
+      insert into fixture_external_play
+        (fixture_id, org_id, status, scheduled_at_basis, challenge_id, create_sent_at, white_side, white_lichess_id, black_lichess_id)
+      values (${two.fixtureId}, ${r.orgId}, 'live', ${T0}, ${`gm-${randomUUID().slice(0, 12)}`}, ${T0}, 'home',
+              ${two.home.lichessId}, ${two.away.lichessId})
+      on conflict (fixture_id) do update
+        set status = 'live', challenge_id = excluded.challenge_id, create_sent_at = excluded.create_sent_at,
+            white_side = 'home', white_lichess_id = excluded.white_lichess_id, black_lichess_id = excluded.black_lichess_id`;
+    const v = roundOf(await view(r, at(MIN)), 1);
+    expect(v.pairings.find((p) => p.fixtureId === two.fixtureId)).toMatchObject({ owedSeats: 0, invitedAt: null, canResend: false });
+    expect(v.press, "everyone who can be invited was").toBe("none");
+    await expectPressAgrees(r, v, at(MIN));
+  });
+
+  it("a stamp counts only for the open it was written under (labelled SQL move: no product path moves a fixture between rounds)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, spares: 1 });
+    const { fixture_id: b2 } = await addFixture(r.owner, r.stageId, {
+      home_entrant_id: r.spares[0]!.home.entrantId,
+      away_entrant_id: r.spares[0]!.away.entrantId,
+      round_no: 2,
+      scheduled_at: null,
+    });
+    await press(r, 1, T0);
+    await press(r, 2, T0);
+    const moved = r.boards[0]!.fixtureId;
+    expect((await stamps(moved)).white, "premise: stamped under round 1's open").not.toBeNull();
+    await sql`update fixtures set round_no = 2 where id = ${moved}`;
+    const v = roundOf(await view(r, at(MIN)), 2);
+    expect(v.pairings.map((p) => [p.fixtureId, p.owedSeats, p.invitedAt])).toEqual(
+      expect.arrayContaining([[moved, 2, null]]),
+    );
+    expect(v.pairings.find((p) => p.fixtureId === b2)?.owedSeats).toBe(0);
+    // The server asserts the same invariant, loudly.
+    await expect(press(r, 2, at(MIN))).rejects.toThrow(/names open/);
   });
 
   it("the NEXT round only: of several paired rounds the lowest is offered; once it opens, the next one is", async () => {
