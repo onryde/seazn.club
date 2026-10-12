@@ -96,7 +96,8 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { OpenRoundControl } from "@/components/v2/desk/open-round-control";
-import type { OpenRoundView } from "@/lib/open-round";
+import { isOnlineGameExists, type OpenRoundView } from "@/lib/open-round";
+import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
@@ -356,6 +357,9 @@ interface Props {
   /** T16 (D12) — the organiser's Open round control per stage (`listOpenRounds`), keyed by stage id. The page hands
    *  it down only while the club is offered online chess (an open STARTS play, T20); absent ⇒ no control. */
   openRounds?: Record<string, OpenRoundView[]>;
+  /** T16 (T19 carry) — where a refused Unpair / Rebuild sends the organiser when an online game stands behind a board
+   *  it would clear (409 ONLINE_GAME_EXISTS): the arbiter panel, which settles it. Null ⇒ the notice alone. */
+  arbiterHref?: string | null;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -465,7 +469,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -521,6 +525,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // (generic failure, red) — an amber, actionable "here's what to fix" state
   // so it's never confused with the "nothing new — up to date" success copy.
   const [warning, setWarning] = useState<string | null>(null);
+  // T16: a refused Unpair / Rebuild over a board an online game stands behind (OnlineGameExistsNotice).
+  const [gameExists, setGameExists] = useState(false);
   // Set after an inline reschedule lands: the notice grows an Undo button
   // that steps the division history back one event (Jul3/03).
   const [undoable, setUndoable] = useState(false);
@@ -599,6 +605,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
+    setGameExists(false);
     setBusy(stageId);
     try {
       if (action === "delete") {
@@ -661,7 +668,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
       } else {
-        if (action === "unpair") {
+        if (action === "unpair" && isOnlineGameExists(err)) {
+          setGameExists(true);
+        } else if (action === "unpair") {
           setError(msg("schedule.error.unpairFailed"));
         } else {
           // The stage list lets an early Generate on a waiting stage name
@@ -696,6 +705,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setPaywallFeature(null);
     setNotice(null);
     setWarning(null);
+    setGameExists(false);
     setBusy(stageId);
     try {
       const out = await apiV1<{ created: number; existing: number; removed: number }>(
@@ -714,7 +724,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // coverage) — so this is a real, reachable outcome, not just a
         // defence-in-depth 422 the UI never offers a button for.
         const blocked = rebuildBlockedMessage(err, msg);
-        if (blocked) {
+        if (isOnlineGameExists(err)) {
+          setGameExists(true);
+        } else if (blocked) {
           setWarning(blocked);
         } else {
           setError(err instanceof Error ? err.message : msg("schedule.error.failed"));
@@ -775,6 +787,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           {warning}
         </p>
       )}
+      {gameExists && <OnlineGameExistsNotice arbiterHref={arbiterHref} />}
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
           {error}

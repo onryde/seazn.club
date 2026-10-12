@@ -2062,8 +2062,10 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
  * refused 409 ONLINE_GAME_EXISTS when a game stands behind any of them: a
  * recorded challenge, or T9's `create_sent_at` marker (a create whose outcome
  * is unknown: a game MAY exist). Nothing is written before the refusal, and
- * the caller's transaction rolls back on it. The organiser voids the game
- * first (T16). Pre-review ruling + review M8, 2026-10-10.
+ * the caller's transaction rolls back on it. There is no void that unblocks
+ * it: the organiser settles the board in the arbiter panel (T16), which
+ * decides it, so the round stays paired. Pre-review ruling + review M8,
+ * 2026-10-10.
  *
  * Why each lock:
  *   - the fixtures FOR UPDATE: a bridge row T9 mints now (guard.ts
@@ -2088,7 +2090,7 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
   if (game) {
     throw new HttpError(
       409,
-      "An online game exists on a board this would clear. Void the game first, then try again.",
+      "An online game exists on a board this would clear, so it cannot be cleared. Settle that board in the arbiter panel.",
       ONLINE_GAME_EXISTS_CODE,
     );
   }

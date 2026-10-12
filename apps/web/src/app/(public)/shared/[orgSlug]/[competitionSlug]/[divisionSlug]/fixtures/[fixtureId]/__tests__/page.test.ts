@@ -761,3 +761,57 @@ describe("FixturePage JSON-LD — a held fixture (W2a)", () => {
     expect(await eventStatusOf("decided")).toBe("https://schema.org/EventCompleted");
   });
 });
+
+// T16 (controller ruling 2026-10-12) — the page is ISR: one HTML for every
+// viewer, so it carries no player's door. It mounts the "Your board" island
+// for a fixture of a division that plays online; the island asks the lobby
+// route after hydration (your-board*.test.tsx). The island is found on the
+// page's own tree (a static render of a client island is empty by design).
+describe("FixturePage — the 'Your board' island (T16)", () => {
+  function findAll(node: unknown, type: unknown, out: { props: Record<string, unknown> }[] = []) {
+    if (Array.isArray(node)) {
+      for (const c of node) findAll(c, type, out);
+      return out;
+    }
+    if (!isValidElement(node)) return out;
+    if (node.type === type) out.push(node as unknown as { props: Record<string, unknown> });
+    findAll((node.props as { children?: unknown }).children, type, out);
+    return out;
+  }
+  const renderDivision = async (division: Record<string, unknown>) => {
+    const data = baseData("en");
+    getPublicFixture.mockResolvedValue({ ...data, division: { ...data.division, ...division } });
+    useSearchParams.mockReturnValue(new URLSearchParams());
+    const { default: FixturePage } = await import("../page");
+    return FixturePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+  };
+
+  it("the empty case first: no island where nothing is played online — another sport, chess over the board", async () => {
+    const { YourBoard } = await import("@/components/public-site/your-board");
+    const cells: [string, Record<string, unknown>][] = [
+      ["generic sport", {}],
+      ["another sport claiming online play", { sport_key: "badminton", variant_key: "standard", config: { onlinePlay: "lichess" } }],
+      ["chess over the board", { sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "off" } }],
+      ["chess, no setting", { sport_key: "boardgame", variant_key: "chess", config: {} }],
+    ];
+    let checked = 0;
+    for (const [label, division] of cells) {
+      expect(findAll(await renderDivision(division), YourBoard), label).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(cells.length);
+  });
+
+  it("an online chess division mounts it once, for THIS fixture — and the shared HTML carries no room path and no Lichess link", async () => {
+    const { YourBoard } = await import("@/components/public-site/your-board");
+    const tree = await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } });
+    const found = findAll(tree, YourBoard);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.props.fixtureId).toBe("f1");
+    const html = renderToStaticMarkup(tree);
+    expect(html).not.toMatch(/="[^"]*\/fixtures\/f1\/play/);
+    expect(html).not.toContain("lichess.org");
+  });
+});

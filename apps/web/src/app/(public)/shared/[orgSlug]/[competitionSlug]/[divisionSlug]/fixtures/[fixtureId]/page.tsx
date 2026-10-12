@@ -28,6 +28,8 @@ import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { MatchCentreSubheading } from "./subheading";
 import { ExternalPlayCta } from "@/components/public-site/external-play-cta";
+import { YourBoard } from "@/components/public-site/your-board";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -396,6 +398,12 @@ export default async function FixturePage({ params }: Props) {
             </p>
           ) : null;
         })()}
+
+        {/* T16 — a player's door into their match room. This HTML is shared (ISR), so it carries no door: the
+            island asks the lobby route after hydration, and only one of the two players gets an answer. */}
+        {supportsOnlinePlay(data.division.sport_key) && readOnlinePlay(data.division.config) === "lichess" ? (
+          <YourBoard fixtureId={fixture.id} />
+        ) : null}
 
         {data.externalPlay && data.externalPlay.status !== "pending" ? (
           <ExternalPlayCta

@@ -15,33 +15,11 @@ import { HttpError } from "@/lib/errors";
 import { routes } from "@/lib/routes";
 import { loadOnlinePlayFixture } from "./guard";
 import { readRoom, type RoomDeps } from "./room";
+import type { ExternalPlayLobby, LobbyState } from "@/lib/external-play-lobby";
 
-/** What the door says. The empty case first: a club not offered online chess
- *  with no game started is its own state, with no room to go to — never a
- *  fall-through to a board. */
-export const LOBBY_STATES = [
-  "online_chess_off",
-  "not_opened",
-  "before",
-  "check_in",
-  "closed",
-  "playing",
-  "held",
-  "over",
-] as const;
-export type LobbyState = (typeof LOBBY_STATES)[number];
-
-export type ExternalPlayLobby =
-  | { state: "online_chess_off"; roomPath: null }
-  | {
-      state: Exclude<LobbyState, "online_chess_off">;
-      /** The player's own room (`routes.sharedFixturePlay`, no token — the
-       *  session is the identity there too). */
-      roomPath: string;
-      /** The round's window (D12), or nulls while it is unopened. */
-      opensAt: string | null;
-      deadline: string | null;
-    };
+// The states and the answer's shape are client-safe (lib/external-play-lobby.ts): the fixture page's "Your board"
+// island renders exactly this list.
+export { LOBBY_STATES, type ExternalPlayLobby, type LobbyState } from "@/lib/external-play-lobby";
 
 /**
  * The door for `userId` on `fixtureId`. Every failure is the room's own: a

@@ -176,7 +176,9 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt): string {
     case "resync_nothing":
       return f.t("arbiter.notice.resyncNothing");
     case "resync_failed":
-      return f.t("arbiter.notice.resyncFailed");
+      // A player's stored Lichess access that cannot be opened is an operator fault on our side (reconcile's 503,
+      // passed through by resyncExternalPlay): a retry does not fix it.
+      return n.code === "LICHESS_TOKEN_UNAVAILABLE" ? f.t("arbiter.notice.resyncTokenUnavailable") : f.t("arbiter.notice.resyncFailed");
     case "went_on":
       return n.stillOpen === 0 ? f.t("arbiter.notice.wentOn") : f.plural("arbiter.notice.wentOnNew", n.stillOpen);
     case "go_on_failed":
