@@ -79,8 +79,7 @@ import { isValidIana } from "../../lib/tz.ts";
 // D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
-import type { BoardErrorCode } from "../external-play/types.ts";
-import type { GrantRefusal } from "../usecases/external-play/preflight.ts";
+import type { BoardErrorCode, GrantRefusal } from "../external-play/types.ts";
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 // ---------------------------------------------------------------------------
