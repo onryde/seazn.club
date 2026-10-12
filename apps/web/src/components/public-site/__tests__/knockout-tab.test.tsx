@@ -879,17 +879,34 @@ describe("KnockoutTab — the champion banner", () => {
   it("empty case first: a played final's banner carries no tag", () => {
     expect(bannerOf(render(doneDoc("f1")))).not.toContain("mh-knockout-champion-forfeit");
   });
-  it("a final won by forfeit, every reason: the final's tag beside the line, named and titled by its sentence, once", () => {
+  // Design audit 3.6: (a) the tag rides only beside a line that names no reason — "Beat Dev" (a retirement, a
+  // disqualification). The walkover line already says "by walkover", so its "w/o" said it twice; a withdrawal shares the
+  // w/o tag and the walkover line (X-RS-2). (b) The banner is the dark court: the chip wears the on-court idiom (the
+  // court card's translucent amber), never the light pill. Both sides of (a) are counted.
+  it("a final won on a retirement or a disqualification: the final's tag beside 'Beat Dev', named by its sentence, once, on-court", () => {
     let checked = 0;
-    for (const kind of ["walkover", "withdrew", "retired", "disqualified"]) {
+    for (const kind of ["retired", "disqualified"]) {
       const banner = bannerOf(render(forfeitFinal(kind)));
       const chip = BANNER_CHIP.exec(banner);
       expect(chip, `${kind}: the banner's chip`).not.toBeNull();
       expect([chip![1], chip![2], chip![3]], kind).toEqual([esc("Dev — the sentence"), esc("Dev — the sentence"), kind === "retired" ? "ret." : "w/o"]);
       expect(banner.split("mh-knockout-champion-forfeit").length - 1, `${kind}: once`).toBe(1);
+      const cls = new Set((/data-testid="mh-knockout-champion-forfeit" class="([^"]*)"/.exec(banner)?.[1] ?? "").split(/\s+/u));
+      for (const token of ["rounded-full", "bg-amber-400/20", "text-amber-300"]) expect(cls.has(token), `${kind}: the on-court ${token}`).toBe(true);
+      for (const token of ["bg-zinc-100", "text-ink-muted"]) expect(cls.has(token), `${kind}: not the light pill's ${token}`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(2);
+  });
+  it("a final won by walkover or withdrawal: the line says 'by walkover', and no w/o tag repeats it", () => {
+    let checked = 0;
+    for (const kind of ["walkover", "withdrew"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      expect(banner, `${kind}: the walkover line`).toContain("by walkover");
+      expect(banner, `${kind}: no tag beside it`).not.toContain("mh-knockout-champion-forfeit");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {

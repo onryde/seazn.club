@@ -461,14 +461,18 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
             )}
-            {/* W2b T13 review (b): the line names no reason ("Beat Dev" stands for a retirement too), so the final's
-                own tag rides beside it — the same chip and sentence as its card. No id: the card's chip owns that. */}
-            {final.forfeit ? (
+            {/* W2b T13 review (b): where the line names no reason ("Beat Dev" stands for a retirement too), the final's
+                own tag rides beside it — the same chip and sentence as its card. No id: the card's chip owns that.
+                Design audit 3.6: (a) only there — the walkover line already says "by walkover", and its "w/o" tag
+                beside it said it twice (a withdrawal shares that tag, X-RS-2; the final's card keeps its sentence);
+                (b) in the on-court tone, the banner being the dark court. */}
+            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (
               <span className="ml-1.5 inline-block align-middle">
                 <ForfeitTagChip
                   tag={final.forfeit.tag}
                   sentence={final.forfeit.sentence}
                   testId="mh-knockout-champion-forfeit"
+                  tone="court"
                 />
               </span>
             ) : null}

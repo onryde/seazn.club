@@ -9,7 +9,26 @@
 // tile at 320 has no room for a second line (public-copy.html). `normal-case`: the tag is lowercase on purpose ("w/o"),
 // and some of its hosts are `uppercase` rows. Design audit 3.2: the public site's small neutral status tag is a pill —
 // the seed chip's shape in the seed chip's colours (`matches-hub/teams-tab.tsx`), so one kind of tag has one shape.
-export function ForfeitTagChip({ tag, sentence, testId, id }: { tag: string; sentence: string; testId?: string; id?: string }) {
+// Design audit 3.6(b): on the dark `bg-court` surfaces the same pill takes the on-court chip idiom (the court card's
+// `mc-strength`: a translucent amber, `match-centre/court-card.tsx`), never the light pill pasted onto the dark.
+const TONE = {
+  light: "bg-zinc-100 text-ink-muted",
+  court: "bg-amber-400/20 text-amber-300",
+} as const;
+
+export function ForfeitTagChip({
+  tag,
+  sentence,
+  testId,
+  id,
+  tone = "light",
+}: {
+  tag: string;
+  sentence: string;
+  testId?: string;
+  id?: string;
+  tone?: keyof typeof TONE;
+}) {
   return (
     <span
       id={id}
@@ -17,7 +36,7 @@ export function ForfeitTagChip({ tag, sentence, testId, id }: { tag: string; sen
       aria-label={sentence}
       title={sentence}
       data-testid={testId}
-      className="inline-block shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold normal-case leading-tight tracking-normal text-ink-muted"
+      className={`inline-block shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold normal-case leading-tight tracking-normal ${TONE[tone]}`}
     >
       {tag}
     </span>
