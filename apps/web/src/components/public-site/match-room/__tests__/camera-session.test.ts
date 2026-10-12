@@ -4,7 +4,7 @@
 // e2e's (with camera policy off the room never loads it — asserted there).
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { cameraSession, RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, type CameraView } from "../camera-session";
+import { cameraSession, RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS, type CameraView } from "../camera-session";
 import { D7GuardError, makeJoinOwnCamera, type MeetingLink, type OwnCamera } from "../camera-loader";
 import { fakeRealtimeKit, type FakeMeeting } from "./_fake-realtimekit";
 import { matchCameraOff } from "@/server/external-play/video/match-camera-off";
@@ -454,6 +454,7 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
     // Back from the give-up, a stop closes as any stop does: a fresh fault,
     // then the page goes while recovering ⇒ that second window is closed.
     second.fault();
+    await flush(1); // the queue: the new start is sent once the end has landed (M-3)
     expect(st.seen, "premise: a second window").toEqual(["start", "end", "start"]);
     await s.stop();
     expect(st.seen, "no longer given up: the stop closes it").toEqual(["start", "end", "start", "end"]);
@@ -514,6 +515,139 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
     expect(seen.gaveUp).toBeGreaterThan(0);
     expect(seen.lastChance, "a success on the LAST attempt is live").toBeGreaterThan(0);
     expect(seen.firstMiss, "a success one attempt too late is a give-up").toBeGreaterThan(0);
+  });
+});
+
+// T14 fix round 6, M-3: a stamp request that fails (the session's stamp
+// rejects — the shell maps a network error or a 5xx to a rejection) is sent
+// again on STAMP_RETRY_MS, bounded, through ONE serial queue: a start's retry
+// never lands after its end. A resolve (a 2xx, or a final 4xx) is delivered.
+describe("cameraSession — stamp delivery: retried on the declared ladder, serial (M-3)", () => {
+  const record = () => {
+    const views: CameraView[] = [];
+    return { views, emit: (v: CameraView) => void views.push(v), statuses: () => views.map((v) => v.status) };
+  };
+  const flush = async (n = 5) => {
+    for (let i = 0; i < n; i += 1) await new Promise((res) => setTimeout(res, 0));
+  };
+  /** A stamp that fails `fail[state]` times, then lands; every call recorded. */
+  function flakyStamp(fail: { start: number; end: number }) {
+    const calls: ("start" | "end")[] = [];
+    const left = { ...fail };
+    return {
+      calls,
+      stamp: async (state: "start" | "end") => {
+        calls.push(state);
+        if (left[state] > 0) {
+          left[state] -= 1;
+          throw new Error("network");
+        }
+      },
+    };
+  }
+  /** A camera that faults, then a re-join that holds at once. */
+  async function faultAndRecover(stamp: (s: "start" | "end") => Promise<void>, sleep: (ms: number) => Promise<void>) {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    let n = 0;
+    const join = async () => (n++ === 0 ? first.cam : fakeCamera(TRACK).cam);
+    const s = cameraSession(join, r.emit, { stamp, sleep });
+    await s.start("t");
+    first.fault();
+    return { r, s };
+  }
+  const stampWaits = (waits: number[]) => waits.filter((ms) => ms !== RECOVER_BACKOFF_MS[0]);
+
+  it("premise: the ladder is bounded, every wait is real, and none collides with the re-join's first (at once) wait", () => {
+    expect(STAMP_RETRY_MS.length).toBeGreaterThan(0);
+    for (const ms of STAMP_RETRY_MS) expect(ms).toBeGreaterThan(0);
+    expect(STAMP_RETRY_MS).not.toContain(RECOVER_BACKOFF_MS[0]);
+  });
+
+  it("rejects twice, then lands ⇒ three calls, the first two waits of the ladder; the end follows, once", async () => {
+    const st = flakyStamp({ start: 2, end: 0 });
+    const waits: number[] = [];
+    const { r, s } = await faultAndRecover(st.stamp, async (ms) => {
+      waits.push(ms);
+      await new Promise((res) => setTimeout(res, 0));
+    });
+    await flush(20);
+    expect(r.statuses().at(-1), "premise: back").toBe("live");
+    expect(st.calls).toEqual(["start", "start", "start", "end"]);
+    expect(stampWaits(waits)).toEqual([STAMP_RETRY_MS[0], STAMP_RETRY_MS[1]]);
+    await s.stop();
+  });
+
+  it("always failing ⇒ BOUNDED: 1 + the ladder's length attempts, the whole ladder once, then dropped; the end has its own budget; nothing more after", async () => {
+    const st = flakyStamp({ start: Infinity, end: Infinity });
+    const waits: number[] = [];
+    const { s } = await faultAndRecover(st.stamp, async (ms) => {
+      waits.push(ms);
+      await new Promise((res) => setTimeout(res, 0));
+    });
+    await flush(40);
+    const each = 1 + STAMP_RETRY_MS.length;
+    expect(st.calls).toEqual([...Array<"start">(each).fill("start"), ...Array<"end">(each).fill("end")]);
+    expect(stampWaits(waits)).toEqual([...STAMP_RETRY_MS, ...STAMP_RETRY_MS]);
+    await flush(40);
+    expect(st.calls, "dropped: no more").toHaveLength(2 * each);
+    await s.stop();
+  });
+
+  it("SERIAL: the end waits behind the start's pending retry — start before end, even when the camera is back first", async () => {
+    const st = flakyStamp({ start: 1, end: 0 });
+    const held: { ms: number; go: () => void }[] = [];
+    const { r, s } = await faultAndRecover(st.stamp, (ms) => new Promise<void>((go) => held.push({ ms, go })));
+    await flush(5);
+    const rejoinWait = held.find((h) => h.ms === RECOVER_BACKOFF_MS[0]);
+    const retryWait = held.find((h) => h.ms === STAMP_RETRY_MS[0]);
+    expect(rejoinWait && retryWait, "premise: both waits pending").toBeTruthy();
+    rejoinWait!.go();
+    await flush(5);
+    expect(r.statuses().at(-1), "premise: the camera is back").toBe("live");
+    expect(st.calls, "the end is queued behind the start's retry").toEqual(["start"]);
+    retryWait!.go();
+    await flush(5);
+    expect(st.calls).toEqual(["start", "start", "end"]);
+    await s.stop();
+  });
+
+  it("property: any failures on the start and the end — each sent min(k+1, 1+ladder) times, every start before every end, the waits the ladder's prefix", async () => {
+    const L = STAMP_RETRY_MS.length;
+    const seen = { startRetried: 0, startDropped: 0, lastChance: 0, firstDrop: 0, endRetried: 0, clean: 0 };
+    await fc.assert(
+      fc.asyncProperty(
+        fc.oneof(fc.constantFrom(L, L + 1), fc.integer({ min: 0, max: L + 2 })),
+        fc.oneof(fc.constantFrom(0, L), fc.integer({ min: 0, max: L + 2 })),
+        async (k1, k2) => {
+          const st = flakyStamp({ start: k1, end: k2 });
+          const waits: number[] = [];
+          const { s } = await faultAndRecover(st.stamp, async (ms) => {
+            waits.push(ms);
+            await new Promise((res) => setTimeout(res, 0));
+          });
+          const n1 = Math.min(k1 + 1, 1 + L);
+          const n2 = Math.min(k2 + 1, 1 + L);
+          for (let i = 0; i < 200 && st.calls.length < n1 + n2; i += 1) await flush(1);
+          await flush(10);
+          expect(st.calls).toEqual([...Array<"start">(n1).fill("start"), ...Array<"end">(n2).fill("end")]);
+          expect(stampWaits(waits)).toEqual([...STAMP_RETRY_MS.slice(0, n1 - 1), ...STAMP_RETRY_MS.slice(0, n2 - 1)]);
+          if (k1 === 0 && k2 === 0) seen.clean += 1;
+          if (k1 > 0 && k1 <= L) seen.startRetried += 1;
+          if (k1 > L) seen.startDropped += 1;
+          if (k1 === L) seen.lastChance += 1;
+          if (k1 === L + 1) seen.firstDrop += 1;
+          if (k2 > 0) seen.endRetried += 1;
+          await s.stop();
+        },
+      ),
+      { numRuns: 60 },
+    );
+    expect(seen.startRetried, "a start delivered after retries").toBeGreaterThan(0);
+    expect(seen.startDropped, "a start dropped past the ladder").toBeGreaterThan(0);
+    expect(seen.lastChance, "delivered on the LAST retry").toBeGreaterThan(0);
+    expect(seen.firstDrop, "one failure too many: dropped").toBeGreaterThan(0);
+    expect(seen.endRetried, "an end retried").toBeGreaterThan(0);
   });
 });
 

@@ -97,6 +97,15 @@ export function sendClockZero(fixtureId: string, token: string | null, f: Fetche
 
 /** Our guard's gap on the caller's own seat (I-1). `keepalive`: a page
  *  closing mid-recovery still closes the stamp it opened. */
+/** The stamp, for the camera session's queue (fix round 6, M-3): REJECTS when
+ *  the server may not have taken it — the network down (status 0) or a 5xx —
+ *  so the session sends it again; resolves on a 2xx or any 4xx (the cap's
+ *  429, a 404), which another send would only repeat. */
+export async function deliverCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch): Promise<void> {
+  const r = await sendCameraFault(fixtureId, token, body, f);
+  if (!r.ok && (r.status === 0 || r.status >= 500)) throw new Error(`camera-fault not delivered (${r.status})`);
+}
+
 export function sendCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch) {
   return call<{ open: boolean }>(f, roomApiPath(fixtureId, "/camera-fault", token), {
     method: "POST",

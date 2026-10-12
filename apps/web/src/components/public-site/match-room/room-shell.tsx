@@ -49,7 +49,7 @@ import { canMove, moveNotice, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
-import { sendCameraFault } from "./room-api";
+import { deliverCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
 import type { RoomGame, RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
@@ -135,7 +135,7 @@ export function RoomShell({
   const fixtureId = snap.fixtureId;
   const stamp = useCallback(
     (s: "start" | "end") =>
-      participantId === null ? Promise.resolve() : sendCameraFault(fixtureId, token, { state: s, participantId }),
+      participantId === null ? Promise.resolve() : deliverCameraFault(fixtureId, token, { state: s, participantId }),
     [participantId, fixtureId, token],
   );
   const camera = useOwnCamera(participantToken, joinOwnCamera, stamp);
