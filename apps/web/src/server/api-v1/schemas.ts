@@ -1398,6 +1398,20 @@ export const VideoOverrideInput = z.object({ note: z.string().trim().min(1).max(
 export type VideoOverrideInput = z.infer<typeof VideoOverrideInput>;
 export const VideoOverrideOut = z.object({ overridden: z.literal(true) });
 
+/** GET /fixtures/{id}/external-play/lobby (T16) — a signed-in player's door
+ *  into their match room. The states are lobby.ts's LOBBY_STATES (kept in
+ *  step by external-play-lobby-route.test.ts); `online_chess_off` carries no
+ *  path — nothing has started and the club is not offered online chess. */
+export const ExternalPlayLobbyOut = z.union([
+  z.object({ state: z.literal("online_chess_off"), roomPath: z.null() }),
+  z.object({
+    state: z.enum(["not_opened", "before", "check_in", "closed", "playing", "held", "over"]),
+    roomPath: z.string(),
+    opensAt: z.string().nullable(),
+    deadline: z.string().nullable(),
+  }),
+]);
+
 export const ResolveExternalPlay = z
   .object({
     kind: z.enum(["home_forfeit", "away_forfeit", "draw", "no_result"]),

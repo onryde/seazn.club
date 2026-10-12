@@ -362,11 +362,11 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/external-play/room/act",
   "POST /fixtures/:id/external-play/room/clock-zero",
   "POST /fixtures/:id/external-play/room/camera-fault",
-  // F2 (T14): shipped before the room and classified nowhere. The lobby is the
-  // pre-room seat surface (T16 deletes it); a resolve writes a result under
-  // organiser authority with a named user, which a key does not have.
+  // F2 (T14), T16: the lobby is a signed-in player's door into their room (it
+  // names a player's seat — the room read's reasoning); there is no POST, the
+  // check-in is the room's. A resolve writes a result under organiser
+  // authority with a named user, which a key does not have.
   "GET /fixtures/:id/external-play/lobby",
-  "POST /fixtures/:id/external-play/lobby",
   "POST /fixtures/:id/external-play/resolve",
   // T15 (design §5.3, D11): the arbiter's join hands out a token that WATCHES
   // players' cameras — a person's act, never a key's; the override's audit
