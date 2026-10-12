@@ -3,15 +3,18 @@
 // the non-tenant client — capture_records is RLS FORCEd with no policy (V437).
 //
 // What a record shows: its ref, time, slot and code id (never the tok — no tok is stored), its received / kept / dropped
-// counts, and its KEPT lines as rows of `at`, `kind`, `level`, `sid` and the other fields as `key=value`. A dropped line
-// cannot be shown: none is stored.
+// counts and how many of the dropped were bad lines (owner ruling RL), and its KEPT lines as rows of `at`, `kind`,
+// `level`, `sid` and the other fields as `key=value`. A dropped line cannot be shown: none is stored.
 import { sql } from "@/lib/db";
 import { CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
 
 export type AdminRecordLine = { at: string; kind: string; level: string | null; sid: string | null; fields: [key: string, value: string][] };
 export type AdminCaptureRecord = {
   id: string; ref: string; createdAt: Date; expiresAt: Date; slot: number; codeId: string; fixtureId: string; orgId: string;
-  received: number; kept: number; dropped: number; sessionIds: string[]; lines: AdminRecordLine[];
+  received: number; kept: number; dropped: number;
+  /** Owner ruling RL (2026-10-12): the BAD lines among the dropped (off the allow-list or its class, unreadable, or
+   *  secret-shaped) — a count only, so staff can spot a scrub leak. */
+  invalid: number; sessionIds: string[]; lines: AdminRecordLine[];
 };
 export type AdminFixtureRecords = {
   sessions: { id: string; state: string; createdAt: Date; records: AdminCaptureRecord[] }[];
@@ -48,16 +51,17 @@ function linesOf(recordId: string, text: string): AdminRecordLine[] {
 
 type Row = {
   id: string; ref: string; created_at: Date; expires_at: Date; slot: number; code_id: string; fixture_id: string; org_id: string;
-  received_lines: number; kept_lines: number; dropped_lines: number; lines: string; session_ids: string[];
+  received_lines: number; kept_lines: number; dropped_lines: number; invalid_lines: number; lines: string; session_ids: string[];
 };
 const toRecord = (r: Row): AdminCaptureRecord => ({
   id: r.id, ref: r.ref, createdAt: r.created_at, expiresAt: r.expires_at, slot: r.slot, codeId: r.code_id, fixtureId: r.fixture_id,
-  orgId: r.org_id, received: r.received_lines, kept: r.kept_lines, dropped: r.dropped_lines, sessionIds: r.session_ids,
+  orgId: r.org_id, received: r.received_lines, kept: r.kept_lines, dropped: r.dropped_lines, invalid: r.invalid_lines,
+  sessionIds: r.session_ids,
   lines: linesOf(r.id, r.lines),
 });
 const COLUMNS = sql`
   r.id, r.ref, r.created_at, r.expires_at, r.slot, r.code_id, r.fixture_id, r.org_id, r.received_lines, r.kept_lines,
-  r.dropped_lines, r.lines,
+  r.dropped_lines, r.invalid_lines, r.lines,
   coalesce((select array_agg(l.session_id::text order by l.session_id::text) from capture_record_sessions l where l.record_id = r.id), '{}') as session_ids`;
 
 /** §10: `/admin/capture-records?ref=` — the support path (operator → organiser → staff). */

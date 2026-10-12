@@ -23,6 +23,8 @@ export function CaptureRecordView({ record, dict }: { record: AdminCaptureRecord
         <Field label={t(dict, "admin.captureRecords.sentAt")} value={record.createdAt.toISOString()} />
         <Field label={t(dict, "admin.captureRecords.expiresAt")} value={record.expiresAt.toISOString()} />
         <Field label={t(dict, "admin.captureRecords.slot")} value={String(record.slot)} />
+        {/* Owner ruling RL (2026-10-12): the bad lines among the dropped, a count only — a scrub leak shows up here. */}
+        <Field label={t(dict, "admin.captureRecords.invalidLines")} value={String(record.invalid)} testId="capture-record-invalid" />
         <Field label={t(dict, "admin.captureRecords.codeId")} value={record.codeId} mono />
         <Field label={t(dict, "admin.captureRecords.fixtureId")} value={record.fixtureId} mono />
         <Field
@@ -65,11 +67,11 @@ export function CaptureRecordView({ record, dict }: { record: AdminCaptureRecord
   );
 }
 
-function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function Field({ label, value, mono = false, testId }: { label: string; value: string; mono?: boolean; testId?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className={`break-words text-slate-200 ${mono ? "font-mono text-xs" : ""}`}>{value}</dd>
+      <dd className={`break-words text-slate-200 ${mono ? "font-mono text-xs" : ""}`} data-testid={testId}>{value}</dd>
     </div>
   );
 }

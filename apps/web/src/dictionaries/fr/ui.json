@@ -5744,5 +5744,6 @@
   "admin.captureRecords.noneForSession": "Aucun journal ne nomme cette session.",
   "admin.captureRecords.unlinked": "Journaux qui ne nomment aucune session",
   "admin.captureRecords.noneForFixture": "Aucun journal de capture pour ce match.",
-  "admin.captureRecords.breadcrumb": "Admin"
+  "admin.captureRecords.breadcrumb": "Admin",
+  "admin.captureRecords.invalidLines": "Lignes invalides écartées (non conformes ou ressemblant à un secret)"
 }

@@ -5744,5 +5744,6 @@
   "admin.captureRecords.noneForSession": "Ningún registro nombra esta sesión.",
   "admin.captureRecords.unlinked": "Registros que no nombran ninguna sesión",
   "admin.captureRecords.noneForFixture": "No hay registros de captura para este partido.",
-  "admin.captureRecords.breadcrumb": "Admin"
+  "admin.captureRecords.breadcrumb": "Admin",
+  "admin.captureRecords.invalidLines": "Líneas no válidas descartadas (no conformes o con forma de secreto)"
 }

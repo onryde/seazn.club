@@ -66,11 +66,12 @@ describe.skipIf(!HAS_DB)("the staff reads (§10)", () => {
       { at: AT, kind: "thermal", message: foreign },                                      // before any pair: dropped
       { at: AT, kind: "pair", claim: "new", slot: 0, tokenTag: tokenTag(r.tok) },
       { at: AT, kind: "live", level: "warn", sid: S, transport: "srt", attempt: 2, ok: true },
+      { at: AT, kind: "x", battery: 1, message: foreign },                                // a bad line (ruling RL): dropped, counted apart
     ]), r.now());
     const unlinked = await postCaptureRecord(r.code, r.tok, post([{ at: AT, kind: "pair", claim: "new", slot: 0, tokenTag: tokenTag(r.tok) }]), r.now());
     const got = await captureRecordByRef(linked.ref.toLowerCase());
     const [{ code_id }] = await sql<{ code_id: string }[]>`select id as code_id from fixture_stream_codes where code = ${r.code}`;
-    expect(got).toMatchObject({ ref: linked.ref, slot: 0, codeId: code_id, fixtureId: r.fixtureId, orgId: r.auth.orgId, received: 3, kept: 2, dropped: 1, sessionIds: [S] });
+    expect(got).toMatchObject({ ref: linked.ref, slot: 0, codeId: code_id, fixtureId: r.fixtureId, orgId: r.auth.orgId, received: 4, kept: 2, dropped: 2, invalid: 1, sessionIds: [S] });
     expect(got!.lines).toEqual([
       { at: AT, kind: "pair", level: null, sid: null, fields: [["claim", "new"], ["slot", "0"], ["tokenTag", tokenTag(r.tok)]] },
       { at: AT, kind: "live", level: "warn", sid: S, fields: [["transport", "srt"], ["attempt", "2"], ["ok", "true"]] },
@@ -84,6 +85,6 @@ describe.skipIf(!HAS_DB)("the staff reads (§10)", () => {
   it("a record whose every line was dropped reads with kept 0 and no lines (P10)", async () => {
     const r = await captureRig();
     const all = await postCaptureRecord(r.code, r.tok, post([{ at: AT, kind: "thermal" }]), r.now());
-    expect(await captureRecordByRef(all.ref)).toMatchObject({ kept: 0, dropped: 1, lines: [], sessionIds: [] });
+    expect(await captureRecordByRef(all.ref)).toMatchObject({ kept: 0, dropped: 1, invalid: 0, lines: [], sessionIds: [] });
   });
 });

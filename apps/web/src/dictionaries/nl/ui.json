@@ -5744,5 +5744,6 @@
   "admin.captureRecords.noneForSession": "Geen logboek noemt deze sessie.",
   "admin.captureRecords.unlinked": "Logboeken die geen sessie noemen",
   "admin.captureRecords.noneForFixture": "Geen capture-logboek voor deze wedstrijd.",
-  "admin.captureRecords.breadcrumb": "Admin"
+  "admin.captureRecords.breadcrumb": "Admin",
+  "admin.captureRecords.invalidLines": "Ongeldige regels weggelaten (niet conform of geheim-achtig)"
 }

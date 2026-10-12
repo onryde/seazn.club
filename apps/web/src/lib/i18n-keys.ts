@@ -61,6 +61,7 @@ export type DictionaryKey =
   | "admin.captureRecords.fixtureId"
   | "admin.captureRecords.fixtureSection"
   | "admin.captureRecords.intro"
+  | "admin.captureRecords.invalidLines"
   | "admin.captureRecords.lookUp"
   | "admin.captureRecords.nav"
   | "admin.captureRecords.noLines"

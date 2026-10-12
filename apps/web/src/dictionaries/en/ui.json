@@ -5744,5 +5744,6 @@
   "admin.captureRecords.noneForSession": "No record names this session.",
   "admin.captureRecords.unlinked": "Records that name no session",
   "admin.captureRecords.noneForFixture": "No capture record for this fixture.",
-  "admin.captureRecords.breadcrumb": "Admin"
+  "admin.captureRecords.breadcrumb": "Admin",
+  "admin.captureRecords.invalidLines": "Bad lines dropped (invalid or secret-shaped)"
 }
