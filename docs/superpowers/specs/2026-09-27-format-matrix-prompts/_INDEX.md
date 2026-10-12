@@ -1325,6 +1325,18 @@ Elsewhere the text is the controller's record.
        (colours) and the chess in-page programme (feat/chess-lichess-external-play) finish first. The chess
        programme's only part is a time control per fixture or per round for online games.
      - **W2b:** builds none of it.
+120. **An abandon counts as a match played only if something was played** (2026-10-12, owner "A", given after my
+     recommendation A). Found in the R115 M3 fix: the stats reader had counted every abandon as a match, including
+     one with no result and no score. No signed row covered the case. Example: cricket started, then rain before the
+     first ball.
+     - **The rule:** an abandon counts as a match played in player stats only if `playRecorded` is true before it.
+       That is the same test used for forfeits (rulings 112–115): any active sport event after `core.start`, scoring
+       or not (ruling 114). In chess, Start itself counts (ruling 118).
+     - **Nothing played:** nobody's stats get a match, whatever the abandon's result or settle.
+     - **Something played:** X-PS-2 applies, as before.
+     - **Why:** one rule everywhere, so a player's record never shows a match nobody played. It also matches cricket,
+       where a match abandoned without a ball bowled does not count in players' records.
+     - **Amends** X-PS-2 and X-AB-1 (stats clause only). Table and standings treatment is unchanged.
 
 ## Recommendations (mine — not rulings)
 
