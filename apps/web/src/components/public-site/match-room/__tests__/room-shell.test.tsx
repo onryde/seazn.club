@@ -166,13 +166,13 @@ describe("the room's first paint", () => {
     expect(html).not.toContain("½");
   });
 
-  it("every state card paints for its snapshot (cards 1, 5, 6; seams A and B)", () => {
+  it("every state card paints for its snapshot (cards 1, 5, 6; states A and B, drawn 2026-10-12)", () => {
     const cases: [Partial<RoomSnapshot>, string, string][] = [
       [{ phase: "not_opened" }, "notOpened", "room-state-not-opened"],
       [{ creation: { state: "creating" } }, "creating", "room-state-creating"],
       [{ phase: "closed" }, "closed", "room-state-closed"],
-      [{ frozen: "you", game: GAME }, "revoked", "room-seam-revoked"],
-      [{ onlineChessOff: true }, "offForClub", "room-seam-off-for-club"],
+      [{ frozen: "you", game: GAME }, "revoked", "room-revoked"],
+      [{ onlineChessOff: true }, "offForClub", "room-off-for-club"],
     ];
     for (const [over, screen, id] of cases) {
       const html = paint(snap(over));

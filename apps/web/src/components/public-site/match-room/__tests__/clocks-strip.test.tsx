@@ -41,6 +41,28 @@ describe("ClocksStrip", () => {
     expect(mutedFaces(live)).toBe(0);
   });
 
+  it("Seam A, your seat on hold: your card reads Seat on hold (phone) / White · seat on hold (desktop), is never the active one even on your turn — and the clocks are NOT muted (they still run on Lichess)", () => {
+    const mutedFaces = (h: string) => [...h.matchAll(/<span class="font-display[^"]*text-\[#6b5b8a\]/g)].length;
+    let checked = 0;
+    for (const turn of ["white", "black"] as const) {
+      const html = renderToStaticMarkup(<ClocksStrip you={you} opponent={opponent} turn={turn} over={false} seatOnHold t={t} />);
+      expect(html, turn).toMatch(/data-testid="room-clock-you"[^>]*data-active="false"/);
+      // The opponent's seat is not on hold: their turn is still theirs.
+      expect(html, turn).toMatch(new RegExp(`data-testid="room-clock-opponent"[^>]*data-active="${turn === "black"}"`));
+      expect(html, turn).toContain('<span class="md:hidden">externalPlay.room.seatOnHold</span>');
+      expect(html, turn).toContain('<span class="max-md:hidden">externalPlay.room.colourSeatOnHold(colour=externalPlay.room.colour.white)</span>');
+      expect(html, `${turn}: never "your move" on a seat on hold`).not.toContain("externalPlay.room.yourMove");
+      expect(html, `${turn}: never "your move" on a seat on hold`).not.toContain("externalPlay.room.colourYourMove");
+      expect(mutedFaces(html), turn).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    // The pair: the same board with the seat NOT on hold says your move.
+    const live = renderToStaticMarkup(<ClocksStrip you={you} opponent={opponent} turn="white" over={false} t={t} />);
+    expect(live).toContain("externalPlay.room.yourMove");
+    expect(live).not.toContain("externalPlay.room.seatOnHold");
+  });
+
   it("time trouble shows tenths, and zero is 0:00.0 (clock-math's face)", () => {
     const html = renderToStaticMarkup(
       <ClocksStrip you={{ ...you, ms: 7_400 }} opponent={{ ...opponent, ms: 0 }} turn="white" over={false} t={t} />,

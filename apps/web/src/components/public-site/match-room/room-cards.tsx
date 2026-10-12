@@ -294,3 +294,136 @@ export function CameraOffBanner({ onEnable, t }: { onEnable: () => void; t: Room
     </div>
   );
 }
+
+// ── Seams A, B and C (owner-approved canvas, "Room states", 2026-10-12) ──
+
+/** The canvas's line icons for the room states (24-unit grid, stroke 2). */
+function LineIcon({ size, colour, className, children }: { size: number; colour: string; className?: string; children: React.ReactNode }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={colour}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={className}
+    >
+      {children}
+    </svg>
+  );
+}
+const INFO = (
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5" />
+    <path d="M12 8h.01" />
+  </>
+);
+const OFFLINE = (
+  <>
+    <path d="M2 2l20 20" />
+    <path d="M8.5 16.5a5 5 0 0 1 7 0" />
+    <path d="M5 12.9a10 10 0 0 1 5.2-2.8" />
+    <path d="M19 12.9a10 10 0 0 0-2.3-1.6" />
+    <path d="M12 20h.01" />
+  </>
+);
+const RESTORED = (
+  <>
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+    <path d="M3 3v5h5" />
+  </>
+);
+
+/** A · Your Lichess link was revoked: the amber notice with the one thing
+ *  that is the player's to do — link Lichess again. */
+export function RevokedNotice({ relinkHref, t }: { relinkHref: string; t: RoomT }) {
+  return (
+    <div
+      data-testid="room-revoked-notice"
+      role="status"
+      className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:gap-2 md:p-3.5"
+    >
+      <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.title")}</span>
+      <span className="text-[13px] leading-[1.45] md:text-sm">{t("externalPlay.room.state.revoked.body")}</span>
+      <a
+        href={relinkHref}
+        data-testid="room-revoked-relink"
+        className="mt-1 flex min-h-11 items-center justify-center rounded-[10px] bg-[#713f12] px-4 text-[15px] font-semibold text-white no-underline"
+      >
+        {t("externalPlay.room.state.revoked.relink")}
+      </a>
+    </div>
+  );
+}
+
+/** The room's way back to the fixture, as a full button (A, B). */
+export function BackToFixture({ href, className = "", t }: { href: string; className?: string; t: RoomT }) {
+  return (
+    <Link href={href} className={`${OUTLINE} ${className}`} data-testid="room-back-to-fixture">
+      {t("externalPlay.room.backToFixture")}
+    </Link>
+  );
+}
+
+/** B · Online chess off: one calm white card — no board, camera or clocks. */
+export function OffForClubCard({ fixtureHref, t }: { fixtureHref: string; t: RoomT }) {
+  return (
+    <section
+      data-testid="room-off-for-club"
+      className="mx-auto mt-1 flex w-full min-w-0 max-w-[520px] flex-col gap-2.5 rounded-[14px] border border-[#e7e3f3] bg-white p-4 text-[#2e1065] md:mt-12 md:gap-3 md:p-7"
+    >
+      <LineIcon size={28} colour="#7c3aed" className="md:h-8 md:w-8">
+        {INFO}
+      </LineIcon>
+      <h1 className="m-0 text-[17px] font-semibold leading-[1.35] md:text-xl">{t("externalPlay.room.state.offForClub.title")}</h1>
+      <p className="m-0 text-sm leading-[1.45] text-[#4a3a6b] md:text-[15px] md:leading-normal">{t("externalPlay.room.state.offForClub.body")}</p>
+      <BackToFixture href={fixtureHref} className="mt-1.5 md:mt-2 md:min-w-[200px] md:self-start" t={t} />
+    </section>
+  );
+}
+
+/** C1–C3 · The live room's move notices: offline and refused in amber, an
+ *  invalid move as the purple inline line. `className` places it (order). */
+export function MoveNoticeView({ kind, className = "", t }: { kind: "offline" | "refused" | "invalid"; className?: string; t: RoomT }) {
+  if (kind === "invalid") {
+    return (
+      <p
+        data-testid="room-move-notice"
+        data-kind="invalid"
+        role="status"
+        className={`m-0 flex min-h-9 min-w-0 items-center gap-2 rounded-[10px] bg-[#f3effc] px-3 py-2 text-[13px] leading-[1.4] text-[#4a3a6b] ${className}`}
+      >
+        <LineIcon size={16} colour="#5b21b6" className="shrink-0">
+          {INFO}
+        </LineIcon>
+        <span className="min-w-0">{t("externalPlay.room.notice.invalid")}</span>
+      </p>
+    );
+  }
+  const offline = kind === "offline";
+  return (
+    <div
+      data-testid="room-move-notice"
+      data-kind={kind}
+      role="status"
+      className={`flex min-w-0 items-start gap-2.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] px-3 py-2.5 text-[#713f12] ${className}`}
+    >
+      <LineIcon size={18} colour="#713f12" className="mt-px shrink-0">
+        {offline ? OFFLINE : RESTORED}
+      </LineIcon>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-sm font-semibold leading-[1.35]">
+          {t(offline ? "externalPlay.room.notice.offline.title" : "externalPlay.room.notice.refused.title")}
+        </span>
+        <span className="text-[13px] leading-[1.4]">
+          {t(offline ? "externalPlay.room.notice.offline.body" : "externalPlay.room.notice.refused.body")}
+        </span>
+      </div>
+    </div>
+  );
+}

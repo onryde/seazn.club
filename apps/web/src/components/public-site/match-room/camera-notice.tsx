@@ -4,10 +4,11 @@
 // (controller ruling, T14 review I3).
 import type { RoomT } from "./room-copy";
 
-export function CameraNotice({ t }: { t: RoomT }) {
+export function CameraNotice({ onHold = false, t }: { onHold?: boolean; t: RoomT }) {
   return (
     <p data-testid="room-camera-notice" className="m-0 text-xs leading-[1.45] text-[#6b5b8a]">
-      {t("onlineChess.camera.playerNotice")}
+      {/* Seam A: the duty holds while the seat is on hold, in its own words. */}
+      {t(onHold ? "externalPlay.room.state.revoked.cameraNotice" : "onlineChess.camera.playerNotice")}
     </p>
   );
 }
