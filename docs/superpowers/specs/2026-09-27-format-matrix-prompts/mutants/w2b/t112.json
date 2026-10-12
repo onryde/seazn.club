@@ -1281,5 +1281,35 @@
     "name": "card, /me stats and /me career"
    }
   ]
+ },
+ {
+  "id": "m1-no-claim-when-the-check-runs",
+  "file": "apps/web/src/server/usecases/player-stats-refresh.ts",
+  "find": "    for (const { key } of due) remember(lastChecked, key, now);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-refresh.test.ts"
+    ],
+    "name": "a burst of reads checks once and queues one refresh"
+   }
+  ]
+ },
+ {
+  "id": "m1-claim-when-the-read-registers",
+  "file": "apps/web/src/server/usecases/player-stats-refresh.ts",
+  "find": "  if (dueAt(Date.now()).length === 0) return;\n  deferred(async () => {\n    // The claim is made here, as the check runs, and not when the read registered it (R115 review M1).\n    const now = Date.now();\n    const due = dueAt(now);\n    if (due.length === 0) return;\n    for (const { key } of due) remember(lastChecked, key, now);\n",
+  "replace": "  const now = Date.now();\n  const due = dueAt(now);\n  if (due.length === 0) return;\n  for (const { key } of due) remember(lastChecked, key, now);\n  deferred(async () => {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-refresh-after.test.ts"
+    ],
+    "name": "an ISR regeneration of the public player card registers its check, which never runs and claims nothing"
+   }
+  ]
  }
 ]

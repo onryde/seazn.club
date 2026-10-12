@@ -174,9 +174,10 @@ export function schedulePlayerStatsRefresh(orgId: string, target: Target): void 
   });
 }
 
-/** When each division's read-side check was last registered (ms). Doubles as
- *  the in-flight marker: a check whose `after()` never runs (a response that
- *  never closed) frees its division when the interval passes. */
+/** When each division's read-side check last ran (ms). Claimed when the check
+ *  RUNS, after the response, never when a read registers it: a check whose
+ *  `after()` never runs (an ISR regeneration, a response that never closed)
+ *  claims nothing, so it blocks no later read's check (R115 review M1). */
 const lastChecked = new Map<string, number>();
 /** Divisions whose read-queued refresh failed or gave up: until when (ms), and
  *  how many times in a row. */
@@ -231,13 +232,24 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
  *  an `after()` registered there never runs (final review I1), and one
  *  registered inside a cache scope cannot clear the ISR tags (m7).
  *
+ *  One exception, the public player card (`getPublicPlayer`, W2b R115-4): it
+ *  asks from its ISR page render, outside its cached entry, because no route
+ *  serves its tiles. A render that answers a request (a cold or expired entry)
+ *  runs the check after that response; a background regeneration registers it
+ *  and it never runs. That costs nothing, because the throttle is claimed only
+ *  when a check runs (R115 review M1). A refold the card's own check queues
+ *  cannot clear the ISR tags from that scope (m7), so the card shows it at its
+ *  next regeneration.
+ *
  *  Costs the read a map lookup per division. The check is 3–4 queries in one
  *  transaction after the response (the division row, the fold record, the
  *  per-fixture ledger aggregate, and the inputs md5 when the ledger is not
  *  already owed): about 50 ms on a 105-fixture T20 division of 26k events,
  *  30 ms when the ledger already owes. Bounded (final review I2):
- *  - once per division per `minIntervalMs`, a burst of reads included; the
- *    same window frees a division whose registered check never ran;
+ *  - once per division per `minIntervalMs`, a burst of reads included: a read
+ *    registers no check for a division checked inside the window, and of the
+ *    checks a burst registered, the first to run claims the division and the
+ *    rest skip it. A registered check that never runs claims nothing;
  *  - `reconcileCheckCap()` checks at once across the process (a fifth of the
  *    DB pool: 2 of production's 12, 1 of the default 5); one that finds no
  *    slot is dropped and forgotten, so the next read of that division checks
@@ -262,19 +274,25 @@ export function reconcilePlayerStatsOnRead(
   divisionIds: string | readonly string[],
   opts: { allowed?: () => Promise<boolean> } = {},
 ): void {
-  const now = Date.now();
-  const due: Array<{ divisionId: string; key: string }> = [];
-  for (const divisionId of typeof divisionIds === "string" ? [divisionIds] : divisionIds) {
-    const key = divisionId.toLowerCase();
-    const last = lastChecked.get(key);
-    if (last !== undefined && now - last < RECONCILE_POLICY.minIntervalMs) continue;
-    const quiet = quietUntil.get(key);
-    if (quiet !== undefined && now < quiet.until) continue;
-    remember(lastChecked, key, now);
-    due.push({ divisionId, key });
-  }
-  if (due.length === 0) return;
+  const asked = (typeof divisionIds === "string" ? [divisionIds] : divisionIds).map((divisionId) => ({
+    divisionId,
+    key: divisionId.toLowerCase(),
+  }));
+  /** The asked divisions neither checked inside the window nor quiet, at `at`. */
+  const dueAt = (at: number) =>
+    asked.filter(({ key }) => {
+      const last = lastChecked.get(key);
+      if (last !== undefined && at - last < RECONCILE_POLICY.minIntervalMs) return false;
+      const quiet = quietUntil.get(key);
+      return quiet === undefined || at >= quiet.until;
+    });
+  if (dueAt(Date.now()).length === 0) return;
   deferred(async () => {
+    // The claim is made here, as the check runs, and not when the read registered it (R115 review M1).
+    const now = Date.now();
+    const due = dueAt(now);
+    if (due.length === 0) return;
+    for (const { key } of due) remember(lastChecked, key, now);
     try {
       if (opts.allowed !== undefined && !(await opts.allowed())) return;
     } catch (err) {

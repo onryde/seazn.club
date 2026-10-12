@@ -1267,10 +1267,13 @@ describe.skipIf(!HAS_DB)("a refresh lost to a restart heals on the next stats re
       probe.folds = 0;
       probe.tryLocks = 0;
       logMock.info.mockClear();
+      probe.checked.length = 0;
       await publicRead(s);
       await hub(s);
-      expect(probe.tasks, "one check per division in flight").toHaveLength(1);
+      // Each read registers its check: the throttle is claimed when a check RUNS (R115 review M1).
+      expect(probe.tasks, "each read registers its check").toHaveLength(2);
       await runAfterResponse();
+      expect(probe.checked, "the first check to run claims the division; the second skips it").toEqual([s.divisionId]);
       expect(queuedFor(s.divisionId)).toEqual([]);
       expect(probe.tryLocks, "no refresh was queued").toBe(0);
       expect(probe.folds).toBe(0);
@@ -1392,13 +1395,18 @@ describe.skipIf(!HAS_DB)("a refresh lost to a restart heals on the next stats re
     const s = await scene();
     await lostResult(s, "Reds", "Blues", s.ada);
     probe.folds = 0;
+    probe.checked.length = 0;
     await Promise.all([publicRead(s), publicRead(s), publicRead(s), hub(s), publicRead(s), hub(s)]);
-    expect(probe.tasks).toHaveLength(1);
+    // Every read of the burst registers its check, since none has run yet to claim the division (R115 review M1)...
+    expect(probe.tasks, "one registration per read").toHaveLength(6);
     await runAfterResponse();
+    // ...and the first to run claims it: one check, one refresh.
+    expect(probe.checked, "one check ran").toEqual([s.divisionId]);
     expect(queuedFor(s.divisionId)).toHaveLength(1);
     expect(probe.folds).toBe(1);
-    // Behind again only once something moves: the next reads queue nothing.
+    // Behind again only once something moves: the next reads register nothing (the division was checked this minute).
     await Promise.all([publicRead(s), hub(s)]);
+    expect(probe.tasks, "no registration inside the minute").toHaveLength(0);
     await runAfterResponse();
     expect(queuedFor(s.divisionId)).toHaveLength(1);
     expect(probe.folds).toBe(1);

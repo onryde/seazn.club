@@ -1540,8 +1540,10 @@ export async function getPublicPlayer(
   // of the divisions this person plays in: the ones a roster or a lineup seats
   // them in, the only ones a snapshot row of theirs can come from. Read off the
   // list above, so no statement is added. The check runs after the response,
-  // at most once a minute per division and within a share of the DB pool. It
-  // never folds on this request: a snapshot that is behind (an older
+  // at most once a minute per division and within a share of the DB pool; a
+  // background regeneration registers it but never runs it, which claims no
+  // throttle slot (R115 review M1, `reconcilePlayerStatsOnRead`'s card
+  // exception). It never folds on this request: a snapshot that is behind (an older
   // `STATS_FOLD_VERSION`, R115-2) is refolded in the background. The refold
   // this card's own check runs cannot clear the ISR tags (it runs inside this
   // page's cache scope; the refresh logs "the ISR tags could not be cleared
