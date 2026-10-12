@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll } from "./helpers";
+import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 
 // W2b Task 13 (spec §5.5, UI-2 option A; X-RS-2, X-DW-1) — a credited result says which one, on every public surface:
@@ -423,6 +423,22 @@ test.describe("W2b — a credited result says which one, on every public surface
   });
 });
 
+/** A knockout whose final waits on SF2 with SF1's winner gone from it: `depart` empties her seat (R116-3, R116-4). */
+async function deadSeatKnockout(request: APIRequestContext, depart: (her: string) => Promise<void>) {
+  const ko = await publicKnockout(request);
+  const [sf1, sf2] = ko.semis;
+  const her = sf1!.home_entrant_id!;
+  await depart(her);
+  await post(request, sf1!.id, "core.forfeit", { by: sf1!.away_entrant_id, reason: "walkover" });
+  return { ko, sf2: sf2!, her };
+}
+/** SF2's winner arrives in the final, walking it over. */
+async function arriveInFinal(request: APIRequestContext, ko: Awaited<ReturnType<typeof publicKnockout>>, sf2: Fx) {
+  await post(request, sf2.id, "core.forfeit", { by: sf2.away_entrant_id, reason: "walkover" });
+  await expect.poll(async () => (await read(request, ko.final.id)).status, { timeout: STEP_MS }).toBe("forfeited");
+  return read(request, ko.final.id);
+}
+
 // R116-3 (W2b Task 16; owner ruling 116): the ORGANISER's surfaces — the division's run sheet (`?tab=fixtures`) and the
 // bracket panel above it — read the same tie as a walkover naming her in her seat, never "{name} has a bye" and never
 // the bye label. The positive pair is the same locator before the arrival, where her dead seat reads the bye word; and a
@@ -439,20 +455,8 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     // of this draw's names holds the letters, so the bare word is the probe.
     const BYE = new RegExp(bye, "i");
 
-    /** A knockout whose final waits on SF2 with SF1's winner gone from it: `depart` empties her seat. */
-    const deadSeatFinal = async (depart: (her: string) => Promise<void>) => {
-      const ko = await publicKnockout(request);
-      const [sf1, sf2] = ko.semis;
-      const her = sf1!.home_entrant_id!;
-      await depart(her);
-      await post(request, sf1!.id, "core.forfeit", { by: sf1!.away_entrant_id, reason: "walkover" });
-      return { ko, sf2: sf2!, her };
-    };
-    const arrive = async (ko: Awaited<ReturnType<typeof publicKnockout>>, sf2: Fx) => {
-      await post(request, sf2.id, "core.forfeit", { by: sf2.away_entrant_id, reason: "walkover" });
-      await expect.poll(async () => (await read(request, ko.final.id)).status, { timeout: STEP_MS }).toBe("forfeited");
-      return read(request, ko.final.id);
-    };
+    const deadSeatFinal = (depart: (her: string) => Promise<void>) => deadSeatKnockout(request, depart);
+    const arrive = (ko: Awaited<ReturnType<typeof publicKnockout>>, sf2: Fx) => arriveInFinal(request, ko, sf2);
     const surfaces = (no: number) => ({
       row: page.getByTestId("run-sheet").locator(`li[data-fixture-no="${no}"]`),
       byeRows: page.getByTestId("run-sheet").getByTestId("run-sheet-bye"),
@@ -522,5 +526,159 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     await expect(d.node, "and never prints her").not.toContainText(dqName);
     console.log(`R116-3 DQ run sheet: ${(await dqBye.innerText()).replace(/\s+/g, " ").trim()}`);
     console.log(`R116-3 DQ bracket node: ${(await d.node.innerText()).replace(/\s+/g, " ").trim()}`);
+  });
+});
+
+// R116-4 (W2b Task 16; owner ruling 116): the organiser surfaces R116-3 left — the fixture console every run-sheet row
+// links to (`/f/{no}`), the schedule board's card and the officials tab's fixture list — name her in her seat, never the
+// bye word ("Bye vs Bears of Brockley · forfeited" was the console's header). The positive pairs: before the arrival her
+// dead seat reads the bye word on the console and the officials list, and the board card names its feeder; a DQ'd
+// winner's dead seat (the award names nobody) keeps exactly that after the arrival too, and never prints her.
+test.describe("W2b R116-4 — the organiser's console, board card and officials list name ruling 116's withdrawn winner", () => {
+  test("her name in her seat on the fixture console, the board card and the officials list at 1280/768/320; a DQ'd winner's dead seat names nobody", async ({ page, request }) => {
+    test.setTimeout(6 * 60_000);
+    await activeOrg(page);
+    const UI = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const bye = UI["bracket.slot.bye"]!;
+    const [densityAria, densityBoard] = [UI["board.densityAria"]!, UI["board.density.board"]!];
+    expect([bye, densityAria, densityBoard].every(Boolean), "ui.json's words").toBe(true);
+    // Glued seat text (innerText "ByevsWinner of …"): no word boundary, and no name in this draw holds the letters.
+    const BYE = new RegExp(bye, "i");
+    const quote = async (at: Locator) => (await at.innerText()).replace(/\s+/g, " ").trim();
+
+    const surfaces = async (divId: string, finalId: string, no: number) => {
+      const consoleUrl = await divisionPath(request, divId, `/f/${no}`);
+      const boardUrl = await divisionPath(request, divId, "/schedule?tab=board");
+      const officialsUrl = await divisionPath(request, divId, "/schedule?tab=officials");
+      const header = page.locator("header.card h1").first();
+      const card = page.locator(`[data-fixture-id="${finalId}"]`).first();
+      const open = async (url: string) => {
+        await page.goto(url);
+        await dismissCookieBanner(page);
+      };
+      /** The board on its Board density: a phone opens on Agenda (board-held-card.spec.ts). */
+      const openBoard = async () => {
+        await open(boardUrl);
+        const density = page.getByRole("group", { name: densityAria }).getByRole("button", { name: densityBoard, exact: true });
+        if (await density.isVisible()) {
+          await density.click();
+          await expect(density).toHaveAttribute("aria-pressed", "true");
+        }
+        await expect(card, "the board shows the final's card").toBeVisible({ timeout: STEP_MS });
+      };
+      return { header, card, consoleUrl, officialsUrl, open, openBoard };
+    };
+    /** The board draws a settled tie only where it was PLACED (a held card, board-held-card.spec.ts); the tray lists
+     *  unplayed fixtures alone. So each rig's final is placed on a court before it is walked over. */
+    const placeFinal = async (divId: string, finalId: string) => {
+      const { courts } = await seedVenueWithCourts(request, ["Court 1"]);
+      const startAt = new Date(Date.UTC(2030, 5, 1, 9, 0)).toISOString();
+      const settings = await apiJson(request, `/api/v1/divisions/${divId}/schedule-settings`, "PUT", {
+        tz: "UTC",
+        config: { startAt, matchMinutes: 30, gapMinutes: 0, courts: [courts[0]!.id], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+      });
+      expect(settings.status, JSON.stringify(settings.error)).toBe(200);
+      const placed = await apiJson(request, `/api/v1/fixtures/${finalId}`, "PATCH", { scheduled_at: startAt, court_id: courts[0]!.id });
+      expect(placed.status, `place the final: ${JSON.stringify(placed.error)}`).toBe(200);
+    };
+    /** The officials list's row for the final: the one whose label names both of `names`. */
+    const officialsRow = (...names: (string | RegExp)[]) =>
+      names.reduce((rows: Locator, n) => rows.filter({ hasText: n }), page.locator("table tbody tr"));
+
+    // Ruling 116's tie, as R116-3 builds it: SF1's winner reaches the final and withdraws, SF2's winner arrives.
+    const w = await deadSeatKnockout(request, async () => {});
+    await expect.poll(async () => { const f = await read(request, w.ko.final.id); return [f.home_entrant_id, f.away_entrant_id].includes(w.her); }, { timeout: STEP_MS }).toBe(true);
+    const withdrew = await apiJson(request, `/api/v1/entrants/${w.her}/withdraw`, "POST");
+    expect(withdrew.status, JSON.stringify(withdrew.error)).toBeLessThan(300);
+    const herName = w.ko.nameOf.get(w.her)!;
+    expect([...w.ko.nameOf.values()].filter((x) => BYE.test(x)), "premise: no name holds the bye word's letters").toEqual([]);
+    await placeFinal(w.ko.divId, w.ko.final.id);
+    const s = await surfaces(w.ko.divId, w.ko.final.id, w.ko.final.fixture_no);
+
+    // Before the arrival: the console and the officials list read the bye word in her dead seat; the board card its
+    // feeder. None names her.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await s.open(s.consoleUrl);
+    await expect(s.header, "before: the console's header reads the bye word in her seat").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
+    await expect(s.header, "before: and never her").not.toContainText(herName);
+    console.log(`R116-4 before, console header: ${await quote(s.header)}`);
+    await s.openBoard();
+    const cardBefore = await quote(s.card);
+    expect(cardBefore, "before: the board card does not name her").not.toContain(herName);
+    console.log(`R116-4 before, board card: ${cardBefore}`);
+    await s.open(s.officialsUrl);
+    await expect(officialsRow(BYE), "before: the officials list reads the bye word for the final").toHaveCount(1, { timeout: STEP_MS });
+    console.log(`R116-4 before, officials row: ${await quote(officialsRow(BYE).first())}`);
+
+    const final = await arriveInFinal(request, w.ko, w.sf2);
+    const arriving = w.sf2.home_entrant_id!;
+    expect(final.outcome, "a walkover naming who withdrew").toEqual({ kind: "award", winner: arriving, loser: w.her, reason: "withdrew" });
+    const arrivingName = w.ko.nameOf.get(arriving)!;
+    // Her seat: the final's empty one. The header and the list print home first.
+    const herHome = final.home_entrant_id === null;
+    const pair = herHome ? [herName, arrivingName] : [arrivingName, herName];
+
+    let screens = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      await s.open(s.consoleUrl);
+      await expect(s.header, `${width}: the console's header names her`).toContainText(herName, { timeout: STEP_MS });
+      const header = await quote(s.header);
+      expect(header.indexOf(pair[0]!) < header.indexOf(pair[1]!), `${width}: her name in her seat (${header})`).toBe(true);
+      expect(header, `${width}: the console's header prints no bye word`).not.toMatch(BYE);
+      await expectNoHorizontalScroll(page);
+      await crop(s.header.locator("xpath=ancestor::header[1]"), `organiser-console-withdrew-final-${width}`);
+      console.log(`R116-4 ${width} console header: ${header}`);
+      screens++;
+
+      await s.openBoard();
+      const card = await quote(s.card);
+      expect(card, `${width}: the board card names her`).toContain(herName);
+      expect(card.indexOf(pair[0]!) < card.indexOf(pair[1]!), `${width}: in her seat (${card})`).toBe(true);
+      expect(card, `${width}: the board card prints no bye word`).not.toMatch(BYE);
+      await expectNoHorizontalScroll(page);
+      await crop(s.card, `organiser-board-card-withdrew-final-${width}`);
+      console.log(`R116-4 ${width} board card: ${card}`);
+      screens++;
+
+      await s.open(s.officialsUrl);
+      const row = officialsRow(herName, arrivingName);
+      await expect(row, `${width}: the officials list names her opposite the arriving side`).toHaveCount(1, { timeout: STEP_MS });
+      const label = await quote(row.locator("td").first());
+      expect(label, `${width}: her name in her seat`).toBe(`${pair[0]} vs ${pair[1]}`);
+      await expect(officialsRow(BYE), `${width}: no bye word in the officials list`).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+      await crop(row, `organiser-officials-withdrew-final-${width}`);
+      console.log(`R116-4 ${width} officials row: ${label}`);
+      screens++;
+    }
+    expect(screens).toBe(WIDTHS.length * 3);
+
+    // The pair: a DQ'd winner's dead seat (the bare status write v1's entrant patch makes): a walkover by bye naming
+    // nobody — the console and the officials list keep the bye word, the board card its feeder, and none prints her.
+    const dq = await deadSeatKnockout(request, async (her) => {
+      const left = await apiJson(request, `/api/v1/entrants/${her}`, "PATCH", { status: "disqualified" });
+      expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
+    });
+    await placeFinal(dq.ko.divId, dq.ko.final.id);
+    const dqFinal = await arriveInFinal(request, dq.ko, dq.sf2);
+    const dqArriving = dq.sf2.home_entrant_id!;
+    expect(dqFinal.outcome, "a walkover by bye, naming nobody").toEqual({ kind: "award", winner: dqArriving, loser: null, reason: "bye" });
+    const [dqName, dqArrivingName] = [dq.ko.nameOf.get(dq.her)!, dq.ko.nameOf.get(dqArriving)!];
+    const d = await surfaces(dq.ko.divId, dqFinal.id, dqFinal.fixture_no);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await d.open(d.consoleUrl);
+    await expect(d.header, "DQ: the console's header keeps the bye word").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
+    await expect(d.header, "DQ: and names the arriving side").toContainText(dqArrivingName);
+    await expect(d.header, "DQ: never her").not.toContainText(dqName);
+    console.log(`R116-4 DQ console header: ${await quote(d.header)}`);
+    await d.openBoard();
+    const dqCard = await quote(d.card);
+    expect([dqCard.includes(dqArrivingName), dqCard.includes(dqName)], `DQ: the board card names the arriving side, never her (${dqCard})`).toEqual([true, false]);
+    console.log(`R116-4 DQ board card: ${dqCard}`);
+    await d.open(d.officialsUrl);
+    await expect(officialsRow(BYE, dqArrivingName), "DQ: the officials list keeps the bye word").toHaveCount(1, { timeout: STEP_MS });
+    await expect(officialsRow(dqName, dqArrivingName), "DQ: and never pairs her with the arriving side").toHaveCount(0);
+    console.log(`R116-4 DQ officials row: ${await quote(officialsRow(BYE, dqArrivingName).first())}`);
   });
 });
