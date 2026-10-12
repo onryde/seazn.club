@@ -13,6 +13,9 @@ import { fold, redo, undo } from "./history.ts";
 import type { LedgerEvent } from "./types.ts";
 
 const NONE: ReadonlySet<string> = new Set();
+// The enumerated sweeps fold a ledger after every step of 2 × 3^7 orderings.
+// A wall-clock budget for a loaded machine, not a cap on the enumeration.
+const SWEEP_TIMEOUT_MS = 30_000;
 
 type Action = "undo" | "redo" | { edit: string; fixture?: string };
 
@@ -142,7 +145,7 @@ describe("undo / redo after a fresh edit — the executor's writes agree with th
       for (const outcome of ["edit:ok", "undo:ok", "redo:ok", "undo:NOTHING_TO_UNDO", "redo:NOTHING_TO_REDO"]) {
         expect(steps.get(outcome) ?? 0, `${outcome} never happened`).toBeGreaterThan(0);
       }
-    });
+    }, SWEEP_TIMEOUT_MS);
   }
 });
 
@@ -310,6 +313,6 @@ describe("undo / redo follow ONE linear timeline (owner ruling 2026-10-11)", () 
       ]) {
         expect(seen.get(key) ?? 0, `${key} never happened`).toBeGreaterThan(0);
       }
-    });
+    }, SWEEP_TIMEOUT_MS);
   }
 });

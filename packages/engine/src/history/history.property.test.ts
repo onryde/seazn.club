@@ -291,6 +291,11 @@ const walkStep: fc.Arbitrary<WalkStep> = fc.oneof(
   { arbitrary: editSpec.map((edit): WalkStep => ({ edit })), weight: 1 },
 );
 
+// 200 fast-check runs of up to 24 steps, each step folding the ledger twice:
+// ~2.5 s alone, past vitest's 5 s default on a loaded machine. The budget is
+// for wall clock under load, not a cap on the work — never trade numRuns for it.
+const WALK_TIMEOUT_MS = 30_000;
+
 describe("history properties — mixed registry kinds (rule 10)", () => {
   it("every Undo / Redo / fresh-edit step keeps the executor's writes and the watermark in agreement; undo-all / redo-all round-trip", () => {
     const undoneKinds = new Map<string, number>(KINDS.map((k) => [k, 0]));
@@ -393,5 +398,5 @@ describe("history properties — mixed registry kinds (rule 10)", () => {
     for (const key of ["fresh edit after an Undo/Redo", "undo of an undo/redo row", "redo of an undo/redo row"]) {
       expect(seen.get(key) ?? 0, `${key} never happened`).toBeGreaterThan(0);
     }
-  });
+  }, WALK_TIMEOUT_MS);
 });
