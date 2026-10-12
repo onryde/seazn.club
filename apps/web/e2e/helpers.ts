@@ -500,8 +500,9 @@ export async function loginUi(page: Page, email: string, next?: string): Promise
 }
 
 /** One-shot SQL client against the app's schema (DATABASE_URL must point at
- *  the same DB the dev server under test uses). */
-async function withDb<T>(
+ *  the same DB the dev server under test uses). Exported for the kits that
+ *  seed a state no API writes (match-room-kit.ts). */
+export async function withDb<T>(
   fn: (sql: import("postgres").Sql) => Promise<T>,
 ): Promise<T> {
   const dbUrl = process.env.DATABASE_URL;
