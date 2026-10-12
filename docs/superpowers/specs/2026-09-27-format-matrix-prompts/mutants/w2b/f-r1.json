@@ -332,7 +332,7 @@
  {
   "id": "r1-m4-not-forwarded",
   "file": "apps/web/src/server/api-v1/http.ts",
-  "find": "        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both };",
+  "find": "        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both, ...(named.played === undefined ? {} : { played: named.played }) };",
   "replace": "",
   "killers": [
    {

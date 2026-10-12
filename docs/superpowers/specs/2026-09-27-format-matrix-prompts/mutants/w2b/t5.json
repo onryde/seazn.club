@@ -2,8 +2,8 @@
   {
     "id": "walkover-rule-inverted",
     "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
-    "find": ".some((event) => event.type === \"core.start\") ? \"retired\" : \"walkover\";",
-    "replace": ".some((event) => event.type === \"core.start\") ? \"walkover\" : \"retired\";",
+    "find": "return playRecorded(prefix) ? \"retired\" : \"walkover\";",
+    "replace": "return playRecorded(prefix) ? \"walkover\" : \"retired\";",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -17,15 +17,15 @@
         "files": [
           "src/testkit/golden-forfeit-migration.test.ts"
         ],
-        "name": "a forfeit after core\\.start becomes retired"
+        "name": "ruling 113: a forfeit after core\\.start AND the sport's own play becomes retired"
       }
     ]
   },
   {
     "id": "voided-start-counted",
     "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
-    "find": "return resolveVoids(prefix).some(",
-    "replace": "return prefix.filter((event) => event.type !== \"core.void\").some(",
+    "find": "makeEnvelope(i, event as never, event.voids)",
+    "replace": "makeEnvelope(i, event as never)",
     "killers": [
       {
         "cwd": "packages/engine",

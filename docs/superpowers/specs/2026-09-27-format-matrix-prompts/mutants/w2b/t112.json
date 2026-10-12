@@ -127,8 +127,8 @@
  {
   "id": "fold-fact-true",
   "file": "packages/engine/src/core/events.ts",
-  "find": "forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)))",
-  "replace": "forfeitReasonsAllowed(phase, walkoverPhases, true)",
+  "find": "const played = playRecorded(active.slice(0, index));",
+  "replace": "const played = true;",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -136,14 +136,21 @@
      "src/core/forfeit-ruling-112.test.ts"
     ],
     "name": "the stored production walkover still folds"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "\\[start, retired\\] is refused FORFEIT_REASON_WRONG_PHASE"
    }
   ]
  },
  {
   "id": "fold-fact-false",
   "file": "packages/engine/src/core/events.ts",
-  "find": "forfeitReasonsAllowed(phase, walkoverPhases, playRecorded(active.slice(0, index)))",
-  "replace": "forfeitReasonsAllowed(phase, walkoverPhases, false)",
+  "find": "const played = playRecorded(active.slice(0, index));",
+  "replace": "const played = false;",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -151,6 +158,13 @@
      "src/core/forfeit-ruling-112.test.ts"
     ],
     "name": "once the sport's own event is played a walkover is refused"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "\\[start, play, retired\\] is admitted"
    }
   ]
  },
@@ -172,7 +186,7 @@
     "files": [
      "src/core/forfeit-ruling-112.test.ts"
     ],
-    "name": "the admission after a bare start is the ruling's"
+    "name": "the admission after a bare start is the rulings'"
    }
   ]
  },
@@ -239,7 +253,7 @@
     "files": [
      "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
     ],
-    "name": "after Start with nothing played, the console offers Neither and the walkover"
+    "name": "after Start with nothing played, the console offers Neither, the walkover and the disqualification"
    }
   ]
  },
@@ -314,7 +328,7 @@
     "files": [
      "src/families/bracket-finish.test.ts"
     ],
-    "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"
+    "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
    }
   ]
  },
@@ -329,7 +343,7 @@
     "files": [
      "src/families/bracket-finish.test.ts"
     ],
-    "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"
+    "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
    }
   ]
  },
@@ -352,6 +366,393 @@
      "src/families/walkover-credit.test.ts"
     ],
     "name": "an empty scoresheet is a Start with nothing played"
+   }
+  ]
+ },
+ {
+  "id": "r113-retired-needs-play",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "if (reason === \"retired\") return played && phase !== \"pre\";",
+  "replace": "if (reason === \"retired\") return phase !== \"pre\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "\\[start, retired\\] is refused FORFEIT_REASON_WRONG_PHASE"
+   }
+  ]
+ },
+ {
+  "id": "r113-refusal-played-dropped",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "bothAllowed: doubleWalkoverAdmitted(phase, allowed), played },",
+  "replace": "bothAllowed: doubleWalkoverAdmitted(phase, allowed) },",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "\\[start, retired\\] is refused FORFEIT_REASON_WRONG_PHASE"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-ruling-113.test.ts"
+    ],
+    "name": "the refusal names whether anything was played"
+   }
+  ]
+ },
+ {
+  "id": "r113-copy-played-inverted",
+  "file": "apps/web/src/lib/scoring-vocab.ts",
+  "find": "named.phase === \"play\" && named.played === false ?",
+  "replace": "named.phase === \"play\" && named.played === true ?",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/scoring-vocab.test.ts"
+    ],
+    "name": "ruling 113: a retirement refused after a bare Start reads"
+   }
+  ]
+ },
+ {
+  "id": "r113-copy-phase-ignored",
+  "file": "apps/web/src/lib/scoring-vocab.ts",
+  "find": "named.phase === \"play\" && named.played === false ?",
+  "replace": "named.played === false ?",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/scoring-vocab.test.ts"
+    ],
+    "name": "ruling 113: a retirement refused after a bare Start reads"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "every sport, before the start, after a bare start and once something is played"
+   }
+  ]
+ },
+ {
+  "id": "r113-reader-played-unchecked",
+  "file": "apps/web/src/lib/forfeit-phase-refusal.ts",
+  "find": "  if (d.played !== undefined && typeof d.played !== \"boolean\") return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/scoring-vocab.test.ts"
+    ],
+    "name": "ruling 113: a retirement refused after a bare Start reads"
+   }
+  ]
+ },
+ {
+  "id": "r113-http-played-dropped",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "both: named.both, ...(named.played === undefined ? {} : { played: named.played }) };",
+  "replace": "both: named.both };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "every sport, before the start, after a bare start and once something is played"
+   }
+  ]
+ },
+ {
+  "id": "r113-migration-start-based",
+  "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+  "find": "return playRecorded(prefix) ? \"retired\" : \"walkover\";",
+  "replace": "return prefix.some((e) => e.type === \"core.start\") ? \"retired\" : \"walkover\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/golden-forfeit-migration.test.ts"
+    ],
+    "name": "ruling 113: a forfeit after core\\.start AND the sport's own play becomes retired"
+   }
+  ]
+ },
+ {
+  "id": "r113-generic-generator-retires-unplayed",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "roll < 0.04 && played ? \"retired\"",
+  "replace": "roll < 0.04 ? \"retired\"",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts",
+     "src/sports/cfg-replay.conformance.test.ts",
+     "src/conformance/discipline.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "r112-i1-bo1-empty-sets",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
+  "replace": "let next = reason === \"walkover\" ? null : state.sets.length;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WD-6 \\+ X-RT-1 \\(PF-7, rulings 112, 113\\)"
+   }
+  ]
+ },
+ {
+  "id": "r112-m2-first-draw",
+  "file": "packages/engine/src/testkit/play-event.ts",
+  "find": "    if (after.lines !== before.lines) return e;\n",
+  "replace": "    return e;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/play-event.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "r112-m2-no-tally-fallback",
+  "file": "packages/engine/src/testkit/play-event.ts",
+  "find": "  return tallyOnly;\n",
+  "replace": "  return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/play-event.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "r112-m3-empty-sheet-unit",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "return played.length === 0 ? { home: [], away: [] } : sheet;",
+  "replace": "return sheet;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf, the empty case"
+   }
+  ]
+ },
+ {
+  "id": "r112-m1-memo-events",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "useMemo(() => forfeitPlayRecorded(events), [events]);",
+  "replace": "useMemo(() => forfeitPlayRecorded(events), []);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "ONE mounted console follows its ledger through resyncs"
+   }
+  ]
+ },
+ {
+  "id": "r112-m1-memo-deps",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "}, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded]);",
+  "replace": "}, [sportModule, forfeitCfg, live.state, home, away, noNextMatch]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "ONE mounted console follows its ledger through resyncs"
+   }
+  ]
+ },
+ {
+  "id": "r113-matrix-model-retired",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "  if (reason === \"retired\" && !played) return refuse(\"FORFEIT_REASON_WRONG_PHASE\");\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a retirement after a bare Start is refused FORFEIT_REASON_WRONG_PHASE \\(ruling 113\\)"
+   }
+  ]
+ },
+ {
+  "id": "r113-streams-unreachable-off",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "if (o.reason === \"retired\" && play.length > 0 && !holdsPlay(play)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "X-RS-1 \\+ ruling 113"
+   }
+  ]
+ },
+ {
+  "id": "r113-posting-retired-bare",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "if (forfeit.by !== \"both\" && forfeit.reason === \"retired\" && !holdsPlay(play)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "forfeitPosting \\(M-2\\)"
+   }
+  ]
+ },
+ {
+  "id": "r113-holdsplay-any-event",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "const holdsPlay = (play: readonly StreamEvent[]): boolean => play.some((e) => !e.type.startsWith(\"core.\"));",
+  "replace": "const holdsPlay = (play: readonly StreamEvent[]): boolean => play.length > 0;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "X-RS-1 \\+ ruling 113"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/streams.test.ts"
+    ],
+    "name": "^stream sweep (?!— discovery)"
+   }
+  ]
+ },
+ {
+  "id": "r113-rtpart-reasons-unfiltered",
+  "file": "tools/matrix/lib/w2b-cells.ts",
+  "find": "return ([\"retired\", \"disqualified\"] as const).filter((reason) => streamBuilds(sport, cfg, stageKind, { kind: \"forfeit\", by: \"home\", reason, at: \"after_start\" }));",
+  "replace": "return [\"retired\", \"disqualified\"];",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "RT-PART on league, every sport it is planned on"
+   }
+  ]
+ },
+ {
+  "id": "r113-rtpart-cells-retired-only",
+  "file": "tools/matrix/lib/w2b-cells.ts",
+  "find": "inMatchReasons(sport, rootCfgOf(row, sport), rootKind(row)).length > 0",
+  "replace": "inMatchReasons(sport, rootCfgOf(row, sport), rootKind(row)).includes(\"retired\")",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "RT-PART a table and a bracket for every sport"
+   }
+  ]
+ },
+ {
+  "id": "r113-ref-nothing-played-off",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "  if (c.reason === \"retired\" && !playedAny) throw new CreditRefused(\"nothing-played\", `${c.sport} retired with an empty scoresheet`);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 \\(ruling 113\\)"
+   },
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it"
+   }
+  ]
+ },
+ {
+  "id": "r113-ref-empty-sheet-retirement-credit",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const sp = retirement && playedAny ? p : null;",
+  "replace": "const sp = retirement ? p : null;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WD-6 \\+ X-RT-1 \\(ruling 113\\): a Best of 1 with nothing played"
+   }
+  ]
+ },
+ {
+  "id": "r113-ref-enum-retires-unplayed",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "[...(holdsPlay(s) ? [withPlay(s, \"retired\")] : []), withPlay(s, \"disqualified\")]",
+  "replace": "[withPlay(s, \"retired\"), withPlay(s, \"disqualified\")]",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "the enumeration is never empty"
+   }
+  ]
+ },
+ {
+  "id": "r113-ref-bf-retired-after-bare-start",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "    if (a.reason === \"retired\" && walkoverPhase === \"pre\") return \"FORFEIT_REASON_WRONG_PHASE\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
    }
   ]
  }
