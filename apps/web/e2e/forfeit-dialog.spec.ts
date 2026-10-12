@@ -120,6 +120,32 @@ function countForfeitPosts(page: Page): () => number {
   return () => n;
 }
 
+/** Hold every GET `page` makes of one fixture's `/state` and `/events` until `release()`: the page keeps the ledger it
+ *  had. Its live channel and its poll still FIRE — their reads just wait — so a write made elsewhere stays unheard here
+ *  until released. Review Focus 4's race (loop H): page 2's live channel delivers page 1's forfeit within ~350 ms
+ *  (measured: a `/events` + `/state` resync landed 4 ms before its Confirm), after which it sends a CURRENT
+ *  `expected_seq` and the server answers ALREADY_DECIDED, not SEQ_CONFLICT. `held()` counts the reads that waited. */
+async function holdFixtureReads(page: Page, fixtureId: string): Promise<{ release: () => Promise<void>; held: () => number }> {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  let held = 0;
+  const reads = (url: URL) => url.pathname === `/api/v1/fixtures/${fixtureId}/state` || url.pathname === `/api/v1/fixtures/${fixtureId}/events`;
+  const handler = async (route: Parameters<Parameters<Page["route"]>[1]>[0]) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    held++;
+    await gate;
+    await route.fallback();
+  };
+  await page.route(reads, handler);
+  return {
+    release: async () => {
+      open();
+      await page.unroute(reads, handler);
+    },
+    held: () => held,
+  };
+}
+
 /** An ACCEPTED official scorer for one fixture, minted as bracket-finish.spec.ts mints one (the suite has no official
  *  storage state): an org viewer whose person is the official the fixture names. */
 async function officialScorerPage(browser: Browser, fixtureId: string): Promise<{ page: Page; close: () => Promise<void> }> {
@@ -495,12 +521,51 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
         await d.getByTestId("forfeit-who-home").click();
         await d.getByTestId("forfeit-why-walkover").check();
       }
+      // The premise, made a guard rather than a hope: the second page has NOT heard the first one's forfeit when its
+      // organiser confirms (it holds the ledger it opened the dialog on — a stale device). The sibling test below is
+      // the other side of that race: a second page that HAS heard it.
+      const stale = await holdFixtureReads(second, fx.id);
       await d1.getByTestId("forfeit-confirm").dblclick();
       await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
       expect(posts1(), "the page sent one forfeit for a double tap").toBe(1);
       await d2.getByTestId("forfeit-confirm").click();
+      await stale.release();
+      console.log(`Review Focus 4: page 2 reads held while stale: ${stale.held()}`);
       await expect(dialogOf(second), "the refusal closed the second dialog").toHaveCount(0, { timeout: 20_000 });
       await expect(second.getByTestId("forfeit-refusal")).toHaveText(ui("score.seqConflict"));
+      expect(posts2()).toBe(1);
+      expect(await forfeitsIn(request, fx.id), "one forfeit on the ledger").toHaveLength(1);
+    } finally {
+      await second.close();
+    }
+  });
+
+  test("Review Focus 4, the other side of the race: a second page that has HEARD the first forfeit is refused as already decided, and says so", async ({ page, request }) => {
+    const { fx } = await badmintonLeague(request);
+    const second = await page.context().newPage();
+    try {
+      const path = await fixturePath(request, fx.id);
+      await page.goto(path);
+      await second.goto(path);
+      const posts2 = countForfeitPosts(second);
+      const d1 = await openDialog(page);
+      const d2 = await openDialog(second);
+      for (const d of [d1, d2]) {
+        await d.getByTestId("forfeit-who-home").click();
+        await d.getByTestId("forfeit-why-walkover").check();
+      }
+      await d1.getByTestId("forfeit-confirm").click();
+      await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
+      // The tab-return refresh (`refreshIfVisible`) — the live channel's push, made deterministic. The second page now
+      // holds the decided match; its open dialog is a snapshot and stays (the server judges the send).
+      const resynced = second.waitForResponse((r) => r.url().endsWith(`/api/v1/fixtures/${fx.id}/state`) && r.request().method() === "GET");
+      await second.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await resynced;
+      await expect(second.getByTestId("score-forfeit"), "the second page has heard: decided, no Forfeit").toHaveCount(0, { timeout: 20_000 });
+      await expect(d2, "the open dialog is a snapshot").toBeVisible();
+      await d2.getByTestId("forfeit-confirm").click();
+      await expect(dialogOf(second), "the refusal closed the second dialog").toHaveCount(0, { timeout: 20_000 });
+      await expect(second.getByTestId("forfeit-refusal")).toHaveText(ui("engineError.ALREADY_DECIDED"));
       expect(posts2()).toBe(1);
       expect(await forfeitsIn(request, fx.id), "one forfeit on the ledger").toHaveLength(1);
     } finally {
