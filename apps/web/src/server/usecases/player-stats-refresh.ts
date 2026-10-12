@@ -25,8 +25,9 @@ import "server-only";
 //
 // 1. BOUNDED. One refresh transaction at a time per process, whatever the
 //    number of divisions (review I3). Each fold pins a connection from the
-//    pool (sized by `DB_POOL_MAX`, `lib/db.ts`: 5 by default, 20 in production
-//    per `fly.toml` [env]) and runs synchronous JS for its whole length, so ten
+//    pool (sized by `DB_POOL_MAX`, `lib/db.ts`: 5 by default; production runs
+//    12, set on the Fly app rather than in `fly.toml`, whose [env] has no
+//    `DB_POOL_MAX`) and runs synchronous JS for its whole length, so ten
 //    finishes in ten divisions would otherwise hold ten of those connections at
 //    once and stall the event loop for the scoring requests themselves. Refreshes wait in an in-memory
 //    queue, and a second request for a division already waiting joins it.
@@ -198,9 +199,10 @@ let checksRunning = 0;
 
 /** Checks running at once across the process (final review I2). Each check
  *  holds one pooled connection that scoring writes also need, so the checks get
- *  `poolSharePercent` of the pool, rounded down, never below 1. The production
- *  pool is set in `fly.toml` [env] (`DB_POOL_MAX = "20"`), so the cap there is 4;
- *  the default pool of 5, as run locally, gives 1. The size is read the way
+ *  `poolSharePercent` of the pool, rounded down, never below 1. Production runs
+ *  `DB_POOL_MAX` 12 (three machines inside the 60-connection Postgres budget),
+ *  set on the Fly app: `fly.toml` [env] does not carry it. So the cap there is
+ *  2; the default pool of 5, as run locally, gives 1. The size is read the way
  *  `lib/db.ts` reads it for the pool itself (`connectionOptions`), so resizing
  *  the pool moves the cap with it and no number here has to follow. */
 export function reconcileCheckCap(env: Record<string, string | undefined> = process.env): number {
@@ -237,7 +239,7 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
  *  - once per division per `minIntervalMs`, a burst of reads included; the
  *    same window frees a division whose registered check never ran;
  *  - `reconcileCheckCap()` checks at once across the process (a fifth of the
- *    DB pool: 4 of a 20-connection pool, 1 of 5); one that finds no
+ *    DB pool: 2 of production's 12, 1 of the default 5); one that finds no
  *    slot is dropped and forgotten, so the next read of that division checks
  *    it. One call's divisions are checked one after another;
  *  - a refresh that gave up on the lock (`busy`) quiets the division for
