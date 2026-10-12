@@ -5,6 +5,7 @@ import "server-only";
 import type postgres from "postgres";
 import {
   aggregatePlayerStatsWithDiagnostics,
+  playedInStats,
   sumPlayerStats,
   type PlayerStatRow,
 } from "@seazn/engine/stats";
@@ -34,6 +35,18 @@ interface EventRow {
   payload: unknown;
   recorded_at: Date;
   voids_event_id: string | null;
+}
+
+/** A stored `score_events` row as the engine reads it — the fold below and `fixturesPlayedInStats` share it. */
+function eventEnvelope(e: EventRow): EventEnvelope {
+  return {
+    id: e.id,
+    seq: e.seq,
+    type: e.type,
+    payload: e.payload,
+    recordedAt: e.recorded_at.toISOString(),
+    ...(e.voids_event_id !== null ? { voids: e.voids_event_id } : {}),
+  } as EventEnvelope;
 }
 
 /** Follow `persons.merged_into` to a person who is not themselves a tombstone
@@ -387,15 +400,7 @@ async function foldDivision(
     throughSeq += 1;
     const seen = ledgerMap[e.fixture_id];
     ledgerMap[e.fixture_id] = [(seen?.[0] ?? 0) + 1, Math.max(seen?.[1] ?? 0, Number(e.seq))];
-    const envelope = {
-      id: e.id,
-      seq: e.seq,
-      type: e.type,
-      payload: e.payload,
-      recordedAt: e.recorded_at.toISOString(),
-      ...(e.voids_event_id !== null ? { voids: e.voids_event_id } : {}),
-    } as EventEnvelope;
-    (byFixture.get(e.fixture_id) ?? byFixture.set(e.fixture_id, []).get(e.fixture_id)!).push(envelope);
+    (byFixture.get(e.fixture_id) ?? byFixture.set(e.fixture_id, []).get(e.fixture_id)!).push(eventEnvelope(e));
   }
   // S4 (#428) review round 1, finding 1 — the person-role discriminator:
   // a card/goal credited to a non-player (coach/staff, S3 ruling 3) must not
@@ -909,6 +914,59 @@ type Queryable = postgres.ISql;
  *  defect was duplicated three times because the query itself was). */
 export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPersons"; userId: string };
 
+/** A settled fixture, with what `fixturesPlayedInStats` needs to ask the engine about it. */
+export interface StatsFixture {
+  id: string;
+  sport_key: string;
+  module_version: string;
+}
+
+/**
+ * W2b (X-PS-1, X-PS-2; ruling 115, R115-1) — which of these fixtures are a match played in players' stats. The engine's
+ * one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored ledger:
+ * a walkover, a withdrawal, a double walkover and a disqualification with nothing played are not; a retirement and an
+ * in-match disqualification are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles
+ * without an event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot
+ * figures cannot disagree about which fixtures were played.
+ *
+ * Cost: the reader answers any non-empty ledger holding no `core.forfeit` and no `core.void` row as played without
+ * reading it (its documented steps 1 and 2), so only those ledgers — and the absent ones — are read in full. A career
+ * spans every fixture a person ever played; loading every ledger to re-derive "played" for each decided match would
+ * multiply this read by the events per match.
+ */
+export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly StatsFixture[]): Promise<Set<string>> {
+  const played = new Set<string>();
+  if (fixtures.length === 0) return played;
+  const ids = [...new Set(fixtures.map((f) => f.id))];
+  const shapes = await db<{ fixture_id: string; read: boolean }[]>`
+    select se.fixture_id, bool_or(se.type in ('core.forfeit', 'core.void')) as read
+    from score_events se
+    where se.fixture_id in ${db(ids)}
+    group by se.fixture_id`;
+  const toRead = shapes.filter((r) => r.read).map((r) => r.fixture_id);
+  const ledgers = new Map<string, EventEnvelope[]>(toRead.map((id) => [id, []]));
+  if (toRead.length > 0) {
+    const events = await db<EventRow[]>`
+      select se.fixture_id, se.id, se.seq, se.type, se.payload, se.recorded_at, se.voids_event_id
+      from score_events se
+      where se.fixture_id in ${db(toRead)}
+      order by se.fixture_id, se.seq`;
+    for (const e of events) ledgers.get(e.fixture_id)!.push(eventEnvelope(e));
+  }
+  const hasLedger = new Set(shapes.map((r) => r.fixture_id));
+  for (const f of fixtures) {
+    const ledger = ledgers.get(f.id);
+    // Steps 1 and 2 of the reader, answered from the row shapes: no ledger is unplayed, a forfeit- and void-free one
+    // is played. `playedInStats([])` is asked rather than assumed, so the empty answer stays the engine's.
+    const isPlayed =
+      ledger !== undefined
+        ? playedInStats(ledger, resolveModule(f.sport_key, f.module_version).playerStats)
+        : hasLedger.has(f.id) || playedInStats([]);
+    if (isPlayed) played.add(f.id);
+  }
+  return played;
+}
+
 /** Completed fixtures a person — or, for a signed-in player, ANY of their
  *  claimed persons (`MatchesOwner`'s "claimedPersons" branch: there is no
  *  single personId to scope by there, a user can hold one claimed `persons`
@@ -919,6 +977,11 @@ export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPe
  *  3 of the 11 shipped modules (carrom, and the setbased/nested kernels)
  *  declare one at all, so a metric-based count would read zero for
  *  football/cricket/hockey/…
+ *
+ *  "Played" is the engine's (R115-1): of the completed fixtures the person is
+ *  on, those `fixturesPlayedInStats` keeps — never a walkover, a withdrawal, a
+ *  double walkover or a disqualification with nothing played (X-PS-1, ruling
+ *  115).
  *
  *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
  *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
@@ -931,23 +994,28 @@ export async function countMatchesByDivision(
   if (divisionIds.length === 0) return new Map();
   const rows =
     owner.by === "person"
-      ? await db<{ division_id: string; matches: number }[]>`
-          select f.division_id, count(distinct f.id)::int as matches
+      ? await db<(StatsFixture & { division_id: string })[]>`
+          select distinct f.id, f.division_id, d.sport_key, d.module_version
           from fixtures f
+          join divisions d on d.id = f.division_id
           join entrant_members em on em.person_id = ${owner.personId}
             and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
-          group by f.division_id`
-      : await db<{ division_id: string; matches: number }[]>`
-          select f.division_id, count(distinct f.id)::int as matches
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}`
+      : await db<(StatsFixture & { division_id: string })[]>`
+          select distinct f.id, f.division_id, d.sport_key, d.module_version
           from fixtures f
+          join divisions d on d.id = f.division_id
           join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
           where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
-          group by f.division_id`;
-  return new Map(rows.map((r) => [r.division_id, r.matches]));
+            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}`;
+  const played = await fixturesPlayedInStats(db, rows);
+  const matches = new Map<string, number>();
+  for (const r of rows) {
+    if (played.has(r.id)) matches.set(r.division_id, (matches.get(r.division_id) ?? 0) + 1);
+  }
+  return matches;
 }
 
 /** GET /persons/{id}/stats?group=sport — the S9/#418 career rollup: every

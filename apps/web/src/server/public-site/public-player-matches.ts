@@ -21,7 +21,11 @@ import "server-only";
 // match at all for those players. Only fixtures that have started count: the
 // repo's played set (`COMPLETED_FIXTURE_STATUSES`, which the career rollup's
 // match count reads too) plus `in_play`. A pre-match team sheet is not an
-// appearance.
+// appearance. Of the settled ones, only a match played in players' stats is
+// listed — the engine's reader, through the same `fixturesPlayedInStats` the
+// career count asks (R115-1): a walkover, a withdrawal, a double walkover or a
+// disqualification with nothing played is no appearance and earns no
+// "won"/"lost" badge (X-PS-1, ruling 115).
 //
 // CRICKET FIGURES HAVE ONE AUTHORITY: the engine's `deriveCricketScorecard`,
 // the fold the match centre renders, over exactly the inputs the server fold
@@ -68,7 +72,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
-import { COMPLETED_FIXTURE_STATUSES } from "@/server/usecases/player-stats";
+import { COMPLETED_FIXTURE_STATUSES, fixturesPlayedInStats } from "@/server/usecases/player-stats";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from "./data";
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
@@ -417,9 +421,13 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
       and f.status in ${sql(APPEARANCE_STATUSES as string[])}
     order by coalesce(f.scheduled_at, ms.updated_at) desc nulls last, f.id`;
   if (rows.length === 0) return [];
+  const settled = rows.filter((r) => r.status !== "in_play");
+  const played = await fixturesPlayedInStats(sql, settled.map((r) => ({ id: r.id, sport_key: r.sport_key, module_version: r.module_version })));
+  const appearances = rows.filter((r) => r.status === "in_play" || played.has(r.id));
+  if (appearances.length === 0) return [];
 
-  const opponentNames = await maskedOpponentNames(sql, rows);
-  return rows.map((r) => {
+  const opponentNames = await maskedOpponentNames(sql, appearances);
+  return appearances.map((r) => {
     const opponentId = r.my_entrant_id === r.home_entrant_id ? r.away_entrant_id : r.home_entrant_id;
     return {
       fixtureId: r.id,

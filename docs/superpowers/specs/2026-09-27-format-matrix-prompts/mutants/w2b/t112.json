@@ -1064,5 +1064,102 @@
     "name": "every signed or deviation row names a proving test that exists and contains the id"
    }
   ]
+ },
+ {
+  "id": "r1151-web-filter-keeps-all",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "    if (isPlayed) played.add(f.id);\n",
+  "replace": "    played.add(f.id);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches = 2 and W/L 1"
+   }
+  ]
+ },
+ {
+  "id": "r1151-web-no-ledger-played",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "        : hasLedger.has(f.id) || playedInStats([]);\n",
+  "replace": "        : true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches = 2 and W/L 1"
+   }
+  ]
+ },
+ {
+  "id": "r1151-web-forfeit-ledger-not-read",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "bool_or(se.type in ('core.forfeit', 'core.void')) as read",
+  "replace": "bool_or(se.type in ('core.void')) as read",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches = 2 and W/L 1"
+   }
+  ]
+ },
+ {
+  "id": "r1151-list-keeps-all",
+  "file": "apps/web/src/server/public-site/public-player-matches.ts",
+  "find": "rows.filter((r) => r.status === \"in_play\" || played.has(r.id));",
+  "replace": "rows.filter(() => true);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches = 2 and W/L 1"
+   }
+  ]
+ },
+ {
+  "id": "r1151-engine-empty-played",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  if (active.length === 0) return false;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "playedInStats, the one reader the web counts ask"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches = 2 and W/L 1"
+   }
+  ]
+ },
+ {
+  "id": "r1151-engine-no-forfeit-asks-model",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  if (!active.some((event) => event.type === \"core.forfeit\")) return true;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "playedInStats, the one reader the web counts ask"
+   }
+  ]
  }
 ]

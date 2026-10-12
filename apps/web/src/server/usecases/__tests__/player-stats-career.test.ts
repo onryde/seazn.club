@@ -125,6 +125,16 @@ async function makeEntrant(
 }
 
 let roundCounter = 0;
+/** R115-1: a settled status is only ever the fold's (append-event's `fixtureStatusFromFold`), so a decided or
+ *  finalized fixture always has a ledger — and the matches count asks the engine's `playedInStats` of it, which reads
+ *  an EMPTY ledger as no match played (X-PS-1: the byes and double walkovers stages.ts settles without an event). A raw
+ *  settled fixture therefore carries the one row a real one always opens with; no forfeit, so it is played. */
+async function withLedger(fixtureId: string): Promise<string> {
+  await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+            values (gen_random_uuid(), ${fixtureId}, 1, 'core.start', '{}', now())`;
+  return fixtureId;
+}
+
 async function insertFinalizedFixture(
   stageId: string,
   divisionId: string,
@@ -136,7 +146,7 @@ async function insertFinalizedFixture(
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
     values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'finalized')
     returning id`;
-  return id;
+  return withLedger(id);
 }
 
 /** Same raw insert as insertFinalizedFixture, but left 'decided' — the
@@ -159,7 +169,7 @@ async function insertDecidedFixture(
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
     values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'decided')
     returning id`;
-  return id;
+  return withLedger(id);
 }
 
 async function insertSnapshot(

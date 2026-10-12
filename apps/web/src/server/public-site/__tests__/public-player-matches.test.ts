@@ -527,13 +527,22 @@ async function seed(): Promise<Scene> {
   // first failure would take every later line down with it.
   await sql`update match_states set updated_at = '2030-12-01T10:00:00Z' where fixture_id = ${unfoldable.id}`;
 
-  // Rovers v Dingoes: Dingoes FORFEIT before a ball is bowled. Both sides had
-  // declared their XI (so Hal, still on the Dingoes roster, is not dragged in).
-  // Never scheduled; recorded now, i.e. before every 2030 date in the scene.
+  // Rovers v Dingoes: Dingoes RETIRE after the first over, recorded as a
+  // summary — a forfeit with something played, so an appearance with a result
+  // (X-PS-2; a walkover would be no match at all, X-PS-1 and R115-1 — see
+  // player-matches-played-x-ps-1.test.ts), and a summary names no batter or
+  // bowler, so nobody has figures. Both sides had declared their XI (so Hal,
+  // still on the Dingoes roster, is not dragged in). Never scheduled; recorded
+  // now, i.e. before every 2030 date in the scene.
   const forfeit = between(cricketFixtures, roversE!.id, dingoesE!.id);
   await insertLineup(forfeit.id, roversE!.id, rovers);
   await insertLineup(forfeit.id, dingoesE!.id, dingoes);
-  await append(orgId, forfeit.id, [{ type: "core.forfeit", payload: { by: dingoesE!.id, reason: "walkover" } }]);
+  await append(orgId, forfeit.id, [
+    { type: "cricket.toss", payload: { wonBy: roversE!.id, elected: "bat" } },
+    { type: "core.start", payload: {} },
+    { type: "cricket.innings.summary", payload: { runs: 8, wickets: 0, legalBalls: 6, partial: true } },
+    { type: "core.forfeit", payload: { by: dingoesE!.id, reason: "retired" } },
+  ]);
 
   // Comets v Dingoes, decided. Dingoes' team sheet: three starters, a COACH on
   // a starting row, and two on the bench. Bea comes on for D3 straight after the
@@ -636,10 +645,15 @@ async function seed(): Promise<Scene> {
   ]);
   await insertLineupRow(eaglesFoxes.id, gullsE!.id, stray, { orderNo: 1 });
   await sql`update fixtures set scheduled_at = '2030-08-01T10:00:00Z' where id = ${eaglesFoxes.id}`;
-  // Eagles (made HOME) v Gulls: Gulls forfeit, nobody declared a sheet. Dee is
-  // on BOTH rosters, so both sides are "hers" by roster alone.
+  // Eagles (made HOME) v Gulls: Gulls retire a point down, nobody declared a
+  // sheet — a played forfeit (X-PS-2), so an appearance. Dee is on BOTH
+  // rosters, so both sides are "hers" by roster alone.
   const eaglesGulls = await makeHome(between(extraFixtures, eaglesE!.id, gullsE!.id), eaglesE!.id);
-  await append(orgId, eaglesGulls.id, [{ type: "core.forfeit", payload: { by: gullsE!.id, reason: "walkover" } }]);
+  await append(orgId, eaglesGulls.id, [
+    { type: "core.start", payload: {} },
+    { type: "generic.score", payload: { by: eaglesE!.id, points: 1 } },
+    { type: "core.forfeit", payload: { by: gullsE!.id, reason: "retired" } },
+  ]);
   await sql`update fixtures set scheduled_at = '2030-08-02T10:00:00Z' where id = ${eaglesGulls.id}`;
 
   // ---- an ARCHIVED division of the same public competition --------------------
@@ -1028,7 +1042,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(await linesFor(scene.persons.stray)).toEqual([]);
   });
 
-  it("FORFEITED: listed, the result read off the award's winner, and '—' with no figures", async () => {
+  it("FORFEITED after play (X-PS-2): listed, the result read off the award's winner, and '—' with no figures", async () => {
     const [{ status }] = await sql<{ status: string }[]>`
       select status from fixtures where id = ${scene.forfeitFixtureId}`;
     expect(status).toBe("forfeited");
@@ -1036,7 +1050,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(line).toMatchObject({ result: "won", line: "—", opponentName: "Dingoes" });
   });
 
-  it("the settled lines agree with the career rollup's own match count, forfeits included", async () => {
+  it("the settled lines agree with the career rollup's own match count, played forfeits included (X-PS-2)", async () => {
     for (const [personId, divisionId] of [
       [scene.persons.r1, scene.cricketDivisionId],
       [scene.persons.ivy, scene.extraDivisionId],
