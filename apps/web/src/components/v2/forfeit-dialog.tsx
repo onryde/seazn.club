@@ -281,7 +281,11 @@ export function ForfeitDialog(props: DialogProps) {
         </h2>
         <fieldset className="mt-4 min-w-0">
           <legend className="text-sm font-medium text-slate-700">{msg("forfeitDialog.who")}</legend>
-          <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+          {/* Loop H F3: a wrapping row, not two fixed columns — at 768 and 1280 a half-width column broke a long surname
+              mid-word ("Wolfeschlegelsteinhause / n"). The AI instruction preview's pattern (`flex-1 basis-*`): two
+              chips share a row when their words fit (the old two columns at ≥640), stack when one does not (and below
+              640, where the sheet is narrower than two bases — the old single column). */}
+          <div className="mt-2 flex min-w-0 flex-wrap gap-2">
             {model.who.map((w) => (
               <button
                 key={w}
@@ -289,9 +293,11 @@ export function ForfeitDialog(props: DialogProps) {
                 data-testid={`forfeit-who-${w}`}
                 aria-pressed={sel.who === w}
                 onClick={() => setSel((s) => pickForfeit(model, s, { kind: "who", who: w }))}
-                // The settle dialog's M12: a long name WRAPS, the button grows to fit, a long single word breaks.
-                className={`flex min-h-12 min-w-0 items-center rounded-xl border px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                  w === "both" ? "sm:col-span-2 " : ""
+                // The settle dialog's M12: a long name WRAPS whole, never an ellipsis. Loop H F3: at WORD boundaries — no
+                // `min-w-0`, so a chip never shrinks below its longest word; `max-w-full` clamps that to the row, so only a
+                // single word wider than the whole dialog falls back to `break-words`.
+                className={`flex min-h-12 max-w-full flex-1 items-center rounded-xl border px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                  w === "both" ? "basis-full " : "basis-48 "
                 }${
                   sel.who === w
                     ? "border-purple-600 bg-purple-600 text-white"
