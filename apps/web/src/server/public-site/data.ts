@@ -1325,7 +1325,11 @@ export async function getPublicFixture(
     // rebase): `externalPlay` is `{ status }` alone — the lichess.org play URLs
     // went with D3, and `lastError` is operator text. A v4 entry written
     // before the chess branch has no `externalPlay` at all.
-    ["pub-fixture-v5", fixtureId],
+    //
+    // v6 (chess T16, 2026-10-13): `externalPlay` gained `watch`, the view-only
+    // board. A `-v5` entry has none, so for a REVALIDATE_FAST window the page
+    // would say "not started" over a game being played.
+    ["pub-fixture-v6", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

@@ -5,7 +5,7 @@ import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
 const msg = (key: string) => key;
 const render = (status: PublicExternalPlay["status"]) =>
-  renderToStaticMarkup(<ExternalPlayCta externalPlay={{ status }} scheduledLabel="Wed 12:00" msg={msg} />);
+  renderToStaticMarkup(<ExternalPlayCta externalPlay={{ status, watch: null }} scheduledLabel="Wed 12:00" msg={msg} />);
 
 // D3 deleted the lichess.org mode: no status puts a Lichess play link on the
 // public page. Swept over every status the type declares, counted.
