@@ -21,7 +21,7 @@ import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from
 // different file). Shared with personCareerStats/countMatchesByDivision
 // (usecases/player-stats.ts) and me.ts's listMyCareerStats, review round 2
 // finding 2.
-import { countMatchesByDivision } from "@/server/usecases/player-stats";
+import { careerMatchesByDivision } from "@/server/usecases/player-stats";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -1694,10 +1694,10 @@ export async function getPublicPlayer(
       // STRUCTURALLY scoped to this one competition — summing across
       // competitions (or orgs) here would leak a spectator a total the
       // consent gate never agreed to show them. Matches count is the SAME
-      // shared countMatchesByDivision personCareerStats/listMyCareerStats
+      // shared careerMatchesByDivision personCareerStats/listMyCareerStats
       // use (review round 2 finding 2) — no tenant/user scoping needed here
-      // because the caller already restricts divisionIds to exactly the
-      // division ids this competition's own snapshots named.
+      // because the caller restricts divisionIds to this competition's own
+      // public divisions.
       // A competition-scoped rollup EARNS its place only where it aggregates
       // something. With one division in a sport it restates that sport's own
       // row in the `stats` list above, word for word — so those sports are
@@ -1705,18 +1705,28 @@ export async function getPublicPlayer(
       // holds for a MIXED competition: gating the whole section on "some
       // sport has >1 division" still rendered the single-division sports
       // beside the one that tripped the gate, which is the duplication this
-      // rule exists to remove. Dropping them here also means a competition
-      // with nothing to aggregate never pays for the query below.
+      // rule exists to remove.
+      // W2b ruling 120 follow-up: the divisions a sport spans are the snapshot rows' AND the career count's — the count
+      // runs over every public division of this competition, and a division the person played in with no credited
+      // figure (a played abandon that decided nobody, a footballer who scored nothing) holds no snapshot row. The
+      // listing reads the same set (`groupCareerStatsBySport`), so it cannot leave out a division the count found.
+      const competitionDivisions = await sql<{ id: string }[]>`
+        select id from public_divisions_v where competition_id = ${shell.competition.id}`;
+      const played = await careerMatchesByDivision(sql, { by: "person", personId }, competitionDivisions.map((d) => d.id));
       const divisionsPerSport = new Map<string, Set<string>>();
-      for (const s of snapshots) {
-        const seen = divisionsPerSport.get(s.sport_key) ?? new Set<string>();
-        seen.add(s.division_id);
-        divisionsPerSport.set(s.sport_key, seen);
+      const sportDivisions: [string, string][] = [
+        ...snapshots.map((s) => [s.sport_key, s.division_id] as [string, string]),
+        ...[...played].map(([divisionId, d]) => [d.sport_key, divisionId] as [string, string]),
+      ];
+      for (const [sportKey, divisionId] of sportDivisions) {
+        const seen = divisionsPerSport.get(sportKey) ?? new Set<string>();
+        seen.add(divisionId);
+        divisionsPerSport.set(sportKey, seen);
       }
-      const aggregating = snapshots.filter(
-        (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
-      );
-      if (aggregating.length === 0) {
+      const aggregatesSport = (sportKey: string) => (divisionsPerSport.get(sportKey)?.size ?? 0) > 1;
+      const aggregating = snapshots.filter((s) => aggregatesSport(s.sport_key));
+      const aggregatingPlayed = new Map([...played].filter(([, d]) => aggregatesSport(d.sport_key)));
+      if (aggregating.length === 0 && aggregatingPlayed.size === 0) {
         return {
           nameMask,
           memberships,
@@ -1727,8 +1737,7 @@ export async function getPublicPlayer(
           generatedAt,
         };
       }
-      const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
-      const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
+
       // This page has no Dict/locale pair to compose its own pluralized copy
       // with (see statMsg's own comment above) — so, like every metric
       // label already in this payload, the "N divisions · N variants · N
@@ -1736,7 +1745,7 @@ export async function getPublicPlayer(
       // shipped as raw numbers for the page to format.
       const career: PublicCareerSport[] = groupCareerStatsBySport(
         aggregating,
-        matchesByDivision,
+        aggregatingPlayed,
         statMsg,
       ).map((c) => ({
         ...c,

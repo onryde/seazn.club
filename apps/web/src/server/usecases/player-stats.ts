@@ -20,7 +20,7 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
-import { groupCareerStatsBySport, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
+import { groupCareerStatsBySport, type CareerPlayedDivision, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -1016,19 +1016,32 @@ export async function countMatchesByDivision(
   owner: MatchesOwner,
   divisionIds: readonly string[],
 ): Promise<Map<string, number>> {
+  const played = await careerMatchesByDivision(db, owner, divisionIds);
+  return new Map([...played].map(([divisionId, d]) => [divisionId, d.matches]));
+}
+
+/** `countMatchesByDivision`, with each played division's sport and variant: what a career LISTING needs to card a
+ *  division the count found and no snapshot row holds (`groupCareerStatsBySport`). The one query both read, so the
+ *  listing and the count cannot disagree about which divisions a person played in. Only divisions with a match
+ *  played are in the map. */
+export async function careerMatchesByDivision(
+  db: Queryable,
+  owner: MatchesOwner,
+  divisionIds: readonly string[],
+): Promise<Map<string, CareerPlayedDivision>> {
   if (divisionIds.length === 0) return new Map();
   const rows =
     owner.by === "person"
-      ? await db<(StatsFixture & { division_id: string })[]>`
-          select distinct f.id, f.division_id, d.sport_key, d.module_version
+      ? await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
+          select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
           from fixtures f
           join divisions d on d.id = f.division_id
           join entrant_members em on em.person_id = ${owner.personId}
             and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           where f.division_id in ${db(divisionIds as string[])}
             and f.status in ${db(STATS_MATCH_STATUSES as string[])}`
-      : await db<(StatsFixture & { division_id: string })[]>`
-          select distinct f.id, f.division_id, d.sport_key, d.module_version
+      : await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
+          select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
           from fixtures f
           join divisions d on d.id = f.division_id
           join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
@@ -1036,9 +1049,12 @@ export async function countMatchesByDivision(
           where f.division_id in ${db(divisionIds as string[])}
             and f.status in ${db(STATS_MATCH_STATUSES as string[])}`;
   const played = await fixturesPlayedInStats(db, rows);
-  const matches = new Map<string, number>();
+  const matches = new Map<string, CareerPlayedDivision>();
   for (const r of rows) {
-    if (played.has(r.id)) matches.set(r.division_id, (matches.get(r.division_id) ?? 0) + 1);
+    if (!played.has(r.id)) continue;
+    const d = matches.get(r.division_id);
+    if (d === undefined) matches.set(r.division_id, { sport_key: r.sport_key, variant_key: r.variant_key, matches: 1 });
+    else d.matches++;
   }
   return matches;
 }
@@ -1102,13 +1118,13 @@ export async function personCareerStats(
       where ps.person_id = ${personId}
         and ps.division_id = any(${readable})
       order by d.slug`;
-    if (rows.length === 0) return { sports: [] };
-
-    const matchesByDivision = await countMatchesByDivision(
-      tx,
-      { by: "person", personId },
-      [...new Set(rows.map((r) => r.division_id))],
-    );
+    // W2b ruling 120 follow-up: the count runs over every readable, unarchived division — not only those holding a
+    // snapshot row — and the listing cards every division it found (`groupCareerStatsBySport`), so a sport the person
+    // played without a credited figure is still in their career.
+    const scope = await tx<{ id: string }[]>`
+      select id from divisions where id = any(${readable}) and archived_at is null`;
+    const played = await careerMatchesByDivision(tx, { by: "person", personId }, scope.map((d) => d.id));
+    if (rows.length === 0 && played.size === 0) return { sports: [] };
     // The persons-stats route is already dynamic (auth'd, per-request), so
     // resolving the request locale here costs no rendering mode — mirrors
     // listMyPlayerStats's own discipline (me.ts). The catch is for callers
@@ -1116,7 +1132,7 @@ export async function personCareerStats(
     // is the right answer there, not a crash.
     const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
     const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-    return { sports: groupCareerStatsBySport(rows, matchesByDivision, m) };
+    return { sports: groupCareerStatsBySport(rows, played, m) };
   });
 }
 

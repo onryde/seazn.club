@@ -1247,8 +1247,8 @@
  {
   "id": "r1154-me-career-no-check",
   "file": "apps/web/src/server/usecases/me.ts",
-  "find": "  if (rows.length === 0) return [];\n  await checkSnapshotsOnRead(rows);\n",
-  "replace": "  if (rows.length === 0) return [];\n",
+  "find": "  if (rows.length > 0) await checkSnapshotsOnRead(rows);\n",
+  "replace": "\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1646,6 +1646,50 @@
      "test/rules-reference.test.ts"
     ],
     "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "r120-career-listing-rows-only",
+  "file": "apps/web/src/server/player-stats.ts",
+  "find": ".filter(([divisionId, d]) => d.matches > 0 && !listed.has(divisionId))",
+  "replace": ".filter(() => false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/career-listing-matches-sweep.test.ts"
+    ],
+    "name": "a sport is listed exactly when the person played"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/player-stats-career.test.ts"
+    ],
+    "name": "cards a division the count found"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "a played abandon is Pat"
+   }
+  ]
+ },
+ {
+  "id": "r120-console-career-counts-snapshot-divisions-only",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "await careerMatchesByDivision(tx, { by: \"person\", personId }, scope.map((d) => d.id));",
+  "replace": "await careerMatchesByDivision(tx, { by: \"person\", personId }, [...new Set(rows.map((r) => r.division_id))]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "a played abandon is Pat"
    }
   ]
  }

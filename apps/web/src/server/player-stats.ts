@@ -112,6 +112,14 @@ export interface CareerSnapshotRow {
   stats: Record<string, number>;
 }
 
+/** A division the career COUNT found the person played a match in (`careerMatchesByDivision`, the engine's reader
+ *  over the fixtures), with what the listing needs to card it: its sport, its variant and the number of matches. */
+export interface CareerPlayedDivision {
+  sport_key: string;
+  variant_key: string;
+  matches: number;
+}
+
 export interface CareerSportStats {
   sport_key: string;
   sport_label: string;
@@ -137,10 +145,13 @@ const CAREER_BUCKET_ID = "career";
 /**
  * Group→sum→label a person's snapshot rows into one card per sport. Pure:
  * no DB, no engine fold — `stats` on each row is whatever
- * `player_stat_snapshots` already holds, and `matchesByDivision` is a
- * pre-computed lookup the caller supplies (each caller's own query differs:
- * org-scoped tx, cross-org /me, or the public unauthenticated read — see the
- * three call sites named in this file's header comment).
+ * `player_stat_snapshots` already holds, and `played` is the career count
+ * the caller supplies (`careerMatchesByDivision`, over the divisions in the
+ * caller's own scope: org-scoped tx, cross-org /me, or the public
+ * unauthenticated read — see the three call sites named in this file's
+ * header comment). Every division in `played` with a match is carded, row or
+ * no row, so the listing can never leave out a sport the count says was
+ * played.
  *
  * Sorted by localized sport_label so the card order doesn't jump between
  * locales-with-different-alphabetical-sort and doesn't depend on SQL row
@@ -148,11 +159,20 @@ const CAREER_BUCKET_ID = "career";
  */
 export function groupCareerStatsBySport(
   rows: readonly CareerSnapshotRow[],
-  matchesByDivision: ReadonlyMap<string, number>,
+  played: ReadonlyMap<string, CareerPlayedDivision>,
   m: MsgFn,
 ): CareerSportStats[] {
+  // W2b ruling 120 follow-up: the listing and the match count read ONE division set. A division the count says the
+  // person played in is carded even when it holds no snapshot row — a fold credits only the keys a fact applies to, so
+  // a played abandon that decided nobody (generic), or a footballer who scored nothing, leaves no row, and a listing
+  // built from snapshot rows alone left the sport out of the career while its count read 1. An empty row adds the
+  // division (and its variant) and no figure.
+  const listed = new Set(rows.map((row) => row.division_id));
+  const playedRows: CareerSnapshotRow[] = [...played]
+    .filter(([divisionId, d]) => d.matches > 0 && !listed.has(divisionId))
+    .map(([divisionId, d]) => ({ division_id: divisionId, sport_key: d.sport_key, variant_key: d.variant_key, stats: {} }));
   const bySport = new Map<string, CareerSnapshotRow[]>();
-  for (const row of rows) {
+  for (const row of [...rows, ...playedRows]) {
     const group = bySport.get(row.sport_key);
     if (group) group.push(row);
     else bySport.set(row.sport_key, [row]);
@@ -188,7 +208,7 @@ export function groupCareerStatsBySport(
       const stats = summed[0]?.stats ?? {};
 
       const divisionIds = [...new Set(group.map((r) => r.division_id))];
-      const matches = divisionIds.reduce((n, id) => n + (matchesByDivision.get(id) ?? 0), 0);
+      const matches = divisionIds.reduce((n, id) => n + (played.get(id)?.matches ?? 0), 0);
 
       // A career card states its match count ONCE, in the meta line above the
       // tiles — and that is the count derived from `fixtures`, which exists

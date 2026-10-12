@@ -528,14 +528,12 @@ describe.skipIf(!HAS_DB)("ruling 120: an abandon is a match only if something wa
       // The snapshot fold (the tile) agrees with the career count, and the settle credited Pat no win.
       const boards = [await divisionPlayerStats(auth, league.division.id, {}), await divisionPlayerStats(auth, ko.division.id, {})];
       const declared = new Set([...(c.module.playerStats?.metrics ?? []).map((m) => m.key), ...(c.module.playerStats?.folded?.keys ?? []).map((k) => k.key)]);
-      // A career lists a sport only where the person holds a snapshot row (personCareerStats). Badminton's `matches`
-      // key gives Pat one; generic's abandon that decided nobody credits no W/D/L, so Pat may hold none there (a career
-      // that omits the sport — not this ruling's, routed). Where the sport is listed, its count is the rule's.
+      // The career listings card the sport with the count's one match — generic's played abandon decided nobody and
+      // credits Pat no figure, so no snapshot row holds it; the listing reads the count's division set too.
       const consoleCareer = await personCareerStats(auth, patPerson);
       const me = await listMyCareerStats(userId);
       const careers = [consoleCareer.sports.map((x) => [x.sport_key, x.matches]), me.map((x) => [x.sport_key, x.matches])];
-      if (declared.has("matches")) expect(careers, `${key}: console and /me careers`).toEqual([[[key, 1]], [[key, 1]]]);
-      else for (const career of careers) for (const [sport, n] of career) expect([sport, n], `${key}: a listed career`).toEqual([key, 1]);
+      expect(careers, `${key}: console and /me careers`).toEqual([[[key, 1]], [[key, 1]]]);
       const [leagueStats, koStats] = boards.map((b) => b.rows.find((r) => r.person_id === patPerson)?.stats ?? {});
       let checked = 0;
       if (declared.has("matches")) {

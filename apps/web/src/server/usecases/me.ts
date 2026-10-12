@@ -23,7 +23,7 @@ import {
 // different file: usecases/player-stats.ts vs server/player-stats.ts).
 // Shared with personCareerStats (usecases/player-stats.ts) and
 // public-site/data.ts's getPublicPlayer, review round 2 finding 2.
-import { countMatchesByDivision } from "./player-stats";
+import { careerMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -427,17 +427,23 @@ export async function listMyCareerStats(userId: string): Promise<CareerSportStat
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null
     order by d.slug`;
-  if (rows.length === 0) return [];
-  await checkSnapshotsOnRead(rows);
+  if (rows.length > 0) await checkSnapshotsOnRead(rows);
 
-  const matchesByDivision = await countMatchesByDivision(
-    sql,
-    { by: "claimedPersons", userId },
-    [...new Set(rows.map((r) => r.division_id))],
-  );
+  // W2b ruling 120 follow-up: the count runs over every unarchived division a claimed person is rostered in — not only
+  // those holding a snapshot row — and the listing cards every division it found (`groupCareerStatsBySport`), so a
+  // sport played without a credited figure is still in the career.
+  const scope = await sql<{ division_id: string }[]>`
+    select distinct e.division_id
+    from entrant_members em
+    join entrants e on e.id = em.entrant_id
+    join persons p on p.id = em.person_id and p.user_id = ${userId} and p.merged_into is null
+    join divisions d on d.id = e.division_id and d.archived_at is null`;
+  const divisionIds = [...new Set([...rows.map((r) => r.division_id), ...scope.map((d) => d.division_id)])];
+  const played = await careerMatchesByDivision(sql, { by: "claimedPersons", userId }, divisionIds);
+  if (rows.length === 0 && played.size === 0) return [];
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return groupCareerStatsBySport(rows, matchesByDivision, m);
+  return groupCareerStatsBySport(rows, played, m);
 }
 
 /** True when the user's ONLY relationship to the platform is a claimed

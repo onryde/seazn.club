@@ -192,7 +192,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
-  it("ASYMMETRIC: 2 sports, 3 divisions (1 football + 2 badminton), real cross-division summation, variants != divisions, matches summed, team-entrant sport produces NO phantom row", async () => {
+  it("ASYMMETRIC: 3 sports, 4 divisions (1 football + 2 badminton + 1 volleyball), real cross-division summation, variants != divisions, matches summed; a team-entrant sport with no snapshot row is carded by its count, with no figure", async () => {
     const { auth } = await seedOrg();
     const person = await createPerson(auth, {
       full_name: "Robin Career",
@@ -245,9 +245,17 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
 
     const result = await personCareerStats(auth, person.id);
 
-    // Volleyball must be COMPLETELY absent — no phantom card despite a real
-    // roster membership and a real finalized fixture.
-    expect(result.sports.map((s) => s.sport_key).sort()).toEqual(["badminton", "football"]);
+    // W2b ruling 120 follow-up (coordinator, 2026-10-12): the listing and the
+    // match count read ONE division set. Volleyball holds no snapshot row (a
+    // team entrant's fact credits nobody, S8/#417 — that guard is the fold's
+    // and is unchanged), but the count finds a finalized fixture the person's
+    // team played, so the career cards it: one division, one match, no figure
+    // tile. Before the follow-up this asserted volleyball ABSENT — the very
+    // disagreement (a count of 1 the listing hid) the follow-up removes.
+    expect(result.sports.map((s) => s.sport_key).sort()).toEqual(["badminton", "football", "volleyball"]);
+    const vbCard = result.sports.find((s) => s.sport_key === "volleyball")!;
+    expect([vbCard.divisions, vbCard.variants, vbCard.matches], "volleyball: carded by the count").toEqual([1, 1, 1]);
+    expect(vbCard.metrics, "volleyball: no figure — no snapshot row, no phantom tile").toEqual([]);
 
     const fbCard = result.sports.find((s) => s.sport_key === "football")!;
     expect(fbCard.divisions).toBe(1);
