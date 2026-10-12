@@ -9,17 +9,15 @@ import "server-only";
 // `public_divisions_v` (the same, plus the division not archived). The fixture
 // view alone does not hide an archived division; only the division join does.
 //
-// WHICH FIXTURES ARE AN APPEARANCE. A declared lineup row is the fact where one
-// exists: a team member the XI left out did not play. Only a `player` row
-// counts — a coach or staff member on the sheet is in the squad, never in a
-// playing record (the engine's own ruling, `core/lineup.ts` `SquadRole`) — and
-// only a row on an entrant that IS a side of the fixture. A bench row counts
-// only by `benchRowIsAppearance` below. Where a side declared NO lineup for the
-// fixture, its rostered members stand in for one (a team's players only, ruling
-// 122: its coach and staff never) — the only writer of `lineups`
-// is the organiser's `putLineup`, so an individual or pair entrant (badminton,
-// tennis, …) almost never has a row, and a lineups-only read would list no
-// match at all for those players. Only fixtures that have started count: the
+// WHICH FIXTURES ARE AN APPEARANCE is ONE rule, shared with the career match
+// count: `@/server/appearances` (ruling 122 and its round-1 review). A team
+// side's declared sheet is the fact where one exists — only its `player` rows,
+// a coach or staff row never — else the team's roster players stand in; an
+// individual or pair side's roster always does (the only writer of `lineups` is
+// the organiser's `putLineup`, so such an entrant almost never has a row, and a
+// lineups-only read would list no match at all for those players). A bench row
+// counts only by the owner's bench rule (`benchRowIsAppearance`).
+// Only fixtures that have started count: the
 // settled set the career rollup's match count reads (`STATS_MATCH_STATUSES`:
 // decided, finalized, forfeited and abandoned) plus `in_play`. A pre-match team
 // sheet is not an appearance. Of the settled ones, only a match played in
@@ -52,19 +50,9 @@ import "server-only";
 // unstable-cache.js), so from in there every render would re-fold every match.
 import type postgres from "postgres";
 import { unstable_cache } from "next/cache";
-import {
-  EngineError,
-  isLevelOutcome,
-  resolveVoids,
-  summaryOf,
-  type EventEnvelope,
-  type LevelWithdrawal,
-  type Lineup,
-  type LineupPair,
-  type LineupSlot,
-} from "@seazn/engine/core";
+import { isLevelOutcome, summaryOf, type LevelWithdrawal } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { deriveCricketScorecard, type CricketCfg, type CricketScorecard } from "@seazn/engine/sports/cricket";
+import type { CricketScorecard } from "@seazn/engine/sports/cricket";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
@@ -72,7 +60,17 @@ import { isoDateTime } from "@/lib/public-site";
 import { routes } from "@/lib/routes";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { resolveVenueTz } from "@/lib/tz";
-import { loadFoldInputs } from "@/server/engine-db/fold";
+import {
+  appearanceSide,
+  figurePeople,
+  figuresByPerson,
+  figuresFor,
+  foldFixtureFigures,
+  rowIsAppearance,
+  sportHasFigures,
+  type FixtureFigures,
+  type PersonFigures,
+} from "@/server/appearances";
 import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
 import { fixturesPlayedInStats, STATS_MATCH_STATUSES } from "@/server/usecases/player-stats";
@@ -81,6 +79,9 @@ import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from 
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
 
 export type Sql = ReturnType<typeof postgres>;
+
+// The appearance rule's figures half moved to `@/server/appearances` (ruling 122, round 1), shared with the career count.
+export { benchRowIsAppearance, figuresByPerson, figuresFor, type FixtureFigures, type PersonFigures } from "@/server/appearances";
 
 export type PlayerMatchResult = "won" | "lost" | "drawn" | "live";
 
@@ -118,48 +119,11 @@ export interface PlayerMatchSeed extends Omit<PlayerMatchLine, "line"> {
   scoreLine: string | null;
 }
 
-/** One person's match figures. Present in a fixture's map only for someone who
- *  batted or bowled in a main innings. */
-export interface PersonFigures {
-  batting: { runs: number; balls: number } | null;
-  bowling: { wickets: number; runs: number } | null;
-}
-
-/** Every figure-bearing person in one fixture, keyed by person id. A plain
- *  object, not a Map: `unstable_cache` serialises its value, and a Map crosses
- *  that boundary as `{}`. */
-export type FixtureFigures = Record<string, PersonFigures>;
-
 /** A line with nothing to say. Punctuation, not copy: identical in every locale. */
 const NO_FIGURES = "—";
 
 /** The started statuses: settled (the career count's own set, an abandoned fixture included — ruling 120) or in play. */
 const APPEARANCE_STATUSES: readonly string[] = [...STATS_MATCH_STATUSES, "in_play"];
-
-/**
- * Is a BENCH row an appearance?
- *
- * OWNER RULING, 2026-09-16: a bench row counts only when the cricket fold shows
- * the person batted or bowled; a coach or staff row never counts (that half is
- * the `l.role = 'player'` filter in `readPlayerMatchSeeds`). The whole bench
- * policy lives in this one function. In cricket, figures mean a replacement or
- * a community sub rule brought the player properly on (Law 24 lets an ordinary
- * substitute field only); a bench player with no figures sat it out. Other
- * sports record no per-person figures on this page, so nothing shows a bench
- * player came on — they are left out. A starting row and a roster stand-in are
- * never asked.
- *
- * Only a lineup event brings a bench player on. The scorecard fold reads the
- * kernel's `core.lineup.*` events (fix/cricket-scorecard-core-events), so a
- * bench player who came on and batted or bowled has figures and is listed
- * (the "BENCH (cricket): a bench player who came on and bowled" test).
- *
- * The `sportKey` test is belt-and-braces TODAY: no other sport produces
- * `figures`, so it changes no answer until one does.
- */
-export function benchRowIsAppearance(sportKey: string, figures: PersonFigures | undefined): boolean {
-  return sportKey === "cricket" && figures !== undefined;
-}
 
 /**
  * How the fixture ended FOR THIS PERSON'S SIDE.
@@ -178,34 +142,6 @@ export function playerMatchResult(status: string, outcome: unknown, myEntrantId:
   return null;
 }
 
-/**
- * Every person's match figures off a scorecard the engine folded, summed over
- * every MAIN innings — so a two-innings match reads as the match's figures
- * rather than the first innings alone. Super-over innings are left out: a super
- * over is a tiebreak and its runs and wickets are not part of a player's match
- * figures. `isSuperOver` is the fold's own flag.
- */
-export function figuresByPerson(card: CricketScorecard): FixtureFigures {
-  // No prototype: a key is a person id and nothing else.
-  const figures: FixtureFigures = Object.create(null);
-  const of = (person: string): PersonFigures => (figures[person] ??= { batting: null, bowling: null });
-  for (const innings of card.innings) {
-    if (innings.isSuperOver) continue;
-    for (const line of innings.batting) {
-      const mine = of(line.person);
-      mine.batting = { runs: (mine.batting?.runs ?? 0) + line.runs, balls: (mine.batting?.balls ?? 0) + line.balls };
-    }
-    for (const line of innings.bowling) {
-      const mine = of(line.person);
-      mine.bowling = {
-        wickets: (mine.bowling?.wickets ?? 0) + line.wickets,
-        runs: (mine.bowling?.runs ?? 0) + line.runs,
-      };
-    }
-  }
-  return figures;
-}
-
 /** runs (balls) batting, wickets/runs bowling, joined by `player.line.cricket`
  *  when the person did both; "—" when they did neither. */
 export function cricketLine(figures: PersonFigures | undefined, dict: Dict): string {
@@ -213,29 +149,6 @@ export function cricketLine(figures: PersonFigures | undefined, dict: Dict): str
   const bowling = figures?.bowling ? t(dict, "player.line.bowling", figures.bowling) : null;
   if (batting !== null && bowling !== null) return t(dict, "player.line.cricket", { batting, bowling });
   return batting ?? bowling ?? NO_FIGURES;
-}
-
-/** The same person's figures under several ids (a survivor and everyone merged
- *  into them), summed. Undefined when none of the ids batted or bowled. */
-export function figuresFor(all: FixtureFigures | null, people: readonly string[]): PersonFigures | undefined {
-  if (all === null) return undefined;
-  let sum: PersonFigures | undefined;
-  for (const id of people) {
-    if (!Object.hasOwn(all, id)) continue;
-    const { batting, bowling } = all[id]!;
-    const acc: PersonFigures = sum ?? { batting: null, bowling: null };
-    if (batting) {
-      acc.batting = { runs: (acc.batting?.runs ?? 0) + batting.runs, balls: (acc.batting?.balls ?? 0) + batting.balls };
-    }
-    if (bowling) {
-      acc.bowling = {
-        wickets: (acc.bowling?.wickets ?? 0) + bowling.wickets,
-        runs: (acc.bowling?.runs ?? 0) + bowling.runs,
-      };
-    }
-    sum = acc;
-  }
-  return sum;
 }
 
 /**
@@ -379,16 +292,9 @@ export async function readPlayerMatchLines(sql: Sql, args: MatchArgs): Promise<P
 export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<PlayerMatchSeed[]> {
   const { personId, competitionId, orgSlug, compSlug } = args;
 
-  // `mine` is the person's side of each fixture: their `player` lineup row on
-  // one of its two sides where one exists (precedence 0), else their roster
-  // membership of a side that declared no lineup for this fixture (precedence
-  // 1) — on a team, only a member registered in the player lane: a coach or
-  // staff member never gets a match (ruling 122, the career count's own rule,
-  // `careerMatchesByDivision`). An inner lateral join, so a fixture with
-  // neither is not a row at all.
-  // Someone placed on BOTH sides resolves the same way every read: lineup
-  // before roster, then home before away. (`is_home` is a column because a
-  // UNION's ORDER BY may name output columns only.)
+  // `mine` is the person's side of each fixture, by the one appearance rule the career count reads too
+  // (`appearanceSide`, ruling 122): a team side's sheet where it recorded one, else its roster's players; an
+  // individual or pair side's roster. An inner lateral join, so a fixture with neither is not a row at all.
   //
   // Newest first by when the fixture was scheduled, or — never scheduled — by
   // when its ledger was last written (`match_states.updated_at`, stamped by
@@ -408,24 +314,8 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
     left join match_states ms on ms.fixture_id = f.id
     left join schedule_settings ss on ss.division_id = d.id
     left join organizations o on o.id = dv.org_id
-    join lateral (
-      select l.entrant_id, l.slot, 0 as precedence, l.entrant_id = f.home_entrant_id as is_home
-      from lineups l
-      where l.fixture_id = f.id and l.person_id = ${personId}
-        and l.role = 'player'
-        and l.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-      union all
-      select em.entrant_id, null::text as slot, 1 as precedence, em.entrant_id = f.home_entrant_id as is_home
-      from entrant_members em
-      join entrants re on re.id = em.entrant_id
-      join persons rp on rp.id = em.person_id
-      where em.person_id = ${personId}
-        and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-        and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = em.entrant_id)
-        and (re.kind <> 'team' or rp.lane = 'player')
-      order by precedence, is_home desc
-      limit 1
-    ) mine on true
+    join persons p on p.id = ${personId}
+    join lateral (${appearanceSide(sql)}) mine on true
     where d.competition_id = ${competitionId}
       and f.status in ${sql(APPEARANCE_STATUSES as string[])}
     order by coalesce(f.scheduled_at, ms.updated_at) desc nulls last, f.id`;
@@ -471,17 +361,8 @@ export async function completePlayerMatchLines(
 ): Promise<PlayerMatchLine[]> {
   if (seeds.length === 0) return [];
   const dict = await getDictionary(args.locale, "public");
-  // Everyone merged into this person. A merge flattens inbound tombstones onto
-  // the new survivor, so one hop is the invariant; the bounded walk is the belt
-  // to that, the same belt `player-stats.ts`'s `liveSurvivor` wears.
-  const absorbed = await sql<{ id: string }[]>`
-    with recursive absorbed(id, depth) as (
-      select id, 1 from persons where merged_into = ${args.personId}
-      union all
-      select p.id, a.depth + 1 from persons p join absorbed a on p.merged_into = a.id where a.depth < 16
-    )
-    select distinct id from absorbed`;
-  const people = [args.personId, ...absorbed.map((row) => row.id)];
+  // Everyone merged into this person: their figures may be recorded under any of those ids.
+  const people = await figurePeople(sql, args.personId);
   return composePlayerMatchLines(seeds, people, dict, (seed) => fixtureFigures(sql, seed));
 }
 
@@ -502,8 +383,8 @@ export async function composePlayerMatchLines(
   const lines: PlayerMatchLine[] = [];
   for (const seed of seeds) {
     const { sportKey, slot, scoreLine } = seed;
-    const figures = figuresFor(sportKey === "cricket" ? await figuresOf(seed) : null, people);
-    if (slot === "bench" && !benchRowIsAppearance(sportKey, figures)) continue;
+    const figures = figuresFor(sportHasFigures(sportKey) ? await figuresOf(seed) : null, people);
+    if (!rowIsAppearance({ slot, sportKey }, figures)) continue;
     lines.push({
       fixtureId: seed.fixtureId,
       href: seed.href,
@@ -572,112 +453,6 @@ async function fixtureFigures(sql: Sql, seed: PlayerMatchSeed): Promise<FixtureF
     );
     return null;
   }
-}
-
-/** A refusal FROM THE FOLD — the engine judged the config or the ledger. Zod is
- *  matched by name: the engine's schemas may come from another zod copy. */
-function isFoldRefusal(err: unknown): boolean {
-  return EngineError.is(err) || (err instanceof Error && err.name === "ZodError");
-}
-
-/**
- * The engine's scorecard for one fixture, reduced to per-person figures. The
- * config MUST be parsed — `loadFoldInputs` carries it raw, and the scorecard
- * fold throws on the raw value. The scorecard fold resolves voids itself now
- * (it rides `foldMatch`, which calls `resolveVoids`), and `resolveVoids` is
- * idempotent, so resolving the ledger first here is free; it stays so this
- * read and `loadMatchCentre` fold one stream. Its own transaction, opened and
- * closed here: a statement Postgres refuses aborts this fixture's transaction
- * and no other's.
- *
- * Only the pure half sits inside the refusal guard. Everything that reads the
- * database — including `loadFoldInputs`' own refusals of a fixture it cannot
- * load (a missing entrant, an unknown module) — stays outside it and throws
- * uncached, as `admin-fixture-config.ts` treats the same failures.
- */
-async function foldFixtureFigures(sql: Sql, fixtureId: string): Promise<FixtureFigures | null> {
-  return (await sql.begin(async (tx) => {
-    const inputs = await loadFoldInputs(tx, fixtureId);
-    if (inputs === null) return null;
-    const { lineups, unresolved } = await asRecorded(tx, inputs.lineups, inputs.envelopes);
-    try {
-      const cfg = inputs.module.configSchema.parse(inputs.cfg) as CricketCfg;
-      return figuresByPerson(deriveCricketScorecard({ events: resolveVoids(inputs.envelopes), cfg, lineups }));
-    } catch (err) {
-      // A refusal is cached as no figures — but not while the ledger names a
-      // merged person this read could not seat: that refusal is this reader's
-      // gap, not the fixture's, and is thrown (uncached) to be tried again.
-      if (!isFoldRefusal(err) || unresolved.length > 0) throw err;
-      log.warn(
-        { fixtureId, err: err instanceof Error ? err.message : String(err) },
-        "player matches: the engine refused this cricket fixture's config or ledger, cached as no figures",
-      );
-      return null;
-    }
-  })) as FixtureFigures | null;
-}
-
-/**
- * The lineup pair as the LEDGER knows it.
- *
- * A merge repoints a lineup row to the survivor — and, where both people were
- * on the same sheet, DELETES the absorbed person's row — while every recorded
- * event keeps naming the id it was recorded under. Folding the repointed sheet
- * would refuse the first ball an absorbed id faced or bowled. So every merged
- * id the ledger names gets a slot of its own on its survivor's side:
- *  - the survivor's slot stays the survivor's when the ledger names the
- *    survivor too; otherwise the first absorbed id takes it over;
- *  - each further id is APPENDED to that side (next `orderNo`, same slot kind
- *    and role), so no other player's place in the batting order moves.
- * The figures come out keyed by each recorded id, and the read-time merge in
- * `completePlayerMatchLines` sums them for the survivor.
- *
- * `unresolved`: merged ids the ledger names whose survivor is on neither sheet
- * — nothing to seat them beside. A refusal with any of those is not cached.
- */
-const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-async function asRecorded(
-  tx: postgres.TransactionSql,
-  lineups: LineupPair,
-  envelopes: readonly EventEnvelope[],
-): Promise<{ lineups: LineupPair; unresolved: string[] }> {
-  const recorded = JSON.stringify(envelopes.map((envelope) => envelope.payload));
-  const named = [...new Set((recorded.match(UUID_PATTERN) ?? []).map((id) => id.toLowerCase()))];
-  if (named.length === 0) return { lineups, unresolved: [] };
-  const merged = await tx<{ id: string; merged_into: string }[]>`
-    select id, merged_into from persons where id in ${tx(named)} and merged_into is not null`;
-  if (merged.length === 0) return { lineups, unresolved: [] };
-
-  const absorbedBySurvivor = new Map<string, string[]>();
-  for (const { id, merged_into } of merged) {
-    absorbedBySurvivor.set(merged_into, [...(absorbedBySurvivor.get(merged_into) ?? []), id]);
-  }
-  const seated = new Set<string>();
-  const seat = (lineup: Lineup): Lineup => {
-    let lastOrderNo = Math.max(0, ...lineup.slots.map((slot) => slot.orderNo));
-    const slots: LineupSlot[] = [];
-    const appended: LineupSlot[] = [];
-    for (const slot of lineup.slots) {
-      const absorbed = (absorbedBySurvivor.get(slot.personId) ?? []).filter((id) => !seated.has(id));
-      if (absorbed.length === 0) {
-        slots.push(slot);
-        continue;
-      }
-      for (const id of absorbed) seated.add(id);
-      const ids = named.includes(slot.personId) ? [slot.personId, ...absorbed] : absorbed;
-      slots.push({ ...slot, personId: ids[0]! });
-      for (const id of ids.slice(1)) {
-        lastOrderNo += 1;
-        appended.push({ personId: id, slot: slot.slot, orderNo: lastOrderNo, ...(slot.role ? { role: slot.role } : {}) });
-      }
-    }
-    return { ...lineup, slots: [...slots, ...appended] };
-  };
-  return {
-    lineups: { home: seat(lineups.home), away: seat(lineups.away) },
-    unresolved: merged.map((row) => row.id).filter((id) => !seated.has(id)),
-  };
 }
 
 /** The six fields the masking pass reads — a Matches seed row and an Upcoming

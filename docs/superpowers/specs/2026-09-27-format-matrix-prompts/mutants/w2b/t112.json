@@ -1694,10 +1694,10 @@
   ]
  },
  {
-  "id": "r122-career-team-roster-lane-dropped",
-  "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "            or (p.lane = 'player'\n",
-  "replace": "            or (true\n",
+  "id": "r122r1-side-team-roster-lane-dropped",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "        or (p.lane = 'player'\n",
+  "replace": "        or (true\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1716,10 +1716,10 @@
   ]
  },
  {
-  "id": "r122-career-sheet-role-dropped",
-  "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "l.person_id = p.id and l.role = 'player'))",
-  "replace": "l.person_id = p.id))",
+  "id": "r122r1-side-sheet-role-dropped",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "    where l.fixture_id = f.id and l.person_id = p.id and l.role = 'player'\n",
+  "replace": "    where l.fixture_id = f.id and l.person_id = p.id\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1731,10 +1731,10 @@
   ]
  },
  {
-  "id": "r122-career-roster-stands-in-despite-sheet",
-  "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "              and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = e.id))))",
-  "replace": "              and true)))",
+  "id": "r122r1-side-roster-stands-in-despite-sheet",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "          and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = em.entrant_id)))\n",
+  "replace": "          and true))\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1746,10 +1746,10 @@
   ]
  },
  {
-  "id": "r122-career-lane-read-for-every-kind",
-  "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "          and (e.kind <> 'team'\n",
-  "replace": "          and (false\n",
+  "id": "r122r1-side-lane-read-for-every-kind",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "      and (re.kind <> 'team'\n",
+  "replace": "      and (false\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1761,47 +1761,114 @@
   ]
  },
  {
-  "id": "r122-career-sheet-branch-dropped",
-  "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "        (e.kind = 'team'\n",
-  "replace": "        (false\n",
+  "id": "r122r1-side-sheet-gates-every-kind",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "      and (re.kind <> 'team'\n",
+  "replace": "      and ((re.kind <> 'team' and not exists (select 1 from lineups il where il.fixture_id = f.id and il.entrant_id = em.entrant_id))\n",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
     ],
-    "name": "a lineup-only player"
+    "name": "every individual-entrant sport is unchanged"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-side-sheet-branch-dropped",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "    where l.fixture_id = f.id and l.person_id = p.id and l.role = 'player'\n",
+  "replace": "    where false and l.fixture_id = f.id and l.person_id = p.id and l.role = 'player'\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-side-bench-outranks-roster",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "case when l.slot = 'bench' then 2 else 0 end as precedence",
+  "replace": "0 as precedence",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-count-skips-bench-rule",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "    if (rowIsAppearance(row, figures)) appeared.add(row.fixtureId);\n",
+  "replace": "    appeared.add(row.fixtureId);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
    },
    {
     "cwd": "apps/web",
     "files": [
-     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+     "src/server/public-site/__tests__/public-player-matches.test.ts"
     ],
-    "name": "every team sport"
+    "name": "ruling 122, round 1"
    }
   ]
  },
  {
-  "id": "r122-career-sheet-gates-every-kind",
+  "id": "r122r1-count-never-folds-bench",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "    if (row.slot === \"bench\" && sportHasFigures(row.sportKey)) {\n",
+  "replace": "    if (false) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-player-matches.test.ts"
+    ],
+    "name": "ruling 122, round 1"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-bench-row-always-appears",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "  return row.slot !== \"bench\" || benchRowIsAppearance(row.sportKey, figures);\n",
+  "replace": "  return true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-player-matches.test.ts"
+    ],
+    "name": "ruling 122, round 1"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-placed-divisions-roster-only",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "          and (e.kind <> 'team'\n",
-  "replace": "          and ((e.kind <> 'team' and not exists (select 1 from lineups il where il.fixture_id = f.id and il.entrant_id = e.id))\n",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
-    ],
-    "name": "a sheet naming an individual entrant"
-   }
-  ]
- },
- {
-  "id": "r122-public-seeds-roster-lane-dropped",
-  "file": "apps/web/src/server/public-site/public-player-matches.ts",
-  "find": "        and (re.kind <> 'team' or rp.lane = 'player')\n",
-  "replace": "        and true\n",
+  "find": "    join persons p on p.id = l.person_id and ${ownedPersons(q, owner)}\n    where l.role = 'player'`;",
+  "replace": "    join persons p on p.id = l.person_id and ${ownedPersons(q, owner)}\n    where false`;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1813,17 +1880,32 @@
   ]
  },
  {
-  "id": "r122-public-seeds-lane-read-for-every-kind",
-  "file": "apps/web/src/server/public-site/public-player-matches.ts",
-  "find": "        and (re.kind <> 'team' or rp.lane = 'player')\n",
-  "replace": "        and (rp.lane = 'player')\n",
+  "id": "r122r1-console-scope-roster-only",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "      and (d.id in (${placedDivisions(sql, { by: \"person\", personId })})\n",
+  "replace": "      and (d.id in (select e.division_id from entrant_members em join entrants e on e.id = em.entrant_id where em.person_id = ${personId})\n",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
     ],
-    "name": "every individual-entrant sport is unchanged"
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122r1-me-scope-roster-only",
+  "file": "apps/web/src/server/usecases/me.ts",
+  "find": "    from (${placedDivisions(sql, { by: \"claimedPersons\", userId })}) pd\n",
+  "replace": "    from (select e.division_id from entrant_members em join entrants e on e.id = em.entrant_id join persons p on p.id = em.person_id and p.user_id = ${userId} and p.merged_into is null) pd\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
    }
   ]
  }

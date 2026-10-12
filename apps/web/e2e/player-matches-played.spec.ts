@@ -221,16 +221,21 @@ test("R115-1: /me, the public player card and the console count only matches pla
   testInfo.annotations.push({ type: "numbers", description: seen.join(" | ") });
 });
 
-// W2b ruling 122 (owner "B", 2026-10-12): a team match counts on a person's career record only for players — the
-// side's recorded lineup, or its roster's players when it recorded none. A coach never gets one; a player added to the
-// roster after a lineup-less fixture still does (the accepted residue: no join date is stored).
+// W2b ruling 122 (owner "B", 2026-10-12) and its round-1 review: a team match counts on a person's career record only
+// for players — the side's recorded lineup, a bench row by the owner's bench rule (2026-09-16), or its roster's
+// players when it recorded none. A coach never gets one; a player added to the roster after a lineup-less fixture
+// still does (the accepted residue: no join date is stored); a sheet player since removed from the roster keeps the
+// match the sheet recorded, on every surface.
 //
 // Two generic team divisions in one public competition (the public card's career rollup shows only where it
 // aggregates), each Mine v Theirs, one played match each, recorded through the organiser's own doors:
-//   A — no lineup; after the match Lou joins Mine's roster.   B — Mine records a sheet: Pia as player, Cole as coach.
-// Expected, from the ruling: Pia 2 matches (A by the roster, B by the sheet); Cole, registered as coach, none; Lou 1 (A).
-test("ruling 122: the coach is listed with no team match; the player keeps both; a player added after the lineup-less match keeps it (accepted residue)", async ({ page, browser }, testInfo) => {
-  test.setTimeout(240_000);
+//   A — no lineup; after the match Lou joins Mine's roster.
+//   B — Mine records a sheet: Pia and Leo as starting players, Cole as coach, Ben on the bench; after the match Leo
+//       leaves B's Mine.
+// Expected, from the rules: Pia 2 (A by the roster, B by the sheet); Cole, registered as coach, none; Lou 1 (A); Ben 1
+// (A; B's bench row is no match in generic — no figures show he came on); Leo 2 (A by the roster, B by the sheet).
+test("ruling 122: the coach is listed with no team match; a bench row follows the bench rule; a late joiner keeps the lineup-less match; a sheet player who left keeps the sheet's", async ({ page, browser }, testInfo) => {
+  test.setTimeout(300_000);
   const person = async (n: string, lane: "player" | "coach") => {
     const res = await apiJson<{ id: string }>(page.request, "/api/v1/persons", "POST", { full_name: `${n} ${TAG}`, consent: { public_name: true }, lane });
     expect(res.status, `person ${n}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
@@ -239,6 +244,8 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
   const pia = await person("Pia Player", "player");
   const cole = await person("Cole Coach", "coach");
   const lou = await person("Lou Late", "player");
+  const ben = await person("Ben Bench", "player");
+  const leo = await person("Leo Left", "player");
   const oz = await person("Oz Opp", "player");
   const comp = await apiJson<{ id: string; slug: string; org_id: string }>(page.request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -246,8 +253,10 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
     visibility: "public",
   });
   expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const squad = [pia, cole, ben, leo];
 
-  const teamDivision = async (name: string, sheet: boolean) => {
+  type SheetRow = { person_id: string; slot: "starting" | "bench"; role: "player" | "coach" };
+  const teamDivision = async (name: string, sheet: SheetRow[] | null) => {
     const div = await apiJson<{ id: string }>(page.request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
       name,
       sport_key: "generic",
@@ -256,7 +265,7 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
     expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
     const divisionId = div.data!.id;
     const ents = await apiJson<{ id: string }[]>(page.request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
-      { kind: "team", display_name: `${name} Mine ${TAG}`, seed: 1, members: [{ person_id: pia }, { person_id: cole }] },
+      { kind: "team", display_name: `${name} Mine ${TAG}`, seed: 1, members: squad.map((person_id) => ({ person_id })) },
       { kind: "team", display_name: `${name} Theirs ${TAG}`, seed: 2, members: [{ person_id: oz }] },
     ]);
     expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
@@ -268,13 +277,8 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
     const fixtures = gen.data!.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
     expect(fixtures.length, `${name}: one match`).toBe(1);
     const f = fixtures[0]!;
-    if (sheet) {
-      const put = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", {
-        slots: [
-          { person_id: pia, slot: "starting", role: "player" },
-          { person_id: cole, slot: "starting", role: "coach" },
-        ],
-      });
+    if (sheet !== null) {
+      const put = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", { slots: sheet });
       expect(put.status, `${name} sheet: ${JSON.stringify(put.error)}`).toBeLessThan(300);
     }
     const seq = { n: 0 };
@@ -282,13 +286,20 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
     for (const e of SPORTS.generic.win(f.home_entrant_id === mineId ? "home" : "away")) await post(page.request, f.id, seq, e.type, e.payload);
     return { divisionId, mineId };
   };
-  const a = await teamDivision("Team A", false);
-  await teamDivision("Team B", true);
-  // Lou joins Mine of A after its match was played.
-  const joined = await apiJson(page.request, `/api/v1/entrants/${a.mineId}`, "PATCH", {
-    members: [{ person_id: pia }, { person_id: cole }, { person_id: lou }],
-  });
-  expect(joined.status, `late join: ${JSON.stringify(joined.error)}`).toBeLessThan(300);
+  const a = await teamDivision("Team A", null);
+  const b = await teamDivision("Team B", [
+    { person_id: pia, slot: "starting", role: "player" },
+    { person_id: leo, slot: "starting", role: "player" },
+    { person_id: cole, slot: "starting", role: "coach" },
+    { person_id: ben, slot: "bench", role: "player" },
+  ]);
+  const roster = async (entrantId: string, members: string[], what: string) => {
+    const res = await apiJson(page.request, `/api/v1/entrants/${entrantId}`, "PATCH", { members: members.map((person_id) => ({ person_id })) });
+    expect(res.status, `${what}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+  };
+  // After the matches: Lou joins A's Mine; Leo leaves B's Mine.
+  await roster(a.mineId, [...squad, lou], "late join");
+  await roster(b.mineId, squad.filter((id) => id !== leo), "Leo leaves");
 
   // ---- the console API (?group=sport) ---------------------------------------------------------------------------
   const consoleMatches = async (id: string) => {
@@ -299,28 +310,39 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
   expect(await consoleMatches(pia), "console: Pia").toEqual([["generic", 2]]);
   expect(await consoleMatches(cole), "console: Cole, the coach").toEqual([]);
   expect(await consoleMatches(lou), "console: Lou, added after the lineup-less match").toEqual([["generic", 1]]);
+  expect(await consoleMatches(ben), "console: Ben, B's bench").toEqual([["generic", 1]]);
+  expect(await consoleMatches(leo), "console: Leo, left B's roster after its match").toEqual([["generic", 2]]);
 
   const seen: string[] = [];
-  // ---- /me, as the coach -----------------------------------------------------------------------------------------
-  const coachCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
-  const me = await coachCtx.newPage();
-  await loginUi(me, `cole-coach-${TAG}@example.com`, "/me");
-  const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
-  expect(whoami.status).toBe(200);
-  await linkPersonToUserBySql(cole, whoami.data!.id);
-  await me.goto("/me");
-  await me.getByTestId("cookie-accept").click();
-  for (const width of [1280, 768, 320]) {
-    await me.setViewportSize({ width, height: 900 });
-    const career = me.getByTestId("me-career");
-    await expect(career).toBeVisible({ timeout: 20_000 });
-    await expect(career.getByTestId("me-career-empty")).toBeVisible();
-    await expect(career.locator('[data-testid^="career-sport-"]')).toHaveCount(0);
-    await expectNoHorizontalScroll(me);
-    seen.push(`/me coach@${width}: "${(await career.innerText()).replace(/\s+/g, " ").trim()}"`);
-    await career.screenshot({ path: testInfo.outputPath(`r122-me-coach-${width}.png`) });
+  // ---- /me, as the coach and as the player who left ---------------------------------------------------------------
+  for (const [who, id, want] of [
+    ["Cole", cole, null],
+    ["Leo", leo, "2 matches"],
+  ] as const) {
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const me = await ctx.newPage();
+    await loginUi(me, `${who.toLowerCase()}-r122-${TAG}@example.com`, "/me");
+    const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
+    expect(whoami.status).toBe(200);
+    await linkPersonToUserBySql(id, whoami.data!.id);
+    await me.goto("/me");
+    await me.getByTestId("cookie-accept").click();
+    for (const width of [1280, 768, 320]) {
+      await me.setViewportSize({ width, height: 900 });
+      const career = me.getByTestId("me-career");
+      await expect(career).toBeVisible({ timeout: 20_000 });
+      if (want === null) {
+        await expect(career.getByTestId("me-career-empty")).toBeVisible();
+        await expect(career.locator('[data-testid^="career-sport-"]')).toHaveCount(0);
+      } else {
+        await expect(career.getByTestId("career-sport-generic")).toContainText(want);
+      }
+      await expectNoHorizontalScroll(me);
+      seen.push(`/me ${who}@${width}: "${(await career.innerText()).replace(/\s+/g, " ").trim()}"`);
+      await career.screenshot({ path: testInfo.outputPath(`r122-me-${who.toLowerCase()}-${width}.png`) });
+    }
+    await ctx.close();
   }
-  await coachCtx.close();
 
   // ---- the public player cards, anonymous -----------------------------------------------------------------------
   const orgs = await apiJson<{ id: string; slug: string }[]>(page.request, "/api/orgs");
@@ -332,6 +354,8 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
     ["Cole", cole, { lines: 0, rollup: null }],
     ["Pia", pia, { lines: 2, rollup: "2 matches" }],
     ["Lou", lou, { lines: 1, rollup: null }],
+    ["Ben", ben, { lines: 1, rollup: null }],
+    ["Leo", leo, { lines: 2, rollup: "2 matches" }],
   ] as const) {
     await anon.goto(`/shared/${orgSlug}/${comp.data!.slug}/players/${id}`, { waitUntil: "load" });
     if (banner) {
@@ -348,11 +372,11 @@ test("ruling 122: the coach is listed with no team match; the player keeps both;
       else await expect(rollup.getByTestId("career-sport-generic")).toContainText(want.rollup);
       await expectNoHorizontalScroll(anon);
       const rollupText = want.rollup === null ? "none" : `"${(await rollup.getByTestId("career-sport-generic").locator("p").nth(1).innerText()).trim()}"`;
-      seen.push(`public ${who}@${width}: matches "${(await list.innerText()).replace(/\s+/g, " ").trim().slice(0, 120)}"; career ${rollupText}`);
+      seen.push(`public ${who}@${width}: matches "${(await list.innerText()).replace(/\s+/g, " ").trim().slice(0, 140)}"; career ${rollupText}`);
       await list.screenshot({ path: testInfo.outputPath(`r122-public-${who.toLowerCase()}-${width}.png`) });
     }
   }
   await anonCtx.close();
-  expect(seen.length, "surfaces read").toBe(12);
+  expect(seen.length, "surfaces read").toBe(21);
   testInfo.annotations.push({ type: "numbers", description: seen.join(" | ") });
 });

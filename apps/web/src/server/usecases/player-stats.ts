@@ -21,6 +21,7 @@ import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { groupCareerStatsBySport, type CareerPlayedDivision, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
+import { appearanceSide, appearedFixtureIds } from "@/server/appearances";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -645,10 +646,7 @@ async function personDivisionScope(
     select d.id as division_id, d.competition_id
     from divisions d
     where d.org_id = ${orgId}
-      and (exists (
-            select 1 from entrant_members em
-            join entrants e on e.id = em.entrant_id
-            where em.person_id = ${personId} and e.division_id = d.id)
+      and (d.id in (${placedDivisions(sql, { by: "person", personId })})
         or exists (
             select 1 from player_stat_snapshots ps
             where ps.person_id = ${personId} and ps.division_id = d.id))`;
@@ -936,6 +934,29 @@ type Queryable = postgres.ISql;
  *  defect was duplicated three times because the query itself was). */
 export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPersons"; userId: string };
 
+/** The `persons p` rows an owner resolves to, as a join condition: the person, or every live person the user claimed. */
+function ownedPersons(q: Queryable, owner: MatchesOwner) {
+  return owner.by === "person" ? q`p.id = ${owner.personId}` : q`p.user_id = ${owner.userId} and p.merged_into is null`;
+}
+
+/** The divisions an owner's person is PLACED in — a roster row, or a `player` row on a fixture's sheet — as a
+ *  subquery of `division_id`s: the career count's candidate divisions (`personDivisionScope`, me.ts
+ *  `listMyCareerStats`). Ruling 122, round 1: a sheet player since removed from the roster still played there, and
+ *  the count credits it (`appearanceSide`), so the scope must reach the division. */
+export function placedDivisions(q: Queryable, owner: MatchesOwner) {
+  return q`
+    select e.division_id
+    from entrant_members em
+    join entrants e on e.id = em.entrant_id
+    join persons p on p.id = em.person_id and ${ownedPersons(q, owner)}
+    union
+    select f.division_id
+    from lineups l
+    join fixtures f on f.id = l.fixture_id
+    join persons p on p.id = l.person_id and ${ownedPersons(q, owner)}
+    where l.role = 'player'`;
+}
+
 /** A settled fixture, with what `fixturesPlayedInStats` needs to ask the engine about it. */
 export interface StatsFixture {
   id: string;
@@ -1030,35 +1051,22 @@ export async function careerMatchesByDivision(
   divisionIds: readonly string[],
 ): Promise<Map<string, CareerPlayedDivision>> {
   if (divisionIds.length === 0) return new Map();
-  const owned =
-    owner.by === "person"
-      ? db`p.id = ${owner.personId}`
-      : db`p.user_id = ${owner.userId} and p.merged_into is null`;
-  // Who a side's match credits (ruling 122, owner "B", 2026-10-12). An individual or pair entrant: its roster, as
-  // always. A team: only players — the side's recorded lineup where it declared one for the fixture (its `player`
-  // rows, bench included; who of the bench came on is ruling 121's later rule), else the roster's members registered
-  // in the player lane. A coach or staff member never gets the match: the roster row carries no such role (its
-  // `roles` are the sport's catalog roles, captain and the like), so the fallback reads the person's lane (V356) and
-  // a sheet reads its own `role` (V357). A player added after a lineup-less fixture is credited with it — no join
-  // date is stored (ruling 122's accepted residue). The public match lines apply the same rule
-  // (`readPlayerMatchSeeds`).
-  const rows = await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
-    select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
+  // Who appeared in which settled fixture is the ONE appearance rule (`@/server/appearances`, ruling 122 and its
+  // round-1 review) the public match lines read too: its relational half here, one side per fixture and owned person,
+  // then its bench half. Which of those matches were played is the engine's (`fixturesPlayedInStats`).
+  const sides = await db<(StatsFixture & { division_id: string; variant_key: string; slot: string | null; person_id: string })[]>`
+    select f.id, f.division_id, d.sport_key, d.module_version, d.variant_key, mine.slot, p.id as person_id
     from fixtures f
     join divisions d on d.id = f.division_id
-    join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
-    join persons p on ${owned}
+    join persons p on ${ownedPersons(db, owner)}
+    join lateral (${appearanceSide(db)}) mine on true
     where f.division_id in ${db(divisionIds as string[])}
-      and f.status in ${db(STATS_MATCH_STATUSES as string[])}
-      and (
-        (e.kind = 'team'
-          and exists (select 1 from lineups l
-                      where l.fixture_id = f.id and l.entrant_id = e.id and l.person_id = p.id and l.role = 'player'))
-        or (exists (select 1 from entrant_members em where em.entrant_id = e.id and em.person_id = p.id)
-          and (e.kind <> 'team'
-            or (p.lane = 'player'
-              and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = e.id))))
-      )`;
+      and f.status in ${db(STATS_MATCH_STATUSES as string[])}`;
+  const appeared = await appearedFixtureIds(
+    db,
+    sides.map((r) => ({ fixtureId: r.id, slot: r.slot, sportKey: r.sport_key, personId: r.person_id })),
+  );
+  const rows = [...new Map(sides.filter((r) => appeared.has(r.id)).map((r) => [r.id, r])).values()];
   const played = await fixturesPlayedInStats(db, rows);
   const matches = new Map<string, CareerPlayedDivision>();
   for (const r of rows) {

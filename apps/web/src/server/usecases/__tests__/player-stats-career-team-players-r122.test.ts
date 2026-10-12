@@ -24,10 +24,16 @@
 // with its role), `patchEntrant` (the late addition). A settled fixture is raw-flipped to `finalized` over the one
 // ledger row a real one always opens with (`core.start`, R115-1), as the career tests beside this one do.
 //
-// Both readers that credit a person with a match are asked, and must agree on every team-sport person: the career
-// count (`careerMatchesByDivision`, which the career listing cards from — one reader for both), by person and by
-// claimed user, and the public player page's match seeds (`readPlayerMatchSeeds`).
-import { afterAll, describe, expect, it } from "vitest";
+// Round 1 (coordinator review): the rule is ONE reader now (`@/server/appearances`), shared by the career count and
+// the public match lines, and the bench rows follow the owner's bench rule (`benchRowIsAppearance`, 2026-09-16) in
+// both. Every person below is asked through FIVE readers, which must all give the ruling's number: the career count
+// by person and by claimed user (`careerMatchesByDivision`), the public player page's settled match lines
+// (`readPlayerMatchLines`, bench rule applied), the console career (`personCareerStats`) and /me Career
+// (`listMyCareerStats`) — the last two through their own division scope (`placedDivisions`), which must reach a
+// division the person played in from a sheet after leaving the roster.
+//
+// The per-fixture cache of the lines' cricket figures is a pass-through here: this file asks the rule, not the cache.
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel, type AnySportModule } from "@seazn/engine/sport";
@@ -35,13 +41,17 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { readPlayerMatchSeeds } from "@/server/public-site/public-player-matches";
+import { benchRowIsAppearance } from "@/server/appearances";
+import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { putLineup } from "../fixtures";
 import { createPerson } from "../persons";
-import { careerMatchesByDivision } from "../player-stats";
+import { listMyCareerStats } from "../me";
+import { careerMatchesByDivision, personCareerStats } from "../player-stats";
+
+vi.mock("next/cache", () => ({ unstable_cache: (fn: (...args: unknown[]) => unknown) => fn, revalidateTag: vi.fn() }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 type Lane = "player" | "coach" | "staff";
@@ -106,7 +116,7 @@ async function seedDivision(auth: AuthCtx, m: AnySportModule) {
   const [{ slug, visibility }] = await sql<{ slug: string; visibility: string }[]>`
     select slug, visibility from competitions where id = ${comp.id}`;
   expect(visibility, `${m.key}: premise — the competition stayed public, so the public seeds can see it`).toBe("public");
-  return { divisionId: division.id, stageId, competitionId: comp.id, compSlug: slug };
+  return { divisionId: division.id, stageId, competitionId: comp.id, compSlug: slug, sportKey: m.key };
 }
 
 async function person(auth: AuthCtx, name: string, lane: Lane): Promise<string> {
@@ -152,18 +162,24 @@ async function claim(personId: string): Promise<string> {
   return id;
 }
 
-type Asked = { byPerson: number; byUser: number; seeds: number; carded: boolean };
-async function ask(personId: string, userId: string, d: { divisionId: string; competitionId: string; compSlug: string }, orgSlug: string): Promise<Asked> {
+type Asked = { byPerson: number; byUser: number; lines: number; career: number; me: number };
+type Scene = { divisionId: string; competitionId: string; compSlug: string; sportKey: string };
+/** One person through the five readers. Each org and each claimed user holds this one division of the sport, so a
+ *  career card's match count is the division's. */
+async function ask(auth: AuthCtx, personId: string, userId: string, d: Scene, orgSlug: string): Promise<Asked> {
   const byPerson = await careerMatchesByDivision(sql, { by: "person", personId }, [d.divisionId]);
   const byUser = await careerMatchesByDivision(sql, { by: "claimedPersons", userId }, [d.divisionId]);
-  const seeds = await readPlayerMatchSeeds(sql, { personId, competitionId: d.competitionId, orgSlug, compSlug: d.compSlug, locale: "en" });
+  const lines = await readPlayerMatchLines(sql, { personId, competitionId: d.competitionId, orgSlug, compSlug: d.compSlug, locale: "en" });
+  const card = (sports: { sport_key: string; matches: number }[]) => sports.find((s) => s.sport_key === d.sportKey)?.matches ?? 0;
   return {
     byPerson: byPerson.get(d.divisionId)?.matches ?? 0,
     byUser: byUser.get(d.divisionId)?.matches ?? 0,
-    seeds: seeds.filter((s) => s.status !== "in_play").length,
-    carded: byPerson.has(d.divisionId),
+    lines: lines.filter((l) => l.result !== "live").length,
+    career: card((await personCareerStats(auth, personId)).sports),
+    me: card(await listMyCareerStats(userId)),
   };
 }
+const every = (n: number): Asked => ({ byPerson: n, byUser: n, lines: n, career: n, me: n });
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -181,9 +197,9 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
     expect(SPORTS.map((m) => m.key).sort()).toEqual([...new Set(builtinModules.map((m) => m.key))].sort());
   });
 
-  it("every team sport: coach and staff get 0; a recorded lineup credits only its players; no lineup credits the roster's players; and a player added after a lineup-less fixture still gets it (ruling 122's accepted residue)", async () => {
+  it("every team sport: coach and staff get 0; a recorded lineup credits only its players, a bench row by the bench rule; no lineup credits the roster's players; a player added after a lineup-less fixture still gets it (ruling 122's accepted residue) — five readers agree", async () => {
     const { auth, orgSlug } = await seedOrg();
-    const n = { sports: 0, persons: 0, zeroes: 0, residue: 0 };
+    const n = { sports: 0, persons: 0, asked: 0, zeroes: 0, residue: 0, leavers: 0, duals: 0 };
     for (const m of TEAM_SPORTS) {
       const d = await seedDivision(auth, m);
       const p = {
@@ -193,100 +209,103 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         sheetCoach: await person(auth, `${m.key} Sheet Coach`, "player"),
         coach: await person(auth, `${m.key} Coach`, "coach"),
         staff: await person(auth, `${m.key} Staff`, "staff"),
+        leaver: await person(auth, `${m.key} Leaver`, "player"),
+        dual: await person(auth, `${m.key} Dual`, "player"),
         oppPlayer: await person(auth, `${m.key} Opp Player`, "player"),
         oppCoach: await person(auth, `${m.key} Opp Coach`, "coach"),
         late: await person(auth, `${m.key} Late`, "player"),
       };
-      const squad = [p.rosterPlayer, p.starter, p.bench, p.sheetCoach, p.coach, p.staff];
+      const squad = [p.rosterPlayer, p.starter, p.bench, p.sheetCoach, p.coach, p.staff, p.leaver, p.dual];
       const mine = await entrant(auth, d.divisionId, "team", `${m.key} Mine`, squad);
-      const theirs = await entrant(auth, d.divisionId, "team", `${m.key} Theirs`, [p.oppPlayer, p.oppCoach]);
+      // Dual is on BOTH teams of the division.
+      const theirs = await entrant(auth, d.divisionId, "team", `${m.key} Theirs`, [p.oppPlayer, p.oppCoach, p.dual]);
 
-      // F1: no lineup on either side. F2: Mine recorded a sheet — a starter, a bench player, a squad player the
-      // sheet names as coach, and the registered coach and staff under their own roles; Theirs recorded none.
+      // F1: no lineup on either side. F2: Mine records a sheet — a starter, a bench player, a squad player the sheet
+      // names as coach, the registered coach on the bench as coach, staff as staff, and the leaver as a starter;
+      // Theirs records none. Then the leaver leaves Mine's roster and the late player joins it. F3: Mine records a
+      // sheet with the starter and, on the bench, the late player and Dual; Theirs none.
       const f1 = await scheduledFixture(d.stageId, d.divisionId, mine, theirs);
       const f2 = await scheduledFixture(d.stageId, d.divisionId, mine, theirs);
       await sheet(auth, f2, mine, [
         { personId: p.starter, slot: "starting", role: "player" },
         { personId: p.bench, slot: "bench", role: "player" },
         { personId: p.sheetCoach, slot: "starting", role: "coach" },
-        { personId: p.coach, slot: "starting", role: "coach" },
+        { personId: p.coach, slot: "bench", role: "coach" },
         { personId: p.staff, slot: "bench", role: "staff" },
+        { personId: p.leaver, slot: "starting", role: "player" },
       ]);
-      const [{ count: sheetRows }] = await sql<{ count: number }[]>`
-        select count(*)::int as count from lineups where fixture_id = ${f2}`;
-      expect(sheetRows, `${m.key}: premise — the sheet was stored on F2, and only on Mine's side`).toBe(5);
       await settle(f1);
       await settle(f2);
-      // The late player joins Mine's roster after both fixtures settled.
-      await patchEntrant(auth, mine, { members: [...squad, p.late].map(member) } as never);
+      await patchEntrant(auth, mine, { members: [...squad.filter((id) => id !== p.leaver), p.late].map(member) } as never);
+      const f3 = await scheduledFixture(d.stageId, d.divisionId, mine, theirs);
+      await sheet(auth, f3, mine, [
+        { personId: p.starter, slot: "starting", role: "player" },
+        { personId: p.late, slot: "bench", role: "player" },
+        { personId: p.dual, slot: "bench", role: "player" },
+      ]);
+      await settle(f3);
+      const [{ count: sheetRows }] = await sql<{ count: number }[]>`
+        select count(*)::int as count from lineups where fixture_id in (${f1}, ${f2}, ${f3})`;
+      expect(sheetRows, `${m.key}: premise — the sheets were stored on F2 and F3, Mine's side only`).toBe(9);
+      const [{ count: leaverRows }] = await sql<{ count: number }[]>`
+        select count(*)::int as count from entrant_members where person_id = ${p.leaver}`;
+      expect(leaverRows, `${m.key}: premise — the leaver is on no roster`).toBe(0);
 
-      // Expected, per fixture, from ruling 122's text:
+      // Expected, per fixture, from ruling 122's text; a bench row from the bench rule's own declaration — none of
+      // these bench players batted or bowled (the ledgers hold only their opening row), so no figures.
+      const B = benchRowIsAppearance(m.key, undefined) ? 1 : 0;
       const expected: Record<keyof typeof p, number> = {
-        rosterPlayer: 1 + 0, // F1: a roster player, no lineup. F2: a lineup was recorded and does not name them.
-        starter: 1 + 1, // F1: roster player. F2: in the lineup as a player.
-        bench: 1 + 1, // F1: roster player. F2: in the lineup (as a player; the substitutes-who-came-on rule is ruling 121's).
-        sheetCoach: 1 + 0, // F1: a roster player. F2: in the lineup, but as coach — "coach and staff never get one".
-        coach: 0 + 0, // a coach never gets a match, lineup or not.
-        staff: 0 + 0, // nor staff.
-        oppPlayer: 1 + 1, // Theirs recorded no lineup for either fixture: the roster's players get both.
-        oppCoach: 0 + 0, // the roster's coach gets neither.
-        late: 1 + 0, // ACCEPTED RESIDUE: F1 had no lineup and no join date is stored. F2's lineup does not name them.
+        rosterPlayer: 1 + 0 + 0, // F1: a roster player, no lineup. F2, F3: a lineup was recorded and does not name them.
+        starter: 1 + 1 + 1, // F1: roster player. F2, F3: in the lineup as a starting player.
+        bench: 1 + B + 0, // F1: roster player. F2: on the bench — the bench rule. F3: not on the sheet.
+        sheetCoach: 1 + 0 + 0, // F1: a roster player. F2: in the lineup as coach — "coach and staff never get one".
+        coach: 0 + 0 + 0, // a coach never gets a match: roster, or a coach on the lineup's bench.
+        staff: 0 + 0 + 0, // nor staff.
+        leaver: 0 + 1 + 0, // F1: no lineup, and no longer on the roster (it stores no dates). F2: a starting player on the sheet.
+        // On both teams, read once per fixture: F1 once, not twice; F2 by Theirs' roster (no lineup there); F3 the same —
+        // a roster stand-in outranks Mine's bench row, so the side that credits them is the one read.
+        dual: 1 + 1 + 1,
+        oppPlayer: 1 + 1 + 1, // Theirs recorded no lineup: the roster's players get every fixture.
+        oppCoach: 0 + 0 + 0, // the roster's coach gets none.
+        late: 1 + 0 + B, // ACCEPTED RESIDUE: F1 had no lineup and no join date is stored. F2: not named. F3: the bench rule.
       };
       for (const [role, personId] of Object.entries(p) as [keyof typeof p, string][]) {
         const userId = await claim(personId);
-        const got = await ask(personId, userId, d, orgSlug);
-        const want = expected[role];
-        expect(got, `${m.key} / ${role}`).toEqual({ byPerson: want, byUser: want, seeds: want, carded: want > 0 });
+        expect(await ask(auth, personId, userId, d, orgSlug), `${m.key} / ${role}`).toEqual(every(expected[role]));
         n.persons++;
-        if (want === 0) n.zeroes++;
+        n.asked += 5;
+        if (expected[role] === 0) n.zeroes++;
       }
-      if (expected.late === 1) n.residue++;
+      if (expected.late >= 1) n.residue++;
+      if (expected.leaver === 1) n.leavers++;
+      if (expected.dual === 3) n.duals++;
       n.sports++;
     }
-    // Anti-vacuity: every team sport the engine declares was swept, each with its zero-credit and residue scenes.
+    // Anti-vacuity: every team sport the engine declares, each person through all five readers.
     expect(n.sports).toBe(TEAM_SPORTS.length);
-    expect(n.persons).toBe(TEAM_SPORTS.length * 9);
+    expect(n.persons).toBe(TEAM_SPORTS.length * 11);
+    expect(n.asked).toBe(TEAM_SPORTS.length * 11 * 5);
     expect(n.zeroes).toBe(TEAM_SPORTS.length * 3);
-    expect(n.residue).toBe(TEAM_SPORTS.length);
-  }, 300_000);
+    expect([n.residue, n.leavers, n.duals]).toEqual([TEAM_SPORTS.length, TEAM_SPORTS.length, TEAM_SPORTS.length]);
+  }, 600_000);
 
-  it("ruling 122: a lineup-only player — on the sheet, since removed from the roster — still gets the match the sheet recorded", async () => {
-    // Single sport, deliberately: the rule's lineup branch is one SQL predicate for every team sport, which the sweep
-    // above covers; this pins the one shape the sweep does not build (a sheet row with no roster row behind it).
-    const { auth, orgSlug } = await seedOrg();
-    const m = TEAM_SPORTS[0]!;
-    const d = await seedDivision(auth, m);
-    const left = await person(auth, `${m.key} Left`, "player");
-    const stays = await person(auth, `${m.key} Stays`, "player");
-    const opp = await person(auth, `${m.key} Opp`, "player");
-    const mine = await entrant(auth, d.divisionId, "team", "Mine", [left, stays]);
-    const theirs = await entrant(auth, d.divisionId, "team", "Theirs", [opp]);
-    const f = await scheduledFixture(d.stageId, d.divisionId, mine, theirs);
-    await sheet(auth, f, mine, [{ personId: left, slot: "starting", role: "player" }]);
-    await settle(f);
-    await patchEntrant(auth, mine, { members: [stays].map(member) } as never);
-    const [{ count }] = await sql<{ count: number }[]>`
-      select count(*)::int as count from entrant_members where entrant_id = ${mine} and person_id = ${left}`;
-    expect(count, "premise: no roster row behind the sheet row").toBe(0);
-    expect(await ask(left, await claim(left), d, orgSlug)).toEqual({ byPerson: 1, byUser: 1, seeds: 1, carded: true });
-    // The positive pair: the squad player the sheet left out gets nothing for it.
-    expect(await ask(stays, await claim(stays), d, orgSlug)).toEqual({ byPerson: 0, byUser: 0, seeds: 0, carded: false });
-  }, 60_000);
-
-  it("every individual-entrant sport is unchanged: the roster credits whoever is on it, whatever their lane", async () => {
+  it("every individual-entrant sport is unchanged: the roster credits whoever is on it, whatever their lane or a sheet says — five readers agree", async () => {
     const { auth, orgSlug } = await seedOrg();
     const n = { sports: 0, persons: 0, singles: 0, pairs: 0 };
     for (const m of NON_TEAM_SPORTS) {
       const d = await seedDivision(auth, m);
       if (kindsOf(m).includes("individual")) {
-        // A person registered under the coach lane, on an individual entrant: credited by the roster as always.
+        // A person registered under the coach lane, on an individual entrant whose sheet names them as coach:
+        // credited by the roster as always — neither the lane nor a sheet is read for an individual side.
         const solo = await person(auth, `${m.key} Solo`, "coach");
         const rival = await person(auth, `${m.key} Rival`, "player");
         const soloE = await entrant(auth, d.divisionId, "individual", "Solo", [solo]);
         const rivalE = await entrant(auth, d.divisionId, "individual", "Rival", [rival]);
-        await settle(await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE));
+        const f = await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE);
+        await sheet(auth, f, soloE, [{ personId: solo, slot: "bench", role: "coach" }]);
+        await settle(f);
         for (const personId of [solo, rival]) {
-          expect(await ask(personId, await claim(personId), d, orgSlug), `${m.key}: individual`).toEqual({ byPerson: 1, byUser: 1, seeds: 1, carded: true });
+          expect(await ask(auth, personId, await claim(personId), d, orgSlug), `${m.key}: individual`).toEqual(every(1));
           n.persons++;
         }
         n.singles++;
@@ -298,9 +317,12 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
         const e = await person(auth, `${m.key} Pair D`, "player");
         const ab = await entrant(auth, d.divisionId, "pair", "AB", [a, b]);
         const ce = await entrant(auth, d.divisionId, "pair", "CE", [c, e]);
-        await settle(await scheduledFixture(d.stageId, d.divisionId, ab, ce));
+        const f = await scheduledFixture(d.stageId, d.divisionId, ab, ce);
+        // A pair sheet naming only A: B is still credited by the pair's roster.
+        await sheet(auth, f, ab, [{ personId: a, slot: "starting", role: "player" }]);
+        await settle(f);
         for (const personId of [a, b]) {
-          expect(await ask(personId, await claim(personId), d, orgSlug), `${m.key}: pair`).toEqual({ byPerson: 1, byUser: 1, seeds: 1, carded: true });
+          expect(await ask(auth, personId, await claim(personId), d, orgSlug), `${m.key}: pair`).toEqual(every(1));
           n.persons++;
         }
         n.pairs++;
@@ -314,26 +336,5 @@ describe.skipIf(!HAS_DB)("ruling 122: a team match counts on a career record onl
     expect(n.pairs).toBe(pairSports);
     expect(pairSports).toBeGreaterThan(0);
     expect(n.persons).toBe(INDIVIDUAL_SPORTS.length * 2 + pairSports * 2);
-  }, 300_000);
-
-  it("individual entrants are unchanged: a sheet naming an individual entrant's member as coach does not reach the career count", async () => {
-    // Single sport, deliberately: the kind guard is one SQL predicate, and the sweep above covers every individual
-    // sport's roster credit. Only the career count is asked: the public match lines read a sheet for every entrant
-    // kind (their own rule, older than ruling 122 and unchanged by it).
-    const { auth } = await seedOrg();
-    const m = INDIVIDUAL_SPORTS[0]!;
-    const d = await seedDivision(auth, m);
-    const solo = await person(auth, `${m.key} Solo`, "player");
-    const rival = await person(auth, `${m.key} Rival`, "player");
-    const soloE = await entrant(auth, d.divisionId, "individual", "Solo", [solo]);
-    const rivalE = await entrant(auth, d.divisionId, "individual", "Rival", [rival]);
-    const f = await scheduledFixture(d.stageId, d.divisionId, soloE, rivalE);
-    await sheet(auth, f, soloE, [{ personId: solo, slot: "starting", role: "coach" }]);
-    await settle(f);
-    const [{ count }] = await sql<{ count: number }[]>`select count(*)::int as count from lineups where fixture_id = ${f}`;
-    expect(count, "premise: the sheet was stored").toBe(1);
-    const userId = await claim(solo);
-    expect((await careerMatchesByDivision(sql, { by: "person", personId: solo }, [d.divisionId])).get(d.divisionId)?.matches).toBe(1);
-    expect((await careerMatchesByDivision(sql, { by: "claimedPersons", userId }, [d.divisionId])).get(d.divisionId)?.matches).toBe(1);
-  }, 60_000);
+  }, 600_000);
 });

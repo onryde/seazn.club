@@ -1071,6 +1071,30 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     }
   });
 
+  it("ruling 122, round 1: the career count agrees with the settled match lines for EVERY person in the scene — one appearance rule, the bench rule and cricket's figures included", async () => {
+    // One reader (`@/server/appearances`) behind both: a cricket bench player who came on and bowled is a match in
+    // both (Bea), one who never came on in neither (Ula), a football-style bench row in neither (Ben's Eagles v Foxes),
+    // a coach on the sheet in neither (Cora).
+    const divisionIds = (await sql<{ id: string }[]>`
+      select id from public_divisions_v where competition_id = ${scene.competitionId}`).map((d) => d.id);
+    const n = { persons: 0, matches: 0 };
+    const counts: Record<string, number> = {};
+    for (const [name, personId] of Object.entries(scene.persons)) {
+      const byDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
+      const counted = [...byDivision.values()].reduce((sum, c) => sum + c, 0);
+      const settled = (await linesFor(personId)).filter((l) => l.result !== "live").length;
+      expect(counted, `${name}: the career count vs the settled lines`).toBe(settled);
+      counts[name] = counted;
+      n.persons++;
+      n.matches += counted;
+    }
+    expect(n.persons, "every person in the scene asked").toBe(Object.keys(scene.persons).length);
+    expect(n.persons).toBeGreaterThan(15);
+    expect(n.matches).toBeGreaterThan(0);
+    // The bench rule's own declaration, read off the scene's two cricket bench players' figures.
+    expect([counts.bea, counts.ula, counts.cora, counts.ben]).toEqual([1, 0, 0, 1]);
+  });
+
   it("ORDER: an unscheduled fixture sorts by when it was last recorded, not to either end", async () => {
     const rows = await sql<{ id: string; scheduled_at: Date | null; updated_at: Date }[]>`
       select f.id, f.scheduled_at, m.updated_at from fixtures f join match_states m on m.fixture_id = f.id
