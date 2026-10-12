@@ -50940,7 +50940,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/arbiter": {
       "post": {
-        "summary": "A signed-in organiser joins the board's video meeting receive-only (RealtimeKit preset `arbiter`): their OWN token for a FRESH participant (one per open, never reused; the server removes it when the panel closes, when the organiser's role is gone, after 3 hours, or when the room is torn down), and the two players' participant ids by colour. Never a player's token; never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_ENDED; 503 VIDEO_UNAVAILABLE when the video vendor is down",
+        "summary": "A signed-in organiser joins the board's video meeting receive-only (RealtimeKit preset `arbiter`): their OWN token for a FRESH participant (one per open, never reused; the server removes it when the panel closes, when the organiser's role is gone, when the organiser is now seated on the board, after 3 hours, or when the room is torn down), and the two players' participant ids by colour. Never a player's token; never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_ENDED; 503 VIDEO_UNAVAILABLE when the video vendor is down",
         "tags": [
           "fixtures"
         ],
