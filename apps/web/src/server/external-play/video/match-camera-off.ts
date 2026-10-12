@@ -19,8 +19,11 @@
 // OUR faults are not the player's (T14 re-review 3, I-1): when the player's
 // browser cannot refuse a remote stream it leaves the meeting and re-joins
 // (camera-loader.ts, D7), and stamps the gap on the server
-// (fixture_video_guard_faults). Each stamped interval counts as covered, so
-// only what lies outside it is judged — never a camera_lost for our gap.
+// (fixture_video_guard_faults). A stamped interval counts as covered where
+// the player had NO connection in the meeting — a real fault takes them out
+// (T14 fix round 6, M-1, adopted): a stamp held open while a connection sat
+// in the meeting with its camera off excuses nothing, and that time is judged
+// as any other. Never a camera_lost for our gap; never an excuse for theirs.
 //
 // A stamp excuses; it never HIDES (T14 fix round 5, ruling 1). The stamps are
 // the player's browser's claim, so past either threshold in one match —
@@ -95,6 +98,22 @@ export type StampedInMatch = {
   flag: boolean;
 };
 
+/** `spans` minus `holes` (both any order): what of each span no hole covers. */
+function minus(spans: readonly Span[], holes: readonly Span[]): Span[] {
+  const cut = clippedUnion(holes, -Infinity, Infinity);
+  const out: Span[] = [];
+  for (const [a, b] of spans) {
+    let cursor = a;
+    for (const [x, y] of cut) {
+      if (y <= cursor || x >= b) continue;
+      if (x > cursor) out.push([cursor, x]);
+      cursor = Math.max(cursor, y);
+    }
+    if (b > cursor) out.push([cursor, b]);
+  }
+  return out;
+}
+
 /** Our safeguard's stamps over ONE match window, and whether they are many
  *  or long enough that the organiser must be told (ruling 1, fix round 5). */
 export function stampedInMatch(
@@ -121,7 +140,11 @@ export function matchCameraOff(
 ): CameraOffInMatch {
   const [w0, w1] = windowSpan(window);
 
-  const on: Span[] = guardFaults.map(faultSpan);
+  // A stamp excuses only while no connection of the player was in the
+  // meeting (M-1): our guard's fault is a LEAVE, so a connected peer means the
+  // stamp is not what kept the camera out.
+  const connected: Span[] = reports.map((r): Span => [Date.parse(r.joinedAt), Date.parse(r.leftAt)]);
+  const on: Span[] = minus(guardFaults.map(faultSpan), connected);
   const confirmedOff: Span[] = [];
   for (const r of reports) {
     let cursor = Date.parse(r.joinedAt);

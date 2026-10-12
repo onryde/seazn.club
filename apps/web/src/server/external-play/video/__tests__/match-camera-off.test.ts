@@ -170,6 +170,41 @@ describe("matchCameraOff — our guard's faults are not the player's (I-1)", () 
     expect(matchCameraOff(win(60, 840), reports, [])).toEqual(matchCameraOff(win(60, 840), reports));
   });
 
+  // T14 fix round 6, M-1 (adopted): a real guard fault TAKES the player out
+  // of the meeting — failClosed leaves, the re-join is a new peer. So a stamp
+  // excuses only the time no connection of the player was in the meeting; a
+  // stamp held open while a connection sat in the meeting with its camera
+  // off excuses nothing, and that time is judged as any other.
+  it("M-1: stamped while ABSENT from the meeting ⇒ excused; stamped while PRESENT with the camera off ⇒ counted — the same 70 s, the same stamp", () => {
+    // Sample instants are multiples of the 7 s step, so a gap's edges are exact.
+    const stamp = [span(294, 364)];
+    // Absent: the old peer left at 294, the re-join is a new peer at 364.
+    const absent = [onThroughout(0, 294), onThroughout(364, 900)];
+    expect(offs(matchCameraOff(win(60, 840), absent)), "premise: absent and unstamped, it is off").toEqual([[at(294), at(364), 70]]);
+    expect(offs(matchCameraOff(win(60, 840), absent, stamp)), "absent: ours").toEqual([]);
+    // Present: ONE connection 0–900, its camera producing nothing 294–364.
+    const present = [connection({ joined: 0, left: 900, samples: [...every(0, 294), ...every(364, 900)] })];
+    expect(offs(matchCameraOff(win(60, 840), present)), "premise: present and unstamped, the same gap").toEqual([[at(294), at(364), 70]]);
+    expect(offs(matchCameraOff(win(60, 840), present, stamp)), "present without video: the player's, stamp or not").toEqual([[at(294), at(364), 70]]);
+  });
+
+  it("M-1: only the ABSENT part of a stamp is excused — a stamp straddling a leave excuses from the leave on, and a present-but-off remainder past 15 s still counts", () => {
+    // In the meeting 0–336 with no video after 294; out 336–364; back at 364. Stamped 294–364.
+    const reports = [connection({ joined: 0, left: 336, samples: every(0, 294) }), onThroughout(364, 900)];
+    expect(offs(matchCameraOff(win(60, 840), reports)), "premise: unstamped, 294–364 is off").toEqual([[at(294), at(364), 70]]);
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(294, 364)])), "only 336–364 was ours").toEqual([[at(294), at(336), 42]]);
+    // The pair: the same stamp, the camera on right up to the leave ⇒ nothing off.
+    const honest = [onThroughout(0, 336), onThroughout(364, 900)];
+    expect(offs(matchCameraOff(win(60, 840), honest, [span(294, 364)]))).toEqual([]);
+  });
+
+  it("M-1: a second tab in the meeting during a stamp is a connected peer — its camera-off time is not excused", () => {
+    // Tab A leaves at 294 (our fault); tab B sits in the meeting 210–504 with no video; C returns at 504.
+    const reports = [onThroughout(0, 294), connection({ joined: 210, left: 504, samples: [] }), onThroughout(504, 900)];
+    expect(offs(matchCameraOff(win(60, 840), reports)), "premise").toEqual([[at(294), at(504), 210]]);
+    expect(offs(matchCameraOff(win(60, 840), reports, [span(294, 504)])), "B was in, camera off: counted").toEqual([[at(294), at(504), 210]]);
+  });
+
   it("an inverted fault is refused — a stamp whose end precedes its start is not evidence", () => {
     expect(() => matchCameraOff(win(60, 840), [], [span(400, 300)])).toThrow(/fault/);
   });
