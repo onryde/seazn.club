@@ -15,6 +15,9 @@
 //   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
 //     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
 //     (code 1..8, pool ^[A-Z]$), and `role.kind` as an OPEN string whose prose lists every kind the engine declares.
+//   * the record upload's contract (capture-record.v1, PROPOSED 2026-10-12, design only): no route and no twin yet, so
+//     its fixtures are judged by the published bytes alone, its keys against capture's allow-list typed here, and a
+//     tripwire fails the day a twin appears without joining the parity test.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
 //
 // Pure — no DB. One "sport" on purpose: the contract reads no sport (the capture surface is sport-agnostic).
@@ -50,6 +53,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
+  "capture-record.v1.json": "fc7f3ff16d4628793f87ddda74709c9857a84e8aa7289bfb3102a90b223e9792",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -244,6 +248,47 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
 };
 
+// ---------------------------------------------------------------------------------------------------------------
+// capture-record.v1 — PROPOSED, design only (spec 2026-10-12-capture-record-upload-design.md). No route, no twin.
+// ---------------------------------------------------------------------------------------------------------------
+const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
+/** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
+const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
+  ["line-", "", 23], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+];
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 7ea8f63, list for list: the rulebook the
+ *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
+ *  bump here (the spec's §Body). */
+const ALLOW_LIST = {
+  reserved: ["at", "kind", "level"],
+  plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
+    "failure", "field", "from", "host", "intent", "key", "kind", "lastEnd", "lock", "mode", "ms", "notReady", "op", "phase",
+    "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side", "sid", "site",
+    "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
+  publicUrl: ["url", "playbackUrl", "overlayUrl"],
+  text: ["message", "problems"],
+  never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
+  scalars: ["audioFps", "camera", "counted", "encodeListed", "exitAtMs", "failed", "gapMs", "granted", "headroom", "held",
+    "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs",
+    "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
+    "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive"],
+};
+/** The spec's answer table (§Answers): every refusal POST …/records answers, with its status. Never `replaced` (R4). */
+const SPEC_RECORD_REFUSALS: Record<string, number> = {
+  code_ended: 401, not_a_stream_code: 404, too_large: 413, invalid: 422, rate_limited: 429, unavailable: 503,
+};
+/** The secret-shaped rules no schema can state (spec §Body, S1–S5): each `line-secret-*` fixture is a shape the file
+ *  ADMITS and the server refuses on one rule, which the root description must state in these words. S1's vector
+ *  assumes this Bearer (the route's test sends it). */
+const RECORD_SENDING_TOK = "fake-tok-0000000000000";
+const RECORD_SERVER_ONLY: Record<string, string> = {
+  "line-secret-sending-tok": "S1 the Bearer token that sent the record",
+  "line-secret-ingest-url": "S2 an ingest URL",
+  "line-secret-srt-streamid": "S3 a streamid= or passphrase= pair",
+  "line-secret-userinfo": "S4 a URL with userinfo",
+  "line-secret-bearer": "S5 a Bearer credential",
+};
+
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
  *  stricter of the two readings a vendoring repo may take, so a fixture the file admits only with formats off fails. */
 function fileValidator(): (file: string, pointer: string, value: unknown) => boolean {
@@ -258,22 +303,25 @@ function fileValidator(): (file: string, pointer: string, value: unknown) => boo
 }
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
-  it("each of the five contracts is checksummed (the cross-repo drift gate)", () => {
+  it("each of the six contracts is checksummed (the cross-repo drift gate)", () => {
     let checked = 0;
     for (const [file, sha] of Object.entries(SHA256)) {
       expect(createHash("sha256").update(contractText(file)).digest("hex"), file).toBe(sha);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 
-  it("v1 is gone, and every published capture contract is one of the five twinned ones (W4, §6.13; W27)", () => {
+  it("v1 is gone, and every published capture contract is one of the five twinned ones or the design-only record (W4, §6.13; W27; 2026-10-12)", () => {
     expect(existsSync(resolve(CONTRACTS, "capture-qr.v1.json")), "the v1 contract").toBe(false);
     expect(existsSync(resolve(FIXTURES, "capture-qr.v1")), "the v1 fixtures").toBe(false);
     const files = readdirSync(CONTRACTS).filter((f) => f.startsWith("capture-")).sort();
     expect(files).toEqual(Object.keys(SHA256).sort());
     const dirs = readdirSync(FIXTURES).filter((f) => f.startsWith("capture-")).sort();
-    expect(dirs).toEqual(Object.keys(DIRS).sort());
+    expect(dirs).toEqual([...Object.keys(DIRS), RECORD_DIR].sort());
+    // The twinned five are DIRS; the record is the one contract without a twin, and it is not in DIRS.
+    expect(Object.values(DIRS).map((d) => d.file)).not.toContain(RECORD);
+    expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([RECORD]);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -668,7 +716,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(contractText(file), `${file}: a retired custom ingest host`).not.toMatch(RETIRED);
       contracts++;
     }
-    expect(contracts).toBe(5);
+    expect(contracts).toBe(6);
   });
 
   it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, never sent by this server", () => {
@@ -974,6 +1022,160 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // match_finished is the one NEW word; it carries no extras.
     expect(SPEC_REFUSAL_CODES.filter((c) => !(c in SPEC_REFUSALS))).toEqual(["match_finished"]);
     expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
+  });
+
+  it("capture-record.v1 (design only): every fixture is judged by the published bytes under ajv, counted per shape — valid* admitted, invalid-*/tampered* refused, and each line-secret-* ADMITTED, its rule being the server's alone and stated in the root's prose", () => {
+    const fileAdmits = fileValidator();
+    const root = rootOf(contract(RECORD));
+    const names = readdirSync(resolve(FIXTURES, RECORD_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
+    const perRoute = new Map<string, number>();
+    let secrets = 0;
+    for (const name of names) {
+      const route = RECORD_ROUTES.find(([prefix]) => name.startsWith(prefix));
+      expect(route, `${RECORD_DIR}/${name}: no shape routes this fixture`).toBeDefined();
+      const [prefix, pointer] = route!;
+      const kind = name.slice(prefix.length);
+      const value = fixture(RECORD_DIR, name);
+      let admitted: boolean;
+      if (/^valid(-.+)?$/.test(kind)) admitted = true;
+      else if (/^(invalid-.+|tampered(-.+)?)$/.test(kind)) admitted = false;
+      else if (prefix === "line-" && /^secret-.+$/.test(kind)) {
+        // The file admits it; the server refuses it on the one rule its entry names, which the root states.
+        const rule = RECORD_SERVER_ONLY[name];
+        expect(rule, `${name}: a secret-shaped vector names its rule`).toBeDefined();
+        expect(root.description, `${name}: the root states "${rule}"`).toContain(rule);
+        admitted = true;
+        secrets++;
+      } else expect.fail(`${RECORD_DIR}/${name}: neither valid* nor invalid-*/tampered* nor line-secret-*`);
+      expect(fileAdmits(RECORD, pointer, value), `${RECORD_DIR}/${name}: ${RECORD}${pointer} ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+      perRoute.set(prefix, (perRoute.get(prefix) ?? 0) + 1);
+    }
+    let routes = 0;
+    for (const [prefix, , count] of RECORD_ROUTES) {
+      expect(perRoute.get(prefix) ?? 0, `${RECORD_DIR}: "${prefix}" fixtures checked`).toBe(count);
+      routes++;
+    }
+    expect(routes).toBe(3);
+    expect(names).toHaveLength(23 + 6 + 8);
+    // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
+    expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
+    expect(secrets).toBe(5);
+    // S1's vector is the Bearer the route's test will send, as a plain word the file cannot tell from any other.
+    expect(fixture(RECORD_DIR, "line-secret-sending-tok").state).toBe(RECORD_SENDING_TOK);
+  });
+
+  it("capture-record.v1 keys are capture's allow-list, class for class: the line's own three, every plain/publicUrl/text/scalars key (the field kind written field_kind), no never key, no unnamed key — each class proven through ajv, counted", () => {
+    const root = rootOf(contract(RECORD));
+    const written = (k: string): string => (ALLOW_LIST.reserved.includes(k) ? `field_${k}` : k);
+    const lists = [ALLOW_LIST.reserved, ALLOW_LIST.plain, ALLOW_LIST.publicUrl, ALLOW_LIST.text, ALLOW_LIST.scalars];
+    const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars];
+    // Premise: the lists are disjoint once `kind` is renamed, so the key count is their sum.
+    expect(new Set(expected).size, "premise: disjoint lists").toBe(lists.reduce((n, l) => n + l.length, 0));
+    expect(expected).toHaveLength(3 + 47 + 3 + 2 + 37);
+    expect(Object.keys(root.properties as Json).sort()).toEqual([...expected].sort());
+    expect(root.additionalProperties).toBe(false);
+    expect([...(root.required as string[])].sort()).toEqual(["at", "kind"]);
+    for (const k of ALLOW_LIST.never) expect(Object.keys(root.properties as Json), `never key ${k}`).not.toContain(k);
+
+    // Behaviour, through the published bytes: each key, on a minimal line, admits and refuses by its class.
+    const fileAdmits = fileValidator();
+    const base: Json = { at: "2026-10-11T21:19:03.123Z", kind: "probe" };
+    let probes = 0;
+    const probe = (k: string, v: unknown, want: boolean): void => {
+      expect(fileAdmits(RECORD, "", { ...base, [k]: v }), `${k} = ${JSON.stringify(v)}`).toBe(want);
+      probes++;
+    };
+    const SCALARS = [3, 0.4, true, false, null];
+    // allow-list.json's plainWord (^[A-Za-z0-9_.:-]{1,64}$) and its mask (***).
+    const WORDS = ["live", "SocketException", "code.error", "a:b-c_d.e", "x".repeat(64), "***"];
+    const NOT_WORDS = ["two words", "a/b", "x".repeat(65), "", "k=v", "a@b", "a?b"];
+    const plain = ALLOW_LIST.plain.filter((p) => p !== "tokenTag").map(written);
+    for (const k of plain) {
+      for (const v of [...WORDS, ...SCALARS]) probe(k, v, true);
+      for (const v of [...NOT_WORDS, {}, []]) probe(k, v, false);
+    }
+    // tokenTag: the allow-list's own reason narrows it — "which issue of a code, eight hex digits; never the token".
+    // The admitted values are capture's token-tag-vectors.json tags.
+    for (const v of ["c980ff38", "811c9dc5", "0076912c"]) probe("tokenTag", v, true);
+    for (const v of ["C980FF38", "c980ff3", "c980ff38ab", "***", 3, null, true]) probe("tokenTag", v, false);
+    for (const k of ALLOW_LIST.publicUrl) {
+      for (const v of ["https://customer-k7q2.cloudflarestream.com/0f1e/manifest/video.m3u8", "HTTPS://example.com", "https://example.com:443/x", "***", ...SCALARS]) probe(k, v, true);
+      for (const v of ["http://example.com/x", "https://u:p@example.com/x", "https://example.com/x?token=1", "https://example.com/x#f", "rtmps://live.cloudflare.com:443/live/", "word", {}]) probe(k, v, false);
+    }
+    for (const k of ALLOW_LIST.text) {
+      for (const v of ["free text, with spaces / and ? and =", "", "***", ...SCALARS]) probe(k, v, true);
+      for (const v of [{}, ["a"]]) probe(k, v, false);
+    }
+    for (const k of ALLOW_LIST.scalars) {
+      for (const v of SCALARS) probe(k, v, true);
+      for (const v of ["word", "***", {}]) probe(k, v, false);
+    }
+    // The line's own keys. `at` is ISO 8601 UTC as both capture writers spell it (IsoTime.utc, toISOString), NEVER
+    // epoch milliseconds (spec Premise P1); `kind` a word or the mask; `level` one of four or the mask, and optional.
+    for (const v of ["2026-10-11T21:19:03.123Z", "2026-10-11T21:19:03Z", "2026-10-11T21:19:03.123456789Z"]) probe("at", v, true);
+    for (const v of [1791797943123, "2026-10-11T21:19:03.123+01:00", "2026-10-11T21:19Z", "2026-10-11 21:19:03.123Z", ""]) probe("at", v, false);
+    for (const v of ["live", "code.error", "***"]) probe("kind", v, true);
+    for (const v of ["two words", "", 3, null]) probe("kind", v, false);
+    for (const v of ["debug", "info", "warn", "error", "***"]) probe("level", v, true);
+    for (const v of ["fatal", "INFO", 3, null]) probe("level", v, false);
+    expect(fileAdmits(RECORD, "", base), "level absent (= info)").toBe(true);
+    expect(fileAdmits(RECORD, "", without(base, "kind")), "kind absent").toBe(false);
+    expect(fileAdmits(RECORD, "", without(base, "at")), "at absent").toBe(false);
+    // Unlisted keys — every never key, a scalar under an unnamed key, a renamed reserved key no list names — are
+    // refused whatever they hold, the mask included.
+    const unlisted = [...ALLOW_LIST.never, "battery", "cred", "field_at"];
+    for (const k of unlisted) for (const v of ["***", 3, null]) probe(k, v, false);
+    expect(plain).toHaveLength(46);
+    expect(unlisted).toHaveLength(11);
+    expect(probes).toBe(46 * 20 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 8 + 7 + 9 + 11 * 3);
+  });
+
+  it("capture-record.v1 answers: 201 is the closed {ref, kept, dropped} with an upper-case Crockford ref; every refusal word of the spec's table has a fixture the file admits; replaced is none of them (R4)", () => {
+    const file = contract(RECORD);
+    const ok = defOf(file, "ok");
+    expect([...(ok.required as string[])].sort()).toEqual(["dropped", "kept", "ref"]);
+    expect(ok.additionalProperties).toBe(false);
+    const fileAdmits = fileValidator();
+    // The ref is read aloud to the organiser: upper-case Crockford base32 (§6.1's alphabet), so no I, L, O or U.
+    let refs = 0;
+    for (const ch of CROCKFORD.toUpperCase()) {
+      expect(fileAdmits(RECORD, "#/$defs/ok", { ref: `R-${ch.repeat(4)}`, kept: 0, dropped: 0 }), ch).toBe(true);
+      refs++;
+    }
+    for (const ch of ["I", "L", "O", "U", "a"]) {
+      expect(fileAdmits(RECORD, "#/$defs/ok", { ref: `R-${ch.repeat(4)}`, kept: 0, dropped: 0 }), ch).toBe(false);
+      refs++;
+    }
+    expect(refs).toBe(32 + 5);
+    // The empty case: a record whose every line was another code's is still a 201 (the app shows the ref only).
+    const allDropped = fixture(RECORD_DIR, "ok-valid-all-dropped");
+    expect(allDropped.kept).toBe(0);
+    expect(fileAdmits(RECORD, "#/$defs/ok", allDropped)).toBe(true);
+    // Refusals: the file's closed list is the spec's table, word for word; each word has a two-key fixture it admits.
+    const refusal = defOf(file, "refusal");
+    const codes = Object.keys(SPEC_RECORD_REFUSALS);
+    expect(codes).toHaveLength(6);
+    expect(enumOf((refusal.properties as Record<string, Json>).code!)).toEqual([...codes].sort());
+    let checked = 0;
+    for (const code of codes) {
+      const f = fixture(RECORD_DIR, `valid-${code}`);
+      expect(f.code).toBe(code);
+      expect(Object.keys(f).sort(), code).toEqual(["code", "message"]);
+      expect(fileAdmits(RECORD, "#/$defs/refusal", f), code).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    const present = readdirSync(resolve(FIXTURES, RECORD_DIR)).filter((f) => /^valid-/.test(f)).map((f) => f.slice("valid-".length, -5));
+    expect(present.sort()).toEqual([...codes].sort());
+    // R4: a replaced phone may send, so `replaced` is no answer of this route, and the file refuses its body.
+    expect(codes).not.toContain("replaced");
+    expect(fileAdmits(RECORD, "#/$defs/refusal", fixture(RECORD_DIR, "invalid-replaced"))).toBe(false);
+  });
+
+  it("capture-record.v1 is design only: capture-schemas.ts exports no record twin yet (the route's twin joins DIRS and the parity test, and retires this tripwire)", () => {
+    const names = Object.keys(CS);
+    expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
+    expect(names.filter((n) => /record/i.test(n))).toEqual([]);
   });
 });
 

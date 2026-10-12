@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-11T21:19:03.123Z",
+  "kind": "engine-error",
+  "level": "error",
+  "error": {
+    "class": "IllegalStateException"
+  }
+}

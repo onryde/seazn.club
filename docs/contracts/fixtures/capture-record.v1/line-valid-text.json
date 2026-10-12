@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-11T21:19:03.123Z",
+  "kind": "vendor-log",
+  "level": "error",
+  "tag": "RtmpClient",
+  "message": "connection reset by peer while writing a chunk",
+  "error": "SocketException"
+}

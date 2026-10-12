@@ -1,0 +1,1533 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-record.v1.json",
+  "title": "Seazn capture record, v1: POST /api/v1/capture/codes/{code}/records (PROPOSED)",
+  "description": "PROPOSED, design only (docs/superpowers/specs/2026-10-12-capture-record-upload-design.md, for owner review): no route serves it yet and no zod twin mirrors it; the path is a proposal. The operator's Send record tap (owner rulings R3, R4) posts the phone's scrubbed session record as NDJSON (application/x-ndjson): one JSON object per line, and THIS schema is ONE line. Limits apply to the DECOMPRESSED body: at most 1000 non-empty lines and at most 1 MB (1048576 bytes). Content-Encoding: gzip is accepted; the server inflates at most 1 MB + 1 byte and stops there, so a zip bomb is 413 too_large and is never inflated whole. The keys are capture's modules/capture-engine/src/scrub/allow-list.json (capture 7ea8f63): at, kind and level are the line's own; every plain, publicUrl, text and scalars key under its class, a field named like a line key written field_<key>. Any other key, a never key included (even masked), is 422 invalid, and so is a value off its key's class. Beyond any shape, the server refuses with 422 invalid a body in which any string value is secret-shaped: S1 the Bearer token that sent the record, raw, percent-encoded or form-encoded; S2 an ingest URL (rtmp://, rtmps:// or srt://); S3 a streamid= or passphrase= pair; S4 a URL with userinfo (scheme://...@); S5 a Bearer credential (the word Bearer followed by a value). The 422's message names the line number and the key, never the value. Attribution: the record is the phone's last 1000 lines and can span codes. The server keeps a line only if it belongs to the sending code, and drops every other line before storing: A1 a line whose sid is a string is kept iff that session belongs to the sending code; A2 a line with no sid is kept iff it falls inside a pairing window of the sending code: a window opens at a `pair` line whose tokenTag is the tag of a token of the sending code, and runs through the next `unpaired` or `ended` line, or up to (not including) the next `pair` line, whichever comes first. A line before the record's first `pair` line is in no window. A dropped line is counted, never stored, logged or echoed. $defs.ok is the 201 answer and $defs.refusal every refusal body (the capture envelope {code, message}: the phone keys on code; message is a developer string the phone never shows). Its sha256 and fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "at": {
+      "description": "When the line was written, ISO 8601 in UTC with a Z, as both of capture's writers spell it (IsoTime.utc and Date.toISOString: milliseconds, e.g. 2026-10-11T21:19:03.123Z). NOT epoch milliseconds: the design brief said ms epoch, and capture's writers say otherwise (spec 2026-10-12, Premise P1).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "kind": {
+      "description": "What the line records: a plain word (capture's modules/capture-engine/src/scrub/allow-list.json, its `kinds`), or the mask *** when capture's scrub masked it. A kind outside capture's list is admitted: the list grows with the app, and a word is not a secret.",
+      "type": "string",
+      "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+    },
+    "level": {
+      "description": "debug, warn or error; ABSENT means info, which capture never writes (CD7). info is admitted when sent, and the mask *** is native's answer to a level it does not vet.",
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error",
+        "***"
+      ]
+    },
+    "action": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "answer": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "appVersion": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "attempt": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cause": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "claim": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "count": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delivery": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "endReason": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "error": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "exit": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failure": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "field": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "from": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "intent": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "key": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "field_kind": {
+      "description": "plain: the field `kind`, renamed field_kind because `kind` is the line's own key (capture's RESERVED_KEYS, CD7).",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastEnd": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lock": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mode": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ms": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notReady": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "op": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "phase": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "problem": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "refusal": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "result": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retryAfterS": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rootError": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "route": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scene": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "shed": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "side": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sid": {
+      "description": "plain: the broadcast session this line is about. A line whose sid is a string is kept only if that session belongs to the sending code (attribution, rule A1); null or absent makes the line a pairing-window line (rule A2).",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "site": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "slot": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "startFailed": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tag": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "to": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tokenTag": {
+      "description": "plain, narrowed by the allow-list's own reason (\"which issue of a code, eight hex digits; never the token\"): eight lowercase hex digits, capture's FNV-1a 32-bit tag of the token (tokenTag.ts / TokenTag.kt, carry 2). Carried by the `pair` line; it opens a pairing window (rule A2). Never a scalar and never masked.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}$"
+    },
+    "transport": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "word": {
+      "description": "plain: a plain word, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "url": {
+      "description": "publicUrl: a public https URL with no userinfo, query or fragment, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([Hh][Tt][Tt][Pp][Ss]://[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "playbackUrl": {
+      "description": "publicUrl: a public https URL with no userinfo, query or fragment, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([Hh][Tt][Tt][Pp][Ss]://[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "overlayUrl": {
+      "description": "publicUrl: a public https URL with no userinfo, query or fragment, the mask ***, or a number, boolean or null.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^([Hh][Tt][Tt][Pp][Ss]://[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "message": {
+      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still refuses it if it is secret-shaped (rules S1–S5).",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "problems": {
+      "description": "text: free text from a library or the platform, already masked by capture's scrub, or a number, boolean or null. The server still refuses it if it is secret-shaped (rules S1–S5).",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "audioFps": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "camera": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counted": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "encodeListed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "exitAtMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gapMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "granted": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "headroom": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "held": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "intervalMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lagGrowthMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lagMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "late": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "listed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "minuteEpochMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "msSinceAdvance": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "on": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "outageMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pickHeight": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pickWidth": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "publishedMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rebaselined": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rebuilds": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "refusedSid": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sameArea": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sent": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sinceLastMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sound": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "srtOffered": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stalledMs": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stopped": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "suppressed": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "validated": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "videoFps": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "wasLive": {
+      "description": "scalars: a number, a boolean or null only.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "at",
+    "kind"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ok": {
+      "description": "201: the record was received. The bare shape, never an {ok, data} envelope. Owner ruling 2026-10-12: the app shows ONLY the ref (\"Sent — ref R-7K2Q\") and says nothing about dropped lines; the server still returns and records both counts, and kept + dropped is the number of non-empty lines received. A record whose every line was dropped is still 201 (kept 0), stored as counts with no lines.",
+      "type": "object",
+      "properties": {
+        "ref": {
+          "description": "The record's reference, for the operator to read to the organiser: R- and four characters of upper-case Crockford base32 (no I, L, O or U), e.g. R-7K2Q; the server may lengthen it to eight without a new version. Unique among the records still kept.",
+          "type": "string",
+          "pattern": "^R-[0-9A-HJKMNP-TV-Z]{4,8}$"
+        },
+        "kept": {
+          "description": "Lines stored: those that belong to the sending code (A1, A2).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "dropped": {
+          "description": "Lines dropped as another code's. The app ignores it (owner ruling 2026-10-12).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "ref",
+        "kept",
+        "dropped"
+      ],
+      "additionalProperties": false
+    },
+    "refusal": {
+      "description": "Every refusal: 401 code_ended (a missing, malformed or wrong Bearer, an unknown code, an ended code: one sentence, no oracle), 404 not_a_stream_code (a malformed code), 413 too_large (over 1000 lines or 1 MB decompressed; a NEW word, proposed), 422 invalid (not NDJSON, an empty record, a key or value off the allow-list, a secret-shaped value, an unsupported Content-Encoding), 429 rate_limited (10 records an hour per code, with Retry-After), 503 unavailable (anything unmapped). Never replaced: a replaced phone may send (R4).",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "The machine word the phone keys on.",
+          "type": "string",
+          "enum": [
+            "code_ended",
+            "not_a_stream_code",
+            "too_large",
+            "invalid",
+            "rate_limited",
+            "unavailable"
+          ]
+        },
+        "message": {
+          "description": "A plain English developer string; the phone never shows it. It never quotes a line's value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
