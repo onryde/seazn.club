@@ -1253,6 +1253,10 @@ async function main() {
   // refusals. Keyless; one signed-in stranger.
   await matchRoomSuite();
 
+  // Chess in-page board T15: the arbiter panel's page and routes refuse
+  // everyone but an organiser of an online board. Keyless; own fresh org.
+  await arbiterSuite();
+
   // Task 15 (spectator W1): the public match-centre page and its
   // `match_centre` API field, against a live server. Own fresh org;
   // keyless-safe.
@@ -21636,6 +21640,86 @@ async function matchRoomSuite(): Promise<void> {
   check("match room API: anti-vacuity, eight calls", answered === calls.length && answered === 8);
 }
 
+/**
+ * Chess in-page board T15 — the arbiter panel, keyless (no Lichess, no
+ * RealtimeKit). The organiser's panel and its three routes answer only an
+ * organiser of an ONLINE chess board: on an over-the-board chess fixture the
+ * join and the video override are NOT FOUND (there is no online game) and the
+ * resync reads nothing; with no identity every route is 401, and so with a
+ * signed-in stranger (not a member of the fixture's org); the panel page 404s on the
+ * over-the-board division, with a signed-out visitor sent to sign in. The real
+ * panel (boards, flags, the outage and its audit record) is
+ * e2e/arbiter-panel.spec.ts. SMOKE_ONLY=arbiter runs it alone.
+ */
+async function arbiterSuite(): Promise<void> {
+  const owner = newSession();
+  await signIn(owner, `delivered+smoke-arb-${tag}@resend.dev`);
+  const stranger = newSession();
+  await signIn(stranger, `delivered+smoke-arb-stranger-${tag}@resend.dev`);
+  check("arbiter: owner and stranger signed in", !!owner.cookies["seazn_session"] && !!stranger.cookies["seazn_session"]);
+
+  const comp = v1data<{ id: string; slug: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Arbiter OTB ${tag}`, visibility: "public" }),
+  );
+  const div = v1data<{ id: string; slug: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Chess OTB",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", clock: { base: 600 } },
+    }),
+  );
+  const ents = await v1(owner, `/api/v1/divisions/${div.id}/entrants`, "POST", [
+    { kind: "individual", display_name: `Arb A ${tag}`, members: [{ new_person: { full_name: `Arb A ${tag}` } }] },
+    { kind: "individual", display_name: `Arb B ${tag}`, members: [{ new_person: { full_name: `Arb B ${tag}` } }] },
+  ]);
+  check(`arbiter: two over-the-board entrants (got ${ents.status})`, ents.status === 201);
+  const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" }));
+  const gen = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST"));
+  const fixtureId = gen?.fixtures?.[0]?.id ?? "";
+  check("arbiter: an over-the-board chess fixture to ask about", fixtureId !== "");
+
+  const anon = newSession();
+  const base = `/api/v1/fixtures/${fixtureId}/external-play`;
+  const note = { note: "smoke: never written" };
+  const calls: [string, Session, string, unknown, number, string | null][] = [
+    ["join, no identity", anon, `${base}/arbiter`, undefined, 401, null],
+    ["resync, no identity", anon, `${base}/resync`, undefined, 401, null],
+    ["override, no identity", anon, `${base}/video-override`, note, 401, null],
+    // Not a member of the fixture's org: requireOrgAuth's AuthError, the same
+    // 401 as no identity — nothing says the board exists.
+    ["join, a signed-in stranger", stranger, `${base}/arbiter`, undefined, 401, "UNAUTHENTICATED"],
+    ["resync, a signed-in stranger", stranger, `${base}/resync`, undefined, 401, "UNAUTHENTICATED"],
+    ["override, a signed-in stranger", stranger, `${base}/video-override`, note, 401, "UNAUTHENTICATED"],
+    ["join, the organiser, over the board", owner, `${base}/arbiter`, undefined, 404, "NOT_FOUND"],
+    ["override, the organiser, over the board", owner, `${base}/video-override`, note, 404, "NOT_FOUND"],
+  ];
+  let answered = 0;
+  for (const [what, session, path, body, want, code] of calls) {
+    const r = await v1(session, path, "POST", body);
+    const got = r.json.error?.code;
+    check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
+    answered += 1;
+  }
+  check("arbiter API: anti-vacuity, eight calls", answered === calls.length && answered === 8);
+  const resync = await v1(owner, `${base}/resync`, "POST");
+  const read = resync.json.data as { read?: boolean; adopted?: number } | undefined;
+  check(
+    `arbiter API, resync, the organiser, over the board: nothing to read (got ${resync.status} ${JSON.stringify(read)})`,
+    resync.status === 200 && read?.read === false && read?.adopted === 0,
+  );
+
+  // The page: the division's slugs from the organiser's own links.
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };
+  const orgSlug = Array.isArray(orgs) ? orgs[0]?.slug : orgs.orgs?.[0]?.slug;
+  const page = `/o/${orgSlug}/c/${comp.slug}/d/${div.slug}/arbiter`;
+  const asOwner = await fetch(`${BASE}${page}`, { redirect: "manual", headers: { cookie: cookieHeader(owner) } });
+  check(`arbiter page, the organiser, over the board: 404 (got ${asOwner.status})`, asOwner.status === 404);
+  const asAnon = await fetch(`${BASE}${page}`, { redirect: "manual" });
+  const to = asAnon.headers.get("location") ?? "";
+  check(`arbiter page, signed out: sent to sign in (got ${asAnon.status} ${to})`, asAnon.status >= 300 && asAnon.status < 400 && to.includes("/login"));
+}
+
 async function cleanup(tag: string): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -21674,6 +21758,10 @@ async function cleanup(tag: string): Promise<void> {
     // #404 personMergeSuite — its own Pro org (its two persons, their
     // suspension and the person_merges ledger row all cascade with it).
     `delivered+dupmerge_${tag}@resend.dev`,
+    // T15 arbiterSuite — its owner's org (one over-the-board chess division)
+    // and its stranger's.
+    `delivered+smoke-arb-${tag}@resend.dev`,
+    `delivered+smoke-arb-stranger-${tag}@resend.dev`,
     // T14 autoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
     `delivered+smoke-autosched-${tag}@resend.dev`,
@@ -21917,6 +22005,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   bracketFinish: () => bracketFinishSuite(),
   walkoverCredit: () => walkoverCreditSuite(),
   matchRoom: () => matchRoomSuite(),
+  arbiter: () => arbiterSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
