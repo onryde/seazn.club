@@ -282,7 +282,10 @@ test.describe("W2b — a credited result says which one, on every public surface
   // in her seat, the w/o tag named by "<her> withdrew — walkover." — and never the bye word, which before this read
   // beside the tag. The probe's positive pair is the SAME locator on the SAME page before the arrival, where her dead
   // seat still reads the bye word (a probe that cannot see "Bye" would pass the absence vacuously).
-  test("ruling 116 / R116-1: a withdrawn winner's walked-over final names her with w/o on every surface, never Bye, at 1280/768/320", async ({ page, request }) => {
+  // R116-2: …and shows the sport's walkover credit, like any walkover: football's `awardScore.goals` to the side that
+  // turned up and nil to her, by seat, on each surface that prints a score. Its pair: before the arrival the same
+  // match-centre cells print no score.
+  test("ruling 116 / R116-1 / R116-2: a withdrawn winner's walked-over final names her with w/o and the credited score on every surface, never Bye, at 1280/768/320", async ({ page, request }) => {
     test.setTimeout(4 * 60_000);
     const org = await activeOrg(page);
     const ko = await publicKnockout(request);
@@ -320,6 +323,9 @@ test.describe("W2b — a credited result says which one, on every public surface
     await expect(finalChip).toBeVisible({ timeout: STEP_MS });
     await finalChip.click();
     await expect(koCard(), "before: the pending seat's crest is the waiting slot's").toContainText("?", { timeout: STEP_MS });
+    // R116-2's pair: nothing is credited yet, so the match centre's score cells print none.
+    await page.goto(`${base}/${ko.divSlug}/fixtures/${ko.final.id}`);
+    for (const i of [0, 1]) await expect(page.getByTestId(`mc-score-${i}`), `before: score ${i}`).toHaveText("—", { timeout: STEP_MS });
 
     // SF2 is walked over to its home side, who arrives and walks over her (awardSeededByes, ruling 116).
     const arriving = sf2!.home_entrant_id!;
@@ -331,6 +337,16 @@ test.describe("W2b — a credited result says which one, on every public surface
     const herName = ko.nameOf.get(her)!;
     const sentence = say("forfeit.sentence.withdrew", { loser: herName });
     const tag = say("forfeit.tag.walkover");
+    // R116-2: the credit by seat, home first — the arriving side's goals, her nil.
+    const want = final.home_entrant_id === arriving ? [String(CREDIT), "0"] : ["0", String(CREDIT)];
+    expect(CREDIT, "premise: the walkover credits goals, so the credit differs from her 0").toBeGreaterThan(0);
+    const headline = new RegExp(`^${want[0]}\\s*[–—-]\\s*${want[1]}$`);
+    const endsWith = (line: string) => new RegExp(`(^|\\D)${line}$`);
+    const hubScores = async (card: ReturnType<typeof page.getByTestId>, where: string) => {
+      for (const i of [0, 1]) {
+        await expect(card.getByTestId(`mh-match-side-${i}`).locator("span.tabular-nums"), `${where}: side ${i}'s score`).toHaveText(want[i]!);
+      }
+    };
 
     let screens = 0;
     for (const w of WIDTHS) {
@@ -344,6 +360,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(page.locator("main"), `${w}: the match centre prints no bye word`).not.toContainText(BYE, { useInnerText: true });
       expect(await page.title(), `${w}: the title names her`).toContain(herName);
       expect(await page.title(), `${w}: the title prints no bye word`).not.toMatch(BYE);
+      for (const i of [0, 1]) await expect(page.getByTestId(`mc-score-${i}`), `${w}: the match centre's score ${i}`).toHaveText(want[i]!);
       await expectNoHorizontalScroll(page);
       await crop(page.locator("main"), `match-centre-withdrew-final-${w}`);
       screens++;
@@ -355,6 +372,10 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(row.getByRole("img", { name: sentence }), `${w}: the schedule row's tag`).toHaveText(tag, { timeout: STEP_MS });
       await expect(row, `${w}: the schedule row names her`).toContainText(herName);
       await expect(row, `${w}: the schedule row prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      // Stacked by seat as any walkover's row (the tag rides the winner's line), never the no-lines headline chip.
+      const lines = row.locator("span.pl-2.text-right");
+      await expect(lines, `${w}: the schedule row stacks two score lines`).toHaveCount(2);
+      for (const i of [0, 1]) await expect(lines.nth(i), `${w}: the schedule row's line ${i}`).toHaveText(endsWith(want[i]!));
       await expectNoHorizontalScroll(page);
       await crop(row, `schedule-withdrew-final-${w}`);
       screens++;
@@ -366,6 +387,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(tile.getByRole("img", { name: sentence }), `${w}: the tile's tag`).toHaveText(tag, { timeout: STEP_MS });
       await expect(tile, `${w}: the tile names her`).toContainText(herName);
       await expect(tile, `${w}: the tile prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      await expect(tile.getByTestId("bracket-forfeit").locator("span").first(), `${w}: the tile's credited headline`).toHaveText(headline);
       await expectNoHorizontalScroll(page);
       await crop(tile, `bracket-tile-withdrew-final-${w}`);
       screens++;
@@ -378,6 +400,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(card, `${w}: the results card names her`).toContainText(herName);
       await expect(card, `${w}: the results card prints no bye word`).not.toContainText(BYE, { useInnerText: true });
       await expect(card, `${w}: her side is drawn as a side, never the waiting slot's "?" crest`).not.toContainText("?");
+      await hubScores(card, `${w}: the results card`);
       await expectNoHorizontalScroll(page);
       await crop(card, `results-card-withdrew-final-${w}`);
       screens++;
@@ -390,6 +413,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(koCard(), `${w}: the knockout card names her`).toContainText(herName);
       await expect(koCard(), `${w}: the knockout card prints no bye word`).not.toContainText(BYE, { useInnerText: true });
       await expect(koCard(), `${w}: the knockout card draws her as a side`).not.toContainText("?");
+      await hubScores(koCard(), `${w}: the knockout card`);
       await expectNoHorizontalScroll(page);
       await crop(koCard(), `knockout-card-withdrew-final-${w}`);
       screens++;
