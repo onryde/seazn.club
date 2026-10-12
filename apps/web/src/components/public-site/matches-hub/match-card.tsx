@@ -33,6 +33,10 @@ import { t } from "@/lib/i18n-runtime";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import type { HubMatchT } from "@/server/public-site/competition-hub-schema";
 
+/** Design audit 3.7: the abandon tags that carry the result's method ("Aband. · DLS", "Aband. · NR"). Beside a result
+ *  line, which names that method itself ("… (DLS)", "No result"), the tag is the bare abandon word. */
+const ABANDON_METHOD_TAG_KINDS: ReadonlySet<string> = new Set(["abandoned_dls", "abandoned_no_result"]);
+
 export interface MatchCardProps {
   match: HubMatchT;
   dict: PublicDict;
@@ -309,7 +313,12 @@ export function MatchCard({
           // the tag ("Eagles won by 12 runs (DLS)" · "Aband. · DLS"); a forfeit's tag replaces the bare "Forfeited".
           <span data-testid="mh-match-forfeit" className="flex shrink-0 items-baseline gap-1.5 font-medium text-ink">
             {m.resultLine ? <ScoreSentence text={m.resultLine} /> : null}
-            <ForfeitTagChip id={`mh-forfeit-${m.fixtureId}`} tag={m.forfeit.tag} sentence={m.forfeit.sentence} testId="mh-match-forfeit-tag" />
+            <ForfeitTagChip
+              id={`mh-forfeit-${m.fixtureId}`}
+              tag={m.resultLine && ABANDON_METHOD_TAG_KINDS.has(m.forfeit.kind) ? t(dict, "forfeit.tag.abandoned") : m.forfeit.tag}
+              sentence={m.forfeit.sentence}
+              testId="mh-match-forfeit-tag"
+            />
           </span>
         ) : m.resultLine ? (
           <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">

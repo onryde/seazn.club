@@ -159,11 +159,28 @@ describe("MatchCard — the results list (the consumer)", () => {
     expect(h, "the tag replaces the bare status word").not.toContain(">Forfeited<");
   });
 
-  it("an abandon keeps its result sentence beside the tag", () => {
-    const h = card(hubMatch({ resultLine: "Riverside FC won by 12 runs (DLS)", forfeit: { kind: "abandoned_dls", tag: "Aband. · DLS", sentence: "S" } }));
-    const slot = h.slice(h.indexOf('data-testid="mh-match-forfeit"'));
-    expect(slot).toContain("Riverside FC won by 12 runs (DLS)");
-    expect(slot).toContain(">Aband. · DLS<");
+  // Design audit 3.7: the result line already names the method ("… (DLS)", "No result"), so the tag beside it is the
+  // bare abandon word — "Aband. · DLS" after "(DLS)" said DLS twice in one row. The words are the dictionary's (the
+  // card's own tag word, `forfeit.tag.abandoned`); with no result line (a held abandon) the full tag stays.
+  it("audit 3.7: an abandon keeps its result sentence, and the tag beside it does not repeat the method", () => {
+    const bare = tr("forfeit.tag.abandoned");
+    let checked = 0;
+    for (const [kind, full, line] of [
+      ["abandoned_dls", tr("forfeit.tag.abandonedDls"), tr("matchCentre.result.dlsRuns.other", { winner: "Riverside FC", runs: 12 })],
+      ["abandoned_no_result", tr("forfeit.tag.abandonedNoResult"), tr("matchCentre.result.no_result")],
+    ] as const) {
+      expect(full.startsWith(bare) && full !== bare, `premise: ${kind}'s tag is the abandon word plus its method`).toBe(true);
+      const h = card(hubMatch({ resultLine: line, forfeit: { kind, tag: full, sentence: "S" } }));
+      const slot = h.slice(h.indexOf('data-testid="mh-match-forfeit"'));
+      expect(slot, kind).toContain(html(line));
+      expect(slot, `${kind}: the bare abandon word`).toMatch(new RegExp(`data-testid="mh-match-forfeit-tag"[^>]*>${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</span>`));
+      expect(slot, `${kind}: not the method twice`).not.toContain(`>${html(full)}<`);
+      // The pair: a held abandon has no result line, and keeps the full tag.
+      const held = card(hubMatch({ resultLine: null, forfeit: { kind, tag: full, sentence: "S" } }));
+      expect(held, `${kind}, no result line: the full tag`).toContain(`>${html(full)}<`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
