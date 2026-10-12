@@ -299,6 +299,10 @@ describe("Seam C — the live room's move notices, reached through the reducer",
       else expect(clocks < notice && notice < board, `${name}: between clocks and board`).toBe(true);
       expect(notice < order(html, "room-controls"), `${name}: above the controls`).toBe(true);
       expect(classOf(html, "room-aside")).toMatch(/(^|\s)max-md:contents(\s|$)/);
+      // On a desktop the aside is ONE grid item: auto-placement follows
+      // `order`, so it must come after the board or it takes column 1.
+      const asideMd = Number(/(?:^|\s)md:order-(\d+)(?:\s|$)/.exec(classOf(html, "room-aside"))?.[1] ?? NaN);
+      expect(asideMd > board, `${name}: the aside places after the board`).toBe(true);
       checked += 1;
     }
     expect(checked).toBe(4);

@@ -73,9 +73,11 @@ export type RoomState = {
   seat: SeatAnswer | null;
   pending: null | { kind: "seat" } | { kind: "act"; action: RoomActBody };
   error: RoomError | null;
-  /** The kind of act whose answer raised a `refused` or `invalid` error —
-   *  set with it, in the same transition, so the notice can tell a move
-   *  from a resign or an offer (the drawn copy is a move's). */
+  /** The kind of the last act whose answer failed — set in the SAME
+   *  transition as its `refused`/`invalid` error (the only two that raise
+   *  those), so the notice can tell a move from a resign or an offer (the
+   *  drawn copy is a move's). Read only beside such an error: once the
+   *  error is gone, a stale value here means nothing. */
   failedAct: RoomActBody["kind"] | null;
   /** Bumped whenever the board must be put back on the held position. */
   syncKey: number;
@@ -183,7 +185,7 @@ function endNotices(before: RoomState, after: RoomState, answered: boolean): Roo
   const offlineEnds = answered && after.error === "network";
   const movedOn =
     (after.error === "refused" || after.error === "invalid") && plyOf(after.snap.game) > plyOf(before.snap.game);
-  return offlineEnds || movedOn ? { ...after, error: null, failedAct: null } : after;
+  return offlineEnds || movedOn ? { ...after, error: null } : after;
 }
 
 export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
@@ -196,18 +198,12 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       return endNotices(s, applyBroadcast(s, e.b, e.receivedAt), false);
     case "seat_sent":
       if (s.pending !== null) return s;
-      return { ...s, pending: { kind: "seat" }, error: null, failedAct: null };
+      return { ...s, pending: { kind: "seat" }, error: null };
     case "seat_answered": {
       const merged = mergeSnapshot(s, e.answer.snapshot, e.receivedAt);
       const seat = e.answer.seat;
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
-      return {
-        ...merged,
-        seat,
-        pending: s.pending?.kind === "seat" ? null : s.pending,
-        error: relink ? "relink" : null,
-        failedAct: null,
-      };
+      return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null };
     }
     case "seat_failed":
       return {
@@ -219,11 +215,11 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       };
     case "act_sent":
       if (s.pending !== null) return s;
-      return { ...s, pending: { kind: "act", action: e.action }, error: null, failedAct: null };
+      return { ...s, pending: { kind: "act", action: e.action }, error: null };
     case "act_answered": {
       if (s.pending?.kind !== "act") return s;
       const a = e.answer;
-      if (a.ok) return { ...s, pending: null, error: null, failedAct: null };
+      if (a.ok) return { ...s, pending: null, error: null };
       return {
         ...s,
         pending: null,
