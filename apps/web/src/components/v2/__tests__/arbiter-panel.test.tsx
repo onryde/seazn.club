@@ -1,0 +1,598 @@
+// T15 — the arbiter panel as painted (server render of the pure screen with
+// the REAL dictionaries), built to the owner-approved canvas (ArbiterPhone,
+// ArbiterDesktop on https://claude.ai/artifact/JKzKrtjSAPiU3QsFiRkEew).
+// Effects do not run here (`environment: "node"`): the camera join, the
+// polling and the clicks are the e2e's (e2e/arbiter-panel.spec.ts). What this
+// suite owns: which copy each state paints — the canvas's own sentences as
+// the expected values — every flag kind and its empty case, which decision
+// controls each board offers, and that no untranslated key reaches the page
+// in any locale.
+import { readFileSync } from "node:fs";
+import { join as pathJoin } from "node:path";
+import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import type { Dict } from "@/lib/i18n-constants";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import type { ArbiterBoard, ArbiterFlag, ArbiterRound } from "@/lib/arbiter-view";
+import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
+import {
+  ArbiterScreen,
+  arbiterJoinStateFromError,
+  nextOffSince,
+  shouldJoinVideo,
+  showsOutageCard,
+  type ArbiterScreenProps,
+  type ArbiterVideoView,
+} from "../arbiter-panel";
+import { ApiV1Error } from "@/lib/client-v1";
+import { ArbiterGuardError } from "../arbiter-camera";
+
+const LOCALES = { en, es, fr, nl } as const;
+
+/** A local wall-clock time today: the panel paints the VIEWER's time of day,
+ *  so building the instant from local fields keeps the test TZ-independent. */
+const at = (h: number, m: number, s = 0) => new Date(2026, 9, 12, h, m, s).toISOString();
+const NOW = Date.parse(at(19, 44));
+
+const outOfBand = (plies: { from: number; to: number } | null): ArbiterFlag => ({
+  id: "fl-oob",
+  kind: "out_of_band_play",
+  at: at(19, 38),
+  plies,
+});
+const PRIYA_REPORT: ArbiterFlag = {
+  id: "fl-cam",
+  kind: "camera_lost",
+  at: at(19, 41),
+  personName: "Priya Raghunathan",
+  windowFrom: at(19, 18),
+  report: {
+    offSeconds: 189,
+    windowSeconds: 21 * 60,
+    intervals: [{ from: at(19, 31, 5), to: at(19, 34, 14), confirmedByEvents: true }],
+    connections: 2,
+    sessions: 1,
+  },
+};
+
+function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "boardNo">): ArbiterBoard {
+  return {
+    fixtureNo: over.boardNo + 10,
+    white: { name: "Jonah Mbeki", personId: "p-w" },
+    black: { name: "Elif Demirtaş", personId: "p-b" },
+    state: { kind: "live", moveNo: 31 },
+    clock: { whiteMs: 185_000, blackMs: 257_000, asOf: at(19, 44), running: false, turn: "white" },
+    cameraPolicy: "required",
+    videoOverridden: false,
+    cameraReport: null,
+    canResync: true,
+    playable: true,
+    flags: [],
+    ...over,
+  };
+}
+
+/** The canvas's round: five boards in five states. */
+const ROUND: ArbiterRound = {
+  stageId: "st1",
+  stageName: "Open Swiss",
+  roundNo: 3,
+  timeControl: "10+5",
+  boards: [
+    board({ fixtureId: "f1", boardNo: 1, white: { name: "Ada Okonkwo", personId: "a" }, black: { name: "Tomasz Wieczorek", personId: "b" }, state: { kind: "live", moveNo: 23 } }),
+    board({
+      fixtureId: "f2",
+      boardNo: 2,
+      white: { name: "Maximiliana Wolfeschlegel-Featherstonehaugh", personId: "c" },
+      black: { name: "Priya Raghunathan", personId: "d" },
+      state: { kind: "result", score: "1–0" },
+      canResync: false,
+      playable: false,
+      cameraReport: "settled",
+      flags: [PRIYA_REPORT],
+    }),
+    board({ fixtureId: "f3", boardNo: 3, cameraReport: "pending", flags: [outOfBand({ from: 51, to: 53 })] }),
+    board({ fixtureId: "f4", boardNo: 4, white: { name: "Sven Halvorsen", personId: "e" }, black: { name: "Grace Achterberg", personId: "f" }, state: { kind: "checking_in" }, clock: null, canResync: false }),
+    board({ fixtureId: "f5", boardNo: 5, white: { name: "Rafael Quintero", personId: "g" }, black: { name: "Mei Lin Chu", personId: "h" }, state: { kind: "on_hold" } }),
+  ],
+};
+
+const WATCHING: ArbiterVideoView = {
+  kind: "watching",
+  white: { present: true, live: true, offSinceMs: null, track: null },
+  black: { present: true, live: false, offSinceMs: Date.parse(at(19, 42)), track: null },
+};
+
+const noop = () => undefined;
+function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
+  return {
+    round: ROUND,
+    decision: initialArbiterDecision("f3"),
+    video: WATCHING,
+    nowMs: NOW,
+    slugs: { org: "club", comp: "autumn", div: "open" },
+    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, override: noop, retryVideo: noop },
+    ...over,
+  };
+}
+
+function html(p: ArbiterScreenProps, locale: keyof typeof LOCALES = "en"): string {
+  return renderToStaticMarkup(
+    <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
+      <ArbiterScreen {...p} />
+    </DictProvider>,
+  );
+}
+const decode = (s: string) =>
+  s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+/** The page's text, tags as spaces, whitespace collapsed. */
+const text = (h: string) => decode(h.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+/** The en dictionary is the copy authority beside the canvas. */
+const EN = en as Record<string, string>;
+const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+
+describe("the empty cases first", () => {
+  it("no round open: says so, with the D8 sentence that flags are recorded anyway — and offers nothing to press", () => {
+    const h = html(props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.empty.title"]);
+    expect(t).toContain(EN["arbiter.empty.body"]);
+    expect(EN["arbiter.empty.body"]).toMatch(/whether or not anyone is watching/);
+    expect(t).not.toContain(EN["arbiter.boardsHeading"]);
+    expect(count(h, "<button"), "nothing to press").toBe(0);
+    expect(h).toContain('href="/o/club/c/autumn/d/open?tab=fixtures"');
+  });
+
+  it("a round with no boards: says so, nothing to press", () => {
+    const h = html(props({ round: { ...ROUND, boards: [] }, decision: initialArbiterDecision(null), video: { kind: "idle" } }));
+    expect(text(h)).toContain(EN["arbiter.emptyBoards"]);
+    expect(count(h, "<button")).toBe(0);
+  });
+
+  it("a board with no flags says so; no pending card when no report is owed", () => {
+    const h = html(props({ decision: initialArbiterDecision("f1") }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.flags.none"]);
+    expect(t).not.toContain(EN["arbiter.flag.pending.chip"]);
+  });
+});
+
+describe("the header and the boards (canvas)", () => {
+  it("back link, round line, title and the watch-only sentence the owner wrote", () => {
+    const t = text(html(props()));
+    expect(t).toContain("Back to run sheet");
+    expect(t).toContain("Open Swiss · Round 3");
+    expect(t).toContain("Arbiter");
+    expect(t).toContain("You only watch. The players can't see or hear you, and they never see each other.");
+  });
+
+  it("the desktop list: one button per board, labelled as the canvas labels them, the one on screen pressed", () => {
+    const h = html(props());
+    const buttons = [...h.matchAll(/<button type="button" aria-pressed="(true|false)"[^>]*>(.*?)<\/button>/g)];
+    expect(buttons.length, "anti-vacuity: five boards").toBe(5);
+    expect(buttons.map((b) => text(b[2]!))).toEqual([
+      "Board 1 · live Ada Okonkwo vs Tomasz Wieczorek",
+      "Board 2 · 1–0 · 1 flag Maximiliana Wolfeschlegel-Featherstonehaugh vs Priya Raghunathan",
+      "Board 3 · live · 1 flag Jonah Mbeki vs Elif Demirtaş",
+      "Board 4 · checking in Sven Halvorsen vs Grace Achterberg",
+      "Board 5 · on hold Rafael Quintero vs Mei Lin Chu",
+    ]);
+    expect(buttons.map((b) => b[1])).toEqual(["false", "false", "true", "false", "false"]);
+  });
+
+  it("the phone picker: one option per board, names and flag count, the board on screen selected", () => {
+    const h = html(props());
+    const options = [...h.matchAll(/<option value="([^"]+)"( selected="")?>(.*?)<\/option>/g)];
+    expect(options.length).toBe(5);
+    expect(options.map((o) => decode(o[3]!))).toEqual([
+      "Board 1 · Ada Okonkwo vs Tomasz Wieczorek",
+      "Board 2 · Maximiliana Wolfeschlegel-Featherstonehaugh vs Priya Raghunathan · 1 flag",
+      "Board 3 · Jonah Mbeki vs Elif Demirtaş · 1 flag",
+      "Board 4 · Sven Halvorsen vs Grace Achterberg",
+      "Board 5 · Rafael Quintero vs Mei Lin Chu",
+    ]);
+    expect(options.filter((o) => o[2]).map((o) => o[1])).toEqual(["f3"]);
+  });
+
+  it("the board on screen: its heading, 'Live · move 31', the clock '10+5', and both clocks", () => {
+    const t = text(html(props()));
+    expect(t).toContain("Board 3 · Jonah Mbeki vs Elif Demirtaş");
+    expect(t).toContain("Live · move 31");
+    expect(t).toContain("10+5");
+    // 185 000 ms is 3:05 and 257 000 ms is 4:17 (the canvas's faces).
+    expect(t).toContain("3:05");
+    expect(t).toContain("4:17");
+  });
+
+  it("a running clock ticks from its last move; the other side's does not", () => {
+    const b = { ...ROUND.boards[2]!, clock: { whiteMs: 185_000, blackMs: 257_000, asOf: at(19, 44), running: true, turn: "white" as const } };
+    const t = text(html(props({ round: { ...ROUND, boards: [b] }, nowMs: NOW + 5_000 })));
+    expect(t).toContain("3:00");
+    expect(t).toContain("4:17");
+  });
+
+  it("every board state reads as the run sheet would say it", () => {
+    const states: [ArbiterBoard["state"], string][] = [
+      [{ kind: "checking_in" }, "Checking in"],
+      [{ kind: "starting" }, "Starting"],
+      [{ kind: "on_hold" }, "On hold"],
+      [{ kind: "result", score: "½–½" }, "Finished · ½–½"],
+      [{ kind: "result", score: null }, "Finished"],
+    ];
+    let checked = 0;
+    for (const [state, label] of states) {
+      const b = { ...ROUND.boards[2]!, state };
+      expect(text(html(props({ round: { ...ROUND, boards: [b] } }))), label).toContain(label);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+});
+
+describe("the two tiles", () => {
+  it("watching: White's camera live, Black's off since the time this browser saw it go", () => {
+    const h = html(props());
+    const t = text(h);
+    expect(count(t, "Camera live")).toBe(1);
+    expect(t).toContain(`Camera off since ${hhmm(at(19, 42))}`);
+    expect(t).toContain("Jonah Mbeki");
+    expect(t).toContain("White");
+    expect(t).toContain("Black");
+    // The video element: muted, inline, autoplay — never sound.
+    const videos = [...h.matchAll(/<video[^>]*>/g)].map((m) => m[0]);
+    expect(videos).toHaveLength(1);
+    expect(videos[0]).toMatch(/muted=""/);
+    expect(videos[0]).toMatch(/playsInline=""|playsinline=""/);
+  });
+
+  it("before mount no time of day is painted (the server's timezone is not the arbiter's)", () => {
+    const t = text(html(props({ nowMs: null })));
+    expect(t).not.toMatch(/Camera off since/);
+    expect(t).toContain(EN["arbiter.tile.off"]);
+    expect(t).not.toContain("Found at");
+  });
+
+  it("each video state paints its own sentence on both tiles", () => {
+    const cases: [ArbiterVideoView, string][] = [
+      [{ kind: "idle" }, EN["arbiter.tile.connecting"]!],
+      [{ kind: "connecting" }, EN["arbiter.tile.connecting"]!],
+      [{ kind: "none" }, EN["arbiter.tile.noCamera"]!],
+      [{ kind: "overridden" }, EN["arbiter.tile.overridden"]!],
+      [{ kind: "over" }, EN["arbiter.tile.over"]!],
+      [{ kind: "ended" }, EN["arbiter.tile.over"]!],
+      [{ kind: "unavailable" }, EN["arbiter.tile.unavailable"]!],
+      [{ kind: "fault" }, EN["arbiter.tile.fault"]!],
+      [{ kind: "error" }, EN["arbiter.tile.error"]!],
+      [
+        { kind: "watching", white: { present: false, live: false, offSinceMs: null, track: null }, black: { present: false, live: false, offSinceMs: null, track: null } },
+        EN["arbiter.tile.absent"]!,
+      ],
+    ];
+    let checked = 0;
+    for (const [video, sentence] of cases) {
+      const h = html(props({ video }));
+      const tiles = [...h.matchAll(/<figure[\s\S]*?<\/figure>/g)].map((m) => text(m[0]));
+      expect(tiles, `${video.kind}: two tiles`).toHaveLength(2);
+      for (const tile of tiles) expect(count(tile, sentence), video.kind).toBe(1);
+      expect(count(h, "<video"), `${video.kind}: no video element`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
+  it("a fault or an error offers ONE retry; no other state does", () => {
+    let checked = 0;
+    for (const kind of ["fault", "error", "connecting", "unavailable", "none"] as const) {
+      const t = text(html(props({ video: { kind } })));
+      expect(count(t, EN["arbiter.tile.retry"]!), kind).toBe(kind === "fault" || kind === "error" ? 1 : 0);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+});
+
+describe("flags on this board (canvas cards)", () => {
+  it("heading for phone and desktop, the lede, and Moves made off Seazn as the canvas words it", () => {
+    const t = text(html(props()));
+    expect(t).toContain("Flags on this board");
+    expect(t).toContain("Flags on Board 3");
+    expect(t).toContain("Evidence for you to review. Nothing here changes a result by itself.");
+    expect(t).toContain("Moves made off Seazn");
+    // Plies 51–53: three plies, moves 26 to 27 (FIDE: ply 2N-1 is White's move N).
+    expect(t).toContain("3 moves reached Lichess that were not played on Seazn's board (moves 26 to 27).");
+    expect(t).toContain(`Found at ${hhmm(at(19, 38))}`);
+  });
+
+  it("one ply, two plies of one move, and an unreadable note each read honestly", () => {
+    const cases: [{ from: number; to: number } | null, string][] = [
+      [{ from: 9, to: 9 }, "1 move reached Lichess that was not played on Seazn's board (move 5)."],
+      [{ from: 9, to: 10 }, "2 moves reached Lichess that were not played on Seazn's board (move 5)."],
+      [null, EN["arbiter.flag.outOfBand.unread"]!],
+    ];
+    let checked = 0;
+    for (const [plies, sentence] of cases) {
+      const b = { ...ROUND.boards[2]!, flags: [outOfBand(plies)] };
+      expect(text(html(props({ round: { ...ROUND, boards: [b] } })))).toContain(sentence);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the camera report card, word for word, with its timeline", () => {
+    const b = { ...ROUND.boards[2]!, flags: [PRIYA_REPORT] };
+    const h = html(props({ round: { ...ROUND, boards: [b] } }));
+    const t = text(h);
+    expect(t).toContain("Camera off · 3 min 9 s of 21 min");
+    expect(t).toContain(`Priya Raghunathan: off ${hhmmss(at(19, 31, 5))} to ${hhmmss(at(19, 34, 14))}.`);
+    // Gender-neutral (the canvas's "Her" is the sample's, not a rule).
+    expect(t).toContain(EN["arbiter.flag.cameraOff.agree"]);
+    expect(t).toContain("From 2 camera connections in 1 session.");
+    expect(t).toContain(`${hhmm(at(19, 18))} first move`);
+    expect(t).toContain(`${hhmm(at(19, 39))} game over`);
+    expect(t).toContain(`${hhmm(at(19, 18))} start`);
+    expect(t).toContain(`${hhmm(at(19, 39))} end`);
+    // 19:31:05 is 785 s into a 1 260 s window; the gap is 189 s.
+    const seg = /left:(\d+(?:\.\d+)?)%;width:(\d+(?:\.\d+)?)%/.exec(h.replace(/\s/g, ""));
+    expect(seg, "one segment painted").not.toBeNull();
+    expect(Number(seg![1])).toBeCloseTo((785 / 1260) * 100, 1);
+    expect(Number(seg![2])).toBeCloseTo((189 / 1260) * 100, 1);
+  });
+
+  it("the agree sentence only when EVERY interval's own events agree; plural sessions", () => {
+    const report = { ...(PRIYA_REPORT as Extract<ArbiterFlag, { kind: "camera_lost" }>).report!, sessions: 2 };
+    const mixed: ArbiterFlag = {
+      ...(PRIYA_REPORT as Extract<ArbiterFlag, { kind: "camera_lost" }>),
+      report: {
+        ...report,
+        intervals: [...report.intervals, { from: at(19, 36), to: at(19, 37), confirmedByEvents: false }],
+      },
+    };
+    const b = { ...ROUND.boards[2]!, flags: [mixed] };
+    const t = text(html(props({ round: { ...ROUND, boards: [b] } })));
+    expect(t).not.toContain(EN["arbiter.flag.cameraOff.agree"]);
+    expect(t).toContain("From 2 camera connections in 2 sessions.");
+    expect(t).toContain(`${hhmmss(at(19, 36))} to ${hhmmss(at(19, 37))}`);
+  });
+
+  it("an unreadable camera report says so in general words — never a guessed number", () => {
+    const b = { ...ROUND.boards[2]!, flags: [{ ...PRIYA_REPORT, report: null } as ArbiterFlag] };
+    const t = text(html(props({ round: { ...ROUND, boards: [b] } })));
+    expect(t).toContain(EN["arbiter.flag.cameraOff.unread"]!.replace("{name}", "Priya Raghunathan"));
+    expect(t).not.toMatch(/\d+ min \d+ s/);
+  });
+
+  it("camera connection problems: the neutral card, its duration from the loader's seconds", () => {
+    const flag: ArbiterFlag = { id: "fl-cc", kind: "camera_connection_problems", at: at(19, 40), personName: "Elif Demirtaş", seconds: 90.4, stamps: 3 };
+    const b = { ...ROUND.boards[2]!, flags: [flag] };
+    const h = html(props({ round: { ...ROUND, boards: [b] } }));
+    const t = text(h);
+    expect(t).toContain("Camera connection problems (our side) — 1 min 30 s");
+    expect(t).toContain(EN["arbiter.flag.connection.body.other"]!.replace("{name}", "Elif Demirtaş").replace("{count}", "3"));
+  });
+
+  it("the pending card while the report is still to come, and not once it is settled", () => {
+    const t = text(html(props()));
+    expect(t).toContain("Camera report · pending");
+    expect(t).toContain("How long each camera was off is measured after the game. It arrives about 2 minutes after the players leave.");
+    const settled = { ...ROUND.boards[2]!, cameraReport: "settled" as const };
+    expect(text(html(props({ round: { ...ROUND, boards: [settled] } })))).not.toContain("Camera report · pending");
+  });
+
+  it("another board's camera report sits beside this board (canvas 'Board 2 · camera report'); never this board's own, never another kind", () => {
+    const t = text(html(props()));
+    expect(t).toContain("Board 2 · camera report");
+    expect(count(t, "Camera off · 3 min 9 s of 21 min")).toBe(1);
+    // On Board 2 itself the report is in its own flags, not repeated.
+    const t2 = text(html(props({ decision: initialArbiterDecision("f2") })));
+    expect(t2).not.toContain("Board 2 · camera report");
+    expect(count(t2, "Camera off · 3 min 9 s of 21 min")).toBe(1);
+    // Board 3's out-of-band flag does not appear as a report on Board 2's view.
+    expect(t2).not.toContain("Board 3 · camera report");
+    expect(t2).not.toContain("Moves made off Seazn");
+  });
+
+  it("no sanction language anywhere on the panel", () => {
+    const t = text(html(props())).toLowerCase();
+    let checked = 0;
+    for (const word of ["blocked", "banned", "cheat", "disqualif", "monitored", "penalt"]) {
+      expect(t, word).not.toContain(word);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+});
+
+describe("your decision", () => {
+  it("a live flagged board: Resync, Let the game go on, Settle the result now… — phone and desktop headings", () => {
+    const h = html(props());
+    const t = text(h);
+    expect(t).toContain("Your decision");
+    expect(t).toContain("Your decision · Board 3");
+    for (const label of ["Resync from Lichess", "Let the game go on", "Settle the result now…"]) expect(t).toContain(label);
+    expect(h).toMatch(/aria-expanded="false"[^>]*>Settle the result now…/);
+  });
+
+  it("which controls each board offers (resync needs a game at Lichess; going on needs a flag; settling needs a game not over)", () => {
+    const rows: [string, string[]][] = [
+      ["f1", ["Resync from Lichess", "Settle the result now…"]],
+      ["f2", []],
+      ["f3", ["Resync from Lichess", "Let the game go on", "Settle the result now…"]],
+      ["f4", ["Settle the result now…"]],
+      ["f5", ["Resync from Lichess", "Settle the result now…"]],
+    ];
+    const ALL = ["Resync from Lichess", "Let the game go on", "Settle the result now…"];
+    let checked = 0;
+    for (const [id, offered] of rows) {
+      const t = text(html(props({ decision: initialArbiterDecision(id) })));
+      for (const label of ALL) expect(t.includes(label), `${id}: ${label}`).toBe(offered.includes(label));
+      if (offered.length === 0) expect(t, `${id}: no decision section`).not.toContain("Your decision");
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("settle opens to the board's match page", () => {
+    const h = html(props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(h).toMatch(/aria-expanded="true"/);
+    expect(h).toContain('href="/o/club/c/autumn/d/open/f/13"');
+    expect(text(h)).toContain(EN["arbiter.decide.settleBody"]);
+  });
+
+  it("while a request is in flight, the decision controls are disabled", () => {
+    const h = html(props({ decision: { ...initialArbiterDecision("f3"), busy: { kind: "resync", boardId: "f3" } } }));
+    const disabled = [...h.matchAll(/<button[^>]*disabled=""[^>]*>(.*?)<\/button>/g)].map((m) => text(m[1]!));
+    expect(disabled).toEqual(expect.arrayContaining(["Resync from Lichess", "Let the game go on"]));
+  });
+
+  it("each answer paints its own sentence (anti-vacuity: every notice kind)", () => {
+    const notices: [ArbiterDecisionState["notice"], string][] = [
+      [{ boardId: "f3", kind: "resynced", adopted: 2 }, EN["arbiter.notice.resynced.other"]!.replace("{count}", "2")],
+      [{ boardId: "f3", kind: "resynced", adopted: 1 }, EN["arbiter.notice.resynced.one"]!.replace("{count}", "1")],
+      [{ boardId: "f3", kind: "resynced", adopted: 0 }, EN["arbiter.notice.resyncedNone"]!],
+      [{ boardId: "f3", kind: "resync_nothing" }, EN["arbiter.notice.resyncNothing"]!],
+      [{ boardId: "f3", kind: "resync_failed", code: "NOT_FOUND" }, EN["arbiter.notice.resyncFailed"]!],
+      [{ boardId: "f3", kind: "went_on" }, EN["arbiter.notice.wentOn"]!],
+      [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
+      [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
+      [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
+      [{ boardId: "f3", kind: "override_failed", code: "UNKNOWN" }, EN["arbiter.notice.failed"]!],
+    ];
+    const seen = new Set<string>();
+    for (const [notice, sentence] of notices) {
+      const h = html(props({ decision: { ...initialArbiterDecision("f3"), notice } }));
+      expect(h).toMatch(/role="status"/);
+      expect(text(h), JSON.stringify(notice)).toContain(sentence);
+      seen.add(sentence);
+    }
+    expect(seen.size, "ten notices, ten distinct sentences").toBe(10);
+  });
+});
+
+describe("the outage card", () => {
+  it("only during a video outage on a required, playable board not already let go — the whole table", () => {
+    const POLICIES = ["off", "optional", "required"] as const;
+    const VIDEO: ArbiterVideoView[] = [{ kind: "unavailable" }, { kind: "connecting" }, WATCHING, { kind: "fault" }, { kind: "error" }];
+    let cells = 0;
+    let shown = 0;
+    for (const cameraPolicy of POLICIES)
+      for (const videoOverridden of [false, true])
+        for (const playable of [false, true])
+          for (const video of VIDEO) {
+            const b = { ...ROUND.boards[2]!, cameraPolicy, videoOverridden, playable };
+            const expected = cameraPolicy === "required" && playable && !videoOverridden && video.kind === "unavailable";
+            expect(showsOutageCard(b, video), JSON.stringify({ cameraPolicy, videoOverridden, playable, v: video.kind })).toBe(expected);
+            const t = text(html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f3"), video })));
+            expect(t.includes("Let this board play without video")).toBe(expected);
+            cells++;
+            if (expected) shown++;
+          }
+    expect(cells).toBe(60);
+    expect(shown, "exactly one cell of the table").toBe(1);
+  });
+
+  it("the card's words are the canvas's", () => {
+    const t = text(html(props({ video: { kind: "unavailable" } })));
+    expect(t).toContain("Only during a video outage");
+    expect(t).toContain("Video is unavailable right now");
+    expect(t).toContain("Players can't take a seat while a camera is required. You can let this board start without video. This is written to the audit log.");
+  });
+});
+
+describe("the camera join, as pure decisions", () => {
+  it("joins only where there is a camera to watch: policy on, not let go, game not over", () => {
+    const base = ROUND.boards[2]!;
+    const rows: [Partial<ArbiterBoard>, boolean][] = [
+      [{}, true],
+      [{ cameraPolicy: "optional" }, true],
+      [{ cameraPolicy: "off" }, false],
+      [{ videoOverridden: true }, false],
+      [{ state: { kind: "result", score: "1–0" } }, false],
+      [{ state: { kind: "checking_in" } }, true],
+      [{ state: { kind: "on_hold" } }, true],
+    ];
+    let checked = 0;
+    for (const [over, join] of rows) {
+      expect(shouldJoinVideo({ ...base, ...over }), JSON.stringify(over)).toBe(join);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("each refusal of the join route becomes its own tile state; anything else is an error", () => {
+    const rows: [unknown, ArbiterVideoView["kind"]][] = [
+      [new ApiV1Error("x", 503, "VIDEO_UNAVAILABLE"), "unavailable"],
+      [new ApiV1Error("x", 409, "VIDEO_NOT_IN_USE"), "none"],
+      [new ApiV1Error("x", 409, "VIDEO_OVERRIDDEN"), "overridden"],
+      [new ApiV1Error("x", 409, "VIDEO_MEETING_ENDED"), "ended"],
+      [new ArbiterGuardError(new Error("audio")), "fault"],
+      [new ApiV1Error("x", 404, "NOT_FOUND"), "error"],
+      [new Error("network"), "error"],
+    ];
+    let checked = 0;
+    for (const [err, kind] of rows) {
+      expect(arbiterJoinStateFromError(err).kind).toBe(kind);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("'camera off since' starts when this browser first sees a present player's camera off, holds, and clears when it is back", () => {
+    const off = { present: true, live: false, track: null };
+    const on = { present: true, live: true, track: null };
+    const gone = { present: false, live: false, track: null };
+    expect(nextOffSince(null, off, 1_000)).toBe(1_000);
+    expect(nextOffSince(1_000, off, 5_000), "a second reading keeps the first instant").toBe(1_000);
+    expect(nextOffSince(1_000, on, 6_000)).toBeNull();
+    expect(nextOffSince(1_000, gone, 6_000), "absent is its own state, not 'off since'").toBeNull();
+  });
+});
+
+describe("every locale", () => {
+  it("no untranslated key or unfilled slot reaches the page, in any state the panel paints", () => {
+    const states: ArbiterScreenProps[] = [
+      props(),
+      props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true, notice: { boardId: "f3", kind: "went_on" } } }),
+      props({ video: { kind: "unavailable" } }),
+      props({ video: { kind: "fault" }, decision: initialArbiterDecision("f2") }),
+      props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
+      props({
+        round: {
+          ...ROUND,
+          boards: [{ ...ROUND.boards[2]!, flags: [outOfBand(null), { id: "c", kind: "camera_connection_problems", at: at(19, 40), personName: null, seconds: 61, stamps: 1 }, { ...PRIYA_REPORT, report: null, personName: null } as ArbiterFlag] }],
+        },
+      }),
+    ];
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      for (const p of states) {
+        const t = text(html(p, locale));
+        expect(t, `${locale}: raw key`).not.toMatch(/\barbiter\.[a-zA-Z]/);
+        expect(t, `${locale}: unfilled slot`).not.toMatch(/\{[a-z]+\}/i);
+        checked++;
+      }
+    }
+    expect(checked).toBe(24);
+  });
+
+  it("the source never asks for the arbiter's own camera or microphone", () => {
+    let scanned = 0;
+    for (const f of ["../arbiter-panel.tsx", "../arbiter-camera.ts"]) {
+      const src = readFileSync(pathJoin(__dirname, f), "utf8");
+      expect(src.length).toBeGreaterThan(1_000);
+      for (const call of ["getUserMedia", "enableAudio", "enableVideo", "enableScreenShare"]) expect(src, `${f}: ${call}`).not.toContain(call);
+      scanned++;
+    }
+    expect(scanned).toBe(2);
+  });
+});
+
+function hhmm(iso: string): string {
+  return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+}
+function hhmmss(iso: string): string {
+  return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+}
