@@ -1642,9 +1642,10 @@ export function FixtureConsole({
         </section>
       )}
       {/* W2b Task 11 (spec §7): a refused forfeit closed its dialog; the reason stays here, outside the band, so a
-          refusal that resynced the match into its decided state is still read. */}
+          refusal that resynced the match into its decided state is still read. Design audit 1.4: in the console's own
+          error-banner treatment (the `error` line under the header, the app's house alert) — one red banner style. */}
       {forfeitRefusal !== null && (
-        <p data-testid="forfeit-refusal" role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 [overflow-wrap:anywhere]">
+        <p data-testid="forfeit-refusal" role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 [overflow-wrap:anywhere]">
           {forfeitRefusal}
         </p>
       )}

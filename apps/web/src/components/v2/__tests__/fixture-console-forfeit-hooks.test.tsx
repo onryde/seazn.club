@@ -366,6 +366,13 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     const line = byTestid(island.tree(), "forfeit-refusal");
     expect(line).toHaveLength(1);
     expect(textOf(line[0]!)).toBe(en("engineError.ALREADY_DECIDED"));
+    // Design audit 1.4: ONE red-banner treatment on the console — the refusal wears the console's own error banner
+    // (fixture-console's `error` line, the app's house alert: rounded-md bg-red-50 px-3 py-2 text-sm text-red-600), not
+    // a second bordered, rounded-lg, red-800 style. role=alert stays.
+    const cls = new Set(String(propsOf(line[0]!).className).split(/\s+/u));
+    for (const token of ["rounded-md", "bg-red-50", "px-3", "py-2", "text-sm", "text-red-600"]) expect(cls.has(token), `the house alert's ${token}`).toBe(true);
+    for (const token of ["border", "border-red-200", "rounded-lg", "text-red-800"]) expect(cls.has(token), `no second style: ${token}`).toBe(false);
+    expect(propsOf(line[0]!).role).toBe("alert");
     // Reopening the dialog clears the old refusal.
     click(byTestid(island.tree(), "score-forfeit")[0]);
     expect(byTestid(island.tree(), "forfeit-refusal")).toHaveLength(0);
