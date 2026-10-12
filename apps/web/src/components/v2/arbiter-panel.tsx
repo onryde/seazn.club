@@ -637,7 +637,9 @@ function Decision({
   const canResync = board.canResync;
   const canGoOn = !over && board.flags.length > 0;
   const canSettle = !over;
-  const notice = decision.notice !== null && decision.notice.boardId === board.fixtureId ? decision.notice : null;
+  // The reducer owns "a notice belongs to the board on screen" (R4: a switch
+  // clears it, an answer for the board left behind shows nothing).
+  const notice = decision.notice;
   if (!canResync && !canGoOn && !canSettle && notice === null) return null;
   const busy = decision.busy !== null;
   return (
