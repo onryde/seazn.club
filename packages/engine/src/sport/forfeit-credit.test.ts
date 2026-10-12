@@ -207,7 +207,7 @@ describe("X-WO-1: walkover credit per sport, from the stage's own cfg (spec §5.
     }
     expect(checked).toBeGreaterThanOrEqual(8);
   });
-  it("C-5: a bye's credit is a PAIR of ledgers and excludes nothing (today's bye delta, the played ledger untouched), every sport", () => {
+  it("C-5: a bye's credit is a PAIR of ledgers and excludes nothing, every sport", () => {
     let checked = 0;
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
@@ -222,6 +222,43 @@ describe("X-WO-1: walkover credit per sport, from the stage's own cfg (spec §5.
       }
     });
     expect(checked).toBeGreaterThanOrEqual(22);
+  });
+
+  it("X-WO-1: a one-side award's credit feeds every ratio — `excluded` is EXACTLY what the sport's own row leaves out (BG-WO-1 colour history, TN-WO-1 the games), else nothing", () => {
+    // MD-1 fix round 1 (M-1). X-WO-1: "the same credited score is used in the table, tie-breaks, the public page and the
+    // qualification view" — so an award excludes nothing from a ratio unless the sport's own row says so. `excluded` is
+    // read by creditedMetrics and by the qualification view (`divisionAwardAddsToLedger`), so a stray key is a contract
+    // break, not a no-op. The keys are each rule's, checked against the module's own declared metrics below.
+    const BY_RULE: Record<string, readonly string[]> = {
+      boardgame: ["black", "white"], // BG-WO-1: "excluded from colour history"
+      tennis: ["games_lost", "games_won"], // TN-WO-1 / TN-RT-1: "the match's games excluded from game %"
+    };
+    let checked = 0;
+    let unlimited = 0;
+    const sports = new Set<string>();
+    forEachSport(({ module: m }) => {
+      const declared = new Set(m.metrics.map((metric) => metric.key));
+      for (const key of BY_RULE[m.key] ?? []) expect(declared.has(key), `${m.key}: ${key} is a declared metric`).toBe(true);
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        // CK-WO-2 (PF-6): unlimited-overs cricket leaves the match out of NRR — its own test above; counted here.
+        if (m.key === "cricket" && unlimitedOvers("cricket", cfg as Record<string, unknown>)) {
+          unlimited++;
+          continue;
+        }
+        const state = m.init(cfg, defaultLineupPair(m.positions));
+        for (const reason of ["walkover", "retired", "disqualified", "withdrew"] as const) {
+          for (const side of ["home", "away"] as const) {
+            const credit = m.forfeitCredit(cfg, state as never, reason, side);
+            expect([...credit.excluded].sort(), `${m.key}/${name} ${reason} ${side}`).toEqual([...(BY_RULE[m.key] ?? [])]);
+            checked++;
+          }
+        }
+        sports.add(m.key);
+      }
+    });
+    expect(unlimited, "unlimited-overs cfgs left to CK-WO-2").toBeGreaterThanOrEqual(1);
+    expect(sports.size, "every sport reached with a cfg").toBe(builtinModules.length);
+    expect(checked).toBe(8 * [...sports].reduce((n, key) => n + declaredCfgs(builtinModules.find((x) => x.key === key)! as never).length, 0) - 8 * unlimited);
   });
 });
 

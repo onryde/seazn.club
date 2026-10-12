@@ -290,12 +290,6 @@
       "reason": "The flag only moves the played ledger's `wins` value; creditedMetrics lays the double-walkover credit over it, and that credit carries every key the ledger has (wins, white, black) at 0, so the played value is never observable."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:568:74 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };",
-      "reason": "`excluded` is read only as a list of metric keys to zero or leave out of ratios (creditedMetrics, the tie-break readers); a key no metric carries changes neither, so a retirement credit reads the same."
-    },
-    {
       "mutant": "src/sports/carrom/carrom.ts:1058:56 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = carromForfeitCredit(cfg, state, \"walkover\", \"both\");",
@@ -338,12 +332,6 @@
       "reason": "For a bye footballForfeitCredit returns the played ledger, whose gf is state.goals[side] (sideMetrics with zero=false), so displayedGoals reads state.goals either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:1749:15 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "excluded: [],",
-      "reason": "`excluded` is read only by creditedMetrics as a list of metric keys to zero (`if (key in out)`); a key no ledger carries changes nothing, and no other reader (forfeit dialog, qualification view) reads `excluded`."
-    },
-    {
       "mutant": "src/sports/football/football.ts:2715:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = footballForfeitCredit(cfg, state, \"walkover\", \"both\");",
@@ -366,12 +354,6 @@
       "original": "[\"for\", \"against\", \"diff\"]",
       "line": "if (by === \"both\") return doubleWalkoverCredit(played[0], played[1], [\"for\", \"against\", \"diff\"]);",
       "reason": "sideMetrics (and zeroMetrics) always return exactly {for, against, diff} in that order, so the union of the played ledgers' keys already is the declared list: same keys, same order, same zeroed perSide and excluded."
-    },
-    {
-      "mutant": "src/sports/generic/generic.ts:265:80 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "return { perSide: creditFor(by, record(opponent(by)), record(by)), excluded: [] };",
-      "reason": "`excluded` is read only by creditedMetrics as a list of metric keys to zero (`if (key in out)`); a key no ledger carries changes nothing, and no other reader (forfeit dialog, qualification view) reads `excluded`."
     },
     {
       "mutant": "src/sports/generic/generic.ts:686:57 StringLiteral → \"\"",
@@ -494,7 +476,19 @@
       "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
     },
     {
+      "mutant": "src/sports/boardgame/boardgame.ts:920:40 EqualityOperator → w !== 1",
+      "original": "w === 1",
+      "line": "...build(side, w, 0, l, pts, w === 1),",
+      "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
+    },
+    {
       "mutant": "src/sports/boardgame/boardgame.ts:921:61 ConditionalExpression → false",
+      "original": "w === 1",
+      "line": "metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),",
+      "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
+    },
+    {
+      "mutant": "src/sports/boardgame/boardgame.ts:921:61 ConditionalExpression → true",
       "original": "w === 1",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),",
       "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
@@ -518,12 +512,6 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3560:119 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "return { perSide: creditFor(by, zeroCricketLedger(), { ...zeroCricketLedger(), balls_faced_eff: quota }), excluded: [] };",
-      "reason": "`excluded` is read only by creditedMetrics as a list of metric keys to zero (`if (key in out)`); a key no ledger carries changes nothing, and no other reader (forfeit dialog, qualification view) reads `excluded`."
-    },
-    {
       "mutant": "src/sports/period/kernel.ts:2302:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
@@ -536,22 +524,10 @@
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2493:82 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "return { perSide: creditFor(by, record(opponent(by)), record(by)), excluded: [] };",
-      "reason": "`excluded` is read only by creditedMetrics as a list of metric keys to zero (`if (key in out)`); a key no ledger carries changes nothing, and no other reader (forfeit dialog, qualification view) reads `excluded`."
-    },
-    {
       "mutant": "src/sports/setbased/kernel.ts:2319:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
-    },
-    {
-      "mutant": "src/sports/setbased/kernel.ts:2330:76 ArrayDeclaration → [\"Stryker was here\"]",
-      "original": "[]",
-      "line": "return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };",
-      "reason": "`excluded` is read only by creditedMetrics as a list of metric keys to zero (`if (key in out)`); a key no ledger carries changes nothing, and no other reader (forfeit dialog, qualification view) reads `excluded`."
     }
   ]
 }
