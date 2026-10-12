@@ -359,9 +359,10 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     // session of this code (A1 would drop it), so it is sent as the window line it is when no session is named.
     const { sid: foreignSid, ...rejoin } = read("line-valid-rejoin-retry.json");
     expect(typeof foreignSid).toBe("string");
-    // Q7 (capture, 2026-10-12): the two SRT prose strings ride on `pair-refused` lines, which END the window — so, as a
-    // phone would, a new pair follows each one, or the lines after it would be in no window.
-    const Q7_CLOSING = new Set(["unpaired", "ended", "pair-refused", "engine-error", "reset"]);
+    // Q7 (capture, 2026-10-12, as corrected the same day — `engine-error` closes nothing): the two SRT prose strings ride
+    // on `pair-refused` lines, which END the window — so, as a phone would, a new pair follows each one, or the lines
+    // after it would be in no window.
+    const Q7_CLOSING = new Set(["unpaired", "ended", "pair-refused", "reset"]);
     const lines: Record<string, unknown>[] = [pairLine(r.tok)];
     let reopened = 0;
     for (const line of [...near.map(read), { at: AT, kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 },
@@ -375,6 +376,33 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     expect(reopened, "the two pair-refused prose lines").toBe(2);
     expect(await postCaptureRecord(r.code, r.tok, post(ndjson(lines)), r.now())).toMatchObject({ kept: lines.length, dropped: 0 });
     expect((await records(r.fixtureId))[0]).toMatchObject({ kept_lines: lines.length, dropped_lines: 0, invalid_lines: 0 });
+  });
+
+  it("Q7 CORRECTED by capture (2026-10-12): a non-fatal `engine-error` closes nothing — the no-sid line after it is STORED; after the fatal path's `ended {reason: \"fatal-error\", wasLive}` the next one is DROPPED — and a second record of the same lines answers the same", async () => {
+    const r = await captureRig();
+    const lines = [
+      pairLine(r.tok),
+      { at: AT, kind: "engine-error", message: "java.lang.IllegalStateException: snapshot not whole", suppressed: 0 },
+      deviceLine("after a non-fatal engine-error"),
+      { at: AT, kind: "engine-error", message: "java.lang.IllegalStateException: machine failed" },
+      { at: AT, kind: "ended", reason: "fatal-error", wasLive: true },
+      deviceLine("after the fatal ended"),
+    ];
+    let uploads = 0;
+    while (uploads < 2) {
+      expect(await postCaptureRecord(r.code, r.tok, post(ndjson(lines)), r.now()), `upload ${uploads + 1}`).toMatchObject({ kept: 5, dropped: 1 });
+      uploads++;
+      r.tick(60_000);
+    }
+    expect(uploads).toBe(2);
+    const stored = await records(r.fixtureId);
+    expect(stored).toHaveLength(2);
+    for (const row of stored) {
+      expect(row).toMatchObject({ received_lines: 6, kept_lines: 5, dropped_lines: 1, invalid_lines: 0 });
+      expect(row.lines).toBe(lines.slice(0, 5).map((l) => JSON.stringify(l)).join("\n"));
+      expect(row.lines).toContain("after a non-fatal engine-error");
+      expect(row.lines).not.toContain("after the fatal ended");
+    }
   });
 
   it("P9: a ref collision draws again (the stored ref is the second draw); a draw that always collides gives up with the unique violation", async () => {
