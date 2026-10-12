@@ -331,6 +331,7 @@ export async function openRound(
           fixture: c.board.f,
           seat: c.seat,
           roundNo: a.roundNo,
+          roundOpenId: decision.open.id,
           roundOpenedAt: decision.open.roundOpenedAt,
           origin: deps.origin,
         });

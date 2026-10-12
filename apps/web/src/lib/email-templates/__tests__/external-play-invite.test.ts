@@ -18,7 +18,6 @@ const ARGS = {
   orgName: "Chess & Co",
   opponentName: "Alice <b>Bold</b>",
   roundNo: 3,
-  scheduledLabel: "Wed 1 Oct, 12:10 UTC",
   deadlineLabel: "Wed 1 Oct, 12:30 UTC",
   fixtureUrl: "https://example.test/shared/org/comp/div/fixtures/abc",
 };
@@ -39,7 +38,7 @@ describe("externalPlayInviteTemplate", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("names the round, opponent, start and deadline; links the Seazn fixture page, never Lichess", () => {
+  it("names the round, opponent and deadline; links the Seazn match room, never Lichess", () => {
     let checked = 0;
     for (const loc of LOCALES) {
       const out = externalPlayInviteTemplate(ARGS, DICTS[loc]);
@@ -50,9 +49,12 @@ describe("externalPlayInviteTemplate", () => {
         expect(part, loc).not.toContain("lichess.org");
       }
       expect(out.text, loc).toContain(ARGS.deadlineLabel);
-      expect(out.text, loc).toContain(ARGS.scheduledLabel);
       expect(out.html, loc).toContain(ARGS.deadlineLabel);
-      // No placeholder left unfilled.
+      // No placeholder left unfilled — and T19 review M2: the mail names ONE
+      // time, the deadline. A copy still promising a start ("scheduled for
+      // {when}") contradicted it whenever the round opened early or late, so
+      // the template no longer passes a start time at all: a locale that
+      // still asks for one is left with a raw {when} here.
       expect(out.html, loc).not.toMatch(/\{(opponentName|roundNo|when|deadline|orgName|fixtureUrl)\}/);
       expect(out.text, loc).not.toMatch(/\{[a-zA-Z]+\}/);
       checked++;

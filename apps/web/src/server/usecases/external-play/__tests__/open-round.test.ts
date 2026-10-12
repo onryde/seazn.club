@@ -16,7 +16,7 @@ import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 // strips it) and would report every invite as failed, so the invite sender is
 // replaced. `fail` names recipients whose send the provider refuses.
 const mail = vi.hoisted(() => ({
-  sent: [] as { to: string; fixtureUrl: string; opponentName: string; roundNo: number; scheduledLabel: string }[],
+  sent: [] as { to: string; fixtureUrl: string; opponentName: string; roundNo: number; deadlineLabel: string }[],
   fail: new Set<string>(),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
@@ -31,7 +31,7 @@ vi.mock("@/lib/email", async (importOriginal) => {
           fixtureUrl: args.fixtureUrl,
           opponentName: args.opponentName,
           roundNo: args.roundNo,
-          scheduledLabel: args.scheduledLabel,
+          deadlineLabel: args.deadlineLabel,
         });
         return true;
       },
@@ -228,7 +228,7 @@ describe.skipIf(!HAS_DB)("openRound — the stamp", () => {
     // Each invite names the player's own board and opponent.
     for (const b of r.boards) {
       const toHome = mail.sent.find((m) => m.to === b.home.email)!;
-      expect(toHome.fixtureUrl).toContain(`/fixtures/${b.fixtureId}`);
+      expect(toHome.fixtureUrl).toContain(`/fixtures/${b.fixtureId}/play?t=`);
       expect(toHome.opponentName).toBe(`P${r.boards.indexOf(b) + 1}B`);
       expect(toHome.roundNo).toBe(1);
     }
@@ -621,18 +621,18 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     const t0 = new Date(Date.now() - 2 * MIN);
     expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, skipped: [] });
     expect(sentTo()).toEqual(emailsOf(r).sort());
-    // The mail names the open as the start (no start time to name): the
-    // open's UTC day, hour and minute, never the epoch a NULL formats as.
-    // A locale may print a 12- or a 24-hour clock ("07:09 PM" / "19:09"),
-    // so either form of the open's own time is accepted — a fixed one went
-    // red every afternoon UTC.
+    // The mail's one time is the deadline — the OPEN's T+20 (T14, review
+    // M2), never a start time and never the epoch a NULL formats as. A
+    // locale may print a 12- or a 24-hour clock ("07:09 PM" / "19:09"), so
+    // either form is accepted — a fixed one went red every afternoon UTC.
     const pad = (n: number) => String(n).padStart(2, "0");
-    const h = t0.getUTCHours();
-    const mm = pad(t0.getUTCMinutes());
+    const deadline = new Date(t0.getTime() + DEADLINE_AFTER_MS);
+    const h = deadline.getUTCHours();
+    const mm = pad(deadline.getUTCMinutes());
     const clocks = [`${pad(h)}:${mm}`, `${pad(((h + 11) % 12) + 1)}:${mm}`];
-    const day = String(t0.getUTCDate());
+    const day = String(deadline.getUTCDate());
     const named = mail.sent
-      .map((m) => m.scheduledLabel)
+      .map((m) => m.deadlineLabel)
       .filter((l) => clocks.some((c) => l.includes(c)) && new RegExp(`\\b${day}\\b`).test(l));
     expect(named).toHaveLength(4);
     for (const b of r.boards) {

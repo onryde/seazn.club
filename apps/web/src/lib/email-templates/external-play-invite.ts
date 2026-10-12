@@ -6,16 +6,19 @@ export interface ExternalPlayInviteArgs {
   orgName: string;
   opponentName: string;
   roundNo: number;
-  /** The board's scheduled start — what players are SHOWN (D12). */
-  scheduledLabel: string;
-  /** opened_at + DEADLINE_AFTER_MS: the last moment to take the seat. */
+  /** opened_at + DEADLINE_AFTER_MS: the last moment to take the seat — the
+   *  ONE time the invite names. It carried the board's scheduled start too
+   *  until T14 (T19 review M2): the round is open when this is sent, so a
+   *  start time either repeated the open or contradicted the deadline. */
   deadlineLabel: string;
+  /** The player's own match room (`routes.sharedFixturePlay`), carrying their
+   *  personal link token when they have one. */
   fixtureUrl: string;
 }
 
 /** D12: the organiser opened the round. Sent once per player per board per
- *  pairing (T19). The CTA is the Seazn fixture page — the game is played on
- *  Seazn's board, never a lichess.org link (D3). */
+ *  pairing (T19). The CTA is the player's Seazn match room — the game is
+ *  played on Seazn's board, never a lichess.org link (D3). */
 export function externalPlayInviteTemplate(
   args: ExternalPlayInviteArgs,
   dict: Dict,
@@ -23,7 +26,6 @@ export function externalPlayInviteTemplate(
   const vars = {
     opponentName: args.opponentName,
     roundNo: String(args.roundNo),
-    when: args.scheduledLabel,
     deadline: args.deadlineLabel,
     orgName: args.orgName,
     fixtureUrl: args.fixtureUrl,
@@ -35,7 +37,6 @@ export function externalPlayInviteTemplate(
     ...vars,
     opponentName: escapeHtml(args.opponentName),
     orgName: escapeHtml(args.orgName),
-    when: escapeHtml(args.scheduledLabel),
     deadline: escapeHtml(args.deadlineLabel),
   };
   const subject = t(dict, "externalPlayInvite.subject", vars);
