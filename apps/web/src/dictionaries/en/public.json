@@ -546,6 +546,7 @@
   "player.inThisCompetition": "In this competition",
   "player.noSquad": "No squad listed",
   "player.stats": "Stats",
+  "player.career.noStats": "No stats yet",
   "player.matches": "Matches",
   "player.matches.empty": "No matches yet",
   "player.line.cricket": "{batting} & {bowling}",

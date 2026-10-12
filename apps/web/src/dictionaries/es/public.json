@@ -546,6 +546,7 @@
   "player.inThisCompetition": "En esta competición",
   "player.noSquad": "Sin plantilla registrada",
   "player.stats": "Estadísticas",
+  "player.career.noStats": "Aún no hay estadísticas",
   "player.matches": "Partidos",
   "player.matches.empty": "Aún no hay partidos",
   "player.line.cricket": "{batting} & {bowling}",

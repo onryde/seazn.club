@@ -1,6 +1,8 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { TAG, apiJson, expectNoHorizontalScroll, linkPersonToUserBySql, loginUi } from "./helpers";
 import { withDb } from "./rs007-money-kit";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // W2b R115-1 (X-PS-1, X-PS-2, ruling 115) — a person's matches and W/L count only matches PLAYED, on every surface a
 // person reads them: the /me Career cards, the public player card's career rollup, its per-division stats and its
@@ -18,6 +20,13 @@ import { withDb } from "./rs007-money-kit";
 // six match lines on the public card, three won and three lost.
 
 interface Fixture { id: string; home_entrant_id: string | null; away_entrant_id: string | null }
+
+const UI_EN = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+const PUBLIC_EN = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8")) as Record<string, string>;
+const word = (dict: Record<string, string>, key: string): string => {
+  expect(dict[key], `the en dictionary has ${key}`).toBeTruthy();
+  return dict[key]!;
+};
 type Side = "home" | "away";
 
 const SPORTS = {
@@ -176,6 +185,13 @@ test("R115-1: /me, the public player card and the console count only matches pla
     await expect(gen).toContainText("2 matches");
     const t = await tiles(me, "career-sport-generic");
     expect([t["wins"], t["draws"] ?? "0", t["losses"]], `/me generic W/D/L at ${width}`).toEqual(["1", "0", "1"]);
+    // Audit 5.1: badminton's only folded figure is its own `matches` (dropped for the meta line's count), so its card has
+    // no tiles — it says so in the empty-state words and renders no empty <dl>. The pair: generic's card has tiles and
+    // no empty line.
+    await expect(bad.getByTestId("career-sport-no-stats"), `/me badminton at ${width}`).toHaveText(word(UI_EN, "me.career.noStats"));
+    await expect(bad.locator("dl"), `/me badminton: no empty list at ${width}`).toHaveCount(0);
+    await expect(gen.getByTestId("career-sport-no-stats"), `/me generic has figures at ${width}`).toHaveCount(0);
+    await expect(gen.locator("dl"), `/me generic's tiles at ${width}`).toHaveCount(1);
     await expectNoHorizontalScroll(me);
     seen.push(`/me@${width}: badminton "${(await bad.locator("p").nth(1).innerText()).trim()}", generic "${(await gen.locator("p").nth(1).innerText()).trim()}" W ${t["wins"]} D ${t["draws"] ?? "-"} L ${t["losses"]}`);
     await me.getByTestId("me-career").screenshot({ path: testInfo.outputPath(`me-career-${width}.png`) });
@@ -193,6 +209,9 @@ test("R115-1: /me, the public player card and the console count only matches pla
     await anon.setViewportSize({ width, height: 900 });
     const rollup = anon.getByTestId("player-career").getByTestId("career-sport-badminton");
     await expect(rollup).toContainText("4 matches", { timeout: 20_000 });
+    // Audit 5.1, the public half: the same metric-less card, its empty-state words, no empty <dl>.
+    await expect(rollup.getByTestId("career-sport-no-stats"), `public badminton at ${width}`).toHaveText(word(PUBLIC_EN, "player.career.noStats"));
+    await expect(rollup.locator("dl"), `public badminton: no empty list at ${width}`).toHaveCount(0);
     const list = anon.getByTestId("mh-player-matches");
     const lines = list.locator('[data-testid^="mh-player-match-"]');
     await expect(lines).toHaveCount(6);

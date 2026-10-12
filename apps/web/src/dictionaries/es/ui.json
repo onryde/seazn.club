@@ -529,6 +529,7 @@
   "me.stats.publicProfile": "Perfil público",
   "me.career.title": "Carrera",
   "me.career.empty": "Aún no hay estadísticas de carrera. Aparecerán aquí en cuanto juegues un partido puntuado.",
+  "me.career.noStats": "Aún no hay estadísticas",
   "player.career.title": "Totales de carrera",
   "career.divisions.one": "{count} división",
   "career.divisions.other": "{count} divisiones",

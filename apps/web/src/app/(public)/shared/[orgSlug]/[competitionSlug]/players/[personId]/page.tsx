@@ -163,14 +163,22 @@ export default async function PlayerCardPage({ params }: Props) {
                   <div key={c.sport_key} data-testid={`career-sport-${c.sport_key}`} className={CARD}>
                     <p className="text-sm font-medium text-ink">{c.sport_label}</p>
                     <p className="text-xs text-ink-muted">{c.meta}</p>
-                    <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
-                      {c.metrics.map((m) => (
-                        <div key={m.key} className="min-w-16">
-                          <dt className="text-xs text-ink-muted">{m.label}</dt>
-                          <dd className="font-display text-2xl font-bold tabular-nums text-ink">{m.value}</dd>
-                        </div>
-                      ))}
-                    </dl>
+                    {/* Audit 5.1: a played sport with no figure says so in this page's empty-state words
+                        (`player.noSquad`'s muted small text) — never an empty list. */}
+                    {c.metrics.length > 0 ? (
+                      <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+                        {c.metrics.map((m) => (
+                          <div key={m.key} className="min-w-16">
+                            <dt className="text-xs text-ink-muted">{m.label}</dt>
+                            <dd className="font-display text-2xl font-bold tabular-nums text-ink">{m.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : (
+                      <p className="mt-2 text-sm text-ink-muted" data-testid="career-sport-no-stats">
+                        {t(dict, "player.career.noStats")}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>

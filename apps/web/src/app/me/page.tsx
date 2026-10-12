@@ -339,18 +339,27 @@ export default async function MePage({
                     {" · "}
                     {plural(ui, "career.matches", c.matches, locale)}
                   </p>
-                  <dl className="flex flex-wrap gap-x-6 gap-y-2">
-                    {c.metrics.map((m) => (
-                      <div key={m.key} className="min-w-16">
-                        <dt className="text-[11px] uppercase tracking-wide text-slate-400">
-                          {m.label}
-                        </dt>
-                        <dd className="font-display text-2xl font-bold tabular-nums text-slate-900">
-                          {m.value}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
+                  {/* Audit 5.1: a played sport with no figure (a footballer who scored nothing, ruling 120; badminton,
+                      whose one figure is the match count above) says so in the empty-state words — never an empty
+                      list. The section's own empty state is the pattern (`me-career-empty`, muted small text). */}
+                  {c.metrics.length > 0 ? (
+                    <dl className="flex flex-wrap gap-x-6 gap-y-2">
+                      {c.metrics.map((m) => (
+                        <div key={m.key} className="min-w-16">
+                          <dt className="text-[11px] uppercase tracking-wide text-slate-400">
+                            {m.label}
+                          </dt>
+                          <dd className="font-display text-2xl font-bold tabular-nums text-slate-900">
+                            {m.value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="text-sm text-slate-500" data-testid="career-sport-no-stats">
+                      {t(ui, "me.career.noStats")}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>
