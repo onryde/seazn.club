@@ -3,15 +3,17 @@
 // COMPILATION (tsc, not vitest) when a mirror drifts from its source. The
 // runtime block pins the envelope reading against v1's real envelope shape.
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
-import type { SeatWire, RoomClaim } from "@/server/usecases/external-play/room";
+import type { RoomAct, RoomActOut, RoomCameraFault } from "@/server/api-v1/schemas";
+import type { SeatWire, RoomClaim, CameraFaultReport } from "@/server/usecases/external-play/room";
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import {
   claimSeat,
   fetchRoom,
   roomApiPath,
   sendAct,
+  sendCameraFault,
   sendClockZero,
+  type CameraFaultBody,
   type ParticipantWire,
   type RoomActAnswer,
   type RoomActBody,
@@ -32,6 +34,10 @@ describe("the wire mirrors match their server sources (type level)", () => {
   });
   it("the POST answer IS RoomClaim — T9's `create` included (review m3: the route no longer drops it)", () => {
     expectTypeOf<RoomClaimAnswer>().toEqualTypeOf<RoomClaim>();
+  });
+  it("the camera-fault body IS the route's schema type and the usecase's report (I-1)", () => {
+    expectTypeOf<CameraFaultBody>().toEqualTypeOf<RoomCameraFault>();
+    expectTypeOf<CameraFaultBody>().toEqualTypeOf<CameraFaultReport>();
   });
 });
 
@@ -70,6 +76,15 @@ describe("the calls", () => {
       ["POST", "/api/v1/fixtures/f-1/external-play/room/clock-zero", null],
     ]);
     for (const s of seen) expect([s.init.credentials, s.init.cache]).toEqual(["same-origin", "no-store"]);
+  });
+
+  it("camera-fault posts {state, participantId} as JSON, kept alive past an unload (the page closing mid-recovery still ends our stamp)", async () => {
+    const { f, seen } = fakeFetch(() => envelope({ open: false }));
+    expect(await sendCameraFault("f-1", "tok", { state: "end", participantId: "pt-1" }, f)).toEqual({ ok: true, data: { open: false } });
+    expect([seen[0]!.init.method, seen[0]!.url]).toEqual(["POST", "/api/v1/fixtures/f-1/external-play/room/camera-fault?t=tok"]);
+    expect(JSON.parse(String(seen[0]!.init.body))).toEqual({ state: "end", participantId: "pt-1" });
+    expect(new Headers(seen[0]!.init.headers).get("content-type")).toBe("application/json");
+    expect(seen[0]!.init.keepalive).toBe(true);
   });
 
   it("act posts the action as JSON, verbatim", async () => {

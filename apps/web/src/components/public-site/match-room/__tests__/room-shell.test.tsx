@@ -287,3 +287,65 @@ describe("I3/I4: the camera duty is the REQUIRED policy's; an unknown presence a
     expect(checked).toBe(3);
   });
 });
+
+// T14 re-review 3, I-1 (controller ruling 2026-10-12): when OUR guard takes
+// the camera out of the meeting and re-joins, the player is told so — one
+// amber line, in their language — and never "your camera is off; your
+// organiser sees when it was off".
+describe("I-1: our guard re-joining is ours — the reconnecting notice, never the camera-off banner", () => {
+  const RULED_EN = "Camera connection problem on our side — reconnecting…";
+  const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+  function paintLiveIn(s: RoomSnapshot, cameraStatus: "live" | "off" | "recovering", locale: keyof typeof LOCALES) {
+    const state = initialRoomState(s, T0);
+    const noop = async () => null;
+    const dict = LOCALES[locale] as unknown as Record<string, string>;
+    return renderToStaticMarkup(
+      <DictProvider dict={dict as unknown as Dict} locale={locale}>
+        <Screen
+          screen={{ kind: "live" }}
+          state={state}
+          room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
+          camera={{ status: cameraStatus, stream: null, enable: () => {}, link: () => null, onLinkChange: () => () => {} }}
+          busy={false}
+          tryAgain={() => {}}
+          relinkHref="/x"
+          locale={locale}
+          t={((k: string) => dict[k] ?? k) as never}
+          plural={((k: string) => k) as never}
+        />
+      </DictProvider>,
+    );
+  }
+
+  it("the owner's words, exactly, in en; every locale has its own copy (not the key, not English)", () => {
+    expect(en["externalPlay.room.state.cameraReconnecting" as keyof typeof en]).toBe(RULED_EN);
+    for (const l of ["es", "fr", "nl"] as const) {
+      const v = (LOCALES[l] as unknown as Record<string, string>)["externalPlay.room.state.cameraReconnecting"];
+      expect(v, l).toBeTruthy();
+      expect(v, `${l} is not English`).not.toBe(RULED_EN);
+    }
+  });
+
+  it("recovering, under every policy with a camera: the notice in each locale and NO camera-off banner; the pair: off shows the banner and no notice (required)", () => {
+    let checked = 0;
+    for (const policy of ["optional", "required"] as const) {
+      for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+        const s = snap({ game: GAME, you, cameraPolicy: policy, opponentPresence: { participantId: "rtk-opp" } });
+        const html = paintLiveIn(s, "recovering", locale);
+        const copy = (LOCALES[locale] as unknown as Record<string, string>)["externalPlay.room.state.cameraReconnecting"]!;
+        expect(ids(html), `${policy}/${locale}`).toContain("room-camera-reconnecting");
+        expect(html, `${policy}/${locale}: the copy`).toContain(copy.replace(/&/g, "&amp;"));
+        expect(ids(html), `${policy}/${locale}: never blamed`).not.toContain("room-camera-off");
+        expect(html.match(/data-testid="room-camera-reconnecting"/g), "a single notice").toHaveLength(1);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: policy × locale").toBe(8);
+    const off = paintLiveIn(snap({ game: GAME, you, cameraPolicy: "required" }), "off", "en");
+    expect(ids(off)).toContain("room-camera-off");
+    expect(ids(off)).not.toContain("room-camera-reconnecting");
+    const live = paintLiveIn(snap({ game: GAME, you, cameraPolicy: "required" }), "live", "en");
+    expect(ids(live).filter((x) => x === "room-camera-off" || x === "room-camera-reconnecting")).toEqual([]);
+  });
+
+});

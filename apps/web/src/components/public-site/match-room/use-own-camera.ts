@@ -1,20 +1,29 @@
 "use client";
 // The hook over camera-session: join with the caller's OWN participant token
 // (from the seat answer — never from the snapshot), expose the local preview
-// stream and the status, leave on unmount. And the opponent's presence pill,
+// stream and the status, leave on unmount. Our guard's faults are stamped on
+// the server through `stamp` (I-1). And the opponent's presence pill,
 // read from that same join (review I8) on a local timer — no network.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cameraSession, type CameraView } from "./camera-session";
 import { joinOwnCamera, type JoinOwnCamera, type MeetingLink } from "./camera-loader";
 import { opponentPresenceView, PRESENCE_TICK_MS, type OpponentPresenceWire } from "./opponent-presence";
 
-export function useOwnCamera(authToken: string | null, join: JoinOwnCamera = joinOwnCamera) {
+/** Tells the server our guard's gap on this seat started or ended (I-1). */
+export type CameraFaultStamp = (state: "start" | "end") => Promise<unknown>;
+
+export function useOwnCamera(authToken: string | null, join: JoinOwnCamera = joinOwnCamera, stamp: CameraFaultStamp | null = null) {
   const [view, setView] = useState<CameraView>({ status: "idle", track: null });
   const session = useRef<ReturnType<typeof cameraSession> | null>(null);
   const joinRef = useRef(join);
+  // The session lives for the page; the stamp names the latest seat.
+  const stampRef = useRef(stamp);
+  useEffect(() => {
+    stampRef.current = stamp;
+  });
 
   useEffect(() => {
-    const s = cameraSession(joinRef.current, setView);
+    const s = cameraSession(joinRef.current, setView, { stamp: (state) => stampRef.current?.(state) });
     session.current = s;
     return () => {
       session.current = null;

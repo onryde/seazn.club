@@ -162,6 +162,7 @@ class FakeParticipants extends Emitter {
   }
   setMaxActiveParticipantsCount(limit: number): void {
     this.m.calls.push(`setMax:${limit}`);
+    this.m.injectedFailure("setMax");
     if (limit < 0 || limit > 24) throw new Error("0 <= Max active participants count limit <= 24");
     this.#max = limit;
     if (this.m.socketJoined) this.m.updateActive();
@@ -259,10 +260,20 @@ export class FakeMeeting {
   consumedAudio: { peerId: string; producerId: string }[] = [];
   // ── test seams (not SDK behaviour) ────────────────────────────────────
   /** Make the next N calls of a method throw, as a future SDK might. */
-  failNext: { setViewMode: number; unsubscribe: number; leave: number } = { setViewMode: 0, unsubscribe: 0, leave: 0 };
+  failNext: { setMax: number; setViewMode: number; unsubscribe: number; leave: number } = {
+    setMax: 0,
+    setViewMode: 0,
+    unsubscribe: 0,
+    leave: 0,
+  };
+  /** While this answers true, all THREE guard calls throw (setMax,
+   *  setViewMode, unsubscribe) — a fault that hits every player at once
+   *  until it clears (T14 re-review 3, ruling 5). */
+  failWhile: (() => boolean) | null = null;
   /** Runs once inside the next unsubscribe — an arrival mid-enforcement. */
   duringNextUnsubscribe: ((m: FakeMeeting) => void) | null = null;
-  injectedFailure(method: "setViewMode" | "unsubscribe" | "leave"): void {
+  injectedFailure(method: "setMax" | "setViewMode" | "unsubscribe" | "leave"): void {
+    if (method !== "leave" && this.failWhile?.() === true) throw new Error(`injected ${method} failure (burst)`);
     if (this.failNext[method] > 0) {
       this.failNext[method] -= 1;
       throw new Error(`injected ${method} failure`);

@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import { join as pathJoin } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { D7_MAX_ATTEMPTS, makeJoinOwnCamera, type D7Report } from "../camera-loader";
+import { D7_MAX_ATTEMPTS, D7_QUIET_RETRY_MS, D7GuardError, makeJoinOwnCamera, type D7Report, type OwnCamera } from "../camera-loader";
 import { fakeRealtimeKit, MODELLED_SDK_VERSION, type FakeMeeting } from "./_fake-realtimekit";
 
 const OPP = { peer: "opp-peer", user: "rtk-opponent" };
@@ -35,6 +35,33 @@ function received(m: FakeMeeting) {
   };
 }
 const NOTHING = { subscribed: 0, consumed: 0, audioSubscribed: 0, audioConsumed: 0 };
+/** How many times the camera told its owner the guard left the meeting. */
+function faults(cam: OwnCamera) {
+  const seen = { n: 0 };
+  cam.onFault(() => (seen.n += 1));
+  return seen;
+}
+/** A scheduler the test fires by hand: what the loader asked to wait, in order. */
+function manualLater() {
+  const queue: { fn: () => void; ms: number; cancelled: boolean }[] = [];
+  return {
+    asked: () => queue.map((q) => q.ms),
+    pending: () => queue.filter((q) => !q.cancelled).length,
+    later: (fn: () => void, ms: number) => {
+      const q = { fn, ms, cancelled: false };
+      queue.push(q);
+      return () => void (q.cancelled = true);
+    },
+    async fireNext(): Promise<boolean> {
+      const q = queue.find((x) => !x.cancelled);
+      if (!q) return false;
+      q.cancelled = true;
+      q.fn();
+      await settle();
+      return true;
+    },
+  };
+}
 /** A reporter that records, for the failure paths (review re-2 M3). */
 function reports() {
   const seen: { event: string; message: string }[] = [];
@@ -294,11 +321,14 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(m.participants.viewMode).toBe("MANUAL");
   });
 
-  it(`a call that keeps throwing fails CLOSED after ${D7_MAX_ATTEMPTS} attempts: reported, the meeting left, the camera reads off, nothing received`, async () => {
+  it(`a remote peer subscribed and a call that keeps throwing: after ${D7_MAX_ATTEMPTS} attempts it fails CLOSED — reported, the meeting left, the OWNER told (onFault, once), nothing received`, async () => {
     const { seen, report } = reports();
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), mic(m, OPP.peer)) });
     const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    const fault = faults(cam);
     const m = rtk.meetings[0]!;
+    const leavesWhenTold: number[] = [];
+    cam.onFault(() => leavesWhenTold.push(m.calls.filter((c) => c === "leave").length));
     await settle();
     expect(m.calls, "premise: in the meeting").not.toContain("leave");
     m.failNext.unsubscribe = 1_000;
@@ -307,14 +337,18 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     const tries = 1_000 - m.failNext.unsubscribe;
     expect(tries, "bounded: exactly the attempts allowed, never a loop").toBe(D7_MAX_ATTEMPTS);
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
-    expect(m.calls).toContain("leave");
+    expect(m.calls.filter((c) => c === "leave")).toHaveLength(1);
+    expect(fault.n, "the owner heard it once — and re-joins (camera-session)").toBe(1);
+    expect(leavesWhenTold, "told BEFORE the leave: its stamp leaves no stretch of the gap unstamped").toEqual([0]);
     expect(received(m).consumed + received(m).audioConsumed, "nothing consumed").toBe(0);
     expect(cam.link(), "out of the meeting").toBeNull();
-    expect(cam.track(), "the camera reads off").toBeNull();
-    await expect(cam.enable(), "it cannot be turned back on into that meeting").rejects.toThrow(/left/);
+    expect(cam.track(), "this camera is gone").toBeNull();
+    await expect(cam.enable(), "never back into THAT meeting — a fresh join replaces it").rejects.toThrow(/fresh join/);
+    await cam.leave();
+    expect(m.calls.filter((c) => c === "leave"), "the owner's leave is the same leave, not a second").toHaveLength(1);
   });
 
-  it("fails closed DURING the join itself: the camera comes back closed — out of the meeting, nothing received", async () => {
+  it("fails closed DURING the join itself: the join REJECTS as our guard's (D7GuardError) — out of the meeting, nothing received", async () => {
     const { seen, report } = reports();
     const rtk = fakeRealtimeKit({
       setup: (m) => {
@@ -326,13 +360,25 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
         m.failNext.setViewMode = 1_000;
       },
     });
-    const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    const joined = makeJoinOwnCamera(rtk.load, report)("own-token");
+    await expect(joined).rejects.toBeInstanceOf(D7GuardError);
     const m = rtk.meetings[0]!;
     await settle();
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
     expect(m.calls).toContain("leave");
-    expect(cam.link(), "the join's own roomJoined does not put it back").toBeNull();
+    expect(m.socketJoined, "the join's own roomJoined does not put it back").toBe(false);
     expect(received(m).consumed + received(m).audioConsumed).toBe(0);
+  });
+
+  it("the cap cannot be set BEFORE the join: nothing is joined, and the join rejects as our guard's (D7GuardError), reported", async () => {
+    const { seen, report } = reports();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), (m.failNext.setMax = 1)) });
+    await expect(makeJoinOwnCamera(rtk.load, report)("own-token")).rejects.toBeInstanceOf(D7GuardError);
+    const m = rtk.meetings[0]!;
+    expect(m.failNext.setMax, "premise: the cap call failed").toBe(0);
+    expect(m.calls, "never joined").not.toContain("join");
+    expect(seen.map((x) => x.event)).toEqual(["d7_prejoin_failed"]);
+    expect(received(m)).toEqual(NOTHING);
   });
 
   it("fails closed during a REJOIN: that rejoin's roomJoined, landing after, does not put it back", async () => {
@@ -345,6 +391,7 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
       },
     });
     const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    const fault = faults(cam);
     const m = rtk.meetings[0]!;
     await settle();
     m.failNext.unsubscribe = 1_000;
@@ -352,6 +399,7 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     await settle();
     expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
     expect(cam.link()).toBeNull();
+    expect(fault.n).toBe(1);
     expect(received(m).consumed + received(m).audioConsumed).toBe(0);
   });
 
@@ -396,17 +444,85 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(cam.track()).toBeNull();
   });
 
-  it("a camera listener hears the fail-closed as the camera going off", async () => {
+  it("the fail-close is a FAULT, never the player's camera going off: the camera listener hears nothing, the fault listener once — and one added afterwards hears it at once", async () => {
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), mic(m, OPP.peer)) });
     const cam = await makeJoinOwnCamera(rtk.load, () => {})("own-token");
     const m = rtk.meetings[0]!;
     const heard: [boolean, MediaStreamTrack | null][] = [];
     cam.onChange((enabled, track) => heard.push([enabled, track]));
+    const early = faults(cam);
     m.failNext.unsubscribe = 1_000;
     await m.participants.subscribe([OPP.peer], ["audio"]);
     await settle();
-    expect(heard).toEqual([[false, null]]);
+    expect(heard, "no 'camera off' — that would be the player's").toEqual([]);
+    expect(early.n).toBe(1);
+    const late = faults(cam);
+    await settle();
+    expect(late.n, "a late listener is not left waiting for a fault that already happened").toBe(1);
     expect(received(m).audioConsumed).toBe(0);
+  });
+
+  it("NOTHING remote subscribed and the guard keeps failing: it STAYS — in the meeting, publishing, reported once — and retries quietly until the SDK lets it", async () => {
+    const { seen, report } = reports();
+    const timer = manualLater();
+    // Alone in the meeting: nobody to receive. setViewMode fails 6 times in a row.
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.failNext.setViewMode = 6) });
+    const cam = await makeJoinOwnCamera(rtk.load, report, { later: timer.later })("own-token");
+    const fault = faults(cam);
+    const m = rtk.meetings[0]!;
+    await settle();
+    expect(m.failNext.setViewMode, "premise: the join's attempts all failed").toBe(6 - D7_MAX_ATTEMPTS);
+    expect([m.calls.includes("leave"), fault.n], "not left: nothing to refuse").toEqual([false, 0]);
+    expect(cam.track(), "still publishing").not.toBeNull();
+    expect(cam.link(), "still in the meeting").not.toBeNull();
+    let fired = 0;
+    while (m.participants.viewMode !== "MANUAL" && (await timer.fireNext())) fired += 1;
+    expect(fired, "the quiet retries it took: one per remaining failure, plus the one that worked").toBe(6 - D7_MAX_ATTEMPTS + 1);
+    expect(m.participants.viewMode, "recovered when the SDK did").toBe("MANUAL");
+    expect(timer.pending(), "nothing further scheduled once it holds").toBe(0);
+    expect(seen.map((x) => x.event), "reported once, never closed").toEqual(["d7_enforce_failed"]);
+    // …and the opponent arriving now is refused as ever.
+    m.peerJoins(OPP.peer, OPP.user);
+    camera(m, OPP.peer);
+    mic(m, OPP.peer);
+    await settle();
+    expect(received(m)).toEqual(NOTHING);
+    expect(fault.n).toBe(0);
+  });
+
+  it("the quiet retries wait on the declared ladder, the last wait repeating — never a hot loop", async () => {
+    const timer = manualLater();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.failNext.setViewMode = 1_000) });
+    await makeJoinOwnCamera(rtk.load, () => {}, { later: timer.later })("own-token");
+    await settle();
+    const rounds = D7_QUIET_RETRY_MS.length + 2;
+    for (let i = 0; i < rounds; i += 1) expect(await timer.fireNext(), `round ${i}`).toBe(true);
+    const want = [...D7_QUIET_RETRY_MS, ...Array(3).fill(D7_QUIET_RETRY_MS.at(-1))];
+    expect(timer.asked(), "one wait per failed retry").toEqual(want.slice(0, rounds + 1));
+    expect(Math.min(...timer.asked()), "never immediate").toBeGreaterThan(0);
+    expect(rtk.meetings[0]!.calls, "still in").not.toContain("leave");
+  });
+
+  it("degraded (the view never went MANUAL) and then a peer IS subscribed: refused at once — it leaves, the owner told, nothing consumed", async () => {
+    const { seen, report } = reports();
+    const timer = manualLater();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.failNext.setViewMode = 1_000) });
+    const cam = await makeJoinOwnCamera(rtk.load, report, { later: timer.later })("own-token");
+    const fault = faults(cam);
+    const m = rtk.meetings[0]!;
+    await settle();
+    expect(m.participants.viewMode, "premise: degraded").toBe("ACTIVE_GRID");
+    const before = 1_000 - m.failNext.setViewMode;
+    // The opponent arrives; the SDK's own view subscribes them.
+    m.peerJoins(OPP.peer, OPP.user);
+    camera(m, OPP.peer);
+    mic(m, OPP.peer);
+    await settle();
+    expect(1_000 - m.failNext.setViewMode - before, "ONE more attempt, not three: it has failed long enough").toBe(1);
+    expect([m.calls.includes("leave"), fault.n]).toEqual([true, 1]);
+    expect(received(m).consumed + received(m).audioConsumed, "left before the consumer sync").toBe(0);
+    expect(timer.pending(), "the quiet retry is cancelled").toBe(0);
+    expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed", "d7_fail_closed"]);
   });
 });
 

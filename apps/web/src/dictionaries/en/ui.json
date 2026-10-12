@@ -5994,6 +5994,7 @@
   "externalPlay.room.state.cameraOff.title": "Your camera is off",
   "externalPlay.room.state.cameraOff.body": "Turn it back on. The game carries on; your organiser sees when it was off.",
   "externalPlay.room.state.cameraOff.cta": "Turn camera on",
+  "externalPlay.room.state.cameraReconnecting": "Camera connection problem on our side — reconnecting…",
   "externalPlay.room.state.revoked.title": "Your Lichess link was revoked",
   "externalPlay.room.state.revoked.body": "Your organiser has been told.",
   "externalPlay.room.state.held.title": "This game is on hold",

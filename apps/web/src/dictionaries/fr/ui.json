@@ -5994,6 +5994,7 @@
   "externalPlay.room.state.cameraOff.title": "Votre caméra est éteinte",
   "externalPlay.room.state.cameraOff.body": "Rallumez-la. La partie continue ; votre organisateur voit quand elle était éteinte.",
   "externalPlay.room.state.cameraOff.cta": "Allumer la caméra",
+  "externalPlay.room.state.cameraReconnecting": "Problème de connexion de la caméra de notre côté — reconnexion…",
   "externalPlay.room.state.revoked.title": "Votre lien Lichess a été révoqué",
   "externalPlay.room.state.revoked.body": "Votre organisateur a été prévenu.",
   "externalPlay.room.state.held.title": "Cette partie est suspendue",

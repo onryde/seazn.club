@@ -2374,6 +2374,7 @@ export type DictionaryKey =
   | "externalPlay.room.state.cameraOff.body"
   | "externalPlay.room.state.cameraOff.cta"
   | "externalPlay.room.state.cameraOff.title"
+  | "externalPlay.room.state.cameraReconnecting"
   | "externalPlay.room.state.cameraRequired.body"
   | "externalPlay.room.state.cameraRequired.title"
   | "externalPlay.room.state.checkAgain"

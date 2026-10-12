@@ -1,4 +1,4 @@
-// The match room's four calls to OUR server (design §3.4: the browser never
+// The match room's five calls to OUR server (design §3.4: the browser never
 // talks to Lichess). Client-safe: no server module is imported — the wire
 // types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas.ts), the
 // room usecase's `SeatWire` and T9's `CreateOutcome`, and room-api.test.ts
@@ -20,6 +20,10 @@ export type RoomActAnswer =
   | { ok: false; reconcile: false; reason: GrantRefusalWire };
 
 export type ParticipantWire = { participantId: string; authToken: string };
+
+/** The room usecase's `CameraFaultReport` / the route's `RoomCameraFault`
+ *  (I-1): our guard's gap on this player's OWN seat started or ended. */
+export type CameraFaultBody = { state: "start" | "end"; participantId: string };
 
 export type SeatAnswer =
   | { seated: true; participant: ParticipantWire | null }
@@ -48,7 +52,7 @@ export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; 
 
 export type Fetcher = typeof fetch;
 
-export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero", token: string | null): string {
+export function roomApiPath(fixtureId: string, tail: "" | "/act" | "/clock-zero" | "/camera-fault", token: string | null): string {
   const q = token ? `?t=${encodeURIComponent(token)}` : "";
   return `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/room${tail}${q}`;
 }
@@ -89,4 +93,15 @@ export function sendAct(fixtureId: string, token: string | null, action: RoomAct
 
 export function sendClockZero(fixtureId: string, token: string | null, f: Fetcher = fetch) {
   return call<{ reconciled: boolean }>(f, roomApiPath(fixtureId, "/clock-zero", token), { method: "POST" });
+}
+
+/** Our guard's gap on the caller's own seat (I-1). `keepalive`: a page
+ *  closing mid-recovery still closes the stamp it opened. */
+export function sendCameraFault(fixtureId: string, token: string | null, body: CameraFaultBody, f: Fetcher = fetch) {
+  return call<{ open: boolean }>(f, roomApiPath(fixtureId, "/camera-fault", token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    keepalive: true,
+  });
 }

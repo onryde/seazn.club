@@ -26,6 +26,7 @@ import { RoomHeader } from "./room-header";
 import {
   CameraCard,
   CameraOffBanner,
+  CameraReconnectingNotice,
   ClosedCard,
   CreatingCard,
   NotOpenedCard,
@@ -38,6 +39,8 @@ import { roomScreen } from "./room-screen";
 import { canMove, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
+import { joinOwnCamera } from "./camera-loader";
+import { sendCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
 import type { RoomGame, RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
@@ -114,7 +117,15 @@ export function RoomShell({
   const snap = state.snap;
   const cameraOn = snap.cameraPolicy !== "off";
   const participantToken = cameraOn ? (state.seat?.participant?.authToken ?? null) : null;
-  const camera = useOwnCamera(participantToken);
+  // Our guard's gap (I-1) is stamped on the caller's OWN seat, by its id.
+  const participantId = cameraOn ? (state.seat?.participant?.participantId ?? null) : null;
+  const fixtureId = snap.fixtureId;
+  const stamp = useCallback(
+    (s: "start" | "end") =>
+      participantId === null ? Promise.resolve() : sendCameraFault(fixtureId, token, { state: s, participantId }),
+    [participantId, fixtureId, token],
+  );
+  const camera = useOwnCamera(participantToken, joinOwnCamera, stamp);
   // The pill reads this client's own meeting join (review I8): no server call.
   const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
 
@@ -146,8 +157,9 @@ export function RoomShell({
   }, [refusedForCamera, camera.status, state.pending, retries, claim]);
   // While the camera is coming up and the seat is still being retried, the
   // player stays on the check-in; card 2/3 is for a camera that will not come.
+  // Recovering is OUR guard re-joining (I-1): never the camera-required card.
   const cameraSettling =
-    camera.status === "joining" || (camera.status === "live" && retries < SEAT_RETRIES);
+    camera.status === "joining" || camera.status === "recovering" || (camera.status === "live" && retries < SEAT_RETRIES);
   const screen = roomScreen(state, { cameraSettling });
 
   const tryAgain = useCallback(() => {
@@ -309,6 +321,12 @@ export function Screen({
           {cameraDown ? (
             <div className="order-0 md:col-span-2">
               <CameraOffBanner onEnable={camera.status === "off" ? camera.enable : tryAgain} t={t} />
+            </div>
+          ) : null}
+          {/* OUR guard re-joining (I-1): honest copy, never "camera off". */}
+          {policyOn && camera.status === "recovering" ? (
+            <div className="order-0 md:col-span-2">
+              <CameraReconnectingNotice t={t} />
             </div>
           ) : null}
           <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
