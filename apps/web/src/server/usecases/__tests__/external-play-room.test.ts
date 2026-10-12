@@ -1,700 +1,497 @@
 // apps/web/src/server/usecases/__tests__/external-play-room.test.ts
 //
-// Task 8 — the match room usecase (spec §5 steps 6-7, §8.2, §12.1): identity
-// resolution (session or signed link), a write-free GET, check-in inside the
-// T-10..T+20 window, and minting exactly one open challenge outside any
-// transaction behind a short row claim.
+// T14 — the match room usecase (design §6; spec §5, §8.2, §12.1): identity
+// (session, or a link token bound to the round's OPEN — M4), a write-free
+// GET, the seat claim through preflight's seatPlayer with the check-in it
+// stamps, T9's createGameIfReady as the one challenge producer, the T20 start
+// gate, the frozen seat (T11 M7), the held board's watch link, and the act /
+// clock-zero reconcile triggers.
+//
+// Every case below runs camera policy `off` (the seed's default), so the REAL
+// seatPlayer seats without RealtimeKit; T9's create is a seam (its own suite
+// owns it) and the T20 flag is asked through `deps.offered`, because vitest
+// runs with ONLINE_CHESS_ALWAYS=1. Single-sport by construction: online play
+// exists only for `boardgame` (guard.ts `d.sport_key = 'boardgame'`).
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
-import { appendEvent } from "@/server/engine-db";
-import { roomPhase, windowFor } from "@/server/external-play/window";
-import type { ExternalPlayAdapter } from "@/server/external-play/types";
+import { routes } from "@/lib/routes";
+import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
-import { loadOnlinePlayFixture } from "../external-play/guard";
+import { fenAfter, type PlayResult } from "../external-play/play";
 import {
-  checkInToMatchRoom,
-  mintIfReady,
-  readMatchRoom,
-  resolveRoomPlayer,
+  CLOCK_ZERO_TOLERANCE_MS,
+  actInRoom,
+  claimRoomSeat,
+  readRoom,
+  reportClockZero,
   type RoomDeps,
 } from "../external-play/room";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
-// `stampFixtureCheckIn` always stamps `checked_in_at` with the DB's own
-// `now()` (real wall clock) — `checkInCounts` then judges THAT stamp against
-// the fixture's window (window.ts's own doc comment: "a check-in counts only
-// inside the fixture's CURRENT window"). Unlike external-play-guard.test.ts
-// (which never stamps a check-in), T here MUST be anchored to the real
-// clock — a fixed future literal like guard.test.ts's own T would put every
-// real check-in stamp hours/days "before" the window and every
-// checkInCounts read would silently read false. `now` (the room's own
-// SIMULATED time, passed as deps.now for the phase gate) is kept close to
-// the real check-in stamps above so both independently land "open".
+// `stampFixtureCheckIn` stamps the DB's own now() (real wall clock) and
+// `checkInCounts` judges THAT stamp against the open's window, so the open is
+// anchored to the real clock: T five minutes ahead, the window T-10..T+20.
 const T = new Date(Date.now() + 5 * 60_000);
 const now = new Date();
-// D12 (T9): the room's window hangs off the organiser's OPEN stamp, not the
-// timetable. Every pre-existing case below opens its round AT T, so the
-// window each was written against (T-10..T+20) is unchanged; the D12 cases
-// at the bottom are the ones where the two anchors differ.
 
-// `fixture_external_play.challenge_id` has a GLOBAL unique index (V405) —
-// not scoped per fixture, and this test DB is not reset between vitest
-// invocations — so every test that actually completes a mint needs its OWN
-// distinct, never-reused id; a hardcoded literal shared across two
-// "actually mints" tests (or reused across two separate `vitest run`
-// invocations of this file) collides with "duplicate key value violates
-// unique constraint fixture_external_play_challenge_idx" (found via a live
-// run of this suite, not asserted from reading the migration alone). Every
-// call gets a fresh id; tests read the actual id off the returned `id`
-// field instead of hardcoding the URL.
-function fakeAdapter(id: string = `ch-${randomUUID()}`): ExternalPlayAdapter & {
-  id: string;
-  createOpenChallenge: ReturnType<typeof vi.fn>;
-  fetchGame: ReturnType<typeof vi.fn>;
+function deps(overrides: Partial<RoomDeps> = {}): RoomDeps & {
+  publish: ReturnType<typeof vi.fn>;
+  create: ReturnType<typeof vi.fn>;
+  offered: ReturnType<typeof vi.fn>;
 } {
   return {
-    id,
-    createOpenChallenge: vi.fn(async () => ({
-      challengeId: id,
-      urlWhite: `https://l/${id}?color=white`,
-      urlBlack: `https://l/${id}?color=black`,
-    })),
-    fetchGame: vi.fn(async () => null),
-  };
+    now,
+    publish: vi.fn(async () => {}),
+    create: vi.fn(async () => ({ created: false as const, reason: "not_ready" as const })),
+    offered: vi.fn(async () => true),
+    mintRealtime: vi.fn(async () => "rt-token"),
+    ...overrides,
+  } as never;
 }
 
-function deps(overrides: Partial<RoomDeps> = {}): RoomDeps {
-  return { now, adapter: fakeAdapter(), publish: vi.fn(async () => {}), ...overrides };
-}
-
-async function tokenFor(s: SeedOnlineChessFixtureResult, personId: string, scheduledAt: Date) {
-  return mintMatchRoomToken({
-    fixtureId: s.fixtureId,
-    personId,
-    scheduledAt: scheduledAt.toISOString(),
+async function seed(over: Partial<Parameters<typeof seedOnlineChessFixture>[0]> = {}) {
+  return seedOnlineChessFixture({
+    onlinePlay: "lichess",
+    divisionStarted: true,
+    scheduledAt: T,
+    roundOpenedAt: T,
+    linked: true,
+    homeFullName: "Ada Okonkwo",
+    awayFullName: "Bo Lind",
+    ...over,
   });
 }
 
-type Snapshot = { bridge: unknown[]; availability: unknown[] };
+async function openOf(s: SeedOnlineChessFixtureResult): Promise<{ id: string; openedAt: Date }> {
+  const [row] = await sql<{ id: string; opened_at: Date }[]>`
+    select id, opened_at from stage_round_opens where stage_id = ${s.stageId} and round_no = 1`;
+  if (!row) throw new Error("premise: the seed opened round 1");
+  return { id: row.id, openedAt: row.opened_at };
+}
 
-async function snapshotRows(fixtureId: string): Promise<Snapshot> {
+async function tokenFor(
+  s: SeedOnlineChessFixtureResult,
+  personId: string,
+  over: Partial<{ fixtureId: string; roundOpenId: string; roundOpenedAt: Date }> = {},
+) {
+  const open = await openOf(s);
+  return mintMatchRoomToken({
+    fixtureId: over.fixtureId ?? s.fixtureId,
+    personId,
+    roundOpenId: over.roundOpenId ?? open.id,
+    roundOpenedAt: (over.roundOpenedAt ?? open.openedAt).toISOString(),
+  });
+}
+
+/** A game on file as T9's writer leaves it (status ready, colours and both
+ *  accounts recorded) — by SQL, standing for createGameIfReady (its own
+ *  suite drives the real one; external-play-room-game.test.ts drives it here). */
+async function gameOnFile(
+  s: SeedOnlineChessFixtureResult,
+  over: Partial<{ status: string; whiteSide: "home" | "away"; moves: string[]; needsReason: string; revokedSeat: string; whiteMs: number; blackMs: number; lastMoveAt: Date }> = {},
+) {
+  const gameId = `gm-${randomUUID().slice(0, 12)}`;
+  const whiteSide = over.whiteSide ?? "home";
+  const white = whiteSide === "home" ? s.home : s.away;
+  const black = whiteSide === "home" ? s.away : s.home;
+  const moves = over.moves ?? [];
+  await sql`
+    insert into fixture_external_play
+      (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id,
+       moves_uci, move_count, last_move_at, white_ms, black_ms, needs_reason, revoked_seat)
+    values (${s.fixtureId}, ${s.orgId}, ${over.status ?? "ready"}, ${T}, ${gameId}, ${whiteSide}, ${white.lichessId},
+            ${black.lichessId}, ${sql.json(moves as never)}, ${moves.length}, ${over.lastMoveAt ?? (moves.length ? now : null)},
+            ${over.whiteMs ?? null}, ${over.blackMs ?? null}, ${over.needsReason ?? null}, ${over.revokedSeat ?? null})
+    on conflict (fixture_id) do update set status = excluded.status, challenge_id = excluded.challenge_id,
+      white_side = excluded.white_side, white_lichess_id = excluded.white_lichess_id, black_lichess_id = excluded.black_lichess_id,
+      moves_uci = excluded.moves_uci, move_count = excluded.move_count, last_move_at = excluded.last_move_at,
+      white_ms = excluded.white_ms, black_ms = excluded.black_ms, needs_reason = excluded.needs_reason,
+      revoked_seat = excluded.revoked_seat`;
+  return gameId;
+}
+
+async function rows(fixtureId: string) {
   const bridge = await sql`select * from fixture_external_play where fixture_id = ${fixtureId}`;
-  const availability = await sql`
-    select * from fixture_availability where fixture_id = ${fixtureId} order by person_id`;
+  const availability = await sql`select * from fixture_availability where fixture_id = ${fixtureId} order by person_id`;
   return { bridge, availability };
 }
 
-// Top level, not inside the first describe: the D12 block below runs after
-// it, and an end() scoped to the first block would close the pool under it.
 afterAll(async () => {
   await sql.end();
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
-
-  // -------------------------------------------------------------------
-  // Identity resolution (spec §12.1) — every failure collapses to the same
-  // 404 NOT_FOUND so a probe can't learn whether the fixture exists.
-  // -------------------------------------------------------------------
-
-  it("session identity: the fixture's own home/away user reads the room", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const player = await resolveRoomPlayer({ kind: "session", userId: s.home.userId }, f);
-    expect(player?.side).toBe("home");
+describe.skipIf(!process.env.DATABASE_URL)("match room — identity (every failure is the same 404)", () => {
+  it("session: each player reads their own seat, by the PERSON's name, never the snapshot", async () => {
+    const s = await seed();
+    const home = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    const away = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect([home.you.name, home.opponent.name]).toEqual(["Ada Okonkwo", "Bo Lind"]);
+    expect([away.you.name, away.opponent.name]).toEqual(["Bo Lind", "Ada Okonkwo"]);
+    // Pairing default: home is White (whiteSideOf), no game recorded yet.
+    expect([home.you.colour, away.you.colour]).toEqual(["white", "black"]);
+    // FIXED links (never history.back()): the fixture page, and the division
+    // page above it that carries the standings.
+    expect(home.links.fixture).toMatch(new RegExp(`^/shared/${home.orgSlug}/[^/]+/[^/]+/fixtures/${s.fixtureId}$`));
+    expect(home.links.fixture).toBe(`${home.links.standings}/fixtures/${s.fixtureId}`);
+    expect(routes.sharedFixturePlay("o", "c", "d", s.fixtureId, "tok")).toBe(`/shared/o/c/d/fixtures/${s.fixtureId}/play?t=tok`);
   });
 
-  it("non-player session ⇒ 404 NOT_FOUND", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
+  it("a non-player session ⇒ 404 NOT_FOUND", async () => {
+    const s = await seed();
     const stranger = await makeUser("stranger");
-    await expect(
-      readMatchRoom({ kind: "session", userId: stranger.id }, s.fixtureId, now),
-    ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
-  });
-
-  it("token minted for a DIFFERENT fixture ⇒ 404 (mutant killer: fixtureId comparison)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const other = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    // Isolate the fixtureId comparison specifically: the personId and
-    // scheduledAt claims are s's OWN valid ones (would otherwise pass every
-    // other check) — only the fixtureId claim points at `other`. A first
-    // draft of this test used other's own personId too, which is ALSO
-    // refused by the personId comparison even with the fixtureId check
-    // deleted — a survivor confirmed by mutation testing (two guards
-    // covering for each other; AGENTS.md recurring-failure class 3).
-    const token = await tokenFor(other, s.home.personId, T);
-    await expect(readMatchRoom({ kind: "token", token }, s.fixtureId, now)).rejects.toMatchObject({
+    await expect(readRoom({ kind: "session", userId: stranger.id }, s.fixtureId, deps())).rejects.toMatchObject({
       status: 404,
       code: "NOT_FOUND",
     });
   });
 
-  it("token with a stale scheduledAt (fixture rescheduled after mint) ⇒ 404 (mutant killer: sat comparison)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    // Minted for the CORRECT fixture/person, but the scheduledAt on the link
-    // no longer matches — a reschedule invalidates the old link.
-    const staleSat = new Date(T.getTime() - 60 * 60_000);
-    const token = await tokenFor(s, s.home.personId, staleSat);
-    await expect(readMatchRoom({ kind: "token", token }, s.fixtureId, now)).rejects.toMatchObject({
-      status: 404,
-      code: "NOT_FOUND",
-    });
+  it("a valid link token reads the room with no session (the positive the refusals below pair with)", async () => {
+    const s = await seed();
+    const token = await tokenFor(s, s.away.personId);
+    const v = await readRoom({ kind: "token", token }, s.fixtureId, deps());
+    expect(v.you.name).toBe("Bo Lind");
   });
 
-  it("token whose personId is a REAL person on a DIFFERENT fixture ⇒ 404", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const other = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    // Correct fixtureId and correct (matching) scheduledAt for s, but the
-    // personId belongs to a real person who is not on THIS fixture's roster.
-    const token = await tokenFor(s, other.home.personId, T);
-    await expect(readMatchRoom({ kind: "token", token }, s.fixtureId, now)).rejects.toMatchObject({
-      status: 404,
-      code: "NOT_FOUND",
-    });
-  });
-
-  it("expired token ⇒ 404 NOT_FOUND (documented choice: resolveRoomPlayer collapses EVERY verifyMatchRoomToken rejection — bad signature, expired, or this room's own fixtureId/sat/personId mismatches — into the same identity-hiding 404, never a distinct 401)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    // mintMatchRoomToken pins exp = scheduledAt + 24h; a scheduledAt far in
-    // the real past mints a token that is already expired against the REAL
-    // wall clock jose checks against (independent of this suite's fake
-    // fixture-window `now`) — proving verifyMatchRoomToken's OWN 401 throw
-    // (not just this file's post-verification comparisons) is swallowed by
-    // resolveRoomPlayer's `.catch(() => null)`.
-    const longAgo = new Date("2000-01-01T00:00:00.000Z");
-    const token = await tokenFor(s, s.home.personId, longAgo);
-    await expect(readMatchRoom({ kind: "token", token }, s.fixtureId, now)).rejects.toMatchObject({
-      status: 404,
-      code: "NOT_FOUND",
-    });
-  });
-
-  // -------------------------------------------------------------------
-  // GET never writes (spec §12.1)
-  // -------------------------------------------------------------------
-
-  it("GET never writes: reading a room with a STALE bridge twice leaves fixture_external_play and fixture_availability untouched (mutant killer: readMatchRoom must never call resetStaleBridge)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    // A bridge minted for an OLDER scheduled_at (stale — effectiveBridge
-    // hides it, but only resetStaleBridge, a write, would clear it).
-    const oldBasis = new Date(T.getTime() - 60 * 60_000);
-    await sql`
-      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id)
-      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis}, ${`chal-stale-${randomUUID()}`})`;
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-
-    const before = await snapshotRows(s.fixtureId);
-    await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    await readMatchRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, now);
-    expect(await snapshotRows(s.fixtureId)).toEqual(before);
-  });
-
-  // -------------------------------------------------------------------
-  // Check-in window (spec §8.1/§8.2)
-  // -------------------------------------------------------------------
-
-  it("before T-10: check-in refused 409 CHECK_IN_CLOSED, nothing stamped (mutant killer: phase check in checkInToMatchRoom)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const early = new Date(T.getTime() - 11 * 60_000);
-    await expect(
-      checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: early })),
-    ).rejects.toMatchObject({ status: 409, code: "CHECK_IN_CLOSED" });
-    const [row] = await sql`select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
-    expect(row).toBeUndefined();
-  });
-
-  it("check-in after T+20 refused even with a valid token", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const token = await tokenFor(s, s.home.personId, T);
-    const afterDeadline = new Date(T.getTime() + 20 * 60_000);
-    await expect(
-      checkInToMatchRoom({ kind: "token", token }, s.fixtureId, deps({ now: afterDeadline })),
-    ).rejects.toMatchObject({ status: 409, code: "CHECK_IN_CLOSED" });
-  });
-
-  it("first check-in stamps fixture_availability, publishes, does not mint", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const d = deps();
-    const v = await checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
-    expect(v.you.checkedIn).toBe(true);
-    expect(v.opponent.checkedIn).toBe(false);
-    expect(d.adapter?.createOpenChallenge).not.toHaveBeenCalled();
-    expect(d.publish).toHaveBeenCalledWith(s.fixtureId);
-    expect(v.canMint).toBe(false);
-  });
-
-  it("second check-in mints ONE open challenge White-first with expiresAt = deadline, and each player sees only their own colour", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const adapter = fakeAdapter();
-    const d = deps({ adapter });
-    await checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
-    const v = await checkInToMatchRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
-
-    expect(d.adapter?.createOpenChallenge).toHaveBeenCalledTimes(1);
-    expect(d.adapter?.createOpenChallenge).toHaveBeenCalledWith({
-      whiteUsername: s.home.lichessId,
-      blackUsername: s.away.lichessId,
-      clock: { limit: 900, increment: 10 },
-      expiresAt: windowFor(T).deadline,
-    });
-    // V435 dropped the per-colour lichess.org links (D3); colour is what is left.
-    expect(v.you.colour).toBe("black"); // away is Black by default
-    const homeView = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    expect(homeView.you.colour).toBe("white");
-    expect(homeView.watchUrl).toBeNull(); // not live/finished yet
-    expect(homeView.status).toBe("ready");
-  });
-
-  it("token identity checks in with no session", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    const token = await tokenFor(s, s.away.personId, T);
-    const d = deps();
-    const v = await checkInToMatchRoom({ kind: "token", token }, s.fixtureId, d);
-    expect(v.you.side).toBe("away");
-    expect(v.you.checkedIn).toBe(true);
-  });
-
-  // -------------------------------------------------------------------
-  // Minting (spec §8.2)
-  // -------------------------------------------------------------------
-
-  it("unlinked player: both checked in ⇒ mintIfReady not_ready, canMint false", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: false,
-    });
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const d = deps();
-    expect(await mintIfReady(f, d)).toBe("not_ready");
-    expect(d.adapter?.createOpenChallenge).not.toHaveBeenCalled();
-    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    expect(view.canMint).toBe(false);
-  });
-
-  it("concurrent mint keeps one challenge", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const raceId = `ch-race-${randomUUID()}`;
-    const adapter: ExternalPlayAdapter = {
-      createOpenChallenge: vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        return {
-          challengeId: raceId,
-          urlWhite: `https://l/${raceId}?color=white`,
-          urlBlack: `https://l/${raceId}?color=black`,
-        };
-      }),
-      fetchGame: vi.fn(async () => null),
-    };
-    const publish = vi.fn(async () => {});
-    const results = await Promise.all([
-      mintIfReady(f, { now, adapter, publish }),
-      mintIfReady(f, { now, adapter, publish }),
-      mintIfReady(f, { now, adapter, publish }),
-    ]);
-    expect(results.filter((r) => r === "minted")).toHaveLength(1);
-    expect(adapter.createOpenChallenge).toHaveBeenCalledTimes(1);
-    const [row] = await sql<{ challenge_id: string | null }[]>`
-      select challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
-    expect(row?.challenge_id).toBe(raceId);
-  });
-
-  it("adapter failure: stays pending, last_error set, claim released, canMint true for retry", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const adapter: ExternalPlayAdapter = {
-      createOpenChallenge: vi.fn(async () => {
-        throw new Error("lichess is down");
-      }),
-      fetchGame: vi.fn(async () => null),
-    };
-    const result = await mintIfReady(f, { now, adapter, publish: vi.fn(async () => {}) });
-    expect(result).toBe("failed");
-    const [row] = await sql<{ status: string; last_error: string | null; mint_claimed_at: Date | null }[]>`
-      select status, last_error, mint_claimed_at from fixture_external_play where fixture_id = ${s.fixtureId}`;
-    expect(row?.status).toBe("pending");
-    expect(row?.last_error).toContain("lichess is down");
-    expect(row?.mint_claimed_at).toBeNull();
-
-    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    expect(view.canMint).toBe(true);
-  });
-
-  it("live never re-mints (a bridge already past pending is never a Lichess round trip)", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-    await sql`
-      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id)
-      values (${s.fixtureId}, ${s.orgId}, 'live', ${T}, ${`chal-live-${randomUUID()}`})`;
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const d = deps();
-    expect(await mintIfReady(f, d)).toBe("not_ready");
-    expect(d.adapter?.createOpenChallenge).not.toHaveBeenCalled();
-  });
-
-  it("colour follows whiteSideOf: after a pairing flip, home gets the Black link and the away Lichess username mints White", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      roundOpenedAt: T,
-      linked: true,
-    });
-    await appendEvent(s.orgId, s.fixtureId, 0, {
-      type: "boardgame.pairing",
-      payload: { white: s.away.entrantId },
-    });
-    const adapter = fakeAdapter();
-    const d = deps({ adapter });
-    await checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
-    await checkInToMatchRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
-
-    expect(d.adapter?.createOpenChallenge).toHaveBeenCalledWith(
-      expect.objectContaining({ whiteUsername: s.away.lichessId, blackUsername: s.home.lichessId }),
-    );
-    const homeView = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    expect(homeView.you.colour).toBe("black");
-    const awayView = await readMatchRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, now);
-    expect(awayView.you.colour).toBe("white");
-  });
-
-  // -------------------------------------------------------------------
-  // Claim / takeover safety (spec §8.2 — belt and suspenders on top of the
-  // concurrency test above, which is decided by the mint_claimed_at
-  // freshness check alone; these two isolate the OTHER predicates.)
-  // -------------------------------------------------------------------
-
-  it(
-    "the claim's own status='pending' check protects a row that moved past pending behind a caller's stale in-memory snapshot " +
-      "(mutant killer: drop `and status = 'pending'` from the claim query)",
-    async () => {
-      const s = await seedOnlineChessFixture({
-        onlinePlay: "lichess",
-        divisionStarted: true,
-        scheduledAt: T,
-      roundOpenedAt: T,
-        linked: true,
+  it("each token claim is checked ALONE: another fixture, another round's open, another person, expired ⇒ 404", async () => {
+    const s = await seed();
+    const other = await seed();
+    const otherOpen = await openOf(other);
+    const cases: [string, string][] = [
+      // Only the fixture claim is wrong (s's own open and person).
+      ["fixture", await tokenFor(s, s.home.personId, { fixtureId: other.fixtureId })],
+      // Only the open is wrong (s's own fixture and person).
+      ["open", await tokenFor(s, s.home.personId, { roundOpenId: otherOpen.id })],
+      // A real person, on another fixture.
+      ["person", await tokenFor(s, other.home.personId)],
+      // Expired: the open's +24h is long past (the verify's own 401 is swallowed).
+      ["expired", await tokenFor(s, s.home.personId, { roundOpenedAt: new Date("2000-01-01T00:00:00Z") })],
+    ];
+    let checked = 0;
+    for (const [label, token] of cases) {
+      await expect(readRoom({ kind: "token", token }, s.fixtureId, deps()), label).rejects.toMatchObject({
+        status: 404,
+        code: "NOT_FOUND",
       });
-      await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-      await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-      // f is read BEFORE any bridge row exists (f.bridge === null) — this
-      // caller's in-memory snapshot never learns what happens next.
-      const f = await loadOnlinePlayFixture(s.fixtureId);
-      if (!f) throw new Error("seed did not pass the guard");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: token claims refused one at a time").toBe(4);
+  });
 
-      // Race: a bridge row reaches needs_organiser (a real, challenge_id-less
-      // status — spec §9's no_show_both, reached without ever minting)
-      // behind f's back.
-      await sql`
-        insert into fixture_external_play
-          (fixture_id, org_id, status, scheduled_at_basis, needs_reason, challenge_id, mint_claimed_at)
-        values (${s.fixtureId}, ${s.orgId}, 'needs_organiser', ${T}, 'no_show_both', null, null)`;
-
-      const d = deps();
-      const result = await mintIfReady(f, d);
-      expect(result).toBe("busy");
-      expect(d.adapter?.createOpenChallenge).not.toHaveBeenCalled();
-      const [row] = await sql<{ status: string; challenge_id: string | null }[]>`
-        select status, challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
-      expect(row?.status).toBe("needs_organiser"); // untouched — never claimed, never minted into
-      expect(row?.challenge_id).toBeNull();
-    },
-  );
-
-  it(
-    "the ready update's own mint_claimed_at check refuses a stale-claim takeover mid-flight: returns busy, does not publish, does not overwrite the new claimant " +
-      "(mutant killer: remove the conditional on the ready update)",
-    async () => {
-      const s = await seedOnlineChessFixture({
-        onlinePlay: "lichess",
-        divisionStarted: true,
-        scheduledAt: T,
-      roundOpenedAt: T,
-        linked: true,
-      });
-      await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-      await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-      const f = await loadOnlinePlayFixture(s.fixtureId);
-      if (!f) throw new Error("seed did not pass the guard");
-
-      const takeoverAt = new Date(now.getTime() + 1000);
-      const adapter: ExternalPlayAdapter = {
-        createOpenChallenge: vi.fn(async () => {
-          // Simulate a second minter's claim taking over the row (status
-          // stays 'pending' — only mint_claimed_at moves) WHILE this call's
-          // own HTTP round trip is in flight.
-          await sql`
-            update fixture_external_play
-               set mint_claimed_at = ${takeoverAt}
-             where fixture_id = ${s.fixtureId} and status = 'pending'`;
-          return { challengeId: "ch-a", urlWhite: "https://l/ch-a?color=white", urlBlack: "https://l/ch-a?color=black" };
-        }),
-        fetchGame: vi.fn(async () => null),
-      };
-      const publish = vi.fn(async () => {});
-      const result = await mintIfReady(f, { now, adapter, publish });
-      expect(result).toBe("busy");
-      expect(publish).not.toHaveBeenCalled();
-      const [row] = await sql<{ status: string; challenge_id: string | null; mint_claimed_at: Date | null }[]>`
-        select status, challenge_id, mint_claimed_at from fixture_external_play where fixture_id = ${s.fixtureId}`;
-      expect(row?.status).toBe("pending");
-      expect(row?.challenge_id).toBeNull(); // this call's challenge (ch-a) was NOT stored
-      expect(row?.mint_claimed_at?.getTime()).toBe(takeoverAt.getTime()); // the new claimant's stamp survives
-    },
-  );
+  it("a token for an UNOPENED round resolves nothing (there is no open to bind to) — while the session reads not_opened", async () => {
+    const s = await seed({ roundOpenedAt: undefined });
+    const token = await mintMatchRoomToken({
+      fixtureId: s.fixtureId,
+      personId: s.home.personId,
+      roundOpenId: randomUUID(),
+      roundOpenedAt: new Date().toISOString(),
+    });
+    await expect(readRoom({ kind: "token", token }, s.fixtureId, deps())).rejects.toMatchObject({ status: 404 });
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).phase).toBe("not_opened");
+  });
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("D12 — the room anchors on the open stamp", () => {
-  it("a paired-but-unopened round reads phase 'before', whatever the timetable says", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
-      linked: true,
-    });
-    // Five minutes AFTER the scheduled time: schedule-anchored, this is
-    // "open"; stamp-anchored, the round has not started.
-    const view = await readMatchRoom(
-      { kind: "session", userId: s.home.userId },
-      s.fixtureId,
-      new Date("2026-10-01T12:15:00.000Z"),
-    );
-    expect(view.phase).toBe("before");
-    expect(view.canMint, "nothing to mint for a round nobody opened").toBe(false);
-    // The scheduled time is what the player is SHOWN until the open.
-    const scheduled = windowFor(new Date("2026-10-01T12:10:00.000Z"));
-    expect(view.opensAt).toBe(scheduled.opensAt.toISOString());
-    expect(view.deadline).toBe(scheduled.deadline.toISOString());
-  });
-
-  it("an opened round reads 'open' from the stamp, and its deadline is stamp + 20m", async () => {
-    const opened = new Date("2026-10-01T12:00:00.000Z");
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
-      linked: true,
-      roundOpenedAt: opened,
-    });
-    const view = await readMatchRoom(
-      { kind: "session", userId: s.home.userId },
-      s.fixtureId,
-      new Date("2026-10-01T12:05:00.000Z"),
-    );
-    expect(view.phase).toBe("open");
-    // Derived from the window constants, never typed in, so moving
-    // DEADLINE_AFTER_MS moves this test with it.
-    expect(view.deadline).toBe(windowFor(opened).deadline.toISOString());
-    expect(view.opensAt).toBe(windowFor(opened).opensAt.toISOString());
-    expect(windowFor(opened).deadline.getTime(), "premise: the two anchors differ").not.toBe(
-      windowFor(new Date("2026-10-01T12:10:00.000Z")).deadline.getTime(),
-    );
-  });
-
-  it("check-in is refused on an unopened round", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
-      linked: true,
-    });
-    await expect(
-      checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, {
-        now: new Date("2026-10-01T12:15:00.000Z"),
-      }),
-    ).rejects.toMatchObject({ status: 409, code: "CHECK_IN_CLOSED" });
-    const [row] = await sql`select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
-    expect(row, "nothing stamped").toBeUndefined();
-  });
-
-  it("an unopened round counts no check-in, even one inside the timetable's window", async () => {
-    // Mutant Rg (2026-10-09): an unopened round falling back to the timetable
-    // for check-ins survived every other case here.
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      linked: true,
-    });
+describe.skipIf(!process.env.DATABASE_URL)("match room — the GET never writes", () => {
+  it("reading a room with a STALE bridge twice leaves the bridge row and fixture_availability untouched", async () => {
+    const s = await seed();
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis})`;
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    const [stamp] = await sql<{ checked_in_at: Date }[]>`
-      select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
-    expect(roomPhase(stamp!.checked_in_at, T), "premise: inside the timetable's window").toBe("open");
-    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, new Date());
-    expect(view.phase).toBe("before");
-    expect(view.you.checkedIn).toBe(false);
+    const before = await rows(s.fixtureId);
+    const d = deps();
+    await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
+    expect(await rows(s.fixtureId)).toEqual(before);
+    expect(d.publish).not.toHaveBeenCalled();
+    expect(d.create).not.toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — D12 phase and window", () => {
+  it("the empty case: an unopened round reads not_opened, with no window and nothing to create, whatever the timetable says", async () => {
+    const s = await seed({ roundOpenedAt: undefined });
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: new Date(T.getTime() + 60_000) }));
+    expect(v).toMatchObject({ phase: "not_opened", opensAt: null, deadline: null, roundOpenedAt: null, creation: null, game: null });
+    expect(v.scheduledAt, "the schedule is shown as information").toBe(T.toISOString());
   });
 
-  it("a check-in inside the TIMETABLE's window but outside the OPEN stamp's does not count", async () => {
-    // stampFixtureCheckIn stamps the DB's real now(): the schedule (T, five
-    // minutes ahead) puts that stamp inside its window, while a round opened
-    // two hours ago closed its window long before it.
-    const openedLongAgo = new Date(Date.now() - 2 * 60 * 60_000);
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      linked: true,
-      roundOpenedAt: openedLongAgo,
-    });
-    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
-    const [stamp] = await sql<{ checked_in_at: Date }[]>`
-      select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
-    expect(roomPhase(stamp!.checked_in_at, T), "premise: inside the timetable's window").toBe("open");
-    expect(roomPhase(stamp!.checked_in_at, openedLongAgo), "premise: outside the open stamp's").toBe("closed");
-    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, new Date());
-    expect(view.you.checkedIn).toBe(false);
+  it("an opened round reads the open's window (derived from windowFor), and closes at the deadline", async () => {
+    const s = await seed();
+    const w = windowFor(T);
+    const open = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(open).toMatchObject({ phase: "open", opensAt: w.opensAt.toISOString(), deadline: w.deadline.toISOString() });
+    const closed = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: w.deadline }));
+    expect(closed.phase).toBe("closed");
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — taking the seat", () => {
+  it("before the window: refused round_not_open, nothing stamped, nothing published", async () => {
+    const s = await seed();
+    const early = new Date(T.getTime() - 11 * 60_000);
+    const d = deps({ now: early });
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(c.seat).toEqual({ seated: false, reason: "round_not_open", participant: null });
+    expect((await rows(s.fixtureId)).availability).toEqual([]);
+    expect(d.publish).not.toHaveBeenCalled();
   });
 
-  it("the mint's expires_at is the OPEN stamp's deadline, and an unopened round mints nothing", async () => {
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      linked: true,
-    });
+  it("after the deadline with no game: refused window_closed, nothing stamped", async () => {
+    const s = await seed();
+    const token = await tokenFor(s, s.home.personId);
+    const late = new Date(T.getTime() + DEADLINE_AFTER_MS);
+    const c = await claimRoomSeat({ kind: "token", token }, s.fixtureId, deps({ now: late }));
+    expect(c.seat).toMatchObject({ seated: false, reason: "window_closed" });
+    expect((await rows(s.fixtureId)).availability).toEqual([]);
+  });
+
+  it("the first seat stamps the check-in and pings the lobby, and asks for no game", async () => {
+    const s = await seed();
+    const d = deps();
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(c.seat).toEqual({ seated: true, participant: null });
+    expect(c.snapshot.you.checkedIn).toBe(true);
+    expect(c.snapshot.opponent.checkedIn).toBe(false);
+    expect(c.snapshot.creation).toBeNull();
+    expect(d.publish).toHaveBeenCalledWith(s.fixtureId);
+    expect(d.create).not.toHaveBeenCalled();
+    expect(c.create).toBeNull();
+  });
+
+  it("the SECOND seat asks T9 for the game exactly once; the room then says it is being created", async () => {
+    const s = await seed();
+    const d = deps();
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    const second = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
+    expect(d.create).toHaveBeenCalledTimes(1);
+    expect(d.create).toHaveBeenCalledWith(s.fixtureId);
+    expect(second.create).toEqual({ created: false, reason: "not_ready" });
+    expect(second.snapshot.creation).toEqual({ state: "creating" });
+    // The first player's view says the same, by the GET.
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).creation).toEqual({ state: "creating" });
+  });
+
+  it("a create held back by Lichess's rate limit reads busy, with T9's own retry instant", async () => {
+    const s = await seed();
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
     await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("seed did not pass the guard");
-    const unopened = deps();
-    expect(await mintIfReady(f, unopened)).toBe("not_ready");
-    expect(unopened.adapter?.createOpenChallenge).not.toHaveBeenCalled();
-
-    // Opened two minutes before T: both check-ins (real now) sit inside its
-    // window, and its deadline differs from the timetable's.
-    const opened = new Date(T.getTime() - 2 * 60_000);
+    const retryAt = new Date(Date.now() + 48_000).toISOString();
     await sql`
-      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
-      values (${s.stageId}, ${s.orgId}, 1, ${opened}, ${s.ownerUserId})`;
-    const d = deps();
-    expect(await mintIfReady(f, d)).toBe("minted");
-    expect(d.adapter?.createOpenChallenge).toHaveBeenCalledWith(
-      expect.objectContaining({ expiresAt: windowFor(opened).deadline }),
-    );
-    const [row] = await sql<{ expires_at: Date }[]>`
-      select expires_at from fixture_external_play where fixture_id = ${s.fixtureId}`;
-    expect(row?.expires_at.toISOString()).toBe(windowFor(opened).deadline.toISOString());
-    expect(windowFor(opened).deadline.getTime(), "premise: the anchors differ").not.toBe(windowFor(T).deadline.getTime());
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, last_error)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${T}, ${`create:rate_limited (challenger_budget) retry_at=${retryAt}`})`;
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(v.creation).toEqual({ state: "busy", retryAt });
+  });
+
+  it("T20: with the club NOT offered online chess and no game on file, nothing is seated, stamped or created — the room says so", async () => {
+    const s = await seed();
+    const seat = vi.fn();
+    const d = deps({ offered: vi.fn(async () => false), seat: seat as never });
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(c.seat).toBeNull();
+    expect(c.snapshot.onlineChessOff).toBe(true);
+    expect(seat).not.toHaveBeenCalled();
+    expect((await rows(s.fixtureId)).availability).toEqual([]);
+    expect(d.create).not.toHaveBeenCalled();
+    // The GET agrees (the client stops polling on it).
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d)).onlineChessOff).toBe(true);
+  });
+
+  it("T20: a board with a game on file is NEVER gated — the flag is not even asked, and the seat is", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: ["e2e4"] });
+    const offered = vi.fn(async () => false);
+    const seat = vi.fn(async () => ({ seated: true as const, participant: null }));
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ offered, seat: seat as never }));
+    expect(offered).not.toHaveBeenCalled();
+    expect(seat).toHaveBeenCalledTimes(1);
+    expect(c.snapshot.onlineChessOff).toBe(false);
+  });
+
+  it("a re-entering player (reload mid-game) is re-seated but their check-in is NEVER re-stamped", async () => {
+    const s = await seed();
+    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+    await gameOnFile(s, { status: "live", moves: ["e2e4"] });
+    const before = (await rows(s.fixtureId)).availability;
+    const d = deps({ seat: vi.fn(async () => ({ seated: true as const, participant: null })) as never });
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(c.seat).toEqual({ seated: true, participant: null });
+    expect((await rows(s.fixtureId)).availability).toEqual(before);
+    expect(d.publish).not.toHaveBeenCalled();
+    expect(d.create).not.toHaveBeenCalled();
+  });
+
+  it("a camera refusal hands the caller THEIR OWN participant token back (to join and retry), never another's", async () => {
+    const s = await seed();
+    const participant = { participantId: "pt-home", authToken: "jwt-home" };
+    const seat = vi.fn(async () => ({ seated: false as const, reason: "camera_required" as const, participant }));
+    const c = await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ seat: seat as never }));
+    expect(c.seat).toEqual({ seated: false, reason: "camera_required", participant });
+    expect(seat).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId }, { now });
+    expect((await rows(s.fixtureId)).availability, "a refused seat is not a check-in").toEqual([]);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room shows it", () => {
+  it("board, last move, turn and clocks come from T10's ledger; the colour from the RECORDED white_side, never the pairing", async () => {
+    const s = await seed();
+    const moves = ["e2e4", "e7e5", "g1f3"];
+    // Recorded: AWAY is White, although the pairing (no event) says home.
+    await gameOnFile(s, { status: "live", whiteSide: "away", moves, whiteMs: 590_000, blackMs: 595_000 });
+    const home = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(home.you.colour).toBe("black");
+    expect(home.opponent.colour).toBe("white");
+    expect(home.game).toMatchObject({
+      moves,
+      fen: fenAfter(moves).fen,
+      lastMove: ["g1", "f3"],
+      turn: "black",
+      whiteMs: 590_000,
+      blackMs: 595_000,
+      clockRunning: true,
+      over: false,
+    });
+    expect(home.watchUrl).toBe(`https://lichess.org/${home.game!.gameId}`);
+  });
+
+  it("before any move both clocks show the division's own limit (15+10 seed ⇒ 900 s), not a hard-coded one", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "ready" });
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(v.meta).toMatchObject({ limitSeconds: 900, incrementSeconds: 10, roundNo: 1, boardNo: 1 });
+    expect([v.game!.whiteMs, v.game!.blackMs]).toEqual([900_000, 900_000]);
+    expect(v.game!.clockRunning).toBe(false);
+  });
+
+  it("T11 M7: a token_revoked hold freezes ONE seat — its player reads `you`, the opponent `opponent` and keeps a live board and the watch link", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves: ["e2e4", "e7e5"] });
+    const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(white.frozen).toBe("you");
+    expect(black.frozen).toBe("opponent");
+    expect(black.held, "the opponent's board is not held").toBe(false);
+    expect(black.game?.over).toBe(false);
+    expect(black.watchUrl, "a held board still moving keeps its link").not.toBeNull();
+  });
+
+  it("a token_revoked hold with NO recorded seat freezes both", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "needs_organiser", needsReason: "token_revoked", moves: ["e2e4"] });
+    const v = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(v.frozen).toBe("both");
+  });
+
+  it("a hold the game is not playing through (a no-show) is `held`, and no seat is frozen", async () => {
+    const s = await seed();
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, needs_reason)
+      values (${s.fixtureId}, ${s.orgId}, 'needs_organiser', ${T}, 'no_show_both')`;
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(v).toMatchObject({ held: true, frozen: null, game: null, watchUrl: null });
+  });
+
+  it("the empty case: no game ⇒ no board, no link, no result", async () => {
+    const s = await seed();
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(v).toMatchObject({ game: null, watchUrl: null, result: null, held: false, frozen: null });
+  });
+
+  it("the realtime token is minted per read for the CALLER, living past the deadline (T10 carry)", async () => {
+    const s = await seed();
+    const mint = vi.fn(async () => "rt");
+    const late = new Date(T.getTime() + DEADLINE_AFTER_MS + 5 * 60_000);
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    const v = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ now: late, mintRealtime: mint as never }));
+    expect(mint).toHaveBeenCalledWith(s.fixtureId, s.home.personId, expect.any(Date));
+    const exp = (mint.mock.calls[0] as unknown as [string, string, Date])[2];
+    expect(exp.getTime()).toBeGreaterThan(late.getTime());
+    expect(v.realtime).toMatchObject({ topic: `external-play:${s.fixtureId}`, token: "rt" });
+    expect(roomPhase(late, T)).toBe("closed");
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — act and clock-zero trigger reconcile", () => {
+  const okMove: PlayResult = { ok: true, applied: true };
+  const cases: { label: string; action: Parameters<typeof actInRoom>[2]; answer: PlayResult; reconciles: boolean }[] = [
+    { label: "resign ok", action: { kind: "resign" }, answer: okMove, reconciles: true },
+    { label: "abort ok", action: { kind: "abort" }, answer: okMove, reconciles: true },
+    { label: "draw yes ok", action: { kind: "draw", accept: true }, answer: okMove, reconciles: true },
+    { label: "draw no ok", action: { kind: "draw", accept: false }, answer: okMove, reconciles: false },
+    { label: "move ok", action: { kind: "move", uci: "e2e4" }, answer: okMove, reconciles: false },
+    { label: "move ended", action: { kind: "move", uci: "d8h4" }, answer: { ok: true, applied: true, ended: true }, reconciles: true },
+    { label: "resign refused", action: { kind: "resign" }, answer: { ok: false, reconcile: true, reason: "unavailable" }, reconciles: false },
+    { label: "move re-link", action: { kind: "move", uci: "e2e4" }, answer: { ok: false, reconcile: false, reason: "lichess_link_required" }, reconciles: false },
+  ];
+
+  it("every action × answer: reconcile(game_end) runs exactly when the answer ended the game, and the answer is returned verbatim", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    let checked = 0;
+    for (const c of cases) {
+      const play = vi.fn(async () => c.answer);
+      const rec = vi.fn(async () => null);
+      const out = await actInRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, c.action, deps({ play, reconcile: rec }));
+      expect(out, c.label).toEqual(c.answer);
+      expect(play, c.label).toHaveBeenCalledWith({ fixtureId: s.fixtureId, personId: s.home.personId, action: c.action });
+      if (c.reconciles) expect(rec, c.label).toHaveBeenCalledWith(s.fixtureId, "game_end");
+      else expect(rec, c.label).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: action × answer cells").toBe(cases.length);
+    expect(cases.filter((c) => c.reconciles).length, "both halves are exercised").toBeGreaterThan(0);
+    expect(cases.filter((c) => !c.reconciles).length).toBeGreaterThan(0);
+  });
+
+  it("a failing reconcile never fails the player's answer (the resignation stands at Lichess)", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    const out = await actInRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, { kind: "resign" }, deps({
+      play: vi.fn(async () => okMove),
+      reconcile: vi.fn(async () => {
+        throw new Error("lichess down");
+      }),
+    }));
+    expect(out).toEqual(okMove);
+  });
+
+  it("a stranger cannot act (404), and the usecase is never reached", async () => {
+    const s = await seed();
+    const stranger = await makeUser("stranger");
+    const play = vi.fn();
+    await expect(actInRoom({ kind: "session", userId: stranger.id }, s.fixtureId, { kind: "resign" }, deps({ play: play as never }))).rejects.toMatchObject({ status: 404 });
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("clock-zero: reconcile(clock_zero) runs only when the SERVER's arithmetic puts the side to move within tolerance", async () => {
+    const s = await seed();
+    const lastMoveAt = new Date(now.getTime() - 30_000);
+    // Two plies played: White to move, with 31 s on the clock as of 30 s ago.
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"], whiteMs: 31_000, blackMs: 600_000, lastMoveAt });
+    const early = vi.fn(async () => null);
+    // 1 s left > tolerance? Only if the tolerance is under a second; pin the boundary from the constant instead.
+    const atRemaining = (ms: number) => new Date(lastMoveAt.getTime() + 31_000 - ms);
+    expect(
+      await reportClockZero({ kind: "session", userId: s.away.userId }, s.fixtureId, deps({ now: atRemaining(CLOCK_ZERO_TOLERANCE_MS + 1), reconcile: early })),
+    ).toEqual({ reconciled: false });
+    expect(early).not.toHaveBeenCalled();
+    const due = vi.fn(async () => null);
+    expect(
+      await reportClockZero({ kind: "session", userId: s.away.userId }, s.fixtureId, deps({ now: atRemaining(CLOCK_ZERO_TOLERANCE_MS), reconcile: due })),
+    ).toEqual({ reconciled: true });
+    expect(due).toHaveBeenCalledWith(s.fixtureId, "clock_zero");
+  });
+
+  it("clock-zero before the clocks run (ply < 2) or with no game asks nothing of Lichess", async () => {
+    const s = await seed();
+    const rec = vi.fn(async () => null);
+    expect(await reportClockZero({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ reconcile: rec }))).toEqual({ reconciled: false });
+    await gameOnFile(s, { status: "live", moves: ["e2e4"], whiteMs: 0, blackMs: 0, lastMoveAt: new Date(now.getTime() - 3_600_000) });
+    expect(await reportClockZero({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ reconcile: rec }))).toEqual({ reconciled: false });
+    expect(rec).not.toHaveBeenCalled();
   });
 });

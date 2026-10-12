@@ -375,7 +375,9 @@ async function retryCandidates(pass: Pass): Promise<RetryCandidate[]> {
  *  (T9's spelling of a hold with no time) and for anything unreadable: a
  *  retry the queue would still refuse costs one refusal, while a marker read
  *  as "never" would strand the board. */
-function throttledRetryAt(lastError: string): Date | null {
+/** Exported for the match room (T14), which shows the same retry instant the
+ *  sweep honours — one reading of T9's marker, not two. */
+export function throttledRetryAt(lastError: string): Date | null {
   const at = /retry_at=(\S+)$/.exec(lastError)?.[1];
   if (at === undefined || at === "unknown") return null;
   const t = Date.parse(at);

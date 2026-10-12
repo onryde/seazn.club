@@ -40,12 +40,12 @@ export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number):
 
 /** `null` ⇒ this fixture's round has never been opened (or there is no such
  *  fixture). Resolves the fixture's (stage, round) and asks `roundOpenAt`. */
-export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<RoundOpen | null> {
+export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<RoundOpenRow | null> {
   const [f] = await db<{ stageId: string; roundNo: number }[]>`
     select stage_id as "stageId", round_no as "roundNo" from fixtures where id = ${fixtureId}`;
   if (!f) return null;
-  const open = await roundOpenAt(db, f.stageId, f.roundNo);
-  return open ? { roundOpenedAt: open.roundOpenedAt, openedBy: open.openedBy } : null;
+  // The row's `id` rides along (T14): the match-room link is bound to it.
+  return roundOpenAt(db, f.stageId, f.roundNo);
 }
 
 /** Has ANY round of this division been opened at or before `now`? T6's

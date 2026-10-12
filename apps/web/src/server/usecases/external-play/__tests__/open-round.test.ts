@@ -118,7 +118,7 @@ import { deleteEntrant } from "../../entrants";
 import { patchDivision } from "../../divisions";
 import { moveFixture } from "../../schedule";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../guard";
-import { readMatchRoom } from "../room";
+import { readRoom } from "../room";
 import { mintMatchRoomToken } from "../../match-room-token";
 import {
   seedOnlineChessRound,
@@ -764,33 +764,41 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     expect(await bridgeOf(r.boards[0]!.fixtureId)).toBeNull();
   });
 
-  it("a match-room token cannot resolve a NULL-time board (no start time for its claim to match) ⇒ 404", async () => {
+  it("M4 (T14): a match-room token bound to the round's OPEN resolves a NULL-time board; a token for another open does not", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, scheduledAt: null });
     const b = r.boards[0]!;
     await open(r);
+    const [row] = await sql<{ id: string; opened_at: Date }[]>`
+      select sro.id, sro.opened_at from stage_round_opens sro
+        join fixtures f on f.stage_id = sro.stage_id and f.round_no = sro.round_no
+       where f.id = ${b.fixtureId}`;
     const token = await mintMatchRoomToken({
       fixtureId: b.fixtureId,
       personId: b.home.personId,
-      scheduledAt: new Date().toISOString(),
+      roundOpenId: row!.id,
+      roundOpenedAt: row!.opened_at.toISOString(),
     });
-    await expect(readMatchRoom({ kind: "token", token }, b.fixtureId, new Date())).rejects.toMatchObject({
-      status: 404,
-      code: "NOT_FOUND",
+    const v = await readRoom({ kind: "token", token }, b.fixtureId);
+    expect(v.phase).toBe("open");
+    expect(v.scheduledAt, "premise: the board has no start time").toBeNull();
+    // Negative pair: the same fixture and person, another open's id.
+    const stale = await mintMatchRoomToken({
+      fixtureId: b.fixtureId,
+      personId: b.home.personId,
+      roundOpenId: randomUUID(),
+      roundOpenedAt: row!.opened_at.toISOString(),
     });
-    // positive pair: the same player by session reads the room.
-    expect((await readMatchRoom({ kind: "session", userId: b.home.userId }, b.fixtureId, new Date())).phase).toBe(
-      "open",
-    );
+    await expect(readRoom({ kind: "token", token: stale }, b.fixtureId)).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
   });
 
   it("the match room shows no window for a NULL-time board until the open, then the open's window", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, scheduledAt: null });
     const b = r.boards[0]!;
-    const before = await readMatchRoom({ kind: "session", userId: b.home.userId }, b.fixtureId, new Date());
-    expect(before).toMatchObject({ phase: "before", opensAt: null, deadline: null });
+    const before = await readRoom({ kind: "session", userId: b.home.userId }, b.fixtureId);
+    expect(before).toMatchObject({ phase: "not_opened", opensAt: null, deadline: null });
     const t0 = new Date(Date.now() - MIN);
     await open(r, 1, t0);
-    const after = await readMatchRoom({ kind: "session", userId: b.home.userId }, b.fixtureId, new Date());
+    const after = await readRoom({ kind: "session", userId: b.home.userId }, b.fixtureId);
     expect(after.phase).toBe("open");
     expect(after.deadline).toBe(new Date(t0.getTime() + DEADLINE_AFTER_MS).toISOString());
   });

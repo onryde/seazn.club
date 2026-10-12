@@ -71,6 +71,13 @@ export const routes = {
   /** Public fixture page (spectator view — the link /me hands a player). */
   sharedFixture: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string) =>
     `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}`,
+  /** The player's match room for an online fixture (chess design §6). Same
+   *  slug chain as `sharedFixture` above, so a /me link and an emailed
+   *  personal link address the same page; `?t=` carries the match-room token
+   *  (`usecases/match-room-token.ts`) for a player with no session. */
+  sharedFixturePlay: (orgSlug: Slug, compSlug: Slug, divSlug: Slug, fixtureId: string, token?: string) =>
+    `/shared/${orgSlug}/${compSlug}/${divSlug}/fixtures/${fixtureId}/play` +
+    (token ? `?t=${encodeURIComponent(token)}` : ""),
   /** Player home (PROMPT-53) — cross-org, deliberately NOT under /o. */
   me: () => "/me",
   /** Token surfaces (PROMPT-53): the token IS the address, no org in the URL. */
