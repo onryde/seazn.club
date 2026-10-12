@@ -434,7 +434,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     }
     expect(checked).toBe(ROWS.length);
   });
-  it("X-WD-6 (PF-7): withdrew before start credits the walkover, after start the retirement — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
+  it("X-WD-6 (PF-7, ruling 113): withdrew before anything is played credits the walkover, once something is played the retirement — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     let before = 0;
     let unlimited = 0;
     const bestOfOne = new Set<string>();
@@ -462,7 +462,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
     expect(after).toBe(ROWS.length);
   });
-  it("X-WD-6 (PF-7, ruling 112): a withdrawal after a bare Start — nothing played — credits the walkover, as before the start; so does one whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
+  it("X-WD-6 + X-RT-1 (PF-7, rulings 112, 113): a withdrawal or a disqualification after a bare Start — nothing played — credits the walkover, as before the start; so does a withdrawal whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     // Ruling 112: a Start with no sport event after it is still "before play" for a walkover, and the credit follows the
     // same fact. The expected credit is Appendix A's walkover row, from the cfg (EXPECTED_WALKOVER) — never the module's.
     let checked = 0;
@@ -480,9 +480,11 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
         if (playCfg === undefined) throw new Error(`${m.key}/${name}: its generator draws no sport event after the start`);
         const play = onePlayEvent(m, playCfg, l, [start])!;
         const want = EXPECTED_WALKOVER[m.key]!(cfg);
-        const scenes: { name: string; cfg: unknown; ledger: EventEnvelope[]; reason: "withdrew" | "walkover" }[] = [
+        const scenes: { name: string; cfg: unknown; ledger: EventEnvelope[]; reason: "withdrew" | "walkover" | "disqualified" }[] = [
           { name: "withdrew after a bare start", cfg, ledger: [start], reason: "withdrew" },
           { name: "walkover after a bare start", cfg, ledger: [start], reason: "walkover" },
+          // Ruling 113: nothing played means not started, for every reason — the disqualification too.
+          { name: "disqualified after a bare start", cfg, ledger: [start], reason: "disqualified" },
           { name: "withdrew after its one play was voided", cfg: playCfg, ledger: [start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id)], reason: "withdrew" },
         ];
         for (const s of scenes) {
@@ -501,7 +503,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     });
     expect(sports).toBe(11);
     expect(cfgs).toBeGreaterThan(11);
-    expect(checked).toBe(cfgs * 3);
+    expect(checked).toBe(cfgs * 4);
     expect(unlimited).toBeGreaterThanOrEqual(1);
     for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
   });

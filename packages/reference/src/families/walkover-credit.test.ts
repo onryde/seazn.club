@@ -66,6 +66,27 @@ describe("walkover-credit: the empty case first", () => {
     expect(checked).toBe(44); // 5+5+4+3+2+4+4+4+5+3+5 cfg entries in walkover-credit-cfgs.ts
   });
 
+  it("X-WD-6 + X-RT-1 (ruling 113): a Best of 1 with nothing played credits its one set at setTo (VB-WO-1's 25-0), never its deciding-set target — the withdrawal and the disqualification alike", () => {
+    // single-sport: volleyball's Best of 1 is the case where "as before the start" and "the retirement credit of an
+    // empty sheet" part — its only set is the deciding set (finalSetTo 15); a walkover gives the sets needed, each 25-0.
+    const bo1 = { bestOf: 1, setTo: 25, finalSetTo: 15, winBy: 2, cap: null };
+    const want = sets(1, 0, 25, 0); // VB-WO-1, by hand: one set needed, 25-0
+    let checked = 0;
+    for (const [reason, statsMatch] of [["withdrew", false], ["disqualified", true]] as const) {
+      for (const by of ["home", "away"] as const) {
+        const a = walkoverCredit({ sport: "volleyball", cfg: { ...bo1 }, reason, played: { home: [], away: [] }, by });
+        expect(a, `${reason} ${by} at fault`).toEqual(single(want, mirrorSets(want), statsMatch));
+        checked++;
+      }
+    }
+    // the positive pair: the same Best of 1 before the start is the same credit, and once a point is played the
+    // retirement completes the deciding set to its own target, 15
+    expect(walkoverCredit({ sport: "volleyball", cfg: { ...bo1 }, reason: "walkover" })).toEqual(single(want, mirrorSets(want), false));
+    const played = sets(1, 0, 15, 1);
+    expect(walkoverCredit({ sport: "volleyball", cfg: { ...bo1 }, reason: "retired", played: { home: [1], away: [0] }, by: "home" })).toEqual(single(played, mirrorSets(played), true));
+    expect(checked).toBe(4);
+  });
+
   it("X-RS-1 (ruling 112): an empty scoresheet is a Start with nothing played — a walkover with one is the walkover credit; one with a unit played is refused outside chess", () => {
     // single-sport: football stands for the rule; the registry sweep below covers every sport
     const empty = { sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] }, by: "away" } as const;
