@@ -1,0 +1,7 @@
+{
+  "at": "2026-10-11T21:19:03.123Z",
+  "kind": "connect-failed",
+  "level": "warn",
+  "message": "connect failed tok=*** at x",
+  "problems": "streamid *** refused"
+}
