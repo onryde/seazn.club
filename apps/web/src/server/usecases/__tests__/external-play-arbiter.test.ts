@@ -247,6 +247,26 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
     // Resync reads a game on file that is not over; nothing else.
     expect(view.boards.map((x) => x.canResync)).toEqual([false, true, true, true, false]);
     expect(view.boards.map((x) => x.playable)).toEqual([true, true, true, true, false]);
+    // T16: settled from the panel only with an online game on file (resolve
+    // needs the bridge row; `a` has none) and not over. Nothing here is a
+    // knockout draw on hold.
+    expect(view.boards.map((x) => x.canSettle)).toEqual([false, true, true, true, false]);
+    expect(view.boards.map((x) => x.tiebreakOwed)).toEqual([false, false, false, false, false]);
+  });
+
+  it("T16: whiteSide is the colour on file (the bridge's white_side), and the names follow it", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    await openRound(r);
+    const [a, b] = r.boards;
+    await bridge(a!.fixtureId, r.orgId, { status: "ready" });
+    await bridge(b!.fixtureId, r.orgId, { status: "ready" });
+    await sql`update fixture_external_play set white_side = 'away' where fixture_id = ${b!.fixtureId}`;
+    await sql`update fixture_external_play set white_side = 'home' where fixture_id = ${a!.fixtureId}`;
+    const view = (await loadArbiterRound(r.owner, r.divisionId))!;
+    expect(view.boards.map((x) => [x.whiteSide, x.white.name, x.black.name])).toEqual([
+      ["home", "P1W", "P1B"],
+      ["away", "P2B", "P2W"],
+    ]);
   });
 
   it("C1: the viewer's OWN board is never listed — counted, so the panel can say why; another organiser still sees it", async () => {

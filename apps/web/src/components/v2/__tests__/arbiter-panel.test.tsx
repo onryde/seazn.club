@@ -76,6 +76,9 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     cameraReport: null,
     canResync: true,
     playable: true,
+    canSettle: true,
+    whiteSide: "home",
+    tiebreakOwed: false,
     flags: [],
     ...over,
   };
@@ -99,6 +102,7 @@ const ROUND: ArbiterRound = {
       state: { kind: "result", score: "1–0" },
       canResync: false,
       playable: false,
+      canSettle: false,
       cameraReport: "settled",
       flags: [PRIYA_REPORT],
     }),
@@ -123,7 +127,7 @@ function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
     video: WATCHING,
     nowMs: NOW,
     slugs: { org: "club", comp: "autumn", div: "open" },
-    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, override: noop, retryVideo: noop },
+    on: { select: noop, resync: noop, goOn: noop, toggleSettle: noop, settle: noop, override: noop, retryVideo: noop },
     ...over,
   };
 }
@@ -580,17 +584,67 @@ describe("your decision", () => {
     expect(checked).toBe(5);
   });
 
-  it("settle opens to the board's match page", () => {
-    const h = html(props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
-    expect(h).toMatch(/aria-expanded="true"/);
+  // T16: the disclosure settles the board itself (it used to link to the
+  // match page). Canvas HoldQueueDesktop: "Settle the result" — "{name} wins"
+  // ×2, "Draw", "No result"; a drawn knockout: "Pick the winner" — "{name}
+  // goes through" ×2. The server settles by SIDE, so the white player's
+  // button carries whichever side White is (the canvas names by colour).
+  const settleButtons = (h: string) =>
+    [...h.matchAll(/<button[^>]*data-settle="([a-z_]+)"[^>]*>(.*?)<\/button>/g)].map((m) => [m[1]!, text(m[2]!)] as const);
+
+  it("settle opens to the four buttons, each sending its side — by which side White is", () => {
+    const cases: [ArbiterBoard["whiteSide"], [string, string][]][] = [
+      ["home", [["home_wins", "Jonah Mbeki wins"], ["away_wins", "Elif Demirtaş wins"], ["draw", "Draw"], ["no_result", "No result"]]],
+      ["away", [["away_wins", "Jonah Mbeki wins"], ["home_wins", "Elif Demirtaş wins"], ["draw", "Draw"], ["no_result", "No result"]]],
+    ];
+    let checked = 0;
+    for (const [whiteSide, expected] of cases) {
+      const b = { ...ROUND.boards[2]!, whiteSide };
+      const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+      expect(h).toMatch(/aria-expanded="true"/);
+      expect(h).toMatch(new RegExp(`<legend[^>]*>${EN["externalPlay.settle.legend"]}</legend>`));
+      expect(text(h)).toContain(EN["arbiter.decide.settleBody"]);
+      expect(settleButtons(h), whiteSide).toEqual(expected);
+      expect(h, "no way off to the match page any more").not.toContain('href="/o/club/c/autumn/d/open/f/13"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a drawn knockout (tie-break owed) offers a winner only — never Draw or No result", () => {
+    const b = { ...ROUND.boards[2]!, tiebreakOwed: true, whiteSide: "away" as const };
+    const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(text(h)).toContain(EN["externalPlay.settle.pickLegend"]);
+    expect(text(h)).toContain(EN["arbiter.decide.tiebreakBody"]);
+    expect(settleButtons(h)).toEqual([
+      ["away_wins", "Jonah Mbeki goes through"],
+      ["home_wins", "Elif Demirtaş goes through"],
+    ]);
+  });
+
+  it("a board nobody reached (no online game on file) keeps T15's way to its match page — no settle buttons; closed, the disclosure paints none", () => {
+    const none = { ...ROUND.boards[2]!, canSettle: false };
+    const h = html(props({ round: { ...ROUND, boards: [none] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(text(h)).toContain("Settle the result now…");
+    expect(text(h)).toContain(EN["arbiter.decide.settleElsewhere"]);
     expect(h).toContain('href="/o/club/c/autumn/d/open/f/13"');
-    expect(text(h)).toContain(EN["arbiter.decide.settleBody"]);
+    expect(settleButtons(h)).toEqual([]);
+    // ("Settle the result" is also a prefix of the toggle's label: anchor on the legend.)
+    expect(h).not.toContain("<legend");
+    // …and with no match page to go to either, nothing to settle from here.
+    const nowhere = { ...none, fixtureNo: null };
+    expect(text(html(props({ round: { ...ROUND, boards: [nowhere] } })))).not.toContain("Settle the result now…");
+    expect(settleButtons(html(props())), "closed").toEqual([]);
   });
 
   it("while a request is in flight, the decision controls are disabled", () => {
     const h = html(props({ decision: { ...initialArbiterDecision("f3"), busy: { kind: "resync", boardId: "f3" } } }));
     const disabled = [...h.matchAll(/<button[^>]*disabled=""[^>]*>(.*?)<\/button>/g)].map((m) => text(m[1]!));
     expect(disabled).toEqual(expect.arrayContaining(["Resync from Lichess", "Let the game go on"]));
+    // …and every settle button too, whichever request it is.
+    const open = html(props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true, busy: { kind: "goOn", boardId: "f3" } } }));
+    const off = [...open.matchAll(/<button[^>]*disabled=""[^>]*>(.*?)<\/button>/g)].map((m) => text(m[1]!));
+    expect(off).toEqual(expect.arrayContaining(["Jonah Mbeki wins", "Elif Demirtaş wins", "Draw", "No result", "Let the game go on"]));
   });
 
   it("each answer paints its own sentence (anti-vacuity: every notice kind)", () => {
@@ -600,7 +654,16 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "resynced", adopted: 0 }, EN["arbiter.notice.resyncedNone"]!],
       [{ boardId: "f3", kind: "resync_nothing" }, EN["arbiter.notice.resyncNothing"]!],
       [{ boardId: "f3", kind: "resync_failed", code: "NOT_FOUND" }, EN["arbiter.notice.resyncFailed"]!],
-      [{ boardId: "f3", kind: "went_on" }, EN["arbiter.notice.wentOn"]!],
+      [{ boardId: "f3", kind: "went_on", stillOpen: 0 }, EN["arbiter.notice.wentOn"]!],
+      [{ boardId: "f3", kind: "went_on", stillOpen: 1 }, EN["arbiter.notice.wentOnNew.one"]!.replace("{count}", "1")],
+      [{ boardId: "f3", kind: "went_on", stillOpen: 2 }, EN["arbiter.notice.wentOnNew.other"]!.replace("{count}", "2")],
+      [{ boardId: "f3", kind: "go_on_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.goOnOwnBoard"]!],
+      [{ boardId: "f3", kind: "go_on_failed", code: "FLAG_NOT_FOUND" }, EN["arbiter.notice.failed"]!],
+      [{ boardId: "f3", kind: "settled", status: "finished" }, EN["arbiter.notice.settled"]!],
+      [{ boardId: "f3", kind: "settled", status: "tiebreak_owed" }, EN["arbiter.notice.settledTiebreak"]!],
+      [{ boardId: "f3", kind: "settle_failed", code: "ALREADY_RESOLVED" }, EN["arbiter.notice.alreadyResolved"]!],
+      [{ boardId: "f3", kind: "settle_failed", code: "TIEBREAK_NEEDS_WINNER" }, EN["arbiter.notice.needsWinner"]!],
+      [{ boardId: "f3", kind: "settle_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.settleOwnBoard"]!],
       [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
       [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
       [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
@@ -615,7 +678,9 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    expect(seen.size, "eleven notices, eleven distinct sentences").toBe(11);
+    // 20 notices; "failed" is the shared fallback sentence (2 rows), so 19.
+    expect(notices.length).toBe(20);
+    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(19);
   });
 });
 
@@ -778,7 +843,12 @@ describe("every locale", () => {
   it("no untranslated key or unfilled slot reaches the page, in any state the panel paints", () => {
     const states: ArbiterScreenProps[] = [
       props(),
-      props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true, notice: { boardId: "f3", kind: "went_on" } } }),
+      props({ decision: { ...initialArbiterDecision("f3"), settleOpen: true, notice: { boardId: "f3", kind: "went_on", stillOpen: 2 } } }),
+      props({
+        round: { ...ROUND, boards: [{ ...ROUND.boards[2]!, tiebreakOwed: true }] },
+        decision: { ...initialArbiterDecision("f3"), settleOpen: true, notice: { boardId: "f3", kind: "settled", status: "tiebreak_owed" } },
+      }),
+      props({ round: { ...ROUND, boards: [{ ...ROUND.boards[2]!, canSettle: false }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }),
       props({ video: { kind: "unavailable" } }),
       props({ video: { kind: "fault" }, decision: initialArbiterDecision("f2") }),
       props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
@@ -799,12 +869,12 @@ describe("every locale", () => {
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
       for (const p of states) {
         const t = text(html(p, locale));
-        expect(t, `${locale}: raw key`).not.toMatch(/\barbiter\.[a-zA-Z]/);
+        expect(t, `${locale}: raw key`).not.toMatch(/\b(?:arbiter|externalPlay)\.[a-zA-Z]/);
         expect(t, `${locale}: unfilled slot`).not.toMatch(/\{[a-z]+\}/i);
         checked++;
       }
     }
-    expect(checked).toBe(48);
+    expect(checked).toBe(56);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {

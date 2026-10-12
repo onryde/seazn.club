@@ -14,8 +14,14 @@
 //   R4 A notice belongs to the board on screen: switching boards clears it,
 //      and an answer for a board no longer on screen frees the panel but shows
 //      nothing on this one.
-//   R5 "Let the game go on" writes nothing: never in flight, only a notice.
-//   R6 The settle disclosure belongs to its board: switching closes it.
+//   R5 (T16; it wrote nothing before) "Let the game go on" and each settle
+//      button are requests like the others — R1, R3 and R4 hold for them; the
+//      go-on's answer says how many flags were raised since the screen
+//      loaded, a settle's whether the board is finished or now waits for the
+//      tie-break's winner.
+//   R6 The settle disclosure belongs to its board: switching closes it, and
+//      so does a settle that FINISHES the board (a tie-break owed keeps it
+//      open: the winner is still to pick).
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { ApiV1Error } from "@/lib/client-v1";
@@ -37,17 +43,20 @@ describe("transitions", () => {
     const actions: ArbiterDecisionAction[] = [
       { type: "resync", boardId: "b1" },
       { type: "override", boardId: "b1" },
-      { type: "goOn" },
+      { type: "goOn", boardId: "b1" },
+      { type: "settle", boardId: "b1" },
       { type: "toggleSettle" },
       { type: "resyncDone", boardId: "b1", outcome: { ok: true, read: true, adopted: 2 } },
       { type: "overrideDone", boardId: "b1", outcome: { ok: true } },
+      { type: "goOnDone", boardId: "b1", outcome: { ok: true, closed: 1, stillOpen: 0 } },
+      { type: "settleDone", boardId: "b1", outcome: { ok: true, status: "finished" } },
     ];
     let checked = 0;
     for (const a of actions) {
       expect(arbiterDecision(s0, a), a.type).toBe(s0);
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(9);
   });
 
   it("resync: in flight, then answered with what it adopted", () => {
@@ -81,8 +90,8 @@ describe("transitions", () => {
   });
 
   it("R4: switching boards clears the notice; an answer for the board left behind frees the panel and shows nothing here", () => {
-    const answered = run(on("b1"), { type: "goOn" });
-    expect(answered.notice).toEqual({ boardId: "b1", kind: "went_on" });
+    const answered = run(on("b1"), { type: "goOn", boardId: "b1" }, { type: "goOnDone", boardId: "b1", outcome: { ok: true, closed: 2, stillOpen: 0 } });
+    expect(answered.notice).toEqual({ boardId: "b1", kind: "went_on", stillOpen: 0 });
     expect(run(answered, { type: "select", boardId: "b2" }).notice).toBeNull();
 
     const left = run(on("b1"), { type: "override", boardId: "b1" }, { type: "select", boardId: "b2" });
@@ -94,20 +103,45 @@ describe("transitions", () => {
   });
 
   it("a press that raced a switch (sent for the board just left): in flight for THAT board, this board's notice kept, its answer frees the panel", () => {
-    const here = run(on("b2"), { type: "goOn" });
+    const here = run(on("b2"), { type: "goOn", boardId: "b2" }, { type: "goOnDone", boardId: "b2", outcome: { ok: true, closed: 1, stillOpen: 1 } });
     const raced = run(here, { type: "resync", boardId: "b1" });
     expect(raced.busy).toEqual({ kind: "resync", boardId: "b1" });
-    expect(raced.notice).toEqual({ boardId: "b2", kind: "went_on" });
+    expect(raced.notice).toEqual({ boardId: "b2", kind: "went_on", stillOpen: 1 });
     const done = run(raced, { type: "resyncDone", boardId: "b1", outcome: { ok: true, read: true, adopted: 1 } });
     expect(done.busy).toBeNull();
-    expect(done.notice).toEqual({ boardId: "b2", kind: "went_on" });
+    expect(done.notice).toEqual({ boardId: "b2", kind: "went_on", stillOpen: 1 });
   });
 
-  it("R5: 'Let the game go on' never puts anything in flight, and is refused while a request is", () => {
-    const s = run(on("b1"), { type: "goOn" });
-    expect(s.busy).toBeNull();
+  it("R5: 'Let the game go on' is a request: in flight, answered with the flags raised since, refused by name — and refused while another is in flight", () => {
+    const s = run(on("b1"), { type: "goOn", boardId: "b1" });
+    expect(s.busy).toEqual({ kind: "goOn", boardId: "b1" });
+    expect(run(s, { type: "goOnDone", boardId: "b1", outcome: { ok: true, closed: 1, stillOpen: 2 } }).notice).toEqual({ boardId: "b1", kind: "went_on", stillOpen: 2 });
+    expect(run(s, { type: "goOnDone", boardId: "b1", outcome: { ok: false, code: "ARBITER_PLAYS_THIS_BOARD" } }).notice).toEqual({
+      boardId: "b1", kind: "go_on_failed", code: "ARBITER_PLAYS_THIS_BOARD",
+    });
     const inFlight = run(on("b1"), { type: "resync", boardId: "b1" });
-    expect(arbiterDecision(inFlight, { type: "goOn" })).toBe(inFlight);
+    let refused = 0;
+    for (const a of [{ type: "goOn", boardId: "b1" }, { type: "settle", boardId: "b1" }] as const) {
+      expect(arbiterDecision(inFlight, a), a.type).toBe(inFlight);
+      refused++;
+    }
+    expect(refused).toBe(2);
+  });
+
+  it("R5/R6: a settle that FINISHES the board closes the disclosure; one that opens the tie-break, or is refused, keeps it open", () => {
+    const open = run(on("b1"), { type: "toggleSettle" }, { type: "settle", boardId: "b1" });
+    expect(open.busy).toEqual({ kind: "settle", boardId: "b1" });
+    const finished = run(open, { type: "settleDone", boardId: "b1", outcome: { ok: true, status: "finished" } });
+    expect([finished.settleOpen, finished.notice]).toEqual([false, { boardId: "b1", kind: "settled", status: "finished" }]);
+    const owed = run(open, { type: "settleDone", boardId: "b1", outcome: { ok: true, status: "tiebreak_owed" } });
+    expect([owed.settleOpen, owed.notice]).toEqual([true, { boardId: "b1", kind: "settled", status: "tiebreak_owed" }]);
+    const refused = run(open, { type: "settleDone", boardId: "b1", outcome: { ok: false, code: "ALREADY_RESOLVED" } });
+    expect([refused.settleOpen, refused.notice]).toEqual([true, { boardId: "b1", kind: "settle_failed", code: "ALREADY_RESOLVED" }]);
+    // A settle answered after a switch frees the panel and touches neither
+    // the notice nor the disclosure of the board on screen.
+    const switched = run(open, { type: "select", boardId: "b2" }, { type: "toggleSettle" });
+    const landed = run(switched, { type: "settleDone", boardId: "b1", outcome: { ok: true, status: "finished" } });
+    expect([landed.busy, landed.notice, landed.settleOpen]).toEqual([null, null, true]);
   });
 
   it("override: answered OK, or refused with Task 8's code", () => {
@@ -134,7 +168,8 @@ const action: fc.Arbitrary<ArbiterDecisionAction> = fc.oneof(
   { arbitrary: board.map((boardId) => ({ type: "select" as const, boardId })), weight: 3 },
   { arbitrary: board.map((boardId) => ({ type: "resync" as const, boardId })), weight: 3 },
   { arbitrary: board.map((boardId) => ({ type: "override" as const, boardId })), weight: 2 },
-  { arbitrary: fc.constant({ type: "goOn" as const }), weight: 2 },
+  { arbitrary: board.map((boardId) => ({ type: "goOn" as const, boardId })), weight: 2 },
+  { arbitrary: board.map((boardId) => ({ type: "settle" as const, boardId })), weight: 2 },
   { arbitrary: fc.constant({ type: "toggleSettle" as const }), weight: 2 },
   {
     arbitrary: fc.tuple(board, fc.boolean(), fc.nat(5)).map(([boardId, read, adopted]) => ({
@@ -152,17 +187,48 @@ const action: fc.Arbitrary<ArbiterDecisionAction> = fc.oneof(
     })),
     weight: 3,
   },
+  {
+    arbitrary: fc.tuple(board, fc.nat(2)).map(([boardId, n]) => ({
+      type: "goOnDone" as const,
+      boardId,
+      outcome: n === 0 ? { ok: false as const, code: "ARBITER_PLAYS_THIS_BOARD" } : { ok: true as const, closed: n, stillOpen: n - 1 },
+    })),
+    weight: 3,
+  },
+  {
+    arbitrary: fc.tuple(board, fc.constantFrom("finished", "tiebreak_owed", "refused")).map(([boardId, r]) => ({
+      type: "settleDone" as const,
+      boardId,
+      outcome: r === "refused" ? { ok: false as const, code: "ALREADY_RESOLVED" } : { ok: true as const, status: r as "finished" | "tiebreak_owed" },
+    })),
+    weight: 3,
+  },
+);
+
+/** A settle and its answer back to back — the press-then-answer pair a
+ *  uniform draw almost never lines up, so R6's "a finished board closes the
+ *  disclosure" is reached by construction (counted below as settledClosed). */
+const chunk: fc.Arbitrary<ArbiterDecisionAction[]> = fc.oneof(
+  { arbitrary: action.map((a) => [a]), weight: 12 },
+  {
+    arbitrary: fc.tuple(board, fc.constantFrom("finished" as const, "tiebreak_owed" as const)).map(([boardId, status]): ArbiterDecisionAction[] => [
+      { type: "settle", boardId },
+      { type: "settleDone", boardId, outcome: { ok: true, status } },
+    ]),
+    weight: 2,
+  },
 );
 
 /** The reference model: the rules above as the smallest state that states
  *  them — a selected board and at most one request. */
-type Model = { selected: string | null; inflight: { kind: "resync" | "override"; boardId: string } | null };
+type Model = { selected: string | null; inflight: { kind: "resync" | "override" | "goOn" | "settle"; boardId: string } | null };
+const DONE_KIND = { resyncDone: "resync", overrideDone: "override", goOnDone: "goOn", settleDone: "settle" } as const;
 
 describe("the sequence sweep: the rules hold after every step", () => {
   it("random sequences over three boards (anti-vacuity: every rule's interesting branch is reached)", () => {
-    const seen = { steps: 0, accepted: 0, racedPress: 0, refusedBusy: 0, staleIgnored: 0, landedHere: 0, landedElsewhere: 0, switches: 0 };
+    const seen = { steps: 0, accepted: 0, racedPress: 0, refusedBusy: 0, staleIgnored: 0, landedHere: 0, landedElsewhere: 0, switches: 0, settledClosed: 0 };
     fc.assert(
-      fc.property(fc.option(board, { nil: null }), fc.array(action, { minLength: 1, maxLength: 40 }), (start, actions) => {
+      fc.property(fc.option(board, { nil: null }), fc.array(chunk, { minLength: 1, maxLength: 30 }).map((c) => c.flat()), (start, actions) => {
         let s = initialArbiterDecision(start);
         const m: Model = { selected: start, inflight: null };
         for (const a of actions) {
@@ -180,6 +246,8 @@ describe("the sequence sweep: the rules hold after every step", () => {
               break;
             case "resync":
             case "override":
+            case "goOn":
+            case "settle":
               if (m.selected === null) expect(s, "R2").toBe(before);
               else if (m.inflight !== null) {
                 expect(s, "R1").toBe(before);
@@ -194,17 +262,15 @@ describe("the sequence sweep: the rules hold after every step", () => {
                 seen.accepted++;
               }
               break;
-            case "goOn":
-              if (m.selected !== null && m.inflight === null) expect(s.notice).toEqual({ boardId: m.selected, kind: "went_on" });
-              else expect(s, "R2/R5").toBe(before);
-              break;
             case "toggleSettle":
               if (m.selected === null) expect(s).toBe(before);
               else expect(s.settleOpen).toBe(!before.settleOpen);
               break;
             case "resyncDone":
-            case "overrideDone": {
-              const kind = a.type === "resyncDone" ? "resync" : "override";
+            case "overrideDone":
+            case "goOnDone":
+            case "settleDone": {
+              const kind = DONE_KIND[a.type];
               const answers = m.inflight !== null && m.inflight.kind === kind && m.inflight.boardId === a.boardId;
               if (!answers) {
                 expect(s, "R3").toBe(before);
@@ -213,6 +279,10 @@ describe("the sequence sweep: the rules hold after every step", () => {
                 m.inflight = null;
                 if (a.boardId === m.selected) {
                   expect(s.notice?.boardId).toBe(a.boardId);
+                  // R6: only a FINISHED board closes the disclosure.
+                  const finishes = a.type === "settleDone" && a.outcome.ok && a.outcome.status === "finished";
+                  expect(s.settleOpen, "R6").toBe(finishes ? false : before.settleOpen);
+                  if (finishes) seen.settledClosed++;
                   seen.landedHere++;
                 } else {
                   expect(s.notice, "R4: answered off-screen").toEqual(before.notice);
@@ -270,6 +340,25 @@ describe("the runner: what reaches the network", () => {
     await third;
     expect(h.sent.map((x) => x.path)).toEqual(["/api/v1/fixtures/b1/external-play/resync", "/api/v1/fixtures/b1/external-play/video-override"]);
     expect(h.sent[1]!.body).toEqual({ note: "the note" });
+  });
+
+  it("T16: 'Let the game go on' sends the ids ON SCREEN to flags/close; a settle sends its button to resolve — one request at a time across kinds", async () => {
+    let release!: (v: unknown) => void;
+    const h = harness(() => new Promise((r) => (release = r)));
+    const goOn = h.runner.goOn("b1", ["f1", "f2"]);
+    expect(await h.runner.settle("b1", "draw"), "a settle while the go-on is in flight is refused before the network").toBe(false);
+    release({ closed: 2, stillOpen: 1 });
+    await goOn;
+    expect(h.state.notice).toEqual({ boardId: "b1", kind: "went_on", stillOpen: 1 });
+    const settle = h.runner.settle("b1", "away_wins");
+    release({ status: "finished" });
+    await settle;
+    expect(h.sent).toEqual([
+      { path: "/api/v1/fixtures/b1/external-play/flags/close", body: { ids: ["f1", "f2"] } },
+      { path: "/api/v1/fixtures/b1/external-play/resolve", body: { kind: "away_wins" } },
+    ]);
+    expect(h.state.notice).toEqual({ boardId: "b1", kind: "settled", status: "finished" });
+    expect(h.refreshed).toBe(2);
   });
 
   it("a refusal carries the route's code, frees the panel, and does not refresh", async () => {

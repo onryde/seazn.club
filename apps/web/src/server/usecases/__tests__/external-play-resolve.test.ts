@@ -243,9 +243,11 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a board still being played (the 
     await gameBridge(r, b, "live");
     const before = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
     expect(before.playable, "premise").toBe(true);
+    expect(before.canSettle, "the panel offers the settle").toBe(true);
     await resolveExternalPlay(r.owner, b.fixtureId, "home_wins");
     const after = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
     expect(after.playable).toBe(false);
+    expect(after.canSettle, "…and no longer once it is settled").toBe(false);
     expect(after.state).toEqual({ kind: "result", score: "1–0" });
   });
 });
@@ -256,9 +258,13 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     const b = r.boards[0]!;
     await pendingBridge(r, b);
     await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
+    const held = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
+    expect([held.tiebreakOwed, held.canSettle], "premise: a plain hold is not a tie-break").toEqual([false, true]);
     expect(await resolveExternalPlay(r.owner, b.fixtureId, "draw")).toEqual({ status: "tiebreak_owed" });
     expect((await fixtureOf(b.fixtureId)).outcome, "not decided").toBeNull();
     expect((await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((q) => q.reason)).toEqual(["tiebreak_owed"]);
+    const owed = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
+    expect([owed.tiebreakOwed, owed.canSettle, owed.state.kind], "the panel offers a winner only").toEqual([true, true, "on_hold"]);
 
     let refused = 0;
     for (const kind of ["draw", "no_result"] as const) {
