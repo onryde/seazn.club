@@ -670,13 +670,27 @@ describe("the camera join, as pure decisions", () => {
       expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx-1", "pid-late")]);
     });
 
-    it("ids are path-encoded, and a failed send is swallowed — the sweep removes what the browser could not", async () => {
-      const w = arbiterWatchRelease("fx/1", async () => {
-        throw new Error("offline");
-      });
+    it("ids are path-encoded, and a failed send is caught here — never unhandled; the sweep removes what the browser could not", () => {
+      // A rejected send that reports whether a rejection handler was attached.
+      let handled = 0;
+      const rejected = {
+        then: (_ok: unknown, bad?: (e: unknown) => unknown) => {
+          if (bad) {
+            handled++;
+            bad(new Error("offline"));
+          }
+          return Promise.resolve();
+        },
+        catch: (bad: (e: unknown) => unknown) => {
+          handled++;
+          bad(new Error("offline"));
+          return Promise.resolve();
+        },
+      } as unknown as Promise<unknown>;
+      const w = arbiterWatchRelease("fx/1", () => rejected);
       w.minted("p d");
       expect(() => w.close()).not.toThrow();
-      await new Promise((res) => setTimeout(res, 0));
+      expect(handled, "the failure has a handler").toBe(1);
       const r = recorder();
       const enc = arbiterWatchRelease("fx/1", r.send);
       enc.minted("p d");
