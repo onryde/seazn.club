@@ -68,7 +68,7 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // The game on ANOTHER Lichess account than the viewer's linked one is A
   // too: play.ts refuses every act, and re-linking that account is the
   // remedy (T14 re-review 5, I-2).
-  if (snap.frozen === "you" || snap.frozen === "both" || snap.otherAccount) return { kind: "revoked" };
+  if (snap.frozen === "you" || snap.frozen === "both" || snap.otherAccount !== null) return { kind: "revoked" };
   // Lichess refused the player's own grant mid-act or at the seat.
   if (s.error === "relink") return { kind: "relink" };
   // A game on file the server will not take an act on (play.ts refuses it:

@@ -39,7 +39,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     opponentPresence: null,
     frozen: null,
     canAct: true,
-    otherAccount: false,
+    otherAccount: null,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -147,7 +147,7 @@ describe("roomScreen", () => {
   });
 
   it("re-review 5 I-2: the game is on ANOTHER Lichess account ⇒ A (revoked) — after over, before relink and held; the pairs: the same board as recorded is live, held stays held", () => {
-    const other = { game: GAME, canAct: false, otherAccount: true } as const;
+    const other = { game: GAME, canAct: false, otherAccount: "ada_recorded" } as const;
     expect(roomScreen(st(other)).kind).toBe("revoked");
     // The remedy is a re-link either way: the server's reason outranks a re-link the act asked for.
     expect(roomScreen(st(other, { error: "relink" })).kind).toBe("revoked");
@@ -155,8 +155,8 @@ describe("roomScreen", () => {
     expect(roomScreen(st({ ...other, result: { outcome: "lost", method: "time", score: "0–1" } })).kind).toBe("over");
     expect(roomScreen(st({ ...other, game: { ...GAME, over: true } })).kind).toBe("over");
     // The pairs.
-    expect(roomScreen(st({ game: GAME, canAct: true, otherAccount: false })).kind).toBe("live");
-    expect(roomScreen(st({ game: GAME, canAct: false, otherAccount: false })).kind).toBe("held");
+    expect(roomScreen(st({ game: GAME, canAct: true, otherAccount: null })).kind).toBe("live");
+    expect(roomScreen(st({ game: GAME, canAct: false, otherAccount: null })).kind).toBe("held");
   });
 
   it("I2: a game on file the server will not take a move on is HELD — never the live, movable room", () => {
