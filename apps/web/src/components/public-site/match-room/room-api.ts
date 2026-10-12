@@ -1,7 +1,8 @@
 // The match room's four calls to OUR server (design §3.4: the browser never
 // talks to Lichess). Client-safe: no server module is imported — the wire
-// types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas.ts) and the
-// room usecase's `SeatWire`, and room-api.test.ts pins each mirror against
+// types below mirror `RoomAct` / `RoomActOut` (api-v1/schemas.ts), the
+// room usecase's `SeatWire` and T9's `CreateOutcome`, and room-api.test.ts
+// pins each mirror against
 // its source at the type level, so the two cannot drift silently.
 import type { RoomSnapshot, SeatRefusal } from "./room-snapshot";
 
@@ -24,7 +25,22 @@ export type SeatAnswer =
   | { seated: true; participant: ParticipantWire | null }
   | { seated: false; reason: SeatRefusal; participant: ParticipantWire | null };
 
-export type RoomClaimAnswer = { snapshot: RoomSnapshot; seat: SeatAnswer | null };
+/** T9's `CreateOutcome` (create-game.ts), mirrored. */
+export type CreateAnswer =
+  | { created: true; gameId: string }
+  | {
+      created: false;
+      reason: "not_ready" | "already" | "unplayable" | "provider_error" | "no_person" | "online_chess_disabled" | GrantRefusalWire;
+    };
+
+export type RoomClaimAnswer = {
+  snapshot: RoomSnapshot;
+  seat: SeatAnswer | null;
+  /** T9's answer when this seat asked for the game; null when it asked
+   *  nothing (review m3). Its refusal for the flag already shows as
+   *  `snapshot.onlineChessOff`. */
+  create: CreateAnswer | null;
+};
 
 /** A call's outcome: the envelope's data, or the HTTP status and error code
  *  (`status: 0` ⇒ the request never got an answer). */

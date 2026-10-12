@@ -218,7 +218,7 @@ describe("seat round trip", () => {
     expect(again).toBe(s);
     s = roomReducer(s, {
       type: "seat_answered",
-      answer: { snapshot: snap({ serverNow: iso(T0 + 10) }), seat: { seated: false, reason: "camera_required", participant: null } },
+      answer: { snapshot: snap({ serverNow: iso(T0 + 10) }), seat: { seated: false, reason: "camera_required", participant: null }, create: null },
       receivedAt: T0,
     });
     expect([s.pending, s.seat?.seated, s.error]).toEqual([null, false, null]);
@@ -229,7 +229,7 @@ describe("seat round trip", () => {
     for (const reason of ["lichess_link_required", "lichess_reconsent_required"] as const) {
       const s = roomReducer(roomReducer(initialRoomState(snap(), T0), { type: "seat_sent" }), {
         type: "seat_answered",
-        answer: { snapshot: snap({ serverNow: iso(T0 + 1) }), seat: { seated: false, reason, participant: null } },
+        answer: { snapshot: snap({ serverNow: iso(T0 + 1) }), seat: { seated: false, reason, participant: null }, create: null },
         receivedAt: T0,
       });
       expect(s.error, reason).toBe("relink");

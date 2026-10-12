@@ -55,7 +55,10 @@ export function cspHeader(nonce: string, opts: { forceReportOnly?: boolean } = {
     `img-src 'self' blob: data: https:`,
     `font-src 'self' data:`,
     // Stripe: api.stripe.com for tokenization; supabase + sentry as before.
-    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
+    // RealtimeKit: the match room's camera tile joins from the browser; its
+    // Core SDK talks to *.realtime.cloudflare.com, signalling over wss
+    // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
+    `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}`,
     // Embedded Checkout renders inside a Stripe-hosted iframe.
     `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com`,
     `object-src 'none'`,

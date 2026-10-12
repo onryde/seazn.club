@@ -23,7 +23,9 @@ import { fenAfter, type PlayResult } from "../external-play/play";
 import { writeResultFrom } from "../external-play/result";
 import { appendEvent } from "@/server/engine-db";
 import type { GameSnapshot } from "@/server/external-play/types";
+import { CLOCK_ZERO_SPACING_MS } from "@/components/public-site/match-room/use-room";
 import {
+  CLOCK_ZERO_COOLDOWN_MS,
   CLOCK_ZERO_TOLERANCE_MS,
   actInRoom,
   claimRoomSeat,
@@ -278,6 +280,24 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — taking the seat", () 
     expect(second.snapshot.creation).toEqual({ state: "creating" });
     // The first player's view says the same, by the GET.
     expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).creation).toEqual({ state: "creating" });
+  });
+
+  it("m3: T9 refusing the create because the club is not offered online chess sets onlineChessOff on THAT answer, even when the room's own flag read raced it", async () => {
+    const s = await seed();
+    // The room's flag reads say "offered" (a flag flipping between them and
+    // T9's own check); T9 is the last word.
+    const d = deps({ create: vi.fn(async () => ({ created: false as const, reason: "online_chess_disabled" as const })) });
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    const second = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, d);
+    expect(second.create).toEqual({ created: false, reason: "online_chess_disabled" });
+    expect(second.snapshot.onlineChessOff).toBe(true);
+    // The pair: any other refusal leaves the flag as the room read it.
+    const t = await seed();
+    const d2 = deps({ create: vi.fn(async () => ({ created: false as const, reason: "provider_error" as const })) });
+    await claimRoomSeat({ kind: "session", userId: t.home.userId }, t.fixtureId, d2);
+    const other = await claimRoomSeat({ kind: "session", userId: t.away.userId }, t.fixtureId, d2);
+    expect(other.create).toEqual({ created: false, reason: "provider_error" });
+    expect(other.snapshot.onlineChessOff).toBe(false);
   });
 
   it("a create held back by Lichess's rate limit reads busy, with T9's own retry instant", async () => {
@@ -579,6 +599,34 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — act and clock-zero tr
     expect(due).toHaveBeenCalledWith(s.fixtureId, "clock_zero");
   });
 
+  it("m5: one Lichess read per (game, ply) per cooldown — both players reporting at once read once; a client's spaced retry and the next ply read again", async () => {
+    // The client spaces its own reports CLOCK_ZERO_SPACING_MS apart (and a
+    // flag settles on Lichess's NEXT read), so the server's cooldown must be
+    // shorter than that spacing, or it would swallow the retry that settles it.
+    expect(CLOCK_ZERO_COOLDOWN_MS).toBeGreaterThan(0);
+    expect(CLOCK_ZERO_COOLDOWN_MS).toBeLessThan(CLOCK_ZERO_SPACING_MS);
+    const s = await seed();
+    const lastMoveAt = new Date(now.getTime() - 60_000);
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"], whiteMs: 10_000, blackMs: 600_000, lastMoveAt });
+    const rec = vi.fn(async () => null);
+    const at = (ms: number) => deps({ now: new Date(now.getTime() + ms), reconcile: rec });
+    const report = (who: { userId: string }, ms: number) => reportClockZero({ kind: "session", userId: who.userId }, s.fixtureId, at(ms));
+    expect(await report(s.home, 0)).toEqual({ reconciled: true });
+    expect(await report(s.away, 0), "the opponent's report a moment later").toEqual({ reconciled: false });
+    expect(await report(s.home, CLOCK_ZERO_COOLDOWN_MS - 1), "inside the cooldown").toEqual({ reconciled: false });
+    expect(rec).toHaveBeenCalledTimes(1);
+    expect(await report(s.home, CLOCK_ZERO_COOLDOWN_MS), "at the cooldown's end").toEqual({ reconciled: true });
+    expect(rec).toHaveBeenCalledTimes(2);
+    // A new ply of the SAME game is a new clock: no cooldown carried over,
+    // even a millisecond after the last read.
+    await sql`
+      update fixture_external_play
+         set moves_uci = ${sql.json(["e2e4", "e7e5", "g1f3"] as never)}, move_count = 3, white_ms = 600000, black_ms = 10000
+       where fixture_id = ${s.fixtureId}`;
+    expect(await report(s.away, CLOCK_ZERO_COOLDOWN_MS + 1)).toEqual({ reconciled: true });
+    expect(rec).toHaveBeenCalledTimes(3);
+  });
+
   it("clock-zero before the clocks run (ply < 2) or with no game asks nothing of Lichess", async () => {
     const s = await seed();
     const rec = vi.fn(async () => null);
@@ -663,6 +711,21 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
       }
     }
     expect(checked, "anti-vacuity: board × seat").toBe(cases.length * 2);
+  });
+
+  it("m6: serverNow is stamped when the snapshot is composed, not when the request began — a slow vendor answer does not age it", async () => {
+    const { s } = await cameraBoard();
+    const SLOW_MS = 400;
+    const presence = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, SLOW_MS));
+      return true;
+    });
+    // The real clock (no injected now): what production stamps.
+    const d = { ...deps({ presence, presenceCache: presenceCache() }), now: undefined };
+    const started = Date.now();
+    const snap = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(presence, "premise: the slow call was made").toHaveBeenCalledTimes(1);
+    expect(Date.parse(snap.serverNow) - started).toBeGreaterThanOrEqual(SLOW_MS);
   });
 
   it("the vendor not answering is unknown (null) — and is not asked again inside the TTL", async () => {

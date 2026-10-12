@@ -30,8 +30,8 @@ describe("the wire mirrors match their server sources (type level)", () => {
     expectTypeOf<SeatAnswer>().toEqualTypeOf<SeatWire>();
     expectTypeOf<ParticipantWire>().toEqualTypeOf<ParticipantToken>();
   });
-  it("the POST answer is RoomClaim minus `create` (the route drops it)", () => {
-    expectTypeOf<RoomClaimAnswer>().toEqualTypeOf<Omit<RoomClaim, "create">>();
+  it("the POST answer IS RoomClaim — T9's `create` included (review m3: the route no longer drops it)", () => {
+    expectTypeOf<RoomClaimAnswer>().toEqualTypeOf<RoomClaim>();
   });
 });
 
