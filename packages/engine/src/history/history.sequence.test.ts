@@ -145,3 +145,171 @@ describe("undo / redo after a fresh edit — the executor's writes agree with th
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// The rule (owner ruling 2026-10-11, option B): schedule history is LINEAR,
+// like the help page says ("undo steps back one change, redo steps forward").
+// A fresh edit made after an Undo keeps that Undo as a change of its own, so
+// a later Undo walks back through it — bringing the undone edit back — and a
+// save point taken before it stays reachable. Redo replays only the steps Undo
+// walked back since the latest fresh edit; a fresh edit leaves nothing to redo.
+//
+// The model below is written from that rule alone, in terms of what the board
+// shows: a timeline of changes, a cursor into it, and the Undo/Redo steps
+// taken since the last fresh edit. It never reads the ledger.
+// ---------------------------------------------------------------------------
+type Change = { fixture: string; at: string | null };
+
+class LinearHistory {
+  private timeline: Change[] = [];
+  /** Undo/Redo steps since the last fresh edit — they join the timeline at the next one. */
+  private steps: Change[] = [];
+  private cursor = 0;
+
+  private boardAt(n: number): Map<string, string | null> {
+    const board = new Map<string, string | null>();
+    for (const c of this.timeline.slice(0, n)) board.set(c.fixture, c.at);
+    return board;
+  }
+  edit(fixture: string, at: string): void {
+    this.timeline = [...this.timeline, ...this.steps, { fixture, at }];
+    this.steps = [];
+    this.cursor = this.timeline.length;
+  }
+  undo(): "ok" | "NOTHING_TO_UNDO" {
+    if (this.cursor === 0) return "NOTHING_TO_UNDO";
+    const undone = this.timeline[this.cursor - 1]!;
+    this.steps.push({ fixture: undone.fixture, at: this.boardAt(this.cursor - 1).get(undone.fixture) ?? null });
+    this.cursor--;
+    return "ok";
+  }
+  redo(): "ok" | "NOTHING_TO_REDO" {
+    if (this.cursor === this.timeline.length) return "NOTHING_TO_REDO";
+    this.steps.push(this.timeline[this.cursor]!);
+    this.cursor++;
+    return "ok";
+  }
+  board(fixtures: readonly string[]): Record<string, string | null> {
+    const now = this.boardAt(this.cursor);
+    return Object.fromEntries(fixtures.map((id) => [id, now.get(id) ?? null]));
+  }
+}
+
+describe("undo / redo follow ONE linear timeline (owner ruling 2026-10-11)", () => {
+  // Hand-derived from the rule, step by step, for the recorded defect.
+  it("edit e1, edit e2, Undo, fresh edit e4: Undo ×2 brings e2 back, Redo ×2 replays those two Undos, then nothing to redo", () => {
+    const board: Board = { events: [], wm: null, written: new Map() };
+    const ids = ["f1", "f2", "f4"];
+    const shows = () => Object.fromEntries(ids.map((id) => [id, board.written.get(id) ?? null]));
+    const atWatermark = () => {
+      const state = fold(board.events, board.wm).fixtures;
+      return Object.fromEntries(ids.map((id) => [id, state[id]?.at ?? null]));
+    };
+    const script: [Action, Record<string, string | null>][] = [
+      [{ edit: "1" }, { f1: "T1", f2: null, f4: null }],
+      [{ edit: "2" }, { f1: "T1", f2: "T2", f4: null }],
+      ["undo", { f1: "T1", f2: null, f4: null }], // e2 undone
+      [{ edit: "4" }, { f1: "T1", f2: null, f4: "T4" }], // the Undo is history now
+      ["undo", { f1: "T1", f2: null, f4: null }], // e4 undone
+      ["undo", { f1: "T1", f2: "T2", f4: null }], // the Undo of e2 undone: e2 is back
+      ["redo", { f1: "T1", f2: null, f4: null }], // that Undo replayed: e2 gone again
+      ["redo", { f1: "T1", f2: null, f4: "T4" }], // e4 replayed
+    ];
+    for (const [i, [action, expected]] of script.entries()) {
+      expect(act(board, action), `step ${i + 1}`).toBe("ok");
+      expect(shows(), `step ${i + 1}: what the board shows`).toStrictEqual(expected);
+      expect(atWatermark(), `step ${i + 1}: fold at the watermark`).toStrictEqual(expected);
+    }
+    expect(act(board, "redo")).toBe("NOTHING_TO_REDO");
+    // and the whole walk back still ends at the empty board: e4, the Undo of
+    // e2, e2, e1 — four steps — then nothing to undo
+    for (let i = 0; i < 4; i++) expect(act(board, "undo"), `walk back ${i + 1}`).toBe("ok");
+    expect(shows()).toStrictEqual({ f1: null, f2: null, f4: null });
+    expect(act(board, "undo")).toBe("NOTHING_TO_UNDO");
+  });
+
+  // Every ordering of {edit, undo, redo} of length LEN from an empty ledger
+  // and from one edit, against the model: the same refusal, and the board the
+  // executor wrote = the fold at the watermark = the model's board, after every
+  // step. k-th edit: f(k mod 2) at Tk, so edits overlap on a fixture.
+  const LEN = 7;
+  const ALPHABET = ["edit", "undo", "redo"] as const;
+  type Kind = (typeof ALPHABET)[number];
+  function* orderings(n: number): Generator<Kind[]> {
+    if (n === 0) {
+      yield [];
+      return;
+    }
+    for (const head of orderings(n - 1)) for (const a of ALPHABET) yield [...head, a];
+  }
+  const stamped = (e: LedgerEvent | undefined) =>
+    e !== undefined && (e.payload.__undo_of !== undefined || e.payload.__redo_of !== undefined);
+
+  for (const start of [0, 1]) {
+    it(`every ordering of ${LEN} steps from ${start === 0 ? "an empty ledger" : "one edit"} matches the linear model`, () => {
+      const FIXTURES = ["f0", "f1"];
+      let sequences = 0;
+      let compared = 0;
+      const disagree: string[] = [];
+      const seen = new Map<string, number>();
+      const count = (key: string) => seen.set(key, (seen.get(key) ?? 0) + 1);
+      for (const seq of orderings(LEN)) {
+        sequences++;
+        const board: Board = { events: [], wm: null, written: new Map() };
+        const model = new LinearHistory();
+        let edits = 0;
+        const all: Kind[] = [...Array<Kind>(start).fill("edit"), ...seq];
+        for (const [i, kind] of all.entries()) {
+          let want: string = "ok";
+          if (kind === "edit") {
+            edits++;
+            model.edit(`f${edits % 2}`, `T${edits}`);
+          } else {
+            want = kind === "undo" ? model.undo() : model.redo();
+          }
+          const got = kind === "edit" ? act(board, { edit: `${edits}`, fixture: `f${edits % 2}` }) : act(board, kind);
+          count(`${kind}:${got}`);
+          if (got === "ok" && kind !== "edit") {
+            // the steps this rule is about: an Undo or Redo of a row that is
+            // itself an Undo/Redo — only reachable after a fresh edit
+            const appended = board.events[board.events.length - 1]!;
+            const target = appended.payload[kind === "undo" ? "__undo_of" : "__redo_of"];
+            if (stamped(board.events.find((e) => e.seq === target))) count(`${kind} of an undo/redo row`);
+          }
+          const expected = model.board(FIXTURES);
+          const written = Object.fromEntries(FIXTURES.map((id) => [id, board.written.get(id) ?? null]));
+          const state = fold(board.events, board.wm).fixtures;
+          const atWm = Object.fromEntries(FIXTURES.map((id) => [id, state[id]?.at ?? null]));
+          compared++;
+          const ok =
+            got === want &&
+            JSON.stringify(written) === JSON.stringify(expected) &&
+            JSON.stringify(atWm) === JSON.stringify(expected);
+          if (!ok) {
+            disagree.push(
+              `${all.slice(0, i + 1).join(", ")}: got ${got}, rule ${want}; written ${JSON.stringify(written)}, ` +
+                `watermark ${JSON.stringify(atWm)}, rule ${JSON.stringify(expected)}`,
+            );
+            break;
+          }
+        }
+      }
+      expect(disagree.slice(0, 3), `${disagree.length} of ${sequences} orderings break the rule`).toStrictEqual([]);
+      // anti-vacuity: the full enumeration ran; every action succeeded AND was
+      // refused somewhere; and the sweep reached the path the rule is about
+      expect(sequences).toBe(ALPHABET.length ** LEN);
+      expect(compared).toBeGreaterThan(sequences);
+      for (const key of [
+        "edit:ok",
+        "undo:ok",
+        "redo:ok",
+        "undo:NOTHING_TO_UNDO",
+        "redo:NOTHING_TO_REDO",
+        "undo of an undo/redo row",
+        "redo of an undo/redo row",
+      ]) {
+        expect(seen.get(key) ?? 0, `${key} never happened`).toBeGreaterThan(0);
+      }
+    });
+  }
+});
