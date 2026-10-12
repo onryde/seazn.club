@@ -109,3 +109,68 @@ describe.skipIf(!HAS_DB)("match room through the real producers", () => {
     expect(board.submitMove).toHaveBeenCalledTimes(1);
   });
 });
+
+describe.skipIf(!HAS_DB)("match room — a game the player ends is written by THAT call (review I5: the real reconcile, no sweep)", () => {
+  it("resign through the room ⇒ the room's own reconcile(game_end) reads Lichess and writes the result and the game's end — before any sweep runs", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: OPENED,
+      roundOpenedAt: OPENED,
+      linked: true,
+    });
+    const gameId = `gm-${randomUUID().slice(0, 12)}`;
+    board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: gameId });
+    board.acceptChallenge.mockResolvedValue({ ok: true });
+    board.submitMove.mockResolvedValue({ ok: true });
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    const seated = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(seated.create, "premise: T9's real producer made the game").toEqual({ created: true, gameId });
+    const white = seated.snapshot.you.colour === "white" ? s.away : s.home;
+    const black = white === s.home ? s.away : s.home;
+    expect(await actInRoom({ kind: "session", userId: white.userId }, s.fixtureId, { kind: "move", uci: "e2e4" }, deps())).toEqual({ ok: true, applied: true });
+    expect(await actInRoom({ kind: "session", userId: black.userId }, s.fixtureId, { kind: "move", uci: "e7e5" }, deps())).toEqual({ ok: true, applied: true });
+
+    const endOf = async () => {
+      const [b] = await sql<{ status: string; finished_at: Date | null; game_over_at: Date | null }[]>`
+        select status, finished_at, game_over_at from fixture_external_play where fixture_id = ${s.fixtureId}`;
+      const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${s.fixtureId}`;
+      const results = await sql`select 1 from score_events where fixture_id = ${s.fixtureId} and type = 'boardgame.result'`;
+      return { bridge: b!, fixture: fx!.status, results: results.length };
+    };
+    const before = await endOf();
+    expect([before.bridge.status, before.bridge.finished_at, before.bridge.game_over_at, before.results], "premise: a live game, nothing ended").toEqual([
+      "live",
+      null,
+      null,
+      0,
+    ]);
+
+    // Lichess: White's resignation is accepted, and the export says so.
+    board.resignGame.mockResolvedValue({ ok: true });
+    board.exportGame.mockResolvedValue({
+      gameId,
+      status: "resign",
+      winner: "black",
+      movesSan: ["e4", "e5"],
+      whiteMs: 590_000,
+      blackMs: 592_000,
+      increment: 5,
+    });
+    // NO injected reconcile: deps() carries none, so actInRoom calls the real one.
+    expect(deps().reconcile, "premise: the real reconcile is the one called").toBeUndefined();
+    const out = await actInRoom({ kind: "session", userId: white.userId }, s.fixtureId, { kind: "resign" }, deps());
+    expect(out).toEqual({ ok: true, applied: true });
+    expect(board.resignGame).toHaveBeenCalledWith(expect.objectContaining({ gameId }));
+    expect(board.exportGame, "that call's reconcile read Lichess").toHaveBeenCalledWith(gameId);
+
+    const after = await endOf();
+    expect(after.bridge.status).toBe("finished");
+    expect(after.bridge.finished_at, "finished_at written by the act's own reconcile").not.toBeNull();
+    expect(after.results, "the result is on the ledger, once").toBe(1);
+    expect(after.fixture).toBe("decided");
+    // And the room says so to both players, with no sweep in between.
+    expect((await readRoom({ kind: "session", userId: white.userId }, s.fixtureId, deps())).result).toMatchObject({ outcome: "lost", method: "resign", score: "0–1" });
+    expect((await readRoom({ kind: "session", userId: black.userId }, s.fixtureId, deps())).result).toMatchObject({ outcome: "won", score: "0–1" });
+  });
+});
