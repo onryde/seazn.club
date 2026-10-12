@@ -1279,6 +1279,19 @@ Elsewhere the text is the controller's record.
      - **Scope:** only this case, in W2b. The bracket's "TBD" on finished bye tiles stays with W4, with the rest of the
        bye and vacant copy family. So does the SF2 void copy (R16-5 Q2), which follows owner ruling C2 of
        2026-09-21.
+117. **The owner confirms the R16-3 abandon ruling and the W4 handoffs** (2026-10-12, owner "Ok, confirm", given
+     after the status list that set out both). Both were controller rulings and are now owner-confirmed.
+     - **R16-3:** under abandonPolicy award, a level abandon in a sport/cfg with draws off is accepted with no result.
+       It stays out of the table and is flagged for the organiser to settle or replay (X-AB-1); it is never refused
+       and never forced to a draw.
+       - The cfgs: icehockey/iihf, including the icehockey default, and hockey/fih-shootout.
+       - In draw kinds it is still a draw with the real score (FB-AB-1).
+       - This qualifies FB-AB-1, HK-AB-1 and IH-AB-1, and the rule rows record it.
+     - **Handed to W4:**
+       - the bye and vacant-final copy family, which includes the SF2 void copy (R16-5 Q2) and "final after a semi DW
+         shows bye copy";
+       - the vacant-final Generate 500 (MB-004/005);
+       - "TBD" printed on finished bye tiles.
 
 ## Recommendations (mine — not rulings)
 
