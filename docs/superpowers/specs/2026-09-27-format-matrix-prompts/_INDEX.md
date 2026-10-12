@@ -1292,6 +1292,24 @@ Elsewhere the text is the controller's record.
          shows bye copy";
        - the vacant-final Generate 500 (MB-004/005);
        - "TBD" printed on finished bye tiles.
+118. **In chess, Start means play has begun** (2026-10-12, owner "A", given after my recommendation A). Found while
+     checking the ECF 2026 English Championships rules (Section G: a ringing phone forfeits the game).
+     - **What it fixes:** Seazn records no chess moves, so under rulings 113 and 115 a chess game in progress always
+       read "nothing played".
+       - The organiser could not record a retirement.
+       - A forfeit during the game scored as a walkover.
+       - The game did not count in either player's stats.
+     - **The rule (chess only):** after `core.start`, a retirement or a disqualification counts as a game played.
+       It carries the result, and both players' stats count it (X-PS-2).
+     - **No-shows:** they are still recorded as a walkover. Chess already admits a walkover after Start (its wider
+       `walkoverPhases`, FIDE 6.7.1). The reason the organiser picks is what tells "never arrived" (walkover) apart
+       from "forfeited during the game" (disqualified or retired).
+     - **Other sports:** unchanged. "Nothing played means not started" (rulings 113–115) still holds.
+     - **Owner scoping in the same message:** Seazn needs no player ratings, because the seed number serves, and no
+       shared places. The ECF gap list drops ratings, TPR, the performance prize, shared places and the 90/10 split.
+       Its remaining candidates for a later wave are: requested zero-point byes, a per-event default time, the
+       playoff game sequences (two-game rounds, the sudden-death bid, the coin toss), a public time-control display,
+       and fee and refund tiers.
 
 ## Recommendations (mine — not rulings)
 
