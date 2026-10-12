@@ -33,7 +33,7 @@ import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { forfeitLedgerOf, forfeitTag } from "@/lib/forfeit-tag";
 import { outcomeText } from "@/lib/outcome-text";
@@ -543,6 +543,8 @@ export function FixtureConsole({
   viewerPlan,
 }: Props) {
   const msg = useMsg();
+  // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider, as stages-panel.
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const [live, setLive] = useState<LiveState>(initialState);
   const [events, setEvents] = useState<EventIn[]>(initialEvents);
@@ -697,13 +699,14 @@ export function FixtureConsole({
             msg,
             "score.failed",
             err instanceof ApiV1Error ? err.extra : null,
+            locale,
           ),
         };
       } finally {
         setBusy(false);
       }
     },
-    [fixture.id, live.last_seq, resync, router, msg, setForfeitRefusal],
+    [fixture.id, live.last_seq, resync, router, msg, locale, setForfeitRefusal],
   );
 
   const send: SendEvent = useCallback(

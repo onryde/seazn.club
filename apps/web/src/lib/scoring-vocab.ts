@@ -34,6 +34,7 @@ import { forfeitPhaseRefusalOf, type RefusalPhase, type WriterForfeitReason } fr
 import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
+import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { NEXT_MATCH_STARTED_CODE, ROUND_CODE_KEYS, nextMatchLabel, nextMatchRefOf } from "@/lib/next-match-started";
@@ -1620,6 +1621,10 @@ export function tiebreakScoreFromDetail(detail: unknown): string | null {
  * does not code): `nextMatchLabel`, over `matchRef`'s own composition in the
  * dictionary-free `lib/match-ref.ts`. Without a ref it is still localized,
  * never the server's English.
+ *
+ * `locale` is the reader's: a list the sentence names (the reasons a refused forfeit could have recorded) is that
+ * language's own list (design audit 1.5 — `Intl.ListFormat`, as stages-panel's roster-drift sentence), never English
+ * ", " punctuation. Absent ⇒ English, the same default `useLocaleOrDefault` gives a bare island.
  */
 export function scoringErrorText(
   code: string | null | undefined,
@@ -1627,6 +1632,7 @@ export function scoringErrorText(
   m: MsgFn,
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
+  locale: Locale = DEFAULT_LOCALE,
 ): string {
   // W2b D11: STAGE_SEAT_DEPARTED names the entrant (by name) and the match (by the board's label) in the reader's
   // language. Without both on the wire it reads the code's own copy, never an id.
@@ -1642,7 +1648,7 @@ export function scoringErrorText(
   if (code === "FORFEIT_REASON_WRONG_PHASE") {
     const named = forfeitPhaseRefusalOf(extra);
     if (named) {
-      const allowed = named.allowed.map((r) => m(FORFEIT_REASON_KEY[r])).join(", ");
+      const allowed = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(named.allowed.map((r) => m(FORFEIT_REASON_KEY[r])));
       const phase = named.phase === "play" && named.played === false ? FORFEIT_NOTHING_PLAYED_KEY : FORFEIT_PHASE_KEY[named.phase];
       return named.both && named.phase === "tiebreak"
         ? m(FORFEIT_WRONG_PHASE_BOTH_KEY, { allowed })

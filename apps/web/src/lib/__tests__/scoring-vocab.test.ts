@@ -11,6 +11,7 @@ import {
 import { REFUSAL_PHASES } from "@/lib/forfeit-phase-refusal";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { interpolate } from "@/lib/i18n-runtime";
+import type { Locale } from "@/lib/i18n-constants";
 import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
@@ -1006,14 +1007,19 @@ describe("scoring-vocab covers what the engine declares", () => {
       const named = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named"]!;
       // The engine's list after a bare Start (walkover, disqualified, withdrew); the sentence drops the cascade's withdrew.
       const allowed = ["walkover", "disqualified", "withdrew"];
-      const words = [dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!].join(", ");
-      const bare = scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: false });
+      // Design audit 1.5: the list is the reader's language's own list (the platform's Intl.ListFormat, the house
+      // pattern of stages-panel's roster-drift sentence), never English ", " punctuation in every locale. The premise:
+      // the right answer differs from the comma join in every locale, so this case can witness the regression.
+      const list = (xs: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(xs);
+      const words = list([dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!]);
+      expect(words, `${locale}: the language's own list differs from ", "`).not.toBe([dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!].join(", "));
+      const bare = scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: false }, locale as Locale);
       expect(bare, locale).toBe(interpolate(named, { phase: nothing!, allowed: words }));
       expect(bare, locale).not.toContain(dict["forfeit.phase.play"]!);
       // The pair: once something is played, the play phase's words (a walkover refused after play).
       const after = ["retired", "disqualified", "withdrew"];
-      const afterWords = [dict["forfeit.reason.retired"]!, dict["forfeit.reason.disqualified"]!].join(", ");
-      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed: after, both: false, played: true }), locale).toBe(
+      const afterWords = list([dict["forfeit.reason.retired"]!, dict["forfeit.reason.disqualified"]!]);
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed: after, both: false, played: true }, locale as Locale), locale).toBe(
         interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: afterWords }),
       );
       // Before the Start nothing is played either, and the pre phase's words stand (the match has not started).
