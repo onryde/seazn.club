@@ -88,6 +88,8 @@ import {
   PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT,
   type RelayPhaseReply as RelayPhaseReplyWire,
 } from "../../lib/relay-phase.ts";
+import type { BoardErrorCode } from "../external-play/types.ts";
+import type { GrantRefusal } from "../usecases/external-play/preflight.ts";
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 // ---------------------------------------------------------------------------
@@ -1389,6 +1391,46 @@ export const ResolveExternalPlayOut = z.object({
   }),
 });
 export type ResolveExternalPlayOut = z.infer<typeof ResolveExternalPlayOut>;
+
+/** POST /fixtures/{id}/external-play/room/act (T14) — a player's intended
+ *  move, draw offer/answer, resignation or abort, forwarded by T10's `act`.
+ *  The uci length bound is a cheap first gate only: the strict UCI check is
+ *  T3's `assertUci` (M5), server-side, and a suffixless promotion is refused
+ *  there with 400 INVALID_UCI. No takeback: Lichess's Board API has none. */
+export const RoomAct = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("move"), uci: z.string().min(4).max(5) }).strict(),
+  z.object({ kind: z.literal("resign") }).strict(),
+  z.object({ kind: z.literal("draw"), accept: z.boolean() }).strict(),
+  z.object({ kind: z.literal("abort") }).strict(),
+]);
+export type RoomAct = z.infer<typeof RoomAct>;
+
+/** Every reason T10 answers `reconcile: true` with: a Board API failure
+ *  class, or a ledger that no longer replays. Typed both ways against the
+ *  source unions, so a new code there fails compilation here. */
+const ROOM_ACT_RECONCILE_REASONS = [
+  "not_your_turn_or_over",
+  "unplayable_time_control",
+  "rate_limited",
+  "unauthorized",
+  "unavailable",
+  "outcome_unknown",
+  "unreplayable",
+] as const satisfies readonly (BoardErrorCode | "unreplayable")[];
+const ROOM_ACT_GRANT_REFUSALS = ["lichess_link_required", "lichess_reconsent_required"] as const satisfies readonly GrantRefusal[];
+type _ReconcileReasonsCovered = Exclude<BoardErrorCode | "unreplayable", (typeof ROOM_ACT_RECONCILE_REASONS)[number]>;
+type _GrantRefusalsCovered = Exclude<GrantRefusal, (typeof ROOM_ACT_GRANT_REFUSALS)[number]>;
+const _roomActCovered: [_ReconcileReasonsCovered, _GrantRefusalsCovered] extends [never, never] ? true : never = true;
+void _roomActCovered;
+
+/** T10's PlayResult on the wire. `ended: true` ⇒ the move ended the game at
+ *  Lichess (the room has already asked reconcile to close it). */
+export const RoomActOut = z.union([
+  z.object({ ok: z.literal(true), applied: z.boolean(), ended: z.literal(true).optional() }).strict(),
+  z.object({ ok: z.literal(false), reconcile: z.literal(true), reason: z.enum(ROOM_ACT_RECONCILE_REASONS) }).strict(),
+  z.object({ ok: z.literal(false), reconcile: z.literal(false), reason: z.enum(ROOM_ACT_GRANT_REFUSALS) }).strict(),
+]);
+export type RoomActOut = z.infer<typeof RoomActOut>;
 
 export const FixtureStream = z.object({
   id: z.string(),
