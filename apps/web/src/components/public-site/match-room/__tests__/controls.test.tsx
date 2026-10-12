@@ -179,6 +179,36 @@ describe("RoomControls — what each button SENDS (T10's PlayAction shapes)", ()
     expect(checked).toBe(2);
   });
 
+  it("every word of the confirm resolves in all four locales — title, body, both buttons (a missing key paints raw)", () => {
+    // T14 e2e review: the confirm button read a key no dictionary had, and
+    // TKey accepts any string, so neither tsc nor a markup test saw it.
+    const dicts = Object.fromEntries(
+      ["en", "es", "fr", "nl"].map((l) => [
+        l,
+        JSON.parse(readFileSync(join(__dirname, `../../../../dictionaries/${l}/ui.json`), "utf8")) as Record<string, string>,
+      ]),
+    );
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const missing: string[] = [];
+      const real = (key: string) => {
+        if (dict[key] === undefined) missing.push(key);
+        return dict[key] ?? key;
+      };
+      for (const [kind, ply] of [["resign", 4], ["abort", 1]] as const) {
+        const els = walk(RoomControlsView({ ...base, ply, t: real, confirm: kind, setConfirm: () => {} }));
+        const dialog = els.find((e) => (e.props as { testId?: string }).testId === `room-${kind}-confirm`)!;
+        const p = dialog.props as { title: string; confirmLabel: string; cancelLabel: string; children: string };
+        for (const text of [p.title, p.confirmLabel, p.cancelLabel, p.children]) {
+          expect(text, `${locale} ${kind}`).not.toMatch(/^externalPlay\./);
+          checked += 1;
+        }
+      }
+      expect(missing, `${locale}: keys with no copy`).toEqual([]);
+    }
+    expect(checked, "anti-vacuity: 4 locales × 2 confirms × 4 texts").toBe(32);
+  });
+
   it("a pressed disabled control is unreachable: Draw after move 1 and Draw offered carry no onClick", () => {
     const early = walk(RoomControlsView({ ...base, ply: 0, confirm: null, setConfirm: () => {} }));
     expect((byTestId(early, "room-draw")!.props as { onClick?: unknown }).onClick).toBeUndefined();
