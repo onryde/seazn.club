@@ -277,7 +277,14 @@ export function MatchCard({
               {t(dict, "matchesHub.live")}
             </span>
           ) : m.bucket === "completed" ? (
-            t(dict, "matchesHub.ended")
+            // W2b loop H F4: an abandon that left no winner — flagged for replay, held for a settle, level, no result —
+            // is not "Ended". Read from the card's own tag (`hubForfeit` → `forfeitTag`: the outcome and the LEDGER,
+            // never the status, X-AB-2), in the match centre's word for it; an abandon that decided a winner ended.
+            m.forfeit?.kind.startsWith("abandoned") && m.winnerIndex === null ? (
+              t(dict, "matchCentre.status.abandoned")
+            ) : (
+              t(dict, "matchesHub.ended")
+            )
           ) : m.scheduledAt ? (
             fmtPublicTime(locale, m.tz, m.scheduledAt)
           ) : (

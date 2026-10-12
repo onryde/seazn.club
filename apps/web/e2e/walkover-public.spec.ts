@@ -864,3 +864,42 @@ test.describe("W2b loop H F2 — the fixture console names a credited result as 
   });
 });
 
+// F4 (loop H) — the hub's results card said "Ended" over a final abandoned for replay (no outcome, the "Aband." tag
+// below it). Its status slot reads the same reader as its tag: an abandon that left no winner reads "Abandoned".
+test.describe("W2b loop H F4 — the hub's results card does not call a final abandoned for replay Ended", () => {
+  test("the abandoned final's card reads Abandoned with its Aband. tag; a walked-over semi's reads Ended, at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(5 * 60_000);
+    const org = await activeOrg(page);
+    const ko = await publicKnockout(request);
+    for (const sf of ko.semis) await post(request, sf.id, "core.forfeit", { by: sf.away_entrant_id, reason: "walkover" });
+    await expect.poll(async () => { const f = await read(request, ko.final.id); return Boolean(f.home_entrant_id && f.away_entrant_id); }, { timeout: STEP_MS }).toBe(true);
+    const final = await read(request, ko.final.id);
+    await post(request, final.id, "core.start");
+    await post(request, final.id, "football.goal", { by: final.home_entrant_id });
+    await post(request, final.id, "core.abandon", { reason: "rain" });
+    const after = await read(request, final.id);
+    // Football's declared default is a replay (football.ts `abandonPolicy`): nobody is decided.
+    expect([after.status, after.outcome], "abandoned for replay").toEqual(["abandoned", null]);
+    const [ENDED, ABANDONED] = [say("matchesHub.ended"), say("matchCentre.status.abandoned")];
+    const sentence = say("forfeit.sentence.abandonedBare", { reason: "rain" });
+    const base = `/shared/${org.slug}/${ko.compSlug}`;
+
+    let screens = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await hubResults(page, `${base}?tab=matches`);
+      const card = page.getByTestId(`mh-match-${final.id}`);
+      await expect(card).toBeVisible({ timeout: STEP_MS });
+      const state = card.locator("span.ml-auto.shrink-0").first();
+      await expect(state, `${w}: the final's status slot`).toHaveText(ABANDONED);
+      await expect(card.getByRole("img", { name: sentence }), `${w}: its tag, named by the sentence`).toHaveText(say("forfeit.tag.abandoned"));
+      // The pair: a semi walked over ENDED, and still says so.
+      const semi = page.getByTestId(`mh-match-${ko.semis[0]!.id}`);
+      await expect(semi.locator("span.ml-auto.shrink-0").first(), `${w}: a walked-over semi's slot`).toHaveText(ENDED);
+      await expectNoHorizontalScroll(page);
+      await shot(card, `f4-results-card-abandoned-${w}`);
+      screens++;
+    }
+    expect(screens).toBe(WIDTHS.length);
+  });
+});
