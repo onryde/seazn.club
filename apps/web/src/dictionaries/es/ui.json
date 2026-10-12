@@ -5980,6 +5980,8 @@
   "externalPlay.room.state.revoked.body": "Tu organizador ha sido avisado.",
   "externalPlay.room.state.offForClub.title": "El ajedrez en línea está desactivado para este club",
   "externalPlay.room.pieceCredit": "Piezas de ajedrez de Colin M.L. Burnett (GPLv2+).",
+  "externalPlay.room.meta.title": "Tu tablero",
+  "externalPlay.room.meta.description": "Juega tu partida de ajedrez en línea de este encuentro.",
   "register.lichessLinkRequired": "Esta división exige una cuenta de Lichess vinculada antes de inscribirte.",
   "register.lichessLinkCta": "Vincular Lichess"
 }
