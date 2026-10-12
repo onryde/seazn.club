@@ -682,3 +682,161 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
     console.log(`R116-4 DQ officials row: ${await quote(officialsRow(BYE, dqArrivingName).first())}`);
   });
 });
+
+// ------------------------------------------------------------------------------------------------ W2b loop H findings
+//
+// F1 (controller ruling: the result tag never truncates) — at 320 the run sheet's phone line read "Round 2 · forfeited ·
+// Bears of Br…": the ellipsis took "won (w/o)". Measured here as GEOMETRY, not text: every rendered copy of the result's
+// tail lies wholly inside each clipping ancestor up to its row (`toContainText` reads textContent and cannot see an
+// ellipsis). Realistic 43-character names, and every tag the line can end with: w/o, ret., DQ, Aband., 2× w/o.
+
+const UI = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+const ui = (key: string) => {
+  const w = UI[key];
+  expect(w, `ui.json has ${key}`).toBeTruthy();
+  return w!;
+};
+/** "{name} won ({tag})" in the en dictionary's own words, and the part after the name (the tail that must not truncate). */
+const wonTagged = (name: string, tagKey: string) => ui("schedule.outcome.wonTagged").replace("{name}", name).replace("{tag}", ui(tagKey));
+const wonTaggedTail = (tagKey: string) => wonTagged("", tagKey).trim();
+
+/** Six realistic 43-character team names (AGENTS.md: the 320 overflow only shows with a realistic name). */
+const LONG_NAMES = [
+  "Riverside Athletic Football Club Under-21 A",
+  "Bears of Brockley Sunday League Veterans XI",
+  "Harbour United Reserves and Academy Squad B",
+  "Kingsbridge Rovers Community Football Group",
+  "Thornbury Town Saturday Morning Development",
+  "Catford Wanderers Ladies Development Squads",
+];
+
+/** A started public football division of `names` (`kind` stage), with `config` merged over the variant. */
+async function longNameDivision(r: APIRequestContext, kind: "league" | "knockout", names: string[], config: Record<string, unknown> = {}) {
+  const comp = await apiJson<{ id: string; slug: string }>(r, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2b loop H ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "public",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Cup", sport_key: SPORT, variant_key: VARIANT, config,
+  });
+  expect(div.status, JSON.stringify(div.error)).toBe(201);
+  const added = await addEntrantsViaApi(r, div.data!.id, names, "team");
+  expect(added.ids).toHaveLength(names.length);
+  const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind, name: "Cup" });
+  const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  const all = await Promise.all(fixtureIds.map((id) => read(r, id)));
+  const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
+  return { divId: div.data!.id, compSlug: comp.data!.slug, divSlug: div.data!.slug, seated: all.filter((f) => f.home_entrant_id && f.away_entrant_id), all, nameOf };
+}
+
+/** Every RENDERED copy of `tail` inside `row`, measured against each clipping ancestor up to the row. `crowded`: the line
+ *  holding it really was short of room (its lead, or the line itself, overflows) — the precondition that makes a 320
+ *  pass mean something. */
+async function measureTail(row: Locator, tail: string) {
+  return row.evaluate((rowEl, t) => {
+    const out = { measured: 0, clipped: [] as string[], crowded: false };
+    const walker = document.createTreeWalker(rowEl, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const text = n.textContent ?? "";
+      const at = text.indexOf(t);
+      if (at === -1) continue;
+      const range = document.createRange();
+      range.setStart(n, at);
+      range.setEnd(n, at + t.length);
+      if ([...range.getClientRects()].every((x) => x.width === 0)) continue; // the other breakpoint's copy (display:none)
+      const box = range.getBoundingClientRect();
+      out.measured++;
+      const holder = n.parentElement!;
+      const lead = holder.previousElementSibling;
+      out.crowded ||= holder.scrollWidth > holder.clientWidth + 1 || (lead !== null && lead.scrollWidth > lead.clientWidth + 1);
+      for (let el: HTMLElement | null = holder; el !== null && el !== rowEl.parentElement; el = el.parentElement) {
+        if (getComputedStyle(el).overflowX === "visible") continue;
+        const b = el.getBoundingClientRect();
+        if (box.left < b.left - 0.5 || box.right > b.right + 0.5) {
+          out.clipped.push(`<${el.tagName.toLowerCase()} class="${el.className}"> [${Math.round(box.left)}–${Math.round(box.right)}] outside [${Math.round(b.left)}–${Math.round(b.right)}]`);
+        }
+      }
+    }
+    return out;
+  }, tail);
+}
+
+async function shot(target: Locator, name: string) {
+  const dir = process.env.LOOPH_SHOTS;
+  if (dir) await target.screenshot({ path: `${dir}/${name}.png` });
+}
+
+/** The F1/F2 rig: a league whose cfg awards an abandon to the side leading (W2b D8), its rows settled by walkover,
+ *  retirement, disqualification and abandon; and a knockout semi walked over by both. Each row: what the run sheet
+ *  and the console must say, and the tail that must never truncate. */
+async function organiserResultRows(request: APIRequestContext) {
+  expect(LONG_NAMES.map((n) => n.length), "premise: every name is 43 characters").toEqual(LONG_NAMES.map(() => 43));
+
+  // A league whose cfg awards an abandon to the side leading (W2b D8), so an abandon leaves a winner and a tag.
+  const lg = await longNameDivision(request, "league", LONG_NAMES, { abandonPolicy: "award" });
+  expect(lg.seated.length, "four seated league fixtures to settle").toBeGreaterThanOrEqual(4);
+  const [fW, fR, fD, fA] = lg.seated as [Fx, Fx, Fx, Fx];
+  await post(request, fW.id, "core.forfeit", { by: fW.away_entrant_id, reason: "walkover" });
+  for (const f of [fR, fD, fA]) await post(request, f.id, "core.start");
+  for (const f of [fR, fA]) await post(request, f.id, "football.goal", { by: f.home_entrant_id });
+  await post(request, fR.id, "core.forfeit", { by: fR.away_entrant_id, reason: "retired" });
+  await post(request, fD.id, "core.forfeit", { by: fD.away_entrant_id, reason: "disqualified" });
+  await post(request, fA.id, "core.abandon", { reason: "rain" });
+  const settled = await Promise.all([fW, fR, fD, fA].map((f) => read(request, f.id)));
+  expect(settled.map((f) => [f.outcome?.kind, f.outcome?.winner]), "each settled for its home side").toEqual(
+    [fW, fR, fD, fA].map((f, i) => [i === 3 ? "win" : "award", f.home_entrant_id]),
+  );
+
+  // A knockout semi walked over by BOTH sides (X-DW-1: it feeds a final, so the double walkover is admitted).
+  const ko = await longNameDivision(request, "knockout", LONG_NAMES.slice(0, 4));
+  const dw = ko.seated[0]!;
+  await post(request, dw.id, "core.forfeit", { by: "both", reason: "walkover" });
+  expect((await read(request, dw.id)).outcome, "a double walkover").toEqual({ kind: "double_walkover" });
+
+  const rows = [
+    { name: "walkover", div: lg.divId, f: fW, tagKey: "forfeit.tag.walkover", winner: lg.nameOf.get(fW.home_entrant_id!)! },
+    { name: "retired", div: lg.divId, f: fR, tagKey: "forfeit.tag.retired", winner: lg.nameOf.get(fR.home_entrant_id!)! },
+    { name: "disqualified", div: lg.divId, f: fD, tagKey: "forfeit.tag.disqualified", winner: lg.nameOf.get(fD.home_entrant_id!)! },
+    { name: "abandoned", div: lg.divId, f: fA, tagKey: "forfeit.tag.abandoned", winner: lg.nameOf.get(fA.home_entrant_id!)! },
+    { name: "double-walkover", div: ko.divId, f: dw, tagKey: "forfeit.tag.doubleWalkover", winner: null },
+  ];
+  const lineOf = (r: (typeof rows)[number]) => (r.winner === null ? ui(r.tagKey) : wonTagged(r.winner, r.tagKey));
+  const tailOf = (r: (typeof rows)[number]) => (r.winner === null ? ui(r.tagKey) : wonTaggedTail(r.tagKey));
+  const sheets = new Map([[lg.divId, await divisionPath(request, lg.divId, "?tab=fixtures")], [ko.divId, await divisionPath(request, ko.divId, "?tab=fixtures")]]);
+  return { rows, lineOf, tailOf, sheets, lg, ko };
+}
+
+test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", () => {
+  test("w/o, ret., DQ, Aband. and 2× w/o with 43-character names: the tail is never clipped at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(6 * 60_000);
+    await activeOrg(page);
+    const { rows, lineOf, tailOf, sheets, lg, ko } = await organiserResultRows(request);
+    let measured = 0;
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const divId of [lg.divId, ko.divId]) {
+        await page.goto(sheets.get(divId)!);
+        await dismissCookieBanner(page);
+        for (const r of rows.filter((x) => x.div === divId)) {
+          const row = page.getByTestId("run-sheet").locator(`li[data-fixture-no="${r.f.fixture_no}"]`);
+          await expect(row, `${width} ${r.name}: the run-sheet row`).toBeVisible({ timeout: STEP_MS });
+          await expect(row, `${width} ${r.name}: the run sheet's words, tag and all`).toContainText(lineOf(r));
+          const m = await measureTail(row, tailOf(r));
+          console.log(`loop H F1 ${width} ${r.name}: ${(await row.innerText()).replace(/\s+/g, " ").trim()} :: ${JSON.stringify(m)}`);
+          expect(m.measured, `${width} ${r.name}: the tail "${tailOf(r)}" is rendered once at this width`).toBe(1);
+          expect(m.clipped, `${width} ${r.name}: the tail is never clipped`).toEqual([]);
+          // At 320 a 43-character name cannot fit beside the tag: the name is what gave way (the precondition).
+          if (width === 320 && r.winner !== null) expect(m.crowded, `${width} ${r.name}: the line really was short of room`).toBe(true);
+          await shot(row, `f1-run-sheet-${r.name}-${width}`);
+          measured++;
+        }
+        await expectNoHorizontalScroll(page);
+      }
+    }
+    expect(measured, "rows measured").toBe(WIDTHS.length * rows.length);
+  });
+});
+

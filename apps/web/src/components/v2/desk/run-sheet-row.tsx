@@ -29,7 +29,8 @@ import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
-import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
 import { forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
@@ -281,7 +282,10 @@ export function RunSheetRow({
   const away = awayId
     ? (entrantNames[awayId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
-  const decided = outcomeText(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
+  // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
+  // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
+  const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
+  const decided = decidedParts === null ? null : decidedParts.lead + decidedParts.tail;
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,
   // venue-qualified name this row already prints, so an archived court carried
@@ -350,6 +354,11 @@ export function RunSheetRow({
   // paragraphs there (see the `hidden md:block` pair below); this combined
   // string is read ONLY by the `md:hidden` line-2 paragraph further down.
   const phoneLineTwo = subLine !== null && subLine !== "" ? `${metaLine} · ${subLine}` : metaLine;
+  // W2b loop H F1 (controller ruling: the result tag never truncates). As ONE truncating string, line 2 lost its END
+  // first — at 320 "Round 2 · forfeited · Bears of Brockley won (w/o)" read "… Bears of Br…", so the result said
+  // nothing. The line ends with the result's tail whenever it carries one (the sub-line's precedence above puts the
+  // result last), so it is cut there: the meta and the name truncate, the tail does not.
+  const phoneLine = splitResultTail(phoneLineTwo, decidedParts?.tail);
 
   /**
    * THE ONLY DOOR into the editor, and the one place `when` is seeded.
@@ -545,7 +554,13 @@ export function RunSheetRow({
           {/* Loop R M7(d): a HELD row also carries the held chip and Settle on this line, and at 320 they took the room —
               the meta truncated to "Round 1 · …" and hid the reason ("abandoned"). A held row's meta takes the whole
               line (`max-md:basis-full`) and the chip and Settle wrap below it; every other row keeps two lines. */}
-          <p className={`min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>{phoneLineTwo}</p>
+          {/* Loop H F1: the device pad's scan-confirm pattern (`device-score-pad.tsx`) — a `min-w-0 truncate` span for
+              what may shorten, a `shrink-0 whitespace-pre` span for what may not (`whitespace-pre` keeps the tail's
+              leading space, which a flex item would otherwise drop). */}
+          <p className={`flex min-w-0 flex-1 text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>
+            <span className="min-w-0 truncate">{phoneLine.lead}</span>
+            {phoneLine.tail !== "" && <span className="shrink-0 whitespace-pre">{phoneLine.tail}</span>}
+          </p>
           {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
               chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
               status: a stream outlives the whistle. 44 px tall on phones (the tap floor).

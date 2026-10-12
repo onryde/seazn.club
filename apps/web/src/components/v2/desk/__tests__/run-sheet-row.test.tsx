@@ -272,7 +272,12 @@ describe("a held fixture (needs_decision) reads Needs a decision and offers Sett
     // At 320 line 2 held the meta text, the held chip and Settle: the chip and the action took the room and the meta
     // truncated to "Round 1 · …", hiding the reason. A held row's meta now takes the whole line (max-md:basis-full) and
     // the chip and Settle wrap below it; any other row keeps the two-line composition (Task 9, A3).
-    const phoneMeta = (html: string) => /<p class="([^"]*\bmd:hidden\b[^"]*)">([^<]*)<\/p>/.exec(html);
+    // Loop H F1: the line is now two spans (the truncating lead, the result's tail), so its text is read with the tags
+    // stripped; the paragraph is still found by its own `md:hidden` class.
+    const phoneMeta = (html: string) => {
+      const m = /<p class="([^"]*\bmd:hidden\b[^"]*)">(.*?)<\/p>/.exec(html);
+      return m === null ? null : ([m[0], m[1]!, m[2]!.replace(/<[^>]*>/g, "")] as const);
+    };
     const abandoned = fx({ status: "abandoned", outcome: null });
     const rows = [
       { name: "held abandon", html: rowHtml(abandoned, true, undefined, true), own: true },
