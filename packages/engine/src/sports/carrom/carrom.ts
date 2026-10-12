@@ -1197,6 +1197,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
   // spec 03 §6 — deterministic generator: optional toss, start, then boards
   // with occasional umpire adjustments, forfeits and abandonments.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<CarromEv> | null {
     const randomEntrant = () => (rng() < 0.5 ? state.entrants.home : state.entrants.away);
     if (state.phase === "pre") {
@@ -1263,4 +1264,5 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
       },
     };
   },
+  // Stryker restore all
 };

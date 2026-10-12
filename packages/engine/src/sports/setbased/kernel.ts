@@ -2596,6 +2596,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     // spec 03 §6 — deterministic generator. Summary-dominant so best-of-N
     // matches decide within the conformance event budget; rally bursts exercise
     // the point-by-point path and coarsen (§9.6).
+    // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
     arbitraryEvent(state, rng: Rng): ModuleEvent<SetBasedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
@@ -2701,6 +2702,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
         payload: { home: homeWins ? hi : lo, away: homeWins ? lo : hi },
       };
     },
+    // Stryker restore all
 
     // §9.6 — collapse a rally stream into per-set summaries. Completed sets emit
     // a non-partial entrant-keyed summary; a trailing open set emits a `partial`

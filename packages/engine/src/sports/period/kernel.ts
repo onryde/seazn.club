@@ -2766,6 +2766,7 @@ export function makePeriodModule(
     ...(discipline === undefined ? {} : { discipline }),
 
     // spec 03 §6 — deterministic valid-event generator.
+    // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
     arbitraryEvent(state, rng: Rng): ModuleEvent<PeriodEv> | null {
       const sideId = (side: Side) => state.entrants[side];
       const randomSide = (): Side => (rng() < 0.5 ? "home" : "away");
@@ -2967,5 +2968,6 @@ export function makePeriodModule(
       if (to === null) return null;
       return { type: advanceType, payload: { to, at: stamp(state.phase) } };
     },
+    // Stryker restore all
   };
 }

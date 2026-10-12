@@ -1033,6 +1033,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
 
   // spec 03 §6 — deterministic generator: start, then a single result
   // (win/draw/forfeit) that decides the fixture.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<BoardgameEv> | null {
     // Person ids follow the testkit lineup convention (`<entrantId>-p1`) —
     // the module holds no roster, so the generator synthesises them.
@@ -1101,4 +1102,5 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       },
     };
   },
+  // Stryker restore all
 };

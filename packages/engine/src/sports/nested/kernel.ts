@@ -2321,6 +2321,7 @@ export function makeNestedModule(
     // spec 03 §6 — deterministic generator. Summary-dominant so matches decide
     // within the conformance event budget; point bursts exercise the rally
     // path (deuce loops, TB entry) like setbased's rally bursts.
+    // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
     arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
@@ -2476,5 +2477,6 @@ export function makeNestedModule(
         payload: { home: homeWins ? rules.gamesTo : lo, away: homeWins ? lo : rules.gamesTo },
       };
     },
+    // Stryker restore all
   };
 }

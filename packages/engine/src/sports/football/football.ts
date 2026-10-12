@@ -2918,6 +2918,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   },
 
   // spec 03 §6 — deterministic valid-event generator.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<FootballEv> | null {
     const sideId = (side: Side) => state.entrants[side];
     const randomSide = (): Side => (rng() < 0.5 ? "home" : "away");
@@ -3178,6 +3179,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       },
     };
   },
+  // Stryker restore all
 
   // §9.6 / PROMPT-04 §9 — timeline → period summaries: strip attribution
   // (scorers, minutes, kick takers) keeping only what moves the score, drop

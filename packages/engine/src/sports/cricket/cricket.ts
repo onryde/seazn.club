@@ -4048,6 +4048,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
 
   // spec 03 §6 / PROMPT-05 §9 — generates only legal deliveries.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<CricketEv> | null {
     const pick = <T>(items: readonly T[]): T => items[Math.floor(rng() * items.length)] as T;
 
@@ -4306,6 +4307,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     }
     return { type: "cricket.ball", payload: generateBall(state, rng) };
   },
+  // Stryker restore all
 
   // §9.6 / spec §2.2 — coarsen: collapse ball runs into innings summaries.
   // cfg-free by design: it emits `partial` snapshots at every boundary and
