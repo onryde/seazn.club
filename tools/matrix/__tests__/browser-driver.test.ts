@@ -2536,6 +2536,15 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect((e as Error).message).toMatch(/answered no event/);
   });
 
+  it("a console that answered MORE than one event is OrganiserWriteUnproven, never a second row stored uncompared", async () => {
+    // The console answers each act with one event (forfeitUi's one-element list); a page that answered two is named.
+    const { driver } = make({ http: orgHttp([asRow(3, FORFEIT), asRow(4, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited"), answer(4, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    const e = await driver.postStream("f1", [FORFEIT], "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+    expect((e as Error).message).toMatch(/answered 2 events \(seq 3, 4\), want exactly one/);
+  });
+
   it("a scorer segment the pad answered only in part ends the stream: its finding is the headline and the organiser's act is not made on a half-played match", async () => {
     const partial: ReplayResult = { rows: [], stored: [asRow(2, START)], findings: ["stopped after event 1 of 2: p2Score: stored 2, generated 1"] };
     const { driver, pageCalls } = make({ http: orgHttp([asRow(2, START)]), pads: PADS, replay: (async () => partial) as Replay, pages: { settleUi: async () => { throw new Error("must not be driven"); } } });
@@ -2731,6 +2740,33 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
       }
       expect(checked).toBe(items.length);
       expect(checked).toBeGreaterThanOrEqual(2);
+    });
+
+    it("a CONFIGURED sport row rides the pad too: a value the product lists as organiser-only is the scorer's event on the pad, never a console control (padAuthored reads the product's table)", async () => {
+      // The product's table is empty since W2b D15, so `items` holds no organiser-only value and never reaches
+      // padAuthored. A row is configured on the product's live table — the one padAuthored and isOrganiserOnlyEvent
+      // read — and removed in `finally`. Its value is deliberately not "forfeit".
+      const BOARDGAME_RESULT_TYPE = "boardgame.result";
+      const table = ORGANISER_ONLY_SPORT_EVENTS as Record<string, { field: string; values: readonly string[] }>;
+      expect(Object.hasOwn(table, BOARDGAME_RESULT_TYPE), "the rig: the type carries no row of its own").toBe(false);
+      const ev: StreamEvent = { type: BOARDGAME_RESULT_TYPE, payload: { winner: "e1", method: "resign" } };
+      table[BOARDGAME_RESULT_TYPE] = { field: "method", values: ["resign"] };
+      try {
+        expect(isOrganiserOnlyEvent(ev.type, ev.payload), "the premise: organiser-only by the configured row").toBe(true);
+        const rows = [asRow(2, START), asRow(3, ev)];
+        const r = replayOf(rows);
+        const { driver, pageCalls, http } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn });
+        await built(driver, spec("knockout", BG));
+        const posted = await driver.postStream("f1", [START, ev], "p");
+        expect(r.calls).toHaveLength(1);
+        expect(r.calls[0]![2]).toEqual([START, ev]);
+        for (const page of ["settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, page).not.toContain(page);
+        expect(http.calls).not.toContain("postStream");
+        expect(posted.map((x) => x.stored)).toEqual([START, ev]);
+      } finally {
+        delete table[BOARDGAME_RESULT_TYPE];
+      }
+      expect(Object.keys(ORGANISER_ONLY_SPORT_EVENTS), "the configured row is removed").toEqual([]);
     });
 
     it("a sport with no pad adapter takes the same event over http whole: the organiser's own session writes it, and no console is opened", async () => {

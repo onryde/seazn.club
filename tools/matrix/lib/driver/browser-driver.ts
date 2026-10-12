@@ -906,24 +906,22 @@ export class BrowserDriver implements OrganiserDriver {
     return this.#consoleRows(fixtureId, event, [answered]);
   }
 
-  /** The ledger row at each seq the console answered, as `stored`; the LAST answer is the event the stream meant, and
-   *  its row must be that type and hold every value the event carries (any earlier answer's row is stored, not
-   *  compared). */
+  /** The ledger row at the seq the console answered, as `stored`: it must be the event's type and hold every value the
+   *  event carries. The console answers each act with exactly ONE event (forfeitUi's one-element list; settle and
+   *  abandon one each), so none, or more than one, is OrganiserWriteUnproven by name — never a row stored uncompared. */
   async #consoleRows(fixtureId: string, event: StreamEvent, answered: readonly PostedEvent[]): Promise<PostedEvent[]> {
     if (answered.length === 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, "the page answered no event");
-    const rows = await this.#http.ledger(fixtureId, Math.min(...answered.map((a) => a.seq)) - 1);
-    return answered.map((a, i) => {
-      const row = rows.find((r) => r.seq === a.seq);
-      if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the product's answer names seq ${a.seq}, which the ledger does not hold (it holds ${rows.map((r) => r.seq).join(", ") || "nothing after it"})`);
-      if (i === answered.length - 1) {
-        if (row.type !== event.type) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} is ${row.type}, not ${event.type}`);
-        const want = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
-        const held = (typeof row.payload === "object" && row.payload !== null ? row.payload : {}) as Record<string, unknown>;
-        const off = Object.keys(want).filter((k) => JSON.stringify(held[k]) !== JSON.stringify(want[k]));
-        if (off.length > 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} holds ${off.map((k) => `${k}=${JSON.stringify(held[k])}`).join(", ")}, the event meant ${off.map((k) => `${k}=${JSON.stringify(want[k])}`).join(", ")}`);
-      }
-      return { ...a, stored: { type: row.type, payload: row.payload } };
-    });
+    if (answered.length > 1) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the page answered ${answered.length} events (seq ${answered.map((p) => p.seq).join(", ")}), want exactly one`);
+    const a = answered[0];
+    const rows = await this.#http.ledger(fixtureId, a.seq - 1);
+    const row = rows.find((r) => r.seq === a.seq);
+    if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the product's answer names seq ${a.seq}, which the ledger does not hold (it holds ${rows.map((r) => r.seq).join(", ") || "nothing after it"})`);
+    if (row.type !== event.type) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} is ${row.type}, not ${event.type}`);
+    const want = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
+    const held = (typeof row.payload === "object" && row.payload !== null ? row.payload : {}) as Record<string, unknown>;
+    const off = Object.keys(want).filter((k) => JSON.stringify(held[k]) !== JSON.stringify(want[k]));
+    if (off.length > 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} holds ${off.map((k) => `${k}=${JSON.stringify(held[k])}`).join(", ")}, the event meant ${off.map((k) => `${k}=${JSON.stringify(want[k])}`).join(", ")}`);
+    return [{ ...a, stored: { type: row.type, payload: row.payload } }];
   }
 
   /** `stored` on every answered event or on none: when some segments were answered from the ledger (the pad, the
