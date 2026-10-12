@@ -341,15 +341,26 @@ const RESTORED = (
 
 /** A · Your Lichess link was revoked: the amber notice with the one thing
  *  that is the player's to do — link Lichess again. */
-export function RevokedNotice({ relinkHref, t }: { relinkHref: string; t: RoomT }) {
+/** A's notice. `otherAccount` (T14 re-review 5, I-2): the game is on another
+ *  Lichess account than the one linked — nothing was revoked and no organiser
+ *  was told, so the account's own line stands in for those words; the action
+ *  (re-link) is the same. */
+export function RevokedNotice({ relinkHref, otherAccount = false, t }: { relinkHref: string; otherAccount?: boolean; t: RoomT }) {
   return (
     <div
       data-testid="room-revoked-notice"
+      data-reason={otherAccount ? "account" : "revoked"}
       role="status"
       className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] md:gap-2 md:p-3.5"
     >
-      <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.title")}</span>
-      <span className="text-[13px] leading-[1.45] md:text-sm">{t("externalPlay.room.state.revoked.body")}</span>
+      {otherAccount ? (
+        <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.otherAccount")}</span>
+      ) : (
+        <>
+          <span className="text-[15px] font-semibold leading-[1.35] md:text-base">{t("externalPlay.room.state.revoked.title")}</span>
+          <span className="text-[13px] leading-[1.45] md:text-sm">{t("externalPlay.room.state.revoked.body")}</span>
+        </>
+      )}
       <a
         href={relinkHref}
         data-testid="room-revoked-relink"

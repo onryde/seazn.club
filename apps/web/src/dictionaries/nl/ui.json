@@ -5987,6 +5987,7 @@
   "externalPlay.room.state.revoked.title": "Je Lichess-koppeling is ingetrokken, dus we kunnen je zetten niet spelen.",
   "externalPlay.room.state.revoked.body": "Je organisator is op de hoogte gebracht en beslist wat er nu gebeurt.",
   "externalPlay.room.state.revoked.relink": "Lichess opnieuw koppelen",
+  "externalPlay.room.state.revoked.otherAccount": "Deze partij staat op een ander Lichess-account — koppel dat account opnieuw om verder te spelen.",
   "externalPlay.room.state.revoked.cameraNotice": "Houd je camera aan zolang je plaats in de wacht staat. Valt je video weg, dan noteren we wanneer voor je organisator, die beslist wat er gebeurt.",
   "externalPlay.room.state.held.title": "Deze partij staat stil",
   "externalPlay.room.state.held.body": "Je organisator bekijkt dit bord. Tot die het heeft afgehandeld, kun je hier geen zetten doen.",

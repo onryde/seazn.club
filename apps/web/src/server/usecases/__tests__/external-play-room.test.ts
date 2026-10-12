@@ -19,7 +19,7 @@ import { routes } from "@/lib/routes";
 import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
-import { fenAfter, type PlayResult } from "../external-play/play";
+import { act, fenAfter, type PlayResult } from "../external-play/play";
 import { writeResultFrom } from "../external-play/result";
 import { appendEvent } from "@/server/engine-db";
 import type { GameSnapshot } from "@/server/external-play/types";
@@ -453,19 +453,21 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(checked).toBe(2);
   });
 
-  it("I2: who may act is play.ts's own predicate — and every board the room says nobody may act on, T10 refuses (404)", async () => {
-    type Case = {
+  it("I2 + re-review 5 I-2: canAct IS play.ts's acceptance — BOTH directions, over every hold, seat and account state", async () => {
+    type Bridge = {
       label: string;
       bridge: Parameters<typeof gameOnFile>[1];
+      /** A board change no bridge column carries (a withdrawal). */
+      after?: (s: SeedOnlineChessFixtureResult) => Promise<unknown>;
       // Ruling M7 (T11): a token_revoked hold freezes only the revoked seat;
-      // every other hold and a finished board accept nothing (T10 play.ts).
+      // every other hold, a finished and a withdrawn board accept nothing (T10).
       white: boolean;
       black: boolean;
       held: boolean;
       clockRunning: boolean;
     };
     const moves = ["e2e4", "e7e5"];
-    const cases: Case[] = [
+    const bridges: Bridge[] = [
       { label: "live", bridge: { status: "live", moves }, white: true, black: true, held: false, clockRunning: true },
       { label: "token_revoked, White's seat", bridge: { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves }, white: false, black: true, held: false, clockRunning: true },
       { label: "token_revoked, no seat recorded", bridge: { status: "needs_organiser", needsReason: "token_revoked", moves }, white: false, black: false, held: false, clockRunning: true },
@@ -476,31 +478,121 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
       // T13's deadline hold of a created game: held for the organiser.
       { label: "not_started with a game on file", bridge: { status: "needs_organiser", needsReason: "not_started", moves: [] }, white: false, black: false, held: true, clockRunning: false },
       { label: "finished", bridge: { status: "finished", moves }, white: false, black: false, held: false, clockRunning: false },
+      // Controller ruling Q2: a withdrawal leaves the board `abandoned`; the
+      // guard still loads it, and nobody may act on it.
+      {
+        label: "withdrawn (abandoned)",
+        bridge: { status: "live", moves },
+        after: (s) => sql`update fixtures set status = 'abandoned' where id = ${s.fixtureId}`,
+        white: false,
+        black: false,
+        held: false,
+        clockRunning: true,
+      },
     ];
-    let checked = 0;
-    let refusedByPlay = 0;
-    for (const c of cases) {
-      const s = await seed();
-      await gameOnFile(s, c.bridge);
-      const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
-      const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
-      expect([white.canAct, black.canAct], c.label).toEqual([c.white, c.black]);
-      expect(white.held, `${c.label}: held`).toBe(c.held);
-      expect(white.game?.clockRunning, `${c.label}: clocks`).toBe(c.clockRunning);
-      // The other authority agrees: where the room says no, T10's real act
-      // refuses before any grant, token or Lichess call.
-      for (const [who, v] of [[s.home, white], [s.away, black]] as const) {
-        if (v.canAct) continue;
-        await expect(
-          actInRoom({ kind: "session", userId: who.userId }, s.fixtureId, { kind: "draw", accept: false }, deps({ reconcile: vi.fn() })),
-          `${c.label}: T10 refuses`,
-        ).rejects.toMatchObject({ status: 404 });
-        refusedByPlay += 1;
+    // What happened to WHITE's Lichess account after the game was created
+    // (T9 recorded both accounts with it). Black's stays as recorded — the pair.
+    type Account = "as recorded" | "re-linked to another account" | "unlinked" | "grant downgraded";
+    const accounts: Account[] = ["as recorded", "re-linked to another account", "unlinked", "grant downgraded"];
+    const changeAccount = async (userId: string, a: Account) => {
+      if (a === "re-linked to another account")
+        await sql`update user_external_accounts set external_user_id = ${`x-${randomUUID().slice(0, 8)}`} where user_id = ${userId} and provider = 'lichess'`;
+      if (a === "unlinked") await sql`delete from user_external_accounts where user_id = ${userId} and provider = 'lichess'`;
+      if (a === "grant downgraded")
+        await sql`update user_external_accounts set scopes = array_remove(scopes, 'board:play') where user_id = ${userId} and provider = 'lichess'`;
+    };
+    // The REAL act (T10) behind the room, Lichess stubbed: an act it accepts
+    // reaches the board call and comes back ok.
+    const boardCalls: string[] = [];
+    const realPlay: RoomDeps["play"] = (a) =>
+      act(a, {
+        now,
+        accessToken: async () => "tok",
+        offerOrAcceptDraw: async (x) => (boardCalls.push(x.gameId), { ok: true }),
+        publish: async () => {},
+      });
+    type Outcome = "accepted" | "404" | `grant:${string}`;
+    const outcomeOf = async (userId: string, fixtureId: string): Promise<Outcome> => {
+      try {
+        const r = await actInRoom({ kind: "session", userId }, fixtureId, { kind: "draw", accept: false }, deps({ play: realPlay, reconcile: vi.fn() }));
+        if (r.ok) return "accepted";
+        if (!r.reconcile) return `grant:${r.reason}`;
+        throw new Error(`a Lichess refusal from a stub that never refuses: ${r.reason}`);
+      } catch (err) {
+        if ((err as { status?: number }).status === 404) return "404";
+        throw err;
       }
-      checked += 1;
+    };
+    let rows = 0;
+    let acceptedWithCanAct = 0;
+    let refusedWithoutCanAct = 0;
+    let otherAccountSeen = 0;
+    let grantNamed = 0;
+    for (const c of bridges) {
+      for (const account of accounts) {
+        const s = await seed();
+        await gameOnFile(s, c.bridge);
+        await c.after?.(s);
+        await changeAccount(s.home.userId, account); // home is White (gameOnFile's default)
+        const linkedAsRecorded = account === "as recorded" || account === "grant downgraded";
+        for (const [seat, who] of [["white", s.home], ["black", s.away]] as const) {
+          const label = `${c.label} × White ${account} × ${seat}`;
+          // The ruling's answer, stated here: the board lets this seat act,
+          // and (White only) the account linked is the one the game is on.
+          const boardAllows = seat === "white" ? c.white : c.black;
+          const accountOk = seat === "black" || linkedAsRecorded;
+          const v = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
+          expect(v.canAct, `${label}: canAct`).toBe(boardAllows && accountOk);
+          expect(v.otherAccount, `${label}: the account line`).toBe(boardAllows && !accountOk);
+          if (seat === "white") {
+            expect(v.held, `${label}: held`).toBe(c.held);
+            expect(v.game?.clockRunning, `${label}: clocks`).toBe(c.clockRunning);
+          }
+          const outcome = await outcomeOf(who.userId, s.fixtureId);
+          // Direction 1 — the room offers a live board ⇒ T10 takes the act
+          // to the board. The one named exception is T2's grant gate, asked
+          // per act and answered by name (the room's re-link screen).
+          if (v.canAct) {
+            expect(outcome, `${label}: canAct ⇒ play accepts`).toBe(account === "grant downgraded" && seat === "white" ? "grant:lichess_reconsent_required" : "accepted");
+            if (outcome === "accepted") acceptedWithCanAct += 1;
+            else grantNamed += 1;
+          }
+          // Direction 2 — T10 refuses ⇒ the room said nobody may act; and a
+          // room that says no is never accepted.
+          if (outcome === "404") {
+            expect(v.canAct, `${label}: play refuses ⇒ !canAct`).toBe(false);
+            refusedWithoutCanAct += 1;
+          }
+          if (!v.canAct) expect(outcome, `${label}: !canAct ⇒ never accepted`).not.toBe("accepted");
+          if (v.otherAccount) otherAccountSeen += 1;
+          rows += 1;
+        }
+      }
     }
-    expect(checked, "anti-vacuity: every bridge state").toBe(cases.length);
-    expect(refusedByPlay, "anti-vacuity: refusals paired with T10").toBe(9);
+    expect(rows, "anti-vacuity: bridges × accounts × seats").toBe(bridges.length * accounts.length * 2);
+    expect(acceptedWithCanAct, "anti-vacuity: accepted acts paired with canAct").toBeGreaterThan(0);
+    expect(boardCalls.length, "every accepted act reached the board call").toBe(acceptedWithCanAct);
+    expect(refusedWithoutCanAct, "anti-vacuity: play's refusals paired with !canAct").toBeGreaterThan(0);
+    expect(grantNamed, "the grant's named answer reached").toBeGreaterThan(0);
+    // Only the live board lets White act at all: White re-linked or unlinked there.
+    expect(otherAccountSeen, "anti-vacuity: the reviewer's re-linked case and the unlink").toBe(2);
+  });
+
+  it("re-review 5 I-2, the reviewer's probe: White re-links ANOTHER Lichess account mid-game ⇒ the room says White may not act (and why), the opponent plays on", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    const before = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect([before.canAct, before.otherAccount], "the pair: as recorded").toEqual([true, false]);
+    await sql`
+      update user_external_accounts set external_user_id = ${`x-${randomUUID().slice(0, 8)}`}
+       where user_id = ${s.home.userId} and provider = 'lichess'`;
+    const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect(white).toMatchObject({ canAct: false, otherAccount: true, frozen: null, held: false });
+    await expect(
+      actInRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, { kind: "draw", accept: false }, deps({ reconcile: vi.fn() })),
+    ).rejects.toMatchObject({ status: 404 });
+    const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(black).toMatchObject({ canAct: true, otherAccount: false });
   });
 
   it("a hold the game is not playing through (a no-show) is `held`, and no seat is frozen", async () => {
