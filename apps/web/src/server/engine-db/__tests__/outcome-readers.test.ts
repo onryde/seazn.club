@@ -88,7 +88,9 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     // Exactly the six fold readers Step 8 moves (preflight C8), plus the two module player-stat folds
     // (ruling D-C3). A later task that adds a reader adds it here by name. W2b ruling 112: the testkit's
     // `onePlayEvent` refuses a drawn event that decides the match, through outcomeOf (settle-aware like every reader).
-    // R116-2: `awardedMatchState` refuses a walkover whose fold decides other than the stored award.
+    // R116-2: `awardedMatchState` refuses a walkover whose fold decides other than the stored award. Ruling 120: the
+    // testkit's `afterStartEvents` keeps only a sport event that leaves the match undecided after a Start, through
+    // outcomeOf (shared by the ruling-114 and ruling-120 sweeps).
     expect(readers.sort()).toEqual([
       "apps/web/src/server/engine-db/append-event.ts",
       "apps/web/src/server/engine-db/awarded-state.ts",
@@ -97,6 +99,7 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       "packages/engine/src/sports/carrom/carrom.ts",
       "packages/engine/src/sports/cricket/scorecard.ts",
       "packages/engine/src/sports/generic/generic.ts",
+      "packages/engine/src/testkit/after-start-events.ts",
       "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
