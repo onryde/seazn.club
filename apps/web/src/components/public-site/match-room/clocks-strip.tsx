@@ -1,6 +1,7 @@
 // Both clocks and both names (canvas: the opponent on the left, "You" on the
 // right; the side to move is the dark card; game over mutes both). The strip
-// is dumb on purpose: names arrive resolved from the room usecase, and the
+// is dumb on purpose (Seam A: a seat on hold reads so on YOUR card, never
+// "your move", and its clock is not muted — it still runs on Lichess): names arrive resolved from the room usecase, and the
 // milliseconds arrive already derived by the shell (clock-math), so a wrong
 // name or a wrong time is provable at ONE site, never here.
 import { formatClock } from "./clock-math";
@@ -52,15 +53,18 @@ export function ClocksStrip({
   opponent,
   turn,
   over,
+  seatOnHold = false,
   t,
 }: {
   you: Side;
   opponent: Side;
   turn: Colour;
   over: boolean;
+  /** Your seat is frozen (Seam A): the opponent's still plays. */
+  seatOnHold?: boolean;
   t: RoomT;
 }) {
-  const yourMove = !over && turn === you.colour;
+  const yourMove = !over && !seatOnHold && turn === you.colour;
   const colourOf = (c: Colour) => t(c === "white" ? "externalPlay.room.colour.white" : "externalPlay.room.colour.black");
   return (
     <div data-turn={turn} className="grid min-w-0 grid-cols-2 gap-2 md:gap-3">
@@ -79,7 +83,12 @@ export function ClocksStrip({
         over={over}
         title={t("externalPlay.room.you")}
         sub={
-          yourMove ? (
+          seatOnHold ? (
+            <>
+              <span className="md:hidden">{t("externalPlay.room.seatOnHold")}</span>
+              <span className="max-md:hidden">{t("externalPlay.room.colourSeatOnHold", { colour: colourOf(you.colour) })}</span>
+            </>
+          ) : yourMove ? (
             <>
               <span className="md:hidden">{t("externalPlay.room.yourMove")}</span>
               <span className="max-md:hidden">{t("externalPlay.room.colourYourMove", { colour: colourOf(you.colour) })}</span>

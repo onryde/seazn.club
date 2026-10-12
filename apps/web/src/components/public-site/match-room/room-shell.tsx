@@ -3,13 +3,17 @@
 // (use-room), the player's own camera (use-own-camera) and the screen
 // decision (room-screen). Built to the owner-approved canvas (2026-10-11):
 //
-//   phone   header · [camera-off banner] · clocks · board · tile+pill ·
-//           controls · camera notice — one column, explicit order;
+//   phone   header · [camera-off banner] · clocks · [C1/C2 notice] · board ·
+//           [C3 notice] · tile+pill · controls · camera notice — one column,
+//           explicit order;
 //   ≥ md    header · clocks across both columns · board left (≤ 560px) ·
-//           tile, pill, controls and notice in a 288px aside.
+//           the move notice, tile, pill, controls and notice in a 288px aside.
 //
-// One DOM, branched at md (AGENTS.md "The phone composition"). The board is
-// chessground behind its licence loader, client-only.
+// One DOM, branched at md (AGENTS.md "The phone composition"): the aside
+// dissolves into the phone's column (`max-md:contents`) so each of its
+// children takes its drawn place by `order-*`; on a desktop it is the right
+// column again, in the same order. Seam A (the revoked seat) is built the
+// same way. The board is chessground behind its licence loader, client-only.
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePlural, useLocale, useT } from "@/components/i18n/dict-provider";
@@ -28,16 +32,20 @@ import {
   CameraGaveUpNotice,
   CameraOffBanner,
   CameraReconnectingNotice,
+  BackToFixture,
   ClosedCard,
   CreatingCard,
+  MoveNoticeView,
   NotOpenedCard,
+  OffForClubCard,
   RelinkCard,
+  RevokedNotice,
   UnavailableCard,
   VideoDownCard,
 } from "./room-cards";
-import { HeldSeam, OffForClubSeam, RevokedSeam } from "./room-seams";
+import { HeldSeam } from "./room-seams";
 import { roomScreen } from "./room-screen";
-import { canMove, plyOf, type RoomState } from "./room-state";
+import { canMove, moveNotice, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
@@ -59,6 +67,7 @@ function Clocks({
   skewMs,
   onZero,
   held = false,
+  seatOnHold = false,
   t,
 }: {
   game: RoomGame;
@@ -68,6 +77,8 @@ function Clocks({
   /** A held board: the times are Lichess's and still shown, but nobody is
    *  told "your move" on a board the room takes no move on. */
   held?: boolean;
+  /** Seam A: the viewer's seat is frozen; the clocks still run. */
+  seatOnHold?: boolean;
   t: RoomT;
 }) {
   const running = game.clockRunning && !game.over;
@@ -90,6 +101,7 @@ function Clocks({
       opponent={{ name: snap.opponent.name, colour: snap.opponent.colour, ms: ms(snap.opponent.colour) }}
       turn={game.turn}
       over={game.over || snap.result !== null || held}
+      seatOnHold={seatOnHold}
       t={t}
     />
   );
@@ -198,6 +210,28 @@ export function RoomShell({
   );
 }
 
+/** The player's own tile and the opponent's pill (any camera policy). */
+function TileStrip({
+  snap,
+  camera,
+  presence,
+  t,
+}: {
+  snap: RoomSnapshot;
+  camera: ReturnType<typeof useOwnCamera>;
+  presence: boolean | null;
+  t: RoomT;
+}) {
+  return (
+    <div data-testid="room-tile-strip" className="order-5 flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
+      <OwnTile policy={snap.cameraPolicy} stream={camera.stream} t={t} />
+      {/* null is "unknown" — not joined, not settled, connection down: no
+          pill rather than a "camera off" (review I4). */}
+      {presence !== null ? <PresencePill name={snap.opponent.name} cameraLive={presence} t={t} /> : null}
+    </div>
+  );
+}
+
 /** The give-up notice's way back: a fresh page joins afresh (fix round 5). */
 const reloadPage = () => location.reload();
 
@@ -235,6 +269,28 @@ export function Screen({
   const snap = state.snap;
   // Re-joining gave up (fix round 5): wherever the player is, the one way back.
   const gaveUp = snap.cameraPolicy !== "off" && camera.status === "gave_up" ? <CameraGaveUpNotice onReload={reload} t={t} /> : null;
+  const policyOn = snap.cameraPolicy !== "off";
+  // The camera DUTY is the required policy's (review I3): under `optional`
+  // nobody is told to keep a camera on, or that it is off.
+  const cameraDuty = snap.cameraPolicy === "required";
+  const cameraDown = cameraDuty && (camera.status === "off" || camera.status === "failed");
+  // Above the clocks on a board the player sits at (live, and Seam A).
+  const cameraBanners = (
+    <>
+      {cameraDown ? (
+        <div className="order-0 md:col-span-2">
+          <CameraOffBanner onEnable={camera.status === "off" ? camera.enable : tryAgain} t={t} />
+        </div>
+      ) : null}
+      {/* OUR guard re-joining (I-1): honest copy, never "camera off". */}
+      {policyOn && camera.status === "recovering" ? (
+        <div className="order-0 md:col-span-2">
+          <CameraReconnectingNotice t={t} />
+        </div>
+      ) : null}
+      {gaveUp !== null ? <div className="order-0 md:col-span-2">{gaveUp}</div> : null}
+    </>
+  );
   const now = useServerNow(state.skewMs, 1_000);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
   const countdownTo = (iso: string | null) => (iso !== null && now !== null ? formatCountdown(Date.parse(iso) - now) : null);
@@ -243,9 +299,55 @@ export function Screen({
     case "unavailable":
       return <UnavailableCard fixtureHref={snap.links.fixture} t={t} />;
     case "offForClub":
-      return <OffForClubSeam t={t} />;
-    case "revoked":
-      return <RevokedSeam t={t} />;
+      return <OffForClubCard fixtureHref={snap.links.fixture} t={t} />;
+    case "revoked": {
+      // Seam A (owner-approved canvas): the frozen player's own board as it
+      // stands — the clocks still running on Lichess, the board dimmed and
+      // read-only, the amber notice and its one action, the way back, and
+      // (owner tweak 2) the camera duty on the phone as on the desktop.
+      const g = snap.game;
+      return (
+        <div data-testid="room-revoked" className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
+          {cameraBanners}
+          {g !== null ? (
+            <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
+              <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} seatOnHold t={t} />
+            </div>
+          ) : null}
+          {g !== null ? (
+            <div
+              data-testid="room-board"
+              data-ply={plyOf(g)}
+              data-on-hold="true"
+              className="order-3 mx-auto w-full min-w-0 max-w-[240px] opacity-50 [filter:grayscale(0.35)] md:max-w-[560px]"
+            >
+              <Board
+                fen={g.fen}
+                orientation={snap.you.colour}
+                lastMove={g.lastMove}
+                movable={false}
+                syncKey={state.syncKey}
+                onMove={() => {}}
+                label={t("externalPlay.room.board.seatOnHold")}
+                t={t}
+              />
+            </div>
+          ) : null}
+          <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
+            <div className="order-2 min-w-0">
+              <RevokedNotice relinkHref={relinkHref} t={t} />
+            </div>
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
+            <BackToFixture href={snap.links.fixture} className="order-6" t={t} />
+            {cameraDuty ? (
+              <div className="order-7">
+                <CameraNotice onHold t={t} />
+              </div>
+            ) : null}
+          </aside>
+        </div>
+      );
+    }
     case "relink":
       return <RelinkCard relinkHref={relinkHref} t={t} />;
     case "notOpened":
@@ -327,29 +429,16 @@ export function Screen({
     }
     case "live": {
       const g = snap.game!;
-      const policyOn = snap.cameraPolicy !== "off";
-      // The camera DUTY is the required policy's (review I3): under
-      // `optional` nobody is told to keep a camera on, or that it is off.
-      const cameraDuty = snap.cameraPolicy === "required";
-      const cameraDown = cameraDuty && (camera.status === "off" || camera.status === "failed");
+      // C1–C3 (Seams C): the error the room already records, as the live
+      // board's notice — amber above the board, the purple line under it.
+      const notice = moveNotice(state);
       return (
         <div className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
-          {cameraDown ? (
-            <div className="order-0 md:col-span-2">
-              <CameraOffBanner onEnable={camera.status === "off" ? camera.enable : tryAgain} t={t} />
-            </div>
-          ) : null}
-          {/* OUR guard re-joining (I-1): honest copy, never "camera off". */}
-          {policyOn && camera.status === "recovering" ? (
-            <div className="order-0 md:col-span-2">
-              <CameraReconnectingNotice t={t} />
-            </div>
-          ) : null}
-          {gaveUp !== null ? <div className="order-0 md:col-span-2">{gaveUp}</div> : null}
+          {cameraBanners}
           <div data-testid="room-clocks-strip" className="order-1 min-w-0 md:col-span-2">
             <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} t={t} />
           </div>
-          <div data-testid="room-board" data-ply={plyOf(g)} className="order-2 mx-auto w-full min-w-0 max-w-[560px]">
+          <div data-testid="room-board" data-ply={plyOf(g)} className="order-3 mx-auto w-full min-w-0 max-w-[560px]">
             <Board
               fen={g.fen}
               orientation={snap.you.colour}
@@ -361,16 +450,10 @@ export function Screen({
               t={t}
             />
           </div>
-          <aside className="order-3 flex min-w-0 flex-col gap-3">
-            {policyOn ? (
-              <div data-testid="room-tile-strip" className="flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
-                <OwnTile policy={snap.cameraPolicy} stream={camera.stream} t={t} />
-                {/* null is "unknown" — not joined, not settled, connection
-                    down: no pill rather than a "camera off" (review I4). */}
-                {presence !== null ? <PresencePill name={snap.opponent.name} cameraLive={presence} t={t} /> : null}
-              </div>
-            ) : null}
-            <div data-testid="room-controls">
+          <aside data-testid="room-aside" className="flex min-w-0 flex-col gap-3 max-md:contents md:order-4">
+            {notice !== null ? <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-4" : "order-2"} t={t} /> : null}
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
+            <div data-testid="room-controls" className="order-6">
               <RoomControls
                 ply={plyOf(g)}
                 over={g.over}
@@ -382,7 +465,11 @@ export function Screen({
                 t={t}
               />
             </div>
-            {cameraDuty ? <CameraNotice t={t} /> : null}
+            {cameraDuty ? (
+              <div className="order-7">
+                <CameraNotice t={t} />
+              </div>
+            ) : null}
           </aside>
         </div>
       );
