@@ -1247,6 +1247,21 @@ Elsewhere the text is the controller's record.
      - **Workaround:** take the event back (void it), then record the walkover.
      - **Rejected:** deriving "played" from a score change, as an engine change late in the wave. Reopen it as its
        own small change if a real organiser hits the edge.
+115. **A disqualification with nothing played is treated like a walkover** (2026-10-12, owner "A"). The question was
+     whether a disqualification recorded before anything is played counts as a match played in player stats. Option A,
+     as put to the owner: "doesn't count — treated like a walkover. It also scores like a walkover, which is how it's
+     built now."
+     - **Covers** a disqualification before `core.start`, and one after a Start with nothing played (ruling 112's test,
+       widened by ruling 114).
+     - **Credit:** the sport's walkover credit.
+     - **Stats:** it does not count as a match played for either side's players, and it credits no personal W/L.
+       This is the same as X-PS-1.
+     - **Unchanged:** once something is played, a disqualification counts as in-match. X-PS-2 applies, and the
+       score already played stays credited.
+     - **Why:** one rule everywhere ("nothing played means not started", ruling 113). A player's record never shows
+       a match nobody played, and the stats do not depend on whether the organiser pressed Start before recording
+       the no-show.
+     - **Amends** X-PS-1, X-PS-2 and X-RT-1, and closes the "pending owner ruling (DQ with nothing played)" clauses.
 
 ## Recommendations (mine — not rulings)
 
