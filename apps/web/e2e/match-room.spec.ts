@@ -867,6 +867,28 @@ test("a draw offer: the player offered sees Decline and Accept draw; the one who
   await expect(w.getByTestId("room-resign")).toBeVisible();
   await expect(w.getByTestId("room-draw-offered")).toHaveCount(0);
   await shoot(w, "draw-offer");
+  // Notice routing (ruling 2026-10-12): a decline our server failed (a 503)
+  // is never silent and never "isn't allowed" — the generic C2, in C2's place.
+  await w.route("**/external-play/room/act**", (route: Route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: { code: "unavailable", message: "Unavailable" }, requestId: "e2e" }),
+    }),
+  );
+  await w.getByTestId("room-draw-decline").click();
+  const notice = w.getByTestId("room-move-notice");
+  await expect(notice).toHaveAttribute("data-kind", "failed");
+  await expect(notice).toHaveText(uiEn["externalPlay.room.notice.failed"]!);
+  await expect(notice).not.toContainText(uiEn["externalPlay.room.notice.invalid"]!);
+  await inAside(w, "room-move-notice");
+  await w.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(w, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(w, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(w, "c2-generic");
+  const own = consoleErrors.filter((e) => /status of 503/.test(e));
+  expect(own.length, "the one failed act").toBeLessThanOrEqual(1);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/status of 503/.test(e)));
   await wctx.close();
 
   const bctx = await cold(browser);

@@ -59,9 +59,19 @@ export function parseRoomBroadcast(raw: unknown): RoomBroadcastWire | null {
 export type RoomError = "relink" | "network" | "refused" | "invalid";
 
 /** The in-room notice an error shows on the live board (Seams A/B/C, the
- *  owner-approved canvas): C1 offline, C2 a move Lichess refused, C3 a move
- *  our server refused. */
-export type MoveNotice = "offline" | "refused" | "invalid";
+ *  owner-approved canvas, and the notice routing ruling of 2026-10-12): C1
+ *  offline; C2 a move that didn't go through (Lichess refused it, or our
+ *  server failed); C3 a move a RULE refused; and `failed`, the generic C2
+ *  for anything else — an offer, an answer, a resign or an abort. */
+export type MoveNotice = "offline" | "refused" | "invalid" | "failed";
+
+/** The act route's answers that are a RULE refusing the act, not a failure
+ *  (notice routing ruling): 400 — the move string itself (T3's INVALID_UCI,
+ *  a promotion with no piece, a malformed body); 404 — T10 refusing a board
+ *  it will not take this act on (a frozen seat, no game; review I2); 422 —
+ *  semantically invalid. Any other status — a 5xx, a 401, a 409, a 429 — is a
+ *  failure: the act "didn't go through", and never "isn't allowed". */
+export const ACT_RULE_REFUSAL_STATUSES: readonly number[] = [400, 404, 422];
 
 export type RoomState = {
   snap: RoomSnapshot;
@@ -236,7 +246,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       return {
         ...s,
         pending: null,
-        error: e.status === 0 ? "network" : "invalid",
+        error: e.status === 0 ? "network" : ACT_RULE_REFUSAL_STATUSES.includes(e.status) ? "invalid" : "refused",
         failedAct: s.pending.action.kind,
         syncKey: s.syncKey + 1,
       };
@@ -251,12 +261,12 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
 }
 
 /** The notice the live board shows for the room's error (C1–C3), or none.
- *  Offline is offline whatever was sent; C2/C3 say "that move", so they are
- *  a MOVE's — a refused resign, offer or abort keeps its error (the re-read
- *  shows the truth) but no move notice. A re-link is a screen, not this. */
+ *  Offline is offline whatever was sent. C2/C3 say "that move", so they are
+ *  a MOVE's; a refused resign, offer, answer or abort is never silent — it
+ *  shows the generic C2 (`failed`). A re-link is a screen, not this. */
 export function moveNotice(s: RoomState): MoveNotice | null {
   if (s.error === "network") return "offline";
-  if ((s.error === "refused" || s.error === "invalid") && s.failedAct === "move") return s.error;
+  if (s.error === "refused" || s.error === "invalid") return s.failedAct === "move" ? s.error : "failed";
   return null;
 }
 

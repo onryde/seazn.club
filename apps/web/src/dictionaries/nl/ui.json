@@ -5996,6 +5996,7 @@
   "externalPlay.room.notice.offline.body": "Je klok loopt door.",
   "externalPlay.room.notice.refused.title": "Die zet is niet doorgekomen.",
   "externalPlay.room.notice.refused.body": "Je stelling is hersteld — probeer het opnieuw.",
+  "externalPlay.room.notice.failed": "Dat is niet doorgekomen. Probeer het opnieuw.",
   "externalPlay.room.notice.invalid": "Die zet is hier niet toegestaan.",
   "externalPlay.room.pieceCredit": "Schaakstukken door Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Jouw bord",

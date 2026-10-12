@@ -2332,6 +2332,7 @@ export type DictionaryKey =
   | "externalPlay.room.micMuted"
   | "externalPlay.room.minutes.one"
   | "externalPlay.room.minutes.other"
+  | "externalPlay.room.notice.failed"
   | "externalPlay.room.notice.invalid"
   | "externalPlay.room.notice.offline.body"
   | "externalPlay.room.notice.offline.title"

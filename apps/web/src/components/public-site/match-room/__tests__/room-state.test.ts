@@ -8,6 +8,8 @@ import fc from "fast-check";
 import { Chess } from "chess.js";
 import { canMove, initialRoomState, moveNotice, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomState } from "../room-state";
 import type { RoomActBody } from "../room-api";
+import { RoomAct, RoomActOut } from "@/server/api-v1/schemas";
+import { ROUTES } from "@/server/api-v1/openapi";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
 
 // A fixed opening, played by chess.js: FENS[i] is the board after i plies.
@@ -279,13 +281,13 @@ describe("act round trip", () => {
     expect([grant.error, grant.syncKey]).toEqual(["relink", 1]);
   });
 
-  it("transport failure ⇒ the board is put back; 0 is network; anything else is invalid — and NONE of them stops the room", () => {
+  it("transport failure ⇒ the board is put back; 0 is network; a RULE's refusal (400/404/422) is invalid; any other status (a 409, a 5xx) is a failure, never invalid — and NONE of them stops the room", () => {
     // Review I2: play's 404 is T10 refusing a board it will not accept (a
     // hold, a finished game, a frozen seat) — not the room vanishing. The
     // room re-reads and carries on; only GET room's own 404 is "gone".
     const sent = roomReducer(live(), { type: "act_sent", action: { kind: "resign" } });
     let checked = 0;
-    for (const [status, error] of [[0, "network"], [404, "invalid"], [409, "invalid"], [500, "invalid"]] as const) {
+    for (const [status, error] of [[0, "network"], [404, "invalid"], [409, "refused"], [500, "refused"]] as const) {
       const after = roomReducer(sent, { type: "act_failed", status });
       expect([after.error, after.syncKey, after.pending, after.polling, after.notFound], String(status)).toEqual([error, 1, null, true, false]);
       checked += 1;
@@ -361,9 +363,9 @@ describe("move notices (C1–C3): raised, kept and ended by the room's own event
     expect(moveNotice(reread)).toBe("refused");
   });
 
-  it("C3: a move our server refused (any answered status) is invalid, and the re-read keeps it", () => {
+  it("C3: a move a RULE refused (400 the move string, 404 the board, 422 semantically invalid) is invalid, and the re-read keeps it", () => {
     let checked = 0;
-    for (const status of [404, 409, 422]) {
+    for (const status of [400, 404, 422]) {
       const bad = roomReducer(sent(live()), { type: "act_failed", status });
       expect([moveNotice(bad), bad.syncKey], String(status)).toEqual(["invalid", 1]);
       expect(moveNotice(read(bad, T0 + 500)), `${status} re-read`).toBe("invalid");
@@ -387,18 +389,91 @@ describe("move notices (C1–C3): raised, kept and ended by the room's own event
     expect(checked).toBe(2);
   });
 
-  it("the drawn copy is a MOVE's: a refused resign, draw or abort raises no move notice (its error is still recorded)", () => {
+  it("a refused resign, draw or abort never fails silently: the generic C2 ('That didn't go through'), whatever refused it (notice routing ruling)", () => {
     let checked = 0;
     for (const action of [{ kind: "resign" }, { kind: "draw", accept: true }, { kind: "abort" }] as const) {
       const refused = refusedBy(sent(live(), action));
-      expect([refused.error, moveNotice(refused)], `${action.kind} refused`).toEqual(["refused", null]);
+      expect([refused.error, moveNotice(refused)], `${action.kind} refused`).toEqual(["refused", "failed"]);
       const bad = roomReducer(sent(live(), action), { type: "act_failed", status: 404 });
-      expect([bad.error, moveNotice(bad)], `${action.kind} 404`).toEqual(["invalid", null]);
+      expect([bad.error, moveNotice(bad)], `${action.kind} 404`).toEqual(["invalid", "failed"]);
       // Offline is offline whatever was sent.
       expect(moveNotice(roomReducer(sent(live(), action), { type: "act_failed", status: 0 })), `${action.kind} lost`).toBe("offline");
       checked += 1;
     }
     expect(checked, "anti-vacuity: non-move acts").toBe(3);
+  });
+});
+
+// Notice routing (controller ruling 2026-10-12): C3 "isn't allowed" is ONLY
+// a move a RULE refused; a server failure or a lost request never blames the
+// player (C1/C2); a refused offer, answer, resign or abort shows the generic
+// C2. The rows are every action the room's declared union can send × every
+// failure its declared answer union, its route's declared errors and the
+// network can bring; the expected notice is the RULING's, stated here.
+describe("notice routing: every failure × every action (the ruling, over the declared unions)", () => {
+  const live = () => initialRoomState(snap({ game: game(2) }), T0);
+  type Field = { def: { type: string; values?: unknown[] } };
+  /** Every action RoomAct accepts: one per option, each boolean both ways. */
+  const actions: RoomActBody[] = RoomAct.options.flatMap((o) => {
+    let rows: Record<string, unknown>[] = [{}];
+    for (const [key, f] of Object.entries(o.shape as Record<string, Field>)) {
+      const vals =
+        f.def.type === "literal" ? [f.def.values![0]] : f.def.type === "boolean" ? [true, false] : f.def.type === "string" ? ["g1f3"] : null;
+      if (vals === null) throw new Error(`a RoomAct field of a new type (${key}: ${f.def.type}) — decide its rows`);
+      rows = rows.flatMap((r) => vals.map((v) => ({ ...r, [key]: v })));
+    }
+    return rows.map((r) => RoomAct.parse(r));
+  });
+  /** Every refusing answer RoomActOut declares. */
+  const answers = RoomActOut.options.flatMap((o) => {
+    const shape = o.shape as Record<string, { def: { type: string; values?: unknown[] }; options?: string[] }>;
+    if (shape.ok!.def.values![0] !== false) return [];
+    const reconcile = shape.reconcile!.def.values![0] as boolean;
+    return shape.reason!.options!.map((reason) => ({ ok: false as const, reconcile, reason }));
+  });
+  const actRoute = ROUTES.find((r) => r.path === "/fixtures/{id}/external-play/room/act" && r.method === "post");
+  // The ruling's split of HTTP answers. Every status the route DECLARES must
+  // sit in one of the two (guarded below), so a new one forces a decision.
+  const RULE_REFUSALS = new Set([400, 404, 422]); // the move string, the board not taking it (review I2), semantically invalid
+  const FAILURES = new Set([401, 409, 429, 500, 502, 503]); // the request didn't go through
+  const statuses = [...new Set([...(actRoute?.errors ?? []), ...RULE_REFUSALS, ...FAILURES])];
+
+  type Expected = "offline" | "refused" | "invalid" | "failed" | null;
+  const isMove = (a: RoomActBody) => a.kind === "move";
+
+  it("the route's declared errors are each classified by the ruling", () => {
+    expect(actRoute, "premise: the act route is declared").toBeDefined();
+    expect(actRoute!.errors!.length).toBeGreaterThan(0);
+    for (const st of actRoute!.errors!) expect(RULE_REFUSALS.has(st) || FAILURES.has(st), `declared ${st}`).toBe(true);
+  });
+
+  it("every row shows the ruling's notice — never C3 for a failure, never C3 or silence for a non-move", () => {
+    const tally: Record<string, number> = { offline: 0, refused: 0, invalid: 0, failed: 0, none: 0 };
+    let rows = 0;
+    const check = (a: RoomActBody, label: string, after: RoomState, want: Expected) => {
+      expect(moveNotice(after), `${JSON.stringify(a)} × ${label}`).toBe(want);
+      tally[want ?? "none"]! += 1;
+      rows += 1;
+    };
+    for (const a of actions) {
+      const sent = roomReducer(live(), { type: "act_sent", action: a });
+      check(a, "network", roomReducer(sent, { type: "act_failed", status: 0 }), "offline");
+      for (const st of statuses) {
+        const want: Expected = !isMove(a) ? "failed" : RULE_REFUSALS.has(st) ? "invalid" : "refused";
+        check(a, `HTTP ${st}`, roomReducer(sent, { type: "act_failed", status: st }), want);
+      }
+      for (const ans of answers) {
+        // A grant refusal is the re-link SCREEN, not a notice.
+        const want: Expected = !ans.reconcile ? null : isMove(a) ? "refused" : "failed";
+        check(a, `${ans.reconcile ? "reconcile" : "grant"} ${ans.reason}`, roomReducer(sent, { type: "act_answered", answer: ans as never }), want);
+      }
+    }
+    // Anti-vacuity: the unions were read, and every outcome was reached.
+    expect(actions.some(isMove) && actions.some((a) => !isMove(a)), "moves and non-moves").toBe(true);
+    expect(actions.length, "move, resign, draw ×2, abort").toBeGreaterThanOrEqual(5);
+    expect(answers.some((x) => x.reconcile) && answers.some((x) => !x.reconcile), "both answer kinds").toBe(true);
+    expect(rows).toBe(actions.length * (1 + statuses.length + answers.length));
+    for (const [k, n] of Object.entries(tally)) expect(n, `rows expecting ${k}`).toBeGreaterThan(0);
   });
 });
 
@@ -455,7 +530,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     const seen = {
       steps: 0, staleDropped: 0, plyRose: 0, overSeen: 0, pollingStopped: 0, doubleSendBlocked: 0, act404Survived: 0, endedPolling: 0, endedStopped: 0,
       // Seams C: each notice raised, and each ending exercised.
-      offline: 0, refused: 0, invalid: 0, offlineEndedByRead: 0, endedByPlyRise: 0, nonMoveSilent: 0,
+      offline: 0, refused: 0, invalid: 0, offlineEndedByRead: 0, endedByPlyRise: 0, nonMoveGeneric: 0,
     };
     fc.assert(
       fc.property(fc.array(step, { minLength: 12, maxLength: 40 }), (steps) => {
@@ -546,14 +621,18 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
           if (notice === "offline") seen.offline += 1;
           if (notice === "refused") seen.refused += 1;
           if (notice === "invalid") seen.invalid += 1;
-          if ((s.error === "refused" || s.error === "invalid") && notice === null) seen.nonMoveSilent += 1;
+          if (notice === "invalid") expect(s.failedAct, "C3 is a move's only").toBe("move");
+          if ((s.error === "refused" || s.error === "invalid") && s.failedAct !== "move") {
+            expect(notice, "a refused non-move is never silent: the generic C2").toBe("failed");
+            seen.nonMoveGeneric += 1;
+          }
           if (st.k === "snapshot") {
             expect(notice, "an answered read is never offline").not.toBe("offline");
             if (before.error === "network") seen.offlineEndedByRead += 1;
           }
           if (ply(s) > ply(before)) {
-            expect(notice === "refused" || notice === "invalid", "the board moved on: no C2/C3").toBe(false);
-            if (moveNotice(before) === "refused" || moveNotice(before) === "invalid") seen.endedByPlyRise += 1;
+            expect(notice === "refused" || notice === "invalid" || notice === "failed", "the board moved on: no C2/C3").toBe(false);
+            if (moveNotice(before) === "refused" || moveNotice(before) === "invalid" || moveNotice(before) === "failed") seen.endedByPlyRise += 1;
           }
           if (s.snap.game?.over) seen.overSeen += 1;
           if (before.polling && !s.polling) seen.pollingStopped += 1;
@@ -582,10 +661,12 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     expect(seen.endedStopped, "runs ending stopped").toBeGreaterThan(20);
     expect(seen.offline, "steps showing C1").toBeGreaterThan(200);
     expect(seen.refused, "steps showing C2").toBeGreaterThan(100);
-    expect(seen.invalid, "steps showing C3").toBeGreaterThan(100);
+    // Measured 98 at this seed once a 5xx stopped reading as C3 (notice
+    // routing): only a MOVE's rule refusal (here the 404s) raises it now.
+    expect(seen.invalid, "steps showing C3").toBeGreaterThan(50);
     expect(seen.offlineEndedByRead, "C1 ended by an answered read").toBeGreaterThan(30);
     expect(seen.endedByPlyRise, "C2/C3 ended by the board moving on").toBeGreaterThan(10);
-    expect(seen.nonMoveSilent, "a refused offer raises no move notice").toBeGreaterThan(100);
+    expect(seen.nonMoveGeneric, "a refused offer shows the generic C2").toBeGreaterThan(100);
   });
 });
 

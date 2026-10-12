@@ -5996,6 +5996,7 @@
   "externalPlay.room.notice.offline.body": "Tu reloj sigue corriendo.",
   "externalPlay.room.notice.refused.title": "Esa jugada no se ha podido hacer.",
   "externalPlay.room.notice.refused.body": "Tu posición se ha restaurado — inténtalo de nuevo.",
+  "externalPlay.room.notice.failed": "No se ha podido hacer. Inténtalo de nuevo.",
   "externalPlay.room.notice.invalid": "Esa jugada no está permitida aquí.",
   "externalPlay.room.pieceCredit": "Piezas de ajedrez de Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Tu tablero",
