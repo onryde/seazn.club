@@ -278,6 +278,8 @@ export class FakeMeeting {
   /** Every remote AUDIO consumer — the SDK auto-plays these. */
   consumedAudio: { peerId: string; producerId: string }[] = [];
   // ── test seams (not SDK behaviour) ────────────────────────────────────
+  /** What the loader asked `init` for: its own microphone/camera defaults. */
+  initDefaults: { audio: boolean; video: boolean } | null = null;
   /** Make the next N calls of a method throw, as a future SDK might. */
   failNext: { setMax: number; setViewMode: number; unsubscribe: number; leave: number } = {
     setMax: 0,
@@ -518,8 +520,9 @@ export function fakeRealtimeKit(
   const meetings: FakeMeeting[] = [];
   const mod = {
     default: {
-      init: async (o: { authToken: string }) => {
+      init: async (o: { authToken: string; defaults?: { audio: boolean; video: boolean } }) => {
         const m = new FakeMeeting(o.authToken, opts.selfUserId ?? "self-user", opts.presetMaxVideoStreams ?? 6);
+        m.initDefaults = o.defaults ?? null;
         // The room as the server holds it when this client arrives.
         opts.setup?.(m);
         meetings.push(m);
