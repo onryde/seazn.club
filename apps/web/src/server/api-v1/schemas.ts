@@ -88,8 +88,7 @@ import {
   PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT,
   type RelayPhaseReply as RelayPhaseReplyWire,
 } from "../../lib/relay-phase.ts";
-import type { BoardErrorCode } from "../external-play/types.ts";
-import type { GrantRefusal } from "../usecases/external-play/preflight.ts";
+import type { BoardErrorCode, GrantRefusal } from "../external-play/types.ts";
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 // ---------------------------------------------------------------------------

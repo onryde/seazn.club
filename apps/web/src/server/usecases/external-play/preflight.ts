@@ -16,6 +16,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import type { GrantRefusal } from "@/server/external-play/types";
 import { assertLichessConsentForPlay } from "../external-accounts";
 import {
   RealtimeKitError,
@@ -53,8 +54,9 @@ export const SEAT_REFUSAL_REASONS = [
   "lichess_reconsent_required",
 ] as const;
 
-/** The two seat refusals T2's play gate can produce. */
-export type GrantRefusal = "lichess_link_required" | "lichess_reconsent_required";
+/** The two seat refusals T2's play gate can produce — declared in the
+ *  import-free external-play/types.ts (review I6), re-exported here. */
+export type { GrantRefusal };
 
 export type SeatResult =
   | { seated: true; participant: ParticipantToken | null }
