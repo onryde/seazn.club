@@ -9,6 +9,13 @@ judge, Steps 4–7) has not run yet, so there is no `ci/` and no top-level `MATR
 check passes, with `checked > 0` wherever it applies. But 23 of the 246 scenario cases are red, for three causes
 (below), and none of them is a forfeit-after-Start case (rulings 112–114).
 
+**After rulings R16 (see "Rulings R16: the re-run", below):**
+- AB-AWARD is 4/4 `works`.
+- DW-ALL is 110/110 `works`.
+- WD-CASC is still 11/11 red:
+  - 5 cells are W4-owned (MB-004/005, ruling R16-2), so they are not counted as W2b reds.
+  - All 11 still fail I2 for a cause the first read below got wrong. It needs a ruling.
+
 ## The run
 
 | | |
@@ -47,6 +54,10 @@ every runner summary reads `vacuous: none`.
    final refused, table, and `life-reference-bracket-finish`. The repro2 run (`../w2b-repro/new`) could not show
    this, because the unfixed product refused every double walkover.
    **Class:** a harness gap. The generic invariant predates `double_walkover` (X-DW-1). It is not a product defect.
+   **Correction (R16 re-run):** the WD-CASC half of this is wrong.
+   - Its "5 unbeaten" were the two double-walkover sides, the champion, and two entrants who won a match and then
+     withdrew.
+   - With the double walkover fixed, 3 remain (see below).
 2. **WD-CASC's vacant-final half: Generate answers 500 (5 cells: cricket, carrom, volleyball, table tennis, ice
    hockey; the odd-indexed cells, `wdCascFinalHalf`).**
    - After the final is voided beside a voided feeder (title vacant, W4), the round loop calls Generate.
@@ -115,3 +126,60 @@ The `W2B_REPRO` gate is removed from `packages/engine/src/core/w2b-repro.probe.t
 | engine probes | none | 10 | 10 | 0 | 0 |
 | web probes | the label's `DATABASE_URL`, no `W2B_REPRO` | 12 | 12 | 0 | 0 |
 | web probes | `DATABASE_URL=` (empty) | 12 | 0 | 0 | 12 |
+
+## Rulings R16: the re-run (`local/L3/w2b-final-r16b-*`)
+
+The controller's rulings on the three causes:
+- **R16-1:** I2 is a W2b harness defect.
+- **R16-2:** WD-CASC's vacant-final half is W4's (MB-004/005).
+- **R16-3:** the IIHF refusal is a W2b product defect. In a kind where draws are off, a level award-policy abandon is
+  accepted with no result.
+
+The fixes on this branch:
+
+| commit | ruling | change |
+|---|---|---|
+| `605be790d` | R16-1 | I2 counts a stored `double_walkover` as beating both sides, and no longer flags it |
+| `3203d2140` | R16-3 | the period kernel: a level award-policy abandon has no result where the cfg refuses a draw (`drawStands`, shared with `supportsDraws`); the gate needs no exemption, because no draw reaches it |
+| `0bae87f10` | R16-3 | AB-AWARD: the level abandon expects abandoned with no outcome, and out of the table, where `supportsDraws` is false; every abandon delta judges `played` |
+| `410a3e20b` | R16-3 | `life-results-as-posted` accepts an abandon whose fold leaves no result: stored `abandoned`, no outcome |
+
+The three scenarios were re-run whole, on a fresh env:
+- `seazn-env up --label w2b --placement`, then `rebuild` at `0bae87f10`, with `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000`
+  baked in (`}("3000")` is in the static chunks).
+- The harness ran at `410a3e20b`, a clean tree.
+- 2026-10-12, 07:23:58 – 07:26:45 UTC; every run printed `EXIT=0`.
+- New run ids, `w2b-final-r16b-*`. The `w2b-final-new-*` runs above stay as the record of the reds before the fix.
+
+| run | cases | works | red |
+|---|---|---|---|
+| `local/L3/w2b-final-r16b-ab-award` | 4 | **4** | 0 |
+| `local/L3/w2b-final-r16b-dw-all` | 110 | **110** | 0 |
+| `local/L3/w2b-final-r16b-wd-casc` | 11 | 0 | **11** |
+
+**AB-AWARD `league|icehockey|iihf` now works.**
+- The level abandon is accepted and stored `abandoned` with no outcome.
+- Both sides are out of the table.
+- The first re-run (`0bae87f10`, not committed) still reds here on `life-results-as-posted`: "stored abandoned null
+  over a stream the harness cannot fold". That check had no case for an abandon its fold leaves without a result.
+  `410a3e20b` closes it.
+
+**WD-CASC, by cell:**
+- **W4-owned, MB-004/005 (ruling R16-2): cricket, carrom, volleyball, table tennis, ice hockey.**
+  - In these 5 cells Generate still answers 500 ("bye-award bulk UPDATE would strand home_slot_label") after the
+    void final.
+  - They are not counted as W2b reds. They are neither weakened nor skipped.
+- **All 11 cells: `I2-bracket-one-champion-ranks-permutation: 3 unbeaten entrants`.** This is not a double
+  walkover. Read from the env's database, `knockout|hockey|fih-outdoor`:
+  - QF1: seed 1 wins, then withdraws. Its semi-final is stored with that seat emptied and a bye `award` to the other
+    side, with `loser: null`.
+  - QF3: seed 6 takes the walkover from seed 3, then withdraws. Its semi-final, whose other feeder is QF4's double
+    walkover, is stored `abandoned` with both seats empty.
+  - So no stored fixture records either withdrawn winner losing, and I2 reads both as unbeaten, beside the champion.
+  - The W2b checks that judge this cascade pass in every cell.
+
+  **Open, for a ruling:**
+  - Either I2 counts an entrant the product stored as departed (withdrawn or disqualified) as beaten,
+  - or the product should record the withdrawn winner's next fixture as a walkover the winner lost (X-WD-3's shape),
+    not as a bye.
+
