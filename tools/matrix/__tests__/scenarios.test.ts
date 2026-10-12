@@ -198,6 +198,15 @@ describe("shared assertions — empty case first, then each way to go red", () =
       posted(r, "f1", over.foreign === undefined && over.finishedBefore === undefined ? null : win("a"), over);
       expect(resultsAsPosted(r, run([], [fx({})])), JSON.stringify(over)).toMatchObject({ verdict: "fail", checked: 1, evidence: [expect.stringMatching(/cannot fold/)] });
     }
+    // W2b Task 16 (R16-3, X-AB-1): an ABANDON whose fold has no result (a replay policy, or a level award-policy abandon
+    // where the stage refuses a draw) asserts no outcome, so the stored row must carry none - the two nulls foldParity
+    // accepts for an unasserted request (m-4). Its twins fail: a stored result, and a null left under another status.
+    const abandoned = new Recorder();
+    posted(abandoned, "f1", null, { request: "unasserted" });
+    expect(resultsAsPosted(abandoned, run([], [fx({ status: "abandoned", outcome: null })]))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(resultsAsPosted(abandoned, run([], [fx({ status: "decided", outcome: { kind: "draw" } })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(resultsAsPosted(abandoned, run([], [fx({ status: "abandoned", outcome: { kind: "draw" } })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(resultsAsPosted(abandoned, run([], [fx({ status: "cancelled", outcome: null })]))).toMatchObject({ verdict: "fail", checked: 1 });
   });
 
   it("resultsAsPosted: only the RECORDED withdrawal's cascade explains a result the harness did not post", () => {

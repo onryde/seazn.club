@@ -163,6 +163,11 @@ export function resultsAsPosted(rec: Recorder, observed: ObservedRun): CheckResu
       items.push(same || !cascadeWrote(f, w)
         ? { ok: same, note: `${stored}, the harness posted and folded ${text(p.local)}` }
         : { ok: true, note: `${stored}: struck by the recorded ${w!.policy} after the harness posted it` });
+    } else if (p !== undefined && p.finishedBefore === null && p.foreign === 0 && p.request === "unasserted") {
+      // An abandon whose fold leaves no result (X-AB-1: the replay policy, or a level award-policy abandon where the
+      // stage refuses a draw, ruling R16-3) asserts no outcome, so the stored row carries none and stays abandoned —
+      // the two nulls foldParity accepts for an unasserted request (m-4), and no others.
+      items.push({ ok: f.status === "abandoned" && f.outcome === null, note: `${stored}, the harness posted an abandon its fold leaves without a result` });
     } else if (p !== undefined) {
       const why = p.finishedBefore !== null ? `already ${p.finishedBefore} before it posted` : p.foreign !== 0 ? `${p.foreign} foreign event(s)` : "its local fold has no outcome";
       items.push({ ok: false, note: `${stored} over a stream the harness cannot fold (${why})` });
