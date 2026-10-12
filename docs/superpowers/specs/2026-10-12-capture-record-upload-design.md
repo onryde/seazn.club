@@ -118,7 +118,9 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
     survives the end, so the tok can still be checked. The 24 h run from the LATER of:
     - the code's own end: `ended_at` for a reissue, or, for an expiry, `finished_at` plus the grace. Not the lazily
       written `ended_at` of an expiry, which can land long after the code stopped serving;
-    - the end of the last session of the fixture that was open when the code ended, which C1(a) or C1(b) served.
+    - the end of the last session of the fixture that was open when the code ended, which C1(a) or C1(b) served —
+      "open when it ended" judged against the code's own end above (review fix 4: for an expiry, `finished_at` plus
+      the grace, so a session begun after the code stopped serving and before the lazy write cannot stretch the tail).
 
     The ruling was relayed as "24 h after the code's session has ended", and Q1 asked about "a tok whose code ended
     no more than 24 h ago". The later-of rule meets both: with a session open, the tail runs from its end; with none,
@@ -205,14 +207,24 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
   server's own second line. Each rule has a vector the line shape admits but the server drops (`line-secret-*`),
   and each vector trips its own rule alone.
 - **Line by line (owner ruling RL, 2026-10-12; it replaces "whole body or nothing").** A bad line is dropped and the
-  rest of the record is stored. A bad line is one the line shape refuses (a key off the allow-list, a value off its
-  class, a line that is not a JSON object), one that is not UTF-8 (the body is split on the LF byte, so a bad byte
+  rest of the record is stored. A bad line is one the line shape refuses (a key off the allow-list — `__proto__`
+  included, which zod's strict check skips and the twin refuses on its own (review fix 2) — a value off its class, a
+  line that is not a JSON object), one that names a key twice (review fix 1: JSON.parse keeps the LAST value, so a
+  first value would pass a screen of the parsed object; the rule is on the line's TEXT, and fixture
+  `line-server-duplicate-key` pins it), one that is not UTF-8 (the body is split on the LF byte, so a bad byte
   spoils only its own line), or one with a secret-shaped value. It is counted in `dropped` and apart in
   `invalid_lines` (§9), and never stored, logged, quoted or echoed: no message names it. §6 says how a bad line meets
   attribution.
+- **What is stored (review fix 1).** A kept line is stored as the server re-serialises the object it screened
+  (`JSON.stringify` of the parsed line), never the bytes sent, so no spelling the screen did not judge reaches storage.
 - **Order:** rate limit, then auth (401/404), then size (413), then a body that cannot be read as lines or has none
   (422), then each line's shape and allow-list, then its secret-shaped values, then attribution, storage and the 201.
   A stranger's body is never inflated.
+- **Proxy (review fix 5).** `apps/web/src/proxy.ts` leaves the records path out of its matcher. While proxy runs on
+  a path, Next buffers the request body (`proxyClientMaxBodySize`, 10 MB by default) before the route's own 1 MB
+  raw cap, its rate limit and its auth. The one thing proxy does for an /api POST is the CSRF Origin check, which
+  guards nothing on a Bearer-only, cookie-less route. Every other path still runs proxy
+  (`src/__tests__/proxy-matcher.test.ts`, and the `capture-record` smoke on a real build).
 
 ## 6. Line attribution: the cross-code rule (A1, A2)
 
@@ -315,7 +327,9 @@ The implementing PR owes the migration. The approved shape:
 
 ## 10. Admin view (P7 and Q5, approved)
 
-`/admin` is staff-only and desktop-only. It is verified at 1280 and nowhere else (AGENTS.md).
+`/admin` is staff-only and desktop-only. It is verified at 1280 and nowhere else (AGENTS.md). A Next layout does not
+gate the segments under it, so the page and BOTH reads behind it (`captureRecordByRef`, `captureRecordsOfFixture`)
+each call `requireStaff()` themselves (review fix 3).
 
 - **`/admin/capture-records?ref=R-7K2Q`** looks a record up by its ref, which is the support path: operator, then
   organiser, then staff.
@@ -527,3 +541,6 @@ test.
 - M13 (ruling RL): the drop is made a refusal (a 422 when any line is bad); a use-case test must go red.
 - M14 (Q7): a closing kind removed from the set; the Q7 test must go red.
 - M15 (ruling RL): an unreadable line made transparent to attribution; the boundary test must go red.
+- Review fixes (PR #943), one mutant each: the verbatim bytes stored again; the duplicate-key check removed; the
+  twin's `__proto__` refusal removed; a read's `requireStaff` removed; the tail's session filter put back on the lazy
+  `ended_at`; the records path put back under the proxy matcher; a guard's error made to carry a line's content.
