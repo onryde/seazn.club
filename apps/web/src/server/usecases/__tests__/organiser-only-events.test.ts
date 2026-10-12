@@ -780,4 +780,48 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
     await scoreEvent(admin, id, { expected_seq: before, type: "core.abandon", payload: { reason: "rain" } });
     expect(await seq(id)).toBe(before + 1);
   });
+
+  it("X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists, through the real gate — a non-organiser is refused 403 and nothing is written, an organiser is admitted, and a value the row does not list still passes", async () => {
+    // single-sport: boardgame. The derived table is empty since W2b D15, so the payload arm (the sport half of X-ST-2,
+    // which X-RS-3 routes through) is reached only by a row configured here — on the live table object the gate reads,
+    // removed in `finally`. The listed value is deliberately NOT "forfeit": the arm matches the row's own values, never
+    // one fixed word. Without a row, these same authorities post `resign` and are accepted (the ORDINARY test above).
+    const TYPE = "boardgame.result";
+    const table = ORGANISER_ONLY_SPORT_EVENTS as Record<string, { field: string; values: readonly string[] }>;
+    expect(Object.hasOwn(table, TYPE), "the rig: the type carries no row of its own").toBe(false);
+    let refused = 0;
+    let admitted = 0;
+    let unlisted = 0;
+    table[TYPE] = { field: "method", values: ["resign"] };
+    try {
+      for (const who of [...REFUSED, ...ALLOWED]) {
+        const { s, id, f } = await ready({ sport: "boardgame" });
+        const auth = await asAuthority(s, id, who);
+        const before = await seq(id);
+        const write = scoreEvent(auth, id, { expected_seq: before, type: TYPE, payload: { winner: f.home, method: "resign" } });
+        if ((REFUSED as readonly Who[]).includes(who)) {
+          await expect(write, who).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/^Only an organiser can /) });
+          expect(await seq(id), who).toBe(before);
+          refused++;
+        } else {
+          const out = await write;
+          expect([out.seq, await seq(id)], who).toEqual([before + 1, before + 1]);
+          admitted++;
+        }
+      }
+      // value-scoped, not type-wide: a method the row does not list passes for every non-organiser
+      for (const who of REFUSED) {
+        const { s, id, f } = await ready({ sport: "boardgame" });
+        const auth = await asAuthority(s, id, who);
+        const before = await seq(id);
+        await scoreEvent(auth, id, { expected_seq: before, type: TYPE, payload: { winner: f.home, method: "checkmate" } });
+        expect(await seq(id), `checkmate ${who}`).toBe(before + 1);
+        unlisted++;
+      }
+    } finally {
+      delete table[TYPE];
+    }
+    expect(Object.keys(ORGANISER_ONLY_SPORT_EVENTS), "the configured row is removed").toEqual([]);
+    expect({ refused, admitted, unlisted }).toEqual({ refused: REFUSED.length, admitted: ALLOWED.length, unlisted: REFUSED.length });
+  });
 });

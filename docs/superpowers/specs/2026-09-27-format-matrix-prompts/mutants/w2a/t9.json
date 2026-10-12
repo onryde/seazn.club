@@ -247,21 +247,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "I-1: the vocabulary-free sweep"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
