@@ -617,8 +617,8 @@
   {
     "id": "r1-m1-match-card-glues",
     "file": "apps/web/src/components/public-site/matches-hub/match-card.tsx",
-    "find": "            <ScoreSentence text={m.resultLine} />",
-    "replace": "            {m.resultLine}",
+    "find": "text-ink\">\n            <ScoreSentence text={m.resultLine} />",
+    "replace": "text-ink\">\n            {m.resultLine}",
     "killers": [
       {
         "cwd": "apps/web",
@@ -647,8 +647,8 @@
   {
     "id": "r1-m1-console-glues",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
-    "find": "            <ScoreSentence text={decidedLine} />",
-    "replace": "            {decidedLine}",
+    "find": "<OutcomeTagText text={decidedLine} tag={decidedTag} scores />",
+    "replace": "<OutcomeTagText text={decidedLine} tag={decidedTag} />",
     "killers": [
       {
         "cwd": "apps/web",

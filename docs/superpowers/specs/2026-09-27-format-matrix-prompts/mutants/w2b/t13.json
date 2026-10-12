@@ -281,8 +281,8 @@
   {
     "id": "run-sheet-no-ledger",
     "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
-    "find": "forfeitLedgerOfReason(fixture.abandon_reason)",
-    "replace": "forfeitLedgerOfReason(null)",
+    "find": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason))",
+    "replace": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(null))",
     "killers": [
       {
         "cwd": "apps/web",
@@ -876,7 +876,7 @@
   {
     "id": "b-banner-chip-dropped",
     "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "            {final.forfeit ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+    "find": "            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
     "replace": "            {false ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
     "killers": [
       {
@@ -884,7 +884,7 @@
         "files": [
           "src/components/public-site/__tests__/knockout-tab.test.tsx"
         ],
-        "name": "a final won by forfeit, every reason: the final's tag beside the line"
+        "name": "a final won on a retirement or a disqualification"
       }
     ]
   },
