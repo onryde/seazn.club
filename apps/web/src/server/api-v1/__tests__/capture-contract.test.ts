@@ -15,7 +15,7 @@
 //   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
 //     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
 //     (code 1..8, pool ^[A-Z]$), and `role.kind` as an OPEN string whose prose lists every kind the engine declares.
-//   * the record upload's contract (capture-record.v1, PROPOSED 2026-10-12, design only): no route and no twin yet, so
+//   * the record upload's contract (capture-record.v1, design APPROVED by the owner 2026-10-12): no route and no twin yet, so
 //     its fixtures are judged by the published bytes alone, its keys against capture's allow-list typed here, and a
 //     tripwire fails the day a twin appears without joining the parity test.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
@@ -53,7 +53,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "b8c3f506d907b20a0f2217a538b4854eb1d8cf1d53f5c280970e1263c574b001",
+  "capture-record.v1.json": "09582e858547dde50c43c9e5e2fff0d77d547716a5117787848b4dbe967a4745",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -249,12 +249,12 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 };
 
 // ---------------------------------------------------------------------------------------------------------------
-// capture-record.v1 — PROPOSED, design only (spec 2026-10-12-capture-record-upload-design.md). No route, no twin.
+// capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md). No route, no twin.
 // ---------------------------------------------------------------------------------------------------------------
 const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 36], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 38], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
 /** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
@@ -1084,7 +1084,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(36 + 6 + 8);
+    expect(names).toHaveLength(38 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
@@ -1143,6 +1143,18 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       partial++;
     }
     expect(partial).toBe(3);
+    // Capture's own prose about SRT credentials (SessionConfig.kt problems(), verbatim, as a pair-refused line's
+    // problems) names the word with no credential after it: admitted, and it trips no rule, S3's whitespace form
+    // included (its 16-character floor is what spares "passphrase is" and "streamId is").
+    let prose = 0;
+    for (const [name, text] of [["line-valid-prose-srt-passphrase-length", "srt passphrase is not 10–79 characters"], ["line-valid-prose-srt-streamid-blank", "srt streamId is blank"]] as const) {
+      const line = fixture(RECORD_DIR, name);
+      expect(line.problems, `${name}: capture's string, verbatim`).toBe(text);
+      expect(fileAdmits(RECORD, "", line), `${name}: the line shape admits it`).toBe(true);
+      expect(tripped(line), `${name}: it trips no rule`).toEqual([]);
+      prose++;
+    }
+    expect(prose).toBe(2);
     // No string value of any valid line — the near misses, capture's other scrubbed outputs and the plain lines — is
     // secret-shaped: the rules do not refuse what capture correctly sends.
     let validLines = 0, strings = 0;
@@ -1152,7 +1164,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(17);
+    expect(validLines).toBe(19);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
