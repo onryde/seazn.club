@@ -1004,5 +1004,65 @@
     "name": "X-PS-2: retired and an in-match disqualification credit statsMatch true"
    }
   ]
+ },
+ {
+  "id": "r115-row-x-ps-1-amendment-dropped",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": " Amended by ruling 115 (2026-10-12): nor does a disqualification with nothing played (no Start, or a Start with nothing played).",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "r115-spec-x-ps-2-amendment-dropped",
+  "file": "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md",
+  "find": " Amended by ruling 115 (2026-10-12): a DQ is in-match once something is played (any sport event after the Start, rulings 112 and 114); with nothing played it is X-PS-1's.",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "r115-row-x-ps-2-status-91",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "it is X-PS-1's. | product rule W2b-R9; ruling 115 (2026-10-12) | signed 115 2026-10-12 |",
+  "replace": "it is X-PS-1's. | product rule W2b-R9; ruling 115 (2026-10-12) | signed 91 2026-10-08 |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "r115-row-x-rt-1-proof-unnamed",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "<br>`packages/engine/src/sport/player-stats-ruling-115.test.ts`<br>`packages/reference/src/families/walkover-credit.test.ts`<br>`tools/matrix/__tests__/reference-walkover-credit.test.ts`<br>`tools/matrix/__tests__/w2b-generators.test.ts`",
+  "replace": "<br>`packages/engine/src/sport/player-stats-ruling-115.test.ts`<br>`packages/engine/src/stats/stats.test.ts`<br>`packages/reference/src/families/walkover-credit.test.ts`<br>`tools/matrix/__tests__/reference-walkover-credit.test.ts`<br>`tools/matrix/__tests__/w2b-generators.test.ts`",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "every signed or deviation row names a proving test that exists and contains the id"
+   }
+  ]
  }
 ]

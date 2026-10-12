@@ -152,8 +152,8 @@
  {
   "id": "x-rt-1-dq-credit-stated",
   "file": "packages/engine/rules/cross-sport.md",
-  "find": "a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
-  "replace": "with nothing played (a bare Start) a disqualification, like a withdrawal (X-WD-6), takes the walkover credit.",
+  "find": "a disqualification with nothing played (no Start, or a Start with nothing played) is treated like a walkover: the sport's walkover credit, and no match in players' stats (X-PS-1).",
+  "replace": "a disqualification with nothing played (no Start, or a Start with nothing played) takes the sport's walkover credit and counts as a match in players' stats (X-PS-2).",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -212,8 +212,8 @@
  {
   "id": "spec-x-rt-1-dq-walkover-credit",
   "file": "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md",
-  "find": "a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
-  "replace": "with nothing played (a bare Start) a disqualification, like a withdrawal (X-WD-6), takes the walkover credit — the retirement credit has no played score to keep.",
+  "find": "a disqualification with nothing played (no Start, or a Start with nothing played) is treated like a walkover: the sport's walkover credit, and no match in players' stats (X-PS-1).",
+  "replace": "a disqualification with nothing played (no Start, or a Start with nothing played) takes the sport's walkover credit, a match in players' stats (X-PS-2).",
   "killers": [
    {
     "cwd": "packages/engine",

@@ -28,17 +28,20 @@ const OPEN = "⬜ open";
  *    until owner ruling 113 (2026-10-11) settled its wording ("Amends X-RS-1, X-RT-1 and X-WD-6"), so it carries 113;
  *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
  *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
- *  - X-RS-1 and X-RT-1 carry owner ruling 113 (2026-10-11), which changed their text after ruling 112 (a walkover stays
+ *  - X-RS-1 carries owner ruling 113 (2026-10-11), which changed its text after ruling 112 (a walkover stays
  *    recordable after the start until something is played): nothing played means not started, for every reason, and a
- *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). */
+ *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). X-RT-1 carried 113 too;
+ *  - X-RT-1, X-PS-1 and X-PS-2 carry owner ruling 115 (2026-10-12), which changed their text ("Amends X-PS-1, X-PS-2
+ *    and X-RT-1"): a disqualification with nothing played is treated like a walkover — its credit, and no match in
+ *    players' stats. Appendix A carries the same text, so none of the three is in AMENDED_TEXT. */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
     "X-RS-1": signed(113, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
     "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
-    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(113, "2026-10-11"),
+    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(115, "2026-10-12"),
     "X-AB-1": signed(88), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
-    "X-PS-1": signed(91), "X-PS-2": signed(91), "X-DE-1": signed(93), "X-WD-5": signed(90),
+    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(115, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
     "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
@@ -501,7 +504,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
   });
 });
 
-describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114)", () => {
+describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115)", () => {
   it("empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing", () => {
     const problems = w2bProblems([]);
     expect(problems).toHaveLength(56);
@@ -510,7 +513,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
   });
 
-  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108 or 113 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
+  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113 or 115 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
     const ids = w2bIds();
     expect(ids).toHaveLength(55);
     expect(new Set(ids).size).toBe(55); // no id pinned twice
@@ -537,7 +540,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bProblems(edit("X-BR-1", { provedBy: ["apps/web/src/server/engine-db/__tests__/settle-seating.test.ts"] }))).toHaveLength(1);
   });
 
-  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1) or addition (PF-6, PF-7)", () => {
+  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1), Appendix A amended in place (rulings 113, 115) or addition (PF-6, PF-7)", () => {
     const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
     expect(appendix.rows.length + appendix.amendments.length, "Appendix A parses to the total it states").toBe(appendix.stated);
     expect(appendix.amendments).toEqual(["X-BR-1 (amend)"]);
