@@ -81,6 +81,7 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
   it("joins with its own token, audio and video OFF, and the cap at 0 before join", async () => {
     const { m } = await arbiterIn(fullRoom);
     expect(m.authToken).toBe("arb-token");
+    expect(m.initDefaults, "never its own microphone or camera").toEqual({ audio: false, video: false });
     expect(m.calls.indexOf("setMax:0")).toBeGreaterThanOrEqual(0);
     expect(m.calls.indexOf("setMax:0")).toBeLessThan(m.calls.indexOf("join"));
     expect(m.participants.viewMode).toBe("MANUAL");
@@ -134,6 +135,88 @@ describe("the arbiter receives both players' cameras, and nothing else", () => {
       checks++;
     }
     expect(checks).toBe(3);
+  });
+
+  // MANUAL refused for a whole rejoin's guard run (ARBITER_MAX_ATTEMPTS in a
+  // row, nothing yet selected so nothing to leave over): the SDK stays in
+  // ACTIVE_GRID and selects at the media join — audio for everyone, and (the
+  // cap-0 leak) a stranger's video. The next guard run, on that arrival,
+  // must empty both before the consumer sync.
+  async function rejoinWithManualRefused(
+    select: string[],
+    room: (m: FakeMeeting) => void,
+    o: { refusals?: number; inWindow?: (m: FakeMeeting) => void; before?: (m: FakeMeeting) => void } = {},
+  ) {
+    const rtk = fakeRealtimeKit({ presetMaxVideoStreams: 2, selfUserId: "rtk-arbiter", setup: room });
+    const held: (() => void)[] = [];
+    const cams = await makeJoinArbiter(rtk.load, reports().report, (fn) => (held.push(fn), () => undefined))({
+      authToken: "t",
+      ...SEATS,
+    });
+    await settle();
+    const m = rtk.meetings[0]!;
+    o.before?.(m);
+    await settle();
+    m.select(select);
+    m.failNext.setViewMode = o.refusals ?? ARBITER_MAX_ATTEMPTS;
+    // What the SDK selected during the rejoin — the precondition each test
+    // states, so a fake that never selects cannot pass them.
+    const selected = { audio: new Set<string>(), video: new Set<string>() };
+    m.participants.audioSubscribed.on("participantJoined", (p: unknown) => selected.audio.add((p as { id: string }).id));
+    m.participants.videoSubscribed.on("participantJoined", (p: unknown) => selected.video.add((p as { id: string }).id));
+    await m.reconnect(o.inWindow ? { inWindow: o.inWindow } : {});
+    await settle();
+    return { m, cams, held, selected };
+  }
+
+  it("a rejoin whose MANUAL is refused until the media join: the audio and the stranger's video it selected are dropped before the sync", async () => {
+    const { m, cams, selected } = await rejoinWithManualRefused([OTHER.peer, W.peer, B.peer], fullRoom);
+    expect(selected.audio.size, "precondition: the SDK selected microphones").toBeGreaterThan(0);
+    expect(selected.video.has(OTHER.peer), "precondition: …and the stranger's video (the cap-0 leak)").toBe(true);
+    expect(consumedAudio(m), "nothing heard").toEqual([]);
+    expect(consumedVideo(m).filter((p) => p.startsWith(OTHER.peer)), "never the stranger's camera").toEqual([]);
+    expect(m.calls).not.toContain("leave");
+    expect(cams.tile("white").live).toBe(true);
+  });
+
+  it("MANUAL refused ONCE on a rejoin while a peer's media join selects in that window: the guard's retry empties the audio and the stranger before the sync", async () => {
+    const { m, cams, selected } = await rejoinWithManualRefused([OTHER.peer, W.peer, B.peer], fullRoom, {
+      refusals: 1,
+      inWindow: (mm) => mm.peerMediaJoined(OTHER.peer),
+    });
+    expect(selected.audio.size, "precondition: microphones selected in the window").toBe(3);
+    expect(selected.video.has(OTHER.peer), "precondition: the stranger's video selected (cap-0 leak)").toBe(true);
+    expect(consumedAudio(m), "nothing heard").toEqual([]);
+    expect(consumedVideo(m).filter((p) => !p.endsWith("-cam") || p.startsWith(OTHER.peer)), "only the players' cameras").toEqual([]);
+    expect(m.calls).not.toContain("leave");
+    expect(cams.tile("black").live).toBe(true);
+  });
+
+  it("a player RELOADS during that rejoin window (a new peer the guard never refused, selected for video AND audio): its microphone is still dropped", async () => {
+    const { m, cams, selected } = await rejoinWithManualRefused([OTHER.peer, W.peer, B.peer], fullRoom, {
+      refusals: 1,
+      inWindow: (mm) => {
+        mm.peerJoins("w2-peer", W.user);
+        mm.produce("w2-peer", { producerId: "w2-cam", kind: "video", screenShare: false });
+        mm.produce("w2-peer", { producerId: "w2-mic", kind: "audio", screenShare: false });
+        mm.select(["w2-peer", B.peer, OTHER.peer]);
+      },
+      before: (mm) => mm.peerLeaves(W.peer),
+    });
+    expect(selected.audio.has("w2-peer") && selected.video.has("w2-peer"), "precondition: the new peer selected for both").toBe(true);
+    expect(consumedAudio(m), "nothing heard").toEqual([]);
+    expect(cams.tile("white")).toMatchObject({ present: true, live: true });
+    expect((cams.tile("white").track as unknown as { id: string }).id).toBe("remote-w2-cam");
+  });
+
+  it("…and when only the AUDIO map moves (one microphone, no video selected), that arrival alone is enough", async () => {
+    const { m, selected } = await rejoinWithManualRefused([OTHER.peer], (mm) => {
+      mm.peerJoins(OTHER.peer, OTHER.user);
+      mic(mm, OTHER.peer);
+    });
+    expect([...selected.audio], "precondition: the microphone was selected").toEqual([OTHER.peer]);
+    expect(selected.video.size, "precondition: no video map arrival to ride on").toBe(0);
+    expect(consumedAudio(m)).toEqual([]);
   });
 
   it("a media-node reconnect (no SOCKET_PEERS): still nothing heard", async () => {
