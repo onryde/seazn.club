@@ -3959,7 +3959,7 @@
   "forfeitDialog.why": "Pourquoi ?",
   "forfeitDialog.reason.walkover": "Forfait : ne s'est pas présenté",
   "forfeitDialog.reason.retired": "Abandon : arrêt en cours de match",
-  "forfeitDialog.reason.disqualified": "Disqualification",
+  "forfeitDialog.reason.disqualified": "Disqualification : exclusion pour infraction au règlement",
   "forfeitDialog.preview": "Score crédité : {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "Aucun score n'est crédité.",
   "forfeitDialog.guidance.noNextMatch": "« Les deux » n'est pas proposé ici : ce match ne mène à aucun match suivant, et une finale a besoin d'un résultat. Reprogrammez-la, ou enregistrez un forfait si l'un des deux s'est présenté. Si la compétition doit se clore sans match, tranchez-la.",

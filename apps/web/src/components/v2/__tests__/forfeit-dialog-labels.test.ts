@@ -82,3 +82,27 @@ describe("the both-sides chip names the parties (audit 1.1)", () => {
     expect(checked, `locales checked: ${checked}`).toBe(LOCALES.length);
   });
 });
+
+// Design audit 1.2: the reason radios took two forms — "Walkover: didn't turn up", "Retired: stopped during the match"
+// and a bare "Disqualified". One form for all three, in every locale: "Noun: gloss" (the locale's own colon spacing),
+// and the noun is the one the Confirm button records ("Record retirement"), so the action keeps its name through the
+// flow. The Confirm labels are read, never retyped.
+describe("the reason radios share one form, and name what Confirm records (audit 1.2)", () => {
+  const REASONS = ["walkover", "retired", "disqualified"] as const;
+  it("in every locale: each reason is \"Noun: gloss\", and the Confirm label carries the noun", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      for (const r of REASONS) {
+        const label = d[`forfeitDialog.reason.${r}`]!;
+        const m = /^(\S[^:]*?)\s?:\s+(\S.*)$/u.exec(label);
+        expect(m, `${locale} ${r}: "${label}" is "Noun: gloss"`).not.toBeNull();
+        const noun = m![1]!.toLocaleLowerCase(locale);
+        const confirm = d[`forfeitDialog.confirm.${r}`]!.toLocaleLowerCase(locale);
+        expect(confirm, `${locale} ${r}: Confirm "${d[`forfeitDialog.confirm.${r}`]}" records the radio's noun "${noun}"`).toContain(noun);
+        checked++;
+      }
+    }
+    expect(checked, `reason labels checked: ${checked}`).toBe(LOCALES.length * REASONS.length);
+  });
+});

@@ -3959,7 +3959,7 @@
   "forfeitDialog.why": "¿Por qué?",
   "forfeitDialog.reason.walkover": "Incomparecencia: no se presentó",
   "forfeitDialog.reason.retired": "Retirada: dejó de jugar durante el partido",
-  "forfeitDialog.reason.disqualified": "Descalificación",
+  "forfeitDialog.reason.disqualified": "Descalificación: expulsión por incumplir el reglamento",
   "forfeitDialog.preview": "Resultado acreditado: {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "No se acredita ningún resultado.",
   "forfeitDialog.guidance.noNextMatch": "«Ambos» no se ofrece aquí: este partido no da paso a ningún partido siguiente, y una final necesita un resultado. Reprográmala, o registra una incomparecencia si un lado se presentó. Si la competición debe cerrarse sin partido, resuélvela.",
