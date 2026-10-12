@@ -1,4 +1,5 @@
-// W2b Task 16, controller ruling R16-3 (Appendix A FB-AB-1, which HK-AB-1 and IH-AB-1 inherit; X-AB-1). Through the
+// W2b Task 16, ruling R16-3, owner-confirmed by ruling 117 (Appendix A HK-AB-1 and IH-AB-1, which ruling 117 amends;
+// FB-AB-1, which they inherit; X-AB-1). Through the
 // gate: a level award-policy abandon in a draw kind whose cfg refuses a draw (`supportsDraws` false — an overtime or a
 // shootout is configured) is ACCEPTED with no result: status `abandoned`, no outcome, out of the table. It was refused
 // 422 DRAW_NOT_ALLOWED (append-event.ts, the no-draw gate), so the organiser could not record the abandon at all — the
@@ -78,7 +79,7 @@ async function levelAbandon(c: Case, kind: StageKind) {
   return { s, id, home, away };
 }
 
-describe.runIf(HAS_DB)("R16-3: a level award-policy abandon where the stage refuses a draw (FB-AB-1, X-AB-1)", () => {
+describe.runIf(HAS_DB)("R16-3, ruling 117: a level award-policy abandon where the stage refuses a draw (HK-AB-1, IH-AB-1; FB-AB-1, X-AB-1)", () => {
   it("the sweep is not vacuous: draw-refusing and draw-taking cases both exist, and the truth run's cell (ice hockey's iihf, a league) is one", () => {
     console.info(`R16-3: ${REFUSING.length} draw-refusing cases (${REFUSING.map((r) => `${r.m.key}/${r.variant} ${r.kind}`).join(", ")}); ${STANDING.length} draw-taking cfgs`);
     expect(REFUSING.length).toBeGreaterThan(0);

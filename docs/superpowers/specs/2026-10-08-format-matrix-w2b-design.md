@@ -527,7 +527,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 |---|---|---|---|---|---|
 | HK-WO-1 | Hockey walkover = 5-0 (default changes from 3). | FIH GTR Reg 13.1 | signed 86 2026-10-08 | — | — |
 | HK-RT-1 | Hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue (RBB RB2B-6) | signed 87 2026-10-08 | — | — |
-| HK-AB-1 | Same as FB-AB-1 for hockey. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
+| HK-AB-1 | Same as FB-AB-1 for hockey. Amended by ruling 117 (2026-10-12): where the cfg refuses a draw (an overtime or a shoot-out configured, as fih-shootout does), a level abandon is accepted with no result, in every kind: it stays out of the table, flagged for the organiser to settle or replay (X-AB-1), never refused and never forced to a draw. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `icehockey.md (new)`
 
@@ -535,7 +535,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 |---|---|---|---|---|---|
 | IH-WO-1 | Ice hockey walkover = 5-0. | product rule (IIHF Rule 66 names no score) W2b-R4 | signed 86 2026-10-08 | — | — |
 | IH-RT-1 | Ice hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue | signed 87 2026-10-08 | — | — |
-| IH-AB-1 | Same as FB-AB-1 for ice hockey. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
+| IH-AB-1 | Same as FB-AB-1 for ice hockey. Amended by ruling 117 (2026-10-12): where the cfg refuses a draw (an overtime or a shoot-out configured, as iihf, the default, does), a level abandon is accepted with no result, in every kind: it stays out of the table, flagged for the organiser to settle or replay (X-AB-1), never refused and never forced to a draw. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `volleyball.md (new)`
 

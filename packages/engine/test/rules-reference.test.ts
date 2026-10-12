@@ -33,7 +33,10 @@ const OPEN = "⬜ open";
  *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). X-RT-1 carried 113 too;
  *  - X-RT-1, X-PS-1 and X-PS-2 carry owner ruling 115 (2026-10-12), which changed their text ("Amends X-PS-1, X-PS-2
  *    and X-RT-1"): a disqualification with nothing played is treated like a walkover — its credit, and no match in
- *    players' stats. Appendix A carries the same text, so none of the three is in AMENDED_TEXT. */
+ *    players' stats. Appendix A carries the same text, so none of the three is in AMENDED_TEXT;
+ *  - HK-AB-1 and IH-AB-1 carry owner ruling 117 (2026-10-12), which confirmed R16-3 and qualifies them: where the cfg
+ *    refuses a draw, a level abandon is accepted with no result (X-AB-1). Appendix A carries the same text. FB-AB-1 keeps
+ *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it. */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
     "X-RS-1": signed(113, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
@@ -45,8 +48,8 @@ const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
-  "hockey.md": { "HK-WO-1": signed(86), "HK-RT-1": signed(87), "HK-AB-1": signed(88) },
-  "icehockey.md": { "IH-WO-1": signed(86), "IH-RT-1": signed(87), "IH-AB-1": signed(88) },
+  "hockey.md": { "HK-WO-1": signed(86), "HK-RT-1": signed(87), "HK-AB-1": signed(117, "2026-10-12") },
+  "icehockey.md": { "IH-WO-1": signed(86), "IH-RT-1": signed(87), "IH-AB-1": signed(117, "2026-10-12") },
   "volleyball.md": { "VB-WO-1": signed(86), "VB-RT-1": signed(108, "2026-10-11") },
   "tabletennis.md": { "TT-WO-1": signed(86), "TT-RT-1": signed(87) },
   "tennis.md": { "TN-WO-1": signed(86), "TN-RT-1": signed(87) },

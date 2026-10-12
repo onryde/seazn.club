@@ -119,7 +119,7 @@ describe("abandon results per sport (spec §5.2; D8, D16)", () => {
 // then refused 422 DRAW_NOT_ALLOWED: the organiser could not record the abandon at all (the truth run's IIHF cell).
 // Swept over every declared variant of every module that keeps the award policy, against every draw kind - the
 // engine's own declarations (`variants`, `configSchema`, `supportsDraws`, `DRAW_KINDS`), never a typed list.
-describe("R16-3: a level award-policy abandon where the cfg refuses a draw has no result", () => {
+describe("R16-3, ruling 117 (HK-AB-1, IH-AB-1): a level award-policy abandon where the cfg refuses a draw has no result", () => {
   const CASES = builtinModules.flatMap((m) =>
     Object.entries(m.variants).flatMap(([variant, declared]) => {
       const raw = { ...(declared as Record<string, unknown>), abandonPolicy: "award" };
