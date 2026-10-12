@@ -1,86 +1,1276 @@
 [
-  {"id": "ref-hockey-3", "file": "packages/reference/src/families/walkover-credit-cfgs.ts", "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }", "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 3 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "HK-WO-1: a hockey walkover is 5-0"}]},
-  {"id": "ref-dw-points", "file": "packages/reference/src/families/walkover-credit.ts", "find": "points: \"zero\", statsMatch: false };", "replace": "points: \"win\", statsMatch: false };", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-DW-1 / X-DW-4: a double walkover is all zero"}]},
-  {"id": "ref-enumeration-empty", "file": "packages/reference/src/families/walkover-credit.ts", "find": "return [...base, ...variants];", "replace": "return [];", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "the enumeration is never empty"}]},
-  {"id": "ref-credit-unknown-sport", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (!(CREDIT_SPORTS as readonly string[]).includes(c.sport)) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-unknown-reason", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (!(CREDIT_REASONS as readonly string[]).includes(c.reason)) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-played-before-start", "file": "packages/reference/src/families/walkover-credit.ts", "find": "&& playedAny && !chess) throw", "replace": "&& playedAny && false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-RS-1 \\(ruling 112\\): a walkover or a double walkover with a scoresheet holding play is refused"}]},
-  {"id": "ref-credit-chess-after-start", "file": "packages/reference/src/families/walkover-credit.ts", "find": "&& playedAny && !chess) throw", "replace": "&& playedAny) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "BG-WO-1: a chess forfeit is 1-0"}]},
-  {"id": "ref-credit-not-started", "file": "packages/reference/src/families/walkover-credit.ts", "find": "&& !started) throw new CreditRefused(\"not-started\"", "replace": "&& false) throw new CreditRefused(\"not-started\"", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-RS-1 \\(ruling 112\\): a walkover or a double walkover with a scoresheet holding play is refused"}]},
-  {"id": "ref-credit-fdc-strict", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (realW - realO > g) {", "replace": "if (realW - realO >= g) {", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "FB-RT-1: 3-0, or the real score"}]},
-  {"id": "ref-credit-goals-min", "file": "packages/reference/src/families/walkover-credit.ts", "find": "!Number.isInteger(g) || g < 1)", "replace": "!Number.isInteger(g))", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "cfg-invalid: each value a credit row reads is checked"}]},
-  {"id": "ref-credit-set-past-end", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (a > setEnd(r, i, b) || b > setEnd(r, i, a)) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "played-malformed: unequal lengths"}]},
-  {"id": "ref-credit-set-too-many", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (p.win.length > r.bestOf) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "played-malformed: unequal lengths"}]},
-  {"id": "ref-credit-set-unfinished-not-last", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (i !== p.win.length - 1) throw new CreditRefused(\"unit-unfinished\", `${sport}: set", "replace": "if (false) throw new CreditRefused(\"unit-unfinished\", `${sport}: set", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-set-follows-decided", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (setsW === need || setsO === need) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "unit-unfinished and already-decided"}]},
-  {"id": "ref-credit-set-already-decided", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (!unfinished && (setsW === need || setsO === need)) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-set-cap", "file": "packages/reference/src/families/walkover-credit.ts", "find": "return r.cap === null ? end : Math.min(end, r.cap);", "replace": "return end;", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "BD-RT-1: points played stand"}]},
-  {"id": "ref-credit-final-set-target", "file": "packages/reference/src/families/walkover-credit.ts", "find": "const target = i === r.bestOf - 1 ? r.finalSetTo : r.setTo;", "replace": "const target = r.setTo;", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "VB-RT-1 \\(FIVB 6\\.4\\.3\\)"}]},
-  {"id": "ref-credit-cap-check", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (cap !== null && (typeof cap !== \"number\"", "replace": "if (false && (typeof cap !== \"number\"", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "cfg-invalid: each value a credit row reads is checked"}]},
-  {"id": "ref-credit-bestof-odd", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (n % 2 === 0) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "cfg-invalid: each value a credit row reads is checked"}]},
-  {"id": "ref-credit-tennis-excluded", "file": "packages/reference/src/families/walkover-credit.ts", "find": "    excluded: [\"games_won\", \"games_lost\"],\n", "replace": "    excluded: [],\n", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "TN-WO-1: straight sets for set %"}]},
-  {"id": "ref-credit-cricket-pf6", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (cfg.ballsPerInnings === null) {", "replace": "if (false) {", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "PF-6 \\(CK-WO-2, T14\\)"}]},
-  {"id": "ref-credit-cricket-innings", "file": "packages/reference/src/families/walkover-credit.ts", "find": "wholeNumber(cfg, \"ballsPerInnings\", \"cricket\", 1) * innings;", "replace": "wholeNumber(cfg, \"ballsPerInnings\", \"cricket\", 1);", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "CK-WO-1: a refusal to continue is a forfeit"}]},
-  {"id": "ref-credit-cricket-winner-unaffected", "file": "packages/reference/src/families/walkover-credit.ts", "find": "return { winner: zeros(keys), loser: { ...zeros(keys), balls_faced_eff: quota }, excluded: [] };", "replace": "return { winner: { ...zeros(keys), balls_bowled_eff: quota }, loser: { ...zeros(keys), balls_faced_eff: quota }, excluded: [] };", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "CK-WO-1: cricket's defaulter is charged its full quota"}]},
-  {"id": "ref-credit-carrom-two-winners", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (a >= to && b >= to) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "played-malformed: unequal lengths"}]},
-  {"id": "ref-credit-carrom-unfinished", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (i !== p.win.length - 1) throw new CreditRefused(\"unit-unfinished\", `carrom", "replace": "if (false) throw new CreditRefused(\"unit-unfinished\", `carrom", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "unit-unfinished and already-decided"}]},
-  {"id": "ref-credit-carrom-already-decided", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (!unfinished && (gW === need || gO === need)) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "unit-unfinished and already-decided"}]},
-  {"id": "ref-credit-carrom-unfinished-to-target", "file": "packages/reference/src/families/walkover-credit.ts", "find": "      win[i] = to;\n      gW++;\n", "replace": "      gW++;\n", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "CA-RT-1: completed games stand"}]},
-  {"id": "ref-credit-played-lengths", "file": "packages/reference/src/families/walkover-credit.ts", "find": "|| played.home.length !== played.away.length)", "replace": ")", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-withdrew-after-start", "file": "packages/reference/src/families/walkover-credit.ts", "find": "c.reason === \"disqualified\" || c.reason === \"withdrew\";", "replace": "c.reason === \"disqualified\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-WD-1 \\+ PF-7"}]},
-  {"id": "ref-credit-statsmatch-dq", "file": "packages/reference/src/families/walkover-credit.ts", "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);", "replace": "const statsMatch = c.reason === \"retired\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-PS-2: retired and an in-match disqualification credit statsMatch true"}]},
-  {"id": "ref-credit-dw-excluded", "file": "packages/reference/src/families/walkover-credit.ts", "find": "excluded: [...(RATIO_OPERANDS[c.sport] ?? [])]", "replace": "excluded: []", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-DW-1 / X-DW-4: a double walkover is all zero"}]},
-  {"id": "ref-credit-ratio-carrom-boards", "file": "packages/reference/src/families/walkover-credit.ts", "find": "carrom: [\"sets_won\", \"sets_lost\", \"boards_won\", \"boards_lost\", \"points_won\", \"points_lost\"], // §5", "replace": "carrom: [\"sets_won\", \"sets_lost\", \"points_won\", \"points_lost\"], // §5", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-DW-1 / X-DW-4: a double walkover is all zero"}]},
-  {"id": "ref-bf-forbidden-device", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.by === \"scorer\" || a.by === \"device\") return \"FORBIDDEN\";", "replace": "if (a.by === \"scorer\") return \"FORBIDDEN\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-RS-3: every forfeit a scorer or a device records is refused FORBIDDEN"}]},
-  {"id": "ref-bf-r1-both-walkover", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.offender === \"both\" && a.reason !== \"walkover\") return \"INVALID_EVENT\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "D3 R1 \\(X-DW-1\\): a two-sided forfeit is a walkover"}]},
-  {"id": "ref-bf-pf2-cascade-only", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.reason === \"withdrew\" && a.by !== \"cascade\") return \"INVALID_EVENT\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "D3 R1 \\(X-DW-1\\): a two-sided forfeit is a walkover"}]},
-  {"id": "ref-bf-d19", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"}]},
-  {"id": "ref-bf-d19-ladder-exempt", "file": "packages/reference/src/families/bracket-finish.ts", "find": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine && c.stageKind !== \"ladder\";", "replace": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine;", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"}]},
-  {"id": "ref-bf-d19-loser-line", "file": "packages/reference/src/families/bracket-finish.ts", "find": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine && c.stageKind !== \"ladder\";", "replace": "const noNextMatch = c.hasNextMatch === false && c.stageKind !== \"ladder\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"}]},
-  {"id": "ref-bf-d19-before-kernel", "file": "packages/reference/src/families/bracket-finish.ts", "find": "    if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\"; // X-DW-3 / D19 (server, pre-fold)\n    if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\"; // X-AB-4 / D4: above guarantee 4\n", "replace": "    if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\"; // X-AB-4 / D4: above guarantee 4\n    if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\"; // X-DW-3 / D19 (server, pre-fold)\n", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-DW-3 \\(plan D19, a server pre-fold guard\\)"}]},
-  {"id": "ref-bf-d4-abandon", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-AB-4 \\(plan D4\\)"}]},
-  {"id": "ref-bf-pf1-held-withdrawal", "file": "packages/reference/src/families/bracket-finish.ts", "find": "const heldWithdrawal = levelPlay(s) && win(s) === null && a.reason === \"withdrew\" && a.offender !== \"both\";", "replace": "const heldWithdrawal = false;", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-1 \\+ PF-1"}]},
-  {"id": "ref-bf-pf1-not-settled", "file": "packages/reference/src/families/bracket-finish.ts", "find": "const heldWithdrawal = levelPlay(s) && win(s) === null && a.reason === \"withdrew\"", "replace": "const heldWithdrawal = levelPlay(s) && a.reason === \"withdrew\"", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-1 \\+ PF-1"}]},
-  {"id": "ref-bf-r2-walkover-phase", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.reason === \"walkover\" && !(walkoverPhase === \"pre\" || (chess && (phase === \"play\" || phase === \"tiebreak\")))) return \"FORFEIT_REASON_WRONG_PHASE\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"}]},
-  {"id": "ref-bf-r2-chess-play", "file": "packages/reference/src/families/bracket-finish.ts", "find": "(chess && (phase === \"play\" || phase === \"tiebreak\"))", "replace": "(chess && phase === \"tiebreak\")", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-WO-2 \\+ FIDE 6\\.7\\.1"}]},
-  {"id": "ref-bf-r2-chess-tiebreak", "file": "packages/reference/src/families/bracket-finish.ts", "find": "(chess && (phase === \"play\" || phase === \"tiebreak\"))", "replace": "(chess && phase === \"play\")", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-WO-3 \\+ D3 R3"}]},
-  {"id": "ref-bf-r3-both-tiebreak", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (a.offender === \"both\" && phase === \"tiebreak\") return \"FORFEIT_REASON_WRONG_PHASE\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-WO-3 \\+ D3 R3"}]},
-  {"id": "ref-bf-r4-retired-pre", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if ((a.reason === \"retired\" || a.reason === \"disqualified\") && phase === \"pre\") return \"FORFEIT_REASON_WRONG_PHASE\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-RS-1 \\(ruling 112\\) \\+ D3 \\(R2, R4, R5\\)"}]},
-  {"id": "ref-bf-forfeit-loser-never-seated", "file": "packages/reference/src/families/bracket-finish.ts", "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null", "replace": "loser: c.hasLoserLine ? other(w.winner) : null", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-DE-1: in double elimination any forfeit loser"}]},
-  {"id": "ref-bf-dead-seat-walkover", "file": "packages/reference/src/families/bracket-finish.ts", "find": "rootForfeit = { offender: dead[0], reason: \"walkover\" };", "replace": "rootForfeit = null;", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-3: a withdrawal from a fixture whose opponent is not yet known"}]},
-  {"id": "ref-bf-two-dead-seats-dw", "file": "packages/reference/src/families/bracket-finish.ts", "find": "rootForfeit = { offender: \"both\", reason: \"walkover\" };", "replace": "rootForfeit = null;", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-4: when both sides of a fixture have withdrawn"}]},
-  {"id": "ref-bf-vacant-title", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (noNextMatch) throw new OutOfScope(\"vacant-title\", \"two dead seats\");", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-4: when both sides of a fixture have withdrawn"}]},
-  {"id": "ref-bf-vacant-title-chess", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (c.play.kind === \"double_walkover\" && noNextMatch) throw new OutOfScope(\"vacant-title\", \"a chess double forfeit\");", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-DW-1: a chess double forfeit folds to the double walkover"}]},
-  {"id": "ref-bf-dead-seat-played", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (dead.length > 0 && c.play.kind !== \"none\") throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "CA-KO-1 / BG-KO-1 / X-BR-1 / BG-DW-1 / X-WD-3: RuledOut names its row"}]},
-  {"id": "ref-bf-ladder-dead-seat", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (dead.length > 0 && c.stageKind === \"ladder\") throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "CA-KO-1 / BG-KO-1 / X-BR-1 / BG-DW-1 / X-WD-3: RuledOut names its row"}]},
-  {"id": "ref-bf-dead-seats-set", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (dead.filter((d) => d === side).length > 1) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "deadSeats is a set of seats"}]},
-  {"id": "ref-bf-dw-play-not-chess", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (c.play.kind === \"double_walkover\" && !chess) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-DW-1: a chess double forfeit folds to the double walkover"}]},
-  {"id": "ref-bf-status-dw-forfeited", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.forfeit !== null || doubleWalkover(s)) return \"forfeited\";", "replace": "if (s.forfeit !== null) return \"forfeited\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-DW-1 \\(retires controller ruling T15-R1's hold\\)"}]},
-  {"id": "ref-bf-status-forfeit", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.forfeit !== null || doubleWalkover(s)) return \"forfeited\";", "replace": "if (doubleWalkover(s)) return \"forfeited\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-2: a withdrawal from a page_playoff or ladder fixture"}]},
-  {"id": "ref-bf-finalize-dw", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s, finalized: true });", "replace": "if (win(s) !== null) return accept({ ...s, finalized: true });", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-BR-1 \\(amend\\)"}]},
-  {"id": "ref-bf-abandon-dw", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (win(s) !== null || doubleWalkover(s)) throw new OutOfScope(\"abandon-decided\", at);", "replace": "if (win(s) !== null) throw new OutOfScope(\"abandon-decided\", at);", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-BR-1 \\(amend\\)"}]},
-  {"id": "ref-bf-tiebreak-after-walkover", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.forfeit !== null) return refuse(\"TIEBREAK_NOT_APPLICABLE\");", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-WO-3 \\+ D3 R3"}]},
-  {"id": "ref-bf-levelplay-walked-over", "file": "packages/reference/src/families/bracket-finish.ts", "find": "const levelPlay = (s: State): boolean => s.play.kind === \"level\" && !drawnChess(s) && s.forfeit === null;", "replace": "const levelPlay = (s: State): boolean => s.play.kind === \"level\" && !drawnChess(s);", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-5: a withdrawn entrant is never seated on a loser edge"}]},
-  {"id": "ref-bf-in-progress-in-play", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.play.kind === \"in_progress\" || s.play.kind === \"started\") return \"in_play\";", "replace": "", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "empty case first: an empty deadSeats list is no dead seat"}]},
-  {"id": "ref-bf-phase-over-dw", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (win(s) !== null || doubleWalkover(s) || levelPlay(s)) return \"over\";", "replace": "if (win(s) !== null || levelPlay(s)) return \"over\";", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "BG-DW-1: a chess double forfeit folds to the double walkover"}]},
-  {"id": "ref-bf-win-forfeit", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (s.forfeit !== null && s.forfeit.offender !== \"both\") return { winner: other(s.forfeit.offender), method: s.forfeit.reason };", "replace": "if (s.forfeit !== null && s.forfeit.offender !== \"both\") return { winner: s.forfeit.offender, method: s.forfeit.reason };", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-WD-2: a withdrawal from a page_playoff or ladder fixture"}]},
-  {"id": "ref-bf-w2b-rows-cited", "file": "packages/reference/src/families/bracket-finish.ts", "find": "\"X-WD-3\", \"X-WD-4\", \"X-WD-5\", \"X-DE-1\"", "replace": "\"X-WD-3\", \"X-WD-4\", \"X-WD-5\"", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "the family cites each W2b bracket row"}]},
-  {"id": "w2a-loser-is-the-winner", "file": "packages/reference/src/families/bracket-finish.ts", "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null", "replace": "loser: c.hasLoserLine && !byForfeit ? w.winner : null", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-ST-1: settle after a level result advances the winner and the loser, by method"}]},
-  {"id": "w2a-loser-line-ignored", "file": "packages/reference/src/families/bracket-finish.ts", "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null", "replace": "loser: !byForfeit ? other(w.winner) : null", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "X-ST-1: an abandon before any result, then settle, seats both sides; with no loser line only the winner"}]},
-  {"id": "w2a-finalize-accept-not-finalized", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s, finalized: true });", "replace": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s });", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "spec §5\\.4\\.3: finalize of a decided fixture is finalized and keeps who advances; of a held level result it is refused, abandoned or not"}]},
-  {"id": "w2a-oos-abandon-decided", "file": "packages/reference/src/families/bracket-finish.ts", "find": "if (win(s) !== null || doubleWalkover(s)) throw new OutOfScope(\"abandon-decided\", at);", "replace": "/* mutant: abandon-decided deleted */", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "every OutOfScope reason is reached by its case and names itself; none of them is judged"}]},
-  {"id": "w2a-m1-rows-drop-ck-ko-1", "file": "packages/reference/src/families/bracket-finish.ts", "find": "\"GN-KO-1\", \"CK-KO-1\",", "replace": "\"GN-KO-1\",", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "the rows the family cites are rules-directory rows \\(or Appendix A rows Task 14 has yet to write there\\), every one signed, and every X-BR, X-ST, X-DR and KO row is cited"}]},
-  {"id": "w2a-m1-rows-stale", "file": "packages/reference/src/families/bracket-finish.ts", "find": "\"GN-KO-1\", \"CK-KO-1\",", "replace": "\"GN-KO-1\", \"CK-KO-1\", \"X-ZZ-9\",", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "the rows the family cites are rules-directory rows \\(or Appendix A rows Task 14 has yet to write there\\), every one signed, and every X-BR, X-ST, X-DR and KO row is cited"}]},
-  {"id": "w2a-sweep-loser-is-the-winner", "file": "packages/reference/src/families/bracket-finish.ts", "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null", "replace": "loser: c.hasLoserLine && !byForfeit ? w.winner : null", "killers": [{"cwd": "packages/reference", "files": ["src/families/bracket-finish.test.ts"], "name": "invariants after every step"}]},
-  {"id": "ref-credit-offender-unknown", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (started && c.reason !== \"double_walkover\" && c.by === undefined) throw", "replace": "if (false) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "one case per refusal reaches it and names itself"}]},
-  {"id": "ref-credit-offender-unknown-dw-exempt", "file": "packages/reference/src/families/walkover-credit.ts", "find": "if (started && c.reason !== \"double_walkover\" && c.by === undefined) throw", "replace": "if (started && c.by === undefined) throw", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "offender-unknown: a scoresheet with no side at fault is refused"}]},
-  {"id": "ref-data-declared-value", "file": "packages/reference/src/families/walkover-credit-cfgs.ts", "find": "{ name: \"youth\", cfg: { awardScore: { goals: 3 } }, source: \"FB-WO-1: Appendix A names one football walkover, 3-0\" }", "replace": "{ name: \"youth\", cfg: { awardScore: { goals: 4 } }, source: \"FB-WO-1: Appendix A names one football walkover, 3-0\" }", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-WO-1: each value the data writes for a DECLARED cfg is the engine's declared value"}]},
-  {"id": "ref-hockey-3-listed-difference", "file": "packages/reference/src/families/walkover-credit-cfgs.ts", "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }", "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 3 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }", "killers": [{"cwd": "packages/reference", "files": ["src/families/walkover-credit.test.ts"], "name": "X-WO-1: each value the data writes for a DECLARED cfg is the engine's declared value"}]},
-  {"id": "xc-engine-hockey-award-4", "file": "packages/engine/src/sports/hockey/hockey.ts", "find": "    awardScore: { goals: 5 },", "replace": "    awardScore: { goals: 4 },", "killers": [{"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"}]},
-  {"id": "xc-engine-football-award-points", "file": "packages/engine/src/sports/football/football.ts", "find": "        const winner = at(winnerSide, 1, 0, cfg.points.win);", "replace": "        const winner = at(winnerSide, 1, 0, cfg.points.win - 1);", "killers": [{"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"}]},
-  {"id": "xc-engine-tennis-excluded-dropped", "file": "packages/engine/src/sports/nested/kernel.ts", "find": "      excluded: [\"games_won\", \"games_lost\"],", "replace": "      excluded: [],", "killers": [{"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"}]},
-  {"id": "xc-engine-stats-withdrew-played", "file": "packages/engine/src/stats/stats.ts", "find": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\";", "replace": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" ? \"unplayed\" : \"played\";", "killers": [{"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"}]},
-  {"id": "xc-ref-icehockey-4", "file": "packages/reference/src/families/walkover-credit-cfgs.ts", "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"IH-WO-1: 5-0 (product rule; IIHF Rule 66 names no score)\" }", "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 4 } }, source: \"IH-WO-1: 5-0 (product rule; IIHF Rule 66 names no score)\" }", "killers": [{"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"}]},
-  {"id": "xc-engine-award-clean-sweep", "file": "packages/engine/src/sports/setbased/kernel.ts", "find": "reason === \"bye\" ? cleanSweepPair(cfg) : matchPoints(cfg, credited(winnerSide), credited(offender));", "replace": "cleanSweepPair(cfg);", "killers": [{"cwd": "packages/engine", "files": ["src/sport/forfeit-credit.test.ts"], "name": "VB-RT-1: a retirement, disqualification or post-start withdrawal pays the credited score's pair"}, {"cwd": "packages/engine", "files": ["src/sport/forfeit-credit.test.ts"], "name": "every pointsMap sport × every declared cfg and a configured sets-dependent table"}, {"cwd": ".", "files": ["tools/matrix/__tests__/reference-walkover-credit.test.ts"], "name": "enumerated cases agree with the engine"}]},
-  {"id": "xc-engine-award-bye-guard", "file": "packages/engine/src/sports/setbased/kernel.ts", "find": "reason === \"bye\" ? cleanSweepPair(cfg) :", "replace": "reason === \"bye\" && false ? cleanSweepPair(cfg) :", "killers": [{"cwd": "packages/engine", "files": ["src/sport/forfeit-credit.test.ts"], "name": "a pointsMap that prices neither the credited score nor"}]}
+ {
+  "id": "ref-hockey-3",
+  "file": "packages/reference/src/families/walkover-credit-cfgs.ts",
+  "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }",
+  "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 3 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "HK-WO-1: a hockey walkover is 5-0"
+   }
+  ]
+ },
+ {
+  "id": "ref-dw-points",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "points: \"zero\", statsMatch: false };",
+  "replace": "points: \"win\", statsMatch: false };",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-DW-1 / X-DW-4: a double walkover is all zero"
+   }
+  ]
+ },
+ {
+  "id": "ref-enumeration-empty",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "return [...base, ...variants];",
+  "replace": "return [];",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "the enumeration is never empty"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-unknown-sport",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (!(CREDIT_SPORTS as readonly string[]).includes(c.sport)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-unknown-reason",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (!(CREDIT_REASONS as readonly string[]).includes(c.reason)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-played-before-start",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "&& playedAny && !chess) throw",
+  "replace": "&& playedAny && false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-RS-1 \\(ruling 112\\): a walkover or a double walkover with a scoresheet holding play is refused"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-chess-after-start",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "&& playedAny && !chess) throw",
+  "replace": "&& playedAny) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "BG-WO-1: a chess forfeit is 1-0"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-not-started",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "&& !started) throw new CreditRefused(\"not-started\"",
+  "replace": "&& false) throw new CreditRefused(\"not-started\"",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-RS-1 \\(ruling 112\\): a walkover or a double walkover with a scoresheet holding play is refused"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-fdc-strict",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (realW - realO > g) {",
+  "replace": "if (realW - realO >= g) {",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "FB-RT-1: 3-0, or the real score"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-goals-min",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "!Number.isInteger(g) || g < 1)",
+  "replace": "!Number.isInteger(g))",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "cfg-invalid: each value a credit row reads is checked"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-past-end",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (a > setEnd(r, i, b) || b > setEnd(r, i, a)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "played-malformed: unequal lengths"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-too-many",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (p.win.length > r.bestOf) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "played-malformed: unequal lengths"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-unfinished-not-last",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (i !== p.win.length - 1) throw new CreditRefused(\"unit-unfinished\", `${sport}: set",
+  "replace": "if (false) throw new CreditRefused(\"unit-unfinished\", `${sport}: set",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-follows-decided",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (setsW === need || setsO === need) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "unit-unfinished and already-decided"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-already-decided",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (!unfinished && (setsW === need || setsO === need)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-set-cap",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "return r.cap === null ? end : Math.min(end, r.cap);",
+  "replace": "return end;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "BD-RT-1: points played stand"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-final-set-target",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const target = i === r.bestOf - 1 ? r.finalSetTo : r.setTo;",
+  "replace": "const target = r.setTo;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "VB-RT-1 \\(FIVB 6\\.4\\.3\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-cap-check",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (cap !== null && (typeof cap !== \"number\"",
+  "replace": "if (false && (typeof cap !== \"number\"",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "cfg-invalid: each value a credit row reads is checked"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-bestof-odd",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (n % 2 === 0) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "cfg-invalid: each value a credit row reads is checked"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-tennis-excluded",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "    excluded: [\"games_won\", \"games_lost\"],\n",
+  "replace": "    excluded: [],\n",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "TN-WO-1: straight sets for set %"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-cricket-pf6",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (cfg.ballsPerInnings === null) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "PF-6 \\(CK-WO-2, T14\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-cricket-innings",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "wholeNumber(cfg, \"ballsPerInnings\", \"cricket\", 1) * innings;",
+  "replace": "wholeNumber(cfg, \"ballsPerInnings\", \"cricket\", 1);",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "CK-WO-1: a refusal to continue is a forfeit"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-cricket-winner-unaffected",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "return { winner: zeros(keys), loser: { ...zeros(keys), balls_faced_eff: quota }, excluded: [] };",
+  "replace": "return { winner: { ...zeros(keys), balls_bowled_eff: quota }, loser: { ...zeros(keys), balls_faced_eff: quota }, excluded: [] };",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "CK-WO-1: cricket's defaulter is charged its full quota"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-carrom-two-winners",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (a >= to && b >= to) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "played-malformed: unequal lengths"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-carrom-unfinished",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (i !== p.win.length - 1) throw new CreditRefused(\"unit-unfinished\", `carrom",
+  "replace": "if (false) throw new CreditRefused(\"unit-unfinished\", `carrom",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "unit-unfinished and already-decided"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-carrom-already-decided",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (!unfinished && (gW === need || gO === need)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "unit-unfinished and already-decided"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-carrom-unfinished-to-target",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "      win[i] = to;\n      gW++;\n",
+  "replace": "      gW++;\n",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "CA-RT-1: completed games stand"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-played-lengths",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "|| played.home.length !== played.away.length)",
+  "replace": ")",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-withdrew-after-start",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "c.reason === \"disqualified\" || c.reason === \"withdrew\";",
+  "replace": "c.reason === \"disqualified\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WD-1 \\+ PF-7"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-statsmatch-dq",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-PS-2: retired and an in-match disqualification credit statsMatch true"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-dw-excluded",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "excluded: [...(RATIO_OPERANDS[c.sport] ?? [])]",
+  "replace": "excluded: []",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-DW-1 / X-DW-4: a double walkover is all zero"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-ratio-carrom-boards",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "carrom: [\"sets_won\", \"sets_lost\", \"boards_won\", \"boards_lost\", \"points_won\", \"points_lost\"], // §5",
+  "replace": "carrom: [\"sets_won\", \"sets_lost\", \"points_won\", \"points_lost\"], // §5",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-DW-1 / X-DW-4: a double walkover is all zero"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-forbidden-device",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.by === \"scorer\" || a.by === \"device\") return \"FORBIDDEN\";",
+  "replace": "if (a.by === \"scorer\") return \"FORBIDDEN\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-3: every forfeit a scorer or a device records is refused FORBIDDEN"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r1-both-walkover",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.offender === \"both\" && a.reason !== \"walkover\") return \"INVALID_EVENT\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "D3 R1 \\(X-DW-1\\): a two-sided forfeit is a walkover"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-pf2-cascade-only",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.reason === \"withdrew\" && a.by !== \"cascade\") return \"INVALID_EVENT\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "D3 R1 \\(X-DW-1\\): a two-sided forfeit is a walkover"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-d19",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-d19-ladder-exempt",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine && c.stageKind !== \"ladder\";",
+  "replace": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-d19-loser-line",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const noNextMatch = c.hasNextMatch === false && !c.hasLoserLine && c.stageKind !== \"ladder\";",
+  "replace": "const noNextMatch = c.hasNextMatch === false && c.stageKind !== \"ladder\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-DW-3 \\(plan D19\\): a double walkover where the fixture has no next match"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-d19-before-kernel",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "    if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\"; // X-DW-3 / D19 (server, pre-fold)\n    if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\"; // X-AB-4 / D4: above guarantee 4\n",
+  "replace": "    if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\"; // X-AB-4 / D4: above guarantee 4\n    if (a.offender === \"both\" && noNextMatch) return \"DOUBLE_WALKOVER_NO_NEXT_MATCH\"; // X-DW-3 / D19 (server, pre-fold)\n",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-DW-3 \\(plan D19, a server pre-fold guard\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-d4-abandon",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.abandoned) return \"ABANDONED_SETTLE_OR_VOID\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-AB-4 \\(plan D4\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-pf1-held-withdrawal",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const heldWithdrawal = levelPlay(s) && win(s) === null && a.reason === \"withdrew\" && a.offender !== \"both\";",
+  "replace": "const heldWithdrawal = false;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-1 \\+ PF-1"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-pf1-not-settled",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const heldWithdrawal = levelPlay(s) && win(s) === null && a.reason === \"withdrew\"",
+  "replace": "const heldWithdrawal = levelPlay(s) && a.reason === \"withdrew\"",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-1 \\+ PF-1"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r2-walkover-phase",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.reason === \"walkover\" && !(walkoverPhase === \"pre\" || (chess && (phase === \"play\" || phase === \"tiebreak\")))) return \"FORFEIT_REASON_WRONG_PHASE\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r2-chess-play",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "(chess && (phase === \"play\" || phase === \"tiebreak\"))",
+  "replace": "(chess && phase === \"tiebreak\")",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-WO-2 \\+ FIDE 6\\.7\\.1"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r2-chess-tiebreak",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "(chess && (phase === \"play\" || phase === \"tiebreak\"))",
+  "replace": "(chess && phase === \"play\")",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-WO-3 \\+ D3 R3"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r3-both-tiebreak",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (a.offender === \"both\" && phase === \"tiebreak\") return \"FORFEIT_REASON_WRONG_PHASE\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-WO-3 \\+ D3 R3"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-r4-retired-pre",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if ((a.reason === \"retired\" || a.reason === \"disqualified\") && phase === \"pre\") return \"FORFEIT_REASON_WRONG_PHASE\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-RS-1 \\(rulings 112, 113\\) \\+ D3 \\(R2, R4, R5\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-forfeit-loser-never-seated",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null",
+  "replace": "loser: c.hasLoserLine ? other(w.winner) : null",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-DE-1: in double elimination any forfeit loser"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-dead-seat-walkover",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "rootForfeit = { offender: dead[0], reason: \"walkover\" };",
+  "replace": "rootForfeit = null;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-3: a withdrawal from a fixture whose opponent is not yet known"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-two-dead-seats-dw",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "rootForfeit = { offender: \"both\", reason: \"walkover\" };",
+  "replace": "rootForfeit = null;",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-4: when both sides of a fixture have withdrawn"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-vacant-title",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (noNextMatch) throw new OutOfScope(\"vacant-title\", \"two dead seats\");",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-4: when both sides of a fixture have withdrawn"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-vacant-title-chess",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (c.play.kind === \"double_walkover\" && noNextMatch) throw new OutOfScope(\"vacant-title\", \"a chess double forfeit\");",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-DW-1: a chess double forfeit folds to the double walkover"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-dead-seat-played",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (dead.length > 0 && c.play.kind !== \"none\") throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "CA-KO-1 / BG-KO-1 / X-BR-1 / BG-DW-1 / X-WD-3: RuledOut names its row"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-ladder-dead-seat",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (dead.length > 0 && c.stageKind === \"ladder\") throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "CA-KO-1 / BG-KO-1 / X-BR-1 / BG-DW-1 / X-WD-3: RuledOut names its row"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-dead-seats-set",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (dead.filter((d) => d === side).length > 1) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "deadSeats is a set of seats"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-dw-play-not-chess",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (c.play.kind === \"double_walkover\" && !chess) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-DW-1: a chess double forfeit folds to the double walkover"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-status-dw-forfeited",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.forfeit !== null || doubleWalkover(s)) return \"forfeited\";",
+  "replace": "if (s.forfeit !== null) return \"forfeited\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-DW-1 \\(retires controller ruling T15-R1's hold\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-status-forfeit",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.forfeit !== null || doubleWalkover(s)) return \"forfeited\";",
+  "replace": "if (doubleWalkover(s)) return \"forfeited\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-2: a withdrawal from a page_playoff or ladder fixture"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-finalize-dw",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s, finalized: true });",
+  "replace": "if (win(s) !== null) return accept({ ...s, finalized: true });",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-BR-1 \\(amend\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-abandon-dw",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (win(s) !== null || doubleWalkover(s)) throw new OutOfScope(\"abandon-decided\", at);",
+  "replace": "if (win(s) !== null) throw new OutOfScope(\"abandon-decided\", at);",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-BR-1 \\(amend\\)"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-tiebreak-after-walkover",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.forfeit !== null) return refuse(\"TIEBREAK_NOT_APPLICABLE\");",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-WO-3 \\+ D3 R3"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-levelplay-walked-over",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "const levelPlay = (s: State): boolean => s.play.kind === \"level\" && !drawnChess(s) && s.forfeit === null;",
+  "replace": "const levelPlay = (s: State): boolean => s.play.kind === \"level\" && !drawnChess(s);",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-5: a withdrawn entrant is never seated on a loser edge"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-in-progress-in-play",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.play.kind === \"in_progress\" || s.play.kind === \"started\") return \"in_play\";",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "empty case first: an empty deadSeats list is no dead seat"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-phase-over-dw",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (win(s) !== null || doubleWalkover(s) || levelPlay(s)) return \"over\";",
+  "replace": "if (win(s) !== null || levelPlay(s)) return \"over\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-DW-1: a chess double forfeit folds to the double walkover"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-win-forfeit",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (s.forfeit !== null && s.forfeit.offender !== \"both\") return { winner: other(s.forfeit.offender), method: s.forfeit.reason };",
+  "replace": "if (s.forfeit !== null && s.forfeit.offender !== \"both\") return { winner: s.forfeit.offender, method: s.forfeit.reason };",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-WD-2: a withdrawal from a page_playoff or ladder fixture"
+   }
+  ]
+ },
+ {
+  "id": "ref-bf-w2b-rows-cited",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "\"X-WD-3\", \"X-WD-4\", \"X-WD-5\", \"X-DE-1\"",
+  "replace": "\"X-WD-3\", \"X-WD-4\", \"X-WD-5\"",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "the family cites each W2b bracket row"
+   }
+  ]
+ },
+ {
+  "id": "w2a-loser-is-the-winner",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null",
+  "replace": "loser: c.hasLoserLine && !byForfeit ? w.winner : null",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-ST-1: settle after a level result advances the winner and the loser, by method"
+   }
+  ]
+ },
+ {
+  "id": "w2a-loser-line-ignored",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null",
+  "replace": "loser: !byForfeit ? other(w.winner) : null",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "X-ST-1: an abandon before any result, then settle, seats both sides; with no loser line only the winner"
+   }
+  ]
+ },
+ {
+  "id": "w2a-finalize-accept-not-finalized",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s, finalized: true });",
+  "replace": "if (win(s) !== null || doubleWalkover(s)) return accept({ ...s });",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "spec §5\\.4\\.3: finalize of a decided fixture is finalized and keeps who advances; of a held level result it is refused, abandoned or not"
+   }
+  ]
+ },
+ {
+  "id": "w2a-oos-abandon-decided",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "if (win(s) !== null || doubleWalkover(s)) throw new OutOfScope(\"abandon-decided\", at);",
+  "replace": "/* mutant: abandon-decided deleted */",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "every OutOfScope reason is reached by its case and names itself; none of them is judged"
+   }
+  ]
+ },
+ {
+  "id": "w2a-m1-rows-drop-ck-ko-1",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "\"GN-KO-1\", \"CK-KO-1\",",
+  "replace": "\"GN-KO-1\",",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "the rows the family cites are rules-directory rows \\(or Appendix A rows Task 14 has yet to write there\\), every one signed, and every X-BR, X-ST, X-DR and KO row is cited"
+   }
+  ]
+ },
+ {
+  "id": "w2a-m1-rows-stale",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "\"GN-KO-1\", \"CK-KO-1\",",
+  "replace": "\"GN-KO-1\", \"CK-KO-1\", \"X-ZZ-9\",",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "the rows the family cites are rules-directory rows \\(or Appendix A rows Task 14 has yet to write there\\), every one signed, and every X-BR, X-ST, X-DR and KO row is cited"
+   }
+  ]
+ },
+ {
+  "id": "w2a-sweep-loser-is-the-winner",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "loser: c.hasLoserLine && !byForfeit ? other(w.winner) : null",
+  "replace": "loser: c.hasLoserLine && !byForfeit ? w.winner : null",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "invariants after every step"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-offender-unknown",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (started && c.reason !== \"double_walkover\" && c.by === undefined) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "one case per refusal reaches it and names itself"
+   }
+  ]
+ },
+ {
+  "id": "ref-credit-offender-unknown-dw-exempt",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "if (started && c.reason !== \"double_walkover\" && c.by === undefined) throw",
+  "replace": "if (started && c.by === undefined) throw",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "offender-unknown: a scoresheet with no side at fault is refused"
+   }
+  ]
+ },
+ {
+  "id": "ref-data-declared-value",
+  "file": "packages/reference/src/families/walkover-credit-cfgs.ts",
+  "find": "{ name: \"youth\", cfg: { awardScore: { goals: 3 } }, source: \"FB-WO-1: Appendix A names one football walkover, 3-0\" }",
+  "replace": "{ name: \"youth\", cfg: { awardScore: { goals: 4 } }, source: \"FB-WO-1: Appendix A names one football walkover, 3-0\" }",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WO-1: each value the data writes for a DECLARED cfg is the engine's declared value"
+   }
+  ]
+ },
+ {
+  "id": "ref-hockey-3-listed-difference",
+  "file": "packages/reference/src/families/walkover-credit-cfgs.ts",
+  "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }",
+  "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 3 } }, source: \"HK-WO-1: FIH GTR Reg 13.1, 5-0 (the default changes from 3)\" }",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WO-1: each value the data writes for a DECLARED cfg is the engine's declared value"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-hockey-award-4",
+  "file": "packages/engine/src/sports/hockey/hockey.ts",
+  "find": "    awardScore: { goals: 5 },",
+  "replace": "    awardScore: { goals: 4 },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-football-award-points",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "        const winner = at(winnerSide, 1, 0, cfg.points.win);",
+  "replace": "        const winner = at(winnerSide, 1, 0, cfg.points.win - 1);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-tennis-excluded-dropped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "      excluded: [\"games_won\", \"games_lost\"],",
+  "replace": "      excluded: [],",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-stats-withdrew-played",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\";",
+  "replace": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" ? \"unplayed\" : \"played\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"
+   }
+  ]
+ },
+ {
+  "id": "xc-ref-icehockey-4",
+  "file": "packages/reference/src/families/walkover-credit-cfgs.ts",
+  "find": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 5 } }, source: \"IH-WO-1: 5-0 (product rule; IIHF Rule 66 names no score)\" }",
+  "replace": "{ name: SCHEMA_DEFAULT, cfg: { awardScore: { goals: 4 } }, source: \"IH-WO-1: 5-0 (product rule; IIHF Rule 66 names no score)\" }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "an EMPTY scoresheet \\(play started, nothing scored\\)"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-award-clean-sweep",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "reason === \"bye\" ? cleanSweepPair(cfg) : matchPoints(cfg, credited(winnerSide), credited(offender));",
+  "replace": "cleanSweepPair(cfg);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "VB-RT-1: a retirement, disqualification or post-start withdrawal pays the credited score's pair"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "every pointsMap sport × every declared cfg and a configured sets-dependent table"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "enumerated cases agree with the engine"
+   }
+  ]
+ },
+ {
+  "id": "xc-engine-award-bye-guard",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "reason === \"bye\" ? cleanSweepPair(cfg) :",
+  "replace": "reason === \"bye\" && false ? cleanSweepPair(cfg) :",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "a pointsMap that prices neither the credited score nor"
+   }
+  ]
+ }
 ]

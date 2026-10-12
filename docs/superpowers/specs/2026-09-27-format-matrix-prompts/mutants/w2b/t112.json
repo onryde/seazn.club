@@ -618,6 +618,13 @@
     "files": [
      "tools/matrix/__tests__/w2b-generators.test.ts"
     ],
+    "name": "holdsPlay \\(rulings 113, 118\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
     "name": "X-RS-1 \\+ rulings 113, 118"
    },
    {

@@ -86,6 +86,8 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/lib/__tests__/event-copy-forfeit.test.ts": { writes: 1, why: "a reason-less legacy fixture (Task 12's fallback pair): rendered as a line, never posted" },
   "apps/web/src/lib/__tests__/forfeit-tag.test.ts": { writes: 1, why: "Task 13's per-reason fold: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/api-v1/__tests__/http.test.ts": { writes: 1, why: "`reason` drawn from FORFEIT_REASONS itself (the phase-refusal sweep)" },
+  "apps/web/src/server/engine-db/__tests__/awarded-state.test.ts": { writes: 1, why: "R116-2: an empty `{}` envelope handed to `awardedMatchState` for its id and time only — the award's own reason is folded, never posted" },
+  "apps/web/src/server/engine-db/awarded-state.ts": { writes: 1, why: "R116-2: `reason: outcome.reason`, the stored award's own reason, folded in memory and never posted (the fold must re-decide that same award)" },
   "apps/web/src/server/engine-db/__tests__/w2b-status.test.ts": { writes: 1, why: "`...both`, a spread `{ reason: \"walkover\" }`" },
   "apps/web/src/server/public-site/__tests__/match-centre-forfeit.test.ts": { writes: 1, why: "Task 13's per-reason sentences: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/public-site/__tests__/timeline.test.ts": { writes: 3, why: "Task 12's forfeit-copy sweeps: `reason` drawn from FORFEIT_REASONS itself (two), and a reason-less legacy fixture — rendered as timeline lines, never posted" },
