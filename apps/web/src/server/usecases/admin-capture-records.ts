@@ -61,7 +61,9 @@ const toRecord = (r: Row): AdminCaptureRecord => ({
   sessionIds: r.session_ids,
   lines: linesOf(r.id, r.lines),
 });
-const COLUMNS = sql`
+// A thunk, never a module-scope fragment: `sql` connects on first call, so a fragment built at import throws without
+// DATABASE_URL — at `next build`'s page-config collection, and in a DB-less unit shard (the stream-sessions `cols` shape).
+const columns = () => sql`
   r.id, r.ref, r.created_at, r.expires_at, r.slot, r.code_id, r.fixture_id, r.org_id, r.received_lines, r.kept_lines,
   r.dropped_lines, r.invalid_lines, r.lines,
   coalesce((select array_agg(l.session_id::text order by l.session_id::text) from capture_record_sessions l where l.record_id = r.id), '{}') as session_ids`;
@@ -71,7 +73,7 @@ export async function captureRecordByRef(raw: string): Promise<AdminCaptureRecor
   await requireStaff();
   const ref = normaliseRecordRef(raw);
   if (ref === null) return null;
-  const [row] = await sql<Row[]>`select ${COLUMNS} from capture_records r where r.ref = ${ref}`;
+  const [row] = await sql<Row[]>`select ${columns()} from capture_records r where r.ref = ${ref}`;
   return row ? toRecord(row) : null;
 }
 
@@ -79,7 +81,7 @@ export async function captureRecordByRef(raw: string): Promise<AdminCaptureRecor
  *  that name no session. A record naming two sessions is listed under both. */
 export async function captureRecordsOfFixture(fixtureId: string): Promise<AdminFixtureRecords> {
   await requireStaff();
-  const rows = await sql<Row[]>`select ${COLUMNS} from capture_records r where r.fixture_id = ${fixtureId} order by r.created_at desc, r.ref`;
+  const rows = await sql<Row[]>`select ${columns()} from capture_records r where r.fixture_id = ${fixtureId} order by r.created_at desc, r.ref`;
   const records = rows.map(toRecord);
   const sessionRows = await sql<{ id: string; state: string; created_at: Date }[]>`
     select id, state, created_at from fixture_stream_sessions where fixture_id = ${fixtureId} order by created_at desc`;

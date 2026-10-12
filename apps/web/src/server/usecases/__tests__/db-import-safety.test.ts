@@ -51,6 +51,12 @@ const WAVE_MODULES = [
   "@/lib/credits",
   "@/lib/email",
   "@/lib/ai-pricing",
+  // Capture record upload (PR #943): a module-scope `const COLUMNS = sql\`…\`` in admin-capture-records took
+  // `next build` down at /admin/capture-records' page-config collection, and its suite down in the no-DB unit shard.
+  "@/server/usecases/admin-capture-records",
+  "@/server/usecases/capture-record",
+  "@/server/usecases/stream-codes",
+  "@/server/relay/record-body",
 ];
 
 beforeEach(() => {
