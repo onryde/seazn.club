@@ -31,6 +31,7 @@ import { scoreEvent } from "../scoring";
 import { divisionPlayerStats, playerStatsCoverage, playerStatsInputsMd5 } from "../player-stats";
 import { listMyCareerStats, listMyPlayerStats } from "../me";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { preR1152InputsMd5 } from "./_pre-r115-2-inputs-md5";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -188,9 +189,10 @@ describe.skipIf(!HAS_DB)("R115-4: the public card and /me ask the read-side chec
       expect(await recordMd5(), `${key}: folded under the current version`).toBe(await md5(undefined));
 
       // An old-version snapshot: numbers an older fold could have written (every value off by five), and the record's
-      // md5 exactly as pre-R115-2 code computed it.
+      // md5 exactly as pre-R115-2 code computed it: the FROZEN statement, never the code under test (R115 review M4).
       const stale = Object.fromEntries(Object.entries(right).map(([k, v]) => [k, v + 5]));
-      const old = await md5(null);
+      const old = await withTenant(s.auth.orgId, (tx) => preR1152InputsMd5(tx, s.divisionId));
+      expect(old, `${key}: the frozen pre-version md5 is not this build's`).not.toBe(await md5(undefined));
       const age = async () => {
         await sql`update player_stat_snapshots set stats = ${sql.json(stale as never)}
           where division_id = ${s.divisionId} and person_id = ${s.personId}`;

@@ -45,6 +45,7 @@ import {
 } from "../player-stats";
 import { listMyCareerStats } from "../me";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { preR1152InputsMd5 } from "./_pre-r115-2-inputs-md5";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -265,8 +266,9 @@ describe.skipIf(!HAS_DB)("R115-1 / X-PS-1 / X-PS-2: a person's matches and W/L c
 // ever, until something in its division changed. The md5 now carries `STATS_FOLD_VERSION`, so a record written before it
 // (or under any other version) reads as owed and the first read that folds refolds it. No migration, no production write.
 //
-// `playerStatsInputsMd5(tx, id, null)` is the md5 a record folded before the version existed holds, byte for byte:
-// `concat_ws` skips a NULL argument, so the version-less statement is exactly the pre-R115-2 one.
+// The md5 a record folded before the version existed holds comes from the FROZEN pre-R115-2 statement
+// (`_pre-r115-2-inputs-md5.ts`, R115 review M4), never from the code under test. `playerStatsInputsMd5(tx, id, null)` is
+// asserted to reproduce it (`concat_ws` skips a NULL argument), so the version-less statement stays the pre-R115-2 one.
 describe.skipIf(!HAS_DB)("R115-2: a snapshot folded under an older fold version is recomputed on read", () => {
   for (const c of SPORTS) {
     it(`${c.module.key}: same version + stale rows → served as stored (the control); pre-version record → owed, and the console read refolds it`, async () => {
@@ -298,11 +300,13 @@ describe.skipIf(!HAS_DB)("R115-2: a snapshot folded under an older fold version 
       expect(await patRow(), `${key}: served as stored`).toEqual(stale);
 
       // Now the record as the pre-version code wrote it: its md5 has no version in it.
-      const [md5Now, md5Before, md5Next] = await withTenant(s.auth.orgId, async (tx) => [
+      const [md5Now, md5Before, md5Null, md5Next] = await withTenant(s.auth.orgId, async (tx) => [
         await playerStatsInputsMd5(tx, s.divisionId),
+        await preR1152InputsMd5(tx, s.divisionId),
         await playerStatsInputsMd5(tx, s.divisionId, null),
         await playerStatsInputsMd5(tx, s.divisionId, STATS_FOLD_VERSION + 1),
       ]);
+      expect(md5Null, `${key}: a null version reproduces the frozen pre-R115-2 md5`).toBe(md5Before);
       expect(new Set([md5Now, md5Before, md5Next]).size, `${key}: three versions, three md5s`).toBe(3);
       await sql`update player_stat_folds set inputs_md5 = ${md5Before} where division_id = ${s.divisionId}`;
 

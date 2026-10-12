@@ -1311,5 +1311,20 @@
     "name": "an ISR regeneration of the public player card registers its check, which never runs and claims nothing"
    }
   ]
+ },
+ {
+  "id": "m4-null-version-is-not-the-pre-r115-2-md5",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "      ${foldVersion === null ? null : String(foldVersion)}::text,\n",
+  "replace": "      ${foldVersion === null ? \"1\" : String(foldVersion)}::text,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "R115-2: a snapshot folded under an older fold version is recomputed on read"
+   }
+  ]
  }
 ]
