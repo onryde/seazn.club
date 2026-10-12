@@ -31,6 +31,7 @@ describe("proxy matcher (review fix 5)", () => {
   it("everything else still runs it: the other capture routes, near misses of the records path, other /api routes and pages — counted", () => {
     const kept = [
       "/api/v1/capture/codes/abcdefghjkmn/beats", "/api/v1/capture/codes/abcdefghjkmn/start", "/api/v1/capture/codes/abcdefghjkmn",
+      "/api/v1/capture/codes/x/scoring-link",
       "/api/v1/capture/codes/abcdefghjkmn/records-x", "/api/v1/capture/codes/a/b/records", "/api/v1/capture/records",
       "/api/v1/competitions/c1/exports/scorer-sheets", "/api/orgs", "/api", "/", "/admin/capture-records", "/fr/start",
     ];
@@ -39,7 +40,7 @@ describe("proxy matcher (review fix 5)", () => {
       expect(runs(url), url).toBe(true);
       checked++;
     }
-    expect(checked).toBe(12);
+    expect(checked).toBe(13);
     // Next's own exclusions stay excluded.
     expect(runs("/_next/static/chunk.js")).toBe(false);
     expect(runs("/favicon.ico")).toBe(false);

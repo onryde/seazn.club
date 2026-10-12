@@ -6,8 +6,9 @@
 -- and staff read through the non-tenant client in /admin. rls-static.test.ts reads this file as part of the stream fold
 -- (its name says capture).
 
--- 1. One row per accepted upload (§9). `lines` is the KEPT NDJSON verbatim, joined by "\n" — '' when every line was
---    dropped (P10: a 201 with kept 0 is stored as counts with no lines). A dropped line is never stored, not even hashed.
+-- 1. One row per accepted upload (§9). `lines` is the KEPT lines, each the re-serialised line the screen judged (never
+--    the bytes sent), joined by "\n" — '' when every line was dropped (P10: a 201 with kept 0 is stored as counts
+--    with no lines). A dropped line is never stored, not even hashed.
 --    Owner ruling RL (2026-10-12): a bad line (off the allow-list or its class, not JSON, not UTF-8, or secret-shaped) is
 --    DROPPED, never the body refused. `invalid_lines` counts those apart from another code's lines, so staff can spot a
 --    scrub leak; it is a count only, and a subset of `dropped_lines`.

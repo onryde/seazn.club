@@ -313,7 +313,7 @@ The implementing PR owes the migration. The approved shape:
 
 - `capture_records`: `id`, `org_id`, `competition_id`, `fixture_id`, `code_id`, `slot` (the code's slot, 0 today),
   `ref` (unique), `received_lines`, `kept_lines`, `dropped_lines`, `invalid_lines` (ruling RL: the bad lines among the
-  dropped, a count only, at most `dropped_lines`), `body_bytes`, `lines` (the kept NDJSON, verbatim),
+  dropped, a count only, at most `dropped_lines`), `body_bytes`, `lines` (the kept NDJSON, each the re-serialised line the screen judged),
   `created_at`, `expires_at`. Returning `dropped` is the owner's ruling (RD). Recording `dropped_lines` is part
   of P5, approved with it.
 - `capture_record_sessions(record_id, session_id)`: the sessions that the kept sid lines name, with a cascading
