@@ -1,6 +1,7 @@
 // W2b Task 1 — reproduction probes (spec §8.2). Each `it` asserts the Appendix A answer, so on main each is RED; the red
-// is recorded with its gap id in TR/w2b-repro/ before any fix. Gated (W2B_REPRO=1) so the build's intermediate pushes
-// stay green; every fixing task runs its probes green; Task 16 removes the gate and this file stays as a regression suite.
+// is recorded with its gap id in TR/w2b-repro/ before any fix. It was gated (W2B_REPRO=1) so the build's intermediate
+// pushes stayed green while every fixing task ran its probes green; Task 16 removed the gate, and this file now runs as a
+// regression suite.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "./events.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -27,7 +28,7 @@ function play(key: string, cfgIn: unknown, build: (H: string, A: string) => Even
 }
 const walkover = (by: (H: string, A: string) => string) => (H: string, A: string) => [ev(1, "core.forfeit", { by: by(H, A), reason: "walkover" })];
 
-describe.runIf(process.env.W2B_REPRO === "1")("W2b reproduction probes (engine)", () => {
+describe("W2b reproduction probes (engine)", () => {
   it("H-13: a hockey walkover credits 5-0 (FIH GTR Reg 13.1), not 3-0", () => {
     const r = play("hockey", {}, walkover((_H, A) => A));
     expect(r.deltas?.[0].metrics).toMatchObject({ gf: 5, ga: 0 }); // HK-WO-1

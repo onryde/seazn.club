@@ -1,8 +1,8 @@
 // W2b Task 1 — reproduction probes, server side (spec §8.2). Each `it` asserts the Appendix A answer, driven through the
 // usecases the buttons call (seedBracket is those usecases in one place), so on main each is RED; the red is recorded
-// with its gap id in TR/w2b-repro/ before any fix. Gated (W2B_REPRO=1, plus a database) so the build's intermediate
-// pushes stay green; every fixing task runs its probes green; Task 16 removes the gate and this file stays as a
-// regression suite. Where a probe compares several facts it compares them as ONE object, so the red diff records every
+// with its gap id in TR/w2b-repro/ before any fix. It was gated (W2B_REPRO=1) so the build's intermediate pushes stayed
+// green while every fixing task ran its probes green; Task 16 removed that gate, and this file now runs as a regression
+// suite wherever a database is present. Where a probe compares several facts it compares them as ONE object, so the red diff records every
 // fact today's code gets wrong, not only the first.
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -118,7 +118,7 @@ async function heldFootballSemi(auth: AuthCtx, id: string): Promise<Row> {
   return r;
 }
 
-describe.runIf(process.env.W2B_REPRO === "1" && HAS_DB)("W2b reproduction probes (server)", () => {
+describe.runIf(HAS_DB)("W2b reproduction probes (server)", () => {
   it("ST-G1: a cricket DLS abandon in a league scores in the table (CK-AB-1)", async () => {
     // single-sport: cricket is the one sport with a DLS result (CK-AB-1).
     const cfg: Record<string, unknown> = { ...declaredCfg("cricket", "t20"), dls: { enabled: true, edition: "standard" } };
