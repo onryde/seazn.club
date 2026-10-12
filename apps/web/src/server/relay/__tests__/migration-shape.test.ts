@@ -10,7 +10,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { CAPTURE_CODE_RE } from "@/server/api-v1/capture-schemas";
+import { CAPTURE_CODE_RE, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { MAX_DURATION_MINUTES } from "../config";
 import { AUTO_START_REFUSALS } from "../domain/auto-stream";
@@ -51,7 +51,7 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all TWELVE tables (V410's eight, V430's four), with zero policies", async () => {
+  it("RLS is enabled AND forced on all FOURTEEN tables (V410's eight, V430's four, V437's two), with zero policies", async () => {
     // The list is read from the migration files themselves (`create table (\w+)` over the
     // stream fold), so a table added later is guarded the day it lands, not the day someone
     // remembers this test. STREAM_TABLES comes from _stream-migration.ts, which
@@ -63,7 +63,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       where n.nspname = current_schema()
         and c.relname = any(${STREAM_TABLES})
       order by c.relname`;
-    expect(STREAM_TABLES.length).toBe(8 + 4);
+    expect(STREAM_TABLES.length).toBe(8 + 4 + 2);
     expect(rows.map((r) => r.relname)).toEqual([...STREAM_TABLES].sort());
     for (const r of rows) {
       expect(r.rls, r.relname).toBe(true);
@@ -1004,5 +1004,117 @@ describe.skipIf(!HAS_DB)("V431__auto_stream.sql — the constraints are real", (
     expect((await read())?.toISOString()).toBe(at.toISOString());
     await sql`update fixture_stream_pairings set not_ready_since = null where id = ${pid}`;
     expect(await read()).toBeNull();
+  });
+});
+
+// ---- V437 (capture record upload, spec 2026-10-12 §9, P5/P6/P9/P10) -------------------------------------------------
+// The record and its session links. Each refusal has its accepted twin; the ref pattern IS the contract's
+// CAPTURE_RECORD_REF_RE and the limits ARE the contract's CAPTURE_RECORD_MAX_*, compared to the live constraint text.
+const V437_TABLES = ["capture_records", "capture_record_sessions"];
+
+async function recordRig() {
+  const r = await rig();
+  const codeId = await insertCode(r);
+  return { ...r, codeId };
+}
+type RecordRow = { ref: string; received: number; kept: number; dropped: number; bytes: number; lines: string; slot: number; expiresIn: string };
+/** A ref drawn fresh per row (the column is unique across the table, and the DB is shared across runs). */
+const freshRef = (): string => `R-${Array.from(randomBytes(6), (b) => "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[b % 32]).join("")}`;
+const goodRecord = (): RecordRow => ({
+  ref: freshRef(), received: 3, kept: 2, dropped: 1, bytes: 120, lines: "{\"a\":1}\n{\"b\":2}", slot: 0, expiresIn: "30 days",
+});
+async function insertRecord(r: Awaited<ReturnType<typeof recordRig>>, over: Partial<RecordRow> = {}) {
+  const v = { ...goodRecord(), ...over };
+  const [row] = await sql<{ id: string }[]>`
+    insert into capture_records (org_id, competition_id, fixture_id, code_id, slot, ref, received_lines, kept_lines,
+                                 dropped_lines, body_bytes, lines, expires_at)
+    values (${r.orgId}, ${r.competitionId}, ${r.fixtureId}, ${r.codeId}, ${v.slot}, ${v.ref}, ${v.received}, ${v.kept},
+            ${v.dropped}, ${v.bytes}, ${v.lines}, now() + ${v.expiresIn}::interval)
+    returning id`;
+  return row!.id;
+}
+const refusedBy = async (p: PromiseLike<unknown>): Promise<string> => {
+  try {
+    await p;
+  } catch (e) {
+    return (e as { code?: string }).code ?? "thrown";
+  }
+  return "landed";
+};
+
+describe.skipIf(!HAS_DB)("V437__capture_records.sql — the constraints are real", () => {
+  it("both tables exist with RLS enabled AND forced, NO policy and NO trg_set_org (V410's pattern)", async () => {
+    const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
+      select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
+             (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::int as policies
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = current_schema() and c.relname = any(${V437_TABLES})
+       order by c.relname`;
+    expect(rows.map((r) => r.relname)).toEqual([...V437_TABLES].sort());
+    for (const r of rows) expect(r, r.relname).toMatchObject({ rls: true, forced: true, policies: 0 });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_trigger t join pg_class c on c.oid = t.tgrelid
+       where c.relname = any(${V437_TABLES}) and t.tgname = 'trg_set_org'`;
+    expect(n).toBe(0);
+  });
+
+  it("the accepted twins land, and every bound refuses: the ref (P9), 0 and 1001 received lines, a kept+dropped mismatch, lines with kept 0 and none with kept > 0 (P10), 0 bytes and 1 MB + 1, slot -1, an expiry not after creation — counted", async () => {
+    const r = await recordRig();
+    expect(await refusedBy(insertRecord(r))).toBe("landed");
+    expect(await refusedBy(insertRecord(r, { kept: 0, dropped: 3, lines: "" })), "P10: every line dropped is stored as counts").toBe("landed");
+    expect(await refusedBy(insertRecord(r, { received: CAPTURE_RECORD_MAX_LINES, kept: CAPTURE_RECORD_MAX_LINES, dropped: 0, bytes: CAPTURE_RECORD_MAX_BYTES })), "the top of every bound").toBe("landed");
+    expect(await refusedBy(insertRecord(r, { ref: freshRef().slice(0, 6) })), "a ref of 4").toBe("landed");
+    const refusals: [string, Partial<RecordRow>][] = [
+      ["ref lower-case", { ref: "R-7k2q" }], ["ref with an I", { ref: "R-7I2Q" }], ["ref of 3", { ref: "R-7K2" }],
+      ["ref of 9", { ref: "R-7K2Q9XZ12" }], ["ref without R-", { ref: "7K2Q" }],
+      ["0 received", { received: 0, kept: 0, dropped: 0, lines: "" }],
+      [`${CAPTURE_RECORD_MAX_LINES + 1} received`, { received: CAPTURE_RECORD_MAX_LINES + 1, kept: CAPTURE_RECORD_MAX_LINES + 1, dropped: 0 }],
+      ["kept + dropped != received", { received: 3, kept: 2, dropped: 2 }],
+      ["negative dropped", { received: 3, kept: 4, dropped: -1 }],
+      ["kept 0 with lines", { kept: 0, dropped: 3 }], ["kept 2 with no lines", { lines: "" }],
+      ["0 bytes", { bytes: 0 }], ["1 MB + 1 bytes", { bytes: CAPTURE_RECORD_MAX_BYTES + 1 }],
+      ["slot -1", { slot: -1 }], ["expires at creation", { expiresIn: "0 seconds" }],
+    ];
+    let checked = 0;
+    for (const [name, over] of refusals) {
+      expect(await refusedBy(insertRecord(r, over)), name).toBe("23514");
+      checked++;
+    }
+    expect(checked).toBe(15);
+  });
+
+  it("the ref is unique (P9: the use-case draws again on capture_records_ref_key) and the live check IS the contract's pattern", async () => {
+    const r = await recordRig();
+    const ref = freshRef();
+    await insertRecord(r, { ref });
+    let constraint = "";
+    try {
+      await insertRecord(r, { ref });
+    } catch (e) {
+      constraint = `${(e as { code?: string }).code}:${(e as { constraint_name?: string }).constraint_name}`;
+    }
+    expect(constraint).toBe("23505:capture_records_ref_key");
+    const [def] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint where conrelid = 'capture_records'::regclass and conname = 'capture_records_ref_check'`;
+    expect(def!.def).toContain(CAPTURE_RECORD_REF_RE.source);
+  });
+
+  it("the links cascade both ways: a session delete takes its link, a record delete takes its links; a link to an unknown session is refused; a code delete takes its records", async () => {
+    const r = await recordRig();
+    const recordId = await insertRecord(r);
+    const s1 = await insertSession(r, "completed");
+    const s2 = await insertSession(r, "completed");
+    await sql`insert into capture_record_sessions (record_id, session_id) values (${recordId}, ${s1}), (${recordId}, ${s2})`;
+    expect(await refusedBy(sql`insert into capture_record_sessions (record_id, session_id) values (${recordId}, ${s1})`), "the pair is the key").toBe("23505");
+    expect(await refusedBy(sql`insert into capture_record_sessions (record_id, session_id) values (${recordId}, ${randomUUID()})`)).toBe("23503");
+    const links = async () => (await sql<{ n: number }[]>`select count(*)::int as n from capture_record_sessions where record_id = ${recordId}`)[0]!.n;
+    expect(await links()).toBe(2);
+    await sql`delete from fixture_stream_sessions where id = ${s1}`;
+    expect(await links()).toBe(1);
+    await sql`delete from capture_records where id = ${recordId}`;
+    expect(await links()).toBe(0);
+    const second = await insertRecord(r);
+    await sql`delete from fixture_stream_codes where id = ${r.codeId}`;
+    expect((await sql`select 1 from capture_records where id = ${second}`).length).toBe(0);
   });
 });
