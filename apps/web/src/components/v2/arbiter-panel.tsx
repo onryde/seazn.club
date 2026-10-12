@@ -428,9 +428,11 @@ function Tile({ seat, board, video, nowMs, f }: { seat: ArbiterSeat; board: Arbi
       </div>
       <figcaption className="flex min-w-0 items-center justify-between gap-2 text-sm">
         <span className="flex min-w-0 flex-col">
-          <span className="min-w-0 truncate font-semibold lg:text-[15px]">
-            {player.name}
-            <span className="lg:hidden"> · {colour}</span>
+          {/* The colour never truncates with a long name: on a phone it is
+              the only word saying which tile is White. */}
+          <span className="flex min-w-0 font-semibold lg:text-[15px]">
+            <span className="min-w-0 truncate">{player.name}</span>
+            <span className="shrink-0 whitespace-pre lg:hidden"> · {colour}</span>
           </span>
           <span className={`hidden text-[13px] lg:block ${MUTED}`}>{colour}</span>
         </span>

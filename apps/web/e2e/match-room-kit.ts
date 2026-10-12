@@ -93,7 +93,8 @@ export type SeededRoom = {
   roundOpen: { id: string; openedAt: Date } | null;
 };
 
-async function seedUser(name: string): Promise<{ userId: string; email: string }> {
+/** A signed-up player (also the arbiter spec's, e2e/arbiter-panel.spec.ts). */
+export async function seedUser(name: string): Promise<{ userId: string; email: string }> {
   const email = `room-${TAG}-${randomUUID().slice(0, 8)}@e2e.local`;
   return withDb(async (sql) => {
     const [row] = await sql<{ id: string }[]>`
@@ -103,7 +104,7 @@ async function seedUser(name: string): Promise<{ userId: string; email: string }
   });
 }
 
-async function seedLichessLink(userId: string, lichessId: string): Promise<void> {
+export async function seedLichessLink(userId: string, lichessId: string): Promise<void> {
   await withDb(async (sql) => {
     await sql`
       insert into user_external_accounts (
