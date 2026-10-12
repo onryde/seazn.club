@@ -17,11 +17,12 @@ export async function GET(req: Request, { params }: Ctx) {
 /** POST — take the seat. The camera gate is server-verified by preflight's
  *  seatPlayer (RealtimeKit's own presence); the body carries no camera claim
  *  and is not read. Answers the snapshot and the seat verbatim, including the
- *  caller's OWN participant token on a camera refusal (to join and retry). */
+ *  caller's OWN participant token on a camera refusal (to join and retry),
+ *  and T9's answer when this seat asked for the game (review m3). */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
-    const { snapshot, seat } = await claimRoomSeat(await matchRoomIdentity(req), id);
-    return { snapshot, seat };
+    const { snapshot, seat, create } = await claimRoomSeat(await matchRoomIdentity(req), id);
+    return { snapshot, seat, create };
   });
 }

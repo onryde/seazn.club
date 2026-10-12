@@ -99,6 +99,14 @@ export type RoomClaim = {
  *  server; a report earlier than this is refused without a read. */
 export const CLOCK_ZERO_TOLERANCE_MS = 2_000;
 
+/** One Lichess read per (game, ply) per this long, however many reports
+ *  arrive — both players' clocks reach zero together (review m5). Shorter
+ *  than the client's own report spacing (use-room CLOCK_ZERO_SPACING_MS), so
+ *  a client's spaced retry — the read on which Lichess settles a flag — is
+ *  never swallowed. Per process. */
+export const CLOCK_ZERO_COOLDOWN_MS = 2_500;
+const clockZeroReadAt = new Map<string, number>();
+
 const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
 
 type Resolved = {
@@ -346,7 +354,10 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const theyIn = player.side === "home" ? ci.away : ci.home;
   return {
     fixtureId: f.fixtureId,
-    serverNow: now.toISOString(),
+    // Stamped as the snapshot is finished, not when the request began (review
+    // m6): the client orders reads and derives its clock skew from this, and
+    // a slow read (a vendor call, a busy DB) must not arrive already old.
+    serverNow: (deps.now ?? new Date()).toISOString(),
     phase,
     scheduledAt: f.scheduledAt?.toISOString() ?? null,
     roundOpenedAt: anchor?.toISOString() ?? null,
@@ -429,7 +440,11 @@ export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, d
     if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);
   }
   const fresh = await resolveRoom(identity, fixtureId);
-  return { snapshot: await compose(fresh, now, deps), seat: seatWire(seat), create };
+  const snapshot = await compose(fresh, now, deps);
+  // T9 checks the flag itself at the send (T20): its refusal is the latest
+  // word on it, whatever the room's own read raced to (review m3).
+  const refusedOff = create !== null && !create.created && create.reason === "online_chess_disabled";
+  return { snapshot: refusedOff ? { ...snapshot, onlineChessOff: true } : snapshot, seat: seatWire(seat), create };
 }
 
 /** The answers after which the game is over at Lichess, so T11 must read it
@@ -484,6 +499,13 @@ export async function reportClockZero(
   if (base === null) return { reconciled: false };
   const remaining = base - (now.getTime() - b.last_move_at.getTime());
   if (remaining > CLOCK_ZERO_TOLERANCE_MS) return { reconciled: false };
+  const key = `${fixtureId}:${b.challenge_id}:${b.move_count}`;
+  const last = clockZeroReadAt.get(key);
+  if (last !== undefined && now.getTime() - last < CLOCK_ZERO_COOLDOWN_MS) return { reconciled: false };
+  clockZeroReadAt.set(key, now.getTime());
+  if (clockZeroReadAt.size > 1_024) {
+    for (const [k, at] of clockZeroReadAt) if (now.getTime() - at > 60_000) clockZeroReadAt.delete(k);
+  }
   await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "clock_zero");
   return { reconciled: true };
 }

@@ -163,7 +163,7 @@ describe("roomScreen", () => {
     s = roomReducer(s, { type: "seat_sent" });
     s = roomReducer(s, {
       type: "seat_answered",
-      answer: { snapshot: snap({ serverNow: new Date(T0 + 1).toISOString() }), seat: refused("camera_required") },
+      answer: { snapshot: snap({ serverNow: new Date(T0 + 1).toISOString() }), seat: refused("camera_required"), create: null },
       receivedAt: T0,
     });
     expect(roomScreen(s).kind).toBe("cameraRequired");
@@ -173,6 +173,7 @@ describe("roomScreen", () => {
       answer: {
         snapshot: snap({ serverNow: new Date(T0 + 2).toISOString(), creation: { state: "creating" } }),
         seat: { seated: true, participant: null },
+        create: null,
       },
       receivedAt: T0,
     });

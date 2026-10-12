@@ -118,12 +118,13 @@ describe.skipIf(!HAS_DB)("GET/POST /fixtures/{id}/external-play/room", () => {
     expect((await roomGet(req, ctx(s.fixtureId))).status).toBe(401);
   });
 
-  it("POST takes the seat (camera policy off), stamps the check-in, and answers { snapshot, seat } only", async () => {
+  it("POST takes the seat (camera policy off), stamps the check-in, and answers { snapshot, seat, create } (review m3: T9's answer is not dropped)", async () => {
     const s = await seed();
     const t = await s.tokenFor(s.home.personId);
     const r = await read(await roomPost(post(url(s.fixtureId, "", t)), ctx(s.fixtureId)));
     expect(r.status).toBe(200);
-    expect(Object.keys(r.body.data!).sort()).toEqual(["seat", "snapshot"]);
+    expect(Object.keys(r.body.data!).sort()).toEqual(["create", "seat", "snapshot"]);
+    expect(r.body.data!.create, "one seat asks T9 for nothing").toBeNull();
     expect(r.body.data!.seat).toEqual({ seated: true, participant: null });
     expect((r.body.data!.snapshot as { you: { checkedIn: boolean } }).you.checkedIn).toBe(true);
     const [row] = await sql<{ checked_in_at: Date | null }[]>`
