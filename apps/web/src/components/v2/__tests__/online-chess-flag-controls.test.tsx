@@ -241,6 +241,36 @@ describe("the Lichess card: its link names the club", () => {
   it("linked: no link at all, the unlink control instead", () => {
     const tree = renderIsland(LichessLinkCard, { linkedUsername: "Magnus", configured: true, orgSlug: "riverside" }).tree();
     expect(byTestId(tree, "lichess-link")).toHaveLength(0);
+    expect(byTestId(tree, "lichess-relink"), "a grant that plays needs no re-link").toHaveLength(0);
     expect(byTestId(tree, "lichess-unlink")).toHaveLength(1);
+  });
+
+  it("from /me: the start returns to /me, not the account tab", () => {
+    const tree = renderIsland(LichessLinkCard, { linkedUsername: null, configured: true, orgSlug: "riverside", next: "/me" }).tree();
+    expect(propsOf(byTestId(tree, "lichess-link")[0]!).href).toBe("/api/auth/lichess?org=riverside&next=%2Fme");
+  });
+
+  it("linked with a grant that cannot play: the sentence, a re-link for the club, and unlink; no club ⇒ the sentence alone", () => {
+    const withClub = renderIsland(LichessLinkCard, {
+      linkedUsername: "Magnus",
+      configured: true,
+      orgSlug: "riverside",
+      needsReconsent: true,
+    }).tree();
+    expect(withClub.some((n) => textOf(n).includes(String(EN_UI["settings.account.lichess.reconsentRequired"])))).toBe(true);
+    const relink = byTestId(withClub, "lichess-relink");
+    expect(new Set(relink).size).toBe(1);
+    expect(propsOf(relink[0]!).href).toBe("/api/auth/lichess?org=riverside&next=%2Fsettings%3Ftab%3Daccount");
+    expect(textOf(relink[0]!)).toBe(EN_UI["settings.account.lichess.consent.cta"]);
+    expect(byTestId(withClub, "lichess-unlink").length).toBeGreaterThan(0);
+
+    const noClub = renderIsland(LichessLinkCard, { linkedUsername: "Magnus", configured: true, orgSlug: null, needsReconsent: true }).tree();
+    expect(noClub.some((n) => textOf(n).includes(String(EN_UI["settings.account.lichess.reconsentRequired"])))).toBe(true);
+    expect(byTestId(noClub, "lichess-relink")).toHaveLength(0);
+  });
+
+  it("not linked and no club to link for: no link at all (the start would be refused)", () => {
+    const tree = renderIsland(LichessLinkCard, { linkedUsername: null, configured: true, orgSlug: null }).tree();
+    expect(byTestId(tree, "lichess-link")).toHaveLength(0);
   });
 });

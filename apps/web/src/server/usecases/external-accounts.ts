@@ -243,6 +243,12 @@ export async function assertPersonIdsLinkedForOnlinePlay(
   }
 }
 
+/** Whether a stored grant is enough to PLAY: a consent timestamp AND every scope in PLAY_SCOPES. The one authority —
+ *  the play gate below refuses exactly when this answers false, and `/me` asks for re-consent on the same answer. */
+export function lichessGrantPlays(link: Pick<LichessLink, "consentedAt" | "scopes">): boolean {
+  return link.consentedAt !== null && PLAY_SCOPES.every((s) => link.scopes.includes(s));
+}
+
 /** PLAY gate (§3.1). A link is not enough: the row must carry a consent
  *  timestamp AND every scope in PLAY_SCOPES, because a grant from the
  *  identity-only flow cannot submit a move and would 401 mid-game, one
@@ -276,7 +282,7 @@ export async function assertLichessConsentForPlay(userId: string | null): Promis
   // EVERY scope the design asks for (review T2-I3) — one authority for "the
   // grant that is enough to play", so a PLAY_SCOPES that grows demands
   // re-consent from everyone whose grant predates it.
-  if (link.consentedAt === null || !PLAY_SCOPES.every((s) => link.scopes.includes(s))) {
+  if (!lichessGrantPlays(link)) {
     throw new HttpError(
       422,
       "Re-link your Lichess account so Seazn can submit your moves",

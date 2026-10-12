@@ -40,6 +40,9 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+vi.mock("@/server/usecases/me-lichess", () => ({
+  myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),
+}));
 vi.mock("@/components/me/rsvp-control", () => ({ RsvpControl: () => <div /> }));
 vi.mock("@/components/me/officiating-lane", () => ({ OfficiatingLane: () => <div /> }));
 vi.mock("@/components/me/suspensions-lane", () => ({ SuspensionsLane: () => <div /> }));
