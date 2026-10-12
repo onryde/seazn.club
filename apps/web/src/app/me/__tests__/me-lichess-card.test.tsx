@@ -137,4 +137,21 @@ describe("/me: the Lichess card", () => {
     expect(html).not.toContain('data-testid="lichess-relink"');
     expect(html).not.toContain(escaped(EN["settings.account.lichess.reconsentRequired"]!));
   });
+
+  it("linked with a grant that cannot play, but no club offered online chess any more: the sentence, and NO re-link (it has nowhere to start)", async () => {
+    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: true, orgSlug: null });
+    const html = await render();
+    expect(html).toContain(escaped(EN["settings.account.lichess.reconsentRequired"]!));
+    expect(html).not.toContain('data-testid="lichess-relink"');
+    expect(html).not.toContain("/api/auth/lichess");
+    expect(html).toContain('data-testid="lichess-unlink"');
+  });
+
+  it("a card handed no club and no link (the account tab of a club not offered online chess) starts nothing", async () => {
+    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: null });
+    const html = await render();
+    expect(html).toContain('data-testid="lichess-link-card"');
+    expect(html).not.toContain('data-testid="lichess-link"');
+    expect(html).not.toContain("/api/auth/lichess");
+  });
 });
