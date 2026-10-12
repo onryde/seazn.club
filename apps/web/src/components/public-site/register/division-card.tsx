@@ -198,6 +198,21 @@ export function DivisionCard({
         </p>
       )}
 
+      {/* T16 (spec §5.4): online play and its camera requirement, stated HERE — before signup, not at T−10 — and
+          whoever is looking (information about the division, like the organiser note above). The required duty
+          carries the owner-approved notice verbatim; nothing here claims the player is monitored (D8). */}
+      {division.online_play === true && (
+        <div data-testid="division-online-play" className="mt-3 space-y-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          <p>{t("register.online.lichess")}</p>
+          {division.camera_policy !== undefined && division.camera_policy !== "off" && (
+            <div data-testid="division-camera-requirement" data-policy={division.camera_policy}>
+              <p className="font-medium">{t(`register.camera.${division.camera_policy}`)}</p>
+              {division.camera_policy === "required" && <p>{t("onlineChess.camera.playerNotice")}</p>}
+            </div>
+          )}
+        </div>
+      )}
+
       {imPlaying && selfEligibility && !selfEligibility.eligible && (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {selfEligibility.issues
