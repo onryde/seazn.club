@@ -90,8 +90,73 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
     expect(data).not.toBeNull();
     // toEqual on the whole object: a re-added play URL or last_error key
-    // fails here, not just a wrong status.
-    expect(data!.externalPlay).toEqual({ status: "ready" });
+    // fails here, not just a wrong status. A game on file with no move yet is
+    // the start position (the rulebook's), no clocks read, nothing over.
+    expect(data!.externalPlay).toEqual({
+      status: "ready",
+      watch: {
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        lastMove: null,
+        turn: "white",
+        ply: 0,
+        whiteMs: null,
+        blackMs: null,
+        asOf: null,
+        clockRunning: false,
+        over: false,
+        whiteSide: null,
+      },
+    });
+  });
+
+  it("T16: a game in progress carries its view-only board — the ledger's position, clocks as of the last move, White's side", async () => {
+    const s = await seedPublicFixture();
+    seeded.push(s.orgId);
+    const lastMoveAt = new Date("2026-10-13T10:00:00.000Z");
+    // Labelled SQL: T10's move append writes the ledger (V436); here it stands for two accepted moves, 1.Nf3 Nf6.
+    await sql`
+      insert into fixture_external_play
+        (fixture_id, org_id, scheduled_at_basis, status, challenge_id, white_side,
+         moves_uci, move_count, white_ms, black_ms, last_move_at)
+      values (${s.fixtureId}, ${s.orgId}, now(), 'live', ${`gm-${uniq()}${uniq()}`}, 'away',
+              ${sql.json(["g1f3", "g8f6"])}, 2, 598000, 597000, ${lastMoveAt})`;
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    // The FEN after 1.Nf3 Nf6, from the rules (FEN: halfmove clock 2, fullmove 2), not from our replay.
+    expect(data!.externalPlay).toEqual({
+      status: "live",
+      watch: {
+        fen: "rnbqkb1r/pppppppp/5n2/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 2 2",
+        lastMove: "g8f6",
+        turn: "white",
+        ply: 2,
+        whiteMs: 598000,
+        blackMs: 597000,
+        asOf: lastMoveAt.toISOString(),
+        // Lichess runs the clocks once both sides have moved (ply 2).
+        clockRunning: true,
+        over: false,
+        whiteSide: "away",
+      },
+    });
+  });
+
+  it("T16: a finished game's board is over; a hold with no game has no board", async () => {
+    const done = await seedPublicFixture();
+    seeded.push(done.orgId);
+    await sql`
+      insert into fixture_external_play
+        (fixture_id, org_id, scheduled_at_basis, status, challenge_id, white_side, moves_uci, move_count)
+      values (${done.fixtureId}, ${done.orgId}, now(), 'finished', ${`gm-${uniq()}${uniq()}`}, 'home',
+              ${sql.json(["e2e4"])}, 1)`;
+    const finished = await getPublicFixture(done.orgSlug, done.compSlug, done.divSlug, done.fixtureId);
+    expect(finished!.externalPlay!.watch).toMatchObject({ over: true, clockRunning: false, turn: "black", lastMove: "e2e4", ply: 1 });
+    const held = await seedPublicFixture();
+    seeded.push(held.orgId);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, needs_reason)
+      values (${held.fixtureId}, ${held.orgId}, now(), 'needs_organiser', 'not_started')`;
+    const data = await getPublicFixture(held.orgSlug, held.compSlug, held.divSlug, held.fixtureId);
+    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null });
   });
 
   it("an organiser's hold never shows its operator text publicly", async () => {
@@ -105,7 +170,7 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
       values (${s.fixtureId}, ${s.orgId}, now(), 'needs_organiser', 'provider_error',
               'create:outcome_unknown: operator-only detail')`;
     const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
-    expect(data!.externalPlay).toEqual({ status: "needs_organiser" });
+    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null });
     expect(JSON.stringify(data)).not.toContain("operator-only detail");
   });
 });

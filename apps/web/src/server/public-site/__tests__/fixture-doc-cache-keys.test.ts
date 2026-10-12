@@ -21,6 +21,9 @@
 //     → `["pub-fixture-v5", id]` (chess T9, 2026-10-09; renumbered over W2b's
 //     `-v4` at the 2026-10-13 rebase): `externalPlay` is `{ status }` alone
 //     now; a `-v4` entry has no `externalPlay` field at all.
+//     → `["pub-fixture-v6", id]` (chess T16, 2026-10-13): `externalPlay` gained
+//     `watch` (the view-only board); a `-v5` entry has none, and the page would
+//     draw "not started" over a live game for a whole REVALIDATE_FAST window.
 //
 // The Redis READER's key is pinned here as a literal — the same literal the
 // invalidator suites (`hub-cache-invalidation`, `score-revalidate-in-request`,
@@ -78,10 +81,10 @@ describe("the public fixture document's cache names (v3/v4, W2b T13 M-1)", () =>
     for (const old of [`pub:v1:fixture:${FIXTURE_ID}`, `pub:v1:fixture:v2:${FIXTURE_ID}`]) expect(probe.gets).not.toContain(old);
   });
 
-  it("getPublicFixture caches the page's document under [pub-fixture-v5, id]", async () => {
+  it("getPublicFixture caches the page's document under [pub-fixture-v6, id]", async () => {
     const out = await getPublicFixture("org", "comp", "div", FIXTURE_ID);
     expect(out?.fixture).toEqual({ id: FIXTURE_ID });
     const fixtureEntries = probe.keyParts.filter((parts) => parts[0]?.startsWith("pub-fixture"));
-    expect(fixtureEntries).toEqual([["pub-fixture-v5", FIXTURE_ID]]);
+    expect(fixtureEntries).toEqual([["pub-fixture-v6", FIXTURE_ID]]);
   });
 });
