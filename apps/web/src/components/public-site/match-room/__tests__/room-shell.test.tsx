@@ -1,0 +1,147 @@
+// T14 — the room as first painted (server render of the shell with the REAL
+// dictionaries): which screen each snapshot paints, in the canvas's order,
+// with no untranslated key reaching the page. Effects do not run here; the
+// camera flow is room-shell-flow.test.tsx's, and the board itself (client-
+// only) is the e2e's.
+import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import type { Dict } from "@/lib/i18n-constants";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { RoomShell } from "../room-shell";
+import type { RoomGame, RoomSnapshot } from "../room-snapshot";
+
+const LOCALES = { en, es, fr, nl } as const;
+const T0 = Date.parse("2026-10-12T10:00:00.000Z");
+const GAME: RoomGame = {
+  gameId: "g1",
+  moves: ["e2e4", "e7e5"],
+  fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+  lastMove: ["e7", "e5"],
+  turn: "white",
+  whiteMs: 582_000,
+  blackMs: 497_000,
+  clockAsOf: new Date(T0).toISOString(),
+  clockRunning: true,
+  drawOfferBy: null,
+  over: false,
+};
+function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
+  return {
+    fixtureId: "f1",
+    serverNow: new Date(T0).toISOString(),
+    phase: "open",
+    scheduledAt: new Date(T0).toISOString(),
+    roundOpenedAt: new Date(T0).toISOString(),
+    opensAt: new Date(T0).toISOString(),
+    deadline: new Date(T0 + 20 * 60_000).toISOString(),
+    links: { fixture: "/shared/org/comp/div/fixtures/f1", standings: "/shared/org/comp/div" },
+    meta: { divisionName: "Open Rapid", roundNo: 3, boardNo: 2, limitSeconds: 600, incrementSeconds: 5 },
+    orgSlug: "org",
+    you: { colour: "white", name: "Bo Lind", checkedIn: false },
+    opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
+    cameraPolicy: "off",
+    opponentCameraLive: null,
+    frozen: null,
+    onlineChessOff: false,
+    creation: null,
+    game: null,
+    held: false,
+    result: null,
+    watchUrl: null,
+    realtime: null,
+    ...over,
+  };
+}
+function paint(s: RoomSnapshot, locale: keyof typeof LOCALES = "en") {
+  return renderToStaticMarkup(
+    <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
+      <RoomShell initial={s} token="tok" selfPath="/shared/org/comp/div/fixtures/f1/play?t=tok" />
+    </DictProvider>,
+  );
+}
+const ids = (html: string) => [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!);
+const screenOf = (html: string) => /data-testid="match-room" data-screen="([^"]+)"/.exec(html)?.[1];
+
+describe("the room's first paint", () => {
+  it("live, cameras off: header, clocks, board, controls — in that order — and NO tile, pill or camera notice", () => {
+    const html = paint(snap({ game: GAME, you: { colour: "white", name: "Bo Lind", checkedIn: true } }));
+    expect(screenOf(html)).toBe("live");
+    const order = ids(html).filter((i) => ["room-header", "room-clocks-strip", "room-board", "room-tile-strip", "room-controls", "room-camera-notice"].includes(i));
+    expect(order).toEqual(["room-header", "room-clocks-strip", "room-board", "room-controls"]);
+    expect(html).toContain("Open Rapid · Round 3");
+    expect(html).toContain("Board 2 · 10+5");
+    expect(html, "the clocks paint the snapshot's values before any tick").toContain("9:42");
+    expect(html).toContain("8:17");
+  });
+
+  it("live, cameras on: the tile strip and the camera notice join, after the board and after the controls", () => {
+    const html = paint(snap({ game: GAME, cameraPolicy: "required", opponentCameraLive: true }));
+    const order = ids(html).filter((i) => ["room-clocks-strip", "room-board", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"].includes(i));
+    expect(order).toEqual(["room-clocks-strip", "room-board", "room-tile-strip", "room-own-tile", "room-presence-pill", "room-controls", "room-camera-notice"]);
+    expect(html).toContain("Ada · on camera");
+    expect(html).toContain(en["onlineChess.camera.playerNotice" as keyof typeof en]);
+  });
+
+  it("the check-in: title, who you play spelled out, the opponent's state, Check in", () => {
+    const html = paint(snap());
+    expect(screenOf(html)).toBe("checkin");
+    expect(html).toContain("You play White against Ada Okonkwo · 10 minutes + 5 seconds");
+    expect(html).toContain("Ada Okonkwo has checked in");
+    expect(html).toMatch(/data-testid="room-checkin-cta"[^>]*>Check in</);
+    expect(html, "a time of day is never server-rendered (hydration)").not.toMatch(/at \d\d:\d\d/);
+  });
+
+  it("game over with a result: You won, Checkmate · 1–0, both links", () => {
+    const html = paint(snap({ game: { ...GAME, over: true }, result: { outcome: "won", method: "checkmate", score: "1–0" } }));
+    expect(screenOf(html)).toBe("over");
+    expect(html).toContain("You won");
+    expect(html).toContain("Checkmate · 1–0");
+    expect(html).toContain('href="/shared/org/comp/div/fixtures/f1"');
+    expect(html).toContain('href="/shared/org/comp/div"');
+    expect(html, "no game actions once it is over").not.toContain('data-testid="room-resign"');
+  });
+
+  it("every state card paints for its snapshot (cards 1, 5, 6; seams A and B)", () => {
+    const cases: [Partial<RoomSnapshot>, string, string][] = [
+      [{ phase: "not_opened" }, "notOpened", "room-state-not-opened"],
+      [{ creation: { state: "creating" } }, "creating", "room-state-creating"],
+      [{ phase: "closed" }, "closed", "room-state-closed"],
+      [{ frozen: "you", game: GAME }, "revoked", "room-seam-revoked"],
+      [{ onlineChessOff: true }, "offForClub", "room-seam-off-for-club"],
+    ];
+    for (const [over, screen, id] of cases) {
+      const html = paint(snap(over));
+      expect(screenOf(html), screen).toBe(screen);
+      expect(ids(html), screen).toContain(id);
+    }
+    expect(cases.length).toBe(5);
+  });
+
+  it("no untranslated key reaches the page, in any of the four locales, on any screen", () => {
+    const states: Partial<RoomSnapshot>[] = [
+      {},
+      { game: GAME, cameraPolicy: "required", opponentCameraLive: false },
+      { game: { ...GAME, over: true }, result: { outcome: "draw", method: "agreement", score: "½–½" } },
+      { game: { ...GAME, over: true } },
+      { phase: "not_opened" },
+      { creation: { state: "busy", retryAt: new Date(T0 + 48_000).toISOString() } },
+      { phase: "closed" },
+      { frozen: "you", game: GAME },
+      { onlineChessOff: true },
+    ];
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      for (const s of states) {
+        const html = paint(snap(s), locale);
+        expect(html, `${locale} ${JSON.stringify(s).slice(0, 60)}`).not.toMatch(/externalPlay\.room\.|onlineChess\.camera\.|settings\.account\.|method\./);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: locale × screen").toBe(36);
+    expect(paint(snap(), "nl"), "nl is not English").not.toContain("Your board is open");
+  });
+});
