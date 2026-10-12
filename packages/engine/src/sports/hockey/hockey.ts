@@ -115,7 +115,7 @@ const playerStats: PlayerStatsModel = {
   // `shotTracking: true` below). `so_saves` above is unaffected and still
   // covers only the shoot-out's per-attempt keeper credit — a different
   // event type this fold never matches, by construction.
-  folded: periodKeeperStatsFold("hockey.goal", "GK", "hockey.shot"),
+  folded: periodKeeperStatsFold(() => hockey, "hockey.goal", "GK", "hockey.shot"),
 };
 
 export const hockey = makePeriodModule({

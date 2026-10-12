@@ -36,15 +36,18 @@ const OPEN = "⬜ open";
  *    players' stats. Appendix A carries the same text, so none of the three is in AMENDED_TEXT;
  *  - HK-AB-1 and IH-AB-1 carry owner ruling 117 (2026-10-12), which confirmed R16-3 and qualifies them: where the cfg
  *    refuses a draw, a level abandon is accepted with no result (X-AB-1). Appendix A carries the same text. FB-AB-1 keeps
- *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it. */
+ *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it;
+ *  - X-PS-2 and X-AB-1 carry owner ruling 120 (2026-10-12), which amends them ("X-PS-2 and X-AB-1, the stats clause
+ *    only"): an abandon counts as a match in players' stats only if something was played before it. Appendix A carries
+ *    the same text, so neither is in AMENDED_TEXT. */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
     "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
     "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
     "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(118, "2026-10-12"),
-    "X-AB-1": signed(88), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
+    "X-AB-1": signed(120, "2026-10-12"), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
-    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(118, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
+    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(120, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
     "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },

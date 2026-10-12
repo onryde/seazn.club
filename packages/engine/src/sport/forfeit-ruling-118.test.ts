@@ -56,7 +56,7 @@ const statOf = (rows: PlayerStatRow[], person: string, key: string): number => r
 /** Every chess scene: each module declaring `startIsPlay`, each of its declared cfgs, each side at fault. */
 function chessScenes(): { m: AnySportModule; name: string; cfg: unknown; l: LineupPair; by: string; other: string }[] {
   const out: { m: AnySportModule; name: string; cfg: unknown; l: LineupPair; by: string; other: string }[] = [];
-  for (const m of builtinModules as readonly AnySportModule[]) {
+  for (const m of builtinModules) {
     if (!startIsPlay(m)) continue;
     const l = defaultLineupPair(m.positions);
     for (const { name, cfg } of declaredCfgs(m as never)) {
@@ -68,16 +68,17 @@ function chessScenes(): { m: AnySportModule; name: string; cfg: unknown; l: Line
 
 describe("ruling 118: in chess, Start means play has begun (X-RS-1, X-RT-1, X-PS-2 as amended)", () => {
   it("ruling 118: chess is read from a module declaration — exactly the board-game module declares startIsPlay", () => {
-    expect((builtinModules as readonly AnySportModule[]).filter(startIsPlay).map((m) => m.key)).toEqual(["boardgame"]);
+    expect(builtinModules.filter(startIsPlay).map((m) => m.key)).toEqual(["boardgame"]);
     expect(chessScenes().length, "chess scenes swept").toBeGreaterThan(2);
   });
 
-  it("ruling 118's stats seam: every module declaring startIsPlay reads its forfeits through its OWN players'-stats `unplayed` — playedInStats asks the model, never the module, so a startIsPlay module without one would read its Start as nothing played", () => {
-    // The assumption as a guard (TEST-STRATEGY): `playedInStats(events, model)` falls back to `forfeitStatsRole(active)`
-    // with no module, which reads a bare Start as nothing played. Chess passes itself (`forfeitStatsRole(events,
-    // isGameResult, boardgame)`); a future startIsPlay module must too, or its DQ after the Start reads unplayed.
+  it("ruling 118's stats seam: every module declaring startIsPlay reads its forfeits through its OWN players'-stats `unplayed` — the shared fold asks playedInStats with the model alone, so a startIsPlay module without one would read its Start as nothing played", () => {
+    // The assumption as a guard (TEST-STRATEGY): the shared fold holds only the model (`playedInStats(active, {
+    // playerStats: model })`), whose default reading has no `startIsPlay` and so reads a bare Start as nothing played.
+    // Chess passes itself (`statsUnplayed(events, boardgame, isGameResult)`); a future startIsPlay module must too, or
+    // its DQ after the Start reads unplayed. Ruling 120's abandon half: sport/player-stats-ruling-120.test.ts.
     let checked = 0;
-    for (const m of (builtinModules as readonly AnySportModule[]).filter(startIsPlay)) {
+    for (const m of builtinModules.filter(startIsPlay)) {
       expect(typeof m.playerStats?.unplayed, `${m.key}: declares its own players'-stats unplayed`).toBe("function");
       const l = defaultLineupPair(m.positions);
       const dq = seqd([pairing(l), START, forfeit(A, "disqualified")]);
@@ -112,7 +113,7 @@ describe("ruling 118: in chess, Start means play has begun (X-RS-1, X-RT-1, X-PS
         const steps = [pairing(l), START, forfeit(by, reason)];
         expect(() => fold(m, cfg, l, steps), `${label}: admitted`).not.toThrow();
         const events = seqd(steps);
-        expect(playedInStats(events, m.playerStats!), `${label}: a game played (X-PS-2)`).toBe(true);
+        expect(playedInStats(events, m), `${label}: a game played (X-PS-2)`).toBe(true);
         const rows = rowsOf(m, cfg, l, events);
         for (const p of [offender, winner]) expect(statOf(rows, p, "games"), `${label}: ${p}'s games`).toBe(1);
         expect(statOf(rows, winner, "wins"), `${label}: the winner's win`).toBe(1);
@@ -135,7 +136,7 @@ describe("ruling 118: in chess, Start means play has begun (X-RS-1, X-RT-1, X-PS
         const label = `${m.key}/${name} walkover by ${by} ${what}`;
         expect(outcomeOf(m as never, fold(m, cfg, l, steps) as never), label).toEqual({ kind: "award", winner: other, loser: by, reason: "walkover" });
         const events = seqd(steps);
-        expect(playedInStats(events, m.playerStats!), `${label}: no game (X-PS-1)`).toBe(false);
+        expect(playedInStats(events, m), `${label}: no game (X-PS-1)`).toBe(false);
         const rows = rowsOf(m, cfg, l, events);
         for (const p of persons) for (const key of ["games", "wins", "losses", "draws"]) expect(statOf(rows, p, key), `${label}: ${p} ${key}`).toBe(0);
         checked++;

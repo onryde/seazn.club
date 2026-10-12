@@ -61,6 +61,7 @@ import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
   personsForEntrant,
   playedInStats,
+  type StatsPlayDeclaration,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -1832,6 +1833,9 @@ function nestedGamesOf(state: NestedState, side: Side): number {
 function nestedMatchOutcomesFold(
   preset: NestedPreset,
   configSchema: ReturnType<typeof makeNestedConfigSchema>,
+  /** The module this fold belongs to, read when the fold runs: `playedInStats` reads its own declarations (ruling
+   *  120), never a copy. */
+  play: () => StatsPlayDeclaration,
 ): NonNullable<PlayerStatsModel["folded"]> {
   const pointType = `${preset.key}.point`;
   const summaryType = `${preset.key}.set_summary`;
@@ -1905,9 +1909,10 @@ function nestedMatchOutcomesFold(
 
       // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
       // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
-      // walkover, a withdrawal, a double walkover and a disqualification with nothing played are none (ruling 115); a
-      // retirement, an in-match disqualification and an abandon with a result are one, scored or not (X-PS-2).
-      if (playedInStats(events)) {
+      // walkover, a withdrawal, a double walkover, a disqualification with nothing played and an abandon with nothing
+      // played before it are none (rulings 115, 120); a retirement, an in-match disqualification and an abandon after
+      // play are one, scored or not (X-PS-2, ruling 114).
+      if (playedInStats(events, play())) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -2091,7 +2096,7 @@ export function makeNestedModule(
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
   };
 
-  return {
+  const sportModule: SportModule<NestedCfg, NestedEv, NestedState> = {
     key: preset.key,
     version: preset.version,
     configSchema,
@@ -2308,7 +2313,7 @@ export function makeNestedModule(
     playerStats: mergePlayerStats(
       {
         metrics: [nestedPointsWonMetric(pointType)],
-        folded: nestedMatchOutcomesFold(preset, configSchema),
+        folded: nestedMatchOutcomesFold(preset, configSchema, () => sportModule),
       },
       preset.playerStats,
     ),
@@ -2475,4 +2480,5 @@ export function makeNestedModule(
     },
     // Stryker restore all
   };
+  return sportModule;
 }

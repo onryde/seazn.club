@@ -19,13 +19,15 @@ import "server-only";
 // is the organiser's `putLineup`, so an individual or pair entrant (badminton,
 // tennis, …) almost never has a row, and a lineups-only read would list no
 // match at all for those players. Only fixtures that have started count: the
-// repo's played set (`COMPLETED_FIXTURE_STATUSES`, which the career rollup's
-// match count reads too) plus `in_play`. A pre-match team sheet is not an
-// appearance. Of the settled ones, only a match played in players' stats is
-// listed — the engine's reader, through the same `fixturesPlayedInStats` the
-// career count asks (R115-1): a walkover, a withdrawal, a double walkover or a
-// disqualification with nothing played is no appearance and earns no
-// "won"/"lost" badge (X-PS-1, ruling 115).
+// settled set the career rollup's match count reads (`STATS_MATCH_STATUSES`:
+// decided, finalized, forfeited and abandoned) plus `in_play`. A pre-match team
+// sheet is not an appearance. Of the settled ones, only a match played in
+// players' stats is listed — the engine's reader, through the same
+// `fixturesPlayedInStats` the career count asks (R115-1): a walkover, a
+// withdrawal, a double walkover, a disqualification with nothing played or an
+// abandon with nothing played before it is no appearance and earns no
+// "won"/"lost" badge (X-PS-1, ruling 115, ruling 120); an abandon after play is
+// one, its badge the result it carries (none for an abandon that decided nobody).
 //
 // CRICKET FIGURES HAVE ONE AUTHORITY: the engine's `deriveCricketScorecard`,
 // the fold the match centre renders, over exactly the inputs the server fold
@@ -72,7 +74,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
-import { COMPLETED_FIXTURE_STATUSES, fixturesPlayedInStats } from "@/server/usecases/player-stats";
+import { fixturesPlayedInStats, STATS_MATCH_STATUSES } from "@/server/usecases/player-stats";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from "./data";
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
@@ -130,8 +132,8 @@ export type FixtureFigures = Record<string, PersonFigures>;
 /** A line with nothing to say. Punctuation, not copy: identical in every locale. */
 const NO_FIGURES = "—";
 
-/** The started statuses: played (the career count's own set) or in play. */
-const APPEARANCE_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES, "in_play"];
+/** The started statuses: settled (the career count's own set, an abandoned fixture included — ruling 120) or in play. */
+const APPEARANCE_STATUSES: readonly string[] = [...STATS_MATCH_STATUSES, "in_play"];
 
 /**
  * Is a BENCH row an appearance?

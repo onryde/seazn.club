@@ -1,10 +1,10 @@
 // R115 review M3 (2026-10-12): a player's `matches` count is `playedInStats`, the ONE reader every other surface asks
-// (the shared fold's appearance metric, apps/web's career count and the public player's match lines). The set-based and
-// nested kernels counted it with their own "played" formula — a rally, a set summary or a game award on the ledger —
-// so a settled abandon with nothing scored, which X-PS-2 counts as a match for both sides' players, was none there.
+// (the shared fold's appearance metric, apps/web's career count and the public player's match lines). The set-based,
+// nested and carrom folds counted it with their own "played" formula (a rally, a set summary or a game award on the
+// ledger; carrom: a payload naming an entrant), so they could disagree with the reader on the same ledger.
 //
-// The expected values come from the rule rows, typed per scene (X-PS-1, X-PS-2, rulings 112, 115 and 118), never from
-// the fold: each scene is asserted against its rule, against `playedInStats`, and against every player's `matches`.
+// The expected values come from the rule rows, typed per scene (X-PS-1, X-PS-2, rulings 112, 115, 118 and 120), never
+// from the fold: each scene is asserted against its rule, against `playedInStats`, and against every player's `matches`.
 // Every scene is folded through the real kernel first, so the sweep reads only ledgers the product records; a refusal
 // is named and counted. Swept over every sport that declares a `matches` key, every declared cfg.
 import { describe, expect, it } from "vitest";
@@ -46,8 +46,8 @@ function rowsOf(m: AnySportModule, cfg: unknown, l: LineupPair, events: readonly
 }
 
 describe("R115 review M3: a player's matches count is playedInStats, the one reader — on every sport that counts matches", () => {
-  it("X-PS-1 + X-PS-2 (rulings 112, 115, 118): every scene's matches count is its rule's, for every player, every declared cfg — a settled abandon with nothing scored included", () => {
-    const n = { sports: 0, cfgs: 0, scenes: 0, refused: 0, noPlay: 0, playerChecks: 0, settledNothingScored: 0, kernelSettledNothingScored: 0 };
+  it("X-PS-1 + X-PS-2 (rulings 112, 115, 118, 120): every scene's matches count is its rule's, for every player, every declared cfg — an abandon with nothing played included", () => {
+    const n = { sports: 0, cfgs: 0, scenes: 0, refused: 0, noPlay: 0, playerChecks: 0, settledNothingPlayed: 0, kernelSettledNothingPlayed: 0 };
     const refusals = new Map<string, number>();
     forEachSport(({ module: m }) => {
       const model = m.playerStats;
@@ -73,10 +73,9 @@ describe("R115 review M3: a player's matches count is playedInStats, the one rea
           ["X-PS-1: a double walkover before the Start", [forfeit("walkover", "both")], false],
           ["X-PS-1 (ruling 112): a walkover after a bare Start", startIsPlay ? null : [START, forfeit("walkover")], false],
           ["ruling 115 / ruling 118: a disqualification after a bare Start", [START, forfeit("disqualified")], startIsPlay],
-          ["X-PS-2: an abandon settled with nothing scored", [START, ABANDON, SETTLE], true],
-          // No rule row speaks to an abandon with no result: `playedInStats` reads a ledger with no forfeit as a match (its
-          // step 2 — X-PS-1 takes a match away only through a forfeit), and apps/web's career count already says so.
-          ["playedInStats step 2: an abandon with no result and nothing scored", [START, ABANDON], true],
+          // Ruling 120: an abandon is a match only if something was played before it — whatever its result or settle.
+          ["ruling 120: an abandon settled with nothing played", [START, ABANDON, SETTLE], startIsPlay],
+          ["ruling 120: an abandon with nothing played", [START, ABANDON], startIsPlay],
           ["X-PS-2: a match played", P && [START, P], true],
           ["X-PS-2: an abandon settled after play", P && [START, P, ABANDON, SETTLE], true],
           ["X-PS-2: a retirement after play", P && [START, P, forfeit("retired")], true],
@@ -93,26 +92,27 @@ describe("R115 review M3: a player's matches count is playedInStats, the one rea
             continue;
           }
           n.scenes++;
-          expect(playedInStats(events, model), label(`${what}: the one reader says the rule`)).toBe(want);
+          expect(playedInStats(events, m), label(`${what}: the one reader says the rule`)).toBe(want);
           const rows = rowsOf(m, P !== null && steps.includes(P) ? playCfg : cfg, l, events);
           for (const p of persons) {
             expect(rows.find((r) => r.personId === p)?.stats.matches ?? 0, label(`${what}: ${p}'s matches`)).toBe(want ? 1 : 0);
             n.playerChecks++;
           }
-          if (what.startsWith("X-PS-2: an abandon settled with nothing scored")) {
-            n.settledNothingScored++;
-            if (folded) n.kernelSettledNothingScored++;
+          if (what.startsWith("ruling 120: an abandon settled with nothing played")) {
+            n.settledNothingPlayed++;
+            if (folded) n.kernelSettledNothingPlayed++;
           }
         }
       }
     });
-    // Not vacuous: sports, cfgs, scenes and player counts all checked, and the scene that moved under M3 reached a
-    // kernel-folded `matches` (set-based and nested) on more than one cfg.
+    // Not vacuous: sports, cfgs, scenes and player counts all checked, and the settled abandon with nothing played (the
+    // scene M3 and ruling 120 both moved) reached a kernel-folded `matches` (set-based, nested, carrom) on more than one
+    // cfg.
     expect(n.sports, JSON.stringify(n)).toBeGreaterThanOrEqual(2);
     expect(n.cfgs, JSON.stringify(n)).toBeGreaterThan(n.sports);
     expect(n.scenes, JSON.stringify(n)).toBeGreaterThan(n.cfgs * 5);
     expect(n.playerChecks, JSON.stringify(n)).toBeGreaterThan(n.scenes);
-    expect(n.kernelSettledNothingScored, JSON.stringify(n)).toBeGreaterThan(1);
+    expect(n.kernelSettledNothingPlayed, JSON.stringify(n)).toBeGreaterThan(1);
     expect(n.noPlay, `cfgs with no play event: ${JSON.stringify(n)}`).toBe(0);
     // Every refusal is named: none expected on these scenes (each is a ledger the product records).
     expect(Object.fromEntries(refusals), JSON.stringify(n)).toEqual({});

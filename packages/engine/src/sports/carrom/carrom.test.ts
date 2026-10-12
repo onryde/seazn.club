@@ -587,7 +587,7 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
     expect(rows.find((r) => r.personId === "A-p1")?.stats).toEqual({ matches: 1, wins: 0 });
   });
 
-  it("a void over the decisive board un-counts wins and boards_won; matches stays the one reader's (R115 review M3)", () => {
+  it("a void over the decisive board un-counts wins and boards_won; abandoned after it, nothing was played — no match for anybody (ruling 120)", () => {
     const ctx = ctxFor(
       [
         { id: "H", persons: ["H-p1"] },
@@ -608,14 +608,15 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
       ...decisive,
       makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[1]!.id),
     ];
-    // R115 review M3: `matches` is `playedInStats`, the one players'-stats reader — a ledger with no forfeit is a match
-    // (its step 2), so the Start left behind still reads as one, on carrom as on every surface that asks it (a fixture
-    // whose play is all voided is back in play, and apps/web folds no fixture in play). The void un-counts what the
-    // board decided: the win and the board.
-    expect(aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx)).toEqual([
-      { personId: "A-p1", stats: { matches: 1 } },
-      { personId: "H-p1", stats: { matches: 1 } },
-    ]);
+    // The void un-counts what the board decided: no win and no board for anybody. A fixture whose play is all voided is
+    // back in play, and no rule row says whether an unfinished fixture is a match (apps/web folds no fixture in play),
+    // so its `matches` is not pinned here.
+    const after = aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx);
+    expect(after.flatMap((r) => Object.keys(r.stats).filter((k) => k !== "matches")), "no win and no board for anybody").toEqual([]);
+    // Ruling 120: abandoned now, with nothing played before the abandon (its only board was voided) — no match for
+    // anybody, whatever the abandon's result, and so no row at all.
+    const abandoned = [...voided, makeEnvelope(decisive.length + 2, { type: "core.abandon", payload: { reason: "rain" } })];
+    expect(aggregatePlayerStats(abandoned, carrom.playerStats!, undefined, ctx)).toEqual([]);
   });
 
   it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {

@@ -44,7 +44,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { forfeitStatsRole, personsForEntrant, playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -828,15 +828,15 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
   };
 
   // "matches" — attendance: `playedInStats` (R115 review M3), the one players'-stats reader every other surface asks
-  // (the shared fold's appearance, apps/web's career count), never a local "does a payload name an entrant" — which
-  // counted no match for an abandon settled before the first board (X-PS-2 counts it). An empty ledger credits nobody;
-  // a walkover, a withdrawal, a double walkover and a disqualification with nothing played are no match for anybody
-  // (X-PS-1, ruling 115); a retirement or an in-match disqualification is one for both sides even before the first
-  // board. Once it says played, BOTH `ctx.entrants` are credited, not just whichever one a payload happens to name: a
-  // whitewash where the loser never wins a board, never covers a queen and never draws a penalty would otherwise leave
-  // the loser's own roster with no "matches" row at all, despite unambiguously having played.
-  const forfeit = forfeitStatsRole(events);
-  if (playedInStats(events)) {
+  // (the shared fold's appearance, apps/web's career count), never a local "does a payload name an entrant". An empty
+  // ledger credits nobody; a walkover, a withdrawal, a double walkover, a disqualification with nothing played and an
+  // abandon with nothing played before it (whatever its result or settle) are no match for anybody (X-PS-1, rulings
+  // 115, 120); a retirement or an in-match disqualification is one for both sides even before the first board, and an
+  // abandon after play is one (X-PS-2). Once it says played, BOTH `ctx.entrants` are credited, not just whichever one
+  // a payload happens to name: a whitewash where the loser never wins a board, never covers a queen and never draws a
+  // penalty would otherwise leave the loser's own roster with no "matches" row at all, despite having played.
+  const played = playedInStats(events, carrom);
+  if (played) {
     for (const entrant of ctx.entrants) creditEach(entrant, "matches", 1);
   }
 
@@ -866,8 +866,10 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
       // beside module state, so `state.outcome` would credit a settled level
       // match as a draw.
       const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));
-      // W2b (X-PS-1): an unplayed forfeit credits no personal win or loss — not even the zero.
-      if (forfeit === "unplayed") {
+      // W2b (X-PS-1; ruling 120): a fixture that is no match played — an unplayed forfeit, or an abandon with nothing
+      // played before it, whatever its result or settle — credits no personal win or loss, not even the zero. The same
+      // reader as `matches`, so a player never holds a win from a match they did not play.
+      if (!played) {
         // nothing: the match was not played
       } else if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;

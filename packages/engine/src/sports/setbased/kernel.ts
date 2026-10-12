@@ -44,6 +44,7 @@ import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWal
 import {
   personsForEntrant,
   playedInStats,
+  type StatsPlayDeclaration,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -1971,8 +1972,9 @@ function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBas
  * `matches` needs no cfg at all: it is `playedInStats` (R115 review M3), the
  * one players'-stats reader, so both sides of a fixture it calls played are
  * credited, independent of whether either one specifically won a point (see
- * the shutout note below) — and of whether anything was scored at all (an
- * abandon with a result is a match, X-PS-2).
+ * the shutout note below) — and of whether anything was scored at all (play
+ * that scores nothing is play, ruling 114; an abandon is a match only after
+ * play, ruling 120).
  *
  * Positional summaries (`{home, away}`, no entrant id) cannot bank a set
  * here: attributing one needs a true home/away label this function never has
@@ -1990,6 +1992,9 @@ function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBas
 function setBasedMatchOutcomesFold(
   preset: SetBasedPreset,
   configSchema: ReturnType<typeof makeConfigSchema>,
+  /** The module this fold belongs to, read when the fold runs: `playedInStats` reads its own declarations (ruling
+   *  120), never a copy. */
+  play: () => StatsPlayDeclaration,
 ): NonNullable<PlayerStatsModel["folded"]> {
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
@@ -2059,9 +2064,10 @@ function setBasedMatchOutcomesFold(
 
       // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
       // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
-      // walkover, a withdrawal, a double walkover and a disqualification with nothing played are none (ruling 115); a
-      // retirement, an in-match disqualification and an abandon with a result are one, scored or not (X-PS-2).
-      if (playedInStats(events)) {
+      // walkover, a withdrawal, a double walkover, a disqualification with nothing played and an abandon with nothing
+      // played before it are none (rulings 115, 120); a retirement, an in-match disqualification and an abandon after
+      // play are one, scored or not (X-PS-2, ruling 114).
+      if (playedInStats(events, play())) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -2342,7 +2348,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
   };
 
-  return {
+  const sportModule: SetBasedModule = {
     key: preset.key,
     version: preset.version,
     // R5-1 — read by `setBasedServeContext`, which builds this module's own
@@ -2365,7 +2371,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     playerStats: mergePlayerStats(
       {
         metrics: [setBasedPointsWonMetric(rallyType)],
-        folded: setBasedMatchOutcomesFold(preset, configSchema),
+        folded: setBasedMatchOutcomesFold(preset, configSchema, () => sportModule),
       },
       preset.playerStats,
     ),
@@ -2820,4 +2826,5 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       return out;
     },
   };
+  return sportModule;
 }

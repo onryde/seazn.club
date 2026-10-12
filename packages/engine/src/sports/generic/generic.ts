@@ -30,7 +30,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
-import { forfeitStatsRole, personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
 export const GenericCfg = z.object({
@@ -497,8 +497,10 @@ function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFold
       // to protect (unlike this wave's boardgame sibling), so there is no
       // stray-row risk in writing the zero.
       let wdl: { wHome: number; wAway: number; dEach: number; lHome: number; lAway: number } | null = null;
-      if (forfeitStatsRole(events) === "unplayed") {
-        // W2b (X-PS-1): a walkover, a withdrawal or a double walkover is no match — no W/D/L, not even the zeros.
+      if (!playedInStats(events, generic)) {
+        // W2b (X-PS-1; ruling 120): a fixture that is no match played — a walkover, a withdrawal, a double walkover, a
+        // disqualification with nothing played, an abandon with nothing played before it, whatever its result or settle
+        // (the one players'-stats reader) — has no W/D/L, not even the zeros.
       } else if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;
         wdl = winnerIsHome

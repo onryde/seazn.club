@@ -1015,8 +1015,8 @@
  {
   "id": "r115-row-x-ps-2-status-91",
   "file": "packages/engine/rules/cross-sport.md",
-  "find": "after the Start is in-match. | product rule W2b-R9; rulings 115, 118 (2026-10-12) | signed 118 2026-10-12 |",
-  "replace": "after the Start is in-match. | product rule W2b-R9; rulings 115, 118 (2026-10-12) | signed 91 2026-10-08 |",
+  "find": "whatever its result or settle. | product rule W2b-R9; rulings 115, 118, 120 (2026-10-12) | signed 120 2026-10-12 |",
+  "replace": "whatever its result or settle. | product rule W2b-R9; rulings 115, 118, 120 (2026-10-12) | signed 91 2026-10-08 |",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -1060,8 +1060,8 @@
  {
   "id": "r1151-web-no-ledger-played",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "        : hasLedger.has(f.id) || playedInStats([]);\n",
-  "replace": "        : true;\n",
+  "find": " : hasLedger.has(f.id) || playedInStats([], sportModule);",
+  "replace": " : true;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1075,8 +1075,8 @@
  {
   "id": "r1151-web-forfeit-ledger-not-read",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "bool_or(se.type in ('core.forfeit', 'core.void')) as read",
-  "replace": "bool_or(se.type in ('core.void')) as read",
+  "find": "bool_or(se.type in ('core.forfeit', 'core.abandon', 'core.void')) as read",
+  "replace": "bool_or(se.type in ('core.abandon', 'core.void')) as read",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1127,7 +1127,7 @@
  {
   "id": "r1151-engine-no-forfeit-asks-model",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "  if (!active.some((event) => event.type === \"core.forfeit\")) return true;\n",
+  "find": "  if (!active.some((event) => event.type === \"core.forfeit\" || event.type === \"core.abandon\")) return true;\n",
   "replace": "",
   "killers": [
    {
@@ -1187,8 +1187,8 @@
  {
   "id": "r1153-bye-web-no-ledger-played",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "        : hasLedger.has(f.id) || playedInStats([]);\n",
-  "replace": "        : true;\n",
+  "find": " : hasLedger.has(f.id) || playedInStats([], sportModule);",
+  "replace": " : true;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1344,8 +1344,8 @@
  {
   "id": "r118-boardgame-stats-without-module",
   "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-  "find": "  return forfeitStatsRole(events, isGameResult, boardgame) === \"unplayed\";",
-  "replace": "  return forfeitStatsRole(events, isGameResult) === \"unplayed\";",
+  "find": "  return statsUnplayed(events, boardgame, isGameResult);",
+  "replace": "  return statsUnplayed(events, {}, isGameResult);",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -1441,45 +1441,211 @@
  {
   "id": "r115-m3-setbased-matches-scored-only",
   "file": "packages/engine/src/sports/setbased/kernel.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "find": "if (playedInStats(events, play())) {",
+  "replace": "if (playedInStats(events, play()) && events.some((e) => !e.type.startsWith(\"core.\") && !/\\.(sanction|sub|timeout|interruption|expedite\\.start)$/.test(e.type))) {",
   "killers": [
    {
     "cwd": "packages/engine",
     "files": [
-     "src/sport/player-stats-matches-reader.test.ts"
+     "src/sport/player-stats-ruling-120.test.ts"
     ],
-    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
    }
-  ]
+  ],
+  "note": "Re-shaped under ruling 120: M3's own scene (a settled abandon with nothing scored) is no match now, so the kernel's scored-only formula differs from the reader only on NON-scoring play (ruling 114) before an abandon."
  },
  {
   "id": "r115-m3-nested-matches-scored-only",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "find": "if (playedInStats(events, play())) {",
+  "replace": "if (playedInStats(events, play()) && events.some((e) => !e.type.startsWith(\"core.\") && !/\\.(sanction|sub|timeout|interruption|expedite\\.start)$/.test(e.type))) {",
   "killers": [
    {
     "cwd": "packages/engine",
     "files": [
-     "src/sport/player-stats-matches-reader.test.ts"
+     "src/sport/player-stats-ruling-120.test.ts"
     ],
-    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ],
+  "note": "Re-shaped under ruling 120: M3's own scene (a settled abandon with nothing scored) is no match now, so the kernel's scored-only formula differs from the reader only on NON-scoring play (ruling 114) before an abandon."
+ },
+ {
+  "id": "r120-stats-abandon-branch-dropped",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  return abandonAt >= 0 && !playRecorded(active.slice(0, abandonAt), module);",
+  "replace": "  return false;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "rulings 115, 120 \\+ X-PS-1/2: playedInStats"
    }
   ]
  },
  {
-  "id": "r115-m3-carrom-matches-scored-only",
-  "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && events.some((e) => !e.type.startsWith(\"core.\"))) {",
+  "id": "r120-reader-step2-forfeit-only",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  if (!active.some((event) => event.type === \"core.forfeit\" || event.type === \"core.abandon\")) return true;",
+  "replace": "  if (!active.some((event) => event.type === \"core.forfeit\")) return true;",
   "killers": [
    {
     "cwd": "packages/engine",
     "files": [
-     "src/sport/player-stats-matches-reader.test.ts"
+     "src/sport/player-stats-ruling-120.test.ts"
     ],
-    "name": "X-PS-1 \\+ X-PS-2 \\(rulings 112, 115, 118\\)"
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "rulings 115, 120 \\+ X-PS-1/2: playedInStats"
+   }
+  ]
+ },
+ {
+  "id": "r120-abandon-judged-on-whole-ledger",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "!playRecorded(active.slice(0, abandonAt), module)",
+  "replace": "!playRecorded(active, module)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "rulings 115, 120 \\+ X-PS-1/2: playedInStats"
+   }
+  ]
+ },
+ {
+  "id": "r120-shared-fold-drops-model",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "!playedInStats(active, { playerStats: model })",
+  "replace": "!playedInStats(active, {})",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ]
+ },
+ {
+  "id": "r120-carrom-wins-forfeit-only",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "if (!played) {\n        // nothing: the match was not played",
+  "replace": "if (!played && events.some((e) => e.type === \"core.forfeit\")) {\n        // nothing: the match was not played",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ]
+ },
+ {
+  "id": "r120-period-clean-sheet-forfeit-only",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "const unplayed = !playedInStats(events, play());",
+  "replace": "const unplayed = !playedInStats(events, play()) && events.some((e) => e.type === \"core.forfeit\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ]
+ },
+ {
+  "id": "r120-football-clean-sheet-forfeit-only",
+  "file": "packages/engine/src/sports/football/football.ts",
+  "find": "const unplayed = !playedInStats(events, football);",
+  "replace": "const unplayed = !playedInStats(events, football) && events.some((e) => e.type === \"core.forfeit\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ]
+ },
+ {
+  "id": "r120-generic-wdl-forfeit-only",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "if (!playedInStats(events, generic)) {",
+  "replace": "if (!playedInStats(events, generic) && events.some((e) => e.type === \"core.forfeit\")) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-120.test.ts"
+    ],
+    "name": "ruling 120 \\+ X-PS-2 \\+ X-AB-1"
+   }
+  ]
+ },
+ {
+  "id": "r120-web-fast-path-skips-abandon",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "bool_or(se.type in ('core.forfeit', 'core.abandon', 'core.void')) as read",
+  "replace": "bool_or(se.type in ('core.forfeit', 'core.void')) as read",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "a played abandon is Pat"
+   }
+  ]
+ },
+ {
+  "id": "r120-web-career-without-abandoned",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "export const STATS_MATCH_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES, \"abandoned\"];",
+  "replace": "export const STATS_MATCH_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "a played abandon is Pat"
+   }
+  ]
+ },
+ {
+  "id": "r120-row-x-ab-1-status-88",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "| ICC 16.10.3; RBB §7 item 3; W2b-R6; ruling 120 (2026-10-12) | signed 120 2026-10-12 |",
+  "replace": "| ICC 16.10.3; RBB §7 item 3; W2b-R6; ruling 120 (2026-10-12) | signed 88 2026-10-08 |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
    }
   ]
  }

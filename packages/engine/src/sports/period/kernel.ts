@@ -53,7 +53,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { forfeitStatsRole, type PlayerStatRow, type PlayerStatsModel } from "../../stats/stats.ts";
+import { playedInStats, type PlayerStatRow, type PlayerStatsModel, type StatsPlayDeclaration } from "../../stats/stats.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
   escalationHints,
@@ -1613,6 +1613,9 @@ function winPoints(cfg: PeriodCfg, method: string | undefined): [number, number]
  * in this programme already follows.
  */
 export function periodKeeperStatsFold(
+  /** The module this fold belongs to, read when the fold runs: `playedInStats` reads its own declarations (ruling
+   *  120), never a copy. */
+  play: () => StatsPlayDeclaration,
   goalType: string,
   keeperGroup: string,
   shotType?: string,
@@ -1670,9 +1673,11 @@ export function periodKeeperStatsFold(
           return p === undefined ? undefined : { personId: p, conceded: false };
         })(),
       };
-      // W2b (X-PS-1): no clean sheet in a fixture nobody played (a walkover, a withdrawal, a double walkover); a
-      // retirement or an in-match disqualification was played and keeps them (X-PS-2).
-      const unplayed = forfeitStatsRole(events) === "unplayed";
+      // W2b (X-PS-1; ruling 120): no clean sheet in a fixture that is no match played — a walkover, a withdrawal, a double
+      // walkover, a disqualification with nothing played, an abandon with nothing played before it (whatever its result)
+      // — the one players'-stats reader; a retirement, an in-match disqualification and an abandon after play were
+      // played and keep them (X-PS-2).
+      const unplayed = !playedInStats(events, play());
       const closeSpell = (side: SideKey): void => {
         const spell = open[side];
         if (spell !== undefined && !spell.conceded && !unplayed) bump(spell.personId, "clean_sheets");

@@ -112,9 +112,10 @@ export interface PlayerAwardSpec {
 export interface PlayerStatsModel {
   metrics: PlayerStatMetric[];
   /**
-   * W2b (X-PS-1) — whether a fixture's (void-resolved) ledger is a forfeit nobody played, which skips every
-   * `appearance` metric. Absent ⇒ `forfeitStatsRole(events) === "unplayed"`. A sport whose result can stand BEFORE a
-   * forfeit supplies its own (chess: the classical game before a tie-break walkover stays played, ruling D-C6).
+   * W2b (X-PS-1; ruling 120) — whether a fixture's (void-resolved) ledger holding a `core.forfeit` or a `core.abandon`
+   * is not a match played, which skips every `appearance` metric. Absent ⇒ `statsUnplayed(events, module)`. A sport
+   * whose result can stand BEFORE a forfeit supplies its own (chess: the classical game before a tie-break walkover
+   * stays played, ruling D-C6), built on `statsUnplayed` with its own module so the abandon rule keeps one copy.
    */
   unplayed?: (events: readonly EventEnvelope[]) => boolean;
   derived?: PlayerStatDerive[];
@@ -520,28 +521,68 @@ export function forfeitStatsRole(
   return role;
 }
 
+/** What the players'-stats reader reads of a sport (ruling 120): the module's OWN declarations, never a copy — so any
+ *  `SportModule` is one. `startIsPlay` says what "something played" means (ruling 118: in chess the Start is play);
+ *  `playerStats.unplayed` is a model's own reading where a result can stand before a forfeit (chess, ruling D-C6). */
+export interface StatsPlayDeclaration {
+  readonly startIsPlay?: boolean;
+  readonly playerStats?: Pick<PlayerStatsModel, "unplayed">;
+}
+
 /**
- * W2b (X-PS-1, X-PS-2; ruling 115) — is this fixture a match played in players' stats? THE one reader, in this order:
+ * W2b (X-PS-1, X-PS-2; rulings 115, 120) — the default reading of a void-resolved ledger that holds a `core.forfeit` or
+ * a `core.abandon`: is it NOT a match played? A forfeit reads by `forfeitStatsRole` (a walkover, a withdrawal, a double
+ * walkover and a disqualification with nothing played are not a match; a retirement and an in-match disqualification
+ * are). An abandon is a match only if something was played before it (ruling 120): `playRecorded` of the ledger before
+ * the active abandon — any active sport event after the Start, scoring or not (ruling 114), and in chess the Start
+ * itself (ruling 118). With nothing played it is no match for anybody, whatever its result or a settle after it. A
+ * ledger holding neither is not unplayed here.
+ *
+ * A recorded ledger never holds both: the kernel refuses a forfeit once a match is abandoned (ABANDONED_SETTLE_OR_VOID)
+ * and an abandon once it is decided (ALREADY_DECIDED). Were both active, the forfeit decides, as it did before ruling
+ * 120. `decidedBefore` is `forfeitStatsRole`'s (chess: the classical game's result). A model's own `unplayed` calls this
+ * with its module, so the abandon rule has one copy.
+ */
+export function statsUnplayed(
+  active: readonly EventEnvelope[],
+  module: { readonly startIsPlay?: boolean },
+  decidedBefore?: (event: EventEnvelope) => boolean,
+): boolean {
+  if (active.some((event) => event.type === "core.forfeit")) return forfeitStatsRole(active, decidedBefore, module) === "unplayed";
+  let abandonAt = -1;
+  for (const [index, event] of active.entries()) if (event.type === "core.abandon") abandonAt = index;
+  return abandonAt >= 0 && !playRecorded(active.slice(0, abandonAt), module);
+}
+
+/**
+ * W2b (X-PS-1, X-PS-2; rulings 115, 120) — is this fixture a match played in players' stats? THE one reader, in this
+ * order:
  * 1. an empty ledger (after voids) is not: nothing was recorded, so nothing was played — the walkovers, byes and double
  *    walkovers a product settles without writing an event (X-PS-1);
- * 2. a ledger with no active `core.forfeit` is: X-PS-1 takes a match away only through a forfeit, and a model's own
- *    `unplayed` reads forfeits only, so it is not asked (an abandon with a result before anything was played is X-PS-2's
- *    and counts);
- * 3. otherwise the model's own `unplayed` where it declares one (chess: the classical game before a tie-break walkover
- *    stays played), else `forfeitStatsRole` — a walkover, a withdrawal, a double walkover and a disqualification with
- *    nothing played are not; a retirement and an in-match disqualification are.
+ * 2. a ledger with no active `core.forfeit` and no active `core.abandon` is: X-PS-1 takes a match away only through a
+ *    forfeit, and ruling 120 only through an abandon with nothing played before it, so the model is not asked;
+ * 3. otherwise the module's model's own `unplayed` where it declares one (chess: the classical game before a tie-break
+ *    walkover stays played), else `statsUnplayed` with the module — a walkover, a withdrawal, a double walkover, a
+ *    disqualification with nothing played and an abandon with nothing played (ruling 120) are not; a retirement, an
+ *    in-match disqualification and an abandon after play are.
  * `events` is one fixture's ledger; voids are resolved here, so a caller may hand it the stored rows as they are. Steps 1
- * and 2 answer without a model, so a caller holding many ledgers needs to read in full only those holding a
- * `core.forfeit` or a `core.void` row: any other non-empty ledger is played.
+ * and 2 answer without reading the module, so a caller holding many ledgers needs to read in full only those holding a
+ * `core.forfeit`, a `core.abandon` or a `core.void` row: any other non-empty ledger is played.
  *
- * The shared fold below asks it before crediting an appearance, and apps/web asks it before counting a person's
- * matches (the career count, the public player's match lines) — so no surface carries a second copy of the rule.
+ * `module` is REQUIRED (ruling 120): what counts as "played" before an abandon is the sport's own (`startIsPlay`), so no
+ * caller can leave it out. Any `SportModule` is a `StatsPlayDeclaration`; pass the module itself, never a hand-made one.
+ * The one exception is the shared fold below, which holds only the model: a module whose Start is play declares its own
+ * `unplayed` (boardgame), which answers for it — sport/player-stats-ruling-120.test.ts holds every sport to that.
+ *
+ * The shared fold below asks it before crediting an appearance; the set-based, nested and carrom folds ask it before
+ * crediting `matches`; and apps/web asks it before counting a person's matches (the career count, the public player's
+ * match lines) — so no surface carries a second copy of the rule.
  */
-export function playedInStats(events: readonly EventEnvelope[], model?: Pick<PlayerStatsModel, "unplayed">): boolean {
+export function playedInStats(events: readonly EventEnvelope[], module: StatsPlayDeclaration): boolean {
   const active = resolveVoids([...events]);
   if (active.length === 0) return false;
-  if (!active.some((event) => event.type === "core.forfeit")) return true;
-  return !(model?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+  if (!active.some((event) => event.type === "core.forfeit" || event.type === "core.abandon")) return true;
+  return !(module.playerStats?.unplayed?.(active) ?? statsUnplayed(active, module));
 }
 
 /**
@@ -558,10 +599,10 @@ export function playedInStats(events: readonly EventEnvelope[], model?: Pick<Pla
  * History: 1 — every fold before the version existed (its md5 carried none); 2 — W2b's X-PS-1/X-PS-2 and ruling 115
  * (an unplayed forfeit is no match; a disqualification with nothing played is unplayed; a bye is no match, R115-3);
  * 3 — ruling 118 (chess: a disqualification after a bare Start is a game both players played).
- * 4 — R115 review M3 (the set-based, nested and carrom folds count `matches` through `playedInStats`: an abandon
- * settled with nothing scored is a match for both sides' players, X-PS-2).
+ * 4 — R115 review M3 (the set-based, nested and carrom folds count `matches` through `playedInStats`);
+ * 5 — ruling 120 (an abandon is a match only if something was played before it; carrom's wins follow the reader).
  */
-export const STATS_FOLD_VERSION = 4;
+export const STATS_FOLD_VERSION = 5;
 
 /**
  * Fold one fixture's event ledger into per-person stat contributions
@@ -619,7 +660,9 @@ export function aggregatePlayerStatsWithDiagnostics(
 
   // W2b (X-PS-1): an appearance metric is not credited in a fixture nobody played. Asked once, and only of a model
   // that declares one.
-  const unplayed = model.metrics.some((metric) => metric.appearance === true) && !playedInStats(active, model);
+  // The shared fold holds only the model: a module whose Start is play answers through its own `unplayed` (boardgame),
+  // as `playedInStats` documents — sport/player-stats-ruling-120.test.ts holds every sport to it.
+  const unplayed = model.metrics.some((metric) => metric.appearance === true) && !playedInStats(active, { playerStats: model });
 
   for (const event of active) {
     const payload = event.payload as Record<string, unknown>;

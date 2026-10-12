@@ -43,10 +43,10 @@ const forfeit = (reason: string): Step => ({ type: "core.forfeit", payload: { by
 /** The engine's players'-stats reading of a ledger: `playedInStats`, the one reader every surface asks (the shared fold,
  *  apps/web's match counts). Cross-checked against its two parts — the model's own `unplayed`, else `forfeitStatsRole`
  *  — so the export cannot drift from what the fold's roles say. */
-function statsMatchOf(model: PlayerStatsModel, events: readonly EventEnvelope[]): boolean {
+function statsMatchOf(m: AnySportModule, model: PlayerStatsModel, events: readonly EventEnvelope[]): boolean {
   const active = resolveVoids([...events]);
-  const parts = !(model.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
-  const reader = playedInStats(events, model);
+  const parts = !(model.unplayed?.(active) ?? forfeitStatsRole(active, undefined, m) === "unplayed");
+  const reader = playedInStats(events, m);
   expect(reader, "playedInStats agrees with the model's unplayed / forfeitStatsRole").toBe(parts);
   return reader;
 }
@@ -92,7 +92,7 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
         const expectWalkoverLike = (steps: Step[], walkover: Step[], what: string, c: unknown = cfg) => {
           const events = seqd(steps);
           expect(playRecorded(events, m), label(`${what}: nothing played`)).toBe(false);
-          expect(statsMatchOf(model, events), label(`${what}: not a match played`)).toBe(false);
+          expect(statsMatchOf(m, model, events), label(`${what}: not a match played`)).toBe(false);
           const rows = rowsOf(m, c, l, events);
           expect(rows, label(`${what}: the walkover's rows`)).toEqual(rowsOf(m, c, l, seqd(walkover)));
           if (keys.includes("matches")) {
@@ -140,7 +140,7 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
         const played = [...pre, start, p, forfeit("disqualified")];
         expect(outcomeOf(m as never, fold(played, playCfg) as never), label("after play")).toMatchObject({ kind: "award", winner: H, loser: A, reason: "disqualified" });
         expect(playRecorded(seqd(played), m), label("after play: something played")).toBe(true);
-        expect(statsMatchOf(model, seqd(played)), label("after play: a match played (X-PS-2)")).toBe(true);
+        expect(statsMatchOf(m, model, seqd(played)), label("after play: a match played (X-PS-2)")).toBe(true);
         const rows = rowsOf(m, playCfg, l, seqd(played));
         expect(rows, label("after play: the retirement's rows (X-PS-2)")).toEqual(rowsOf(m, playCfg, l, seqd([...pre, start, p, forfeit("retired")])));
         if (keys.includes("matches")) for (const q of persons) expect(matchesOf(rows, q), label(`after play: ${q}'s matches`)).toBe(1);

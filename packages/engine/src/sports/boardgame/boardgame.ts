@@ -38,7 +38,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { forfeitStatsRole, personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { forfeitStatsRole, personsForEntrant, statsUnplayed, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
@@ -662,10 +662,12 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
 /** The classical game's result — a `boardgame.result` — stands before any later forfeit (ruling D-C6, BG-WO-3). */
 const isGameResult = (event: EventEnvelope): boolean => event.type === "boardgame.result";
 
-/** W2b (X-PS-1) — a chess fixture nobody played: a walkover, a withdrawal or a double walkover before any game result.
- *  A forfeit after the classical game (a tie-break walkover) leaves that game played. */
+/** W2b (X-PS-1; rulings 118, 120) — a chess fixture nobody played: a walkover, a withdrawal or a double walkover before
+ *  any game result, or an abandon before the Start. A forfeit after the classical game (a tie-break walkover) leaves that
+ *  game played, and so does an abandon after the Start (ruling 118: in chess the Start is play). The shared reading with
+ *  this module and the game's result, so the forfeit and abandon rules keep one copy. */
 function boardgameUnplayed(events: readonly EventEnvelope[]): boolean {
-  return forfeitStatsRole(events, isGameResult, boardgame) === "unplayed";
+  return statsUnplayed(events, boardgame, isGameResult);
 }
 
 function foldBoardgameStats(

@@ -220,15 +220,18 @@ describe("stats/stats.ts forfeitStatsRole + the aggregator's appearance skip (X-
     expect(forfeitStatsRole([start, dq(2), ev(3, "x.warning"), dq(4)]), "a DQ after play, following one with nothing played").toBe("played");
   });
 
-  it("ruling 115 + X-PS-1/2: playedInStats, the one reader the web counts ask — empty is unplayed, no forfeit is played; it resolves voids itself; the model's own unplayed wins on a forfeit", () => {
+  it("rulings 115, 120 + X-PS-1/2: playedInStats, the one reader the web counts ask — empty is unplayed, no forfeit and no abandon is played, an abandon only after play; it resolves voids itself; the model's own unplayed wins on a forfeit or an abandon", () => {
     const start = ev(1, "core.start");
     const play = ev(2, "x.warning");
     const voidOf = (seq: number, target: EventEnvelope) => makeEnvelope(seq, { type: "core.void", payload: {} }, target.id);
+    const abandon = (seq: number) => ev(seq, "core.abandon", { reason: "rain" });
+    /** The reader's contract over a sport ("x") that declares neither a Start that is play nor its own `unplayed`. */
+    const NO_DECLARATION = {};
     const rows: Array<[string, EventEnvelope[], boolean]> = [
       // X-PS-1: a walkover / double walkover / bye the product settled without writing an event
       ["no event", [], false],
       ["every event voided", [start, voidOf(2, start)], false],
-      // X-PS-2: an abandon with a result before anything was played still counts — no forfeit, so played
+      // neither a forfeit nor an abandon: played (step 2)
       ["a bare Start", [start], true],
       ["no forfeit, play", [start, play], true],
       ["a walkover", [forfeit(1, { by: A, reason: "walkover" })], false],
@@ -238,23 +241,38 @@ describe("stats/stats.ts forfeitStatsRole + the aggregator's appearance skip (X-
       ["a DQ after a voided play", [start, play, voidOf(3, play), forfeit(4, { by: A, reason: "disqualified" })], false],
       // a voided walkover is no forfeit at all
       ["a voided walkover", [start, forfeit(2, { by: A, reason: "walkover" }), voidOf(3, forfeit(2, {}))], true],
+      // ruling 120: an abandon is a match only if something was played before it — scoring or not (ruling 114)
+      ["an abandon after a bare Start", [start, abandon(2)], false],
+      ["an abandon after play", [start, play, abandon(3)], true],
+      ["an abandon after a voided play", [start, play, voidOf(3, play), abandon(4)], false],
+      // judged at the abandon, as a forfeit is (ruling 115): play recorded only after it played nothing before it
+      ["play only after the abandon", [start, abandon(2), ev(3, "x.warning")], false],
+      ["a voided abandon", [start, abandon(2), voidOf(3, abandon(2))], true],
     ];
     let checked = 0;
     for (const [label, events, want] of rows) {
-      expect(playedInStats(events), label).toBe(want);
+      expect(playedInStats(events, NO_DECLARATION), label).toBe(want);
       checked++;
     }
-    expect(checked).toBe(9);
-    // On a forfeit the model's own reading outranks the role (chess keeps a classical game played): both directions.
+    expect(checked).toBe(14);
+    // On a forfeit or an abandon the model's own reading outranks the default (chess keeps a classical game played, and
+    // reads its Start as play): both directions.
     const retired = forfeit(3, { by: A, reason: "retired" });
-    expect(playedInStats([forfeit(1, { by: A, reason: "walkover" })], { unplayed: () => false }), "model says played").toBe(true);
-    expect(playedInStats([start, play, retired], { unplayed: () => true }), "model says unplayed").toBe(false);
-    // Without an active forfeit the model is not asked: a ledger it would call unplayed is still played (step 2).
+    expect(playedInStats([forfeit(1, { by: A, reason: "walkover" })], { playerStats: { unplayed: () => false } }), "model says played").toBe(true);
+    expect(playedInStats([start, play, retired], { playerStats: { unplayed: () => true } }), "model says unplayed").toBe(false);
+    expect(playedInStats([start, abandon(2)], { playerStats: { unplayed: () => false } }), "an abandon: model says played").toBe(true);
+    expect(playedInStats([start, play, abandon(3)], { playerStats: { unplayed: () => true } }), "an abandon: model says unplayed").toBe(false);
+    // Ruling 120 reads the module's own "played": where the Start is play, an abandon after a bare Start is a match.
+    expect(playedInStats([start, abandon(2)], { startIsPlay: true }), "startIsPlay: an abandon after the Start").toBe(true);
+    expect(playedInStats([abandon(1)], { startIsPlay: true }), "startIsPlay: an abandon with no Start").toBe(false);
+    // Without an active forfeit or abandon the model is not asked: a ledger it would call unplayed is still played.
     let asked = 0;
-    const model = { unplayed: () => (asked++, true) };
-    expect(playedInStats([start, play], model), "no forfeit: played whatever the model says").toBe(true);
+    const model = { playerStats: { unplayed: () => (asked++, true) } };
+    expect(playedInStats([start, play], model), "neither: played whatever the model says").toBe(true);
     expect(playedInStats([], model), "empty: unplayed whatever the model says").toBe(false);
-    expect(asked, "the model is asked only about a ledger with a forfeit").toBe(0);
+    expect(asked, "the model is asked only about a ledger with a forfeit or an abandon").toBe(0);
+    expect(playedInStats([start, play, abandon(3)], model), "an abandon: the model is asked").toBe(false);
+    expect(asked).toBe(1);
   });
 
   it("an unparseable forfeit is no forfeit — it resets the role rather than reading a field off it", () => {

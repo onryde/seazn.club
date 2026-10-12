@@ -436,7 +436,7 @@
  {
   "id": "setbased-ps-matches-skip",
   "file": "packages/engine/src/sports/setbased/kernel.ts",
-  "find": "if (playedInStats(events)) {",
+  "find": "if (playedInStats(events, play())) {",
   "replace": "if (events.length > 0) {",
   "killers": [
    {
@@ -451,8 +451,8 @@
  {
   "id": "setbased-ps-matches-retired",
   "file": "packages/engine/src/sports/setbased/kernel.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "find": "if (playedInStats(events, play())) {",
+  "replace": "if (playedInStats(events, play()) && !events.some((e) => e.type === \"core.forfeit\")) {",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -466,8 +466,8 @@
  {
   "id": "nested-ps-matches-retired",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "find": "if (playedInStats(events, play())) {",
+  "replace": "if (playedInStats(events, play()) && !events.some((e) => e.type === \"core.forfeit\")) {",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -481,8 +481,8 @@
  {
   "id": "carrom-ps-matches-retired",
   "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (playedInStats(events) && !events.some((e) => e.type === \"core.forfeit\")) {",
+  "find": "const played = playedInStats(events, carrom);",
+  "replace": "const played = playedInStats(events, carrom) && !events.some((e) => e.type === \"core.forfeit\");",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -496,7 +496,7 @@
  {
   "id": "nested-ps-matches-skip",
   "file": "packages/engine/src/sports/nested/kernel.ts",
-  "find": "if (playedInStats(events)) {",
+  "find": "if (playedInStats(events, play())) {",
   "replace": "if (events.length > 0) {",
   "killers": [
    {
@@ -511,8 +511,8 @@
  {
   "id": "carrom-ps-matches-skip",
   "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (playedInStats(events)) {",
-  "replace": "if (events.length > 0) {",
+  "find": "const played = playedInStats(events, carrom);",
+  "replace": "const played = events.length > 0;",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -526,7 +526,7 @@
  {
   "id": "carrom-ps-wl-skip",
   "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (forfeit === \"unplayed\") {\n        // nothing: the match was not played\n      } else if",
+  "find": "if (!played) {\n        // nothing: the match was not played\n      } else if",
   "replace": "if (false) {\n        // nothing: the match was not played\n      } else if",
   "killers": [
    {
@@ -541,7 +541,7 @@
  {
   "id": "generic-ps-wdl-skip",
   "file": "packages/engine/src/sports/generic/generic.ts",
-  "find": "if (forfeitStatsRole(events) === \"unplayed\") {",
+  "find": "if (!playedInStats(events, generic)) {",
   "replace": "if (false) {",
   "killers": [
    {

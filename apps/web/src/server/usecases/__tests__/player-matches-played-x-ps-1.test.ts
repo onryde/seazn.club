@@ -430,3 +430,127 @@ describe.skipIf(!HAS_DB)("R115-3: a bye is no match played — career count, mat
     });
   }
 });
+
+// Ruling 120 (owner "A", 2026-10-12): an abandon counts as a match played in players' stats only if something was
+// played before it — any sport event after the Start, scoring or not (ruling 114); with nothing played, no player gets
+// a match, whatever the abandon's result or settle. Expected values from that rule alone. Real `scoreEvent` writes:
+//   league (Pat meets two opponents):
+//     1. Start, play, abandon                            → a match (X-PS-2, ruling 120)
+//     2. Start, abandon (rain before play)               → no match
+//   knockout (Pat v one opponent; a settle is a knockout's only — append-event.ts refuses it in a league):
+//     3. Start, abandon, the organiser settles for Pat   → no match, and no personal win
+// Pat: one match, no W/L. The defect it pins on both sides of the change: the career count left out the `abandoned`
+// status the snapshot fold reads (tile 1, career 0), and read a settled abandon with nothing played as a match.
+describe.skipIf(!HAS_DB)("ruling 120: an abandon is a match only if something was played before it — career count, match list, snapshot", () => {
+  for (const c of SPORTS) {
+    it(`${c.module.key}: a played abandon is Pat's one match; abandons with nothing played (settled or not) are none`, async () => {
+      const key = c.module.key;
+      const suffix = randomUUID().slice(0, 8);
+      const [{ id: orgId, slug: orgSlug }] = await sql<{ id: string; slug: string }[]>`
+        insert into organizations (name, slug) values (${"R120 " + suffix}, ${"r120-" + suffix}) returning id, slug`;
+      await setOrgPlan(orgId, "pro");
+      await invalidateOrgEntitlements(orgId);
+      const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `R120 ${key} ${suffix}`, visibility: "public", branding: {} });
+      const names = ["Pat Rain", "Opp One", "Opp Two", "Opp Three"];
+      const people: { id: string }[] = [];
+      for (const full_name of names) {
+        people.push(await createPerson(auth, { full_name, consent: { public_name: true }, dob: null, gender: null, external_ref: null }));
+      }
+      const seqOf = new Map<string, number>();
+      const post = async (fixtureId: string, type: string, payload: unknown) => {
+        const expected_seq = seqOf.get(fixtureId) ?? 0;
+        await scoreEvent(auth, fixtureId, { expected_seq, type, payload } as never);
+        seqOf.set(fixtureId, expected_seq + 1);
+      };
+      /** A started division of `who` (indexes into `people`), Pat first, its fixtures generated. */
+      const divisionOf = async (slug: string, kind: "league" | "knockout", who: number[]) => {
+        const division = await createDivision(auth, comp.id, { name: slug, slug: `${slug}-${suffix}`, sport_key: key, variant_key: c.variant, config: {} });
+        const entrants = await createEntrants(
+          auth,
+          division.id,
+          who.map((i, seed) => ({
+            kind: "individual" as const,
+            display_name: names[i]!,
+            seed: seed + 1,
+            members: [{ person_id: people[i]!.id, squad_number: null, is_captain: false, roles: [], default_position_key: null }],
+          })),
+        );
+        const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: slug, config: {} });
+        const { fixtures } = await generateStageFixtures(auth, stage!.id);
+        await startDivision(auth, division.id);
+        const pat = entrants[0]!.id;
+        const personOf = new Map(entrants.map((e, i) => [e.id, people[who[i]!]!.id]));
+        const mine = fixtures.filter((f) => f.home_entrant_id === pat || f.away_entrant_id === pat);
+        const oppOf = (f: (typeof mine)[number]) => personOf.get(f.home_entrant_id === pat ? f.away_entrant_id! : f.home_entrant_id!)!;
+        const oppEntrantOf = (f: (typeof mine)[number]) => (f.home_entrant_id === pat ? f.away_entrant_id! : f.home_entrant_id!);
+        return { division, pat, mine, oppOf, oppEntrantOf };
+      };
+      const league = await divisionOf("league", "league", [0, 1, 2]);
+      expect(league.mine.length, `${key}: Pat meets each league opponent once`).toBe(2);
+      const ko = await divisionOf("ko", "knockout", [0, 3]);
+      expect(ko.mine.length, `${key}: Pat's knockout match`).toBe(1);
+      const [played, bare] = league.mine;
+      const settled = ko.mine[0]!;
+      await post(played!.id, "core.start", {});
+      const p = c.play(league.oppEntrantOf(played!));
+      await post(played!.id, p.type, p.payload);
+      await post(played!.id, "core.abandon", { reason: "rain" });
+      await post(bare!.id, "core.start", {});
+      await post(bare!.id, "core.abandon", { reason: "rain" });
+      await post(settled.id, "core.start", {});
+      await post(settled.id, "core.abandon", { reason: "rain" });
+      await post(settled.id, "core.settle", { winner: ko.pat, method: "lot" });
+
+      // The product wrote what each scene says: two abandons that decided nobody, and the organiser's settle.
+      const stored = await sql<{ id: string; status: string }[]>`select id, status from fixtures where id in ${sql([played!.id, bare!.id, settled.id])}`;
+      const statusOf = new Map(stored.map((r) => [r.id, r.status]));
+      expect([statusOf.get(played!.id), statusOf.get(bare!.id), statusOf.get(settled.id)], `${key}: stored statuses`).toEqual(["abandoned", "abandoned", "decided"]);
+
+      // The career count, both owners: the played abandon only.
+      const divisions = [league.division.id, ko.division.id];
+      const patPerson = people[0]!.id;
+      const byPerson = await countMatchesByDivision(sql, { by: "person", personId: patPerson }, divisions);
+      expect([...byPerson], `${key}: matches by person`).toEqual([[league.division.id, 1]]);
+      const [{ id: userId }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified) values (${`rain-${suffix}@test.local`}, 'Pat', true) returning id`;
+      await sql`update persons set user_id = ${userId} where id = ${patPerson}`;
+      const byUser = await countMatchesByDivision(sql, { by: "claimedPersons", userId }, divisions);
+      expect([...byUser], `${key}: matches by claimed user`).toEqual([[league.division.id, 1]]);
+      // The other sides' players: the played abandon's opponent played one; the two others none.
+      const opponents = await Promise.all(
+        [league.oppOf(played!), league.oppOf(bare!), ko.oppOf(settled)].map(
+          async (personId) => [...(await countMatchesByDivision(sql, { by: "person", personId }, divisions)).values()].reduce((a, b) => a + b, 0),
+        ),
+      );
+      expect(opponents, `${key}: the three opponents`).toEqual([1, 0, 0]);
+
+      // The snapshot fold (the tile) agrees with the career count, and the settle credited Pat no win.
+      const boards = [await divisionPlayerStats(auth, league.division.id, {}), await divisionPlayerStats(auth, ko.division.id, {})];
+      const declared = new Set([...(c.module.playerStats?.metrics ?? []).map((m) => m.key), ...(c.module.playerStats?.folded?.keys ?? []).map((k) => k.key)]);
+      // A career lists a sport only where the person holds a snapshot row (personCareerStats). Badminton's `matches`
+      // key gives Pat one; generic's abandon that decided nobody credits no W/D/L, so Pat may hold none there (a career
+      // that omits the sport — not this ruling's, routed). Where the sport is listed, its count is the rule's.
+      const consoleCareer = await personCareerStats(auth, patPerson);
+      const me = await listMyCareerStats(userId);
+      const careers = [consoleCareer.sports.map((x) => [x.sport_key, x.matches]), me.map((x) => [x.sport_key, x.matches])];
+      if (declared.has("matches")) expect(careers, `${key}: console and /me careers`).toEqual([[[key, 1]], [[key, 1]]]);
+      else for (const career of careers) for (const [sport, n] of career) expect([sport, n], `${key}: a listed career`).toEqual([key, 1]);
+      const [leagueStats, koStats] = boards.map((b) => b.rows.find((r) => r.person_id === patPerson)?.stats ?? {});
+      let checked = 0;
+      if (declared.has("matches")) {
+        expect([leagueStats!.matches, koStats!.matches ?? 0], `${key}: the tiles' matches`).toEqual([1, 0]);
+        checked++;
+      }
+      if (declared.has("wins")) {
+        expect(koStats!.wins ?? 0, `${key}: no win from the settle of an abandon with nothing played`).toBe(0);
+        checked++;
+      }
+      expect(checked, `${key}: snapshot keys checked`).toBe(1);
+
+      // The public match list: the played abandon, which decided nobody — a line with no badge.
+      const seeds = await readPlayerMatchSeeds(sql, { personId: patPerson, competitionId: comp.id, orgSlug, compSlug: comp.slug, locale: "en" });
+      expect(new Map(seeds.map((x) => [x.fixtureId, x.result])), `${key}: Pat's public lines`).toEqual(new Map([[played!.id, null]]));
+    });
+  }
+});

@@ -912,6 +912,15 @@ export async function personStats(
  *  player's card could read "5 goals · 0 matches". */
 export const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
 
+/** The settled statuses a match played in players' stats can hold: the completed ones, and `abandoned` — an abandon
+ *  that decided nobody keeps that status (append-event.ts `fixtureStatusFromFold`), and ruling 120 makes it a match
+ *  played whenever something was played before it. Which of these fixtures WERE played is the engine's reader's to
+ *  say (`fixturesPlayedInStats` below), never the status's: an abandon with nothing played before it is no match
+ *  whatever its status, and the snapshot fold — which reads every settled status — already counts a played one, so a
+ *  career count without `abandoned` read "1 match" on the tile and 0 in the career. The career count and the public
+ *  player's match lines read this set. */
+export const STATS_MATCH_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES, "abandoned"];
+
 /** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
  *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).
  *  `countMatchesByDivision` below is called both ways: inside `withTenant`
@@ -935,15 +944,17 @@ export interface StatsFixture {
 }
 
 /**
- * W2b (X-PS-1, X-PS-2; ruling 115, R115-1) — which of these fixtures are a match played in players' stats. The engine's
- * one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored ledger:
- * a walkover, a withdrawal, a double walkover and a disqualification with nothing played are not; a retirement and an
- * in-match disqualification are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles
- * without an event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot
- * figures cannot disagree about which fixtures were played.
+ * W2b (X-PS-1, X-PS-2; rulings 115, 120, R115-1) — which of these fixtures are a match played in players' stats. The
+ * engine's one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored
+ * ledger: a walkover, a withdrawal, a double walkover, a disqualification with nothing played and an abandon with
+ * nothing played before it (whatever its result or settle) are not; a retirement, an in-match disqualification and an
+ * abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles without an
+ * event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot figures
+ * cannot disagree about which fixtures were played.
  *
- * Cost: the reader answers any non-empty ledger holding no `core.forfeit` and no `core.void` row as played without
- * reading it (its documented steps 1 and 2), so only those ledgers — and the absent ones — are read in full. A career
+ * Cost: the reader answers any non-empty ledger holding no `core.forfeit`, no `core.abandon` and no `core.void` row as
+ * played without reading it (its documented steps 1 and 2), so only those ledgers — and the absent ones — are read in
+ * full. A career
  * spans every fixture a person ever played; loading every ledger to re-derive "played" for each decided match would
  * multiply this read by the events per match.
  */
@@ -952,7 +963,7 @@ export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly St
   if (fixtures.length === 0) return played;
   const ids = [...new Set(fixtures.map((f) => f.id))];
   const shapes = await db<{ fixture_id: string; read: boolean }[]>`
-    select se.fixture_id, bool_or(se.type in ('core.forfeit', 'core.void')) as read
+    select se.fixture_id, bool_or(se.type in ('core.forfeit', 'core.abandon', 'core.void')) as read
     from score_events se
     where se.fixture_id in ${db(ids)}
     group by se.fixture_id`;
@@ -969,12 +980,11 @@ export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly St
   const hasLedger = new Set(shapes.map((r) => r.fixture_id));
   for (const f of fixtures) {
     const ledger = ledgers.get(f.id);
-    // Steps 1 and 2 of the reader, answered from the row shapes: no ledger is unplayed, a forfeit- and void-free one
-    // is played. `playedInStats([])` is asked rather than assumed, so the empty answer stays the engine's.
-    const isPlayed =
-      ledger !== undefined
-        ? playedInStats(ledger, resolveModule(f.sport_key, f.module_version).playerStats)
-        : hasLedger.has(f.id) || playedInStats([]);
+    // Steps 1 and 2 of the reader, answered from the row shapes: no ledger is unplayed, a forfeit-, abandon- and
+    // void-free one is played. `playedInStats([], …)` is asked rather than assumed, so the empty answer stays the
+    // engine's. The reader takes the module itself (ruling 120 reads its `startIsPlay`), never a part of it.
+    const sportModule = resolveModule(f.sport_key, f.module_version);
+    const isPlayed = ledger !== undefined ? playedInStats(ledger, sportModule) : hasLedger.has(f.id) || playedInStats([], sportModule);
     if (isPlayed) played.add(f.id);
   }
   return played;
@@ -991,10 +1001,12 @@ export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly St
  *  declare one at all, so a metric-based count would read zero for
  *  football/cricket/hockey/…
  *
- *  "Played" is the engine's (R115-1): of the completed fixtures the person is
- *  on, those `fixturesPlayedInStats` keeps — never a walkover, a withdrawal, a
- *  double walkover or a disqualification with nothing played (X-PS-1, ruling
- *  115).
+ *  "Played" is the engine's (R115-1): of the settled fixtures the person is on
+ *  (`STATS_MATCH_STATUSES`: the completed ones and an abandoned one), those
+ *  `fixturesPlayedInStats` keeps — never a walkover, a withdrawal, a double
+ *  walkover, a disqualification with nothing played (X-PS-1, ruling 115) or an
+ *  abandon with nothing played before it (ruling 120); an abandon after play
+ *  is a match (X-PS-2, ruling 120).
  *
  *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
  *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
@@ -1014,7 +1026,7 @@ export async function countMatchesByDivision(
           join entrant_members em on em.person_id = ${owner.personId}
             and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}`
+            and f.status in ${db(STATS_MATCH_STATUSES as string[])}`
       : await db<(StatsFixture & { division_id: string })[]>`
           select distinct f.id, f.division_id, d.sport_key, d.module_version
           from fixtures f
@@ -1022,7 +1034,7 @@ export async function countMatchesByDivision(
           join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
           join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
           where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}`;
+            and f.status in ${db(STATS_MATCH_STATUSES as string[])}`;
   const played = await fixturesPlayedInStats(db, rows);
   const matches = new Map<string, number>();
   for (const r of rows) {
