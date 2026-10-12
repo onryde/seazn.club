@@ -14,6 +14,8 @@
 // ONE SPORT, on purpose: not applicable — the capture surface reads no sport (spec §13.2 "Another sport").
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
@@ -22,9 +24,17 @@ import { CAPTURE_RECORD_RETENTION_DAYS, CODE_GRACE_AFTER_FINISH_MINUTES } from "
 import { tokenTag } from "@/server/relay/domain/capture-record";
 import { postCaptureRecord } from "../capture-record";
 import { reissueStreamCode, resolveStreamCode } from "../stream-codes";
-import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
+import { captureRig as rawRig, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+/** Every tok a test minted, so the log check can prove none was ever written. */
+const toks: string[] = [];
+async function captureRig(opts: Parameters<typeof rawRig>[0] = {}): Promise<CaptureRig> {
+  const r = await rawRig(opts);
+  toks.push(r.tok);
+  return r;
+}
 
 const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "CODE_GRACE_AFTER_FINISH_MINUTES"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -80,7 +90,14 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
       vi.spyOn(log, level).mockImplementation(((...args: unknown[]) => { logged.push(JSON.stringify(args)); }) as never);
     }
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    // §10.2 / §11: whatever path a test drove, no log line holds a tok or a line's text.
+    for (const entry of logged) {
+      expect(entry).not.toContain("2026-10-11T21:19:03");   // every line here carries this `at`
+      for (const tok of toks) expect(entry).not.toContain(tok);
+    }
+    vi.restoreAllMocks();
+  });
 
   it("the empty case first: an empty body and a blank one are 422 invalid, and nothing is stored", async () => {
     const r = await captureRig();
@@ -257,6 +274,36 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     await finishAgo(recent, GRACE_MS + H);
     expect(await postCaptureRecord(recent.code, recent.tok, post(ndjson([pairLine(recent.tok)])), recent.now())).toMatchObject({ kept: 1 });
     expect((await sql<{ end_cause: string }[]>`select end_cause from fixture_stream_codes where code = ${recent.code}`)[0]!.end_cause).toBe("expired");
+  });
+
+  it("a session that ENDED or FAILED still has its lines kept (A1 reads the pairing, not the state); a finished fixture is served inside the grace, and past it while a session is open", async () => {
+    const r = await captureRig({ credits: 2 });
+    const S = await r.start(phoneId("a"));
+    await endSession(S, r.now());
+    expect(await postCaptureRecord(r.code, r.tok, post(ndjson([sidLine(S, "completed")])), r.now())).toMatchObject({ kept: 1 });
+    await sql`update fixture_stream_sessions set state = 'failed', end_reason = null where id = ${S}`;
+    expect(await postCaptureRecord(r.code, r.tok, post(ndjson([sidLine(S, "failed")])), r.now())).toMatchObject({ kept: 1 });
+    // Finished: inside the grace the code is FINISHING and serves.
+    const f = await captureRig({ credits: 1 });
+    await sql`update fixtures set status = 'cancelled' where id = ${f.fixtureId}`;
+    expect(await postCaptureRecord(f.code, f.tok, post(ndjson([pairLine(f.tok)])), f.now())).toMatchObject({ kept: 1 });
+    // Past the grace with a session open: C2 defers the expiry, so it is still FINISHING and serves.
+    const g = await captureRig({ credits: 1 });
+    await g.start(phoneId("g"));
+    await sql`update fixtures set status = 'cancelled' where id = ${g.fixtureId}`;
+    await sql`update fixtures set finished_at = ${new Date(g.now().getTime() - CODE_GRACE_AFTER_FINISH_MINUTES * 60_000 - H)} where id = ${g.fixtureId}`;
+    expect(await postCaptureRecord(g.code, g.tok, post(ndjson([pairLine(g.tok)])), g.now())).toMatchObject({ kept: 1 });
+    expect((await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_stream_codes where code = ${g.code}`)[0]!.ended_at).toBeNull();
+  });
+
+  it("review fix 1 + §0.1, as a regression: capture's scrubbed output (every near-miss fixture) and lines exactly as its writers write them, sent whole after a pair, are 201 with every line kept", async () => {
+    const r = await captureRig();
+    const dir = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/capture-record.v1");
+    const near = readdirSync(dir).filter((f) => /^line-valid-(scrubbed|prose)-.+\.json$/.test(f)).sort();
+    expect(near).toHaveLength(12);   // the nine near misses, capture's cases 21/24, and the two SRT prose strings (Q4)
+    const lines = [pairLine(r.tok), ...near.map((f) => JSON.parse(readFileSync(resolve(dir, f), "utf8")) as object),
+      { at: AT, kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 }];
+    expect(await postCaptureRecord(r.code, r.tok, post(ndjson(lines)), r.now())).toMatchObject({ kept: lines.length, dropped: 0 });
   });
 
   it("P9: a ref collision draws again (the stored ref is the second draw); a draw that always collides gives up with the unique violation", async () => {
