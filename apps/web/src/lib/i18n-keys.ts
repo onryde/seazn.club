@@ -2338,6 +2338,8 @@ export type DictionaryKey =
   | "externalPlay.room.drawOffered"
   | "externalPlay.room.header.board"
   | "externalPlay.room.header.meta"
+  | "externalPlay.room.meta.description"
+  | "externalPlay.room.meta.title"
   | "externalPlay.room.micMuted"
   | "externalPlay.room.minutes.one"
   | "externalPlay.room.minutes.other"

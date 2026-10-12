@@ -5997,6 +5997,8 @@
   "externalPlay.room.state.revoked.body": "Je organisator is op de hoogte gebracht.",
   "externalPlay.room.state.offForClub.title": "Online schaken staat uit voor deze club",
   "externalPlay.room.pieceCredit": "Schaakstukken door Colin M.L. Burnett (GPLv2+).",
+  "externalPlay.room.meta.title": "Jouw bord",
+  "externalPlay.room.meta.description": "Speel je online schaakpartij voor deze wedstrijd.",
   "register.lichessLinkRequired": "Deze divisie vereist een gekoppeld Lichess-account voordat je je inschrijft.",
   "register.lichessLinkCta": "Lichess koppelen"
 }

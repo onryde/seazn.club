@@ -5997,6 +5997,8 @@
   "externalPlay.room.state.revoked.body": "Your organiser has been told.",
   "externalPlay.room.state.offForClub.title": "Online chess is off for this club",
   "externalPlay.room.pieceCredit": "Chess pieces by Colin M.L. Burnett (GPLv2+).",
+  "externalPlay.room.meta.title": "Your board",
+  "externalPlay.room.meta.description": "Play your online chess game for this fixture.",
   "register.lichessLinkRequired": "This division needs a linked Lichess account before you can enter.",
   "register.lichessLinkCta": "Link Lichess"
 }
