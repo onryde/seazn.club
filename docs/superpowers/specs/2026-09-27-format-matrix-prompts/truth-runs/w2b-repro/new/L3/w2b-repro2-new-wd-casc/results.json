@@ -1,0 +1,1635 @@
+{
+  "schemaVersion": 3,
+  "runId": "w2b-repro2-new-wd-casc",
+  "harnessCommit": "59a743308",
+  "startedAt": "2026-10-09T21:42:07.762Z",
+  "finishedAt": "2026-10-09T21:42:21.215Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L3",
+  "driver": "http",
+  "plan": "--set w1-driving --scenario WD-CASC",
+  "workers": 4,
+  "cases": [
+    {
+      "caseId": "knockout|football|11-a-side|WD-CASC",
+      "row": "knockout",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "error: W2bCascadeLeftOpen: scenario: WD-CASC — d35fd926-74f8-4028-a5a7-b6816bee224c (held) is needs_decision after its side withdrew: the product did not walk it over (X-WD-1), and the harness never decides a withdrawn side's match",
+      "checks": [],
+      "counts": {
+        "calls": 36,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 2525,
+      "notes": [],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|cricket|t20|WD-CASC",
+      "row": "knockout",
+      "sport": "cricket",
+      "variant": "t20",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "error: W2bCascadeLeftOpen: scenario: WD-CASC — 6ac87b34-4d99-420c-858a-f20c42c18972 (held) is needs_decision after its side withdrew: the product did not walk it over (X-WD-1), and the harness never decides a withdrawn side's match",
+      "checks": [],
+      "counts": {
+        "calls": 35,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 2816,
+      "notes": [],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|boardgame|blitz|WD-CASC",
+      "row": "knockout",
+      "sport": "boardgame",
+      "variant": "blitz",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "error: W2bCascadeLeftOpen: scenario: WD-CASC — b9555d56-1043-43cd-b5cd-fee1fb2d2c28 (tie-break pending) is in_play after its side withdrew: the product did not walk it over (X-WD-1), and the harness never decides a withdrawn side's match",
+      "checks": [],
+      "counts": {
+        "calls": 21,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 2034,
+      "notes": [],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|carrom|club-29|WD-CASC",
+      "row": "knockout",
+      "sport": "carrom",
+      "variant": "club-29",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: 5c9562c1-4bed-4018-af78-cdb867fec410 (in play): forfeited {\"kind\":\"award\",\"winner\":\"3dea614d-fb3c-448f-b3f2-c3b501bfc64a\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 3dea614d-fb3c-448f-b3f2-c3b501bfc64a, loser abea6f5b-c160-4956-9f3d-c04a1da40786, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d6f8de57-07b1-4bac-a7ea-46a459999da4\",\"method\":\"regulation\"}, wanted the arriving 3dea614d-fb3c-448f-b3f2-c3b501bfc64a walked over; w2b-withdrawal-both-seats-dead: 985d0e81-a7e9-4552-a910-23d58f28b4ee: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "5c9562c1-4bed-4018-af78-cdb867fec410 (in play): forfeited {\"kind\":\"award\",\"winner\":\"3dea614d-fb3c-448f-b3f2-c3b501bfc64a\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 3dea614d-fb3c-448f-b3f2-c3b501bfc64a, loser abea6f5b-c160-4956-9f3d-c04a1da40786, reason withdrew",
+          "evidence": [
+            "5c9562c1-4bed-4018-af78-cdb867fec410 (in play): forfeited {\"kind\":\"award\",\"winner\":\"3dea614d-fb3c-448f-b3f2-c3b501bfc64a\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 3dea614d-fb3c-448f-b3f2-c3b501bfc64a, loser abea6f5b-c160-4956-9f3d-c04a1da40786, reason withdrew",
+            "2b739745-01b4-47d9-823d-0509fbe24a6c (not started): forfeited {\"kind\":\"award\",\"winner\":\"0a797c53-39fd-4580-a853-8f04c86b8f58\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 0a797c53-39fd-4580-a853-8f04c86b8f58, loser f852739a-84bf-45a3-8b4a-c931f7de348a, reason withdrew",
+            "withdrawal of d6f8de57-07b1-4bac-a7ea-46a459999da4 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of 0a797c53-39fd-4580-a853-8f04c86b8f58 (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d6f8de57-07b1-4bac-a7ea-46a459999da4\",\"method\":\"regulation\"}, wanted the arriving 3dea614d-fb3c-448f-b3f2-c3b501bfc64a walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d6f8de57-07b1-4bac-a7ea-46a459999da4\",\"method\":\"regulation\"}, wanted the arriving 3dea614d-fb3c-448f-b3f2-c3b501bfc64a walked over",
+            "d6f8de57-07b1-4bac-a7ea-46a459999da4 withdrew after 3c19d854-a28a-48d9-81d9-864f2cb5062e and is seated again in bff8a79a-ec7d-40a4-a683-1e599023ad2b, 3a626c40-1730-4921-aa36-a6b4236dfda3",
+            "0a797c53-39fd-4580-a853-8f04c86b8f58 withdrew after 2b739745-01b4-47d9-823d-0509fbe24a6c and is seated again in 158d961d-7795-4801-bd28-074b6e230230"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "985d0e81-a7e9-4552-a910-23d58f28b4ee: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "985d0e81-a7e9-4552-a910-23d58f28b4ee: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"e0213f1a-6532-4499-8034-0dff614a6d84\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"d6f8de57-07b1-4bac-a7ea-46a459999da4\",\"method\":\"settled_organiser\"}, wanted 3dea614d-fb3c-448f-b3f2-c3b501bfc64a walked over",
+            "finalRanks[0] is d6f8de57-07b1-4bac-a7ea-46a459999da4, wanted 3dea614d-fb3c-448f-b3f2-c3b501bfc64a"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 146,
+        "fixtures": 7,
+        "events": 100
+      },
+      "durationMs": 9258,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of d6f8de57-07b1-4bac-a7ea-46a459999da4 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of 0a797c53-39fd-4580-a853-8f04c86b8f58 (semi-final opponent TBD) was refused 422 WRONG_PHASE"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|generic|score|WD-CASC",
+      "row": "knockout",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: 632c14d6-9090-46f1-ba50-9d5fb14a97df (in play): forfeited {\"kind\":\"award\",\"winner\":\"c47e4b64-7737-414d-9183-cd77f7417902\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to c47e4b64-7737-414d-9183-cd77f7417902, loser 1468d8aa-f59d-4cdb-b43a-bfeb1b1fbe38, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f010fb27-67b2-4f40-8411-dba4c50c0cf4\",\"method\":\"regulation\"}, wanted the arriving c47e4b64-7737-414d-9183-cd77f7417902 walked over; w2b-withdrawal-both-seats-dead: c45910b2-e7f8-42ac-858e-24f3ca766364: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "632c14d6-9090-46f1-ba50-9d5fb14a97df (in play): forfeited {\"kind\":\"award\",\"winner\":\"c47e4b64-7737-414d-9183-cd77f7417902\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to c47e4b64-7737-414d-9183-cd77f7417902, loser 1468d8aa-f59d-4cdb-b43a-bfeb1b1fbe38, reason withdrew",
+          "evidence": [
+            "632c14d6-9090-46f1-ba50-9d5fb14a97df (in play): forfeited {\"kind\":\"award\",\"winner\":\"c47e4b64-7737-414d-9183-cd77f7417902\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to c47e4b64-7737-414d-9183-cd77f7417902, loser 1468d8aa-f59d-4cdb-b43a-bfeb1b1fbe38, reason withdrew",
+            "77c0747f-f9e8-46a7-ab00-a8b44903a098 (not started): forfeited {\"kind\":\"award\",\"winner\":\"db05f2a3-dea9-4cb9-a662-0d97e72a2954\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to db05f2a3-dea9-4cb9-a662-0d97e72a2954, loser 4be30a3c-712f-4f68-a6f6-6f393dc8a37b, reason withdrew",
+            "withdrawal of f010fb27-67b2-4f40-8411-dba4c50c0cf4 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of db05f2a3-dea9-4cb9-a662-0d97e72a2954 (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f010fb27-67b2-4f40-8411-dba4c50c0cf4\",\"method\":\"regulation\"}, wanted the arriving c47e4b64-7737-414d-9183-cd77f7417902 walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f010fb27-67b2-4f40-8411-dba4c50c0cf4\",\"method\":\"regulation\"}, wanted the arriving c47e4b64-7737-414d-9183-cd77f7417902 walked over",
+            "f010fb27-67b2-4f40-8411-dba4c50c0cf4 withdrew after 4baab65a-d164-4800-89e8-5c73ce81eefe and is seated again in 2e20e759-baef-47a9-87e7-419e5c7fc9ef, 973dd4c2-2ce9-4a39-8a98-4b7e04b9e578",
+            "db05f2a3-dea9-4cb9-a662-0d97e72a2954 withdrew after 77c0747f-f9e8-46a7-ab00-a8b44903a098 and is seated again in 0a475172-87b7-432f-89ec-87074dc08799"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "c45910b2-e7f8-42ac-858e-24f3ca766364: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "c45910b2-e7f8-42ac-858e-24f3ca766364: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"1e682c83-51f6-4982-9b97-c6b62fc0046d\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"f010fb27-67b2-4f40-8411-dba4c50c0cf4\",\"method\":\"settled_organiser\"}, wanted c47e4b64-7737-414d-9183-cd77f7417902 walked over",
+            "finalRanks[0] is f010fb27-67b2-4f40-8411-dba4c50c0cf4, wanted c47e4b64-7737-414d-9183-cd77f7417902"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 61,
+        "fixtures": 7,
+        "events": 15
+      },
+      "durationMs": 4381,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of f010fb27-67b2-4f40-8411-dba4c50c0cf4 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of db05f2a3-dea9-4cb9-a662-0d97e72a2954 (semi-final opponent TBD) was refused 422 WRONG_PHASE"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|volleyball|beach|WD-CASC",
+      "row": "knockout",
+      "sport": "volleyball",
+      "variant": "beach",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: ac6b7f0b-8e0f-40b6-90c0-b7ddfa6d2405 (in play): forfeited {\"kind\":\"award\",\"winner\":\"e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec, loser 5f190607-6a26-431a-873b-fdca04a4d31d, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"906ecba1-1264-4f0c-b320-a4dfbd78b315\",\"method\":\"regulation\"}, wanted the arriving e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec walked over; w2b-withdrawal-both-seats-dead: d858f2b8-9a9e-47dd-92fb-fa2707861d5d: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 10,
+          "reason": "10 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "ac6b7f0b-8e0f-40b6-90c0-b7ddfa6d2405 (in play): forfeited {\"kind\":\"award\",\"winner\":\"e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec, loser 5f190607-6a26-431a-873b-fdca04a4d31d, reason withdrew",
+          "evidence": [
+            "ac6b7f0b-8e0f-40b6-90c0-b7ddfa6d2405 (in play): forfeited {\"kind\":\"award\",\"winner\":\"e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec, loser 5f190607-6a26-431a-873b-fdca04a4d31d, reason withdrew",
+            "51d3a299-5240-4410-8fc5-b7d744c708c0 (not started): forfeited {\"kind\":\"award\",\"winner\":\"674dc500-4d95-4d5b-a985-4f55aade93e5\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 674dc500-4d95-4d5b-a985-4f55aade93e5, loser 0c46ff80-3278-4f2c-8c24-72662449a80a, reason withdrew",
+            "withdrawal of 906ecba1-1264-4f0c-b320-a4dfbd78b315 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of 674dc500-4d95-4d5b-a985-4f55aade93e5 (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"906ecba1-1264-4f0c-b320-a4dfbd78b315\",\"method\":\"regulation\"}, wanted the arriving e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"906ecba1-1264-4f0c-b320-a4dfbd78b315\",\"method\":\"regulation\"}, wanted the arriving e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec walked over",
+            "906ecba1-1264-4f0c-b320-a4dfbd78b315 withdrew after 9f56bd0c-92c9-41f6-8913-87f33b8ac2bc and is seated again in 60e2634f-10cc-43f6-ba23-34b9d192984e, dfc2b24e-2362-4e2e-a8cb-a2a7c1d8c119",
+            "674dc500-4d95-4d5b-a985-4f55aade93e5 withdrew after 51d3a299-5240-4410-8fc5-b7d744c708c0 and is seated again in 612a4ea2-8fbf-4670-8820-d35be3e54976"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "d858f2b8-9a9e-47dd-92fb-fa2707861d5d: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "d858f2b8-9a9e-47dd-92fb-fa2707861d5d: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"3ed92643-3a43-45f6-bb6e-c94423d1ab52\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"906ecba1-1264-4f0c-b320-a4dfbd78b315\",\"method\":\"settled_organiser\"}, wanted e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec walked over",
+            "finalRanks[0] is 906ecba1-1264-4f0c-b320-a4dfbd78b315, wanted e110e45c-57b2-4d9f-8fdc-cd5fb18b17ec"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 86,
+        "fixtures": 7,
+        "events": 20
+      },
+      "durationMs": 6282,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of 906ecba1-1264-4f0c-b320-a4dfbd78b315 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of 674dc500-4d95-4d5b-a985-4f55aade93e5 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "lineups: 12 PUT across 5 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|badminton|bwf|WD-CASC",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: 0531f888-7729-45e6-bcbe-8b99d5567bb6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"448e740b-6b2c-4333-8689-7ef0bf400699\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 448e740b-6b2c-4333-8689-7ef0bf400699, loser 72a1bc9b-8c6e-4be1-bfd7-f3fe62b5ccab, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f34ca13d-a8b2-4add-b626-7d9c41323c60\",\"method\":\"regulation\"}, wanted the arriving 448e740b-6b2c-4333-8689-7ef0bf400699 walked over; w2b-withdrawal-both-seats-dead: 7bbbcbff-b3d5-4f63-bc31-17ea175366af: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "0531f888-7729-45e6-bcbe-8b99d5567bb6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"448e740b-6b2c-4333-8689-7ef0bf400699\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 448e740b-6b2c-4333-8689-7ef0bf400699, loser 72a1bc9b-8c6e-4be1-bfd7-f3fe62b5ccab, reason withdrew",
+          "evidence": [
+            "0531f888-7729-45e6-bcbe-8b99d5567bb6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"448e740b-6b2c-4333-8689-7ef0bf400699\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 448e740b-6b2c-4333-8689-7ef0bf400699, loser 72a1bc9b-8c6e-4be1-bfd7-f3fe62b5ccab, reason withdrew",
+            "3c14c139-b029-426c-b23f-bf19b178c153 (not started): forfeited {\"kind\":\"award\",\"winner\":\"d1ca2666-0b3b-47c1-9a3c-491b4e580959\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to d1ca2666-0b3b-47c1-9a3c-491b4e580959, loser 1d536f39-02cc-4d35-9ebd-ad44f8f5ebf7, reason withdrew",
+            "withdrawal of f34ca13d-a8b2-4add-b626-7d9c41323c60 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of d1ca2666-0b3b-47c1-9a3c-491b4e580959 (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f34ca13d-a8b2-4add-b626-7d9c41323c60\",\"method\":\"regulation\"}, wanted the arriving 448e740b-6b2c-4333-8689-7ef0bf400699 walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"f34ca13d-a8b2-4add-b626-7d9c41323c60\",\"method\":\"regulation\"}, wanted the arriving 448e740b-6b2c-4333-8689-7ef0bf400699 walked over",
+            "f34ca13d-a8b2-4add-b626-7d9c41323c60 withdrew after f1d09873-8dfa-414b-ac8a-6b283f453cbb and is seated again in 718ad7a2-5b2a-4ce0-9c8f-8b7d2d8cd3b0, a985806c-355b-4fd0-86ba-ff4ca03c204f",
+            "d1ca2666-0b3b-47c1-9a3c-491b4e580959 withdrew after 3c14c139-b029-426c-b23f-bf19b178c153 and is seated again in 9514b3e3-621d-47c0-b094-2284b6fa3551"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "7bbbcbff-b3d5-4f63-bc31-17ea175366af: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "7bbbcbff-b3d5-4f63-bc31-17ea175366af: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"ce73bfc6-857b-4745-8ced-6f69666dd6cc\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"f34ca13d-a8b2-4add-b626-7d9c41323c60\",\"method\":\"settled_organiser\"}, wanted 448e740b-6b2c-4333-8689-7ef0bf400699 walked over",
+            "finalRanks[0] is f34ca13d-a8b2-4add-b626-7d9c41323c60, wanted 448e740b-6b2c-4333-8689-7ef0bf400699"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 66,
+        "fixtures": 7,
+        "events": 20
+      },
+      "durationMs": 4214,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of f34ca13d-a8b2-4add-b626-7d9c41323c60 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of d1ca2666-0b3b-47c1-9a3c-491b4e580959 (semi-final opponent TBD) was refused 422 WRONG_PHASE"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|tabletennis|bo5|WD-CASC",
+      "row": "knockout",
+      "sport": "tabletennis",
+      "variant": "bo5",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: c7660f3e-3786-4919-9435-6fe017ddf029 (in play): forfeited {\"kind\":\"award\",\"winner\":\"7b3b445d-84f5-49d5-b928-09108650115d\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 7b3b445d-84f5-49d5-b928-09108650115d, loser cddd498d-cc43-447b-8d10-ff3d99622540, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"0fa001f9-09d1-4380-949b-d881776642b8\",\"method\":\"regulation\"}, wanted the arriving 7b3b445d-84f5-49d5-b928-09108650115d walked over; w2b-withdrawal-both-seats-dead: f1786625-5a0f-4fb6-8566-ab63e52b6fbc: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "c7660f3e-3786-4919-9435-6fe017ddf029 (in play): forfeited {\"kind\":\"award\",\"winner\":\"7b3b445d-84f5-49d5-b928-09108650115d\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 7b3b445d-84f5-49d5-b928-09108650115d, loser cddd498d-cc43-447b-8d10-ff3d99622540, reason withdrew",
+          "evidence": [
+            "c7660f3e-3786-4919-9435-6fe017ddf029 (in play): forfeited {\"kind\":\"award\",\"winner\":\"7b3b445d-84f5-49d5-b928-09108650115d\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 7b3b445d-84f5-49d5-b928-09108650115d, loser cddd498d-cc43-447b-8d10-ff3d99622540, reason withdrew",
+            "24fe0cc2-df0b-4120-ab93-f3f80134531f (not started): forfeited {\"kind\":\"award\",\"winner\":\"31855c8a-52a4-48d6-9935-6098e1b0edbc\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 31855c8a-52a4-48d6-9935-6098e1b0edbc, loser 532e97bd-fd57-47b6-80d3-09d8cc32d158, reason withdrew",
+            "withdrawal of 0fa001f9-09d1-4380-949b-d881776642b8 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of 31855c8a-52a4-48d6-9935-6098e1b0edbc (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"0fa001f9-09d1-4380-949b-d881776642b8\",\"method\":\"regulation\"}, wanted the arriving 7b3b445d-84f5-49d5-b928-09108650115d walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"0fa001f9-09d1-4380-949b-d881776642b8\",\"method\":\"regulation\"}, wanted the arriving 7b3b445d-84f5-49d5-b928-09108650115d walked over",
+            "0fa001f9-09d1-4380-949b-d881776642b8 withdrew after 1f83f26b-44c3-48cc-8d53-4e3f7aefc37d and is seated again in fe727ad6-c018-4b5e-8f71-0d5e8f250d90, b0fcf459-d764-4d7e-a18e-bc15bc7d6fa4",
+            "31855c8a-52a4-48d6-9935-6098e1b0edbc withdrew after 24fe0cc2-df0b-4120-ab93-f3f80134531f and is seated again in 882c8e3f-df0e-483f-9559-0689391296fb"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "f1786625-5a0f-4fb6-8566-ab63e52b6fbc: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "f1786625-5a0f-4fb6-8566-ab63e52b6fbc: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"552a47bb-460f-4418-88e7-9afd8b5fdd50\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"0fa001f9-09d1-4380-949b-d881776642b8\",\"method\":\"settled_organiser\"}, wanted 7b3b445d-84f5-49d5-b928-09108650115d walked over",
+            "finalRanks[0] is 0fa001f9-09d1-4380-949b-d881776642b8, wanted 7b3b445d-84f5-49d5-b928-09108650115d"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 71,
+        "fixtures": 7,
+        "events": 25
+      },
+      "durationMs": 4602,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of 0fa001f9-09d1-4380-949b-d881776642b8 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of 31855c8a-52a4-48d6-9935-6098e1b0edbc (semi-final opponent TBD) was refused 422 WRONG_PHASE"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|tennis|tour|WD-CASC",
+      "row": "knockout",
+      "sport": "tennis",
+      "variant": "tour",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: 28be8404-dbb5-43b4-bc9e-cc80ab981324 (in play): forfeited {\"kind\":\"award\",\"winner\":\"b68dd542-73b7-4c88-8273-e544dccd4fbd\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to b68dd542-73b7-4c88-8273-e544dccd4fbd, loser f59109e1-07a0-4293-a2fa-acbae09f7ef4, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"4b0a6311-bd29-4bc1-ab64-122321467130\",\"method\":\"regulation\"}, wanted the arriving b68dd542-73b7-4c88-8273-e544dccd4fbd walked over; w2b-withdrawal-both-seats-dead: 380c7544-9227-4d85-99f1-ead97a400cbf: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "28be8404-dbb5-43b4-bc9e-cc80ab981324 (in play): forfeited {\"kind\":\"award\",\"winner\":\"b68dd542-73b7-4c88-8273-e544dccd4fbd\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to b68dd542-73b7-4c88-8273-e544dccd4fbd, loser f59109e1-07a0-4293-a2fa-acbae09f7ef4, reason withdrew",
+          "evidence": [
+            "28be8404-dbb5-43b4-bc9e-cc80ab981324 (in play): forfeited {\"kind\":\"award\",\"winner\":\"b68dd542-73b7-4c88-8273-e544dccd4fbd\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to b68dd542-73b7-4c88-8273-e544dccd4fbd, loser f59109e1-07a0-4293-a2fa-acbae09f7ef4, reason withdrew",
+            "53fd7b05-f8d4-486f-bb17-097c9b4206d7 (not started): forfeited {\"kind\":\"award\",\"winner\":\"a2515021-2a3f-440e-b2b9-59ace8e791de\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to a2515021-2a3f-440e-b2b9-59ace8e791de, loser 605556d9-9e7b-44f2-9249-19cda0967255, reason withdrew",
+            "withdrawal of 4b0a6311-bd29-4bc1-ab64-122321467130 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of a2515021-2a3f-440e-b2b9-59ace8e791de (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"4b0a6311-bd29-4bc1-ab64-122321467130\",\"method\":\"regulation\"}, wanted the arriving b68dd542-73b7-4c88-8273-e544dccd4fbd walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"4b0a6311-bd29-4bc1-ab64-122321467130\",\"method\":\"regulation\"}, wanted the arriving b68dd542-73b7-4c88-8273-e544dccd4fbd walked over",
+            "4b0a6311-bd29-4bc1-ab64-122321467130 withdrew after 5f8199fa-e9df-44f3-a2be-3040669b00a1 and is seated again in 6cb7167f-a5b2-4ead-98c4-47e6b0a24ee3, 9cf98402-0c38-462a-8476-0d81c5c8d60d",
+            "a2515021-2a3f-440e-b2b9-59ace8e791de withdrew after 53fd7b05-f8d4-486f-bb17-097c9b4206d7 and is seated again in 9d53bd4f-4aaa-480a-ba9c-86889b840ba9"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "380c7544-9227-4d85-99f1-ead97a400cbf: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "380c7544-9227-4d85-99f1-ead97a400cbf: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"fbfb0d0f-0661-4f31-9b41-a2da10c61d11\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"4b0a6311-bd29-4bc1-ab64-122321467130\",\"method\":\"settled_organiser\"}, wanted b68dd542-73b7-4c88-8273-e544dccd4fbd walked over",
+            "finalRanks[0] is 4b0a6311-bd29-4bc1-ab64-122321467130, wanted b68dd542-73b7-4c88-8273-e544dccd4fbd"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 66,
+        "fixtures": 7,
+        "events": 20
+      },
+      "durationMs": 4405,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of 4b0a6311-bd29-4bc1-ab64-122321467130 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of a2515021-2a3f-440e-b2b9-59ace8e791de (semi-final opponent TBD) was refused 422 WRONG_PHASE"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|icehockey|iihf|WD-CASC",
+      "row": "knockout",
+      "sport": "icehockey",
+      "variant": "iihf",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "w2b-withdrawal-walks-over: cf8735ee-d244-4089-af19-c511cf8651e6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"cdfde443-2d7c-43bb-bec9-d1b7ba181b68\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to cdfde443-2d7c-43bb-bec9-d1b7ba181b68, loser 56c044d1-7ccb-4994-9a16-192571c9a17e, reason withdrew; w2b-withdrawal-tbd-seat: se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d93f2c8f-be12-4e65-a8e4-fc69f5638746\",\"method\":\"regulation\"}, wanted the arriving cdfde443-2d7c-43bb-bec9-d1b7ba181b68 walked over; w2b-withdrawal-both-seats-dead: a85a9d45-a048-4539-9798-9f6cec942e93: the double walkover was refused 422 INVALID_EVENT",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 10,
+          "reason": "10 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-withdrawal-walks-over",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 6,
+          "reason": "cf8735ee-d244-4089-af19-c511cf8651e6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"cdfde443-2d7c-43bb-bec9-d1b7ba181b68\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to cdfde443-2d7c-43bb-bec9-d1b7ba181b68, loser 56c044d1-7ccb-4994-9a16-192571c9a17e, reason withdrew",
+          "evidence": [
+            "cf8735ee-d244-4089-af19-c511cf8651e6 (in play): forfeited {\"kind\":\"award\",\"winner\":\"cdfde443-2d7c-43bb-bec9-d1b7ba181b68\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to cdfde443-2d7c-43bb-bec9-d1b7ba181b68, loser 56c044d1-7ccb-4994-9a16-192571c9a17e, reason withdrew",
+            "41a706c5-9c1c-457f-b4a1-3d37eb55e9d4 (not started): forfeited {\"kind\":\"award\",\"winner\":\"2dff0ccd-28fc-4602-b70d-1b8a0910a04b\",\"loser\":null,\"reason\":\"entrant withdrew\"}, wanted forfeited award to 2dff0ccd-28fc-4602-b70d-1b8a0910a04b, loser c417cd54-aa8d-4046-ad48-d663ec1f2d1c, reason withdrew",
+            "withdrawal of d93f2c8f-be12-4e65-a8e4-fc69f5638746 (semi-final opponent TBD) refused 422 WRONG_PHASE",
+            "withdrawal of 2dff0ccd-28fc-4602-b70d-1b8a0910a04b (semi-final opponent TBD) refused 422 WRONG_PHASE"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-tbd-seat",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d93f2c8f-be12-4e65-a8e4-fc69f5638746\",\"method\":\"regulation\"}, wanted the arriving cdfde443-2d7c-43bb-bec9-d1b7ba181b68 walked over",
+          "evidence": [
+            "se-r1-i0: decided {\"kind\":\"win\",\"winner\":\"d93f2c8f-be12-4e65-a8e4-fc69f5638746\",\"method\":\"regulation\"}, wanted the arriving cdfde443-2d7c-43bb-bec9-d1b7ba181b68 walked over",
+            "d93f2c8f-be12-4e65-a8e4-fc69f5638746 withdrew after 26c96ec9-97ab-468e-a2e5-7b96184ffa60 and is seated again in a6d5e2ba-2694-4bd5-afe8-5788436d3717, 2e82ecdd-afac-4657-bc3f-6aa53509a118",
+            "2dff0ccd-28fc-4602-b70d-1b8a0910a04b withdrew after 41a706c5-9c1c-457f-b4a1-3d37eb55e9d4 and is seated again in 774dd142-eea0-4e13-81e8-899d970c1812"
+          ]
+        },
+        {
+          "id": "w2b-withdrawal-both-seats-dead",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 4,
+          "reason": "a85a9d45-a048-4539-9798-9f6cec942e93: the double walkover was refused 422 INVALID_EVENT",
+          "evidence": [
+            "a85a9d45-a048-4539-9798-9f6cec942e93: the double walkover was refused 422 INVALID_EVENT",
+            "se-r1-i1: decided {\"kind\":\"win\",\"winner\":\"77d45676-64c2-4dbb-a0bd-81bdbcc891f0\",\"method\":\"regulation\"}, wanted forfeited double_walkover",
+            "se-r2-i0: decided {\"kind\":\"win\",\"winner\":\"d93f2c8f-be12-4e65-a8e4-fc69f5638746\",\"method\":\"settled_organiser\"}, wanted cdfde443-2d7c-43bb-bec9-d1b7ba181b68 walked over",
+            "finalRanks[0] is d93f2c8f-be12-4e65-a8e4-fc69f5638746, wanted cdfde443-2d7c-43bb-bec9-d1b7ba181b68"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 96,
+        "fixtures": 7,
+        "events": 30
+      },
+      "durationMs": 4547,
+      "notes": [
+        "stage knockout status after start: active",
+        "WD-CASC: the withdrawal of d93f2c8f-be12-4e65-a8e4-fc69f5638746 (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "WD-CASC: the withdrawal of 2dff0ccd-28fc-4602-b70d-1b8a0910a04b (semi-final opponent TBD) was refused 422 WRONG_PHASE",
+        "lineups: 12 PUT across 5 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "knockout|hockey|fih-outdoor|WD-CASC",
+      "row": "knockout",
+      "sport": "hockey",
+      "variant": "fih-outdoor",
+      "scenario": "WD-CASC",
+      "canary": false,
+      "state": "red",
+      "reason": "error: W2bCascadeLeftOpen: scenario: WD-CASC — facb0b80-8972-4a20-ad27-12ad343ad66c (held) is needs_decision after its side withdrew: the product did not walk it over (X-WD-1), and the harness never decides a withdrawn side's match",
+      "checks": [],
+      "counts": {
+        "calls": 40,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 2203,
+      "notes": [],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    }
+  ]
+}

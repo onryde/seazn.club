@@ -1,0 +1,3140 @@
+[
+ {
+  "id": "observed-dw-null",
+  "file": "tools/matrix/lib/observed.ts",
+  "find": " || o.kind === \"no_result\" || o.kind === \"double_walkover\") return { kind: o.kind };",
+  "replace": " || o.kind === \"no_result\") return { kind: o.kind };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "X-DW-1: the harness observes double_walkover as itself"
+   }
+  ]
+ },
+ {
+  "id": "walkover-start-kept",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "  return [...play, ev];\n}",
+  "replace": "  return forfeit.reason === \"walkover\" && play.length === 0 ? [START, ev] : [...play, ev];\n}",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "empty case first: a walkover request before start posts no core.start"
+   }
+  ]
+ },
+ {
+  "id": "forfeit-optin-default",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "(k === \"Settle\" ? opts.settle : opts.forfeit) === true",
+  "replace": "(k === \"Settle\" ? opts.settle === true : true)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "empty case first: without the flag the arbitrary set"
+   }
+  ]
+ },
+ {
+  "id": "scenario-zero-checked",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "  return assertion(id, items);\n}\n\n/** X-RT-1",
+  "replace": "  return assertion(id, items.slice(0, 0));\n}\n\n/** X-RT-1",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's record passes on one counted item"
+   }
+  ]
+ },
+ {
+  "id": "w2b-misplanned-off",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "if (!w2bApplies(key, row, sport)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each misplanned case throws W2bMisplanned"
+   }
+  ]
+ },
+ {
+  "id": "ab-award-override-off",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "if (want !== null && Object.entries(want)",
+  "replace": "if (false && Object.entries(want)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each misplanned case throws W2bMisplanned"
+   }
+  ]
+ },
+ {
+  "id": "feed-order-guard-off",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if ((at.get(src) ?? -1) >= (at.get(e.target) ?? -1)) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "wireGraph refuses a generation order"
+   }
+  ]
+ },
+ {
+  "id": "no-next-match-ignores-loser",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "loser_to_fixture: g.loserTo.get(key)?.target ?? null });",
+  "replace": "loser_to_fixture: null });",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "wireGraph refuses a generation order"
+   }
+  ]
+ },
+ {
+  "id": "dead-two-seats-winner-lives",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "    if (n >= 2) kill(g.winnerTo, key);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a fixture both of whose seats die is a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "dead-one-seat-loser-lives",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "    if (n >= 2) kill(g.winnerTo, key);\n    kill(g.loserTo, key);",
+  "replace": "    if (n >= 2) kill(g.winnerTo, key);\n    if (n >= 2) kill(g.loserTo, key);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "with a third-place match, the semi-final"
+   }
+  ]
+ },
+ {
+  "id": "pick-some-end-live",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "return ends.every((k) => (dead.get(k) ?? 0) === 0);",
+  "replace": "return ends.some((k) => (dead.get(k) ?? 0) === 0);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "pickDoubleWalkover leaves every fixture"
+   }
+  ]
+ },
+ {
+  "id": "isolated-unfoldable-guessed",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if (pair === null) { unfoldable = `${f.id} (${f.status} ${text(f.outcome)})`; break; }",
+  "replace": "if (pair === null) continue;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a credited key off by one reds that entrant alone"
+   }
+  ]
+ },
+ {
+  "id": "isolated-metric-unjudged",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "      if (got !== want) bad.push(`metrics.${k}",
+  "replace": "      if (got !== want && false) bad.push(`metrics.${k}",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a credited key off by one reds that entrant alone"
+   }
+  ]
+ },
+ {
+  "id": "retirement-floor-three",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "d.posted >= 2 && d.seq === d.posted",
+  "replace": "d.posted >= 3 && d.seq === d.posted",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "tip equal to the posted count passes"
+   }
+  ]
+ },
+ {
+  "id": "dw-cells-no-third-place",
+  "file": "tools/matrix/lib/w2b-cells.ts",
+  "find": "[...rootKindRows(), ...thirdPlaceRows()]",
+  "replace": "[...rootKindRows()]",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "WO-PRE is every sport on every root kind"
+   }
+  ]
+ },
+ {
+  "id": "ab-award-no-dls",
+  "file": "tools/matrix/lib/w2b-cells.ts",
+  "find": "? DLS_ON : null;",
+  "replace": "? {} : null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "AB-AWARD is the four sports"
+   }
+  ]
+ },
+ {
+  "id": "table-judges-americano",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": " && kind !== \"americano\";",
+  "replace": ";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "tableJudged: a table"
+   }
+  ]
+ },
+ {
+  "id": "abandon-dls-method-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "o.winner === rule.winner && o.method === \"dls\");",
+  "replace": "o.winner === rule.winner);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each kind's rule passes, and each wrong result fails alone"
+   }
+  ]
+ },
+ {
+  "id": "xwd2-kinds-off",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "FORFEIT_MODEL_KINDS.includes(kind) || X_WD_2_KINDS.includes(kind) ? \"forfeit\"",
+  "replace": "FORFEIT_MODEL_KINDS.includes(kind) ? \"forfeit\"",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "m-2, the positive pair: seed 3 through to pp-q2"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/ladder-loop.test.ts"
+    ],
+    "name": "R4 on a ladder with a PENDING challenge"
+   }
+  ]
+ },
+ {
+  "id": "xwd3-tbd-voidable",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "    if (tbd || opponent === null) {",
+  "replace": "    if (opponent === null) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "walkover: a pending game goes to the OPPONENT; a TBD seat is emptied"
+   }
+  ]
+ },
+ {
+  "id": "ladder-unmoved-refused-judged",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "d.refusal !== null) return assertion(\"w2b-double-walkover-advances-nobody\"",
+  "replace": "false) return assertion(\"w2b-double-walkover-advances-nobody\"",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a ladder's order is unmoved by a double walkover"
+   }
+  ]
+ },
+ {
+  "id": "wd-casc-refused-withdrawal-ok",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "? { ok: false, note: `withdrawal of ${s.entrantId} (${s.label}) refused",
+  "replace": "? { ok: true, note: `withdrawal of ${s.entrantId} (${s.label}) refused",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "cascade-left-open-terminal-stops",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (isTerminal(status)) return null;\n  if (withdrawal === \"refused\"",
+  "replace": "  if (withdrawal === \"refused\"",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on"
+   }
+  ]
+ },
+ {
+  "id": "cascade-left-open-refused-unposted-stops",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (withdrawal === \"refused\" && !posted) return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on"
+   }
+  ]
+ },
+ {
+  "id": "fake-dw-no-next-any-reason",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "if (p.by === \"both\" && p.reason === \"walkover\" && kind !== null",
+  "replace": "if (p.by === \"both\" && kind !== null",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover on a DECIDED final meets two rules"
+   }
+  ]
+ },
+ {
+  "id": "model-over-dw-already-decided-only",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "if (phase === \"over\") return lastRound ? refuse(\"ALREADY_DECIDED\", \"DOUBLE_WALKOVER_NO_NEXT_MATCH\") : refuse(\"ALREADY_DECIDED\");",
+  "replace": "if (phase === \"over\") return refuse(\"ALREADY_DECIDED\");",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover on a DECIDED final meets two rules"
+   }
+  ]
+ },
+ {
+  "id": "forfeit-reasons-restated-drift",
+  "file": "tools/matrix/lib/streams/types.ts",
+  "find": "export const FORFEIT_REASONS = Object.freeze([\"walkover\", \"retired\", \"disqualified\", \"withdrew\"] as const);",
+  "replace": "export const FORFEIT_REASONS = Object.freeze([\"walkover\", \"disqualified\", \"retired\", \"withdrew\"] as const);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "D1: the harness's restated reason list is the engine's FORFEIT_REASONS"
+   }
+  ]
+ },
+ {
+  "id": "dw-invariant-off",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "if (seated.length > 0) dw.fails.push(",
+  "replace": "if (false) dw.fails.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover that SEATS one of its entrants reds model-double-walkover-advances-nobody"
+   }
+  ]
+ },
+ {
+  "id": "fake-ladder-exemption-off",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "kind !== null && BRACKET_STAGE_KINDS.has(kind) && !feeds",
+  "replace": "kind !== null && !feeds",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a LADDER fixture has no feed edge and is still never refused DOUBLE_WALKOVER_NO_NEXT_MATCH"
+   }
+  ]
+ },
+ {
+  "id": "i3-reason-dropped",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "{ kind: \"forfeit\", offender: a.by, reason: a.reason, by: HARNESS_FORFEIT_WRITER }",
+  "replace": "{ kind: \"forfeit\", offender: a.by, reason: \"walkover\", by: HARNESS_FORFEIT_WRITER }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "a forfeit is the forfeit action"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "positive: every rulebook-correct forfeit answer agrees"
+   }
+  ]
+ },
+ {
+  "id": "i3-dw-offender-home",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "{ kind: \"forfeit\", offender: \"both\", reason: \"walkover\", by: HARNESS_FORFEIT_WRITER }; // X-DW-1",
+  "replace": "{ kind: \"forfeit\", offender: \"home\", reason: \"walkover\", by: HARNESS_FORFEIT_WRITER }; // X-DW-1",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "a forfeit is the forfeit action"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "positive: every rulebook-correct forfeit answer agrees"
+   }
+  ]
+ },
+ {
+  "id": "i3-writer-scorer",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "export const HARNESS_FORFEIT_WRITER = \"organiser\" as const;",
+  "replace": "export const HARNESS_FORFEIT_WRITER = \"scorer\" as const;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "positive: every rulebook-correct forfeit answer agrees"
+   }
+  ]
+ },
+ {
+  "id": "i3-play-always-none",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "return { ...base, play: d.forfeitPlay, actions: [forfeit]",
+  "replace": "return { ...base, play: { kind: \"none\" }, actions: [forfeit]",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "positive: every rulebook-correct forfeit answer agrees"
+   }
+  ]
+ },
+ {
+  "id": "i3-has-next-always",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "{ hasNextMatch: d.next.line === \"next\" }",
+  "replace": "{ hasNextMatch: true }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "negative: a wrong product, or a forfeit the rules refuse"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "through a driver: a double walkover decided on the page-playoff fake"
+   }
+  ]
+ },
+ {
+  "id": "i3-method-reasons-to-play",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": " || (FORFEIT_REASONS as readonly string[]).includes(method)) return method as WinMethod;",
+  "replace": ") return method as WinMethod;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "I-3: every X-RS-1 forfeit reason keeps its name"
+   }
+  ]
+ },
+ {
+  "id": "i3-award-reason-dropped",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "oracleMethod(won.kind === \"win\" ? won.method : won.reason)",
+  "replace": "oracleMethod(won.kind === \"win\" ? won.method : undefined)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "positive: every rulebook-correct forfeit answer agrees"
+   }
+  ]
+ },
+ {
+  "id": "i3-forfeit-loser-seat-unchecked",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (d.loser.seated === beaten) bad.push",
+  "replace": "if (false) bad.push",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "negative: a wrong product, or a forfeit the rules refuse"
+   }
+  ]
+ },
+ {
+  "id": "i3-forfeitplay-start-ignored",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (!before.some((e) => e.type === \"core.start\")) return { kind: \"none\" };",
+  "replace": "if (false) return { kind: \"none\" };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "forfeitPlayOf reads the play from the stream the harness posted"
+   }
+  ]
+ },
+ {
+  "id": "i3-forfeitplay-decided-guard-off",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (decided !== null) throw new ForfeitPlayUnread(",
+  "replace": "if (false) throw new ForfeitPlayUnread(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "forfeitPlayOf reads the play from the stream the harness posted"
+   }
+  ]
+ },
+ {
+  "id": "i3-forfeitplay-chess-guard-off",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (before.some((e) => e.type === \"boardgame.result\")) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "forfeitPlayOf reads the play from the stream the harness posted"
+   }
+  ]
+ },
+ {
+  "id": "i3-nextline-ladder-dropped",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "  if (stageKind === \"ladder\") return { line: \"none\" }; // D19\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "i3-nextline-any-side",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "ref !== undefined && ref.side === side && ref.fixtureId === layout.key",
+  "replace": "ref !== undefined && ref.fixtureId === layout.key",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "i3-zero-judged-item-off",
+  "file": "tools/matrix/lib/scenarios/assertions.ts",
+  "find": "if (forfeitLine !== null && forfeitsJudged === 0) items.push",
+  "replace": "if (false) items.push",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "the comparison counts the W2b forfeits it judged"
+   }
+  ]
+ },
+ {
+  "id": "i3-judged-count-counts-all",
+  "file": "tools/matrix/lib/scenarios/assertions.ts",
+  "find": "judgements.filter((j, i) => j.judged && isForfeit[i]).length",
+  "replace": "judgements.filter((_j, i) => isForfeit[i]).length",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "the comparison counts the W2b forfeits it judged"
+   }
+  ]
+ },
+ {
+  "id": "i3-owed-not-wired",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "referenceBracketFinish(rec, observed, { forfeitsOwed: forbidsLevelResult(setup.stage.kind) }),",
+  "replace": "referenceBracketFinish(rec, observed),",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "through a driver: a W2b scenario on a bracket OWES its forfeits"
+   }
+  ]
+ },
+ {
+  "id": "i3-next-not-wired",
+  "file": "tools/matrix/lib/scenarios/common.ts",
+  "find": ": nextLineOf(stage.kind, stage.config, row, rows),",
+  "replace": ": { line: \"next\" as const, target: \"x\" },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "through a driver: a double walkover decided on the page-playoff fake"
+   }
+  ]
+ },
+ {
+  "id": "i3-forfeitplay-not-wired",
+  "file": "tools/matrix/lib/scenarios/common.ts",
+  "find": ": forfeitPlayOf(ctx.spec.sport, cfg, home, away, o.live),",
+  "replace": ": { kind: \"none\" as const },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "through a driver: WO-PRE and RT-PART on the knockout fake"
+   }
+  ]
+ },
+ {
+  "id": "s3-credit-loser-swapped",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "const loser = sides.offender === \"home\" ? sides.home : sides.away;",
+  "replace": "const loser = sides.offender === \"home\" ? sides.away : sides.home;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "creditExpectation: a one-sided forfeit credits the OTHER side"
+   }
+  ]
+ },
+ {
+  "id": "s3-refusal-thrown-not-returned",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if (e instanceof CreditRefused) return { refused:",
+  "replace": "if (e instanceof Error && false) return { refused:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "creditExpectation: a one-sided forfeit credits the OTHER side"
+   }
+  ]
+ },
+ {
+  "id": "s3-dw-scalars-won",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: zero",
+  "replace": "scalars: { played: 1, won: 1, drawn: 0, lost: 0, points: 0 }, metrics: zero",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "creditExpectation: a one-sided forfeit credits the OTHER side"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "DW-ALL on league|generic"
+   }
+  ]
+ },
+ {
+  "id": "s3-withrefusals-ignored",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "  if (refused.length === 0) return table;\n",
+  "replace": "  return table;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "withRefusals: each refused credit is a FAILING item"
+   }
+  ]
+ },
+ {
+  "id": "s3-creditTable-drops-refusals",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "judged: ReadonlyMap<string, (e: string) => ExpectedDelta>, refused: readonly string[]): Promise<CheckResult> {\n  const fixtures = observed.stages[0].fixtures;\n  const table = judged.size === 0 ? assertion(id, []) : isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });\n  return withRefusals(table, refused);",
+  "replace": "judged: ReadonlyMap<string, (e: string) => ExpectedDelta>, refused: readonly string[]): Promise<CheckResult> {\n  const fixtures = observed.stages[0].fixtures;\n  const table = judged.size === 0 ? assertion(id, []) : isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });\n  return table;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "RT-PART: a stored row the harness cannot read as a scoresheet"
+   }
+  ]
+ },
+ {
+  "id": "s3-unread-skipped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "      refused.push(`${d.fixtureId}: ${e.message}`);\n      continue;",
+  "replace": "      continue;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "RT-PART: a stored row the harness cannot read as a scoresheet"
+   }
+  ]
+ },
+ {
+  "id": "s3-setbased-guard-off",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if (Math.max(t.home, t.away) >= target(\"setTo\")) unread(",
+  "replace": "if (false) unread(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf refuses by name what it cannot place"
+   }
+  ]
+ },
+ {
+  "id": "s3-tennis-guard-off",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if (Math.max(t.home, t.away) >= 4) unread(",
+  "replace": "if (false) unread(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf refuses by name what it cannot place"
+   }
+  ]
+ },
+ {
+  "id": "s3-side-guard-off",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "(who === home ? \"home\" : who === away ? \"away\" : unread(`${e.type} names ${JSON.stringify(who)}, neither side`))",
+  "replace": "(who === home ? \"home\" : \"away\")",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf refuses by name what it cannot place"
+   }
+  ]
+ },
+ {
+  "id": "s3-vocabulary-guard-off",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "for (const e of played) if (e.type !== type) unread(",
+  "replace": "for (const e of played) if (false) unread(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf refuses by name what it cannot place"
+   }
+  ]
+ },
+ {
+  "id": "s3-cricket-order-swapped",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "return { home: runs.slice(0, 1), away: [runs[1] ?? 0] };",
+  "replace": "return { home: [runs[1] ?? 0], away: runs.slice(0, 1) };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf reads the play the harness POSTED before its forfeit"
+   }
+  ]
+ },
+ {
+  "id": "s3-goal-sheet-offbyone",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "        only(`${sport}.goal`);\n        const t = tally((e) => [sideOf(pay(e).by, e), 1]);\n        return { home: [t.home], away: [t.away] };",
+  "replace": "        only(`${sport}.goal`);\n        const t = tally((e) => [sideOf(pay(e).by, e), 1]);\n        return { home: [t.home + 1], away: [t.away] };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "scoresheetOf reads the play the harness POSTED before its forfeit"
+   }
+  ]
+ },
+ {
+  "id": "s3-retirement-played-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ by: d.asked.by, played }",
+  "replace": "{ by: d.asked.by }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "RT-PART on league, every sport it is planned on"
+   }
+  ]
+ },
+ {
+  "id": "s3-dw-offender-home",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ home: d.home, away: d.away, offender: \"both\" }",
+  "replace": "{ home: d.home, away: d.away, offender: \"home\" }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "DW-ALL on league|generic"
+   }
+  ]
+ },
+ {
+  "id": "r1-points-swapped",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "return { winner: table.win, loser: table.loss };",
+  "replace": "return { winner: table.loss, loser: table.win };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "forfeitPoints: a forfeit"
+   }
+  ]
+ },
+ {
+  "id": "r1-points-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "{ scalars: { played: 1, won: 1, lost: 0, points: pts.winner }, metrics: credit.winner }",
+  "replace": "{ scalars: { played: 1, won: 1, lost: 0 }, metrics: credit.winner }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "creditExpectation: a one-sided"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "WO-PRE \\(I-2\\)"
+   }
+  ]
+ },
+ {
+  "id": "r1-pointsmap-star-only",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "const pair = map[score] ?? map[\"*\"];",
+  "replace": "const pair = map[\"*\"];",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "forfeitPoints: a forfeit"
+   }
+  ]
+ },
+ {
+  "id": "m8-dw-winner-side-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "[[\"winner\", credit.winner], [\"loser\", credit.loser]] as const",
+  "replace": "[[\"loser\", credit.loser]] as const",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "expectationOf \\(M-8\\)"
+   }
+  ]
+ },
+ {
+  "id": "m8-dw-loser-side-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "[[\"winner\", credit.winner], [\"loser\", credit.loser]] as const",
+  "replace": "[[\"winner\", credit.winner]] as const",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "expectationOf \\(M-8\\)"
+   }
+  ]
+ },
+ {
+  "id": "i2-dw-points-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "if (pts.winner !== 0 || pts.loser !== 0) return { refused:",
+  "replace": "if (false) return { refused:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "expectationOf \\(M-8\\)"
+   }
+  ]
+ },
+ {
+  "id": "m2-walkover-with-play",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "if ((forfeit.by === \"both\" || PRE_PLAY_REASONS.includes(forfeit.reason)) && play.length > 0) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "forfeitPosting \\(M-2\\)"
+   }
+  ]
+ },
+ {
+  "id": "m2-inplay-without-play",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "if (forfeit.by !== \"both\" && IN_PLAY_REASONS.includes(forfeit.reason) && play.length === 0) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "forfeitPosting \\(M-2\\)"
+   }
+  ]
+ },
+ {
+  "id": "m2-first-not-start",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": "if (first !== undefined && first.type !== START.type) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "forfeitPosting \\(M-2\\)"
+   }
+  ]
+ },
+ {
+  "id": "m1-seat-cleared-pending",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "if (!tbd && opponent === null) return {",
+  "replace": "if (false) return {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "walkover: a pending game goes to the OPPONENT"
+   }
+  ]
+ },
+ {
+  "id": "i5-play-on-console",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: generated play before a forfeit is the one http forfeit"
+   }
+  ]
+ },
+ {
+  "id": "m3-tie-unread",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (r?.kind === \"tie\") return { winner: null };\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "abandonDelta \\(X-AB-1\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each kind's rule passes"
+   }
+  ]
+ },
+ {
+  "id": "m3-unread-as-tie",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (r?.kind === \"tie\") return { winner: null };\n  return { unread:",
+  "replace": "  if (r?.kind === \"tie\") return { winner: null };\n  if (r !== undefined) return { winner: null };\n  return { unread:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "abandonDelta \\(X-AB-1\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each kind's rule passes"
+   }
+  ]
+ },
+ {
+  "id": "m3-leading-level-unrefused",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "if (lead === \"level\") return { refused:",
+  "replace": "if (false) return { refused:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "abandonDelta \\(X-AB-1\\)"
+   }
+  ]
+ },
+ {
+  "id": "i1-oracle-accepts-refusal",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (expect.refused.length === 0) bad.push(`refusal: the product refused it",
+  "replace": "if (false) bad.push(`refusal: the product refused it",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "judgeDrive \\(review I-1\\)"
+   }
+  ]
+ },
+ {
+  "id": "i1-refusal-code-unchecked",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "else if (expect.refused.length > 1 || expect.refused[0].code !== refused.code) bad.push(",
+  "replace": "else if (expect.refused.length > 1) bad.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "judgeDrive \\(review I-1\\)"
+   }
+  ]
+ },
+ {
+  "id": "i1-refused-drive-dropped",
+  "file": "tools/matrix/lib/scenarios/common.ts",
+  "find": "if (forfeit !== null && now.length === 1 && e instanceof RefusedCall && forbidsLevelResult(stage.kind)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "DW-ALL on knockout_third_place \\(review I-1\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "through a driver: a product that refuses every walkover"
+   }
+  ]
+ },
+ {
+  "id": "i3-bracket-withdraw-expunges",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (!BRACKET_STAGE_KINDS.has(this.stage?.kind ?? \"\")) return super.withdraw(entrantId);",
+  "replace": "    return super.withdraw(entrantId);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-1 / BG-WO-3 on a bracket"
+   }
+  ]
+ },
+ {
+  "id": "i4-table-played-unchecked",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "else if (row.played !== results) fails.push(",
+  "replace": "else if (false) fails.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a table that counts a voided forfeit again"
+   }
+  ]
+ },
+ {
+  "id": "i4-table-unread",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "  if (!forfeitTableKind(m.stageKind)) return { checked: 0, fails: [] };",
+  "replace": "  return { checked: 0, fails: [] };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "on a league: void-then-forfeit"
+   }
+  ]
+ },
+ {
+  "id": "i4-withdrawn-judged",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "if (e !== null && !m.withdrawn.has(e)) judged.add(e);",
+  "replace": "if (e !== null) judged.add(e);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a withdrawn entrant is not judged by the table check"
+   }
+  ]
+ },
+ {
+  "id": "r4-tbd-seat-kept-ok",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "      if (a.home === w || a.away === w) return { item: { ok: false,",
+  "replace": "      if (false) return { item: { ok: false,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "walkover: a pending game goes to the OPPONENT; a TBD seat is emptied"
+   }
+  ]
+ },
+ {
+  "id": "r4-tbd-arrival-not-counted",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: true,",
+  "replace": "expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: false,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "walkover: a pending game goes to the OPPONENT; a TBD seat is emptied"
+   }
+  ]
+ },
+ {
+  "id": "r4-tbd-pending-not-counted",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "the dead seat is never voided (X-WD-3)` }, forfeited: true,",
+  "replace": "the dead seat is never voided (X-WD-3)` }, forfeited: false,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "walkover: a pending game goes to the OPPONENT; a TBD seat is emptied"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-held-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": " && a.walked_over_held === want,",
+  "replace": ",",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-held-labels-empty",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "const HELD_LABELS: ReadonlySet<string> = new Set([\"held\", \"tie-break pending\"]);",
+  "replace": "const HELD_LABELS: ReadonlySet<string> = new Set([]);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-tiebreak-not-held",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "new Set([\"held\", \"tie-break pending\"]);",
+  "replace": "new Set([\"held\"]);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-sf1-bye-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": " && a.winner === r.a2 && a.loser === null && a.reason === \"bye\", note:",
+  "replace": " && a.winner === r.a2, note:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-void-exempt-gone",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  const owed = r.half === \"vacant\" ? [lines.b.sf, lines.final] : [lines.b.sf];",
+  "replace": "  const owed: string[] = [];",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "every sport: the WD-CASC checks pass on counted items"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-sf2-status-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ ok: sf?.status === \"abandoned\" && sf.outcome == null && sfSeats.length === 0, note:",
+  "replace": "{ ok: sfSeats.length === 0, note:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-sf2-seats-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "sf.outcome == null && sfSeats.length === 0, note:",
+  "replace": "sf.outcome == null, note:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-final-bye-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "fa.winner === r.a2 && fa.loser === null && fa.reason === \"bye\", note:",
+  "replace": "fa.winner === r.a2, note:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "wdcasc-champion-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ ok: finalRanks?.[0] === r.a2, note:",
+  "replace": "{ ok: true, note:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three; each reds when its own fixture is wrong"
+   }
+  ]
+ },
+ {
+  "id": "dwall-two-dead-as-dw",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "items.push({ ok: f.status === \"abandoned\" && f.outcome == null, note: `${key}: both seats dead",
+  "replace": "items.push({ ok: f.status === \"forfeited\" && f.outcome?.kind === \"double_walkover\", note: `${key}: both seats dead",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "advances nobody: neither entrant seated again"
+   }
+  ]
+ },
+ {
+  "id": "fake-bye-award-bare",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "Object.assign(target, { status: \"forfeited\", outcome: { kind: \"award\", winner, loser: null, reason: \"bye\" } });",
+  "replace": "Object.assign(target, { status: \"forfeited\", outcome: { kind: \"award\", winner } });",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawal whose opponent is TBD empties her seat"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "every sport: the WD-CASC checks pass on counted items"
+   }
+  ]
+ },
+ {
+  "id": "fake-all-dead-departed",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "    if (this.departedSlots.has(`${id}:${slot}`) && this.departedSlots.has(`${id}:${other}`)) {",
+  "replace": "    if (true) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "Review Focus 1: a dead seat beside a RECORDED double walkover is a void"
+   }
+  ]
+ },
+ {
+  "id": "fake-one-departed-enough",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "    if (this.departedSlots.has(`${id}:${slot}`) && this.departedSlots.has(`${id}:${other}`)) {",
+  "replace": "    if (this.departedSlots.has(`${id}:${slot}`) || this.departedSlots.has(`${id}:${other}`)) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "Review Focus 1: a dead seat beside a RECORDED double walkover is a void"
+   }
+  ]
+ },
+ {
+  "id": "fake-recorded-dw-departed",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "if (next !== undefined) this.killSlot(next.to, next.slot, f.events.length === 0);",
+  "replace": "if (next !== undefined) this.killSlot(next.to, next.slot, true);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "Review Focus 1: a dead seat beside a RECORDED double walkover is a void"
+   }
+  ]
+ },
+ {
+  "id": "fake-tbd-not-counted",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        this.killSlot(f.id, slot, true);\n        walkovers++;\n",
+  "replace": "        this.killSlot(f.id, slot, true);\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawal whose opponent is TBD empties her seat"
+   }
+  ]
+ },
+ {
+  "id": "fake-tbd-seat-kept",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        Object.assign(f, { [slot]: null });\n        this.killSlot(f.id, slot, true);",
+  "replace": "        this.killSlot(f.id, slot, true);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawal whose opponent is TBD empties her seat"
+   }
+  ]
+ },
+ {
+  "id": "fake-held-never",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "    if (f.status === \"needs_decision\" || this.abandonActive(f)) return true;",
+  "replace": "    if (false) return true;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each state the cascade walks over"
+   }
+  ]
+ },
+ {
+  "id": "fake-decider-owed-ignored",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "    return deciderPending(m as never, { state: folded.state as never, settlement: null });",
+  "replace": "    return false;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each state the cascade walks over"
+   }
+  ]
+ },
+ {
+  "id": "fake-abandon-not-voided",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "    for (const id of activeAbandonIds(f.events)) await this.postStream(f.id, [{ type: \"core.void\", payload: { event_id: id } }]);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each state the cascade walks over"
+   }
+  ]
+ },
+ {
+  "id": "fake-abandoned-not-acted",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "  return BRACKET_WITHDRAW_PENDING.has(status) || (IF_ABANDON_ACTIVE.has(status) && abandonActive);",
+  "replace": "  return BRACKET_WITHDRAW_PENDING.has(status);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each state the cascade walks over"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/model-settle.test.ts"
+    ],
+    "name": "a held match with a WITHDRAWN side is walked over by the cascade"
+   }
+  ]
+ },
+ {
+  "id": "fake-gone-ignored",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "      if (gone.has(opponent)) {",
+  "replace": "      if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "X-WD-4: both sides of a line withdrawn is a departure double walkover"
+   }
+  ]
+ },
+ {
+  "id": "fake-gone-final-written",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        if (next === undefined) continue;\n        Object.assign(f, { status: \"forfeited\", outcome: { kind: \"double_walkover\" } });",
+  "replace": "        Object.assign(f, { status: \"forfeited\", outcome: { kind: \"double_walkover\" } });\n        if (next === undefined) continue;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "X-WD-4: both sides of a line withdrawn is a departure double walkover"
+   }
+  ]
+ },
+ {
+  "id": "fake-gone-dw-counts-nothing",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        Object.assign(f, { status: \"forfeited\", outcome: { kind: \"double_walkover\" } });\n        walkovers++;",
+  "replace": "        Object.assign(f, { status: \"forfeited\", outcome: { kind: \"double_walkover\" } });",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "X-WD-4: both sides of a line withdrawn is a departure double walkover"
+   }
+  ]
+ },
+ {
+  "id": "fake-bye-final-no-champion",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        if (this.singleElim && typeof w === \"string\" && !this.feeds.has(f.id)) champion = w;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a withdrawal whose opponent is TBD empties her seat"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "every sport: the WD-CASC checks pass on counted items"
+   }
+  ]
+ },
+ {
+  "id": "pt-empty-table-accepted",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "  if (tablePending.length === 0) throw new Error(",
+  "replace": "  if (false) throw new Error(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket withdrawal walks scheduled, in_play and needs_decision lines over"
+   }
+  ]
+ },
+ {
+  "id": "pt-pending-read-unchecked",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "  if (!/\\n {2}if \\(PENDING\\.has\\(status\\)\\) return \"scheduled\";/.test(body)) throw",
+  "replace": "  if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket withdrawal walks scheduled, in_play and needs_decision lines over"
+   }
+  ]
+ },
+ {
+  "id": "pt-always-dropped",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "  return { pending: [...tablePending, ...always], ifAbandonActive };",
+  "replace": "  return { pending: [...tablePending], ifAbandonActive };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket withdrawal walks scheduled, in_play and needs_decision lines over"
+   }
+  ]
+ },
+ {
+  "id": "pt-if-abandon-dropped",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "  return { pending: [...tablePending, ...always], ifAbandonActive };",
+  "replace": "  return { pending: [...tablePending, ...always], ifAbandonActive: [] };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket withdrawal walks scheduled, in_play and needs_decision lines over"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each state the cascade walks over"
+   }
+  ]
+ },
+ {
+  "id": "model-fill-reason-walkover",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      t.outcome = { kind: \"award\", winner: w, loser: null, reason: \"bye\" }; // awardSeededByes (W2b C-5)",
+  "replace": "      t.outcome = { kind: \"award\", winner: w, loser: null, reason: \"walkover\" };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-3 on the model"
+   }
+  ]
+ },
+ {
+  "id": "model-held-acted-as-table",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));\n    for (const f of acts) {\n      const home",
+  "replace": "    const acts = mine.filter((x) => x.status === \"scheduled\" || x.status === \"in_play\");\n    for (const f of acts) {\n      const home",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/model-settle.test.ts"
+    ],
+    "name": "a held match with a WITHDRAWN side is walked over by the cascade"
+   }
+  ]
+ },
+ {
+  "id": "model-tbd-not-counted",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      walkovers++;\n      if (opponent !== null) {\n        if (this.heldForWithdrawal(f)) held++;",
+  "replace": "      if (opponent !== null) {\n        walkovers++;\n        if (this.heldForWithdrawal(f)) held++;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-3 on the model"
+   }
+  ]
+ },
+ {
+  "id": "model-abandon-not-voided",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "        for (const a of liveEntries(this.ledgers.get(f.id) ?? []).filter((e) => e.type === \"core.abandon\")) await this.#cascadePost(f.id, [{ type: \"core.void\", payload: { event_id: a.id } }]);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-1 on the model: an abandoned line has its abandon voided first"
+   }
+  ]
+ },
+ {
+  "id": "model-held-not-counted",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "        if (this.heldForWithdrawal(f)) held++;\n        for (const a of",
+  "replace": "        for (const a of",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-1 on the model: an abandoned line has its abandon voided first"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/model-settle.test.ts"
+    ],
+    "name": "a held match with a WITHDRAWN side is walked over by the cascade"
+   }
+  ]
+ },
+ {
+  "id": "d4-settle-clause-dropped",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "  if (live.some((e) => e.type === \"core.abandon\") && !live.some((e) => e.type === \"core.settle\")) return refuse(\"ABANDONED_SETTLE_OR_VOID\");",
+  "replace": "  if (live.some((e) => e.type === \"core.abandon\")) return refuse(\"ABANDONED_SETTLE_OR_VOID\");",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "each required forfeit sequence runs with the invariants checked after every step"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "over one knockout shape and every sport"
+   }
+  ]
+ },
+ {
+  "id": "pad-authored-always",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "const padAuthored = (event: StreamEvent): boolean => Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, event.type);",
+  "replace": "const padAuthored = (_event: StreamEvent): boolean => true;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "beside a core.settle the sport forfeit stays with the scorer's events"
+   }
+  ]
+ },
+ {
+  "id": "pad-authored-gate-off",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    if (!isOrganiserOnlyEvent(event.type, event.payload) || padAuthored(event)) { run.push(event); continue; }",
+  "replace": "    if (!isOrganiserOnlyEvent(event.type, event.payload)) { run.push(event); continue; }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "the pad replays the WHOLE stream"
+   }
+  ]
+ },
+ {
+  "id": "ms-pp-not-bracket",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "const BRACKET_WALKOVER = new Set([\"knockout\", \"stepladder\", ...X_WD_2_KINDS.filter((k) => BRACKETS.has(k))]);",
+  "replace": "const BRACKET_WALKOVER = new Set([\"knockout\", \"stepladder\"]);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ms-pending-table-set",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "        const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));\n        // Rulings 53 + 106",
+  "replace": "        const acts = mine.filter((x) => PENDING.has(x.status));\n        // Rulings 53 + 106",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ms-tbd-voided",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "        if (opponent === null) {\n          // loop F X-WD-3",
+  "replace": "        if (false) {\n          // loop F X-WD-3",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ms-held-not-counted",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "        if (this.heldForWithdrawal(f)) held++;\n        await this.walkOverForWithdrawal(f, entrantId);",
+  "replace": "        await this.walkOverForWithdrawal(f, entrantId);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ladder-pending-table-set",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "    const acts = inStage.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));\n    for (const f of acts) {\n      if (f.id !== this.#held",
+  "replace": "    const acts = inStage.filter((x) => PENDING.has(x.status));\n    for (const f of acts) {\n      if (f.id !== this.#held",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ladder-held-not-counted",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "      if (f.id !== this.#held && this.heldForWithdrawal(f)) held++;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ms-arrival-not-resolved",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "      if (stage !== undefined) this.#resolveSeats(stage);\n    }\n  }",
+  "replace": "    }\n  }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "ms-bye-award-bare",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "        f.outcome = { kind: \"award\", winner: lone, loser: null, reason: \"bye\" }; // awardSeededByes (W2b C-5)",
+  "replace": "        f.outcome = { kind: \"award\", winner: lone };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake|the ladder fake"
+   }
+  ]
+ },
+ {
+  "id": "vacant-drive-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "      if (r.half === \"vacant\") await withdraw(r.a2, FINAL_TBD);",
+  "replace": "      void FINAL_TBD;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "half-always-crowned",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  return i % 2 === 1 ? \"vacant\" : \"crowned\";",
+  "replace": "  return \"crowned\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "final half alternates|every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "final-vacant-status-any",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ ok: fin?.status === \"abandoned\" && fin.outcome == null && seats.length === 0, note: `${FINAL_VACANT_TITLE}",
+  "replace": "{ ok: fin?.status !== undefined && fin.outcome == null && seats.length === 0, note: `${FINAL_VACANT_TITLE}",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "final-vacant-outcome-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ ok: fin?.status === \"abandoned\" && fin.outcome == null && seats.length === 0, note: `${FINAL_VACANT_TITLE}",
+  "replace": "{ ok: fin?.status === \"abandoned\" && seats.length === 0, note: `${FINAL_VACANT_TITLE}",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "final-vacant-seats-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "{ ok: fin?.status === \"abandoned\" && fin.outcome == null && seats.length === 0, note: `${FINAL_VACANT_TITLE}",
+  "replace": "{ ok: fin?.status === \"abandoned\" && fin.outcome == null, note: `${FINAL_VACANT_TITLE}",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "crown-settled-ignored",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  return { ok: true, winner: CROWN_SETTLED.has(only.status) ? winner : null };",
+  "replace": "  return { ok: true, winner };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "crown-third-place-counted",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  const finals = fixtures.filter((f) => f.isFinal === true && f.thirdPlace !== true);",
+  "replace": "  const finals = fixtures.filter((f) => f.isFinal === true);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "crown-final-count-any",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (finals.length !== 1) return { ok: false, why:",
+  "replace": "  if (finals.length === 0) return { ok: false, why:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "crown-winner-kinds",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  const winner = o !== null && (o.kind === \"win\" || o.kind === \"award\") ? o.winner : null;",
+  "replace": "  const winner = o !== null && o.kind === \"win\" ? o.winner : null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "crown-settled-copy",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "new Set([\"decided\", \"finalized\", \"forfeited\"]);",
+  "replace": "new Set([\"decided\", \"finalized\"]);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "CROWN_SETTLED is champion|each check passes on the rule.s rows"
+   }
+  ]
+ },
+ {
+  "id": "tbd-vacant-exempt-always",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  const owed = r.half === \"vacant\" ? [lines.b.sf, lines.final] : [lines.b.sf];",
+  "replace": "  const owed = [lines.b.sf, lines.final];",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the rule's run passes all three"
+   }
+  ]
+ },
+ {
+  "id": "tbd-vacant-exempt-never",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  const owed = r.half === \"vacant\" ? [lines.b.sf, lines.final] : [lines.b.sf];",
+  "replace": "  const owed = [lines.b.sf];",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows|every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "tbd-a2-unchecked",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (r.half === \"vacant\") departed.push(",
+  "replace": "  if (r.half === \"never\") departed.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows|every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "tbd-a2-keeps-sf1-dropped",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "departed.push([r.a2, [lines.a.qf[1].id, ...(sf === undefined ? [] : [sf.id])]]);",
+  "replace": "departed.push([r.a2, [lines.a.qf[1].id]]);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows|every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "both-final-items-in-vacant",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (r.half === \"crowned\") {\n    items.push(",
+  "replace": "  if (r.half !== \"never\") {\n    items.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows|every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "final-vacant-not-run",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "    return Promise.resolve(r.half === \"vacant\" ? [...own, finalVacant(r, fixtures)] : own);",
+  "replace": "    return Promise.resolve(own);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "every sport: the WD-CASC checks"
+   }
+  ]
+ },
+ {
+  "id": "mfd-dw-no-kill",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (isDoubleWalkover(f.outcome)) {\n      this.#killSeat(t, edge.slot, false);\n      return;\n    }",
+  "replace": "    if (isDoubleWalkover(f.outcome)) {\n      return;\n    }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover kills the seat"
+   }
+  ]
+ },
+ {
+  "id": "mfd-kill-no-bye",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (waiting !== null) {\n      t.status = \"forfeited\";",
+  "replace": "    if (waiting === \"never\") {\n      t.status = \"forfeited\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover kills the seat"
+   }
+  ]
+ },
+ {
+  "id": "mfd-kill-waits-wrongly",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (!this.deadSeats.has(otherKey)) return;\n    if (this.departedSeats",
+  "replace": "    if (this.departedSeats",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover kills the seat"
+   }
+  ]
+ },
+ {
+  "id": "mfd-kill-no-void",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    t.status = \"abandoned\";\n    t.outcome = null;\n    const edge = this.feeds.get(t.id);",
+  "replace": "    const edge = this.feeds.get(t.id);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a line whose two seats are dead"
+   }
+  ]
+ },
+ {
+  "id": "mfd-void-not-onward",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (edge !== undefined && next !== undefined) this.#killSeat(next, edge.slot, false);\n  }",
+  "replace": "  }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a void kills the seat it feeds in turn"
+   }
+  ]
+ },
+ {
+  "id": "mfd-departed-guard-off",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      throw new Error(`fake: both seats of",
+  "replace": "      void (`fake: both seats of",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a line both of whose seats departed"
+   }
+  ]
+ },
+ {
+  "id": "mfd-departed-flag-dropped",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (departed) this.departedSeats.add(key);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a line both of whose seats departed|emptied seat is never revived"
+   }
+  ]
+ },
+ {
+  "id": "mfd-withdraw-no-resolve",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      this.#killSeat(f, home ? 1 : 2, true);",
+  "replace": "      this.deadSeats.add(`${f.id}:${home ? 1 : 2}`);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a line both of whose seats departed|emptied seat is never revived"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-off",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (isDoubleWalkover(f.outcome) && !isDoubleWalkover(next)) return this.#revive(f, path, plan);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "voiding the double walkover revives|a void kills the seat it feeds in turn"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-no-release",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      const refused = this.#release(t, null, path, plan);\n      if (refused !== null) return refused;\n      plan.push",
+  "replace": "      plan.push",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "take-back is refused NEXT_MATCH_STARTED"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-departed",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (!this.deadSeats.has(key) || this.departedSeats.has(key) || occupant !== null) return null;",
+  "replace": "    if (!this.deadSeats.has(key) || occupant !== null) return null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "emptied seat is never revived"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-void-no-recurse",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "      return this.#revive(t, path, plan);\n    }",
+  "replace": "      return null;\n    }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a void kills the seat it feeds in turn"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-void-branch-off",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    if (t.status === \"abandoned\" && t.outcome === null && t.home_entrant_id === null",
+  "replace": "    if (t.status === \"never\" && t.outcome === null && t.home_entrant_id === null",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "voiding the double walkover revives|a void kills the seat it feeds in turn"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-bye-stays",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "        t.status = NEXT.notStarted;\n        t.outcome = null;\n      });\n      return null;",
+  "replace": "        t.outcome = t.outcome;\n      });\n      return null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "voiding the double walkover revives|a void kills the seat it feeds in turn"
+   }
+  ]
+ },
+ {
+  "id": "mfd-revive-waiting-stays-dead",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "    plan.push(live);\n    return null;",
+  "replace": "    return null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "voiding the double walkover revives"
+   }
+  ]
+ },
+ {
+  "id": "r3-reader-acted-loosened",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "/\\n\\s*if \\(out\\.policy === \"none\" && result\\.updates\\.length > 0\\) out\\.policy = \"walkover\";/",
+  "replace": "/\\n\\s*if \\(out\\.policy === \"none\"[^)]*\\) out\\.policy = \"walkover\";/",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket branch moves a none policy only when its planner acted"
+   }
+  ]
+ },
+ {
+  "id": "r3-reader-both-off",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "if (acted && inStage) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket branch moves a none policy only when its planner acted"
+   }
+  ]
+ },
+ {
+  "id": "r3-reader-neither-off",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "if (!acted && !inStage) throw",
+  "replace": "if (false) throw",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket branch moves a none policy only when its planner acted"
+   }
+  ]
+ },
+ {
+  "id": "r3-reader-swap",
+  "file": "tools/matrix/__tests__/product-text.ts",
+  "find": "return acted ? \"acted\" : \"in-stage\";",
+  "replace": "return acted ? \"in-stage\" : \"acted\";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the product's bracket branch moves a none policy only when its planner acted"
+   }
+  ]
+ },
+ {
+  "id": "r3-policy-prior-dropped",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "  if (prior !== \"none\") return prior;\n  return (BRACKET_POLICY",
+  "replace": "  return (BRACKET_POLICY",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "bracketWithdrawalPolicy: a policy an earlier stage set stands"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake \\(formats\\), groups then a knockout or a page playoff: a bracket loser"
+   }
+  ]
+ },
+ {
+  "id": "r3-policy-rule-ignored",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "(BRACKET_POLICY === \"acted\" ? acted : inStage) > 0",
+  "replace": "(inStage) > 0",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "bracketWithdrawalPolicy: a policy an earlier stage set stands"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-policy-boundary",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "(BRACKET_POLICY === \"acted\" ? acted : inStage) > 0",
+  "replace": "(BRACKET_POLICY === \"acted\" ? acted : inStage) >= 0",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "bracketWithdrawalPolicy: a policy an earlier stage set stands"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-ko-single-elim-mine",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "policy: bracketWithdrawalPolicy(\"none\", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };\n  }\n  /** W2b X-WD-2",
+  "replace": "policy: bracketWithdrawalPolicy(\"none\", mine.length, mine.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };\n  }\n  /** W2b X-WD-2",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-ko-league-path-mine",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, acted) }",
+  "replace": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, inStage.length) }",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-ko-league-path-unaligned",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "return { ...(await super.withdraw(entrantId)), policy: bracketWithdrawalPolicy(\"none\", inStage.length, acted) };",
+  "replace": "return { ...(await super.withdraw(entrantId)) };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-ko-page-playoff-mine",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, pending)",
+  "replace": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, inStage.length)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the knockout fake, every bracket mode"
+   }
+  ]
+ },
+ {
+  "id": "r3-ms-prior-dropped",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "policy = bracketWithdrawalPolicy(policy, mine.length, acts.length);",
+  "replace": "policy = bracketWithdrawalPolicy(\"none\", mine.length, acts.length);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the multi-stage fake \\(formats\\), groups then a knockout or a page playoff: a bracket loser"
+   }
+  ]
+ },
+ {
+  "id": "r3-ladder-mine",
+  "file": "tools/matrix/__tests__/fake-formats-driver.ts",
+  "find": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, acts.length)",
+  "replace": "policy: bracketWithdrawalPolicy(\"none\", inStage.length, inStage.length)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the ladder fake \\(a ladder takes the bracket branch\\)"
+   }
+  ]
+ },
+ {
+  "id": "r3-model-mine",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "policy: bracketWithdrawalPolicy(\"none\", mine.length, acts.length)",
+  "replace": "policy: bracketWithdrawalPolicy(\"none\", mine.length, mine.length)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "rulings 53 \\+ 106 on the model"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-family-bracket-table",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "FORFEIT_MODEL_KINDS.includes(kind) && !onBracketPath(kind) ? \"table\" : \"pending\"",
+  "replace": "FORFEIT_MODEL_KINDS.includes(kind) ? \"table\" : \"pending\"",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "rulings 53 \\+ 106 on a knockout, the empty case first"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "policyFamilyFor: a table kind answers by the table branch"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-xwd2-off-path",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "BRACKET_KINDS.includes(kind as BracketKind) || X_WD_2_KINDS.includes(kind);",
+  "replace": "BRACKET_KINDS.includes(kind as BracketKind);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "m-2, the empty case first"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "expectedPolicy on the bracket path"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-expected-guard-off",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "if (!onBracketPath(kind)) throw new Error(`expectedPolicy:",
+  "replace": "if (false) throw new Error(`expectedPolicy:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "expectedPolicy on the bracket path"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-abandoned-abstain-off",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "if (abandoned !== undefined) return { abstain:",
+  "replace": "if (false) return { abstain:",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "expectedPolicy on the bracket path"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-held-not-pending",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "PENDING_STATUSES.includes(f.status) || f.status === HELD",
+  "replace": "PENDING_STATUSES.includes(f.status)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "expectedPolicy on the bracket path"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-pending-boundary",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "f.status === HELD).length;\n  return { want: pending > 0 ? \"walkover\" : \"none\", pending };",
+  "replace": "f.status === HELD).length;\n  return { want: pending >= 0 ? \"walkover\" : \"none\", pending };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "expectedPolicy on the bracket path"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "rulings 53 \\+ 106 on a knockout, the empty case first"
+   }
+  ]
+ },
+ {
+  "id": "r3-r4-table-fixed-rule",
+  "file": "tools/matrix/lib/scenarios/r4-withdrawal.ts",
+  "find": "? [{ ok: w.policy !== \"none\", note: `policy ${w.policy} on a started division` }]",
+  "replace": "? [{ ok: true, note: `policy ${w.policy} on a started division` }]",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/scenarios.test.ts"
+    ],
+    "name": "R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported"
+   }
+  ]
+ },
+ {
+  "id": "r3-vacant-reads-ranks",
+  "file": "tools/matrix/lib/scenarios/w2b-forfeit-credit.ts",
+  "find": "  if (r.half === \"crowned\") {\n    items.push(",
+  "replace": "  if (r.half === \"crowned\" || r.half === \"vacant\") {\n    items.push(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "each check passes on the rule.s rows and reds on every other shape"
+   }
+  ]
+ },
+ {
+  "id": "r4-no-next-pre-i5",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "!feedsNextMatch({ winner_to_fixture: g.winnerTo.get(key)?.target ?? null, loser_to_fixture: g.loserTo.get(key)?.target ?? null })",
+  "replace": "(!g.winnerTo.has(key) && !g.loserTo.has(key))",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the fixtures with no next match are every final"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "loop F I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r4-no-next-winner-ignored",
+  "file": "tools/matrix/lib/scenarios/w2b-checks.ts",
+  "find": "winner_to_fixture: g.winnerTo.get(key)?.target ?? null,",
+  "replace": "winner_to_fixture: null,",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "the fixtures with no next match are every final"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "loop F I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r5-nextline-winner-only",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "  const loser = lost[0]?.id ?? null;",
+  "replace": "  const loser: string | null = null;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "r5-nextline-old-rule",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "if (!feedsNextMatch({ winner_to_fixture: winner, loser_to_fixture: loser })) return { line: \"none\" };",
+  "replace": "if (won.length === 0) return { line: \"none\" };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "r5-nextline-loser-guard-off",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "[[\"winner\", won], [\"loser\", lost]] as const",
+  "replace": "[[\"winner\", won]] as const",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "r5-nextline-winner-guard-off",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "[[\"winner\", won], [\"loser\", lost]] as const",
+  "replace": "[[\"loser\", lost]] as const",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "r5-nextline-target-loser-first",
+  "file": "tools/matrix/lib/reference-bracket.ts",
+  "find": "  return { line: \"next\", target: winner ?? loser };",
+  "replace": "  return { line: \"next\", target: loser ?? winner };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-bracket.test.ts"
+    ],
+    "name": "nextLineOf: a final"
+   }
+  ]
+ },
+ {
+  "id": "r5-fake-ko-dw-winner-only",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "loser_to_fixture: this.loserFeeds.get(id)?.to ?? null })) {",
+  "replace": "loser_to_fixture: null })) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-scenarios.test.ts"
+    ],
+    "name": "a two-entrant double elim"
+   }
+  ]
+ },
+ {
+  "id": "r5-modelfake-loser-is-winner",
+  "file": "tools/matrix/__tests__/model-fake-driver.ts",
+  "find": "?.target ?? null, loser_to_fixture: null });",
+  "replace": "?.target ?? null, loser_to_fixture: this.feeds.get(f.id)?.target ?? null });",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover on a DECIDED final meets two rules"
+   }
+  ]
+ },
+ {
+  "id": "r5-model-start-guard-off",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "    if (read.diverges.length > 0) {",
+  "replace": "    if (read.diverges.length > 99) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: where the two part"
+   }
+  ]
+ },
+ {
+  "id": "r5-model-entrants-two",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "export const MODEL_ENTRANTS = 4;",
+  "replace": "export const MODEL_ENTRANTS = 2;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: its last-round read"
+   }
+  ]
+ },
+ {
+  "id": "r5-model-nonext-structural-ge",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "  for (const r of rounds) if (r !== null && r > round) return false;",
+  "replace": "  for (const r of rounds) if (r !== null && r >= round) return false;",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: its last-round read"
+   }
+  ]
+ },
+ {
+  "id": "r5-lastround-read-inverted",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "inLastRound(g.round, rounds) !== hasNoNextMatch(graph, g.id)",
+  "replace": "inLastRound(g.round, rounds) === hasNoNextMatch(graph, g.id)",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: its last-round read"
+   }
+  ]
+ },
+ {
+  "id": "r5-lastround-no-generator-passes",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "  if (gen === undefined) throw new Error(",
+  "replace": "  if (gen === undefined) return { checked: 0, diverges: [] };\n  if (gen === null) throw new Error(",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: where the two part"
+   }
+  ]
+ },
+ {
+  "id": "r5-lastround-engine-size-throws",
+  "file": "tools/matrix/lib/model/state.ts",
+  "find": "    if (EngineError.is(e)) return { checked: 0, diverges: [] };",
+  "replace": "    if (EngineError.is(e) && false) return { checked: 0, diverges: [] };",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "loop F I-5 on the model: its last-round read"
+   }
+  ]
+ },
+ {
+  "id": "r5-model-nonext-uses-lastround",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "  return inLastRound(round, [...m.fixtures.values()].map((g) => g.round));",
+  "replace": "  return !inLastRound(round, [...m.fixtures.values()].map((g) => g.round));",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "a double walkover on the FINAL"
+   }
+  ]
+ }
+]

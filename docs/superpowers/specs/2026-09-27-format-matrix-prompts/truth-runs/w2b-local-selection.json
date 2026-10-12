@@ -36,5 +36,11 @@
     "L1": [],
     "L2": []
   },
-  "newScenarios": []
+  "newScenarios": [
+    "WO-PRE",
+    "RT-PART",
+    "DW-ALL",
+    "AB-AWARD",
+    "WD-CASC"
+  ]
 }
