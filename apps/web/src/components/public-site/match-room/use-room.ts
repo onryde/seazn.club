@@ -16,6 +16,11 @@ import type { RoomSnapshot } from "./room-snapshot";
 export const LIVE_POLL_MS = 3_000;
 export const IDLE_POLL_MS = 15_000;
 const LOBBY_DEBOUNCE_MS = 250;
+/** The two events the room's channel carries — lib/realtime.ts's
+ *  publishRoomBroadcast and publishExternalPlayLobby send exactly these
+ *  (pinned against the real publishers, external-play-room-game.test.ts). */
+export const ROOM_STATE_EVENT = "room_state";
+export const LOBBY_CHANGED_EVENT = "lobby_changed";
 export const CLOCK_ZERO_SPACING_MS = 3_000;
 export const CLOCK_ZERO_ATTEMPTS = 5;
 
@@ -109,11 +114,11 @@ export function useRoom(initial: RoomSnapshot, token: string | null) {
         clientRef.current = sb;
         channel = sb
           .channel(topic, { config: { private: true } })
-          .on("broadcast", { event: "room_state" }, (msg: { payload?: unknown }) => {
+          .on("broadcast", { event: ROOM_STATE_EVENT }, (msg: { payload?: unknown }) => {
             const b = parseRoomBroadcast(msg.payload);
             if (b !== null) dispatch({ type: "broadcast", b, receivedAt: Date.now() });
           })
-          .on("broadcast", { event: "lobby_changed" }, () => {
+          .on("broadcast", { event: LOBBY_CHANGED_EVENT }, () => {
             if (debounce) clearTimeout(debounce);
             debounce = setTimeout(() => void refresh(), LOBBY_DEBOUNCE_MS);
           })

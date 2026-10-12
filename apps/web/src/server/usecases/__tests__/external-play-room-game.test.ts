@@ -15,6 +15,9 @@ import { sql } from "@/lib/db";
 import type { BoardCall } from "@/server/external-play/types";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import { actInRoom, claimRoomSeat, readRoom, type RoomDeps } from "../external-play/room";
+import { publishExternalPlayLobby, type RoomBroadcast } from "@/lib/realtime";
+import { initialRoomState, parseRoomBroadcast, roomReducer, type RoomBroadcastWire } from "@/components/public-site/match-room/room-state";
+import { LOBBY_CHANGED_EVENT, ROOM_STATE_EVENT } from "@/components/public-site/match-room/use-room";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -172,5 +175,84 @@ describe.skipIf(!HAS_DB)("match room — a game the player ends is written by TH
     // And the room says so to both players, with no sweep in between.
     expect((await readRoom({ kind: "session", userId: white.userId }, s.fixtureId, deps())).result).toMatchObject({ outcome: "lost", method: "resign", score: "0–1" });
     expect((await readRoom({ kind: "session", userId: black.userId }, s.fixtureId, deps())).result).toMatchObject({ outcome: "won", score: "0–1" });
+  });
+});
+
+// Type pin (review I9): every broadcast the server can send is a value the
+// client's wire type accepts, and the two declare exactly the same fields —
+// tsc fails here the day either side changes alone.
+type SameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A] ? true : false) : false;
+const broadcastKeysPinned: SameKeys<RoomBroadcast, RoomBroadcastWire> = true;
+const broadcastFitsWire = (b: RoomBroadcast) => b satisfies RoomBroadcastWire;
+
+describe.skipIf(!HAS_DB)("match room — the server's REAL broadcast, read by the client's REAL parser and reducer (review I9)", () => {
+  it("a move's broadcast: the topic the room subscribed to, the event the client listens for, a payload the parser keeps, and the board the next read shows", async () => {
+    expect([broadcastKeysPinned, typeof broadcastFitsWire]).toEqual([true, "function"]);
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: OPENED,
+      roundOpenedAt: OPENED,
+      linked: true,
+    });
+    const gameId = `gm-${randomUUID().slice(0, 12)}`;
+    board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: gameId });
+    board.acceptChallenge.mockResolvedValue({ ok: true });
+    board.submitMove.mockResolvedValue({ ok: true });
+    await claimRoomSeat({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    const seated = await claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(seated.create, "premise: T9's real producer made the game").toEqual({ created: true, gameId });
+    const white = seated.snapshot.you.colour === "white" ? s.away : s.home;
+    const black = white === s.home ? s.away : s.home;
+
+    // Black's client, holding the board before the move.
+    const before = await readRoom({ kind: "session", userId: black.userId }, s.fixtureId, deps());
+    expect(before.realtime?.topic, "premise: the room hands the client a topic").toBeTruthy();
+    let client = initialRoomState(before, Date.now());
+
+    // The realtime endpoint, captured at fetch: what publishRoomBroadcast
+    // really sends, byte for byte.
+    const sent: { url: string; body: string }[] = [];
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://realtime.example.test");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role-for-test");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        sent.push({ url: String(url), body: String(init.body) });
+        return new Response("{}", { status: 202 });
+      }),
+    );
+    try {
+      expect(await actInRoom({ kind: "session", userId: white.userId }, s.fixtureId, { kind: "move", uci: "e2e4" }, deps())).toEqual({ ok: true, applied: true });
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+      // The lobby publisher too: the other event the client listens for.
+      await publishExternalPlayLobby(s.fixtureId);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+    const messages = sent.flatMap((x) => (JSON.parse(x.body) as { messages: { topic: string; event: string; payload: unknown }[] }).messages);
+    expect(sent.every((x) => x.url === "https://realtime.example.test/realtime/v1/api/broadcast")).toBe(true);
+    const move = messages.find((m) => m.event === ROOM_STATE_EVENT);
+    const lobby = messages.find((m) => m.event === LOBBY_CHANGED_EVENT);
+    expect(move, "the move went out on the event the client listens for").toBeDefined();
+    expect(lobby, "and so did the lobby's").toBeDefined();
+    expect(move!.topic, "on the topic the room subscribed the client to").toBe(before.realtime!.topic);
+    expect(lobby!.topic).toBe(before.realtime!.topic);
+
+    const wire = parseRoomBroadcast(move!.payload);
+    expect(wire, "the client's parser keeps the server's real payload").not.toBeNull();
+    client = roomReducer(client, { type: "broadcast", b: wire!, receivedAt: Date.now() });
+
+    const rules = new Chess();
+    rules.move({ from: "e2", to: "e4" });
+    expect(client.snap.game).toMatchObject({ fen: rules.fen(), moves: ["e2e4"], lastMove: ["e2", "e4"], turn: "black", over: false });
+    // The broadcast and the next read agree.
+    const after = await readRoom({ kind: "session", userId: black.userId }, s.fixtureId, deps());
+    expect({ fen: client.snap.game!.fen, moves: client.snap.game!.moves, turn: client.snap.game!.turn }).toEqual({
+      fen: after.game!.fen,
+      moves: after.game!.moves,
+      turn: after.game!.turn,
+    });
   });
 });
