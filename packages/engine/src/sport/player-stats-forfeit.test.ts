@@ -1,10 +1,12 @@
 // W2b Task 4 (spec §5.2 "Player-stat folds", W2b-R9; Appendix A X-PS-1, X-PS-2, BG-WO-3). A walkover, a withdrawal or a
 // double walkover is not a match anybody played: no appearance, no personal win or loss. A retirement or an in-match
-// disqualification is: an appearance for both sides' players and the W/L as decided. The match-level keys below are
+// disqualification is: an appearance for both sides' players and the W/L as decided. Ruling 115 (2026-10-12): a
+// disqualification with nothing played is treated like a walkover (player-stats-ruling-115.test.ts sweeps it over every
+// declared cfg). The match-level keys below are
 // the ones a person's row counts per MATCH (appearance, result, a keeper's clean sheet); per-event credits (goals,
 // points, runs) are what was played and stay credited either way.
 import { describe, expect, it } from "vitest";
-import { foldMatchWithStoppage, type EventEnvelope } from "../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { aggregatePlayerStats, type PlayerStatRow, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -111,11 +113,18 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
 
   it("X-PS-2: a retirement or an in-match disqualification is a match for both sides' players, W/L as decided — every sport", () => {
     let checked = 0;
+    let nothingPlayed = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       const keys = declaredMatchKeys(m.playerStats);
       if (keys.length === 0) return; // cricket: no per-match key (see X-PS-1)
       for (const reason of ["retired", "disqualified"]) {
+        if (reason === "disqualified" && PLAYED[m.key]!.length === 0) {
+          // Ruling 115: chess has nothing played here short of its result, so its disqualification is not in-match —
+          // the walkover's reading, pinned below and swept in player-stats-ruling-115.test.ts. Counted.
+          nothingPlayed++;
+          continue;
+        }
         // H retires after A's bit of play, so A wins.
         const spec: Spec = [...(PRE[m.key] ?? []), ["core.start"], ...PLAYED[m.key]!, ["core.forfeit", { by: H, reason }]];
         const { rows, persons } = statsOf(m.key, spec);
@@ -143,7 +152,8 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
         checked++;
       }
     });
-    expect(checked).toBeGreaterThanOrEqual(20);
+    expect(checked).toBeGreaterThanOrEqual(19);
+    expect(nothingPlayed, "chess, whose PLAYED is empty (ruling 115)").toBe(1);
   });
 
   it("X-PS-2 sequence: a note and the finalize recorded after a retirement change no player's row — every sport", () => {
@@ -152,6 +162,7 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     let checked = 0;
     let credited = 0;
     let refused = 0;
+    let dqNothingPlayed = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       for (const reason of ["retired", "disqualified"]) {
@@ -172,13 +183,16 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
         const before = statsOf(m.key, spec).rows;
         expect(statsOf(m.key, after).rows, `${m.key} ${reason}`).toEqual(before);
         if (sumOf(before, declaredMatchKeys(m.playerStats)) > 0) credited++;
+        else if (reason === "disqualified" && PLAYED[m.key]!.length === 0) dqNothingPlayed++; // ruling 115: chess
         checked++;
       }
     });
     expect(checked + refused).toBeGreaterThanOrEqual(22);
     expect(refused, "chess's retirement after a bare start (ruling 113)").toBe(1);
-    // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket)
-    expect(credited).toBeGreaterThanOrEqual(19);
+    // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket) —
+    // less chess's disqualification after a bare start, which is no match played (ruling 115)
+    expect(credited).toBeGreaterThanOrEqual(18);
+    expect(dqNothingPlayed, "chess's disqualification with nothing played (ruling 115)").toBe(1);
   });
 
   it("a player-stat key carries one label wherever its model declares it, and no label is empty — every sport", () => {
@@ -202,19 +216,45 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     expect(repeated, "some model declares a key twice (boardgame's games and wins)").toBeGreaterThanOrEqual(2);
   });
 
-  it("X-PS-2: a retirement or a disqualification straight after the start, before any play, still counts the match", () => {
+  it("ruling 115 + X-PS-1 + X-RT-1: a disqualification straight after the start, before any play, is no match played for either side's players — and a retirement there is refused (ruling 113)", () => {
     let checked = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       if (!declaredMatchKeys(m.playerStats).includes("matches")) return; // the sports that count appearances as matches
-      for (const reason of ["retired", "disqualified"]) {
-        const { rows, persons } = statsOf(m.key, [["core.start"], ["core.forfeit", { by: H, reason }]]);
-        for (const p of [...persons[H]!, ...persons[A]!]) expect(statOf(rows, p, "matches"), `${m.key} ${reason} ${p}`).toBe(1);
+      const { rows, persons } = statsOf(m.key, [["core.start"], ["core.forfeit", { by: H, reason: "disqualified" }]]);
+      for (const p of [...persons[H]!, ...persons[A]!]) expect(statOf(rows, p, "matches"), `${m.key} disqualified ${p}`).toBe(0);
+      const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+      const retired = evs([["core.start"], ["core.forfeit", { by: H, reason: "retired" }]]);
+      expect(() => foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), retired), `${m.key} retired`).toThrowError(
+        expect.objectContaining({ code: "FORFEIT_REASON_WRONG_PHASE" }),
+      );
+      checked++;
+    });
+    // volleyball, table tennis, badminton, tennis, carrom
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it("ruling 115 + X-PS-2: a disqualification or a retirement after play is a match for both sides' players even when that play moved no score (a warning, ruling 114) or named only the side at fault (carrom's board it won)", () => {
+    // The kernel admits each scene (folded first); the stats reading is "something was played", not "a rally was won".
+    // A warning is the first level each sanction enum declares; the payloads are fixtures, as PLAYED's are.
+    const scenes: Array<[string, Spec, string]> = [
+      ...(["volleyball", "tabletennis", "badminton", "tennis"] as const).map((k): [string, Spec, string] => [k, [[`${k}.sanction`, { by: A, level: "warning" }]], H]),
+      ["carrom", [["carrom.board.summary", { winner: A, opponentCoinsLeft: 4, queenTo: null }]], A],
+    ];
+    let checked = 0;
+    for (const [key, play, offender] of scenes) {
+      const m = mod(key);
+      const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+      for (const reason of ["disqualified", "retired"]) {
+        const spec: Spec = [["core.start"], ...play, ["core.forfeit", { by: offender, reason }]];
+        const label = `${key} ${play[0]![0]} then ${offender} ${reason}`;
+        expect(outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), evs(spec)) as never), label).toMatchObject({ kind: "award", loser: offender, reason });
+        const { rows, persons } = statsOf(key, spec);
+        for (const p of [...persons[H]!, ...persons[A]!]) expect(statOf(rows, p, "matches"), `${label}: ${p}`).toBe(1);
         checked++;
       }
-    });
-    // volleyball, table tennis, badminton, tennis, carrom — each with both reasons
-    expect(checked).toBeGreaterThanOrEqual(10);
+    }
+    expect(checked).toBe(10);
   });
 
   it("X-PS-2: an abandon with a result (the award policy) is a match — the leader's keeper keeps the clean sheet", () => {
@@ -243,7 +283,7 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
 });
 
 describe("X-PS-1 at the shared fold: a model whose ONLY metric is an appearance", () => {
-  it("X-PS-1 / X-PS-2: an appearance-only model credits no appearance for a walkover, a withdrawal or a double walkover; a retirement keeps it", () => {
+  it("X-PS-1 / X-PS-2: an appearance-only model credits no appearance for a walkover, a withdrawal, a double walkover or a disqualification with nothing played (ruling 115); a retirement keeps it", () => {
     // Single-model: no shipped sport declares ONLY appearance metrics (chess pairs "games" with "wins"), so the fold's
     // "does this model declare an appearance at all" gate is witnessed only by a model built for it — the shape the
     // PlayerStatsModel contract admits.
@@ -255,11 +295,13 @@ describe("X-PS-1 at the shared fold: a model whose ONLY metric is an appearance"
     // the positive pair: played, and a retirement (X-PS-2: a match both players played)
     expect(games([]), "played").toBe(1);
     expect(games([["core.forfeit", { by: H, reason: "retired" }]]), "retired").toBe(1);
+    // ruling 115: a disqualification is a match only once something is played — any sport event after the Start
+    expect(games([["x.move"], ["core.forfeit", { by: H, reason: "disqualified" }]]), "disqualified after play").toBe(1);
     let unplayed = 0;
-    for (const payload of [{ by: H, reason: "walkover" }, { by: H, reason: "withdrew" }, { by: "both", reason: "walkover" }]) {
+    for (const payload of [{ by: H, reason: "walkover" }, { by: H, reason: "withdrew" }, { by: "both", reason: "walkover" }, { by: H, reason: "disqualified" }]) {
       expect(games([["core.forfeit", payload]]), JSON.stringify(payload)).toBe(0);
       unplayed++;
     }
-    expect(unplayed).toBe(3);
+    expect(unplayed).toBe(4);
   });
 });

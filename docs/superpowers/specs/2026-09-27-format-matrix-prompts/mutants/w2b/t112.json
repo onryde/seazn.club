@@ -515,7 +515,7 @@
     "files": [
      "src/sport/forfeit-credit.test.ts"
     ],
-    "name": "X-WD-6 \\+ X-RT-1 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour — a withdrawal \\(PF-7, rulings 112, 113\\)"
+    "name": "X-WD-6 \\+ X-RT-1 \\+ X-PS-1 — ruling 115: a withdrawal \\(PF-7, rulings 112, 113\\)"
    }
   ]
  },
@@ -820,6 +820,144 @@
      "src/families/walkover-credit.test.ts"
     ],
     "name": "every case is answered"
+   }
+  ]
+ },
+ {
+  "id": "r115-dq-played-ignored",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "replace": "    const dqUnplayed = false;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-115.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-PS-2 \\+ X-RT-1: a disqualification before the Start"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "X-PS-1/2 \\+ ruling 115: the role table"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-RT-1: a disqualification straight after the start"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "X-WD-6 \\+ X-RT-1 \\+ X-PS-1 — ruling 115: a withdrawal \\(PF-7, rulings 112, 113\\)"
+   }
+  ]
+ },
+ {
+  "id": "r115-dq-always-unplayed",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "replace": "    const dqUnplayed = reason === \"disqualified\";\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-115.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-PS-2 \\+ X-RT-1: a disqualification before the Start"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "X-PS-1/2 \\+ ruling 115: the role table"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-2: a retirement or an in-match disqualification is a match"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
+   }
+  ]
+ },
+ {
+  "id": "r115-dq-played-whole-ledger",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events);\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "X-PS-1/2 \\+ ruling 115: the role table"
+   }
+  ]
+ },
+ {
+  "id": "r115-dq-played-before-last",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index - 1));\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-115.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-PS-2 \\+ X-RT-1: a disqualification before the Start"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-2: a retirement or an in-match disqualification is a match"
+   }
+  ]
+ },
+ {
+  "id": "r115-dq-unplayed-not-read",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    else role = dqUnplayed || by === \"both\"",
+  "replace": "    else role = by === \"both\"",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-115.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-PS-2 \\+ X-RT-1: a disqualification before the Start"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/w2b-refusal-contracts.test.ts"
+    ],
+    "name": "X-PS-1/2 \\+ ruling 115: the role table"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "ruling 115 \\+ X-PS-1 \\+ X-RT-1: a disqualification straight after the start"
    }
   ]
  }

@@ -3,9 +3,10 @@
 // game target, `awardScore`, overs) and the played numbers of the stream — never read back from `forfeitCredit` or
 // from `standingsDelta`. A rule that cannot be stated without the module's code is a finding, not a test.
 import { describe, expect, it } from "vitest";
-import { foldMatchWithStoppage, outcomeOf, summaryOf, type EventEnvelope } from "../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, resolveVoids, summaryOf, type EventEnvelope } from "../core/events.ts";
 import type { StandingsDelta } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
+import { forfeitStatsRole } from "../stats/stats.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { buildStream, buildWalk, defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
@@ -604,7 +605,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
     expect(after).toBe(ROWS.length);
   });
-  it("X-WD-6 + X-RT-1 — pending owner ruling (DQ with nothing played): pins current behaviour — a withdrawal (PF-7, rulings 112, 113) or a disqualification after a bare Start — nothing played — credits the walkover, as before the start; so does a withdrawal whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
+  it("X-WD-6 + X-RT-1 + X-PS-1 — ruling 115: a withdrawal (PF-7, rulings 112, 113) or a disqualification after a bare Start — nothing played — credits the walkover, as before the start, and is no match in players' stats; so does a withdrawal whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     // Ruling 112: a Start with no sport event after it is still "before play" for a walkover, and the credit follows the
     // same fact. The expected credit is Appendix A's walkover row, from the cfg (EXPECTED_WALKOVER) — never the module's.
     let checked = 0;
@@ -630,13 +631,17 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
           { name: "withdrew after its one play was voided", cfg: playCfg, ledger: [start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id)], reason: "withdrew" },
         ];
         for (const s of scenes) {
-          const f = foldMatchWithStoppage(m as never, s.cfg as never, l, [...s.ledger, ev(s.ledger.length + 1, "core.forfeit", { by: A, reason: s.reason })]);
+          const ledger = [...s.ledger, ev(s.ledger.length + 1, "core.forfeit", { by: A, reason: s.reason })];
+          const f = foldMatchWithStoppage(m as never, s.cfg as never, l, ledger);
           const o = outcomeOf(m as never, f as never);
           expect(o, `${m.key}/${name} ${s.name}`).toMatchObject({ kind: "award", winner: H, loser: A, reason: s.reason });
           const [home, away] = m.standingsDelta(o!, s.cfg, { kind: "league" } as never, f.state);
           expect(home.metrics, `${m.key}/${name} ${s.name}: winner`).toMatchObject(want.winner);
           expect(away.metrics, `${m.key}/${name} ${s.name}: withdrawn side`).toMatchObject(want.loser);
           expect([home.won, home.lost, away.won, away.lost], `${m.key}/${name} ${s.name}`).toEqual([1, 0, 0, 1]);
+          // Ruling 115 (X-PS-1): with nothing played, no match in players' stats — the disqualification as the walkover.
+          const active = resolveVoids(ledger);
+          expect(m.playerStats?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed", `${m.key}/${name} ${s.name}: players' stats`).toBe(true);
           checked++;
         }
         if (name.endsWith("at Best of 1")) bestOfOne.add(m.key);

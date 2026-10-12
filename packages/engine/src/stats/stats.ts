@@ -15,7 +15,7 @@
 // stays outside the engine's logging carve-out (only
 // `packages/engine/src/scheduling/**` may log), so the counters are the
 // closest this fold may come to logging itself. See `PlayerStatsDiagnostics`.
-import { CoreForfeit, resolveVoids, type EventEnvelope } from "../core/events.ts";
+import { CoreForfeit, playRecorded, resolveVoids, type EventEnvelope } from "../core/events.ts";
 import type { LineupPair } from "../core/types.ts";
 
 /**
@@ -482,9 +482,11 @@ export interface PlayerStatsDiagnostics {
  * W2b (spec §5.2 W2b-R9; Appendix A X-PS-1, X-PS-2) — how a fixture's ACTIVE `core.forfeit` reads for player stats.
  *
  * - `"unplayed"`: a walkover, a withdrawal or a double walkover over a match nothing had decided — not a match anybody
- *   played: no appearance, no personal win or loss (X-PS-1).
- * - `"played"`: a retirement or an in-match disqualification — a match for both sides' players, the W/L as decided,
- *   the events already played still credited (X-PS-2).
+ *   played: no appearance, no personal win or loss (X-PS-1). Ruling 115: so is a disqualification with nothing played
+ *   before it (before the Start, or after a Start with no sport event after it) — `playRecorded`, the one "played" fact
+ *   the kernel's forfeit phase guard reads (rulings 112, 113, 114), of the ledger before that forfeit.
+ * - `"played"`: a retirement or an in-match disqualification (something played before it) — a match for both sides'
+ *   players, the W/L as decided, the events already played still credited (X-PS-2).
  * - `null`: no active forfeit; a payload that is not a W2b forfeit (a pre-W2b free-text reason, read as before); or a
  *   forfeit after `decidedBefore` saw a result stand (chess: the classical game, D-C6 / BG-WO-3) — that result keeps
  *   its credit and the forfeit adds none.
@@ -498,7 +500,7 @@ export function forfeitStatsRole(
 ): "unplayed" | "played" | null {
   let decided = false;
   let role: "unplayed" | "played" | null = null;
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     if (decidedBefore?.(event) === true) decided = true;
     if (event.type !== "core.forfeit") continue;
     const forfeit = CoreForfeit.safeParse(event.payload);
@@ -507,8 +509,10 @@ export function forfeitStatsRole(
       continue;
     }
     const { by, reason } = forfeit.data;
+    // Ruling 115: a disqualification with nothing played before it is treated like a walkover.
+    const dqUnplayed = reason === "disqualified" && !playRecorded(events.slice(0, index));
     if (decided) role = null;
-    else role = by === "both" || reason === "walkover" || reason === "withdrew" ? "unplayed" : "played";
+    else role = dqUnplayed || by === "both" || reason === "walkover" || reason === "withdrew" ? "unplayed" : "played";
   }
   return role;
 }

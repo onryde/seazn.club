@@ -459,7 +459,7 @@
         "files": [
           "src/sport/player-stats-forfeit.test.ts"
         ],
-        "name": "X-PS-2: a retirement or a disqualification straight after the start"
+        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
       }
     ]
   },
@@ -474,7 +474,7 @@
         "files": [
           "src/sport/player-stats-forfeit.test.ts"
         ],
-        "name": "X-PS-2: a retirement or a disqualification straight after the start"
+        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
       }
     ]
   },
@@ -489,7 +489,7 @@
         "files": [
           "src/sport/player-stats-forfeit.test.ts"
         ],
-        "name": "X-PS-2: a retirement or a disqualification straight after the start"
+        "name": "ruling 115 \\+ X-PS-2: a disqualification or a retirement after play is a match"
       }
     ]
   },

@@ -1909,7 +1909,8 @@ function nestedMatchOutcomesFold(
       };
 
       // W2b (X-PS-1/2): a walkover, a withdrawal or a double walkover is no match for anybody, even after a rally;
-      // a retirement or an in-match disqualification is one for both sides, even before the first rally.
+      // a retirement or an in-match disqualification is one for both sides, even before the first rally (a warning is
+      // play, ruling 114). Ruling 115: a disqualification with nothing played reads "unplayed", as a walkover does.
       const forfeit = forfeitStatsRole(events);
       if ((played && forfeit !== "unplayed") || forfeit === "played") {
         for (const p of personsFor(idX)) bump(p, "matches", 1);

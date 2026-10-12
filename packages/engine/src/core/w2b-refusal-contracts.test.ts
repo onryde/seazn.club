@@ -5,7 +5,7 @@
 // declared vocabulary (FORFEIT_REASONS), never read back from the guard.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { foldMatchWithStoppage, type EventEnvelope, type FoldableModule } from "./events.ts";
+import { foldMatchWithStoppage, resolveVoids, type EventEnvelope, type FoldableModule } from "./events.ts";
 import { FORFEIT_REASONS, MatchOutcome, type LineupPair } from "./types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { awardReasonOf, creditedMetrics } from "../sport/forfeit-credit.ts";
@@ -196,13 +196,28 @@ describe("sport/forfeit-credit.ts helpers — the table, every row", () => {
 describe("stats/stats.ts forfeitStatsRole + the aggregator's appearance skip (X-PS-1, X-PS-2)", () => {
   const forfeit = (seq: number, payload: unknown) => ev(seq, "core.forfeit", payload);
 
-  it("X-PS-1/2: the role table — unplayed for walkover, withdrawal and double walkover; played for retired and DQ; none without a forfeit", () => {
+  it("X-PS-1/2 + ruling 115: the role table — unplayed for walkover, withdrawal, double walkover and a DQ with nothing played; played for retired and an in-match DQ; none without a forfeit", () => {
     expect(forfeitStatsRole([])).toBeNull();
     expect(forfeitStatsRole([forfeit(1, { by: A, reason: "walkover" })])).toBe("unplayed");
     expect(forfeitStatsRole([forfeit(1, { by: A, reason: "withdrew" })])).toBe("unplayed");
     expect(forfeitStatsRole([forfeit(1, { by: "both", reason: "walkover" })])).toBe("unplayed");
     expect(forfeitStatsRole([forfeit(1, { by: A, reason: "retired" })])).toBe("played");
-    expect(forfeitStatsRole([forfeit(1, { by: A, reason: "disqualified" })])).toBe("played");
+    // Ruling 115: a disqualification is in-match only once something is played (`playRecorded`: an active sport event
+    // after the Start, scoring or not) — before the Start, after a bare Start, after a pre-Start sport event, or after
+    // its only play was voided, it reads as a walkover.
+    const start = ev(1, "core.start");
+    const play = ev(2, "x.warning");
+    const dq = (seq: number) => forfeit(seq, { by: A, reason: "disqualified" });
+    expect(forfeitStatsRole([dq(1)]), "before the Start").toBe("unplayed");
+    expect(forfeitStatsRole([start, dq(2)]), "after a bare Start").toBe("unplayed");
+    expect(forfeitStatsRole([ev(1, "x.card"), ev(2, "core.start"), dq(3)]), "after a sport event before the Start").toBe("unplayed");
+    expect(forfeitStatsRole([start, play, dq(3)]), "after a sport event after the Start").toBe("played");
+    // `events` is void-resolved (the contract): a voided play is absent, and nothing is played
+    expect(forfeitStatsRole(resolveVoids([start, play, makeEnvelope(3, { type: "core.void", payload: {} }, play.id), dq(4)])), "after its only play was voided").toBe("unplayed");
+    // judged at the forfeit, not at the ledger's end: an event after it played nothing before it
+    expect(forfeitStatsRole([start, dq(2), ev(3, "x.warning")]), "a sport event only after it").toBe("unplayed");
+    // the last forfeit is the effective one, each judged by what was played before IT
+    expect(forfeitStatsRole([start, dq(2), ev(3, "x.warning"), dq(4)]), "a DQ after play, following one with nothing played").toBe("played");
   });
 
   it("an unparseable forfeit is no forfeit — it resets the role rather than reading a field off it", () => {
