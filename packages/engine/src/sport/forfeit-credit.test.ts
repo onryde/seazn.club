@@ -385,6 +385,26 @@ const ROWS: RetirementRow[] = [
     },
   },
   {
+    // T14 M-5. BD-RT-1 (rules/badminton.md): "the current game completed for the winner to its legal end (21, or two
+    // clear up to the 30 cap), remaining games 21-0". The first game at 20-all: two clear is 22-20; then one game 21-0.
+    // Written from the rule's numbers, never from cfg (the test pins that the cfg says the same).
+    id: "BD-RT-1 (deuce: 20-all completes 22-20)", key: "badminton", cfg: parsed("badminton"),
+    played: rallies("badminton.rally", 20, A, 0),
+    want: () => [
+      { sets_won: 0, sets_lost: 2, points_won: 20, points_lost: 22 + 21 },
+      { sets_won: 2, sets_lost: 0, points_won: 22 + 21, points_lost: 20 },
+    ],
+  },
+  {
+    // T14 M-5. The same rule at the cap: 29-all, the 30th point ends the game, 30-29; then one game 21-0.
+    id: "BD-RT-1 (the cap: 29-all completes 30-29)", key: "badminton", cfg: parsed("badminton"),
+    played: rallies("badminton.rally", 29, A, 0),
+    want: () => [
+      { sets_won: 0, sets_lost: 2, points_won: 29, points_lost: 30 + 21 },
+      { sets_won: 2, sets_lost: 0, points_won: 30 + 21, points_lost: 29 },
+    ],
+  },
+  {
     // Any partial: H holds the first game. TN-RT-1 = TN-WO-1 — straight sets, no games credited.
     id: "TN-RT-1", key: "tennis", cfg: parsed("tennis"),
     played: times(4, ["tennis.point", { by: H }]),
@@ -488,6 +508,17 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     expectRetirement(row("TT-RT-1 (deuce: the current game completes at the retiree + 2, not at setTo)"));
   });
   it("BD-RT-1: badminton retirement — points stand, the current game completes to 21, the rest 21-0", () => expectRetirement(row("BD-RT-1")));
+  it("BD-RT-1 (T14 M-5): the current game's legal end — 20-all completes 22-20, 29-all completes 30-29 (two clear, the 30 cap)", () => {
+    // Single-sport: the cap is badminton's alone (BWF Law 7: 21 points, two clear at 20-all, the 30th point wins at 29-all).
+    const c = parsed("badminton");
+    expect([c.setTo, c.winBy, c.cap, c.bestOf], "the default cfg is the rule's game").toEqual([21, 2, 30, 3]);
+    let checked = 0;
+    for (const id of ["BD-RT-1 (deuce: 20-all completes 22-20)", "BD-RT-1 (the cap: 29-all completes 30-29)"]) {
+      expectRetirement(row(id));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
   it("TN-RT-1: tennis retirement — the same credit as TN-WO-1", () => expectRetirement(row("TN-RT-1")));
   it("CA-RT-1: carrom retirement — completed games stand, the unfinished one 25-(opponent), the rest 25-0", () => expectRetirement(row("CA-RT-1")));
   it("GN-RT-1: generic retirement — walkover credit, keeping the recorded score", () => {
