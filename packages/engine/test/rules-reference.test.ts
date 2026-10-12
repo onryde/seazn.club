@@ -24,20 +24,22 @@ const OPEN = "⬜ open";
  *  W2b ledger's rulings amend it (plan PF-13: "53 new ids + CK-WO-2 + X-WD-6, plus the X-BR-1 amendment"):
  *  - Appendix A's 53 new ids, with Appendix A's status (`signed <ruling>` from _INDEX rulings 83–99; BD-WO-2 and BD-RT-1
  *    are recorded deviations);
- *  - CK-WO-2 (plan PF-6) and X-WD-6 (plan PF-7): orchestrator rulings the ledger reports to the owner, so OPEN;
+ *  - CK-WO-2 (plan PF-6): an orchestrator ruling the ledger reports to the owner, so OPEN; X-WD-6 (plan PF-7) was the same
+ *    until owner ruling 113 (2026-10-11) settled its wording ("Amends X-RS-1, X-RT-1 and X-WD-6"), so it carries 113;
  *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
  *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
- *  - X-RS-1 carries owner ruling 112 (2026-10-11), which changed its text: a walkover stays recordable after the start
- *    until something is played. */
+ *  - X-RS-1 and X-RT-1 carry owner ruling 113 (2026-10-11), which changed their text after ruling 112 (a walkover stays
+ *    recordable after the start until something is played): nothing played means not started, for every reason, and a
+ *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
-    "X-RS-1": signed(112, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
+    "X-RS-1": signed(113, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
     "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
-    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(87),
+    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(113, "2026-10-11"),
     "X-AB-1": signed(88), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
     "X-PS-1": signed(91), "X-PS-2": signed(91), "X-DE-1": signed(93), "X-WD-5": signed(90),
-    "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": OPEN,
+    "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
   "hockey.md": { "HK-WO-1": signed(86), "HK-RT-1": signed(87), "HK-AB-1": signed(88) },
@@ -140,8 +142,12 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "Appendix A's own amend line (ruling 84): \"a win\" became \"a win or a double walkover\"",
   },
   "X-RS-1": {
-    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover (and double walkover) = before anything is played, which includes after `core.start` while no sport (module-owned) event is active, kernel admin events not counting as play (chess keeps its wider walkover phases, FIDE 6.7.1); retired/disqualified = after.",
-    by: "owner ruling 112 (2026-10-11): a walkover stays recordable after the start until something is played",
+    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase.",
+    by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start",
+  },
+  "X-RT-1": {
+    says: "In-match disqualification takes the sport's retirement credit for that match (the cascade to other fixtures is W5); a retirement is recorded only once something is played (ruling 113: nobody retires from a match never played); a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
+    by: "owner ruling 113 (2026-10-11): a retirement waits for play; a disqualification with nothing played is pending owner ruling, so Appendix A's walkover-credit clause is not stated",
   },
   "X-WO-1": {
     says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
@@ -164,15 +170,16 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "Task 14 fix round 1 M-1: spec §5.4 rule 2, a level abandon in a bracket stays abandoned (HK-AB-1 and IH-AB-1 say \"Same as FB-AB-1\", so they take it by reference and keep Appendix A's text)",
   },
 };
-/** The two W2b rows Appendix A does not hold (orchestrator rulings PF-6, PF-7), pinned here by their whole text. */
+/** The two W2b rows Appendix A does not hold (orchestrator rulings PF-6, PF-7; X-WD-6 worded by ruling 113), pinned here
+ *  by their whole text. */
 const NOT_IN_APPENDIX_A: Readonly<Record<string, { says: string; by: string }>> = {
   "CK-WO-2": {
     says: "Unlimited-overs (Test, first-class) cricket walkover credits the result and its table points only: no runs or overs are credited, and the match is out of NRR (with no quota, NRR is undefined).",
     by: "plan PF-6",
   },
   "X-WD-6": {
-    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit when the match never started, and the sport's retirement credit once play started (a held level result included, X-WD-1).",
-    by: "plan PF-7",
+    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit while nothing is played (no Start, or a Start with nothing played, ruling 113) and the sport's retirement credit once something is played, the played score standing (a held level result included, X-WD-1); unlimited-overs cricket's walkover credit is CK-WO-2's.",
+    by: "plan PF-7 and ruling 113",
   },
 };
 interface TextCheck { problems: string[]; fromAppendix: number; amended: number; added: number }
@@ -498,7 +505,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
   });
 });
 
-describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112)", () => {
+describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114)", () => {
   it("empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing", () => {
     const problems = w2bProblems([]);
     expect(problems).toHaveLength(56);
@@ -507,7 +514,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
   });
 
-  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108 or 112 where that ruling changed the text; PF-6/PF-7 open), and X-BR-1's text says 'a win or a double walkover'", () => {
+  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108 or 113 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
     const ids = w2bIds();
     expect(ids).toHaveLength(55);
     expect(new Set(ids).size).toBe(55); // no id pinned twice
@@ -515,9 +522,9 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     for (const [file, n] of Object.entries(W2B_PER_FILE)) expect(Object.keys(W2B_ROWS[file] ?? {}), file).toHaveLength(n);
     expect(Object.keys(W2B_ROWS).sort()).toEqual(Object.keys(W2B_PER_FILE).sort());
     expect(Object.values(W2B_PER_FILE).reduce((a, b) => a + b, 0)).toBe(55);
-    // Appendix A's 53 are signed or deviation; only the two orchestrator rows are open.
+    // Appendix A's 53 are signed or deviation, and so is X-WD-6 since ruling 113; only PF-6's CK-WO-2 is open.
     const open = Object.values(W2B_ROWS).flatMap((ids) => Object.entries(ids)).filter(([, s]) => s === OPEN).map(([id]) => id);
-    expect(open.sort()).toEqual(["CK-WO-2", "X-WD-6"]);
+    expect(open.sort()).toEqual(["CK-WO-2"]);
     expect(w2bProblems(allRows())).toEqual([]);
   });
 
@@ -534,7 +541,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bProblems(edit("X-BR-1", { provedBy: ["apps/web/src/server/engine-db/__tests__/settle-seating.test.ts"] }))).toHaveLength(1);
   });
 
-  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112; ledger I-1; Task 15 M-6; Task 14 M-1) or addition (PF-6, PF-7)", () => {
+  it("W2b: each row's text is Appendix A's, read from the spec at test time, or its recorded amendment (rulings 84, 108, 112, 113, 114; ledger I-1; Task 15 M-6; Task 14 M-1) or addition (PF-6, PF-7)", () => {
     const appendix = readAppendixA(readFileSync(W2B_SPEC, "utf8"));
     expect(appendix.rows.length + appendix.amendments.length, "Appendix A parses to the total it states").toBe(appendix.stated);
     expect(appendix.amendments).toEqual(["X-BR-1 (amend)"]);
@@ -577,7 +584,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
       /^FB-AB-1: recorded as amended, but Appendix A already says it$/,
       /^X-BR-1: recorded as amended, but Appendix A has no amend line for it$/,
       /^CK-WO-2: the text is not plan PF-6's: /,
-      /^X-WD-6: Appendix A holds it now \(plan PF-7\)/,
+      /^X-WD-6: Appendix A holds it now \(plan PF-7 and ruling 113\)/,
       /^FB-WO-1: Appendix A files it in football\.md, the rows in hockey\.md$/,
       /^X-ZZ-9: in Appendix A but owed by no W2b pin$/,
     ];
@@ -606,7 +613,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     });
   });
 
-  it("every W2b row names a proving test and an enforcement site, and the two open rows' proofs prove them too, so no listed proof is unchecked evidence (the signed rows' are proved by the check above)", () => {
+  it("every W2b row names a proving test and an enforcement site, and the open row's proofs prove it too, so no listed proof is unchecked evidence (the signed rows' are proved by the check above)", () => {
     const byId = new Map(allRows().map((r) => [r.id, r]));
     let named = 0;
     let openProved = 0;
@@ -622,7 +629,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
       openProved++;
     }
     expect(named).toBe(56);
-    expect(openProved).toBe(2);
+    expect(openProved).toBe(1);
   });
 });
 

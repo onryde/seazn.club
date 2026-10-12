@@ -45,10 +45,10 @@
   ]
  },
  {
-  "id": "x-rs-1-pre-112-status",
+  "id": "x-rs-1-pre-113-status",
   "file": "packages/engine/rules/cross-sport.md",
-  "find": "| signed 112 2026-10-11 |",
-  "replace": "| signed 83 2026-10-08 |",
+  "find": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11) | signed 113 2026-10-11 |",
+  "replace": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11) | signed 112 2026-10-11 |",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -131,6 +131,51 @@
      "src/server/engine-db/__tests__/award-abandon-status.test.ts"
     ],
     "name": "FB-AB-1 / HK-AB-1 / IH-AB-1: a level award-policy abandon"
+   }
+  ]
+ },
+ {
+  "id": "x-wd-6-reopened",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "ruling 113 (2026-10-11) settles its wording | signed 113 2026-10-11 |",
+  "replace": "ruling 113 (2026-10-11) settles its wording | ⬜ open |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "x-rt-1-dq-credit-stated",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
+  "replace": "with nothing played (a bare Start) a disqualification, like a withdrawal (X-WD-6), takes the walkover credit.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "x-rs-1-retired-from-start",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "a disqualification from the Start, a retirement only once something is played,",
+  "replace": "a disqualification and a retirement from the Start,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
    }
   ]
  }
