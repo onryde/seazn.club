@@ -6094,6 +6094,7 @@
   "arbiter.notice.overridden": "Este tablero ahora se juega sin vídeo. Consta en el registro de auditoría.",
   "arbiter.notice.notPlayable": "Este tablero ya no se está jugando.",
   "arbiter.notice.notRequired": "Este tablero no exige vídeo.",
+  "arbiter.notice.ownBoard": "Juegas en este tablero, así que otro organizador debe decidir sobre su vídeo.",
   "arbiter.notice.failed": "No se completó. Inténtalo de nuevo.",
   "arbiter.outage.eyebrow": "Solo durante un corte de vídeo",
   "arbiter.outage.title": "El vídeo no está disponible ahora",

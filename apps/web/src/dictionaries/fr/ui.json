@@ -6094,6 +6094,7 @@
   "arbiter.notice.overridden": "Cet échiquier se joue désormais sans vidéo. C'est inscrit au journal d'audit.",
   "arbiter.notice.notPlayable": "Cet échiquier n'est plus en jeu.",
   "arbiter.notice.notRequired": "La vidéo n'est pas exigée sur cet échiquier.",
+  "arbiter.notice.ownBoard": "Vous jouez sur cet échiquier : un autre organisateur doit décider pour sa vidéo.",
   "arbiter.notice.failed": "Cela n'a pas abouti. Réessayez.",
   "arbiter.outage.eyebrow": "Uniquement pendant une panne vidéo",
   "arbiter.outage.title": "La vidéo est indisponible pour le moment",

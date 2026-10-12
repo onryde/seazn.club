@@ -198,6 +198,7 @@ export type DictionaryKey =
   | "arbiter.notice.notPlayable"
   | "arbiter.notice.notRequired"
   | "arbiter.notice.overridden"
+  | "arbiter.notice.ownBoard"
   | "arbiter.notice.resyncFailed"
   | "arbiter.notice.resyncNothing"
   | "arbiter.notice.resynced.one"

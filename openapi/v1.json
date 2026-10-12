@@ -51953,7 +51953,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/video-override": {
       "post": {
-        "summary": "D11: video is required but unavailable — the organiser lets this board play without video. Written once to the audit log with the reason given (first writer wins). Session only, never an API key. 409 FIXTURE_NOT_PLAYABLE for a board no longer being played, VIDEO_NOT_REQUIRED when the camera policy is not `required`",
+        "summary": "D11: video is required but unavailable — the organiser lets this board play without video. Written once to the audit log with the reason given (first writer wins). Session only, never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board (they would be excusing their own camera); 409 FIXTURE_NOT_PLAYABLE for a board no longer being played, VIDEO_NOT_REQUIRED when the camera policy is not `required`",
         "tags": [
           "fixtures"
         ],

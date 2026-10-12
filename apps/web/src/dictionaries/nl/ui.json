@@ -6094,6 +6094,7 @@
   "arbiter.notice.overridden": "Dit bord speelt nu zonder video. Het staat in het auditlogboek.",
   "arbiter.notice.notPlayable": "Dit bord wordt niet meer gespeeld.",
   "arbiter.notice.notRequired": "Video is op dit bord niet verplicht.",
+  "arbiter.notice.ownBoard": "Je speelt op dit bord, dus een andere organisator moet over de video beslissen.",
   "arbiter.notice.failed": "Dat is niet gelukt. Probeer het opnieuw.",
   "arbiter.outage.eyebrow": "Alleen tijdens een video-storing",
   "arbiter.outage.title": "Video is nu niet beschikbaar",
