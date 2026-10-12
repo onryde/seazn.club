@@ -582,6 +582,20 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect((await arbiterRows(board.fixtureId))[0]!.removed_at).toBeInstanceOf(Date);
   });
 
+  it("I2: the sweep ending the watch while this leave is at the vendor: the stamp is the sweep's — removed:false, its time kept", async () => {
+    const { r, board } = await liveRequired();
+    const swept = new Date(Date.now() - 1_000);
+    const { video } = fakeVideo({
+      // Staged inside the vendor call: another remover stamps the row first.
+      removeParticipant: vi.fn(async (a: { meetingId: string; participantId: string }) => {
+        await sql`update fixture_video_participants set removed_at = ${swept} where participant_id = ${a.participantId}`;
+      }),
+    });
+    const out = await joinAsArbiter(r.owner, board.fixtureId, { video });
+    expect(await leaveAsArbiter(r.owner, board.fixtureId, out.participantId, { video })).toEqual({ removed: false });
+    expect((await arbiterRows(board.fixtureId))[0]!.removed_at?.getTime()).toBe(swept.getTime());
+  });
+
   it("I2: a vendor outage on leave is a 503 and the watch stays OPEN — the sweep retries it", async () => {
     const { r, board } = await liveRequired();
     const { video } = fakeVideo({
