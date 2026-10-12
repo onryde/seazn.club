@@ -283,8 +283,9 @@ function carromCredit(cfg: Record<string, unknown>, p: Played | null): Credit {
 function genericCredit(cfg: Record<string, unknown>, p: Played | null): Credit {
   const mode = cfg.resultMode;
   if (mode !== "score" && mode !== "win_loss") throw new CreditRefused("cfg-invalid", `generic: cfg.resultMode is ${JSON.stringify(mode)}`);
-  // GN-WO-1: "win points, 0-0". GN-RT-1: "walkover credit, keeping any recorded score".
-  if (p !== null && mode === "win_loss" && p.win.length > 0) throw new CreditRefused("played-malformed", "generic: a win/loss match records no score");
+  // GN-WO-1: "win points, 0-0". GN-RT-1: "walkover credit, keeping any recorded score" — in either result mode: the
+  // generic pad keeps its running tally (generic.score) under win/loss as under score, and the row names no mode
+  // (R112 fix round 2, m3: this family used to refuse a win/loss tally as "records no score", which was false).
   const w = p === null ? 0 : sum(p.win);
   const o = p === null ? 0 : sum(p.off);
   return { winner: { for: w, against: o, diff: w - o }, loser: { for: o, against: w, diff: o - w }, excluded: [] };
@@ -370,7 +371,7 @@ export function enumerateCreditCases(): CreditCase[] {
     const [firstCfg, ...otherCfgs] = cfgs;
     const [firstPlay, ...otherPlays] = played;
     if (firstCfg === undefined || firstPlay === undefined) throw new CreditRefused("cfg-invalid", `${sport}: the data holds no cfg or no played scenario`);
-    // Ruling 113: a scenario whose sheet holds no play (chess's game is no unit; a win/loss match records none) has no
+    // Ruling 113: a scenario whose sheet holds no play (chess's game is no unit; generic's tally left at nothing) has no
     // retirement — nobody retires from a match never played — so it enumerates the disqualification alone.
     const holdsPlay = (s: PlayedScenario): boolean => s.home.length > 0 || s.away.length > 0;
     const inMatch = (s: PlayedScenario): CreditCase[] => [...(holdsPlay(s) ? [withPlay(s, "retired")] : []), withPlay(s, "disqualified")];

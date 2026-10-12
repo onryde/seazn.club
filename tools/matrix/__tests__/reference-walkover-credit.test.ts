@@ -402,10 +402,11 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expectAgreement(s, "the empty scoresheet");
   });
 
-  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 208 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
-    // the family's own count (walkover-credit.test.ts): 55 base + 155 variants, less the two retirements ruling 113
-    // refuses (the two played scenarios whose sheet holds no play: chess's, generic's win/loss)
-    expect(CASES.length).toBe(208);
+  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 211 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
+    // the family's own count (walkover-credit.test.ts): 55 base + 158 variants, less the two retirements ruling 113
+    // refuses (the two played scenarios whose sheet holds no play: chess's, generic's untouched win/loss tally). R112
+    // fix round 2 (m3): generic's win/loss tally scenario (GN-RT-1 keeps it) adds three cases with a scoresheet.
+    expect(CASES.length).toBe(211);
     const { items, unbuildable } = itemsOrUnbuildable(CASES);
     expect(unbuildable, "a scoresheet the cross-check could not rebuild as events is a failing item").toEqual([]);
     const s = sweep(items);
@@ -413,7 +414,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     // forfeit has no scoresheet (both seats): counted from the enumeration.
     const owed = CASES.reduce((n, c) => n + (c.played === undefined && c.reason !== "double_walkover" ? 2 : 1), 0);
     expect(s.compared).toBe(owed);
-    expect(owed).toBe(296); // 88 sheetless single forfeits × 2 + 44 double walkovers + 76 with a scoresheet
+    expect(owed).toBe(299); // 88 sheetless single forfeits × 2 + 44 double walkovers + 79 with a scoresheet
     expect(s.sports.size).toBe(11);
     // Every reason is reached where X-RS-1 records it: a walkover and a double walkover before the start, retired and
     // disqualified after it, withdrew either side of it (PF-7).
@@ -505,7 +506,7 @@ describe("the cross-check's own reading of the engine is not vacuous", () => {
       if (scored) { expect(play.length, `${c.label}`).toBeGreaterThan(0); withPlay++; } else { expect(play, `${c.label}`).toEqual([]); bare++; }
     }
     expect(withPlay).toBeGreaterThan(0);
-    expect(withPlay + bare).toBe(76);
+    expect(withPlay + bare).toBe(79);
   });
 
   it("negative: a reference answer moved off the real engine's on ONE field reds on exactly that field — a credit, a loser's credit, an exclusion, the points, players' stats; and a stream at the wrong seat reds on the outcome", () => {

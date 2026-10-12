@@ -96,11 +96,13 @@ describe("walkover-credit: the empty case first", () => {
     expect(refusalOf({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] } })).toBe("offender-unknown");
   });
 
-  it("the enumeration is never empty: 11 × 5 = 55 base cases first, less chess's retirement (ruling 113), then every other cfg and played scenario — 208 in all", () => {
+  it("the enumeration is never empty: 11 × 5 = 55 base cases first, less chess's retirement (ruling 113), then every other cfg and played scenario — 211 in all", () => {
     const all = enumerateCreditCases();
-    // 55 base + 155 variants, counted by hand from walkover-credit-cfgs.ts (see the report), less the two retirements
-    // ruling 113 refuses — the two played scenarios whose sheet is empty: chess's (its base) and generic's win/loss.
-    expect(all.length).toBe(208);
+    // 55 base + 158 variants, counted by hand from walkover-credit-cfgs.ts (see the report), less the two retirements
+    // ruling 113 refuses — the two played scenarios whose sheet is empty: chess's (its base) and generic's untouched
+    // win/loss tally. (R112 fix round 2, m3: generic's win/loss tally scenario adds its retirement, disqualification
+    // and withdrawal — 158 variants, was 155.)
+    expect(all.length).toBe(211);
     const base = all.slice(0, 54);
     expect(base.length).toBe(54);
     // the base holds each sport × each reason exactly once — but chess's retirement: its only played scenario holds
@@ -172,7 +174,7 @@ describe("walkover-credit: the Appendix A examples (brief Step 1)", () => {
       expect(walkoverCredit(c).statsMatch, c.label).toBe(want);
       checked++;
     }
-    expect(checked).toBe(208);
+    expect(checked).toBe(211);
   });
 });
 
@@ -299,12 +301,19 @@ describe("walkover-credit: tennis, cricket, chess, carrom, generic", () => {
     w = sets(2, 1, 72, 49);
     expect(ret("carrom", "club-29", [29, 14, 0], [20, 29, 0])).toEqual(single(w, mirrorSets(w), true));
   });
-  it("GN-WO-1: win points, 0-0; GN-RT-1: the walkover credit, keeping any recorded score", () => {
+  it("GN-WO-1: win points, 0-0; GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode", () => {
     const z = { for: 0, against: 0, diff: 0 };
     for (const name of ["win_loss", "score"]) expect(wo("generic", name), name).toEqual(single(z, z, false));
     expect(ret("generic", "score", [3], [7])).toEqual(single({ for: 3, against: 7, diff: -4 }, { for: 7, against: 3, diff: 4 }, true));
-    // A win/loss match records no score: nothing is played on its sheet, so no retirement (ruling 113) — its in-match
-    // disqualification is the walkover credit, a match played (X-PS-2).
+    // R112 fix round 2 (m3): a win/loss match keeps a tally too. The generic pad's generic.score runs in both result
+    // modes, the engine admits start → generic.score → retired under win/loss, and GN-RT-1 names no mode — so the
+    // recorded tally is kept, by hand: the side at fault (away) trails 1-2, so the winner is 2-1 up.
+    expect(ret("generic", "win_loss", [2], [1])).toEqual(single({ for: 2, against: 1, diff: 1 }, { for: 1, against: 2, diff: -1 }, true));
+    expect(ret("generic", "win_loss", [2], [1], "away", "disqualified")).toEqual(single({ for: 2, against: 1, diff: 1 }, { for: 1, against: 2, diff: -1 }, true));
+    // With nothing on the tally nothing is played, so no retirement (ruling 113) — its in-match disqualification is the
+    // walkover credit, a match played (X-PS-2). Deliberate, and exact for generic alone: it declares two events,
+    // generic.result (which decides) and generic.score (which moves the tally), so an untouched tally after a Start IS
+    // nothing played — ruling 114's non-scoring play (a card, a sanction, a rain delay) cannot occur in generic.
     expect(refusalOf({ sport: "generic", cfg: cfgOf("generic", "win_loss"), reason: "retired", played: { home: [], away: [] }, by: "away" })).toBe("nothing-played");
     expect(ret("generic", "win_loss", [], [], "away", "disqualified")).toEqual(single(z, z, true));
   });
@@ -319,9 +328,9 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
       expect(walkoverCredit({ ...c, reason: "disqualified" }), c.label).toEqual(walkoverCredit(c));
       checked++;
     }
-    // one retirement per played scenario: 4+2+1+2+2+3+3+2+2+2+3 = 26, less the two whose sheet holds no play (ruling
-    // 113: chess's, generic's win/loss) — so chess retires nowhere
-    expect(checked).toBe(24);
+    // one retirement per played scenario: 4+2+1+2+3+3+3+2+2+2+3 = 27, less the two whose sheet holds no play (ruling
+    // 113: chess's, generic's untouched win/loss tally) — so chess retires nowhere
+    expect(checked).toBe(25);
     expect(new Set(played.map((c) => c.sport)).size).toBe(10);
   });
 
@@ -331,7 +340,7 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
       expect(walkoverCredit({ ...c, reason: "withdrew" }), c.label).toEqual({ ...walkoverCredit(c), statsMatch: false });
       after++;
     }
-    expect(after).toBe(24);
+    expect(after).toBe(25);
     let before = 0;
     for (const sport of CREDIT_SPORTS) {
       for (const { name } of WALKOVER_CREDIT_DATA[sport]?.cfgs ?? []) {
@@ -391,7 +400,7 @@ describe("walkover-credit transitions (TEST-STRATEGY rule 1: a second call, the 
       expect(JSON.stringify(c), c.label).toBe(before);
       checked++;
     }
-    expect(checked).toBe(208);
+    expect(checked).toBe(211);
   });
 
   it("the side at fault decides who is credited: home at fault mirrors away at fault (every played scenario, scoresheet mirrored)", () => {
@@ -403,14 +412,14 @@ describe("walkover-credit transitions (TEST-STRATEGY rule 1: a second call, the 
       expect(walkoverCredit(mirrored), c.label).toEqual(walkoverCredit(c));
       checked++;
     }
-    expect(checked).toBe(26 * 3 - 2); // retired, disqualified and withdrew per played scenario — no retirement on the two empty sheets (ruling 113)
+    expect(checked).toBe(27 * 3 - 2); // retired, disqualified and withdrew per played scenario — no retirement on the two empty sheets (ruling 113)
   });
 
   it("the enumeration is deterministic (a second call, the same list) and every case is answered", () => {
     expect(enumerateCreditCases()).toEqual(enumerateCreditCases());
     let answered = 0;
     for (const c of enumerateCreditCases()) { expect(refusalOf(c), c.label).toBe("answered"); answered++; }
-    expect(answered).toBe(208);
+    expect(answered).toBe(211);
   });
 });
 
@@ -486,7 +495,7 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
     expect(new Set(bad.map(([s]) => s)).size).toBe(10); // every sport but chess reads a cfg value
   });
 
-  it("played-malformed: unequal lengths, a negative or fractional score, a set past its end, more sets than the best-of, a score in a win/loss generic match", () => {
+  it("played-malformed: unequal lengths, a negative or fractional score, a set past its end, more sets than the best-of, a game with two winners", () => {
     const tt = cfgOf("tabletennis", "bo5");
     const bad: CreditCase[] = [
       { sport: "football", cfg: fb, reason: "retired", played: { home: [-1], away: [0] }, by: "away" },
@@ -495,11 +504,12 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
       { sport: "tabletennis", cfg: tt, reason: "retired", played: { home: [11, 11, 11, 11, 11, 1], away: [0, 0, 0, 0, 0, 0] }, by: "away" },
       { sport: "badminton", cfg: cfgOf("badminton", "bwf"), reason: "retired", played: { home: [31], away: [29] }, by: "away" }, // past the cap
       { sport: "carrom", cfg: cfgOf("carrom", "icf"), reason: "retired", played: { home: [25], away: [25] }, by: "away" },
-      { sport: "generic", cfg: cfgOf("generic", "win_loss"), reason: "retired", played: { home: [1], away: [0] }, by: "away" },
     ];
     let n = 0;
     for (const c of bad) { expect(refusalOf(c), JSON.stringify(c.played)).toBe("played-malformed"); n++; }
-    expect(n).toBe(7);
+    expect(n).toBe(6);
+    // Its positive pair (m3): a win/loss generic tally is a scoresheet like any other, never malformed.
+    expect(refusalOf({ sport: "generic", cfg: cfgOf("generic", "win_loss"), reason: "retired", played: { home: [1], away: [0] }, by: "away" })).toBe("answered");
   });
 
   it("unit-unfinished and already-decided: only the last unit may be unfinished; a scoresheet that already decides the match is refused (sets and carrom), its positive pair answered", () => {

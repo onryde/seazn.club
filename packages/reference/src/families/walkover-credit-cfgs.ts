@@ -102,7 +102,8 @@ export const WALKOVER_CREDIT_DATA: Readonly<Record<string, SportCreditData>> = {
     ],
     played: [
       { name: "the side at fault leads 7-3 (GN-RT-1: the recorded score is kept)", cfg: "score", home: [3], away: [7] },
-      { name: "a win/loss match records no score (GN-RT-1: 0-0)", cfg: "win_loss", home: [], away: [] },
+      { name: "the side at fault trails 1-2 on a win/loss match's tally (GN-RT-1: the recorded tally is kept, in either result mode)", cfg: "win_loss", home: [2], away: [1] },
+      { name: "a win/loss match whose tally holds nothing (GN-RT-1: 0-0; ruling 113: nothing played)", cfg: "win_loss", home: [], away: [] },
     ],
   },
   volleyball: {
