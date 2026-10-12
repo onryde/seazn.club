@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
+    "@cloudflare/realtimekit": "2.0.2",
     "@formatjs/intl-localematcher": "^0.8.12",
     "@scalar/api-reference-react": "^0.9.54",
     "@seazn/engine": "workspace:@onryde/seazn-engine@*",
