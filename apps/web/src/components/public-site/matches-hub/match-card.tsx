@@ -311,8 +311,14 @@ export function MatchCard({
           // W2b Task 13 (UI-2 option A): a credited result — a forfeit, a double walkover, an abandon with a result —
           // shows its tag, the sentence its tooltip and accessible name. An abandon keeps its result sentence beside
           // the tag ("Eagles won by 12 runs (DLS)" · "Aband. · DLS"); a forfeit's tag replaces the bare "Forfeited".
-          <span data-testid="mh-match-forfeit" className="flex shrink-0 items-baseline gap-1.5 font-medium text-ink">
-            {m.resultLine ? <ScoreSentence text={m.resultLine} /> : null}
+          // Design audit 3.8: the slot and its sentence shrink and WRAP inside the card (a long result at 320 painted
+          // past the card's edge); only the tag keeps `shrink-0`, and a score inside the sentence stays `nowrap`.
+          <span data-testid="mh-match-forfeit" className="flex min-w-0 items-baseline gap-1.5 font-medium text-ink">
+            {m.resultLine ? (
+              <span className="min-w-0 break-words">
+                <ScoreSentence text={m.resultLine} />
+              </span>
+            ) : null}
             <ForfeitTagChip
               id={`mh-forfeit-${m.fixtureId}`}
               tag={m.resultLine && ABANDON_METHOD_TAG_KINDS.has(m.forfeit.kind) ? t(dict, "forfeit.tag.abandoned") : m.forfeit.tag}
@@ -321,7 +327,7 @@ export function MatchCard({
             />
           </span>
         ) : m.resultLine ? (
-          <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
+          <span data-testid="mh-match-result" className="min-w-0 break-words font-medium text-ink">
             <ScoreSentence text={m.resultLine} />
           </span>
         ) : m.header.statusLine ? (

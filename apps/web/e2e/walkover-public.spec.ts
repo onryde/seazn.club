@@ -992,3 +992,57 @@ test.describe("W2b loop H F4 — the hub's results card does not call a final ab
     expect(screens).toBe(WIDTHS.length);
   });
 });
+
+// Design audit 3.8 — the hub's results card at 320 is 264px of box. An abandon awarded to the side leading (W2b D8,
+// `abandonPolicy: "award"`) reads "{winner} won" beside its "Aband." tag; with a realistic 43-character name that
+// sentence is wider than the card, and the slot was `shrink-0`, so it painted past the card's edge. Measured as geometry:
+// the sentence wraps inside the card, the tag sits wholly inside it on one line, and the page never scrolls sideways.
+test.describe("design audit 3.8 — a long result wraps inside the hub card", () => {
+  test("an awarded abandon's '{43-character name} won' beside Aband. stays inside its card at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(3 * 60_000);
+    const org = await activeOrg(page);
+    expect(LONG_NAMES[0]!.length, "premise: a realistic 43-character name").toBe(43);
+    const lg = await longNameDivision(request, "league", LONG_NAMES.slice(0, 4), { abandonPolicy: "award" });
+    const f = lg.seated[0]!;
+    await post(request, f.id, "core.start");
+    await post(request, f.id, "football.goal", { by: f.home_entrant_id });
+    await post(request, f.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, f.id)).outcome, "awarded to the side leading").toMatchObject({ kind: "win", winner: f.home_entrant_id });
+    const winner = lg.nameOf.get(f.home_entrant_id!)!;
+    const tag = say("forfeit.tag.abandoned");
+    let measured = 0;
+    let wrapped = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await hubResults(page, `/shared/${org.slug}/${lg.compSlug}?tab=matches`);
+      const card = page.getByTestId(`mh-match-${f.id}`);
+      await expect(card).toBeVisible({ timeout: STEP_MS });
+      const slot = card.getByTestId("mh-match-forfeit");
+      await expect(slot, `${w}: the result names the winner`).toContainText(winner);
+      await expect(card.getByTestId("mh-match-forfeit-tag"), `${w}: the abandon tag`).toHaveText(tag);
+      const g = await card.evaluate((el) => {
+        const c = el.getBoundingClientRect();
+        const s = el.querySelector('[data-testid="mh-match-forfeit"]')!.getBoundingClientRect();
+        const chip = el.querySelector('[data-testid="mh-match-forfeit-tag"]')!;
+        const t = chip.getBoundingClientRect();
+        const lines = new Set([...chip.getClientRects()].map((r) => Math.round(r.top))).size;
+        const sentence = el.querySelector('[data-testid="mh-match-forfeit"] > span:first-child')!;
+        const sentenceLines = new Set(
+          [...(() => { const r = document.createRange(); r.selectNodeContents(sentence); return r.getClientRects(); })()].filter((x) => x.width > 0).map((x) => Math.round(x.top)),
+        ).size;
+        return { card: [Math.round(c.left), Math.round(c.right)], slot: [Math.round(s.left), Math.round(s.right)], tag: [Math.round(t.left), Math.round(t.right)], tagLines: lines, sentenceLines };
+      });
+      console.log(`audit 3.8 ${w}: ${JSON.stringify(g)}`);
+      expect(g.slot[1], `${w}: the result slot ends inside the card`).toBeLessThanOrEqual(g.card[1]);
+      expect(g.tag[1], `${w}: the tag ends inside the card`).toBeLessThanOrEqual(g.card[1]);
+      expect(g.tagLines, `${w}: the tag on one line`).toBe(1);
+      if (g.sentenceLines > 1) wrapped++;
+      await expectNoHorizontalScroll(page);
+      await crop(card, `audit-3-8-hub-card-long-result-${w}`);
+      measured++;
+    }
+    expect(measured).toBe(WIDTHS.length);
+    // The precondition that makes the 320 pass mean something: the sentence really was too wide, and wrapped there.
+    expect(wrapped, "the long result wrapped at the narrow width at least").toBeGreaterThanOrEqual(1);
+  });
+});

@@ -184,6 +184,29 @@ describe("MatchCard — the results list (the consumer)", () => {
   });
 });
 
+// Design audit 3.8: in the 264px card at 320 a long result ("… won by an innings and 12 runs") beside the tag could
+// not wrap — the slot was `shrink-0` — and painted past the card's edge. The card's own wrap discipline: the sentence
+// is `min-w-0` and wraps; only the tag (and a score inside the sentence) keeps `shrink-0`/`nowrap`. The plain result
+// line (no tag) had the same `shrink-0` and takes the same rule. Classes read off the rendered markup; the geometry
+// at 320 is walkover-public's (a 43-character name's "… won" beside "Aband.").
+describe("MatchCard — a long result wraps inside the card (audit 3.8)", () => {
+  const classOf = (h: string, testId: string) => new Set((new RegExp(`data-testid="${testId}" class="([^"]*)"`).exec(h)?.[1] ?? "").split(/\s+/u));
+  it("the forfeit slot and the plain result line shrink and wrap; the tag alone stays whole", () => {
+    const line = "Riverside Athletic Football Club Under-21 A won by an innings and 12 runs";
+    const tagged = card(hubMatch({ resultLine: line, forfeit: { kind: "abandoned", tag: "Aband.", sentence: "S" } }));
+    const slot = classOf(tagged, "mh-match-forfeit");
+    expect(slot.has("shrink-0"), "the forfeit slot may shrink").toBe(false);
+    expect(slot.has("min-w-0"), "the forfeit slot's min-w-0").toBe(true);
+    const sentence = new RegExp(`<span class="([^"]*)">${line}</span>`).exec(tagged)?.[1];
+    expect(sentence, "the sentence has its own wrapping box").toBeDefined();
+    for (const token of ["min-w-0", "break-words"]) expect(new Set(sentence!.split(/\s+/u)).has(token), `the sentence's ${token}`).toBe(true);
+    expect(classOf(tagged, "mh-match-forfeit-tag").has("shrink-0"), "the tag stays whole").toBe(true);
+    const plain = classOf(card(hubMatch({ resultLine: line, header: header({ statusLine: null }) })), "mh-match-result");
+    expect(plain.has("shrink-0"), "the plain result line may shrink").toBe(false);
+    for (const token of ["min-w-0", "break-words"]) expect(plain.has(token), `the plain result's ${token}`).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------- the bracket tile
 
 describe("Bracket — the tile at every width has ONE footer row (the consumer)", () => {
