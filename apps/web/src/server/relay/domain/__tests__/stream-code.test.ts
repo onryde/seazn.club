@@ -217,6 +217,17 @@ describe("recordTailAnchor (§4 C1(c): the LATER of the code's own end and the e
     expect(recordTailAnchor({ endCause: "expired", endedAt: at(0), finishedAt, graceMinutes, sessions })).toEqual(at(-2));
   });
 
+  it("review fix 4: an expiry's session started AFTER finished_at + the grace but BEFORE the lazy ended_at write does not move the tail — the code had already stopped serving when it began", () => {
+    const finishedAt = at(-80);
+    const codeEnd = new Date(finishedAt.getTime() + graceMinutes * 60_000);
+    const late = { createdAt: at(-40), endedAt: at(-30) };   // after the computed end, before the lazy write at(0)
+    expect(late.createdAt.getTime()).toBeGreaterThan(codeEnd.getTime());   // premise: the session began after the code's end
+    expect(recordTailAnchor({ endCause: "expired", endedAt: at(0), finishedAt, graceMinutes, sessions: [late] })).toEqual(codeEnd);
+    // Its positive pair: the same session started one moment BEFORE the computed end does move it.
+    const early = { createdAt: new Date(codeEnd.getTime() - 1), endedAt: at(-30) };
+    expect(recordTailAnchor({ endCause: "expired", endedAt: at(0), finishedAt, graceMinutes, sessions: [early] })).toEqual(at(-30));
+  });
+
   it("an expiry whose result was later reverted (finished_at null again, C5) falls back to its ended_at", () => {
     expect(recordTailAnchor({ endCause: "expired", endedAt: at(0), finishedAt: null, graceMinutes, sessions: [] })).toEqual(at(0));
   });

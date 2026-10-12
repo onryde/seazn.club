@@ -240,8 +240,10 @@ export async function resolveStreamCode(
   if (call === "record") {
     let anchor: Date | null = null;
     if (status === "ended" && !sessionCreatedBeforeEnd) {
+      // Every session of the fixture: recordTailAnchor alone decides which were open when the code ended (review fix 4 —
+      // for an expiry that is finished_at + the grace, not the lazy ended_at a SQL filter here would have used).
       const sessions = await sql<{ created_at: Date; ended_at: Date | null }[]>`
-        select created_at, ended_at from fixture_stream_sessions where fixture_id = ${row.fixture_id} and created_at < ${endedAt}`;
+        select created_at, ended_at from fixture_stream_sessions where fixture_id = ${row.fixture_id}`;
       anchor = recordTailAnchor({
         endCause, endedAt, finishedAt: row.finished_at, graceMinutes: graceMinutes(),
         sessions: sessions.map((s) => ({ createdAt: s.created_at, endedAt: s.ended_at })),

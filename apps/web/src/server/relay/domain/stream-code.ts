@@ -70,8 +70,10 @@ export function codeServes(i: ServesInput): boolean {
  *  - the code's own end: `ended_at` for a reissue; for an expiry, `finished_at` plus the grace — NOT the lazily written
  *    `ended_at`, which can land long after the code stopped serving (a reverted result, C5, leaves no finished_at, so
  *    the expiry falls back to its ended_at);
- *  - the end of the last session of the fixture that was open when the code ended (created before `ended_at`), which
- *    C1(a) or C1(b) served. A session still open has no end: C1(b) serves it, not the tail.
+ *  - the end of the last session of the fixture that was open when the code ended — created before the code's OWN end
+ *    above (review fix 4: for an expiry that is finished_at + the grace, never the lazy `ended_at`, so a session begun
+ *    after the code stopped serving cannot stretch its tail) — which C1(a) or C1(b) served. A session still open has no
+ *    end: C1(b) serves it, not the tail.
  * null for a code that has not ended. `graceMinutes` is the use-case's `tunable(…)`, passed in.
  */
 export function recordTailAnchor(i: {
@@ -79,10 +81,9 @@ export function recordTailAnchor(i: {
   sessions: readonly { createdAt: Date; endedAt: Date | null }[];
 }): Date | null {
   if (i.endedAt === null) return null;
-  const endedAt = i.endedAt.getTime();
-  const codeEnd = i.endCause === "expired" && i.finishedAt !== null ? i.finishedAt.getTime() + i.graceMinutes * 60_000 : endedAt;
+  const codeEnd = i.endCause === "expired" && i.finishedAt !== null ? i.finishedAt.getTime() + i.graceMinutes * 60_000 : i.endedAt.getTime();
   const sessionEnds = i.sessions
-    .filter((s) => s.createdAt.getTime() < endedAt && s.endedAt !== null)
+    .filter((s) => s.createdAt.getTime() < codeEnd && s.endedAt !== null)
     .map((s) => s.endedAt!.getTime());
   return new Date(Math.max(codeEnd, ...sessionEnds));
 }
