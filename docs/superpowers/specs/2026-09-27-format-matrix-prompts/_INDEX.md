@@ -1310,6 +1310,20 @@ Elsewhere the text is the controller's record.
        Its remaining candidates for a later wave are: requested zero-point byes, a per-event default time, the
        playoff game sequences (two-game rounds, the sudden-death bid, the coin toss), a public time-control display,
        and fee and refund tiers.
+119. **The chess playoff series gets its own wave, after W2c and after the chess in-page programme** (2026-10-12,
+     owner "A, along side after @chess program?", given after my recommendation A).
+     - **What it covers:**
+       - ECF 2026 Section C: two-game playoff rounds, the faster rounds after that, the sudden-death game with its
+         time bid, and the coin toss.
+       - The other ECF candidates from ruling 118: requested zero-point byes and a per-event default time.
+     - **Shape**, as recommended by the chess session and not yet ruled: one ordinary fixture per game, grouped under
+       a series with an aggregate. The series generates each round's games with the colours reversed, then ends or
+       generates the next round. The sudden-death bid is entered in the organiser console, because Lichess may not
+       support unequal clocks (unverified).
+     - **Owner of the work:** a new wave with its own spec, which goes to the owner before anything is built. W2c
+       (colours) and the chess in-page programme (feat/chess-lichess-external-play) finish first. The chess
+       programme's only part is a time control per fixture or per round for online games.
+     - **W2b:** builds none of it.
 
 ## Recommendations (mine — not rulings)
 
