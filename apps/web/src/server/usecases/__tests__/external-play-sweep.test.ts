@@ -3162,6 +3162,36 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(cameraFailures(r)).toEqual([]);
       expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 0]);
     });
+
+    // T15 fix round 1, I1: the arbiter panel shows the connection time from
+    // the guard's own stamps, over the SAME window job 5 judged — the
+    // reviewer's probe case, where the two used to differ: a held game
+    // settled by hand (no read saw its end: the clock bounds it) and a stamp
+    // never closed (it runs to the window's end).
+    it("I1: the panel and job 5 agree — a held game settled by hand, an OPEN stamp: the same seconds, the same stamps", async () => {
+      const m = await playedMatch({ ending: "settled_while_held" });
+      // The rulebook's bound (see the clock-bound test above): Black to move
+      // after T+8, holding the division's whole base.
+      const clockEnd = m.b.at(8).getTime() + SEED_CLOCK.base * 1000;
+      expect(m.endedAt - clockEnd, "premise: the room outlived the clock's bound by more than a minute").toBeGreaterThan(60_000);
+      const leave = clockEnd - 120_000;
+      expect(leave, "premise: the stamp opens inside the match").toBeGreaterThan(m.startedAt);
+      const x = session(m, m.startedAt - 120_000, clockEnd + 30_000);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: clockEnd + 30_000 });
+      expect((await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) })).outcome, "premise: opened, never closed").toBe("opened");
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([1, 0, 1]);
+      // Expected from the scenario: the open stamp runs from the leave to the
+      // clock's bound — never to the room's later end.
+      const seconds = Math.round((clockEnd - leave) / 1000);
+      const [written] = await flagsOf(m.b.fixtureId);
+      expect(written!.note, "job 5's own number").toMatch(new RegExp(`^${seconds} s stamped`));
+      const panel = await loadArbiterRound(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId);
+      const shown = panel!.boards.find((x) => x.fixtureId === m.b.fixtureId)!.flags;
+      expect(shown, "the panel's number").toEqual([expect.objectContaining({ kind: "camera_connection_problems", seconds, stamps: 1 })]);
+    });
   });
 
   it("a report NOT READY yet: nothing stored; the next pass, once final, settles it (the retry)", async () => {
@@ -3450,8 +3480,31 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(flagged).not.toContain(second);
   });
 
-  it("an organiser's video override (D11): nothing read, nothing stored", async () => {
+  // T15 fix round 1, M1 (an owner call): an override ends the video that
+  // was expected — it never erases the evidence from BEFORE the press. Job 5
+  // judges [first move, the press]. organiserOverrideVideo (the real writer,
+  // through `override: true`) stamps the DB's now(), which in this fixture's
+  // compressed timeline lies after the game; each test moves that stamp to
+  // the minute the organiser pressed.
+  it("M1: an organiser's video override (D11) is judged UP TO the press — off before it is camera_lost, off after it is not", async () => {
     const m = await playedMatch({ override: true });
+    const press = m.startedAt + 300_000;
+    expect(press + 200_000, "premise: the second gap is inside the game, after the press").toBeLessThan(m.overAt);
+    await sql`update fixture_external_play set video_override_at = ${new Date(press)} where fixture_id = ${m.b.fixtureId}`;
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 100_000, m.startedAt + 200_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[press + 100_000, press + 200_000]] });
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect([r.cameraSettled, r.cameraFlags]).toEqual([1, 1]);
+    const flags = await flagsOf(m.b.fixtureId);
+    expect(flags.map((f) => [f.kind, f.person_id]), "home's gap was before the press; away's after it").toEqual([["camera_lost", m.b.home.personId]]);
+    expect(flags[0]!.note).toContain(`of ${Math.round((press - m.startedAt) / 1000)} s in the match`);
+  });
+
+  it("M1: the press BEFORE the first move — no video was expected at any point: settled, nothing read, nothing stored", async () => {
+    const m = await playedMatch({ override: true });
+    await sql`update fixture_external_play set video_override_at = ${new Date(m.startedAt - 60_000)} where fixture_id = ${m.b.fixtureId}`;
     const x = session(m, m.startedAt - 120_000, m.endedAt);
     connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
     connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
