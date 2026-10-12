@@ -19,19 +19,19 @@ rule was agreed between the web and capture sessions. It is not an owner ruling.
 |---|---|---|
 | R3 | Only the operator's tap sends, with _Send record to Seazn_. Nothing uploads by itself. | **Owner ruling**, 2026-10-11 |
 | R4 | The server accepts a record from any currently valid token of the code, including a replaced phone's. The app keeps the token for 24 h after an unpair, for uploads only. | **Owner ruling**, 2026-10-11 |
-| RD | The app shows only the ref ("Sent — ref R-7K2Q") and says nothing about dropped lines. | **Owner ruling**, 2026-10-12 |
+| RD | The app shows only the ref ("Sent — ref R-7K2Q") and says nothing about dropped lines. The server still returns `dropped`, and the app ignores it. | **Owner ruling**, 2026-10-12 |
 | A1, A2 | Cross-code attribution (§6) | Agreed rule (web and capture), not an owner ruling |
 | P1 | Path `POST /api/v1/capture/codes/{code}/records` | **Proposed** |
 | P2 | 10 records an hour per code, in a bucket of its own (§8) | **Proposed** (capture's number) |
 | P3 | 413 answers a new word, `too_large` | **Proposed**; see Q2 |
 | P4 | 422 `invalid` for a disallowed key or a secret-shaped value | **Proposed**; it is the house word every capture route uses |
-| P5 | Storage shape (§9), including that the server returns `dropped` and records it with the record | **Proposed** |
+| P5 | Storage shape (§9), including recording `dropped_lines` with the record | **Proposed** |
 | P6 | 30-day retention | **Proposed** |
 | P7 | Admin view placement (§10) | **Proposed**; see Q5 |
 | P8 | Secret-shaped rules S1–S5 (§5), each skipping the scrub's mask | **Proposed** |
 | P9 | The ref: `R-` and 4 upper-case Crockford characters, at most 8 | **Proposed** |
 | P10 | Empty cases: 0 lines is 422; a record whose every line was dropped is 201 with `kept: 0`, stored as counts with no lines | **Proposed** |
-| P11 | Validity is `codeServes` with a new call, `record` (§4) | **Proposed**; see Q1 |
+| P11 | Validity is `codeServes` with a new call, `record` (§4). Trade-off: with no phone condition, a revoked tok (perhaps from a leaked QR) can write records while the old session is open, bounded by 10 an hour, 1 MB each and staff-only reading | **Proposed**; see Q1 |
 
 ## 0.1 Premises checked against both trees (the dispatch is a hypothesis)
 
@@ -99,6 +99,16 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
     code ended. It drops C1(b)'s phone condition, because R4 lets a phone that no longer holds the slot send, and the
     route reads no phone id. This is what R4's "any currently valid token" means on this server. The old code's tok
     still serves the open session after Revoke & reissue, so a replaced phone holding it may send.
+  - **The trade-off, for the owner to rule on knowingly (re-review fix 4).** Dropping the phone condition means a
+    REVOKED tok can write records for as long as the old session stays open. That includes a tok from a leaked QR,
+    which may be the very reason the organiser revoked the code.
+    - **What bounds it:** 10 records an hour, at most 1 MB each, and only staff ever read a record (P7). A record
+      cannot start, stop, claim or beat, and nothing it holds reaches the org or the public. Its lines still pass the
+      allow-list and S1–S5, and A1/A2 keep only lines that belong to the code.
+    - **What it costs:** staff may read junk lines from whoever holds the leaked QR, attributed to that session.
+    - **The alternative:** keep C1(b)'s phone condition for `record`. The route then reads the phone id, and only the
+      phone still streaming the open session may send under an ended code. A replaced phone could then send only
+      while its code is ACTIVE or FINISHING, which is R4's same-code takeover case, but not after Revoke & reissue.
   - **Anything else is `401 code_ended`.** An ENDED code with no such open session refuses a record. Q1 asks whether
     to go further, to 24 h after the end, as the app keeps its credential.
 
@@ -141,22 +151,34 @@ The rate limit is the exception. `capturePhoneRoute` spends `CAPTURE_CODE_LIMIT`
   - **S2–S5 are the contract's own `$defs.secretS2`–`secretS5`.** A string that validates against
     `$defs.secretShaped` is one of them. The server runs exactly these patterns, and capture can run them too:
     - **S2:** an RTMP(S) URL that carries a stream key, meaning two or more path segments after the host, the last of
-      which is not exactly `***`. Cloudflare's bare `rtmps://live.cloudflare.com:443/live/` carries no key.
-    - **S3:** a `streamid=` or `passphrase=` pair whose value is not exactly `***`.
+      which is not the mask. Cloudflare's bare `rtmps://live.cloudflare.com:443/live/` carries no key.
+    - **S3:** SRT's credentials, in either of two forms. One is a `streamid=` or `passphrase=` pair whose value is not
+      the mask. The other is the word `streamid` or `passphrase`, then whitespace, then at least 16 token characters.
+      The second form is capture's vector 24 (`streamid a1b2…90 refused`), which has no `=` (re-review fix 2).
     - **S4:** a URL with userinfo whose password, or whole userinfo, is not exactly `***`.
     - **S5:** the word `Bearer`, then at least 16 token characters. `*` is no token character, so `Bearer ***` never
-      matches. The length keeps prose such as "the bearer of" clear.
-  - **Every rule skips the scrub's mask (review fix 1).** A credential the phone masked in place is no secret. Without
-    the skip, capture's correct output would be refused. One bad line refuses the whole body, and each 422 spends the
-    10-an-hour budget, so such a record could never be sent.
-  - **The near misses are pinned.** These four are fixtures the server must ADMIT, and the contract test proves each
+      matches. The length keeps prose such as "the bearer of" clear, and S3's second form uses the same length.
+  - **Every rule skips the scrub's mask (review fix 1, re-review fix 1).** A credential the phone masked in place is
+    no secret.
+    - **"The mask" means `***` with no letter or digit after it** (`\*\*\*(?![A-Za-z0-9])`). Prose puts a full stop,
+      a comma, a quote or a bracket after a URL or a pair, and the scrub masks in place, so the punctuation stays:
+      `…/live/***.` and `(streamid=***)` are capture's correct output.
+    - A partial mask, `***` with a letter or digit after it (`…/live/***K3Y`), still trips its rule. The test pins
+      that too.
+    - Without the skip, capture's correct output would be refused. One bad line refuses the whole body, and each 422
+      spends the 10-an-hour budget, so such a record could never be sent.
+  - **The near misses are pinned.** These nine are fixtures the server must ADMIT, and the contract test proves each
     trips no rule while masked and exactly its rule once unmasked:
-    - `line-valid-scrubbed-srt-passphrase` (capture's case 22, verbatim);
-    - `line-valid-scrubbed-rtmps-key`;
-    - `line-valid-scrubbed-userinfo`;
-    - `line-valid-scrubbed-bearer`.
+    - `line-valid-scrubbed-srt-passphrase` (capture's case 22, verbatim), near S3;
+    - `line-valid-scrubbed-rtmps-key`, near S2;
+    - `line-valid-scrubbed-userinfo`, near S4;
+    - `line-valid-scrubbed-bearer`, near S5;
+    - `line-valid-scrubbed-rtmps-key-period`, `-comma` and `-quoted`, near S2: the mask followed by `.`, `,` and `"`;
+    - `line-valid-scrubbed-streamid-paren`, near S3: `(streamid=***)`;
+    - `line-valid-scrubbed-streamid-space`, near S3: capture's case 24 output, `streamid *** refused`.
 
-    Capture's cases 21 and 24 (`connect failed tok=*** at x`, `streamid *** refused`) are pinned as admitted too.
+    Capture's cases 21 and 24 (`connect failed tok=*** at x`, `streamid *** refused`) are also pinned verbatim, under
+    their own keys, as admitted. Case 24's input is the S3 vector `line-secret-streamid-space`.
 
   These are regular expressions with no entropy test, because an entropy test fires on class names such as
   `SocketTimeoutException` and on UUIDs. The phone's scrub is the first line of defence and these rules are the
@@ -247,7 +269,8 @@ The implementing PR owes the migration. Proposed shape:
 
 - `capture_records`: `id`, `org_id`, `competition_id`, `fixture_id`, `code_id`, `slot` (the code's slot, 0 today),
   `ref` (unique), `received_lines`, `kept_lines`, `dropped_lines`, `body_bytes`, `lines` (the kept NDJSON, verbatim),
-  `created_at`, `expires_at`. Returning `dropped` and recording `dropped_lines` are part of P5, not of RD.
+  `created_at`, `expires_at`. Returning `dropped` is the owner's ruling (RD). Only recording `dropped_lines` is
+  proposed, as part of P5.
 - `capture_record_sessions(record_id, session_id)`: the sessions that the kept sid lines name, with a cascading
   foreign key. This is what keys a record "by session".
 - RLS follows the V410 pattern (QR v2 §17.1): staff read only.
@@ -292,6 +315,10 @@ The implementing PR owes the migration. Proposed shape:
   after the code was revoked and the session closed. The app already keeps its credential for 24 h after Over and
   Replaced. `tok_hash` survives the end, so the tok can still be checked. This would be one more `codeServes` row for
   `record`, and the open deviation from R4's narrowest reading is recorded here until the owner decides.
+  **The trade-off is §4's, over a longer window.** A revoked tok, perhaps from a leaked QR, could then write records
+  for 24 h after the end even with no session open, not only while the old session lives. The bounds are the same:
+  10 an hour, 1 MB each, staff-only reading, and no effect on any stream. If the owner rejects §4's trade-off, the
+  answer here is no as well.
 - **Q2 (owner): the 413 word.** The choice is a new word, `too_large`, or `invalid` at 413. `CaptureRefusalCode` is
   shared by the refusal of every capture contract. Adding a word to that shared twin changes the start, descriptor and
   scoring-link files, and capture re-vendors all of them. **Recommended:** keep `too_large`, and give records its own
@@ -329,13 +356,16 @@ The implementing PR owes the migration. Proposed shape:
 - the sha256 pin for the record contract (six files now);
 - the listing check: the record is the one contract with no twin, and its `$defs` are exactly `ok`, `refusal`,
   `secretS2`–`secretS5` and `secretShaped`;
-- an ajv sweep of all 44 fixtures (30 lines, 6 oks and 8 refusals), with a pinned count per shape. Valid fixtures
-  must be admitted and invalid or tampered ones refused. The 5 secret vectors must be **admitted** by the line shape,
+- an ajv sweep of all 50 fixtures (36 lines, 6 oks and 8 refusals), with a pinned count per shape. Valid fixtures
+  must be admitted and invalid or tampered ones refused. The 6 secret vectors must be **admitted** by the line shape,
   and the root description must state each one's rule;
 - the secret-shaped rules, run through the file's own `$defs`, all counted:
   - each secret vector trips its own rule alone (S1's trips none, since it needs the Bearer);
-  - each of the 4 near misses trips no rule while masked, and exactly its rule once unmasked;
-  - none of the 12 valid lines' strings is secret-shaped;
+  - each of the 9 near misses trips no rule while masked, and exactly its rule once unmasked; 4 of them put `.`,
+    `,`, `"` or `)` straight after the mask, which the test checks as a premise;
+  - 3 partial masks (`***` with a letter or digit after it) still trip their rule;
+  - capture's case 24 is pinned verbatim: its input as the S3 vector, its output as admitted;
+  - none of the 17 valid lines' strings is secret-shaped;
   - 7 bare or masked ingest strings are not secret-shaped;
 - a check of the key set against capture's allow-list, typed in the test from `allow-list.json` and never read off the
   contract: 92 keys, none of them a never key. The test then makes 1346 class-by-class ajv probes, a pinned count.
@@ -355,6 +385,9 @@ The implementing PR owes the migration. Proposed shape:
    `line-invalid-unlisted-scalar` fixture.
 4. **Review fix 1:** removing S3's mask skip, with the sha re-pinned, turned `line-valid-scrubbed-srt-passphrase` red
    ("masked, it trips no rule: expected ['S3'] to equal []").
+5. **Re-review fix 1:** putting S2's old lookahead back (skip `***` only before whitespace, `/`, `?`, `#` or the
+   end), with the sha re-pinned, turned `line-valid-scrubbed-rtmps-key-period` red ("masked, it trips no rule:
+   expected ['S2'] to deeply equal []"), 29 of 30.
 
 ### 13.2 The implementing PR (owed)
 
@@ -432,8 +465,8 @@ test.
 - M2: A2 never closes a window.
 - M3: A2 opens a window on any tag.
 - M4: an unlisted key is admitted.
-- M5: each of S1–S5 returns false (five mutants), and each mask skip is removed (four mutants: the near misses must
-  die).
+- M5: each of S1–S5 returns false (five mutants), each mask skip is removed (four mutants: the near misses must
+  die), and each skip is narrowed to whitespace or the end (the punctuation near misses must die).
 - M6: the inflate cap is removed.
 - M7: the line limit is off by one (1000 vs 1001).
 - M8: a dropped line is logged.

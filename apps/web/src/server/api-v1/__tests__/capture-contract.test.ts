@@ -53,7 +53,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "30ddf4f9acc6422b96462475461c83403559ed6728e56ef2552ee2c2bdaf52b2",
+  "capture-record.v1.json": "b8c3f506d907b20a0f2217a538b4854eb1d8cf1d53f5c280970e1263c574b001",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -254,7 +254,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 30], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 36], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
 /** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
@@ -287,7 +287,8 @@ const RECORD_SENDING_TOK = "fake-tok-0000000000000";
 const RECORD_SERVER_ONLY: Record<string, [rule: "S1" | "S2" | "S3" | "S4" | "S5", stated: string]> = {
   "line-secret-sending-tok": ["S1", "S1 the Bearer token that sent the record"],
   "line-secret-ingest-url": ["S2", "S2 an RTMP(S) URL that carries a stream key"],
-  "line-secret-srt-streamid": ["S3", "S3 a streamid= or passphrase= pair"],
+  "line-secret-srt-streamid": ["S3", "S3 a streamid or passphrase value"],
+  "line-secret-streamid-space": ["S3", "S3 a streamid or passphrase value"],
   "line-secret-userinfo": ["S4", "S4 a URL with userinfo"],
   "line-secret-bearer": ["S5", "S5 a Bearer credential"],
 };
@@ -300,6 +301,13 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
   "line-valid-scrubbed-srt-passphrase": "S3",
   "line-valid-scrubbed-userinfo": "S4",
   "line-valid-scrubbed-bearer": "S5",
+  // Re-review fix 1: the mask with punctuation after it, as prose leaves it.
+  "line-valid-scrubbed-rtmps-key-period": "S2",
+  "line-valid-scrubbed-rtmps-key-comma": "S2",
+  "line-valid-scrubbed-rtmps-key-quoted": "S2",
+  "line-valid-scrubbed-streamid-paren": "S3",
+  // Re-review fix 2: capture's vector 24 output (no `=`, a space, the mask).
+  "line-valid-scrubbed-streamid-space": "S3",
 };
 /** Every name capture-schemas.ts exports at runtime today (the record has no twin among them). */
 const CAPTURE_SCHEMAS_EXPORTS = [
@@ -1076,10 +1084,10 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(30 + 6 + 8);
+    expect(names).toHaveLength(36 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
-    expect(secrets).toBe(5);
+    expect(secrets).toBe(6);
     // S1's vector is the Bearer the route's test will send, as a plain word the file cannot tell from any other.
     expect(fixture(RECORD_DIR, "line-secret-sending-tok").state).toBe(RECORD_SENDING_TOK);
     expect(Object.keys(contract(RECORD).$defs as Json).sort()).toEqual([...RECORD_DEFS].sort());
@@ -1100,7 +1108,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(shaped(line), `${name}: secretShaped`).toBe(rule !== "S1");
       vectors++;
     }
-    expect(vectors).toBe(5);
+    expect(vectors).toBe(6);
     // The near misses: capture's scrubbed output trips nothing; unmasked, it trips exactly its rule (the premise that
     // the mask, and only the mask, is what spares it).
     const CREDENTIAL = "FAKE0123456789ABCDEF";
@@ -1114,8 +1122,27 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(tripped(unmasked), `${name}: unmasked, it trips ${rule} alone`).toEqual([rule]);
       nearMisses++;
     }
-    expect(nearMisses).toBe(4);
+    expect(nearMisses).toBe(9);
     expect(fixture(RECORD_DIR, "line-valid-scrubbed-srt-passphrase").message, "capture's vectors.json case 22, verbatim").toBe("srt://h:1?passphrase=***&x=1");
+    // Premise of the punctuation near misses: each puts exactly that character straight after the mask.
+    let punctuated = 0;
+    for (const [name, after] of [["period", "."], ["comma", ","], ["quoted", "\""]] as const) {
+      expect(String(fixture(RECORD_DIR, `line-valid-scrubbed-rtmps-key-${name}`).message), name).toContain(`/live/***${after}`);
+      punctuated++;
+    }
+    expect(String(fixture(RECORD_DIR, "line-valid-scrubbed-streamid-paren").message)).toContain("streamid=***)");
+    punctuated++;
+    expect(punctuated).toBe(4);
+    // Capture's vectors.json case 24: its input is the S3 vector (key problems), its output a near miss, both verbatim.
+    expect(fixture(RECORD_DIR, "line-secret-streamid-space").problems).toBe("streamid a1b2c3d4e5f60718293a4b5c6d7e8f90 refused");
+    expect(fixture(RECORD_DIR, "line-valid-scrubbed-vectors").problems).toBe("streamid *** refused");
+    // The skip is for a WHOLE mask only: *** with a letter or digit after it is a partial mask, and still trips.
+    let partial = 0;
+    for (const [s, rule] of [["rtmps://live.cloudflare.com:443/live/***K3Y", "S2"], ["passphrase=***x1", "S3"], ["(streamid=***0)", "S3"]] as const) {
+      expect(fileAdmits(RECORD, `#/$defs/secret${rule}`, s), s).toBe(true);
+      partial++;
+    }
+    expect(partial).toBe(3);
     // No string value of any valid line — the near misses, capture's other scrubbed outputs and the plain lines — is
     // secret-shaped: the rules do not refuse what capture correctly sends.
     let validLines = 0, strings = 0;
@@ -1125,7 +1152,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(12);
+    expect(validLines).toBe(17);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
