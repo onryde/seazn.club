@@ -57,6 +57,7 @@ import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { patchDivision } from "../divisions";
 import { mintOrgOwnerAuth } from "../external-play/auth";
+import { loadArbiterRound } from "../external-play/arbiter";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
@@ -2855,6 +2856,19 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(flags[0]!.note).toContain(`camera off ${Math.round((to - from) / 1000)} s of ${Math.round((m.overAt - m.startedAt) / 1000)} s`);
     expect(flags[0]!.note).toContain(`${iso(from)} to ${iso(to)}`);
     expect(flags[0]!.note).toContain("camera required");
+    // T15: the arbiter panel's loader reads THIS producer's note back — the
+    // same numbers, expected from the scenario, never from the parser.
+    const panel = await loadArbiterRound(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId);
+    const shown = panel!.boards.find((x) => x.fixtureId === m.b.fixtureId)!.flags;
+    expect(shown.map((f) => f.kind)).toEqual(["camera_lost"]);
+    expect(shown[0]).toMatchObject({
+      report: {
+        offSeconds: Math.round((to - from) / 1000),
+        windowSeconds: Math.round((m.overAt - m.startedAt) / 1000),
+        intervals: [{ from: iso(from), to: iso(to) }],
+        sessions: 1,
+      },
+    });
     // D10: the organiser decides — nothing about the match moved.
     expect(await fixtureRow(m.b.fixtureId)).toEqual(before);
     expect(await bridgeOf(m.b.fixtureId)).toEqual(bridge);

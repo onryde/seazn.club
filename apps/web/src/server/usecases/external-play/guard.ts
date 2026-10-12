@@ -430,7 +430,7 @@ function asColorOfHome(state: unknown): "W" | "B" | null {
 
 /** Which side has White — home unless a `boardgame.pairing` card recorded
  *  Black on home. */
-export async function whiteSideOf(f: OnlinePlayFixture): Promise<Side> {
+export async function whiteSideOf(f: Pick<OnlinePlayFixture, "orgId" | "fixtureId">): Promise<Side> {
   const auth = await mintOrgOwnerAuth(f.orgId);
   const state = await getFixtureState(auth, f.fixtureId);
   return asColorOfHome(state.state) === "B" ? "away" : "home";
