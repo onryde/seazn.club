@@ -47,7 +47,8 @@ import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
-import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS } from "@/server/external-play/video/match-camera-off";
+import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
+import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS, isBoardApiPlayable, type TimeControl } from "@/server/external-play/time-controls";
 import { getFixtureState } from "../fixtures";
@@ -2967,6 +2968,74 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(flags.map((f) => [f.kind, f.person_id]).sort()).toEqual(
         [["camera_connection_problems", m.b.home.personId], ["camera_lost", m.b.away.personId]].sort(),
       );
+    });
+
+    // T14 fix round 6, I-2: the camera GIVES UP (RECOVER_MAX_ATTEMPTS failed
+    // re-joins) and tells the player to reload. The give-up sends no end —
+    // camera-session.test.ts proves it — so the stamp stays open until the
+    // reload's re-seat closes it (claimRoomSeat → closeGuardFault, proven in
+    // external-play-room.test.ts). Each case below has its pair: the stamp
+    // closed AT the give-up, as fix round 5 did, accuses the player.
+    describe("the give-up keeps the stamp open (fix round 6, I-2)", () => {
+      const giveUpMs = Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i): number => RECOVER_BACKOFF_MS[Math.min(i, RECOVER_BACKOFF_MS.length - 1)]!).reduce((a, b) => a + b, 0);
+
+      it("give up, then 2 minutes with NO reload, then the match ends: never camera_lost, and the organiser is told — the pair: closed at the give-up, the 2 minutes are camera_lost", async () => {
+        async function gaveUp(closeAtGiveUp: boolean) {
+          const m = await playedMatch();
+          const leave = m.overAt - giveUpMs - 120_000;
+          expect(leave, "premise: the fault starts inside the match").toBeGreaterThan(m.startedAt);
+          const x = session(m, m.startedAt - 120_000, m.endedAt);
+          connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
+          connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+          expect(await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) }), "premise: opened").toBe(true);
+          if (closeAtGiveUp) await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(leave + giveUpMs) });
+          return { m, leave };
+        }
+        const open = await gaveUp(false);
+        expect(open.m.overAt - open.leave, "premise: the open stamp runs past the told threshold").toBeGreaterThan(GUARD_FAULT_FLAG_SECONDS * 1000);
+        const r = await pass(open.m, after(open.m, CAMERA_EVIDENCE_AFTER_MS));
+        expect(cameraFailures(r)).toEqual([]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 1]);
+        expect((await flagsOf(open.m.b.fixtureId)).map((f) => [f.kind, f.person_id])).toEqual([["camera_connection_problems", open.m.b.home.personId]]);
+
+        const closed = await gaveUp(true);
+        const r0 = await pass(closed.m, after(closed.m, CAMERA_EVIDENCE_AFTER_MS));
+        expect(r0.cameraFlags, "closed at the give-up: the 2 minutes are the player's").toBe(1);
+        const lost = (await flagsOf(closed.m.b.fixtureId)).find((f) => f.kind === "camera_lost");
+        expect(lost?.person_id).toBe(closed.m.b.home.personId);
+        expect(lost?.note).toContain(`${iso(closed.leave + giveUpMs)} to ${iso(closed.m.overAt)}`);
+      });
+
+      it("give up, then reload 30 s later: the re-seat closes the stamp, the camera is back a join later — never camera_lost; the pair: closed at the give-up, the reload is camera_lost", async () => {
+        const joinMs = MATCH_OFF_MIN_MS / 3;
+        async function reloaded(closeAtGiveUp: boolean) {
+          const m = await playedMatch();
+          const leave = m.startedAt + 120_000;
+          const reseat = leave + giveUpMs + 30_000;
+          const back = reseat + joinMs;
+          expect(back, "premise: back inside the match").toBeLessThan(m.overAt);
+          const x = session(m, m.startedAt - 120_000, m.endedAt);
+          connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
+          connect(m, x, "home", { joined: back, left: m.endedAt });
+          connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+          await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) });
+          if (closeAtGiveUp) await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(leave + giveUpMs) });
+          // The reload's claim: a no-op when the give-up already closed it.
+          expect(await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(reseat) }), "premise: the re-seat closes only an open stamp").toBe(!closeAtGiveUp);
+          return { m, leave, reseat, back };
+        }
+        const open = await reloaded(false);
+        expect((open.reseat - open.leave) / 1000, "premise: the stamped total is past the told threshold").toBeGreaterThan(GUARD_FAULT_FLAG_SECONDS);
+        const r = await pass(open.m, after(open.m, CAMERA_EVIDENCE_AFTER_MS));
+        expect(cameraFailures(r)).toEqual([]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags], "ours: excused, and told").toEqual([1, 0, 1]);
+
+        const closed = await reloaded(true);
+        const r0 = await pass(closed.m, after(closed.m, CAMERA_EVIDENCE_AFTER_MS));
+        expect(r0.cameraFlags, "closed at the give-up: the reload is the player's").toBe(1);
+        const lost = (await flagsOf(closed.m.b.fixtureId)).find((f) => f.kind === "camera_lost");
+        expect(lost?.note).toContain(`${iso(closed.leave + giveUpMs)} to ${iso(closed.back)}`);
+      });
     });
 
     // T14 fix round 5, ruling 1: a stamp excuses, it never HIDES. Every case

@@ -404,7 +404,7 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
     expect(total).toBeLessThanOrEqual(90_000);
   });
 
-  it("N attempts that all fail (network AND our guard's): recovering throughout, then gave_up — never off or failed; ONE interval, closed by the give-up; nothing more by itself", async () => {
+  it("N attempts that all fail (network AND our guard's): recovering throughout, then gave_up — never off or failed; ONE interval, left OPEN by the give-up (fix round 6, I-2); nothing more by itself", async () => {
     const r = record();
     const first = fakeCamera(TRACK);
     const j = joins(first.cam, ...Array.from({ length: RECOVER_MAX_ATTEMPTS + 3 }, (_, i) => failure(i)));
@@ -424,13 +424,39 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
     expect(r.views.at(-1)).toEqual({ status: "gave_up", track: null });
     expect(j.count(), "the first join, then exactly N re-joins").toBe(1 + RECOVER_MAX_ATTEMPTS);
     expect(waits).toEqual(Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i) => waitBefore(i)));
-    expect(st.seen, "the give-up closes our window").toEqual(["start", "end"]);
+    // I-2: the reload the player is told to make is OUR gap too — the
+    // window stays open, and the reload's re-seat closes it on the server.
+    expect(st.seen, "the give-up leaves our window open").toEqual(["start"]);
     await flush(20);
     expect(j.count(), "given up: no join by itself").toBe(1 + RECOVER_MAX_ATTEMPTS);
     await s.enable();
     await s.stop();
-    expect(st.seen, "nothing open to close at stop").toEqual(["start", "end"]);
+    expect(st.seen, "a stop after the give-up leaves it open too: the re-seat is the closer").toEqual(["start"]);
     expect(r.statuses().at(-1)).toBe("gave_up");
+  });
+
+  it("after the give-up, a NEW start (the next seat's token) joins a fresh camera — live, and the open window closes", async () => {
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const second = fakeCamera(TRACK);
+    const j = joins(first.cam, ...Array.from({ length: RECOVER_MAX_ATTEMPTS }, (_, i) => failure(i)), second.cam);
+    const st = stamps();
+    const s = cameraSession(j.join, r.emit, { stamp: st.stamp, sleep: () => new Promise<void>((res) => setTimeout(res, 0)) });
+    await s.start("t");
+    first.fault();
+    for (let i = 0; i < 4 * RECOVER_MAX_ATTEMPTS && r.views.at(-1)?.status === "recovering"; i += 1) await flush(1);
+    expect(r.statuses().at(-1), "premise: given up").toBe("gave_up");
+    expect(st.seen, "premise: open").toEqual(["start"]);
+    await s.start("t2");
+    expect(r.statuses().slice(-2)).toEqual(["joining", "live"]);
+    expect(j.count()).toBe(1 + RECOVER_MAX_ATTEMPTS + 1);
+    expect(st.seen, "back: closed").toEqual(["start", "end"]);
+    // Back from the give-up, a stop closes as any stop does: a fresh fault,
+    // then the page goes while recovering ⇒ that second window is closed.
+    second.fault();
+    expect(st.seen, "premise: a second window").toEqual(["start", "end", "start"]);
+    await s.stop();
+    expect(st.seen, "no longer given up: the stop closes it").toEqual(["start", "end", "start", "end"]);
   });
 
   it("…then the reload: a fresh page's session joins and is live, nothing of ours left open", async () => {
@@ -464,8 +490,8 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
           for (let i = 0; i < 4 * RECOVER_MAX_ATTEMPTS && r.views.at(-1)?.status === "recovering"; i += 1) await flush(1);
           const statuses = r.statuses();
           expect(statuses.filter((x) => x === "off" || x === "failed"), "never the player's").toEqual([]);
-          expect(st.seen, "one interval, closed").toEqual(["start", "end"]);
           if (okAt < RECOVER_MAX_ATTEMPTS) {
+            expect(st.seen, "one interval, closed by the return").toEqual(["start", "end"]);
             expect(statuses).toEqual(["joining", "live", "recovering", "live"]);
             expect(j.count()).toBe(1 + okAt + 1);
             seen.recovered += 1;
@@ -473,6 +499,7 @@ describe("cameraSession — giving up: fail → retry × N → give-up → reloa
           } else {
             expect(statuses).toEqual(["joining", "live", "recovering", "gave_up"]);
             expect(j.count()).toBe(1 + RECOVER_MAX_ATTEMPTS);
+            expect(st.seen, "one interval, left open for the re-seat (I-2)").toEqual(["start"]);
             seen.gaveUp += 1;
             if (okAt === RECOVER_MAX_ATTEMPTS) seen.firstMiss += 1;
           }
