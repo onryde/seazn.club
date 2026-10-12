@@ -185,10 +185,10 @@
     ]
   },
   {
-    "id": "table-drop-double-forfeit",
+    "id": "table-gains-a-retired-row",
     "file": "apps/web/src/lib/organiser-only-events.ts",
-    "find": "values: [\"forfeit\", \"double_forfeit\"]",
-    "replace": "values: [\"forfeit\"]",
+    "find": "readonly values: readonly string[] }>> = {};",
+    "replace": "readonly values: readonly string[] }>> = { \"boardgame.result\": { field: \"method\", values: [\"forfeit\"] } };",
     "killers": [
       {
         "cwd": "apps/web",
@@ -217,7 +217,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts"
         ],
-        "name": "D-O1: drops a direct tile whose PAYLOAD records a sport forfeit \\(the server's predicate\\), and keeps the same type with an ordinary method"
+        "name": "D-O1 \\(W2b D15\\): every forfeit shape is a core\\.forfeit tile the block drops"
       }
     ]
   },
@@ -269,7 +269,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason"
+        "name": "I-1: the vocabulary-free sweep"
       },
       {
         "cwd": "apps/web",

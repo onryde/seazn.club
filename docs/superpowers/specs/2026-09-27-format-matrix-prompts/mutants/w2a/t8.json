@@ -395,8 +395,8 @@
   {
     "id": "seat-competition-kind",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "toBracketFixture(f, inputs.kind)",
-    "replace": "toBracketFixture(f, \"league\")",
+    "find": "toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null)",
+    "replace": "toBracketFixture(f, \"league\", (id) => seats.get(id) ?? null)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -455,7 +455,7 @@
         "files": [
           "src/server/usecases/__tests__/event-import-held.test.ts"
         ],
-        "name": "X-BR-2: an imported stream ending HELD \\(a chess double forfeit in a knockout\\) lands, and runs no decided side effect"
+        "name": "X-BR-2: an imported stream ending HELD \\(football 0-0 at full time in a knockout\\) lands, and runs no decided side effect"
       }
     ]
   },

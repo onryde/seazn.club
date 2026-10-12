@@ -300,10 +300,10 @@
   ]
  },
  {
-  "id": "t12-removes-the-forfeit-tile",
+  "id": "t12-forfeit-tile-restored",
   "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-  "find": "  \"time\",\n  \"forfeit\",\n",
-  "replace": "  \"time\",\n",
+  "find": "  \"time\",\n  \"adjudication\",\n  \"illegal_move\",\n];\nexport const DRAWN_METHODS",
+  "replace": "  \"time\",\n  \"forfeit\",\n  \"adjudication\",\n  \"illegal_move\",\n];\nexport const DRAWN_METHODS",
   "killers": [
    {
     "cwd": "apps/web",

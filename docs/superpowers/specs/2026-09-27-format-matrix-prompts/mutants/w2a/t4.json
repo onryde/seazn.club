@@ -2,8 +2,8 @@
   {
     "id": "settle-precondition-skipped",
     "file": "packages/engine/src/core/events.ts",
-    "find": "if (!settleApplies(module, { outcome: effective,",
-    "replace": "if (false && !settleApplies(module, { outcome: effective,",
+    "find": "if (!applies && !legacySettle) {",
+    "replace": "if (false && !applies && !legacySettle) {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -17,7 +17,7 @@
   {
     "id": "settle-reads-module-outcome",
     "file": "packages/engine/src/core/events.ts",
-    "find": "const effective = outcomeOf(module, { state, settlement });",
+    "find": "const effective = outcomeOf(module, { state, settlement, expunged, levelWithdrawal });",
     "replace": "const effective = module.outcome(state);",
     "killers": [
       {
@@ -108,8 +108,8 @@
   {
     "id": "kernel-finalize-branch-deleted",
     "file": "packages/engine/src/core/events.ts",
-    "find": "  return event.type === \"core.finalize\" && folded.settled && module.outcome(folded.state) === null;",
-    "replace": "  return false;",
+    "find": "    : folded.settled && moduleOutcome === null;\n}",
+    "replace": "    : false;\n}",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -138,8 +138,8 @@
   {
     "id": "outcomeof-ignores-settlement",
     "file": "packages/engine/src/core/events.ts",
-    "find": "  if (s !== null) return { kind: \"win\", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };\n  return module.outcome(folded.state);",
-    "replace": "  void s;\n  return module.outcome(folded.state);",
+    "find": "  if (s !== null) return { kind: \"win\", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };\n  const w = folded.levelWithdrawal;",
+    "replace": "  void s;\n  const w = folded.levelWithdrawal;",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -183,8 +183,8 @@
   {
     "id": "abandon-never-marked-active",
     "file": "packages/engine/src/core/events.ts",
-    "find": "      if (event.type === \"core.abandon\") abandonActive = true;\n",
-    "replace": "",
+    "find": "        abandonActive = true;\n        expunged =",
+    "replace": "        expunged =",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -362,8 +362,8 @@
   {
     "id": "i1-fold-gate-never-settled",
     "file": "packages/engine/src/core/events.ts",
-    "find": "    if (!kernelOwnsEvent(module, event, { state, settled: settlement !== null })) {",
-    "replace": "    if (!kernelOwnsEvent(module, event, { state, settled: false })) {",
+    "find": "kernelOwnsEvent(module, event, { state, settled: settlement !== null })",
+    "replace": "kernelOwnsEvent(module, event, { state, settled: false })",
     "killers": [
       {
         "cwd": "packages/engine",
