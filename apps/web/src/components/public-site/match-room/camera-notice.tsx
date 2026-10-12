@@ -1,6 +1,7 @@
 // The camera notice under the controls (and above Check in): the owner's
 // wording (2026-10-11), `onlineChess.camera.playerNotice`. Shown only when
-// the division has cameras (policy optional or required).
+// the camera is REQUIRED — it states a duty `optional` does not carry
+// (controller ruling, T14 review I3).
 import type { RoomT } from "./room-copy";
 
 export function CameraNotice({ t }: { t: RoomT }) {

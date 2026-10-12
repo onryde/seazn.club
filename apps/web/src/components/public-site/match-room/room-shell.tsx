@@ -178,7 +178,9 @@ export function RoomShell({
   );
 }
 
-function Screen({
+// Exported for its first-paint test (room-shell.test.tsx): the camera-off
+// banner reads the camera hook, which a server render never runs.
+export function Screen({
   screen,
   state,
   room,
@@ -292,7 +294,10 @@ function Screen({
     case "live": {
       const g = snap.game!;
       const policyOn = snap.cameraPolicy !== "off";
-      const cameraDown = policyOn && (camera.status === "off" || camera.status === "failed");
+      // The camera DUTY is the required policy's (review I3): under
+      // `optional` nobody is told to keep a camera on, or that it is off.
+      const cameraDuty = snap.cameraPolicy === "required";
+      const cameraDown = cameraDuty && (camera.status === "off" || camera.status === "failed");
       return (
         <div className="flex min-w-0 flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_288px] md:items-start md:gap-6">
           {cameraDown ? (
@@ -319,7 +324,11 @@ function Screen({
             {policyOn ? (
               <div data-testid="room-tile-strip" className="flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
                 <OwnTile policy={snap.cameraPolicy} stream={camera.stream} t={t} />
-                <PresencePill name={snap.opponent.name} cameraLive={snap.opponentCameraLive === true} t={t} />
+                {/* null is "unknown" — not asked, or the vendor did not
+                    answer: no pill rather than a "camera off" (review I4). */}
+                {snap.opponentCameraLive !== null ? (
+                  <PresencePill name={snap.opponent.name} cameraLive={snap.opponentCameraLive} t={t} />
+                ) : null}
               </div>
             ) : null}
             <div data-testid="room-controls">
@@ -334,7 +343,7 @@ function Screen({
                 t={t}
               />
             </div>
-            {policyOn ? <CameraNotice t={t} /> : null}
+            {cameraDuty ? <CameraNotice t={t} /> : null}
           </aside>
         </div>
       );

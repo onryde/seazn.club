@@ -78,7 +78,7 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, onCh
         </span>
       </div>
       <div className="flex-1" />
-      {snap.cameraPolicy !== "off" ? <CameraNotice t={t} /> : null}
+      {snap.cameraPolicy === "required" ? <CameraNotice t={t} /> : null}
       <button
         type="button"
         data-testid="room-checkin-cta"
