@@ -30,6 +30,52 @@ export type OpenRoundResult =
   | { opened: false; reason: "already_open"; skipped: OpenRoundSkip[] }
   | { opened: false; reason: OpenRoundRefusal };
 
+/** T16 — what an Open press on this round would do, predicted by the reader
+ *  (`listOpenRounds`) from the same facts `openRound` decides on:
+ *  - `open`: never opened — stamp it, invite everyone, start the window now;
+ *  - `reopen`: opened, but nobody it reached is still bound (every send
+ *    failed, or a re-pair cleared the rows) — the window starts again now;
+ *  - `reinvite`: opened and under way — invite only who is still owed, inside
+ *    the round's own window (its deadline does not move);
+ *  - `none`: nobody left to invite, or the window has closed on them. */
+export type OpenRoundPress = "open" | "reopen" | "reinvite" | "none";
+
+/** One pairing of the round, by colour. */
+export type OpenRoundPairing = {
+  fixtureId: string;
+  boardNo: number;
+  whiteName: string;
+  blackName: string;
+  /** The latest seat stamp this round's open wrote on the board (ISO), or
+   *  null when no seat of it has been invited. */
+  invitedAt: string | null;
+  /** Seats an Open press would invite now (0–2): a seat not yet stamped, on a
+   *  board that still takes invites. */
+  owedSeats: 0 | 1 | 2;
+  /** The invite can be sent again (`/resend`): invited, no game behind it,
+   *  inside the round's window. */
+  canResend: boolean;
+};
+
+export type OpenRoundView = {
+  stageId: string;
+  stageName: string;
+  roundNo: number;
+  /** `paired`: no open stamp yet (`isRoundPaired`); `open`: stamped. */
+  state: "paired" | "open";
+  openedAt: string | null;
+  /** When a player who has not taken their seat is reported: the open plus
+   *  the window. Null before the open. */
+  deadlineAt: string | null;
+  /** Minutes from an open to its deadline (window.ts DEADLINE_AFTER_MS). */
+  windowMinutes: number;
+  /** The earliest scheduled time on the round's boards — only what players
+   *  were shown — or null when none carries one. */
+  scheduledAt: string | null;
+  press: OpenRoundPress;
+  pairings: OpenRoundPairing[];
+};
+
 /** `invited` is a count: render through the plural helper (`.one`/`.other`). */
 export const OPEN_ROUND_INVITED_KEY = "externalPlay.openRound.invited";
 

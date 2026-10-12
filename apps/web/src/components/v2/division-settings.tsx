@@ -931,7 +931,11 @@ export function DivisionSettings({
 
       <Group
         title={msg("divset.format")}
-        summary={`${division.sport_key} · ${locked ? msg("divset.variantLocked", { variant: division.variant_key }) : division.variant_key}`}
+        // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
+        // flag and even when the format is locked (the select itself is hidden then).
+        summary={`${division.sport_key} · ${locked ? msg("divset.variantLocked", { variant: division.variant_key }) : division.variant_key}${
+          division.sport_key === "boardgame" && onlinePlaySaved ? ` · ${msg("divset.onlinePlay.summaryOn")}` : ""
+        }`}
       >
         {locked ? (
           <div data-testid="format-locked" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">

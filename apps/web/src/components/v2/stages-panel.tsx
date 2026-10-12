@@ -95,6 +95,8 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { OpenRoundControl } from "@/components/v2/desk/open-round-control";
+import type { OpenRoundView } from "@/lib/open-round";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
@@ -351,6 +353,9 @@ interface Props {
   /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
    *  an organiser), threaded to the run sheet's chips. Optional: none by default. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  /** T16 (D12) — the organiser's Open round control per stage (`listOpenRounds`), keyed by stage id. The page hands
+   *  it down only while the club is offered online chess (an open STARTS play, T20); absent ⇒ no control. */
+  openRounds?: Record<string, OpenRoundView[]>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -460,7 +465,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, openRounds }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -895,6 +900,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           (f) => f.status === "in_play" && !isBye(toRunSheetFixture(f)),
         );
         const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length;
+        // D12 (T16): online boards whose round nobody has opened — not invited, not playable, owing nothing yet.
+        const stageNotOpened = stageFixtures.filter((f) => onlinePlay?.[f.id]?.unopened === true);
         // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
         // — same rule the comment on `courtTagsEditor` below states for
         // itself — then placed in exactly one of two mutually exclusive
@@ -1014,7 +1021,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         );
         return (
           <div key={stage.id} className="space-y-6">
-          <section className="card overflow-hidden">
+          <section className="card overflow-hidden" data-stage-id={stage.id}>
             {/* Competition Desk W3 Task 5 introduced a two-column desktop
                 layout here — `stage-sheet` beside a 280px `stage-rail`
                 column — RETIRED by "Option B" (controller measurement,
@@ -1246,6 +1253,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         stagePlayed.length > 0 ? msgPlural("schedule.progress.played", stagePlayed.length) : null,
                         stageInPlay.length > 0 ? msgPlural("schedule.progress.inPlay", stageInPlay.length) : null,
                         unscheduled.length > 0 ? msgPlural("schedule.progress.toSchedule", unscheduled.length) : null,
+                        stageNotOpened.length > 0 ? msgPlural("schedule.progress.notOpened", stageNotOpened.length) : null,
                       ].filter((s): s is string => s !== null);
                       return clauses.length > 0 ? (
                         // `mt-1.5` retired with the bar above it — this
@@ -1260,6 +1268,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     })()}
                   </div>
                 )}
+
+                {/* T16 (D12) — the organiser opens this stage's online rounds here, beside the counts that say how many
+                    boards wait on it. The page hands `openRounds` down only while the club is offered online chess
+                    (an open STARTS play, T20); a viewer never gets one. */}
+                {canEdit &&
+                  (openRounds?.[stage.id] ?? []).map((r) => (
+                    <OpenRoundControl key={`${r.stageId}:${r.roundNo}`} round={r} tz={tz} />
+                  ))}
 
                 {/* Owner-approved "Option 2" (on top of Option B) — "why are
                     we not showing the fixtures in each stage?" answered as

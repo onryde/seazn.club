@@ -60,9 +60,12 @@ import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-need
 import {
   listFlaggedExternalPlay,
   listNeedsOrganiserExternalPlay,
+  listOpenRounds,
   listRunSheetOnlinePlay,
   onlineChessOffered,
 } from "@/server/usecases/external-play";
+import { readOnlinePlay } from "@/server/external-play/online-play";
+import type { OpenRoundView } from "@/lib/open-round";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -534,8 +537,17 @@ export default async function DivisionPage({
         listRunSheetOnlinePlay(auth, id),
       ])
     : [[], { boards: [], ownBoards: 0 }, {}];
+  // T16 (D12): the one START control on this tab — each stage card's Open round. Only for a division that plays online
+  // now, and only while the club is offered online chess (T20: the control is not rendered at all otherwise, never
+  // rendered disabled). Grouped by stage, in the reader's order.
+  let openRounds: Record<string, OpenRoundView[]> | undefined;
+  if (onlineDesk && readOnlinePlay(division.config) === "lichess" && (await onlineChessOffered(auth))) {
+    openRounds = {};
+    for (const r of await listOpenRounds(auth, id)) (openRounds[r.stageId] ??= []).push(r);
+  }
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
-  // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings.
+  // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
+  // here, and (above) the fixtures tab's Open round of a division that plays online.
   // (The queue no longer offers the invite resend: the server refuses it for every held board — 409 BOARD_HELD.)
   const onlineChessOn =
     division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
@@ -842,6 +854,7 @@ export default async function DivisionPage({
               streamStates={streamStates}
               awaitingSettle={[...awaitingSettle]}
               onlinePlay={runSheetOnlinePlay}
+              openRounds={openRounds}
             />
           </>
         )}

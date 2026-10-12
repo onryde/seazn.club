@@ -86,6 +86,10 @@ export type RunSheetOnlinePlay = {
   held: NeedsReason | null;
   /** A game is running at Lichess now (bridge `live`). */
   live: boolean;
+  /** D12: still to be played in an online round nobody has opened — nobody is
+   *  invited and nobody can take a seat, so it owes no result yet, whatever
+   *  its scheduled time says. */
+  unopened: boolean;
 };
 
 export type RunSheetInput = {

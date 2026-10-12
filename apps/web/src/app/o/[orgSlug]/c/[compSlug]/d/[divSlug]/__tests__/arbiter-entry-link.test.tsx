@@ -14,6 +14,7 @@ const queue = vi.hoisted(() => ({
   listNeedsOrganiserExternalPlay: vi.fn(),
   listFlaggedExternalPlay: vi.fn(),
   listRunSheetOnlinePlay: vi.fn(),
+  listOpenRounds: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
@@ -150,6 +151,7 @@ beforeEach(() => {
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
   queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
   queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
+  queue.listOpenRounds.mockReset().mockResolvedValue([]);
   vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
 });
 

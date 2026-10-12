@@ -699,6 +699,16 @@ export function RunSheetRow({
               children: msg("arbiter.flag.outOfBand.chip"),
             })
           )}
+          {/* D12 (T16): a round nobody has opened — nobody invited, nobody can take a seat. A fact, not a control:
+              the round is opened from its stage card above. */}
+          {onlinePlay?.unopened && (
+            <span
+              data-testid="run-sheet-round-unopened"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 md:order-first"
+            >
+              {msg("runsheet.round.notOpenedChip")}
+            </span>
+          )}
           {onlineHeld && (
             <Link
               href={`#${queueRowAnchor(fixture.id)}`}

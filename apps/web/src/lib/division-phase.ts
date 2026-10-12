@@ -517,6 +517,15 @@ export function isResultMissing(
   );
 }
 
+/** D12 (2026-10-09): a round is PAIRED automatically and OPENED by an
+ *  organiser — until the open its boards are uninvited and nobody can take a
+ *  seat, so it must not read as "in progress" or as owing a result. The empty
+ *  case comes first deliberately: a round with no fixtures answers no, rather
+ *  than falling through to "paired". */
+export function isRoundPaired(r: { roundOpenedAt: string | null; fixtureCount: number }): boolean {
+  return r.fixtureCount > 0 && r.roundOpenedAt === null;
+}
+
 /** Every stage that is not complete, in play order. K1 (fix round G,
  *  Critical) replaced `lowestOpenStage`, which returned ONE stage: two of its
  *  three callers were asking a question about ALL of them, and a helper whose
