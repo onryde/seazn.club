@@ -612,6 +612,25 @@ describe("cameraSession — stamp delivery: retried on the declared ladder, seri
     await s.stop();
   });
 
+  it("idle again once delivered: a LATER fault's start is sent at once too, in the fault's own turn", async () => {
+    const st = flakyStamp({ start: 0, end: 0 });
+    const r = record();
+    const first = fakeCamera(TRACK);
+    const second = fakeCamera(TRACK);
+    const cams = [first.cam, second.cam, fakeCamera(TRACK).cam];
+    let n = 0;
+    const s = cameraSession(async () => cams[n++]!, r.emit, { stamp: st.stamp, sleep: () => new Promise<void>((res) => setTimeout(res, 0)) });
+    await s.start("t");
+    first.fault();
+    await flush(10);
+    expect([st.calls, r.statuses().at(-1)], "premise: the first window delivered, back").toEqual([["start", "end"], "live"]);
+    second.fault();
+    expect(st.calls, "nothing queued: sent at once, in the fault's own turn").toEqual(["start", "end", "start"]);
+    await flush(10);
+    expect(st.calls).toEqual(["start", "end", "start", "end"]);
+    await s.stop();
+  });
+
   it("property: any failures on the start and the end — each sent min(k+1, 1+ladder) times, every start before every end, the waits the ladder's prefix", async () => {
     const L = STAMP_RETRY_MS.length;
     const seen = { startRetried: 0, startDropped: 0, lastChance: 0, firstDrop: 0, endRetried: 0, clean: 0 };
