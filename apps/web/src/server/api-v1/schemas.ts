@@ -1373,6 +1373,31 @@ export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict(
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
 /** POST /fixtures/{id}/external-play/resolve — organiser settles a needs_organiser bridge. */
+/** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3) — the
+ *  arbiter's OWN RealtimeKit token for the board's meeting (preset `arbiter`,
+ *  receive-only), and the two players' participant ids by colour, which its
+ *  client subscribes to. Never a player's token (spec §10). */
+export const ArbiterJoinOut = z.object({
+  authToken: z.string(),
+  white: z.array(z.string()),
+  black: z.array(z.string()),
+});
+
+/** POST /fixtures/{id}/external-play/resync (T15) — the organiser's
+ *  reconcile (trigger `organiser`): did a read bring Lichess's truth, how many
+ *  plies it added to the ledger, and whether it closed the board. */
+export const ExternalPlayResyncOut = z.object({
+  read: z.boolean(),
+  adopted: z.number().int(),
+  finished: z.boolean(),
+});
+
+/** POST /fixtures/{id}/external-play/video-override (D11, Task 8's
+ *  organiserOverrideVideo) — the reason goes on the audit record. */
+export const VideoOverrideInput = z.object({ note: z.string().trim().min(1).max(500) }).strict();
+export type VideoOverrideInput = z.infer<typeof VideoOverrideInput>;
+export const VideoOverrideOut = z.object({ overridden: z.literal(true) });
+
 export const ResolveExternalPlay = z
   .object({
     kind: z.enum(["home_forfeit", "away_forfeit", "draw", "no_result"]),
