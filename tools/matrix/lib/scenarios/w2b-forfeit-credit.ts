@@ -186,8 +186,11 @@ async function doubleWalkoverTableCheck(ctx: ScenarioContext, rec: Recorder, set
 type AbandonKind = "leading" | "level" | "past_min_overs" | "before_min_overs";
 /** One abandon the scenario posted: its fixture, seats, kind and the events posted — and `rule`, the result the sport's
  *  own rule gives that stream: the real engine's fold of it (CK-AB-1: the DLS par is the engine's table, never the
- *  product's answer), the expected result past the minimum overs (review M-3). */
-export interface AbandonDrive { readonly fixtureId: string; readonly home: string; readonly away: string; readonly kind: AbandonKind; readonly events: readonly StreamEvent[]; readonly rule: ObservedOutcome | null }
+ *  product's answer), the expected result past the minimum overs (review M-3). `drawStands` is whether the stage takes
+ *  a draw at all — the sport's own `supportsDraws` for the case's cfg and stage kind, an engine declaration: FB-AB-1's
+ *  level draw is a draw kind's result only where it does, and where it does not the level abandon has no result
+ *  (X-AB-1; controller ruling R16-3). */
+export interface AbandonDrive { readonly fixtureId: string; readonly home: string; readonly away: string; readonly kind: AbandonKind; readonly events: readonly StreamEvent[]; readonly rule: ObservedOutcome | null; readonly drawStands: boolean }
 
 /** Past the minimum overs the rule's result is a DLS win or a tie (CK-AB-1); anything else the fold gives is named. */
 function pastMinOversRule(d: AbandonDrive): { readonly winner: string | null } | { readonly unread: string } {
@@ -228,7 +231,10 @@ export function abandonWithResult(drives: readonly AbandonDrive[], fixtures: rea
         return { ok: leader !== null && f.status === "decided" && o?.kind === "win" && o.winner === leader && o.method === "abandoned", note: `${got}, wanted decided win{${leader ?? "(no leader posted)"}, method abandoned}` };
       }
       case "level":
-        return { ok: goalLead(d.events, d.home, d.away) === "level" && f.status === "decided" && o?.kind === "draw", note: `${got}, wanted decided draw (a level abandon in a table)` };
+        // X-AB-1: where the stage refuses a draw, the level abandon decides nothing — abandoned, no outcome.
+        return d.drawStands
+          ? { ok: goalLead(d.events, d.home, d.away) === "level" && f.status === "decided" && o?.kind === "draw", note: `${got}, wanted decided draw (a level abandon in a table)` }
+          : { ok: goalLead(d.events, d.home, d.away) === "level" && f.status === "abandoned" && o === null, note: `${got}, wanted abandoned with no outcome (a level abandon where the stage refuses a draw, X-AB-1)` };
       // CK-AB-1: the result the DLS method gives the posted stream (a win by DLS, or a tie at par) — the rule's fold, the
       // par the engine's DLS table, never the product's winner read back.
       case "past_min_overs": {
@@ -249,21 +255,26 @@ export interface PointsCfg { readonly win?: unknown; readonly draw?: unknown; re
  *  (goalLead from the goals posted; past the minimum overs, the rule's fold — review M-3: never the product's winner).
  *  An abandon whose rule result cannot be read is refused by name, for the caller to count as a FAILING item. */
 export function abandonDelta(d: AbandonDrive, p: (k: keyof PointsCfg) => number): { readonly expect: (e: string) => ExpectedDelta } | { readonly refused: string } {
-  const won = (winner: string | null) => (e: string): ExpectedDelta => (e === winner ? { scalars: { won: 1, lost: 0, points: p("win") }, metrics: {} } : { scalars: { won: 0, lost: 1, points: p("loss") }, metrics: {} });
+  // Every abandon with a result is a match played (the sport's standingsDelta); the one with none is not (X-AB-1), so
+  // `played` is judged on every kind — the key a match left out of the table differs on.
+  const won = (winner: string | null) => (e: string): ExpectedDelta => (e === winner ? { scalars: { played: 1, won: 1, lost: 0, points: p("win") }, metrics: {} } : { scalars: { played: 1, won: 0, lost: 1, points: p("loss") }, metrics: {} });
   switch (d.kind) {
     case "leading": {
       const lead = goalLead(d.events, d.home, d.away);
       if (lead === "level") return { refused: `${d.fixtureId} (leading): the goals posted are level — no leader for the rule to credit` };
       return { expect: won(lead === "home" ? d.home : d.away) };
     }
-    case "level": return { expect: () => ({ scalars: { won: 0, drawn: 1, lost: 0, points: p("draw") }, metrics: {} }) };
+    // X-AB-1: where the stage refuses a draw, a level abandon has no result, so it stays out of the table — not played.
+    case "level": return d.drawStands
+      ? { expect: () => ({ scalars: { played: 1, won: 0, drawn: 1, lost: 0, points: p("draw") }, metrics: {} }) }
+      : { expect: () => ({ scalars: { played: 0, won: 0, drawn: 0, lost: 0, points: 0 }, metrics: {} }) };
     case "past_min_overs": {
       const rule = pastMinOversRule(d);
       if ("unread" in rule) return { refused: rule.unread };
-      return { expect: rule.winner === null ? () => ({ scalars: { points: p("tie") }, metrics: {} }) : won(rule.winner) };
+      return { expect: rule.winner === null ? () => ({ scalars: { played: 1, points: p("tie") }, metrics: {} }) : won(rule.winner) };
     }
     // CK-AB-2: 1 point each (the cfg's noResult) and an entry in the no-result column.
-    case "before_min_overs": return { expect: () => ({ scalars: { won: 0, lost: 0, points: p("noResult") }, metrics: { no_results: 1 } }) };
+    case "before_min_overs": return { expect: () => ({ scalars: { played: 1, won: 0, lost: 0, points: p("noResult") }, metrics: { no_results: 1 } }) };
   }
 }
 
@@ -657,9 +668,12 @@ const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
       const home = f.home_entrant_id!;
       const away = f.away_entrant_id!;
       const events = rec.streams.get(f.id) ?? [];
-      // The rule's result for this stream: the real engine's fold of what was posted (review M-3).
-      const rule = toObservedOutcome(foldStream(sportModule(ctx.spec.sport), stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind), home, away, events).outcome);
-      drives.push({ fixtureId: f.id, home, away, kind: step.kind, events, rule });
+      // The rule's result for this stream: the real engine's fold of what was posted (review M-3); and whether the stage
+      // takes a draw: the sport's own declaration for this cfg and kind (X-AB-1).
+      const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
+      const rule = toObservedOutcome(foldStream(sportModule(ctx.spec.sport), cfg, home, away, events).outcome);
+      const drawStands = sportModule(ctx.spec.sport).supportsDraws(cfg, setup.stage.kind as StageKind);
+      drives.push({ fixtureId: f.id, home, away, kind: step.kind, events, rule, drawStands });
     },
   };
   const plays = await playDivision(ctx, rec, setup, hooks);

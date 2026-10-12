@@ -509,7 +509,7 @@ describe("abandonWithResult and goalLead (X-AB-2, FB/HK/IH-AB-1, CK-AB-1/2)", ()
     expect(goalLead(goals(), "a", "b")).toBe("level");
   });
   it("each kind's rule passes, and each wrong result fails alone", () => {
-    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule });
+    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null, drawStands = true) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule, drawStands });
     const dlsB: ObservedOutcome = { kind: "win", winner: "b", method: "dls" };
     const at = (status: string, outcome: ObservedOutcome | null) => [fx("f", "a", "b", status, outcome)];
     expect(abandonWithResult([d("leading", goals("a"))], at("decided", { kind: "win", winner: "a", method: "abandoned" }))).toMatchObject({ verdict: "pass", checked: 1 });
@@ -519,6 +519,12 @@ describe("abandonWithResult and goalLead (X-AB-2, FB/HK/IH-AB-1, CK-AB-1/2)", ()
     expect(abandonWithResult([d("leading", goals("a", "b"))], at("decided", { kind: "win", winner: "a", method: "abandoned" })).verdict, "no leader posted").toBe("fail");
     expect(abandonWithResult([d("level", goals("a", "b"))], at("decided", { kind: "draw" }))).toMatchObject({ verdict: "pass" });
     expect(abandonWithResult([d("level", goals("a", "b"))], at("abandoned", null)).verdict).toBe("fail");
+    // R16-3 (FB-AB-1: a draw in draw kinds only; X-AB-1): where the stage refuses a draw (the sport's supportsDraws), a
+    // level abandon is abandoned with no result - and a draw there is the defect.
+    expect(abandonWithResult([d("level", goals("a", "b"), null, false)], at("abandoned", null))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(abandonWithResult([d("level", goals("a", "b"), null, false)], at("decided", { kind: "draw" })).verdict, "a draw where the stage refuses one").toBe("fail");
+    expect(abandonWithResult([d("level", goals("a", "b"), null, false)], at("abandoned", { kind: "draw" })).verdict, "a held draw is still a result").toBe("fail");
+    expect(abandonWithResult([d("level", goals("a"), null, false)], at("abandoned", null)).verdict, "no level score posted").toBe("fail");
     // CK-AB-1 (review M-3): the expected result is the rule's fold of the posted stream, never the product's winner.
     expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "win", winner: "b", method: "dls" })).verdict).toBe("pass");
     expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "win", winner: "a", method: "dls" })).verdict, "the product's other winner").toBe("fail");
@@ -541,15 +547,18 @@ describe("abandonWithResult and goalLead (X-AB-2, FB/HK/IH-AB-1, CK-AB-1/2)", ()
     // Cricket's league points (hand-written): win 2, loss 0, tie 1, no result 1.
     const pts: Record<string, number> = { win: 2, loss: 0, draw: 1, tie: 1, noResult: 1 };
     const p = (k: string) => pts[k]!;
-    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule });
+    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null, drawStands = true) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule, drawStands });
     const exp = (x: ReturnType<typeof abandonDelta>) => { if (!("expect" in x)) throw new Error(x.refused); return x.expect; };
     const lead = exp(abandonDelta(d("leading", goals("a")), p));
-    expect([lead("a"), lead("b")]).toEqual([{ scalars: { won: 1, lost: 0, points: 2 }, metrics: {} }, { scalars: { won: 0, lost: 1, points: 0 }, metrics: {} }]);
+    expect([lead("a"), lead("b")]).toEqual([{ scalars: { played: 1, won: 1, lost: 0, points: 2 }, metrics: {} }, { scalars: { played: 1, won: 0, lost: 1, points: 0 }, metrics: {} }]);
     const past = exp(abandonDelta(d("past_min_overs", [], { kind: "win", winner: "b", method: "dls" }), p));
-    expect([past("a"), past("b")], "the RULE's winner b, not a product answer").toEqual([{ scalars: { won: 0, lost: 1, points: 0 }, metrics: {} }, { scalars: { won: 1, lost: 0, points: 2 }, metrics: {} }]);
-    expect(exp(abandonDelta(d("past_min_overs", [], { kind: "tie" }), p))("a")).toEqual({ scalars: { points: 1 }, metrics: {} });
-    expect(exp(abandonDelta(d("before_min_overs"), p))("b")).toEqual({ scalars: { won: 0, lost: 0, points: 1 }, metrics: { no_results: 1 } });
-    expect(exp(abandonDelta(d("level", goals("a", "b")), p))("a")).toEqual({ scalars: { won: 0, drawn: 1, lost: 0, points: 1 }, metrics: {} });
+    expect([past("a"), past("b")], "the RULE's winner b, not a product answer").toEqual([{ scalars: { played: 1, won: 0, lost: 1, points: 0 }, metrics: {} }, { scalars: { played: 1, won: 1, lost: 0, points: 2 }, metrics: {} }]);
+    expect(exp(abandonDelta(d("past_min_overs", [], { kind: "tie" }), p))("a")).toEqual({ scalars: { played: 1, points: 1 }, metrics: {} });
+    expect(exp(abandonDelta(d("before_min_overs"), p))("b")).toEqual({ scalars: { played: 1, won: 0, lost: 0, points: 1 }, metrics: { no_results: 1 } });
+    expect(exp(abandonDelta(d("level", goals("a", "b")), p))("a")).toEqual({ scalars: { played: 1, won: 0, drawn: 1, lost: 0, points: 1 }, metrics: {} });
+    // R16-3 / X-AB-1: where the stage refuses a draw, the level abandon has no result - out of the table, nothing played.
+    const out = exp(abandonDelta(d("level", goals("a", "b"), null, false), p));
+    expect([out("a"), out("b")]).toEqual([0, 1].map(() => ({ scalars: { played: 0, won: 0, drawn: 0, lost: 0, points: 0 }, metrics: {} })));
     let refused = 0;
     for (const rule of [null, { kind: "no_result" } as const, { kind: "draw" } as const]) {
       expect(abandonDelta(d("past_min_overs", [], rule), p), JSON.stringify(rule)).toEqual({ refused: expect.stringMatching(/neither a DLS win nor a tie/) });
@@ -975,6 +984,10 @@ describe("each table scenario, run on the league fake", () => {
     { key: "DW-ALL", sport: "generic", pass: ["w2b-double-walkover-recorded", "w2b-double-walkover-table"], abstain: ["w2b-double-walkover-advances-nobody", "w2b-double-walkover-final-refused"] },
     { key: "AB-AWARD", sport: "football", pass: ["w2b-abandon-with-result", "w2b-abandon-in-table"], abstain: [] },
     { key: "AB-AWARD", sport: "cricket", pass: ["w2b-abandon-with-result", "w2b-abandon-in-table"], abstain: [] },
+    // R16-3: hockey's default takes a draw, ice hockey's (iihf: overtime and a shootout) refuses one - both halves of the
+    // level abandon, end to end through the real engine module.
+    { key: "AB-AWARD", sport: "hockey", pass: ["w2b-abandon-with-result", "w2b-abandon-in-table"], abstain: [] },
+    { key: "AB-AWARD", sport: "icehockey", pass: ["w2b-abandon-with-result", "w2b-abandon-in-table"], abstain: [] },
   ];
   for (const r of RUNS) {
     it(`${r.key} on league|${r.sport}: its own checks pass on counted items, the rest abstain by name`, async () => {
