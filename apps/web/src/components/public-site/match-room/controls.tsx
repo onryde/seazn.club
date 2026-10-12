@@ -146,7 +146,8 @@ export function RoomControlsView({
         open={confirm !== null}
         testId={confirm === "abort" ? "room-abort-confirm" : "room-resign-confirm"}
         title={t(confirm === "abort" ? "externalPlay.room.abortConfirm.title" : "externalPlay.room.resignConfirm.title")}
-        confirmLabel={t(confirm === "abort" ? "externalPlay.room.abortConfirm.confirm" : "externalPlay.room.resignConfirm.confirm")}
+        // The button that opened it, named again: "Resign" / "Abort game".
+        confirmLabel={t(confirm === "abort" ? "externalPlay.room.abort" : "externalPlay.room.resign")}
         cancelLabel={t("externalPlay.room.cancel")}
         confirmVariant="danger"
         busy={busy}

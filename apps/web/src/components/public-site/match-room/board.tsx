@@ -72,10 +72,6 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
   const [promo, setPromo] = useState<null | { from: string; to: string }>(null);
   const onMoveRef = useRef(onMove);
   const fenRef = useRef(fen);
-  useEffect(() => {
-    onMoveRef.current = onMove;
-    fenRef.current = fen;
-  });
 
   const turn = sideToMove(fen);
   const check = useMemo(() => inCheck(fen), [fen]);
@@ -103,6 +99,16 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
     }),
     [fen, orientation, turn, check, lastMove, movable],
   );
+  // The latest props, for the board built after the loader resolves: a
+  // snapshot that lands while chessground is still loading must not be lost
+  // to the first render's closure (the effect below runs before the board
+  // exists, so it cannot re-apply it).
+  const configRef = useRef(config);
+  useEffect(() => {
+    onMoveRef.current = onMove;
+    fenRef.current = fen;
+    configRef.current = config;
+  });
 
   // Construct once; destroy on unmount.
   useEffect(() => {
@@ -111,7 +117,7 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
     void loadBoard().then(({ Chessground }) => {
       if (cancelled || !el.current) return;
       api.current = Chessground(el.current, {
-        ...config,
+        ...configRef.current,
         events: {
           move: (orig, dest) => {
             if (needsPromotion(fenRef.current, orig, dest)) {
