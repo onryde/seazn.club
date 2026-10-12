@@ -5953,6 +5953,7 @@
   "externalPlay.room.over.won": "You won",
   "externalPlay.room.over.lost": "You lost",
   "externalPlay.room.over.draw": "Draw",
+  "externalPlay.room.over.noResult": "No result",
   "externalPlay.room.over.onFixture": "The result is on the fixture.",
   "externalPlay.room.over.title": "Game over",
   "externalPlay.room.over.pending": "The result will be on the fixture once it is recorded.",

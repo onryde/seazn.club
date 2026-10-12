@@ -277,7 +277,13 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const result =
     recorded === null
       ? null
-      : resultFor({ winnerEntrantId: recorded.winner, method: recorded.method, myEntrantId: player.entrantId, myColour: mine });
+      : resultFor({
+          winnerEntrantId: recorded.winner,
+          method: recorded.method,
+          myEntrantId: player.entrantId,
+          opponentEntrantId: opponent.entrantId,
+          myColour: mine,
+        });
 
   // T11 M7: a token_revoked hold freezes a seat (or both, when none was
   // recorded); the other player's board stays live. A WRITTEN result ends

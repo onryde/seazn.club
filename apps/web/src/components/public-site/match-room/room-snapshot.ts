@@ -3,7 +3,10 @@
 // Isomorphic on purpose: the room usecase (server) composes a RoomSnapshot
 // from these helpers and the room shell (client) reads the same type, so a
 // field cannot mean one thing on each side. Nothing here touches the DB, a
-// token or Lichess; `@/server/external-play/window` is a pure module.
+// token or Lichess; `@/server/external-play/window` is a pure module, and so
+// is the engine's boardgame fold.
+import { foldMatch } from "@seazn/engine/core";
+import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import { roomPhase, windowFor } from "@/server/external-play/window";
 
 export type Colour = "white" | "black";
@@ -45,11 +48,14 @@ export type RoomGame = {
 };
 
 export type RoomResult = {
-  outcome: "won" | "lost" | "draw";
+  /** The engine's outcome, from the viewer's side: a win is won/lost; a
+   *  draw; or no result (a double forfeit — chess.md §7). */
+  outcome: "won" | "lost" | "draw" | "no_result";
   /** boardgame.result's method, when one was recorded. */
   method: string | null;
-  /** White's score first, the way a chess result is written. */
-  score: "1–0" | "0–1" | "½–½";
+  /** White's score first, the way a chess result is written ("1–0",
+   *  "½–½", "0–0") — the engine's own points for each side. */
+  score: string;
 };
 
 export type RoomSnapshot = {
@@ -150,18 +156,59 @@ export function turnAfter(moveCount: number): Colour {
   return moveCount % 2 === 0 ? "white" : "black";
 }
 
-/** The game-over card's facts from the recorded result (winner is an
- *  entrant id, or null for a draw). */
+const ENGINE_METHODS: ReadonlySet<string> = new Set(BoardgameMethod.options);
+/** The engine's default boardgame scoring IS the FIDE game score (a win 1, a
+ *  draw ½, in half-points) — the division's tournament points never change
+ *  how a chess result is written. */
+const GAME_SCORE_CFG = boardgame.configSchema.parse({});
+
+/** The game-over card's facts from the recorded boardgame.result (winner an
+ *  entrant id or null), as the ENGINE folds it (review I7): its outcome kind
+ *  — a double forfeit is `no_result`, never a draw — and its points for each
+ *  side, White first. A method the engine does not know is carried for the
+ *  record and folded as none. A winner who is neither seat is no result this
+ *  room can state: null, and the screen says the result is on its way. */
 export function resultFor(a: {
   winnerEntrantId: string | null;
   method: string | null;
   myEntrantId: string;
+  opponentEntrantId: string;
   myColour: Colour;
-}): RoomResult {
-  if (a.winnerEntrantId === null) return { outcome: "draw", method: a.method, score: "½–½" };
-  const iWon = a.winnerEntrantId === a.myEntrantId;
-  const whiteWon = iWon === (a.myColour === "white");
-  return { outcome: iWon ? "won" : "lost", method: a.method, score: whiteWon ? "1–0" : "0–1" };
+}): RoomResult | null {
+  if (a.winnerEntrantId !== null && a.winnerEntrantId !== a.myEntrantId && a.winnerEntrantId !== a.opponentEntrantId) {
+    return null;
+  }
+  const white = a.myColour === "white" ? a.myEntrantId : a.opponentEntrantId;
+  const black = a.myColour === "white" ? a.opponentEntrantId : a.myEntrantId;
+  const method = a.method !== null && ENGINE_METHODS.has(a.method) ? a.method : undefined;
+  const at = "1970-01-01T00:00:00.000Z";
+  const state = foldMatch(
+    boardgame,
+    GAME_SCORE_CFG,
+    { home: { entrantId: white, slots: [] }, away: { entrantId: black, slots: [] } },
+    [
+      { id: "start", fixtureId: "room", seq: 0, type: "core.start", payload: {}, recordedAt: at, recordedBy: null },
+      {
+        id: "result",
+        fixtureId: "room",
+        seq: 1,
+        type: "boardgame.result",
+        payload: { winner: a.winnerEntrantId, ...(method === undefined ? {} : { method }) },
+        recordedAt: at,
+        recordedBy: null,
+      },
+    ],
+  );
+  const o = boardgame.outcome(state);
+  if (o === null) return null;
+  const line = (entrant: string) => boardgame.summary(state).perSide.find((p) => p.entrantId === entrant)?.line ?? "";
+  // boardgame.result folds to these three kinds only (the sweep in
+  // room-snapshot.test.ts walks every method); anything else is no result
+  // this card can word, so it is not worded at all.
+  const outcome: RoomResult["outcome"] | null =
+    o.kind === "win" ? (o.winner === a.myEntrantId ? "won" : "lost") : o.kind === "draw" || o.kind === "no_result" ? o.kind : null;
+  if (outcome === null) return null;
+  return { outcome, method: a.method, score: `${line(white)}–${line(black)}` };
 }
 
 /** How long the room's realtime subscriber token lives. It used to be the

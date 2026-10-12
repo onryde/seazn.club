@@ -5953,6 +5953,7 @@
   "externalPlay.room.over.won": "Je hebt gewonnen",
   "externalPlay.room.over.lost": "Je hebt verloren",
   "externalPlay.room.over.draw": "Remise",
+  "externalPlay.room.over.noResult": "Geen resultaat",
   "externalPlay.room.over.onFixture": "De uitslag staat bij de wedstrijd.",
   "externalPlay.room.over.title": "Partij afgelopen",
   "externalPlay.room.over.pending": "De uitslag komt bij de wedstrijd zodra hij is vastgelegd.",

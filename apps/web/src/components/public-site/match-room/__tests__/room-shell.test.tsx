@@ -124,6 +124,16 @@ describe("the room's first paint", () => {
     expect(live).toContain(en["externalPlay.room.yourMove" as keyof typeof en]);
   });
 
+  it("I7: a double forfeit paints NO RESULT · Double forfeit · 0–0 — never \"Draw\" or ½–½", () => {
+    const html = paint(snap({ game: { ...GAME, over: true }, result: { outcome: "no_result", method: "double_forfeit", score: "0–0" } }));
+    expect(screenOf(html)).toBe("over");
+    expect(html).toMatch(/data-outcome="no_result"/);
+    expect(html).toContain(en["externalPlay.room.over.noResult" as keyof typeof en]);
+    expect(html).toContain("Double forfeit · 0–0");
+    expect(html).not.toContain(">Draw<");
+    expect(html).not.toContain("½");
+  });
+
   it("every state card paints for its snapshot (cards 1, 5, 6; seams A and B)", () => {
     const cases: [Partial<RoomSnapshot>, string, string][] = [
       [{ phase: "not_opened" }, "notOpened", "room-state-not-opened"],
@@ -146,6 +156,7 @@ describe("the room's first paint", () => {
       { game: GAME, cameraPolicy: "required", opponentCameraLive: false },
       { game: { ...GAME, over: true }, result: { outcome: "draw", method: "agreement", score: "½–½" } },
       { game: { ...GAME, over: true } },
+      { game: { ...GAME, over: true }, result: { outcome: "no_result", method: "double_forfeit", score: "0–0" } },
       { phase: "not_opened" },
       { creation: { state: "busy", retryAt: new Date(T0 + 48_000).toISOString() } },
       { phase: "closed" },
@@ -161,7 +172,7 @@ describe("the room's first paint", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: locale × screen").toBe(40);
+    expect(checked, "anti-vacuity: locale × screen").toBe(44);
     expect(paint(snap(), "nl"), "nl is not English").not.toContain("Your board is open");
   });
 });

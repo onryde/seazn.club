@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BoardgameMethod } from "@seazn/engine/sports/boardgame";
+import { foldMatch } from "@seazn/engine/core";
+import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import {
   ROOM_REALTIME_TTL_MS,
   frozenFor,
@@ -69,13 +70,17 @@ describe("turnAfter", () => {
   });
 });
 
-describe("resultFor", () => {
-  it("a draw is ½–½ for both seats", () => {
-    expect(resultFor({ winnerEntrantId: null, method: "agreement", myEntrantId: "e1", myColour: "white" })).toEqual({
+describe("resultFor (review I7: the outcome and score are the ENGINE's — T12's boardgame.result, folded)", () => {
+  const seats = { myEntrantId: "me", opponentEntrantId: "them" } as const;
+
+  it("rulebook rows (FIDE Laws: a draw is ½–½; a double forfeit is 0–0 and no result — never a draw)", () => {
+    expect(resultFor({ ...seats, winnerEntrantId: null, method: "agreement", myColour: "white" })).toEqual({
       outcome: "draw",
       method: "agreement",
       score: "½–½",
     });
+    const both = resultFor({ ...seats, winnerEntrantId: null, method: "double_forfeit", myColour: "black" });
+    expect(both).toEqual({ outcome: "no_result", method: "double_forfeit", score: "0–0" });
   });
 
   it("every winner × my colour: won/lost from MY entrant, the score always White-first", () => {
@@ -87,21 +92,64 @@ describe("resultFor", () => {
     ];
     let checked = 0;
     for (const [winner, colour, outcome, score] of rows) {
-      const r = resultFor({ winnerEntrantId: winner, method: "checkmate", myEntrantId: "me", myColour: colour });
-      expect([r.outcome, r.score], `${winner} won, I am ${colour}`).toEqual([outcome, score]);
+      const r = resultFor({ ...seats, winnerEntrantId: winner, method: "checkmate", myColour: colour });
+      expect([r?.outcome, r?.score], `${winner} won, I am ${colour}`).toEqual([outcome, score]);
       checked += 1;
     }
     expect(checked, "anti-vacuity: winner × colour cells").toBe(4);
   });
 
-  it("carries the engine's own method vocabulary through untouched", () => {
+  it("every engine method × winner × colour: outcome and score are what the engine's own fold says", () => {
+    // The expected values come from the engine (foldMatch over the boardgame
+    // module, its default — FIDE — game scoring), never from room-snapshot.
+    const cfg = boardgame.configSchema.parse({});
+    const env = (seq: number, type: string, payload: unknown) => ({
+      id: `e${seq}`,
+      fixtureId: "f",
+      seq,
+      type,
+      payload,
+      recordedAt: "2026-10-12T10:00:00.000Z",
+      recordedBy: null,
+    });
+    const kinds = new Set<string>();
     let checked = 0;
     for (const method of BoardgameMethod.options) {
-      expect(resultFor({ winnerEntrantId: null, method, myEntrantId: "e", myColour: "white" }).method).toBe(method);
-      checked += 1;
+      for (const winner of [null, "me", "them"] as const) {
+        for (const myColour of ["white", "black"] as const) {
+          const white = myColour === "white" ? "me" : "them";
+          const black = myColour === "white" ? "them" : "me";
+          const lineups = { home: { entrantId: white, slots: [] }, away: { entrantId: black, slots: [] } };
+          const state = foldMatch(boardgame, cfg, lineups, [env(0, "core.start", {}), env(1, "boardgame.result", { winner, method })]);
+          const o = boardgame.outcome(state)!;
+          const lines = boardgame.summary(state).perSide;
+          const want = {
+            outcome: o.kind === "win" ? (o.winner === "me" ? "won" : "lost") : o.kind,
+            score: `${lines.find((l) => l.entrantId === white)!.line}–${lines.find((l) => l.entrantId === black)!.line}`,
+          };
+          kinds.add(o.kind);
+          const r = resultFor({ ...seats, winnerEntrantId: winner, method, myColour });
+          expect({ outcome: r?.outcome, score: r?.score }, `${method} / ${winner} / ${myColour}`).toEqual(want);
+          expect(r?.method).toBe(method);
+          checked += 1;
+        }
+      }
     }
-    expect(checked, "anti-vacuity: engine methods checked").toBe(BoardgameMethod.options.length);
-    expect(checked).toBeGreaterThan(3);
+    expect(checked, "anti-vacuity: method × winner × colour").toBe(BoardgameMethod.options.length * 6);
+    expect([...kinds].sort(), "every outcome kind the room can show was reached").toEqual(["draw", "no_result", "win"]);
+  });
+
+  it("no recorded method folds as a plain result; a method the engine does not know is carried, not folded", () => {
+    expect(resultFor({ ...seats, winnerEntrantId: "me", method: null, myColour: "white" })).toEqual({ outcome: "won", method: null, score: "1–0" });
+    expect(resultFor({ ...seats, winnerEntrantId: null, method: "lichess_variant_end", myColour: "white" })).toEqual({
+      outcome: "draw",
+      method: "lichess_variant_end",
+      score: "½–½",
+    });
+  });
+
+  it("a winner who is neither seat is not a result this room can state: null (the screen says it is on its way)", () => {
+    expect(resultFor({ ...seats, winnerEntrantId: "someone-else", method: "resign", myColour: "white" })).toBeNull();
   });
 });
 

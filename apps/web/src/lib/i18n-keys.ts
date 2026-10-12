@@ -2332,6 +2332,7 @@ export type DictionaryKey =
   | "externalPlay.room.offerDraw"
   | "externalPlay.room.over.draw"
   | "externalPlay.room.over.lost"
+  | "externalPlay.room.over.noResult"
   | "externalPlay.room.over.onFixture"
   | "externalPlay.room.over.pending"
   | "externalPlay.room.over.title"
