@@ -249,7 +249,9 @@ function rowsOf(c: CreditCase): string[] {
   // Cricket and chess have no separate retirement row: CK-WO-1 "incl. refusal to continue", BG-WO-1 "or post-start".
   const credit = retirement && p !== "CK" && p !== "BG" ? `${p}-RT-1` : `${p}-WO-1`;
   const cross = c.reason === "withdrew" ? ["X-WD-1"] : retirement ? ["X-RT-1"] : ["X-WO-1"];
-  return [credit, ...cross, c.reason === "retired" || c.reason === "disqualified" ? "X-PS-2" : "X-PS-1"];
+  // Ruling 115: a disqualification with nothing played (an empty scoresheet) is treated like a walkover — X-PS-1's.
+  const something = c.played !== undefined && (c.played.home.length > 0 || c.played.away.length > 0);
+  return [credit, ...cross, c.reason === "retired" || (c.reason === "disqualified" && something) ? "X-PS-2" : "X-PS-1"];
 }
 
 function engineAnswer(item: Item, cfg: Cfg, mismatches: string[]): EngineAnswer | string {
@@ -369,7 +371,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expect(() => expectAgreement(empty, "no case")).toThrow(/zero compared/);
   });
 
-  it("X-RS-1 + X-RT-1 + X-WD-1 — pending owner ruling (DQ with nothing played): pins current behaviour — an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine, and retired is refused by both (ruling 113)", () => {
+  it("X-RS-1 + X-RT-1 + X-WD-1 + X-PS-1 — ruling 115: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine and neither is a match in players' stats, and retired is refused by both (ruling 113)", () => {
     const cases: CreditCase[] = [];
     for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
       for (const e of data.cfgs) {
@@ -400,6 +402,16 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expect(s.compared).toBe(44 * 2 * 2); // 44 cfg entries (41 declared + 3 named extras) × 2 reasons × 2 seats
     expect(s.sports.size).toBe(11);
     expectAgreement(s, "the empty scoresheet");
+    // Ruling 115 (X-PS-1): nothing played, so neither side counts a match in players' stats — the disqualification as
+    // the withdrawal. Asserted on both answers, not only on their agreement.
+    let notAMatch = 0;
+    for (const i of items.filter((x) => x.c.reason !== "retired")) {
+      expect(walkoverCredit(i.c).statsMatch, `${i.label}: the reference`).toBe(false);
+      const eng = engineAnswer(i, engineCfgOf(i.c), []);
+      expect(typeof eng === "string" ? eng : eng.statsMatch, `${i.label}: the engine`).toBe(false);
+      notAMatch++;
+    }
+    expect(notAMatch).toBe(44 * 2 * 2);
   });
 
   it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 211 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {

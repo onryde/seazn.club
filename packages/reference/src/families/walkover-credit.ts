@@ -339,8 +339,9 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   else if (c.sport === "carrom") credit = carromCredit(c.cfg, sp);
   else credit = genericCredit(c.cfg, sp);
   // X-PS-1: a walkover or a withdrawal is never a match played in players' stats; X-PS-2: a retirement or an in-match
-  // disqualification is, W/L as decided.
-  const statsMatch = c.reason === "retired" || c.reason === "disqualified";
+  // disqualification is, W/L as decided. Ruling 115: a disqualification with nothing played — an empty scoresheet, or
+  // none — is treated like a walkover, so it is no match played either.
+  const statsMatch = c.reason === "retired" || (c.reason === "disqualified" && playedAny);
   return { winner: credit.winner, loser: credit.loser, excluded: credit.excluded, points: "win", statsMatch };
 }
 

@@ -700,7 +700,7 @@
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour"
+    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 \\+ X-PS-1 — ruling 115: an EMPTY scoresheet"
    },
    {
     "cwd": "packages/reference",
@@ -722,7 +722,7 @@
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "X-WD-6 \\+ X-RT-1 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour — a Best of 1 with nothing played"
+    "name": "X-WD-6 \\+ X-RT-1 \\+ X-PS-1 — ruling 115: a Best of 1 with nothing played"
    }
   ]
  },
@@ -958,6 +958,50 @@
      "src/sport/player-stats-forfeit.test.ts"
     ],
     "name": "ruling 115 \\+ X-PS-1 \\+ X-RT-1: a disqualification straight after the start"
+   }
+  ]
+ },
+ {
+  "id": "r115-ref-dq-played-ignored",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\" || c.reason === \"disqualified\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 \\+ X-PS-1 — ruling 115: an EMPTY scoresheet"
+   },
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-PS-2: retired and an in-match disqualification credit statsMatch true"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "X-RS-1 \\+ X-RT-1 \\+ X-WD-1 \\+ X-PS-1 — ruling 115: an EMPTY scoresheet"
+   }
+  ]
+ },
+ {
+  "id": "r115-ref-dq-never-a-match",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\";",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "X-PS-2: retired and an in-match disqualification credit statsMatch true"
    }
   ]
  }
