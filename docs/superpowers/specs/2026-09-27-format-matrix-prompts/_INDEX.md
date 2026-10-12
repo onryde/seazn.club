@@ -1286,7 +1286,8 @@ Elsewhere the text is the controller's record.
        and never forced to a draw.
        - The cfgs: icehockey/iihf, including the icehockey default, and hockey/fih-shootout.
        - In draw kinds it is still a draw with the real score (FB-AB-1).
-       - This qualifies FB-AB-1, HK-AB-1 and IH-AB-1, and the rule rows record it.
+       - This qualifies HK-AB-1 and IH-AB-1, and their rule rows record it. FB-AB-1 is not amended: football always
+         admits a draw, and its row already covers brackets (T16 round-2 review).
      - **Handed to W4:**
        - the bye and vacant-final copy family, which includes the SF2 void copy (R16-5 Q2) and "final after a semi DW
          shows bye copy";
