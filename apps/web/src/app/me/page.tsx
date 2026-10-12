@@ -24,6 +24,9 @@ import { RsvpControl } from "@/components/me/rsvp-control";
 import { OfficiatingLane } from "@/components/me/officiating-lane";
 import { SuspensionsLane } from "@/components/me/suspensions-lane";
 import { ConsentCard } from "@/components/me/consent-card";
+import { LichessLinkCard } from "@/components/lichess-link-card";
+import { lichessConfigured } from "@/lib/oauth";
+import { myLichessLink } from "@/server/usecases/me-lichess";
 import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
@@ -59,6 +62,7 @@ export default async function MePage({
     activeOrgId,
     mySuspensions,
     myAverage,
+    lichessCard,
   ] = await Promise.all([
       listMyFixtures(user.id),
       getMyOfficiating(user.id),
@@ -79,6 +83,9 @@ export default async function MePage({
       getMySuspensions(user.id),
       // The official's own cross-org average (D4) — null below 3 marks.
       myMarksAverage(user.id),
+      // T16 (T20 m1): the Lichess card — linked, and the club a link starts at (one offered online chess that this
+      // player is entered in online; never just the club they administer).
+      myLichessLink(user.id),
     ]);
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? orgs[0] ?? null;
   const { claimed, lichess } = await searchParams;
@@ -450,6 +457,18 @@ export default async function MePage({
         )}
 
         {persons.length > 0 && <ConsentCard persons={persons} />}
+
+        {lichessCard.show && (
+          <div className="mt-6">
+            <LichessLinkCard
+              linkedUsername={lichessCard.linkedUsername}
+              configured={lichessConfigured()}
+              orgSlug={lichessCard.orgSlug}
+              needsReconsent={lichessCard.needsReconsent}
+              next="/me"
+            />
+          </div>
+        )}
 
         {/* Growth seam (PROMPT-53): every claimed player is a future
             organiser. Quiet, last, and only when they run nothing yet — the

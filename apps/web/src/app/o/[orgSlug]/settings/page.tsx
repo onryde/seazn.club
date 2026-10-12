@@ -27,7 +27,7 @@ import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
-import { getLichessLink } from "@/server/usecases/external-accounts";
+import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
 import { onlineChessOffered } from "@/server/usecases/external-play/online-chess-flag";
 import { lichessConfigured } from "@/lib/oauth";
 import { lichessFlashKey } from "@/lib/lichess-link";
@@ -227,9 +227,12 @@ export default async function SettingsPage({
   // T20: linking a Lichess account starts online chess, offered per club (the PostHog flag `online-chess`). The card
   // shows while this club is offered it — or while the player is linked, so they can still unlink.
   let lichessOffered = false;
+  // T16: linked, but the grant cannot play (the play gate's own predicate) — the card asks for a re-link.
+  let lichessNeedsReconsent = false;
   if (tab === "account") {
     const linked = await getLichessLink(user.id);
     lichessUsername = linked?.username ?? null;
+    lichessNeedsReconsent = linked !== null && !lichessGrantPlays(linked);
     lichessOffered = await onlineChessOffered(auth);
     for (const org of orgs) {
       if (org.role === "owner") {
@@ -668,7 +671,13 @@ export default async function SettingsPage({
                 </section>
 
                 {(lichessOffered || lichessUsername) && (
-                  <LichessLinkCard linkedUsername={lichessUsername} configured={lichessOk} orgSlug={active.slug} />
+                  <LichessLinkCard
+                    linkedUsername={lichessUsername}
+                    configured={lichessOk}
+                    // A (re-)link starts online chess: it names this club only while the club is offered it.
+                    orgSlug={lichessOffered ? active.slug : null}
+                    needsReconsent={lichessNeedsReconsent}
+                  />
                 )}
 
                 {/* Export */}

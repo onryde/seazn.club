@@ -35,15 +35,24 @@ vi.mock("@/server/page-auth", () => ({ requireOrgPage }));
 vi.mock("@/lib/auth", () => ({ getUserOrgs }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
-vi.mock("@/server/usecases/external-accounts", () => ({ getLichessLink }));
+// The link read is doubled; the grant predicate (`lichessGrantPlays`, the play gate's own) stays REAL.
+vi.mock("@/server/usecases/external-accounts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/external-accounts")>();
+  return { ...actual, getLichessLink };
+});
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
   return { ...actual, isServerFeatureEnabled };
 });
 
 vi.mock("@/components/lichess-link-card", () => ({
-  LichessLinkCard: (p: { orgSlug: string; linkedUsername: string | null; configured: boolean }) => (
-    <div data-testid="lichess-card" data-org={p.orgSlug} data-linked={p.linkedUsername ?? ""} />
+  LichessLinkCard: (p: { orgSlug: string | null; linkedUsername: string | null; configured: boolean; needsReconsent?: boolean }) => (
+    <div
+      data-testid="lichess-card"
+      data-org={p.orgSlug ?? "none"}
+      data-linked={p.linkedUsername ?? ""}
+      data-reconsent={String(p.needsReconsent ?? false)}
+    />
   ),
 }));
 vi.mock("@/components/timezone-preference", () => ({ TimezonePreference: () => <div /> }));
@@ -70,6 +79,7 @@ vi.mock("@/components/account-actions", () => ({
 }));
 
 import SettingsPage from "../page";
+import { PLAY_SCOPES } from "@/server/usecases/external-accounts";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 
 const ORG = {
@@ -112,9 +122,9 @@ function flagIs(s: FlagState): void {
   isServerFeatureEnabled.mockReset();
   s.arm();
 }
-const linkedAs = (username: string | null) =>
+const linkedAs = (username: string | null, scopes: string[] = [...PLAY_SCOPES]) =>
   getLichessLink.mockResolvedValue(
-    username ? { externalUserId: username.toLowerCase(), username, scopes: [], consentedAt: new Date() } : null,
+    username ? { externalUserId: username.toLowerCase(), username, scopes, consentedAt: new Date() } : null,
   );
 
 beforeEach(() => {
@@ -168,6 +178,22 @@ describe("Settings → Account: the Lichess card follows the club's online-chess
     const html = await render("account");
     expect(html).toContain('data-testid="lichess-card"');
     expect(html).toContain('data-linked="Magnus"');
+  });
+
+  it("T16: linked with a grant short of the play scopes asks for re-consent; the re-link names the club only while it is offered", async () => {
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      flagIs(s);
+      linkedAs("Magnus", PLAY_SCOPES.slice(1));
+      const html = await render("account");
+      expect(html, s.label).toContain('data-reconsent="true"');
+      expect(html, s.label).toContain(`data-org="${s.offered ? ORG.slug : "none"}"`);
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+    linkedAs("Magnus");
+    flagIs(FLAG_STATES[0]!);
+    expect(await render("account"), "a full grant: nothing to re-consent").toContain('data-reconsent="false"');
   });
 
   it("another tab neither shows the card nor asks the flag", async () => {

@@ -57,6 +57,8 @@ vi.mock("@/lib/db", () => ({
   sql: vi.fn(async (strings: TemplateStringsArray) => {
     const text = Array.isArray(strings) ? strings.join("") : "";
     if (text.includes("default_locale")) return [{ ...sqlRow, ...orgRow }];
+    // Not linked to Lichess: the generic row is no account link (T16 reads the link's grant).
+    if (text.includes("user_external_accounts")) return [];
     return [sqlRow];
   }),
 }));
