@@ -6,7 +6,8 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { Chess } from "chess.js";
-import { canMove, initialRoomState, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomState } from "../room-state";
+import { canMove, initialRoomState, moveNotice, parseRoomBroadcast, plyOfFen, roomReducer, type RoomBroadcastWire, type RoomState } from "../room-state";
+import type { RoomActBody } from "../room-api";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
 
 // A fixed opening, played by chess.js: FENS[i] is the board after i plies.
@@ -302,6 +303,102 @@ describe("fetch_failed", () => {
   });
 });
 
+// Seams A/B/C (owner-approved canvas, "Room states"): the three in-room
+// notices are the error kinds the room already records — C1 network, C2 a
+// move Lichess refused, C3 a move our server refused — and each one's
+// LIFETIME is a transition: what raises it, what keeps it, what ends it.
+describe("move notices (C1–C3): raised, kept and ended by the room's own events", () => {
+  const live = () => initialRoomState(snap({ game: game(2) }), T0); // White to move; you are White
+  const move = { kind: "move", uci: "g1f3" } as const;
+  const sent = (s: RoomState, action: RoomActBody = move) => roomReducer(s, { type: "act_sent", action });
+  const refusedBy = (s: RoomState) => roomReducer(s, { type: "act_answered", answer: { ok: false, reconcile: true, reason: "rejected" } });
+  const read = (s: RoomState, at: number, g: RoomGame | null = game(2)) =>
+    roomReducer(s, { type: "snapshot", snap: snap({ serverNow: iso(at), game: g }), receivedAt: at });
+
+  it("the empty case: a fresh room, and a room whose every act went through, show no notice", () => {
+    expect(moveNotice(live())).toBeNull();
+    expect(moveNotice(initialRoomState(snap(), T0)), "no game at all").toBeNull();
+    const ok = roomReducer(sent(live()), { type: "act_answered", answer: { ok: true, applied: true } });
+    expect(moveNotice(ok)).toBeNull();
+  });
+
+  it("C1: a read that never got an answer is offline; the next read that does ends it — and a second failure raises it again", () => {
+    const off = roomReducer(live(), { type: "fetch_failed", status: 0 });
+    expect(moveNotice(off)).toBe("offline");
+    // A read the server ANSWERED with an error is not the player offline.
+    expect(moveNotice(roomReducer(live(), { type: "fetch_failed", status: 500 }))).toBeNull();
+    const back = read(off, T0 + 3000);
+    expect([moveNotice(back), back.error]).toEqual([null, null]);
+    // Even a stale answer is an answer: the connection is back.
+    const staleBack = roomReducer(read(live(), T0 + 9000), { type: "fetch_failed", status: 0 });
+    const stale = read(staleBack, T0 + 1000);
+    expect([moveNotice(stale), ply(stale)]).toEqual([null, 2]);
+    expect(moveNotice(roomReducer(back, { type: "fetch_failed", status: 0 })), "a second drop").toBe("offline");
+  });
+
+  it("C1: a move that never reached us is offline too (the board is put back), and stays so while reads keep failing", () => {
+    const lost = roomReducer(sent(live()), { type: "act_failed", status: 0 });
+    expect([moveNotice(lost), lost.syncKey]).toEqual(["offline", 1]);
+    const still = roomReducer(lost, { type: "fetch_failed", status: 0 });
+    expect(moveNotice(still)).toBe("offline");
+    expect(moveNotice(read(still, T0 + 3000))).toBeNull();
+  });
+
+  it("a read never ends a re-link (it is a screen, not a notice)", () => {
+    const grant = roomReducer(sent(live()), { type: "act_answered", answer: { ok: false, reconcile: false, reason: "lichess_reconsent_required" } });
+    const after = read(grant, T0 + 3000);
+    expect([after.error, moveNotice(after)]).toEqual(["relink", null]);
+  });
+
+  it("C2: a move Lichess refused — the piece is put back — and the re-read of the SAME board keeps the notice", () => {
+    const refused = refusedBy(sent(live()));
+    expect([moveNotice(refused), refused.syncKey]).toEqual(["refused", 1]);
+    // useRoom re-reads after every act: that read must not wipe the notice.
+    const reread = read(refused, T0 + 500);
+    expect(moveNotice(reread)).toBe("refused");
+  });
+
+  it("C3: a move our server refused (any answered status) is invalid, and the re-read keeps it", () => {
+    let checked = 0;
+    for (const status of [404, 409, 422]) {
+      const bad = roomReducer(sent(live()), { type: "act_failed", status });
+      expect([moveNotice(bad), bad.syncKey], String(status)).toEqual(["invalid", 1]);
+      expect(moveNotice(read(bad, T0 + 500)), `${status} re-read`).toBe("invalid");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: statuses").toBe(3);
+  });
+
+  it("C2/C3 end when the player tries again, and when the board moves on (a read or a broadcast past the refused position)", () => {
+    let checked = 0;
+    for (const raise of [refusedBy, (s: RoomState) => roomReducer(s, { type: "act_failed", status: 404 })]) {
+      const shown = raise(sent(live()));
+      expect(moveNotice(shown)).not.toBeNull();
+      expect(moveNotice(sent(shown)), "trying again").toBeNull();
+      expect(moveNotice(read(shown, T0 + 3000, game(3))), "a read one ply on").toBeNull();
+      expect(moveNotice(roomReducer(shown, { type: "broadcast", b: bc(3), receivedAt: T0 + 3000 })), "a broadcast one ply on").toBeNull();
+      // The pair: a broadcast of the SAME ply (a clock or offer change) keeps it.
+      expect(moveNotice(roomReducer(shown, { type: "broadcast", b: bc(2, { drawOfferBy: "black" }), receivedAt: T0 + 3000 })), "same ply").not.toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the drawn copy is a MOVE's: a refused resign, draw or abort raises no move notice (its error is still recorded)", () => {
+    let checked = 0;
+    for (const action of [{ kind: "resign" }, { kind: "draw", accept: true }, { kind: "abort" }] as const) {
+      const refused = refusedBy(sent(live(), action));
+      expect([refused.error, moveNotice(refused)], `${action.kind} refused`).toEqual(["refused", null]);
+      const bad = roomReducer(sent(live(), action), { type: "act_failed", status: 404 });
+      expect([bad.error, moveNotice(bad)], `${action.kind} 404`).toEqual(["invalid", null]);
+      // Offline is offline whatever was sent.
+      expect(moveNotice(roomReducer(sent(live(), action), { type: "act_failed", status: 0 })), `${action.kind} lost`).toBe("offline");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: non-move acts").toBe(3);
+  });
+});
+
 describe("canMove", () => {
   it("only on your turn, in a live game, with nothing pending and your seat not frozen", () => {
     const base = initialRoomState(snap({ game: game(2) }), T0); // white to move, you are white
@@ -334,7 +431,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     | { k: "snapshot"; age: number }
     | { k: "broadcast"; age: number; offer: boolean }
     | { k: "end" }
-    | { k: "act" }
+    | { k: "act"; move: boolean }
     | { k: "answer"; ok: boolean }
     | { k: "fail"; status: number }
     | { k: "actFail"; status: number }
@@ -344,7 +441,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     { weight: 3, arbitrary: fc.integer({ min: 0, max: 4 }).map((age) => ({ k: "snapshot" as const, age })) },
     { weight: 3, arbitrary: fc.record({ age: fc.integer({ min: 0, max: 4 }), offer: fc.boolean() }).map((r) => ({ k: "broadcast" as const, ...r })) },
     { weight: 1, arbitrary: fc.constant({ k: "end" as const }) },
-    { weight: 2, arbitrary: fc.constant({ k: "act" as const }) },
+    { weight: 2, arbitrary: fc.boolean().map((move) => ({ k: "act" as const, move })) },
     { weight: 2, arbitrary: fc.boolean().map((ok) => ({ k: "answer" as const, ok })) },
     { weight: 1, arbitrary: fc.constantFrom(0, 404, 500).map((status) => ({ k: "fail" as const, status })) },
     { weight: 2, arbitrary: fc.constantFrom(0, 404, 500).map((status) => ({ k: "actFail" as const, status })) },
@@ -352,7 +449,11 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
   );
 
   it("ply never falls, over never un-ends, polling never restarts, syncKey never falls, at most one request in flight — and the latest read wins", () => {
-    const seen = { steps: 0, staleDropped: 0, plyRose: 0, overSeen: 0, pollingStopped: 0, doubleSendBlocked: 0, act404Survived: 0, endedPolling: 0, endedStopped: 0 };
+    const seen = {
+      steps: 0, staleDropped: 0, plyRose: 0, overSeen: 0, pollingStopped: 0, doubleSendBlocked: 0, act404Survived: 0, endedPolling: 0, endedStopped: 0,
+      // Seams C: each notice raised, and each ending exercised.
+      offline: 0, refused: 0, invalid: 0, offlineEndedByRead: 0, endedByPlyRise: 0, nonMoveSilent: 0,
+    };
     fc.assert(
       fc.property(fc.array(step, { minLength: 12, maxLength: 40 }), (steps) => {
         // The server's history: index = server tick; each entry a snapshot.
@@ -403,7 +504,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
               break;
             }
             case "act": {
-              const next = roomReducer(s, { type: "act_sent", action: { kind: "draw", accept: true } });
+              const next = roomReducer(s, { type: "act_sent", action: st.move ? { kind: "move", uci: "g1f3" } : { kind: "draw", accept: true } });
               if (before.pending !== null) {
                 expect(next, "a second send while one is in flight is a no-op").toBe(before);
                 seen.doubleSendBlocked += 1;
@@ -433,6 +534,24 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
           expect(s.syncKey).toBeGreaterThanOrEqual(before.syncKey);
           expect(Date.parse(s.snap.serverNow)).toBeGreaterThanOrEqual(Date.parse(before.snap.serverNow));
           if (ply(s) > ply(before)) seen.plyRose += 1;
+          // The notices (C1–C3): a refused/invalid error always knows its act;
+          // a notice always stands on an error; an answered read is never
+          // "offline"; a board past the refused position never shows C2/C3.
+          const notice = moveNotice(s);
+          if (s.error === "refused" || s.error === "invalid") expect(s.failedAct, "a refusal knows its act").not.toBeNull();
+          if (notice !== null) expect(s.error, "a notice stands on an error").not.toBeNull();
+          if (notice === "offline") seen.offline += 1;
+          if (notice === "refused") seen.refused += 1;
+          if (notice === "invalid") seen.invalid += 1;
+          if ((s.error === "refused" || s.error === "invalid") && notice === null) seen.nonMoveSilent += 1;
+          if (st.k === "snapshot") {
+            expect(notice, "an answered read is never offline").not.toBe("offline");
+            if (before.error === "network") seen.offlineEndedByRead += 1;
+          }
+          if (ply(s) > ply(before)) {
+            expect(notice === "refused" || notice === "invalid", "the board moved on: no C2/C3").toBe(false);
+            if (moveNotice(before) === "refused" || moveNotice(before) === "invalid") seen.endedByPlyRise += 1;
+          }
           if (s.snap.game?.over) seen.overSeen += 1;
           if (before.polling && !s.polling) seen.pollingStopped += 1;
           seen.steps += 1;
@@ -458,6 +577,12 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     expect(seen.act404Survived, "play 404s delivered while an act was pending").toBeGreaterThan(20);
     expect(seen.endedPolling, "runs ending still polling").toBeGreaterThan(20);
     expect(seen.endedStopped, "runs ending stopped").toBeGreaterThan(20);
+    expect(seen.offline, "steps showing C1").toBeGreaterThan(200);
+    expect(seen.refused, "steps showing C2").toBeGreaterThan(100);
+    expect(seen.invalid, "steps showing C3").toBeGreaterThan(100);
+    expect(seen.offlineEndedByRead, "C1 ended by an answered read").toBeGreaterThan(30);
+    expect(seen.endedByPlyRise, "C2/C3 ended by the board moving on").toBeGreaterThan(10);
+    expect(seen.nonMoveSilent, "a refused offer raises no move notice").toBeGreaterThan(100);
   });
 });
 

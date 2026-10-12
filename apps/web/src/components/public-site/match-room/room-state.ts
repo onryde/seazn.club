@@ -58,6 +58,11 @@ export function parseRoomBroadcast(raw: unknown): RoomBroadcastWire | null {
 
 export type RoomError = "relink" | "network" | "refused" | "invalid";
 
+/** The in-room notice an error shows on the live board (Seams A/B/C, the
+ *  owner-approved canvas): C1 offline, C2 a move Lichess refused, C3 a move
+ *  our server refused. */
+export type MoveNotice = "offline" | "refused" | "invalid";
+
 export type RoomState = {
   snap: RoomSnapshot;
   /** serverNow − clientNow at the last snapshot, ms. Clocks run on the
@@ -68,6 +73,10 @@ export type RoomState = {
   seat: SeatAnswer | null;
   pending: null | { kind: "seat" } | { kind: "act"; action: RoomActBody };
   error: RoomError | null;
+  /** The kind of act whose answer raised a `refused` or `invalid` error —
+   *  set with it, in the same transition, so the notice can tell a move
+   *  from a resign or an offer (the drawn copy is a move's). */
+  failedAct: RoomActBody["kind"] | null;
   /** Bumped whenever the board must be put back on the held position. */
   syncKey: number;
   polling: boolean;
@@ -109,6 +118,7 @@ export function initialRoomState(snap: RoomSnapshot, receivedAt: number): RoomSt
     seat: null,
     pending: null,
     error: null,
+    failedAct: null,
     syncKey: 0,
     polling: !stopsPolling(snap),
     notFound: false,
@@ -165,22 +175,39 @@ function applyBroadcast(s: RoomState, b: RoomBroadcastWire, receivedAt: number):
   return { ...s, snap: { ...s.snap, game } };
 }
 
+/** The notices' endings that no request of the player's causes: a read
+ *  that got an answer ends "offline" (even a stale one — the connection is
+ *  back), and a board that moved past the refused position ends C2/C3 (it
+ *  speaks of a position that no longer stands). */
+function endNotices(before: RoomState, after: RoomState, answered: boolean): RoomState {
+  const offlineEnds = answered && after.error === "network";
+  const movedOn =
+    (after.error === "refused" || after.error === "invalid") && plyOf(after.snap.game) > plyOf(before.snap.game);
+  return offlineEnds || movedOn ? { ...after, error: null, failedAct: null } : after;
+}
+
 export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
   switch (e.type) {
     case "snapshot": {
       const merged = mergeSnapshot(s, e.snap, e.receivedAt);
-      return merged === s ? s : { ...merged, notFound: false };
+      return endNotices(s, merged === s ? s : { ...merged, notFound: false }, true);
     }
     case "broadcast":
-      return applyBroadcast(s, e.b, e.receivedAt);
+      return endNotices(s, applyBroadcast(s, e.b, e.receivedAt), false);
     case "seat_sent":
       if (s.pending !== null) return s;
-      return { ...s, pending: { kind: "seat" }, error: null };
+      return { ...s, pending: { kind: "seat" }, error: null, failedAct: null };
     case "seat_answered": {
       const merged = mergeSnapshot(s, e.answer.snapshot, e.receivedAt);
       const seat = e.answer.seat;
       const relink = seat !== null && !seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required");
-      return { ...merged, seat, pending: s.pending?.kind === "seat" ? null : s.pending, error: relink ? "relink" : null };
+      return {
+        ...merged,
+        seat,
+        pending: s.pending?.kind === "seat" ? null : s.pending,
+        error: relink ? "relink" : null,
+        failedAct: null,
+      };
     }
     case "seat_failed":
       return {
@@ -192,15 +219,16 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       };
     case "act_sent":
       if (s.pending !== null) return s;
-      return { ...s, pending: { kind: "act", action: e.action }, error: null };
+      return { ...s, pending: { kind: "act", action: e.action }, error: null, failedAct: null };
     case "act_answered": {
       if (s.pending?.kind !== "act") return s;
       const a = e.answer;
-      if (a.ok) return { ...s, pending: null, error: null };
+      if (a.ok) return { ...s, pending: null, error: null, failedAct: null };
       return {
         ...s,
         pending: null,
         error: a.reconcile ? "refused" : "relink",
+        failedAct: s.pending.action.kind,
         syncKey: s.syncKey + 1,
       };
     }
@@ -213,6 +241,7 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
         ...s,
         pending: null,
         error: e.status === 0 ? "network" : "invalid",
+        failedAct: s.pending.action.kind,
         syncKey: s.syncKey + 1,
       };
     case "fetch_failed":
@@ -223,6 +252,16 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
         error: e.status === 0 ? "network" : s.error,
       };
   }
+}
+
+/** The notice the live board shows for the room's error (C1–C3), or none.
+ *  Offline is offline whatever was sent; C2/C3 say "that move", so they are
+ *  a MOVE's — a refused resign, offer or abort keeps its error (the re-read
+ *  shows the truth) but no move notice. A re-link is a screen, not this. */
+export function moveNotice(s: RoomState): MoveNotice | null {
+  if (s.error === "network") return "offline";
+  if ((s.error === "refused" || s.error === "invalid") && s.failedAct === "move") return s.error;
+  return null;
 }
 
 /** May the viewer move right now? The server's `canAct` (T10's own
