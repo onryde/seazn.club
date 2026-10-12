@@ -355,6 +355,47 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(received(m).consumed + received(m).audioConsumed).toBe(0);
   });
 
+  it("isolated failures never add up: three one-off throws, each followed by a clean run, never fail closed", async () => {
+    const { seen, report } = reports();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), mic(m, OPP.peer)) });
+    const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    const m = rtk.meetings[0]!;
+    await settle();
+    let episodes = 0;
+    for (let i = 0; i < D7_MAX_ATTEMPTS; i += 1) {
+      m.failNext.unsubscribe = 1;
+      await m.participants.subscribe([OPP.peer], ["video", "audio"]);
+      await settle();
+      expect(m.failNext.unsubscribe, `episode ${i}: the failure was hit`).toBe(0);
+      expect(received(m), `episode ${i}`).toEqual(NOTHING);
+      episodes += 1;
+    }
+    expect(episodes, "anti-vacuity: episodes").toBe(D7_MAX_ATTEMPTS);
+    expect(m.calls, "never left").not.toContain("leave");
+    expect(cam.link()).not.toBeNull();
+    expect(seen.map((x) => x.event)).toEqual(["d7_enforce_failed"]);
+  });
+
+  it("a leave that fails while failing closed is reported, not swallowed — and the camera still reads out of the meeting", async () => {
+    const { seen, report } = reports();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), camera(m, OPP.peer), mic(m, OPP.peer)) });
+    const cam = await makeJoinOwnCamera(rtk.load, report)("own-token");
+    const m = rtk.meetings[0]!;
+    await settle();
+    m.failNext.unsubscribe = 1_000;
+    m.failNext.leave = 1;
+    await m.participants.subscribe([OPP.peer], ["video", "audio"]);
+    await settle();
+    expect(m.failNext.leave, "premise: the leave failed").toBe(0);
+    expect(seen).toEqual([
+      { event: "d7_enforce_failed", message: "injected unsubscribe failure" },
+      { event: "d7_fail_closed", message: "injected unsubscribe failure" },
+      { event: "d7_leave_failed", message: "injected leave failure" },
+    ]);
+    expect(cam.link(), "no roomLeft arrived, and still nothing is claimed").toBeNull();
+    expect(cam.track()).toBeNull();
+  });
+
   it("a camera listener hears the fail-closed as the camera going off", async () => {
     const rtk = fakeRealtimeKit({ setup: (m) => (m.peerJoins(OPP.peer, OPP.user), mic(m, OPP.peer)) });
     const cam = await makeJoinOwnCamera(rtk.load, () => {})("own-token");
