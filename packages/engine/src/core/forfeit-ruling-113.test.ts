@@ -168,4 +168,26 @@ describe("ruling 113: the console's admission is the guard's (forfeitAdmission)"
     });
     expect(checked).toBeGreaterThan(builtinModules.length);
   });
+
+  it("D3 R4 + ruling 113 (R112 fix round 2, m1): a retirement needs BOTH — something played AND a phase past \"pre\"; a phase that reads pre is offered the walkover and the withdrawal only, whatever the console's fact says", () => {
+    // forfeitAdmission takes `playRecorded` from its caller (the console reads it off its ledger rows), so the fact and
+    // the module's phase can disagree — a stale state, or a module that reads pre. The phase is the module's word: R4
+    // records a retirement after the Start, ruling 113 once something is played, and neither alone admits it. The
+    // expected lists are the rule's: in pre a walkover and a withdrawal (R2, R5) and the double walkover (R1); in play,
+    // played, everything but the walkover (ruling 112); in play, nothing played, everything but the retirement.
+    const phased = (phase: "pre" | "play") => ({ forfeitPhase: (): "pre" | "play" => phase });
+    const cases = [
+      { phase: "pre" as const, played: true, reasons: ["walkover", "withdrew"], both: true },
+      { phase: "pre" as const, played: false, reasons: ["walkover", "withdrew"], both: true },
+      { phase: "play" as const, played: true, reasons: FORFEIT_REASONS.filter((r) => r !== "walkover"), both: false },
+      { phase: "play" as const, played: false, reasons: NOTHING_PLAYED, both: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const got = forfeitAdmission(phased(c.phase), {}, { playRecorded: c.played });
+      expect(got, `phase ${c.phase}, played ${c.played}`).toEqual({ phase: c.phase, reasons: c.reasons, both: c.both });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
 });
