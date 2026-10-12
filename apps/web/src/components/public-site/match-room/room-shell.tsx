@@ -262,7 +262,7 @@ export function Screen({
     case "checkin":
       return (
         <>
-          {gaveUp}
+          {gaveUp !== null ? <div className="mb-3.5 md:mx-auto md:w-full md:max-w-md">{gaveUp}</div> : null}
           <Checkin
             snap={snap}
             closesIn={countdownTo(snap.deadline)}
