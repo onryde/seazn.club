@@ -96,6 +96,102 @@
       "original": "compareSemver(module.version, best.version) > 0",
       "line": "if (!best || compareSemver(module.version, best.version) > 0) best = module;",
       "reason": "`>= 0` differs from `> 0` only when compareSemver returns 0, i.e. two DIFFERENT version strings that parse to the same triple. The version Map is keyed by the exact string and register() refuses a duplicate, and parseSemver refuses leading zeros (semver.org §2), so each (major, minor, patch) has exactly one spelling: two keys in the Map never compare equal, and the module being compared is never `best` itself because `best` is taken from earlier iterations. With `>=` the replacement would only differ on a tie, which cannot occur."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:100:7 LogicalOperator → lower === overs && lower === 50",
+      "original": "lower === overs || lower === 50",
+      "line": "if (lower === overs || lower === 50) return base;",
+      "reason": "`||` → `&&` differs only when exactly one operand holds. `lower === 50` alone cannot: overs is clamped to at most 50 and lower = floor(overs), so lower === 50 means overs === 50. `lower === overs` alone (a whole number of overs below 50) now falls through to the interpolation, which reads row lower + 1 (present, lower <= 49) and returns base + 0 × (next − base) = base, the early return's value. A NaN over count throws at the row lookup on line 98 in both versions before line 100."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:100:26 ConditionalExpression → false",
+      "original": "lower === 50",
+      "line": "if (lower === overs || lower === 50) return base;",
+      "reason": "`lower === 50` never holds without `lower === overs`: overs is clamped to at most 50 and lower = floor(overs), so lower === 50 means overs === 50 and the left operand already returned base. Dropping the right operand therefore changes no input's path."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:156:7 ConditionalExpression → true",
+      "original": "r2 > r1",
+      "line": "if (r2 > r1) return Math.floor(s1 + (g50 * (r2 - r1)) / 100) + 1;",
+      "reason": "Line 156 is reached only when `r1 <= 0` (line 154) and `r2 < r1` (line 155) both failed, i.e. at r2 === r1: a NaN resource cannot reach dlsTarget, since resources() throws on a NaN over count at its table lookup and every caller's r1/r2 is a resourcesFromBalls value or a difference of two (cricket.ts). Forcing the G50 branch there returns ⌊s1 + g50 × 0 / 100⌋ + 1 = s1 + 1 for the integer run total every caller passes (the first innings' `runs`) and any finite g50 — the fall-through's own `s1 + 1`. dls.mutation.test.ts sweeps R1 = R2 over every published innings length."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:156:7 EqualityOperator → r2 >= r1",
+      "original": "r2 > r1",
+      "line": "if (r2 > r1) return Math.floor(s1 + (g50 * (r2 - r1)) / 100) + 1;",
+      "reason": "`>=` differs from `>` only at r2 === r1, where the G50 branch returns ⌊s1 + g50 × 0 / 100⌋ + 1 = s1 + 1 for the integer run total every caller passes and any finite g50 — the same value the fall-through `return s1 + 1` gives (see the 156:7 ConditionalExpression entry)."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:172:18 ConditionalExpression → false",
+      "original": "r2Available <= 0",
+      "line": "if (r1 <= 0 || r2Available <= 0) return 0;",
+      "reason": "Dropping `r2Available <= 0` matters only for r2Available <= 0 with r1 > 0. At 0, used clamps to min(max(r2Used, 0), 0) = 0 and `r2Available <= r1` returns ⌊s1 × 0 / r1⌋ = 0 (s1 >= 0, so +0), the guard's own value. Below 0 is unreachable: state.r2 starts as resourcesFromBalls(...) >= 0 (every published cell is >= 0) and a revise lowers it only by lost = before − after with before <= what the chase still had (the table is monotone in overs and wickets, all 510 cells checked), so r2 stays >= the resources remaining >= 0."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:172:18 EqualityOperator → r2Available < 0",
+      "original": "r2Available <= 0",
+      "line": "if (r1 <= 0 || r2Available <= 0) return 0;",
+      "reason": "Differs from `<= 0` only at r2Available = 0 with r1 > 0, where the mutant falls through: used clamps to min(max(r2Used, 0), 0) = 0 and `r2Available <= r1` returns ⌊s1 × 0 / r1⌋ = 0, the value the guard returned."
+    },
+    {
+      "mutant": "src/sports/cricket/dls.ts:174:7 EqualityOperator → r2Available < r1",
+      "original": "r2Available <= r1",
+      "line": "if (r2Available <= r1) return Math.floor((s1 * used) / r1);",
+      "reason": "Differs only at r2Available === r1, where the mutant takes the pro-rata branch: target = dlsTarget(s1, r1, r1) = s1 + 1 (its equal-resources return), and ⌊((target − 1) × used) / r2Available⌋ is ⌊(s1 × used) / r1⌋ — the exact branch's expression, operand for operand."
+    },
+    {
+      "mutant": "src/sport/entrant-model.ts:28:12 OptionalChaining → model?.kinds.length",
+      "original": "model?.kinds?.length",
+      "line": "kinds: model?.kinds?.length ? [...model.kinds] : [...ALL_KINDS],",
+      "reason": "Unreachable (C): the mutant throws only for a model that is present but has no `kinds`. EntrantModel declares `kinds` required, every caller passes a module's declared `entrantModel` (grep -a effectiveEntrantModel: apps/web divisions.ts, usecases/entrants.ts, the division page, tools/matrix sport-cfg.ts), and every declared model has a non-empty kinds array (entrant-model.mutation.test.ts guards that premise over the registry). With no model, `model?.` short-circuits the whole chain in both versions."
+    },
+    {
+      "mutant": "src/sport/entrant-model.ts:29:41 OptionalChaining → model?.kinds[0]",
+      "original": "model?.kinds?.[0]",
+      "line": "defaultKind: model?.defaultKind ?? (model?.kinds?.[0] ?? \"individual\"),",
+      "reason": "Unreachable (C): the right of `??` runs only when `model?.defaultKind` is nullish. With no model both versions short-circuit to undefined and take \"individual\"; with a model, `defaultKind` is a required EntrantModel field set by every declared model (same callers as the 28:12 entry; the premise is guarded by entrant-model.mutation.test.ts), so `model?.kinds?.[0]` is never evaluated."
+    },
+    {
+      "mutant": "src/sport/entrant-model.ts:38:15 ConditionalExpression → false",
+      "original": "typeof raw !== \"object\"",
+      "line": "if (!raw || typeof raw !== \"object\") return base;",
+      "reason": "Dropping `typeof raw !== \"object\"` lets a truthy primitive `entrants` (string, number or true — the only truthy non-objects a jsonb config holds) into the field-by-field merge. A primitive carries none of kinds, defaultKind, squadNumbers or captain (the String/Number/Boolean prototypes define none), so each read is undefined, every override is skipped, and the merge returns `base` unchanged — what the early return returned. entrant-model.mutation.test.ts pins `{entrants: \"team\"}` and `{entrants: 7}` to the declaration."
+    },
+    {
+      "mutant": "src/sports/squad-state.ts:140:7 LogicalOperator → order.length === 0 && !Number.isInteger(turn)",
+      "original": "order.length === 0 || !Number.isInteger(turn)",
+      "line": "if (order.length === 0 || !Number.isInteger(turn) || turn < 0) return null;",
+      "reason": "The first two operands are redundant with the lookup below them, so weakening their `||` changes no result: with an empty order, turn % 0 is NaN and `order[NaN] ?? null` is null; a non-integer finite turn leaves a non-integer remainder (% is exact) that indexes nothing, and an infinite one gives NaN, so `?? null` is null either way. Only `turn < 0` changes a result (−2 % 2 = −0 indexes the first partner), and the mutant keeps it; squad-state.mutation.test.ts kills its removal."
+    },
+    {
+      "mutant": "src/sport/catalog.ts:117:47 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const roleByKey = new Map((catalog.roles ?? []).map((role) => [role.key, role]));",
+      "reason": "Only with `catalog.roles` absent: the map is built from [\"Stryker was here\"], whose `.key` is undefined, so it holds one entry under the key undefined. roleByKey is only ever asked `has(roleKey)` for a slot's role keys, which LineupSlot types as non-empty strings, so every lookup misses exactly as on the empty map and each role is reported role_unknown in both versions."
+    },
+    {
+      "mutant": "src/sport/catalog.ts:130:39 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "for (const role of catalog.roles ?? []) {",
+      "reason": "Only with `catalog.roles` absent: the loop visits one string instead of nothing. Its `.key` is undefined, so personIds is `holders.get(undefined) ?? []` = [] (holders is keyed by string role keys and is empty when no role is declared), and `.unique` and `.required` are undefined on a string, so no issue is pushed — the empty loop's zero issues."
+    },
+    {
+      "mutant": "src/sport/catalog.ts:131:48 ArrayDeclaration → [\"Stryker was here\"]",
+      "original": "[]",
+      "line": "const personIds = holders.get(role.key) ?? [];",
+      "reason": "The default applies only to a declared role nobody holds. Its personIds is then read only by `role.unique && personIds.length > 1` (1 > 1 is false, as 0 > 1 was), which gates the only place personIds is used; `role.required` reads startingRoles, not personIds."
+    },
+    {
+      "mutant": "src/sport/catalog.ts:146:45 StringLiteral → ``",
+      "original": "`lineup for \"${lineup.entrantId}\" is invalid`",
+      "line": "throw new EngineError(\"LINEUP_INVALID\", `lineup for \"${lineup.entrantId}\" is invalid`, {",
+      "reason": "No consumer (C): assertLineup has no production caller — grep -a over apps/, packages/ and tools/ finds only its definition and catalog.test.ts, and tools/matrix/__tests__/scenarios.test.ts pins exactly one `assertLineup(` in engine source (the definition). The event-time LINEUP_INVALID (core/events.ts) carries the lineup reducer's own message, so this sentence reaches no API v1 body or UI; the code and data a caller would branch on are pinned by catalog.test.ts."
+    },
+    {
+      "mutant": "src/sports/period/shootout.ts:84:10 EqualityOperator → taken.home <= taken.away",
+      "original": "taken.home < taken.away",
+      "line": "return taken.home < taken.away ? \"home\" : \"away\";",
+      "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
     }
   ]
 }
