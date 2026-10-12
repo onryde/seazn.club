@@ -354,6 +354,69 @@ test.describe("arbiter panel", () => {
     expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
   });
 
+  test("I2: the panel hands each watch back — on a board switch, and when the tab goes away", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
+    const [b1, b2] = r.boards;
+    await gameOn(b1, { moves: LINE });
+    await gameOn(b2, { moves: LINE.slice(0, 4) });
+    // The server's RealtimeKit is unreachable here, so the JOIN is answered
+    // in the browser: a minted watch per open, as the route answers it. What
+    // is proven is the panel's half — that it hands back the id it was given.
+    // The route's own removal is the vitest suites' (route + usecase + sweep).
+    const minted: string[] = [];
+    const handedBack: string[] = [];
+    await page.route(/\/external-play\/arbiter$/, async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      const fixtureId = route.request().url().split("/fixtures/")[1]!.split("/")[0]!;
+      const participantId = `e2e-${fixtureId.slice(0, 8)}-${minted.length + 1}`; // boardOf() reads the middle
+      minted.push(participantId);
+      await route.fulfill({ json: { ok: true, data: { authToken: "e2e-not-a-token", participantId, white: [], black: [] } } });
+    });
+    await page.route(/\/external-play\/arbiter\/[^/]+$/, async (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      handedBack.push(decodeURIComponent(route.request().url().split("/").pop()!));
+      await route.fulfill({ json: { ok: true, data: { removed: true } } });
+    });
+
+    // The invariant at every step: every watch minted is handed back exactly
+    // once, except the one on screen. (A dev server's StrictMode mounts the
+    // panel twice, so board 1 may be opened, closed and opened again — the
+    // first watch must then come back too.)
+    const boardOf = (pid: string) => pid.split("-")[1];
+    const settled = async (onScreen: Board | null, message: string) => {
+      await expect
+        .poll(
+          () => {
+            const live = minted.filter((pid) => !handedBack.includes(pid));
+            return {
+              live: live.map(boardOf),
+              repeats: handedBack.length - new Set(handedBack).size,
+              unknown: handedBack.filter((pid) => !minted.includes(pid)).length,
+            };
+          },
+          { message },
+        )
+        .toEqual({ live: onScreen === null ? [] : [onScreen.fixtureId.slice(0, 8)], repeats: 0, unknown: 0 });
+    };
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    await settled(b1, "board 1 on screen: its watch is the only one out");
+    const onBoard1 = minted.length;
+    expect(onBoard1, "anti-vacuity: board 1 minted").toBeGreaterThanOrEqual(1);
+
+    await boardsNav(page).getByRole("button").nth(1).click();
+    await expect(boardsNav(page).getByRole("button").nth(1)).toHaveAttribute("aria-pressed", "true");
+    await settled(b2, "board 2 on screen: board 1's watch handed back, a FRESH one for board 2");
+    expect(minted.length, "the switch minted a new watch").toBeGreaterThan(onBoard1);
+
+    // The tab going away: pagehide hands back the watch on screen.
+    await page.goto(r.fixturesTab);
+    await settled(null, "the tab left: nothing out");
+    expect(handedBack.length, "anti-vacuity: every watch came back").toBe(minted.length);
+  });
+
   test("I3: a link to a board that is not here says so — never another board — and offers the current round", async ({ page, request }) => {
     test.setTimeout(120_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
