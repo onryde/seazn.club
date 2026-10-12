@@ -30,6 +30,8 @@ import {
   reportClockZero,
   type RoomDeps,
 } from "../external-play/room";
+import { presenceCache, PRESENCE_TTL_MS } from "../external-play/room-presence";
+import { RealtimeKitError } from "@/server/external-play/video/realtimekit";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
@@ -567,5 +569,93 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — act and clock-zero tr
     await gameOnFile(s, { status: "live", moves: ["e2e4"], whiteMs: 0, blackMs: 0, lastMoveAt: new Date(now.getTime() - 3_600_000) });
     expect(await reportClockZero({ kind: "session", userId: s.home.userId }, s.fixtureId, deps({ reconcile: rec }))).toEqual({ reconciled: false });
     expect(rec).not.toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presence (review I8: vendor calls do not scale with reads)", () => {
+  /** A camera-required board with a live game and both players in the
+   *  meeting, as preflight leaves them. */
+  async function cameraBoard(bridge: Parameters<typeof gameOnFile>[1] = { status: "live", moves: ["e2e4", "e7e5"] }) {
+    const s = await seed({ cameraPolicy: "required" });
+    await gameOnFile(s, bridge);
+    const meetingId = `mtg-${randomUUID()}`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${s.fixtureId}, ${s.orgId}, ${meetingId})`;
+    const part = { home: `pt-home-${randomUUID().slice(0, 8)}`, away: `pt-away-${randomUUID().slice(0, 8)}` };
+    await sql`
+      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+      values (${s.fixtureId}, ${s.home.personId}, 'player', ${part.home}),
+             (${s.fixtureId}, ${s.away.personId}, 'player', ${part.away})`;
+    return { s, meetingId, part };
+  }
+
+  it("N concurrent reads make ONE vendor call per seat asked about; more reads inside the TTL make none; the TTL's end asks again", async () => {
+    const { s, meetingId, part } = await cameraBoard();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const presence = vi.fn(async () => {
+      await gate;
+      return true;
+    });
+    const d = deps({ presence, presenceCache: presenceCache() });
+    const N = 12;
+    const home = Array.from({ length: N }, () => readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d));
+    const away = Array.from({ length: N }, () => readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, d));
+    await vi.waitFor(() => expect(presence).toHaveBeenCalledTimes(2));
+    release();
+    const snaps = await Promise.all([...home, ...away]);
+    expect(snaps.length, "anti-vacuity: reads").toBe(2 * N);
+    expect(snaps.every((x) => x.opponentCameraLive === true)).toBe(true);
+    expect(presence, `${2 * N} reads, one call per seat`).toHaveBeenCalledTimes(2);
+    // Each player asks about the OTHER seat.
+    expect(presence.mock.calls.map((c) => (c as unknown as [{ meetingId: string; participantId: string }])[0])).toEqual(
+      expect.arrayContaining([
+        { meetingId, participantId: part.away },
+        { meetingId, participantId: part.home },
+      ]),
+    );
+    for (let i = 0; i < 5; i += 1) await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d);
+    expect(presence, "inside the TTL: no call").toHaveBeenCalledTimes(2);
+    await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, { ...d, now: new Date(now.getTime() + PRESENCE_TTL_MS) });
+    expect(presence, "the TTL's end asks again").toHaveBeenCalledTimes(3);
+  });
+
+  it("asked only where the pill shows — the live board; never before the game, on a held or finished board, or for a frozen seat (whose opponent still asks)", async () => {
+    const moves = ["e2e4", "e7e5"];
+    const cases: { label: string; bridge: Parameters<typeof gameOnFile>[1] | null; home: boolean; away: boolean }[] = [
+      { label: "live", bridge: { status: "live", moves }, home: true, away: true },
+      { label: "no game yet", bridge: null, home: false, away: false },
+      { label: "provider_error hold", bridge: { status: "needs_organiser", needsReason: "provider_error", moves }, home: false, away: false },
+      { label: "finished", bridge: { status: "finished", moves }, home: false, away: false },
+      { label: "White (home) frozen", bridge: { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves }, home: false, away: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const s = await seed({ cameraPolicy: "required" });
+      if (c.bridge) await gameOnFile(s, c.bridge);
+      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`})`;
+      await sql`
+        insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+        values (${s.fixtureId}, ${s.home.personId}, 'player', ${`ph-${randomUUID()}`}),
+               (${s.fixtureId}, ${s.away.personId}, 'player', ${`pa-${randomUUID()}`})`;
+      for (const side of ["home", "away"] as const) {
+        const presence = vi.fn(async () => true);
+        const snap = await readRoom({ kind: "session", userId: s[side].userId }, s.fixtureId, deps({ presence, presenceCache: presenceCache() }));
+        expect(presence.mock.calls.length, `${c.label} / ${side}: calls`).toBe(c[side] ? 1 : 0);
+        expect(snap.opponentCameraLive, `${c.label} / ${side}`).toBe(c[side] ? true : null);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: board × seat").toBe(cases.length * 2);
+  });
+
+  it("the vendor not answering is unknown (null) — and is not asked again inside the TTL", async () => {
+    const { s } = await cameraBoard();
+    const presence = vi.fn(async () => {
+      throw new RealtimeKitError(502, "unavailable", "vendor down");
+    });
+    const d = deps({ presence, presenceCache: presenceCache() });
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d)).opponentCameraLive).toBeNull();
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, d)).opponentCameraLive).toBeNull();
+    expect(presence).toHaveBeenCalledTimes(1);
   });
 });
