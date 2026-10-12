@@ -29,6 +29,7 @@ import type { PublicFixture } from "@/server/public-site/data";
 import { hubForfeit } from "@/server/public-site/competition-hub";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { MatchCard } from "../matches-hub/match-card";
+import { ForfeitTagChip } from "../forfeit-tag-chip";
 import { Bracket } from "../bracket";
 import { Schedule } from "../schedule";
 import { ResultsMatrix } from "../results-matrix";
@@ -384,5 +385,21 @@ describe("outcomeText — the division result line (stages-panel, read by the ru
     expect(outcomeText(ui, { kind: "no_result" }, NAMES, { abandon: { reason: "rain" } })).toBe(
       `${UI["schedule.outcome.noResult"]} · ${UI["forfeit.tag.abandonedNoResult"]}`,
     );
+  });
+});
+
+// ---------------------------------------------------------------- design audit round
+
+// Design audit 3.2: the tag is one of the public site's small neutral status tags, so it takes their shape — the pill
+// (`rounded-full px-2 py-0.5 text-[11px] font-semibold`) the seed chip wears in the SAME colours (teams-tab.tsx), not a
+// one-off 4px-cornered `rounded px-1 py-px`.
+describe("ForfeitTagChip — the house pill (audit 3.2)", () => {
+  it("the seed chip's pill shape and colours; none of the one-off shape", () => {
+    const h = renderToStaticMarkup(createElement(ForfeitTagChip, { tag: "w/o", sentence: "S" }));
+    const cls = new Set((/class="([^"]*)"/.exec(h)?.[1] ?? "").split(/\s+/u));
+    for (const token of ["rounded-full", "px-2", "py-0.5", "text-[11px]", "font-semibold", "bg-zinc-100", "text-ink-muted", "whitespace-nowrap", "shrink-0"]) {
+      expect(cls.has(token), `the pill's ${token}`).toBe(true);
+    }
+    for (const token of ["rounded", "px-1", "py-px"]) expect(cls.has(token), `no one-off ${token}`).toBe(false);
   });
 });

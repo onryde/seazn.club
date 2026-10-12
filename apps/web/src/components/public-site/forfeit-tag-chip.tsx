@@ -7,7 +7,8 @@
 // so the sentence REPLACES the abbreviation for assistive technology rather than being read after it. `whitespace-nowrap`
 // and `shrink-0`: "2× w/o" and "Aband. · DLS" never break inside themselves or squeeze the score off its row — a bracket
 // tile at 320 has no room for a second line (public-copy.html). `normal-case`: the tag is lowercase on purpose ("w/o"),
-// and some of its hosts are `uppercase` rows.
+// and some of its hosts are `uppercase` rows. Design audit 3.2: the public site's small neutral status tag is a pill —
+// the seed chip's shape in the seed chip's colours (`matches-hub/teams-tab.tsx`), so one kind of tag has one shape.
 export function ForfeitTagChip({ tag, sentence, testId, id }: { tag: string; sentence: string; testId?: string; id?: string }) {
   return (
     <span
@@ -16,7 +17,7 @@ export function ForfeitTagChip({ tag, sentence, testId, id }: { tag: string; sen
       aria-label={sentence}
       title={sentence}
       data-testid={testId}
-      className="inline-block shrink-0 whitespace-nowrap rounded bg-zinc-100 px-1 py-px text-[11px] font-semibold normal-case leading-tight tracking-normal text-ink-muted"
+      className="inline-block shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold normal-case leading-tight tracking-normal text-ink-muted"
     >
       {tag}
     </span>
