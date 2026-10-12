@@ -177,6 +177,9 @@ export async function loadArbiterRound(
           select id, fixture_id as "fixtureId", kind, person_id as "personId", opened_at as "openedAt", note
             from fixture_play_flags
            where fixture_id in ${sql(rows.map((r) => r.fixtureId))} and org_id = ${auth.orgId}
+             -- T16: a flag the organiser closed ("Let the game go on") has
+             -- had its review; the row stays on file as the record.
+             and closed_at is null
            order by opened_at, id`;
 
   // C1 (D7): a board the viewer plays on is never listed — not watchable,

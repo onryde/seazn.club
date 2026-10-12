@@ -70,6 +70,8 @@ describe("matchKeyRoute", () => {
       "GET /fixtures/:id/external-play/lobby",
       "POST /fixtures/:id/external-play/resend",
       "POST /fixtures/:id/external-play/resolve",
+      // T16: "Let the game go on".
+      "POST /fixtures/:id/external-play/flags/close",
     ];
     let checked = 0;
     for (const e of entries) {
@@ -78,7 +80,7 @@ describe("matchKeyRoute", () => {
       expect(matchKeyRoute(method, `/api/v1${path.replace(/:id/g, "seg")}`), e).toBeNull();
       checked += 1;
     }
-    expect(checked, "anti-vacuity: external-play routes checked").toBe(8);
+    expect(checked, "anti-vacuity: external-play routes checked").toBe(9);
   });
 
   it("capture QR v2 (T8c, A16; W27): the phone's start and its scoring link are never key-reachable — and an org API key on EACH of the four phone routes finds no key rule", () => {

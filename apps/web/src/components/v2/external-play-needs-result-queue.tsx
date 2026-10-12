@@ -31,9 +31,9 @@ function reasonLabel(msg: (key: MessageKey) => string, code: string | null): str
   return key ? msg(key) : msg("externalPlay.reason.generic");
 }
 
-const RESOLVE_KINDS: { kind: "home_forfeit" | "away_forfeit" | "draw" | "no_result"; labelKey: MessageKey }[] = [
-  { kind: "home_forfeit", labelKey: "externalPlay.resolve.homeForfeit" },
-  { kind: "away_forfeit", labelKey: "externalPlay.resolve.awayForfeit" },
+const RESOLVE_KINDS: { kind: "home_wins" | "away_wins" | "draw" | "no_result"; labelKey: MessageKey }[] = [
+  { kind: "away_wins", labelKey: "externalPlay.resolve.homeForfeit" },
+  { kind: "home_wins", labelKey: "externalPlay.resolve.awayForfeit" },
   { kind: "draw", labelKey: "externalPlay.resolve.draw" },
   { kind: "no_result", labelKey: "externalPlay.resolve.noResult" },
 ];

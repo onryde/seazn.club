@@ -5,8 +5,9 @@ import { resolveExternalPlay } from "@/server/usecases/external-play";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** POST /api/v1/fixtures/{id}/external-play/resolve — organiser settles
- *  needs_organiser / stalled online play via the normal scoreEvent path. */
+/** POST /api/v1/fixtures/{id}/external-play/resolve (T16) — the organiser
+ *  settles an online board (held, or still being played) through the normal
+ *  scoring path, under their own authority. Session only, never an API key. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
