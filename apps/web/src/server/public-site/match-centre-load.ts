@@ -250,14 +250,14 @@ async function readUnseatedForfeitLoser(
   sql: Sql,
   fixture: Pick<PublicFixture, "outcome" | "home_entrant_id" | "away_entrant_id">,
   division: { youth: boolean; playerNameDisplay: string | null },
-): Promise<{ id: string; name: string; seat: "home" | "away" } | null> {
+): Promise<{ id: string; name: string; seat: "home" | "away"; read: { rows: SideRow[]; maskedNames: Map<string, string> } } | null> {
   const home = unseatedForfeitLoser(fixture, "home");
   const seat = home !== null ? "home" : "away";
   const loser = home ?? unseatedForfeitLoser(fixture, "away");
   if (loser === null) return null;
-  const { rows, maskedNames } = await readSides(sql, { home_entrant_id: loser, away_entrant_id: null }, division);
-  const row = rows.find((r) => r.id === loser);
-  return row ? { id: loser, name: maskedNames.get(loser) ?? row.display_name, seat } : null;
+  const read = await readSides(sql, { home_entrant_id: loser, away_entrant_id: null }, division);
+  const row = read.rows.find((r) => r.id === loser);
+  return row ? { id: loser, name: read.maskedNames.get(loser) ?? row.display_name, seat, read } : null;
 }
 
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
@@ -270,9 +270,14 @@ function buildSides(
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   { rows, maskedNames }: { rows: SideRow[]; maskedNames: Map<string, string> },
   slot: (label: SlotLabel | null, seat: "home" | "away") => string,
-  unseated: { readonly name: string; readonly seat: "home" | "away" } | null,
+  unseated: { readonly id: string; readonly seat: "home" | "away"; readonly read: { rows: SideRow[]; maskedNames: Map<string, string> } } | null,
 ): [SideT, SideT] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  // R116-1: the seat a walkover was won over (ruling 116's withdrawn winner) is HER side — her name, crest and colour,
+  // read like any seated side's — never its bye label, and never the waiting-slot `entrantId: ""`.
+  const byId = new Map([...rows, ...(unseated?.read.rows ?? [])].map((r) => [r.id, r]));
+  const masked = new Map([...maskedNames, ...(unseated?.read.maskedNames ?? [])]);
+  const seatOf = (seated: string | null, seat: "home" | "away"): string | null =>
+    seated ?? (unseated !== null && unseated.seat === seat ? unseated.id : null);
 
   const sideOf = (
     entrantId: string | null,
@@ -280,10 +285,7 @@ function buildSides(
     seat: "home" | "away",
   ): SidePre => {
     if (entrantId === null) {
-      // R116-1: the seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label — the
-      // title and the hero read her name. She is not seated, so the side keeps `entrantId: ""`, no crest, no colour.
-      const name = unseated !== null && unseated.seat === seat ? unseated.name : slot(slotLabel, seat);
-      return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
+      return { entrantId: "", name: slot(slotLabel, seat), colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
     // Defensive fallback (contract notes: "never a blank row") — an
@@ -291,7 +293,7 @@ function buildSides(
     // returns (deleted, or its division/competition dropped out of
     // public/unlisted visibility since the fixture was scored).
     if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false };
-    const name = maskedNames.get(entrantId) ?? row.display_name;
+    const name = masked.get(entrantId) ?? row.display_name;
     const colors = row.team_display?.colors as { home_primary?: string } | null | undefined;
     return {
       entrantId,
@@ -305,8 +307,8 @@ function buildSides(
     };
   };
 
-  const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label, "home");
-  const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label, "away");
+  const home = sideOf(seatOf(fixture.home_entrant_id, "home"), fixture.home_slot_label, "home");
+  const away = sideOf(seatOf(fixture.away_entrant_id, "away"), fixture.away_slot_label, "away");
   // R11 fix round, C9 — resolved TOGETHER, not independently: a collision
   // can only be seen — and broken — by comparing both sides at once.
   const [homeShort, awayShort] = disambiguatedShorts(home, away);

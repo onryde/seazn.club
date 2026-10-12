@@ -238,14 +238,15 @@ export function hubSides(
   >,
   ctx: HubSideCtx,
 ): [SideT, SideT] {
-  const pre = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
+  const pre = (seated: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
+    // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) is HER side — her name, crest
+    // and colour, drawn the way any walkover draws the side that did not play — never its bye label or the
+    // waiting-slot look (`entrantId === ""`: the "?" crest and muted italic name).
+    const entrantId = seated ?? unseatedForfeitLoser(fixture, seat);
     if (entrantId === null) {
-      // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
-      // She is not seated, so the side stays `entrantId: ""` with no crest or colour — only its name is hers.
-      const named = unseatedForfeitLoser(fixture, seat);
       return {
         entrantId: "",
-        name: named !== null ? (ctx.names[named] ?? "?") : ctx.slot(label, seat),
+        name: ctx.slot(label, seat),
         short: "",
         colour: null,
         badgeUrl: null,

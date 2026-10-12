@@ -158,7 +158,7 @@ function linkTo(html: string, fixtureId: string, where: string): { text: string;
 async function surfacesOf(
   s: { auth: AuthCtx; competitionId: string; divisionId: string },
   fixtureId: string,
-): Promise<{ text: Record<string, string>; hubByeSides: readonly boolean[] | undefined }> {
+): Promise<{ text: Record<string, string>; hubByeSides: readonly boolean[] | undefined; sideIds: Record<string, string[]> }> {
   const pub = await publicOf(s);
   const tie = pub.detail.fixtures.find((f) => f.id === fixtureId);
   if (!tie) throw new Error(`rig: ${fixtureId} is not in the public division read`);
@@ -226,6 +226,8 @@ async function surfacesOf(
       "poster draw": `${JSON.parse(drawRow[1]!)} ${JSON.parse(drawRow[2]!)}`,
     },
     hubByeSides: hub.byeSides,
+    // Who each side IS on the two surfaces that draw a crest: "" is the waiting-slot look (the "?" crest, muted italic).
+    sideIds: { hub: hub.header.sides.map((x) => x.entrantId), "match page": doc.header.sides.map((x) => x.entrantId) },
   };
 }
 
@@ -302,11 +304,16 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       expect(seen.text.schedule, `${sport}: the schedule row's tag`).toContain(WO);
       expect(seen.text.bracket, `${sport}: the bracket card's tag`).toContain(WO);
       expect(seen.hubByeSides, `${sport}: the hub card flags no bye side`).toEqual([false, false]);
+      // …and draws her as a side, the way any walkover draws the side that did not play: her id, never the waiting slot.
+      for (const [where, ids] of Object.entries(seen.sideIds)) {
+        expect([...ids].sort(), `${sport}: ${where} draws both sides as entrants`).toEqual([w1, arriving].sort());
+        surfaces++;
+      }
       checked++;
     }
     expect(checked).toBe(SPORTS.length);
     expect(checked).toBeGreaterThanOrEqual(2);
-    expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 10);
+    expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 12);
   }, 240_000);
 
   it("the ranks do not move: she is no loser of a tie she never sat in, so she ranks where a departed entrant always has — below every field entrant", async () => {
@@ -354,6 +361,10 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
         byeSurfaces++;
       }
       expect(seen.hubByeSides?.filter(Boolean).length, `${what}: the hub flags its bye side`).toBe(1);
+      for (const [where, ids] of Object.entries(seen.sideIds)) {
+        expect(ids.filter((x) => x === "").length, `${what}: ${where} keeps the empty seat a slot`).toBe(1);
+        byeSurfaces++;
+      }
     };
     await stillBye(odd, byes[0]!.id, "a genuine bye");
 
@@ -367,6 +378,6 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect([tie.status, tie.outcome], "a bye: nobody withdrew").toEqual(["forfeited", { kind: "award", winner: arriving, loser: null, reason: "bye" }]);
     expect((await publicOf(dw)).words.has(parentId), "and reads no forfeit words").toBe(false);
     await stillBye(dw, parentId, "a double walkover's dead seat");
-    expect(byeSurfaces, "every surface, both byes").toBe(2 * 10);
+    expect(byeSurfaces, "every surface, both byes").toBe(2 * 12);
   }, 240_000);
 });
