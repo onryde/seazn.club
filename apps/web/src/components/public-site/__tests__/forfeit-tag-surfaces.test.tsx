@@ -298,7 +298,10 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
         // The rows split at the away name's cell: the tag sits in the winner's half only, before its own 3.
         const [homeHalf, awayHalf] = row.split('title="Harbour United"');
         const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
-        expect(win, `${tag}: the winner's row carries the tag`).toMatch(/role="img"[^]*>3<\/span>/);
+        // Design audit 3.9: AFTER its score, as on the five other hosts (draw node, bracket footer, results matrix, hub
+        // card): the credited 3, then the tag.
+        expect(win, `${tag}: the winner's row carries the tag after its credited 3`).toMatch(/>3<span[^>]*><span[^>]*role="img"/);
+        expect(win, `${tag}: never before it`).not.toMatch(/role="img"[^]*>3</);
         expect(lose, `${tag}: the loser's row does not`).not.toContain('role="img"');
         checked++;
       }
@@ -321,7 +324,7 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
       const what = `her ${her === "h" ? "home" : "away"} seat`;
       const [homeHalf, awayHalf] = row.split('title="Harbour United"');
       const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
-      expect(win, `${what}: the winner's row carries the tag before its credit`).toMatch(/role="img"[^]*>3<\/span>/);
+      expect(win, `${what}: the winner's row carries the tag after its credit (audit 3.9)`).toMatch(/>3<span[^>]*><span[^>]*role="img"/);
       expect(lose, `${what}: her row shows nil`).toMatch(/>0<\/span>/);
       expect(lose, `${what}: and no tag`).not.toContain('role="img"');
       expect(row, `${what}: not the headline chip of a row with no lines`).not.toContain(">3–0<");

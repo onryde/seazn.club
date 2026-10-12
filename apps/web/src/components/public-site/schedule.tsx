@@ -218,7 +218,8 @@ function ScorebugRow({
   // A double walkover credits nobody: its summary's 0 — 0 would read as an unplayed match, so it shows its tag alone.
   const doubleWalkover = forfeit?.kind === "double_walkover";
   const lines = (decided || live) && !doubleWalkover ? sideLines(f) : null;
-  // The tag rides the winner's score (the first row when nobody won), as on the hub's draw node.
+  // The tag rides the winner's score (the first row when nobody won), AFTER it, as on the hub's draw node, the bracket
+  // footer, the results matrix and the hub card (design audit 3.9).
   const chip =
     forfeit === undefined ? null : (
       <ForfeitTagChip tag={forfeit.tag} sentence={forfeit.sentence} testId="schedule-forfeit-tag" />
@@ -290,8 +291,8 @@ function ScorebugRow({
       <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
       {lines ? (
         <span className={scoreCls(f.home_entrant_id)}>
-          {chipOn(f.home_entrant_id, true) ? <span className="mr-1.5 align-middle">{chip}</span> : null}
           {lines[0]}
+          {chipOn(f.home_entrant_id, true) ? <span className="ml-1.5 align-middle">{chip}</span> : null}
         </span>
       ) : chip !== null ? (
         // No score lines beside the tag (a double walkover, or a line too long for the column): the tag alone, with a
@@ -314,8 +315,8 @@ function ScorebugRow({
       <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>
       {lines ? (
         <span className={scoreCls(f.away_entrant_id)}>
-          {chipOn(f.away_entrant_id, false) ? <span className="mr-1.5 align-middle">{chip}</span> : null}
           {lines[1]}
+          {chipOn(f.away_entrant_id, false) ? <span className="ml-1.5 align-middle">{chip}</span> : null}
         </span>
       ) : null}
     </Link>
