@@ -80,8 +80,13 @@ export type RoomSnapshot = {
   you: { colour: Colour; name: string; checkedIn: boolean };
   opponent: { colour: Colour; name: string; checkedIn: boolean };
   cameraPolicy: CameraPolicyWire;
-  /** null ⇒ not asked (policy off, no meeting, or the vendor did not answer). */
-  opponentCameraLive: boolean | null;
+  /** Where the opponent's presence pill may show, and who the opponent is in
+   *  the meeting: their RealtimeKit participant id, or null when they hold no
+   *  seat in it (absent by construction). The pill's answer is the viewer's
+   *  OWN client's (review I8: opponent-presence.ts) — the server never asks
+   *  the vendor for it. null ⇒ no pill (policy off, an override, a board
+   *  nobody may play on). */
+  opponentPresence: { participantId: string | null } | null;
   /** Which seat a token_revoked hold froze, from the VIEWER's side. null
    *  once a result is written (the result outranks the freeze — review I1). */
   frozen: "you" | "opponent" | "both" | null;

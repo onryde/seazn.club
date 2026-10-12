@@ -38,7 +38,7 @@ import { roomScreen } from "./room-screen";
 import { canMove, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
 import { useRoom } from "./use-room";
-import { useOwnCamera } from "./use-own-camera";
+import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
 import type { RoomGame, RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
@@ -115,6 +115,8 @@ export function RoomShell({
   const cameraOn = snap.cameraPolicy !== "off";
   const participantToken = cameraOn ? (state.seat?.participant?.authToken ?? null) : null;
   const camera = useOwnCamera(participantToken);
+  // The pill reads this client's own meeting join (review I8): no server call.
+  const presence = useOpponentPresence(camera, cameraOn ? snap.opponentPresence : null);
 
   // Re-entry with cameras on: the seat is already ours, but the participant
   // token only ever arrives in a seat answer — claim once, quietly, so the
@@ -165,6 +167,7 @@ export function RoomShell({
           state={state}
           room={room}
           camera={camera}
+          presence={presence}
           busy={busy}
           tryAgain={tryAgain}
           relinkHref={relinkHref}
@@ -185,6 +188,7 @@ export function Screen({
   state,
   room,
   camera,
+  presence = null,
   busy,
   tryAgain,
   relinkHref,
@@ -196,6 +200,8 @@ export function Screen({
   state: RoomState;
   room: ReturnType<typeof useRoom>;
   camera: ReturnType<typeof useOwnCamera>;
+  /** The opponent pill: true on camera, false camera off, null no pill. */
+  presence?: boolean | null;
   busy: boolean;
   tryAgain: () => void;
   relinkHref: string;
@@ -324,11 +330,9 @@ export function Screen({
             {policyOn ? (
               <div data-testid="room-tile-strip" className="flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
                 <OwnTile policy={snap.cameraPolicy} stream={camera.stream} t={t} />
-                {/* null is "unknown" — not asked, or the vendor did not
-                    answer: no pill rather than a "camera off" (review I4). */}
-                {snap.opponentCameraLive !== null ? (
-                  <PresencePill name={snap.opponent.name} cameraLive={snap.opponentCameraLive} t={t} />
-                ) : null}
+                {/* null is "unknown" — not joined, not settled, connection
+                    down: no pill rather than a "camera off" (review I4). */}
+                {presence !== null ? <PresencePill name={snap.opponent.name} cameraLive={presence} t={t} /> : null}
               </div>
             ) : null}
             <div data-testid="room-controls">

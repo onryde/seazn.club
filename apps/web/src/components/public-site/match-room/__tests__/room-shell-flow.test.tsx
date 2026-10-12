@@ -16,7 +16,8 @@ vi.mock("../camera-loader", () => ({ joinOwnCamera: (token: string) => join.fn(t
 
 import { RoomShell } from "../room-shell";
 import type { RoomSnapshot } from "../room-snapshot";
-import type { OwnCamera } from "../camera-loader";
+import type { MeetingLink, OwnCamera } from "../camera-loader";
+import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
 let tick = 0;
@@ -36,7 +37,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Bo Lind", checkedIn: false },
     opponent: { colour: "black", name: "Ada Okonkwo", checkedIn: true },
     cameraPolicy: "required",
-    opponentCameraLive: true,
+    opponentPresence: null,
     frozen: null,
     canAct: true,
     onlineChessOff: false,
@@ -58,11 +59,14 @@ let calls: Call[] = [];
 // Thunks: each answer is composed when the server would compose it, so its
 // serverNow is later than every earlier read (the reducer drops stale ones).
 let seatAnswers: (() => unknown)[] = [];
+/** What a GET room answers; the check-in by default. */
+let getAnswer: () => RoomSnapshot = () => snap();
 
 beforeEach(() => {
   vi.useFakeTimers();
   calls = [];
   tick = 0;
+  getAnswer = () => snap();
   join.fn.mockReset();
   vi.stubGlobal(
     "MediaStream",
@@ -75,7 +79,7 @@ beforeEach(() => {
     vi.fn(async (url: string, init: RequestInit) => {
       calls.push({ method: String(init.method), url });
       if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) return ok(seatAnswers.shift()?.());
-      if (init.method === "GET") return ok(snap());
+      if (init.method === "GET") return ok(getAnswer());
       return new Response("{}", { status: 500 });
     }),
   );
@@ -90,7 +94,36 @@ async function settle(ms = 0) {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 function liveCamera(): OwnCamera {
-  return { track: () => TRACK, onChange: () => () => {}, enable: async () => {}, leave: async () => {} };
+  return {
+    track: () => TRACK,
+    onChange: () => () => {},
+    enable: async () => {},
+    leave: async () => {},
+    link: () => null,
+    onLinkChange: () => () => {},
+  };
+}
+/** A camera whose meeting link the test moves, as the SDK's signalling would. */
+function meetingCamera() {
+  let current: MeetingLink | null = null;
+  const listeners = new Set<() => void>();
+  const cam: OwnCamera = {
+    ...liveCamera(),
+    link: () => current,
+    onLinkChange(cb) {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+  };
+  return {
+    cam,
+    set(l: MeetingLink | null) {
+      current = l;
+      for (const cb of [...listeners]) cb();
+    },
+  };
 }
 type Island = { tree: () => ReturnType<typeof walk> };
 const screenOf = (island: Island) => {
@@ -223,7 +256,7 @@ describe("I2: a refused act never stops the room — it re-reads, backing off wh
       drawOfferBy: null,
       over: false,
     };
-    const base = { cameraPolicy: "off" as const, opponentCameraLive: null, you: { colour: "white" as const, name: "Bo Lind", checkedIn: true }, game: live };
+    const base = { cameraPolicy: "off" as const, opponentPresence: null, you: { colour: "white" as const, name: "Bo Lind", checkedIn: true }, game: live };
     const actAnswers: (() => Response)[] = [
       () => new Response(JSON.stringify({ ok: false, error: { code: "not_found" } }), { status: 404 }),
       () => ok({ ok: false, reconcile: true, reason: "rejected" }),
@@ -271,5 +304,91 @@ describe("I2: a refused act never stops the room — it re-reads, backing off wh
     expect(gets(), "polling never stopped").toBeGreaterThan(g0 + 4);
     expect(screenOf(island)).toBe("live");
     island.unmount();
+  });
+});
+
+describe("I8: the opponent pill comes from the player's own meeting join — never a server call", () => {
+  const LIVE_GAME = {
+    gameId: "g1",
+    moves: ["e2e4", "e7e5"],
+    fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+    lastMove: ["e7", "e5"] as [string, string],
+    turn: "white" as const,
+    whiteMs: 590_000,
+    blackMs: 592_000,
+    clockAsOf: new Date(T0).toISOString(),
+    clockRunning: false,
+    drawOfferBy: null,
+    over: false,
+  };
+  const inPlay = (over: Partial<RoomSnapshot> = {}) =>
+    snap({
+      you: { colour: "white", name: "Bo Lind", checkedIn: true },
+      game: LIVE_GAME,
+      opponentPresence: { participantId: "rtk-opp" },
+      ...over,
+    });
+  const presenceOf = (island: Island) => {
+    const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
+    return propsOf(screen!).presence as boolean | null;
+  };
+  const roomApiOnly = () => calls.every((c) => c.url.startsWith("/api/v1/fixtures/f1/external-play/room"));
+
+  it("no pill until joined AND settled; live, off when the camera stops, off when the opponent leaves, none with the socket down — and every call the page made is our own room API", async () => {
+    getAnswer = () => inPlay();
+    seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+    const meet = meetingCamera();
+    join.fn.mockResolvedValue(meet.cam);
+    const island = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
+    await settle();
+    expect(screenOf(island)).toBe("live");
+    expect(join.fn, "the camera joined").toHaveBeenCalledTimes(1);
+    expect(presenceOf(island), "the camera is not in the meeting yet").toBeNull();
+
+    meet.set({ joinedAt: Date.now(), peers: [{ userId: "rtk-opp", videoLive: true }] });
+    await settle();
+    expect(presenceOf(island), "joined, not settled: no pill rather than a guess").toBeNull();
+    await settle(PRESENCE_SETTLE_MS);
+    expect(presenceOf(island), "settled, the opponent on camera").toBe(true);
+
+    // Producer changes emit nothing in the SDK: the local tick reads them.
+    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: false }] });
+    await settle(PRESENCE_TICK_MS);
+    expect(presenceOf(island), "in the meeting, camera off").toBe(false);
+    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-arbiter", videoLive: true }] });
+    await settle(PRESENCE_TICK_MS);
+    expect(presenceOf(island), "the opponent left; someone else's camera never counts").toBe(false);
+    meet.set(null);
+    await settle();
+    expect(presenceOf(island), "socket down: no pill").toBeNull();
+
+    expect(calls.length, "anti-vacuity: the room did talk to the server").toBeGreaterThan(1);
+    expect(roomApiOnly(), "no call left our own room API").toBe(true);
+    island.unmount();
+  });
+
+  it("unknown shows no pill: the server says no pill (null), or the camera never joined — whatever the meeting holds", async () => {
+    // Server: no pill here (e.g. an override) — even a live opponent shows nothing.
+    getAnswer = () => inPlay({ opponentPresence: null });
+    seatAnswers = [() => ({ snapshot: inPlay({ opponentPresence: null }), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+    const meet = meetingCamera();
+    join.fn.mockResolvedValue(meet.cam);
+    const a = renderIsland(RoomShell, { initial: inPlay({ opponentPresence: null }), token: "tok", selfPath: "/x" });
+    await settle();
+    meet.set({ joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] });
+    await settle(PRESENCE_TICK_MS);
+    expect(presenceOf(a)).toBeNull();
+    a.unmount();
+
+    // The join failed (camera denied, vendor down): no link, no pill.
+    getAnswer = () => inPlay();
+    seatAnswers = [() => ({ snapshot: inPlay(), seat: { seated: true, participant: PARTICIPANT }, create: null })];
+    join.fn.mockReset();
+    join.fn.mockRejectedValue(new Error("vendor down"));
+    const b = renderIsland(RoomShell, { initial: inPlay(), token: "tok", selfPath: "/x" });
+    await settle(PRESENCE_SETTLE_MS + PRESENCE_TICK_MS);
+    expect(join.fn).toHaveBeenCalledTimes(1);
+    expect(presenceOf(b)).toBeNull();
+    b.unmount();
   });
 });

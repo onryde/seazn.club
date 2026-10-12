@@ -1068,7 +1068,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     you: { colour: "white", name: "9zqbo 8zqlind", checkedIn: false },
     opponent: { colour: "black", name: "9zqada 8zqokonkwo", checkedIn: true },
     cameraPolicy: "required",
-    opponentCameraLive: true,
+    opponentPresence: { participantId: "rtk-opp" },
     frozen: null,
     canAct: true,
     onlineChessOff: false,

@@ -36,7 +36,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     you: { colour: "white", name: "Ada Okonkwo", checkedIn: false },
     opponent: { colour: "black", name: "Bo Lind", checkedIn: false },
     cameraPolicy: "off",
-    opponentCameraLive: null,
+    opponentPresence: null,
     frozen: null,
     canAct: true,
     onlineChessOff: false,

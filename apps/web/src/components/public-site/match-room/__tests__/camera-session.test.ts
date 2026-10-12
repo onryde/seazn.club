@@ -4,14 +4,24 @@
 // e2e's (with camera policy off the room never loads it — asserted there).
 import { describe, expect, it } from "vitest";
 import { cameraSession, type CameraView } from "../camera-session";
-import type { OwnCamera } from "../camera-loader";
+import type { MeetingLink, OwnCamera } from "../camera-loader";
 
 const TRACK = { id: "local-video" } as unknown as MediaStreamTrack;
 
 function fakeCamera(initial: MediaStreamTrack | null) {
   let listener: ((enabled: boolean, track: MediaStreamTrack | null) => void) | null = null;
-  const calls = { leave: 0, enable: 0, unsubscribed: 0 };
+  const calls = { leave: 0, enable: 0, unsubscribed: 0, linkUnsubscribed: 0 };
+  let current: MeetingLink | null = { joinedAt: 1, peers: [] };
+  const linkListeners = new Set<() => void>();
   const cam: OwnCamera = {
+    link: () => current,
+    onLinkChange(cb) {
+      linkListeners.add(cb);
+      return () => {
+        calls.linkUnsubscribed += 1;
+        linkListeners.delete(cb);
+      };
+    },
     track: () => initial,
     onChange(cb) {
       listener = cb;
@@ -28,7 +38,15 @@ function fakeCamera(initial: MediaStreamTrack | null) {
       calls.leave += 1;
     },
   };
-  return { cam, calls, fire: (enabled: boolean, track: MediaStreamTrack | null) => listener?.(enabled, track) };
+  return {
+    cam,
+    calls,
+    fire: (enabled: boolean, track: MediaStreamTrack | null) => listener?.(enabled, track),
+    setLink: (l: MeetingLink | null) => {
+      current = l;
+      for (const cb of [...linkListeners]) cb();
+    },
+  };
 }
 
 function record() {
@@ -137,5 +155,45 @@ describe("cameraSession", () => {
     await pending;
     expect(f.calls.leave).toBe(1);
     expect(r.statuses()).toEqual(["joining"]);
+  });
+
+  it("the meeting link (review I8): null before the join, the camera's own after it, relayed to a listener added BEFORE the join, and null again after stop — with the camera's listener released", async () => {
+    const { cam, calls, setLink } = fakeCamera(TRACK);
+    let release!: (c: OwnCamera) => void;
+    const s = cameraSession(() => new Promise<OwnCamera>((r) => (release = r)), () => {});
+    let heard = 0;
+    const off = s.onLinkChange(() => (heard += 1));
+    expect(s.link(), "the empty case: no camera, no link").toBeNull();
+    const started = s.start("tok");
+    release(cam);
+    await started;
+    expect(heard, "the join itself is a change").toBeGreaterThan(0);
+    expect(s.link()).toEqual({ joinedAt: 1, peers: [] });
+    const h0 = heard;
+    setLink({ joinedAt: 2, peers: [{ userId: "rtk-opp", videoLive: true }] });
+    expect(heard).toBe(h0 + 1);
+    expect(s.link()?.peers).toEqual([{ userId: "rtk-opp", videoLive: true }]);
+    await s.stop();
+    expect(s.link(), "stopped: nothing is known").toBeNull();
+    expect(calls.linkUnsubscribed, "the camera's link listener is released").toBe(1);
+    const h1 = heard;
+    setLink({ joinedAt: 3, peers: [] });
+    expect(heard, "nothing relayed after stop").toBe(h1);
+    off();
+  });
+
+  it("a join that lands after stop relays nothing and leaves no listener behind", async () => {
+    const { cam, calls } = fakeCamera(TRACK);
+    let release!: (c: OwnCamera) => void;
+    const s = cameraSession(() => new Promise<OwnCamera>((r) => (release = r)), () => {});
+    let heard = 0;
+    s.onLinkChange(() => (heard += 1));
+    const started = s.start("tok");
+    await s.stop();
+    release(cam);
+    await started;
+    expect(s.link()).toBeNull();
+    expect(heard).toBe(0);
+    expect(calls.leave).toBe(1);
   });
 });
