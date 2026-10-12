@@ -160,7 +160,13 @@ export function parseExtKey(extKey: string | null): { bracket?: "WB" | "LB" | "G
 //  - `award` names its loser since W2b (`loser`, null for a bye). A row stored
 //    before W2b names only the winner, and the loser is whichever side isn't
 //    them (testkit/simulation.ts's own derivation). A loser means a forfeit —
-//    walked over, "loser"; no loser (a bye, one seat) means neither;
+//    walked over, "loser"; no loser (a bye, one seat) means neither. A loser
+//    who holds NO seat here (owner ruling 116: a winner who withdrew before
+//    this tie, its seat dead, `awardSeededByes`) is named for the copy alone:
+//    she never sat in it, so it does not eliminate her and ranks her nowhere —
+//    the bye it was, where a departed entrant always ranked (never above a
+//    field entrant). Named as the loser of a walked-over FINAL, she would
+//    otherwise rank runner-up;
 //  - `double_walkover` names nobody — walked over, "both" (X-DW-2);
 //  - draw/tie/no_result: a bracket fixture holding one is needs_decision (W2a
 //    X-BR-2) and seats nobody, so neither side; a level outcome under a SEATING
@@ -178,7 +184,7 @@ export function bracketWinnerLoser(
       return isLegacyForfeitWin(o) ? { winner: o.winner, loser: o.loser, walkedOver: "loser" } : { winner: o.winner, loser: o.loser };
     case "award": {
       const loser = o.loser !== undefined ? o.loser : o.winner === home ? away : home;
-      return loser === null ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: "loser" };
+      return loser === null || (loser !== home && loser !== away) ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: "loser" };
     }
     case "double_walkover":
       return { walkedOver: "both" };

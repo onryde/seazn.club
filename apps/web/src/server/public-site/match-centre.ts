@@ -152,6 +152,11 @@ export interface MatchCentreInput {
   /** W2b Task 13 (X-DW-1) — the name of the side a double walkover's next match was walked over to, read by the
    *  loader off the next fixture (`doubleWalkoverNextWinner`). Absent, null or empty: the sentence has no clause. */
   doubleWalkoverNext?: string | null;
+  /** Owner ruling 116 (W2b Task 16) — the forfeit's LOSER when she holds no seat here: a winner who withdrew before
+   *  this tie, its seat dead, so the arriving side walked over her (`awardSeededByes`). The sides name only who is
+   *  seated, so the loader reads her name (masked as it masks a side) and the sentence names her. Absent or null for
+   *  every other fixture: a seated loser is named by the sides. */
+  unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
 }
 
 // --------------------------------------------------------------- constants
@@ -936,7 +941,11 @@ function buildHeader(
   // W2b Task 13: the ACTIVE ledger (voids resolved by the loader) — an abandon's tag reads it, never the status — and
   // the two words the forfeit sentence needs from outside the fixture (see `MatchCentreInput`).
   events: readonly EventEnvelope[],
-  forfeitExtra: { resolveMsg?: (msg: MsgT) => string; doubleWalkoverNext?: string | null },
+  forfeitExtra: {
+    resolveMsg?: (msg: MsgT) => string;
+    doubleWalkoverNext?: string | null;
+    unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
+  },
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
 
@@ -1064,7 +1073,9 @@ function buildHeader(
             locale,
           )
         : null;
-    const sentence = forfeitSentence(tag, (id) => sideNameOf(sides, id), {
+    const unseated = forfeitExtra.unseatedForfeitLoser ?? null;
+    const nameOf = (id: string) => (unseated !== null && unseated.id === id ? unseated.name : sideNameOf(sides, id));
+    const sentence = forfeitSentence(tag, nameOf, {
       result: result !== null && resolve !== undefined ? resolve(result) : null,
       next: forfeitExtra.doubleWalkoverNext ?? null,
     });
@@ -1394,7 +1405,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     input.formatLabel,
     input.stage,
     input.events,
-    { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext },
+    { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext, unseatedForfeitLoser: input.unseatedForfeitLoser },
   );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 

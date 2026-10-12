@@ -3674,24 +3674,52 @@ export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number)
  *  stamped on the phantom side — NEVER by "one side is null", which is also
  *  every later-round slot still waiting on a feeder, and every half-filled
  *  final. Idempotent: `status = 'scheduled'` makes a second call a no-op, and
- *  a line whose real seat has not been filled yet is left alone until it is. */
+ *  a line whose real seat has not been filled yet is left alone until it is.
+ *
+ *  Owner ruling 116 (W2b Task 16; X-WD-3): a seat that is dead because the
+ *  WINNER its feeder delivers has since WITHDRAWN (status `withdrawn`) is no
+ *  bye — she won her way there and then left, so the arriving side walks over
+ *  HER: the award names her as its loser, reason `withdrew`, and every surface
+ *  reads "w/o" and "<her> withdrew — walkover." through the one forfeit reader
+ *  (`forfeitTag`). She is still never seated: the seat stays empty and dead
+ *  (X-WD-3/X-WD-5), and the ranks read an award whose loser holds no seat as
+ *  the bye it was (engine-db/competition.ts `bracketWinnerLoser`). Every other
+ *  dead seat — a genuine bye, a void's or a double walkover's dead feeder, a
+ *  departed qualifier seated at generation with no feeder — names nobody and
+ *  stays the bye it was, byte for byte. The ruling's scope, no wider: only the
+ *  winner edge (a departed LOSER's dead loser-edge seat, X-WD-5, stays a bye),
+ *  and only a withdrawal — a DISQUALIFIED winner (the other departed status) is
+ *  no "withdrew", and stays a bye until a ruling words it. */
 async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
   const rows = await tx<{ id: string }[]>`
+    with lines as (
+      select f.id, coalesce(f.home_entrant_id, f.away_entrant_id) as winner,
+             (select src.outcome ->> 'winner' from fixtures src
+                join entrants e on e.id::text = src.outcome ->> 'winner'
+               where src.winner_to_fixture = f.id
+                 and src.winner_to_slot = case when f.home_entrant_id is null then 1 else 2 end
+                 and e.status = 'withdrawn'
+               limit 1) as withdrawn
+        from fixtures f
+       where f.stage_id = ${stageId}
+         and f.status = 'scheduled'
+         and f.outcome is null
+         and (
+           (f.away_entrant_id is null and f.home_entrant_id is not null
+              and f.away_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
+           or
+           (f.home_entrant_id is null and f.away_entrant_id is not null
+              and f.home_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
+         )
+    )
     update fixtures set
       status = 'forfeited',
       outcome = jsonb_build_object(
-        'kind', 'award', 'winner', coalesce(home_entrant_id, away_entrant_id), 'loser', null, 'reason', 'bye')
-    where stage_id = ${stageId}
-      and status = 'scheduled'
-      and outcome is null
-      and (
-        (away_entrant_id is null and home_entrant_id is not null
-           and away_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
-        or
-        (home_entrant_id is null and away_entrant_id is not null
-           and home_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
-      )
-    returning id`;
+        'kind', 'award', 'winner', lines.winner, 'loser', lines.withdrawn,
+        'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)
+    from lines
+    where fixtures.id = lines.id
+    returning fixtures.id`;
   return rows.map((r) => r.id);
 }
 

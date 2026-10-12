@@ -169,7 +169,8 @@ function hasStarted(t: Node): boolean {
 
 /** A walkover the SYSTEM awarded, which nobody played: `awardSeededByes`
  *  writes exactly `forfeited` + `{kind: "award", reason: "bye"}` and no event (W2b C-5; a row stored before W2b
- *  carries no reason). A recorded walkover has its `core.forfeit` behind it, which `live_events` sees — so the
+ *  carries no reason) — or, where the dead seat's feeder delivered a winner who has since withdrawn, the same award
+ *  naming her as its loser, reason "withdrew" (owner ruling 116), and still no event. A recorded walkover has its `core.forfeit` behind it, which `live_events` sees — so the
  *  award's reason is not read here: it would be a second guard covering for this one, and nothing could kill it. */
 function isCascadeWalkover(t: Node): boolean {
   return t.status === "forfeited" && (t.outcome as { kind?: string } | null)?.kind === "award" && t.live_events === 0;

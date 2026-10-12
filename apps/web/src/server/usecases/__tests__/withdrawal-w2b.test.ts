@@ -84,8 +84,9 @@ const stageEventCount = async (stageId: string) =>
 /** The award a withdrawal's `core.forfeit{by: loser, reason: "withdrew"}` folds to (engine §5.1: the award names its
  *  loser and the closed reason). */
 const withdrewAward = (winner: string, loser: string) => ({ kind: "award", winner, loser, reason: "withdrew" });
-/** What `awardSeededByes` writes on a seat the cascade stamped dead: a walkover by bye (W2b C-5; the harness maps a
- *  seeded bye's reason "bye" to its "walkover" rows — T7 report). */
+/** What `awardSeededByes` writes on a seat the cascade stamped dead when nobody WITHDREW from it — a dead feeder's (a
+ *  void, a double walkover), a disqualified winner's: a walkover by bye (W2b C-5; the harness maps a seeded bye's reason
+ *  "bye" to its "walkover" rows — T7 report). A withdrawn winner's dead seat is `withdrewAward` (owner ruling 116). */
 const seatWalkover = (winner: string) => ({ kind: "award", winner, loser: null, reason: "bye" });
 
 /** A withdrawal the organiser recorded BEFORE pressing Start (the division is not live yet, so the cascade is the
@@ -265,12 +266,18 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       "the departed seat is empty and dead; the line waits for its other side",
     ).toEqual({ seat: null, label: BYE_KEY, status: "scheduled", outcome: null });
     expect(await activeTypes(tbd.id), "no event: nobody is on the other side to receive one").toEqual([]);
-    // The arriving winner walks over in the same write that seats them.
+    // The arriving winner walks over in the same write that seats them — over HER (owner ruling 116): she reached this
+    // line through her own first-round bye line, which names her its winner, and then withdrew, so the walkover names
+    // her, reason "withdrew", while her seat stays empty and dead.
     const feeder = rows.find((r) => r.winner_to_fixture === tbd.id && r.home_entrant_id && r.away_entrant_id);
     if (!feeder) throw new Error("rig: the TBD seat has no seated feeder");
+    expect(rows.find((r) => r.winner_to_fixture === tbd.id && r.winner_to_slot === leaverSlot)?.outcome, "premise: her way in, a bye line she won").toEqual({
+      kind: "award", winner: leaver, loser: null, reason: "bye",
+    });
     await playBadminton(s.auth, feeder.id, true);
     const after = await fixtureRow(tbd.id);
-    expect([after.status, after.outcome]).toEqual(["forfeited", seatWalkover(feeder.home_entrant_id!)]);
+    expect([after.status, after.outcome]).toEqual(["forfeited", withdrewAward(feeder.home_entrant_id!, leaver)]);
+    expect(seatOf(after, leaverSlot), "she is never seated (X-WD-3)").toBeNull();
     expect(seatOf(await fixtureRow(tbd.winner_to_fixture!), tbd.winner_to_slot), "and goes on").toBe(feeder.home_entrant_id);
   });
 
@@ -410,9 +417,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     await post(s.auth, b.id, "core.void", { event_id: dwEvent!.id });
     const waiting = await fixtureRow(parentId);
     expect([waiting.status, waiting.outcome, labelOf(waiting, a.winner_to_slot)]).toEqual(["scheduled", null, BYE_KEY]);
-    // …and QF-B played for real now walks its winner over her seat.
+    // …and QF-B played for real now walks its winner over her seat — naming her, who withdrew (owner ruling 116).
     await playBadminton(s.auth, b.id, false);
-    expect((await fixtureRow(parentId)).outcome).toEqual(seatWalkover(b.away_entrant_id!));
+    expect((await fixtureRow(parentId)).outcome).toEqual(withdrewAward(b.away_entrant_id!, a.home_entrant_id!));
   });
 
   it("X-WD-4: every finalist-to-be withdraws — both semis are double walkovers and the final stays open, never a double walkover (D19, X-DW-3)", async () => {
@@ -482,7 +489,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     const { s, a, b, parentId, drawn } = await stampedSemi();
     await playBadminton(s.auth, b.id, true);
     const walked = await fixtureRow(parentId);
-    expect([walked.status, walked.outcome], "rig: QF-B's winner walked over her stamp").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
+    // Owner ruling 116: the walkover over her stamp names her, who withdrew.
+    expect([walked.status, walked.outcome], "rig: QF-B's winner walked over her stamp").toEqual(["forfeited", withdrewAward(b.home_entrant_id!, a.home_entrant_id!)]);
     expect(seatOf(await fixtureRow(walked.winner_to_fixture!), walked.winner_to_slot), "rig: and went on").toBe(b.home_entrant_id);
     await voidLatest(s.auth, a.id);
     const reset = await fixtureRow(parentId);
@@ -504,7 +512,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       null,
       BYE_KEY,
       "forfeited",
-      seatWalkover(b.home_entrant_id!),
+      withdrewAward(b.home_entrant_id!, a.home_entrant_id!),
     ]);
     expect(seatOf(await fixtureRow(again.winner_to_fixture!), again.winner_to_slot)).toBe(b.home_entrant_id);
   });
@@ -965,6 +973,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     await post(s.auth, b.id, "football.period", { phase: "FT" });
     expect((await fixtureRow(b.id)).status, "rig: the other semi decided").toBe("decided");
     const walked = await fixtureRow(a.winner_to_fixture);
+    // A bye, not ruling 116's walkover: the dead seat's winner was DISQUALIFIED, not withdrawn — no "withdrew".
     expect([walked.status, walked.outcome], "the final walks the other semi's winner over").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
   }, 120_000);
 
@@ -1172,7 +1181,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     const final = await fixtureRow(sf1.winner_to_fixture!);
     expect([seatOf(final, sf1.winner_to_slot), labelOf(final, sf1.winner_to_slot)], "her final seat is dead").toEqual([null, BYE_KEY]);
     const sf2 = await playBadminton(s.auth, sf2Id!, true);
-    expect((await fixtureRow(final.id)).outcome).toEqual(seatWalkover(sf2.home_entrant_id!));
+    // Owner ruling 116: she won SF1 (by walkover) and then withdrew, so the final's walkover names her.
+    expect((await fixtureRow(final.id)).outcome).toEqual(withdrewAward(sf2.home_entrant_id!, sf1.away_entrant_id!));
     expect((await completeStage(s.auth, s.stageId)).completed).toBe(true);
   });
 

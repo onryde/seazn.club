@@ -911,9 +911,10 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   if (!seatedHome && f.away !== winner) return null;
   const m = sportModule(sport);
   const state: unknown = m.init(cfg, lineupsFor(seatedHome ? winner : BYE_PHANTOM, seatedHome ? BYE_PHANTOM : winner));
-  // The product's own award as the harness read it (D2: winner, loser, reason — "bye" for a bye; a pre-W2b row's
-  // reason may read "" and is passed on as it was stored).
-  const award = { kind: "award", winner, loser: f.outcome.loser, ...(f.outcome.reason !== "" ? { reason: f.outcome.reason } : {}) } as unknown as MatchOutcome;
+  // The product's own synthesis (awardByeDelta, W2b C-5): the module is handed the TYPED bye whatever the stored row
+  // carries. A one-sided award's stored loser and reason never reach the delta: owner ruling 116 names a withdrawn
+  // winner as the loser of the tie her dead seat walked over, and she holds no seat in it (no lineup has her).
+  const award = { kind: "award", winner, loser: null, reason: "bye" } as unknown as MatchOutcome;
   const pair = m.standingsDelta(award, cfg, stageCtx(stageKind, { pool_id: f.poolId, round_no: f.roundNo }), state);
   const won = pair.find((d) => d.entrantId === winner);
   if (won === undefined) return null;

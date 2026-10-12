@@ -620,8 +620,10 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
   const id = (k: string) => `f-${k}`;
   const ext = (key: string, home: string | null, away: string | null, status: string, outcome: ObservedOutcome | null) => fx(id(key), home, away, status, outcome, { extKey: key });
   const w1 = qf1.home_entrant_id!; const a2 = qf2.away_entrant_id!; const a3 = qf3.away_entrant_id!;
-  // W2b C-5: the bye award a dead seat's arriving opponent gets (awardSeededByes) — no loser, reason bye.
+  // W2b C-5: the bye award a dead seat's arriving opponent gets (awardSeededByes) — no loser, reason bye — unless a
+  // WINNER withdrew from that seat: then it names her, reason withdrew (owner ruling 116).
   const bye = (winner: string): ObservedOutcome => ({ kind: "award", winner, loser: null, reason: "bye" });
+  const overHer = (winner: string, loser: string): ObservedOutcome => ({ kind: "award", winner, loser, reason: WITHDREW });
   const r = {
     half: "crowned" as const,
     steps: [
@@ -638,7 +640,8 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     ext(qf2.ext_key!, qf2.home_entrant_id, a2, "forfeited", { kind: "award", winner: a2, loser: qf2.home_entrant_id!, reason: WITHDREW }),
     ext(qf3.ext_key!, qf3.home_entrant_id, a3, "forfeited", { kind: "award", winner: a3, loser: qf3.home_entrant_id!, reason: WITHDREW }),
     ext(qf4.ext_key!, qf4.home_entrant_id, qf4.away_entrant_id, "forfeited", { kind: "double_walkover" }),
-    ext(lines.a.sf, null, a2, "forfeited", bye(a2)),
+    // Ruling 116: w1 won QF1 and then withdrew, so SF1's walkover names her; the final's dead seat (SF2's void) is a bye.
+    ext(lines.a.sf, null, a2, "forfeited", overHer(a2, w1)),
     // Review Focus 1: a3's departed seat beside QF4's RECORDED double walkover — nobody withdrew from QF4 — is a void.
     ext(lines.b.sf, null, null, "abandoned", null),
     // X-DW-2 (and the 2026-09-21 cascade ruling): the seat the void feeds is dead, so its opponent walks over.
@@ -672,17 +675,19 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     expect(tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, w1, a2, "forfeited", { kind: "award", winner: a2, loser: w1, reason: WITHDREW }))).verdict, "W1 still seated").toBe("fail");
     expect(tbdSeatWalksOver(r, [...good, ext("other", w1, "z", "scheduled", null)]).verdict, "W1 seated later").toBe("fail");
     expect(tbdSeatWalksOver(r, swap(qf1.ext_key!, ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null))).verdict, "a voided fixture").toBe("fail");
-    // C-5: the arrival's award is a bye — no loser, reason bye — and the check reads both.
+    // Ruling 116: the arrival's award names w1, who withdrew — loser w1, reason withdrew — and the check reads both;
+    // the bye it was before the ruling (C-5) is now a failure.
     const sf1Rows: [string, ObservedOutcome][] = [
-      ["reason walkover", { kind: "award", winner: a2, loser: null, reason: "walkover" }],
-      ["a loser named", { kind: "award", winner: a2, loser: w1, reason: "bye" }],
+      ["the bye it was (C-5)", bye(a2)],
+      ["reason walkover", { kind: "award", winner: a2, loser: w1, reason: "walkover" }],
+      ["another loser named", { kind: "award", winner: a2, loser: qf1.away_entrant_id!, reason: WITHDREW }],
     ];
     for (const [name, o] of sf1Rows) {
       const got = tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, null, a2, "forfeited", o)));
       expect(got.verdict, name).toBe("fail");
-      expect(got.evidence.join(" | "), name).toMatch(/wanted the arriving .* walked over by bye/);
+      expect(got.evidence.join(" | "), name).toMatch(/wanted the arriving .* walked over .*, who withdrew/);
     }
-    expect(sf1Rows.length).toBe(2);
+    expect(sf1Rows.length).toBe(3);
     // SF2 and the final, each way to go wrong: SF2 a double walkover (the I-6 expectation F's Review Focus 1 refutes) or
     // left open; the final left open (the I-6 expectation), walked over by another reason, or no champion crowned.
     const deadRows: [string, string, ObservedFixture, readonly string[] | null, RegExp][] = [
@@ -1235,7 +1240,7 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     expect(labels).toEqual(["held", "tie-break pending", "abandoned", "in play"]);
   });
 
-  it("X-WD-3 (D17): a withdrawal whose opponent is TBD empties her seat and counts as a walkover; the opponent who arrives walks over by bye (C-5), and so does the final", async () => {
+  it("X-WD-3 (D17): a withdrawal whose opponent is TBD empties her seat and counts as a walkover; the opponent who arrives walks over HER (ruling 116: loser her, reason withdrew), and she ranks last", async () => {
     const { d, row, r1, win, next, seatOf } = await knockout("generic", 4);
     const sf1 = r1[0]!;
     const sf2 = r1[1]!;
@@ -1245,10 +1250,15 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     expect(await d.withdraw(w)).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: 0 });
     expect(seatOf(sf1.id), "her seat is empty").toBeNull();
     await win(sf2.id, "away");
-    expect(row(next(sf1.id).to)).toMatchObject({ status: "forfeited", outcome: bye(sf2.away_entrant_id!) });
+    expect(row(next(sf1.id).to)).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: sf2.away_entrant_id!, loser: w, reason: "withdrew" } });
+    expect(seatOf(sf1.id), "she is never seated (X-WD-3)").toBeNull();
     const done = await d.completeStage();
     expect(done.completed).toBe(true);
-    expect((done.events[0] as { finalRanks: string[] }).finalRanks[0], "the bye's winner holds the title").toBe(sf2.away_entrant_id);
+    const ranks = (done.events[0] as { finalRanks: string[] }).finalRanks;
+    expect(ranks[0], "the walkover's winner holds the title").toBe(sf2.away_entrant_id);
+    // The product's ranks (withdrawn-winner-walkover.test.ts): she is no loser of a tie she never sat in, so she ranks
+    // below every field entrant, as a departed entrant always has — never the walked-over final's runner-up.
+    expect([ranks.length, ranks.indexOf(w)], "she ranks last of four").toEqual([4, 3]);
   });
 
   it("Review Focus 1: a dead seat beside a RECORDED double walkover is a void (nobody withdrew from it), and the seat that void feeds walks its opponent over", async () => {

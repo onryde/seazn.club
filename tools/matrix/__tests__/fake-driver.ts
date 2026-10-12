@@ -580,7 +580,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
           if (o.kind !== "award") continue;
           const home = f.home_entrant_id === o.winner;
           const state: unknown = m.init(cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
-          const pair = m.standingsDelta(o, cfg, ctx, state);
+          // The product's awardByeDelta (engine-db/competition.ts, W2b C-5): the module is handed the TYPED bye whatever
+          // the row stores — ruling 116's one-sided award names a withdrawn loser no lineup holds.
+          const bye = { kind: "award", winner: o.winner, loser: null, reason: "bye" } as MatchOutcome;
+          const pair = m.standingsDelta(bye, cfg, ctx, state);
           const won = pair.find((d) => d.entrantId === o.winner)!;
           pts.set(o.winner, pts.get(o.winner)! + won.points);
           add(won);
@@ -791,6 +794,9 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
    *  (the bye stamp, X-WD-3) or one a departure double walkover feeds. Any other dead slot (a recorded double walkover's,
    *  a void's) is dead but not departed. */
   readonly departedSlots = new Set<string>();
+  /** `<row id>:<slot>` → the entrant who WITHDREW from that seat while it was a winner edge's (owner ruling 116,
+   *  stages.ts `awardSeededByes`): the arriving side walks over her, and the award names her, reason "withdrew". */
+  readonly withdrawnFrom = new Map<string, string>();
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
   readonly extIds = new Map<string, string>();
   constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
@@ -903,10 +909,18 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     this.awardThrough(target, entrant);
   }
   /** awardSeededByes: a dead seat's opponent walks over — `forfeited` + `{kind: "award", winner, loser: null, reason:
-   *  "bye"}` and no event (W2b C-5). */
+   *  "bye"}` and no event (W2b C-5); over a seat a winner WITHDREW from, the award names her, reason "withdrew" (owner
+   *  ruling 116), and she is still never seated. */
   awardThrough(target: FakeFixture, winner: string): void {
-    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner, loser: null, reason: "bye" } });
+    const slots: readonly Slot[] = ["home_entrant_id", "away_entrant_id"];
+    const loser = slots.map((slot) => this.withdrawnFrom.get(`${target.id}:${slot}`)).find((id) => id !== undefined) ?? null;
+    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner, loser, reason: loser === null ? "bye" : "withdrew" } });
     this.feed(target);
+  }
+  /** A slot a WINNER edge fills (stages.ts `awardSeededByes` reads the winner edge only: a loser edge's dead seat,
+   *  X-WD-5, stays a bye). */
+  winnerFed(id: string, slot: Slot): boolean {
+    return [...this.feeds.values()].some((edge) => edge.to === id && edge.slot === slot);
   }
   /** singleElim, stages.ts resolveBracketSeats (loop F): a slot no entrant will reach (D17, X-WD-3, X-DW-2) is dead.
    *  - An entrant waiting opposite it walks over at once (awardThrough, the bye award).
@@ -952,6 +966,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       const opponent = slot === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
       if (opponent === null) {
         Object.assign(f, { [slot]: null });
+        if (this.winnerFed(f.id, slot)) this.withdrawnFrom.set(`${f.id}:${slot}`, entrantId);
         this.killSlot(f.id, slot, true);
         walkovers++;
         continue;
@@ -1000,6 +1015,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
         continue;
       }
       Object.assign(f, { [mine]: null });
+      if (this.winnerFed(f.id, mine)) this.withdrawnFrom.set(`${f.id}:${mine}`, entrantId);
       this.deadSlots.add(`${f.id}:${mine}`);
       walkovers++;
     }
@@ -1036,9 +1052,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
         if (!this.feeds.has(f.id)) champion = w;
       }
       // T16 review m8: rank every entrant the stage's fixtures name, as the product's `bracketRanks` does (engine
-      // stage.ts): a double walkover's two sides, and a loser an award names, are out at that fixture's round (X-DW-2,
-      // X-DE-1: `walkedOver`); an entrant no stored fixture puts out (a winner who then withdrew, X-WD-3) is eliminated
-      // nowhere (-1) and ranks below every elimination, by seed.
+      // stage.ts): a double walkover's two sides are out at that fixture's round (X-DW-2: `walkedOver`); an entrant no
+      // stored fixture puts out (a winner who then withdrew, X-WD-3) is eliminated nowhere (-1) and ranks below every
+      // elimination, by seed. An award's loser who holds no seat there (ruling 116's withdrawn winner) is no loss
+      // (engine-db/competition.ts `bracketWinnerLoser`), and a seated one is the first loop's.
       const ranked = new Set<string>([...out.map((x) => x.id), ...(champion === null ? [] : [champion])]);
       const rank = (id: string | null | undefined, round: number) => {
         if (typeof id !== "string" || ranked.has(id)) return;
@@ -1048,7 +1065,6 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       for (const f of this.fixtures) {
         const o = f.outcome as { kind?: unknown; loser?: unknown } | null;
         if (o?.kind === "double_walkover") for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, f.round_no ?? 0);
-        else if (typeof o?.loser === "string") rank(o.loser, f.round_no ?? 0);
       }
       for (const f of this.fixtures) for (const id of [f.home_entrant_id, f.away_entrant_id]) rank(id, -1);
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));

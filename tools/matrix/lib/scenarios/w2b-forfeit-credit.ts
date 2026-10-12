@@ -411,8 +411,9 @@ export function withdrawalsWalkOver(r: WdRecord, fixtures: readonly ObservedFixt
 
 const byExt = (fixtures: readonly ObservedFixture[], key: string): ObservedFixture | undefined => fixtures.find((f) => f.extKey === key);
 
-/** X-WD-3: the semi-final whose seat went dead while its other seat was TBD walks the arriving opponent over — by bye,
- *  the award a dead seat's opponent gets (W2b C-5: no loser, reason "bye") — and the withdrawn entrants are seated
+/** X-WD-3: the semi-final whose seat went dead while its other seat was TBD walks the arriving opponent over — and,
+ *  because a WINNER withdrew from that seat (w1 won QF1, then left), the walkover names her (owner ruling 116: loser w1,
+ *  reason "withdrew", like any other walkover; it was a bye, W2b C-5) — and the withdrawn entrants are seated
  *  nowhere after the fixture they left. Nothing is voided but SF2, the dead-seat rule's void (bothSeatsDead), and in the
  *  vacant half the final, the same rule's (finalVacant). */
 export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {
@@ -420,7 +421,7 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
   const sf = byExt(fixtures, r.lines.a.sf);
   const o = sf?.outcome ?? null;
   const a = o !== null && o.kind === "award" ? o : null;
-  const items: Item[] = [{ ok: sf?.status === "forfeited" && a !== null && a.winner === r.a2 && a.loser === null && a.reason === "bye", note: `${r.lines.a.sf}: ${sf?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted the arriving ${r.a2} walked over by bye (no loser, reason bye: C-5)` }];
+  const items: Item[] = [{ ok: sf?.status === "forfeited" && a !== null && a.winner === r.a2 && a.loser === r.w1 && a.reason === WITHDREW, note: `${r.lines.a.sf}: ${sf?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted the arriving ${r.a2} walked over ${r.w1}, who withdrew (loser ${r.w1}, reason ${WITHDREW})` }];
   const lines = r.lines;
   // Who departed, and the fixtures each keeps a seat in: the ones played before her withdrawal. The vacant half's a2
   // keeps QF2 and SF1 (both walked over to her) and leaves the final.

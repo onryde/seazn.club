@@ -238,6 +238,27 @@ async function readDoubleWalkoverNext(
   return row ? (maskedNames.get(winner) ?? row.display_name) : null;
 }
 
+/**
+ * Owner ruling 116 (W2b Task 16; X-WD-3) — the forfeit's loser when she holds no seat in this fixture, or null: a
+ * winner who withdrew before this tie, whose dead seat the arriving side walked over (`awardSeededByes` names her as
+ * the award's loser, reason "withdrew"). The sides read only who is seated, so her name is read here — through
+ * `public_entrants_v`, masked the way this page masks a side (`readSides`). Read only for such an award: any other
+ * fixture, a seated loser's included, makes no read.
+ */
+async function readUnseatedForfeitLoser(
+  sql: Sql,
+  fixture: Pick<PublicFixture, "outcome" | "home_entrant_id" | "away_entrant_id">,
+  division: { youth: boolean; playerNameDisplay: string | null },
+): Promise<{ id: string; name: string } | null> {
+  const o = fixture.outcome as { kind?: unknown; loser?: unknown } | null;
+  if (o?.kind !== "award" || typeof o.loser !== "string") return null;
+  const loser = o.loser;
+  if (loser === fixture.home_entrant_id || loser === fixture.away_entrant_id) return null;
+  const { rows, maskedNames } = await readSides(sql, { home_entrant_id: loser, away_entrant_id: null }, division);
+  const row = rows.find((r) => r.id === loser);
+  return row ? { id: loser, name: maskedNames.get(loser) ?? row.display_name } : null;
+}
+
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
  *  bye/TBD case (an entrant id still null) without throwing: its name is
  *  `slot(label)` — the feeder's round for a side waiting on a match
@@ -533,6 +554,7 @@ export async function loadMatchCentre(
     (fixture.outcome as { kind?: string } | null)?.kind === "double_walkover"
       ? await readDoubleWalkoverNext(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay })
       : null;
+  const unseatedForfeitLoser = await readUnseatedForfeitLoser(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay });
 
   const input: MatchCentreInput = {
     fixture,
@@ -550,6 +572,7 @@ export async function loadMatchCentre(
     formatLabel,
     resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
     doubleWalkoverNext,
+    unseatedForfeitLoser,
   };
   return buildMatchCentre(input);
 }
