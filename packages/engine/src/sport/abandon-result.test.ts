@@ -184,4 +184,35 @@ describe("R16-3: a level award-policy abandon where the cfg refuses a draw has n
     }
     expect(checked).toBeGreaterThan(0);
   });
+
+  // T16 review m2: every declared variant with an overtime also has a shoot-out, so the sweep above cannot tell
+  // `drawStands`' overtime conjunct from its shoot-out one. These are organiser cfgs no variant declares - the ones
+  // supports-draws.test.ts's X-DR-1 house sweep uses - and the expectation is the rule row's, never `supportsDraws`
+  // (which reads the same `drawStands`, so a mutant would move both): FIH and IIHF draws stand only where NO decider is
+  // configured (hockey/DOMAIN.md:59, icehockey/DOMAIN.md:74). One-line reason for two sports: only the period sports
+  // have the overtime conjunct.
+  it("the overtime half: an overtime with no shoot-out refuses a draw, so the level abandon has no result; no decider at all is a draw", () => {
+    const OT = { kind: "sudden_death", minutes: 5 };
+    const HOUSE = [
+      { name: "overtime, no shoot-out", raw: { overtime: OT, shootout: null }, ruleTakesDraw: false },
+      { name: "no decider", raw: { overtime: null, shootout: null }, ruleTakesDraw: true },
+    ];
+    let refused = 0;
+    let drawn = 0;
+    for (const key of ["hockey", "icehockey"]) {
+      for (const h of HOUSE) {
+        const name = `${key} ${h.name}`;
+        const r = fold(key, { abandonPolicy: "award", ...h.raw }, level(key));
+        expect((r.cfg as { abandonPolicy?: unknown }).abandonPolicy, `${name}: the award policy parsed`).toBe("award");
+        if (h.ruleTakesDraw) {
+          expect(r.outcome, name).toEqual({ kind: "draw" });
+          drawn++;
+        } else {
+          expect([r.outcome, r.state.phase, r.state.replayFlagged], name).toEqual([null, "abandoned", true]);
+          refused++;
+        }
+      }
+    }
+    expect([refused, drawn]).toEqual([2, 2]);
+  });
 });
