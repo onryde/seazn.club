@@ -9,7 +9,7 @@
 // in any locale.
 import { readFileSync } from "node:fs";
 import { join as pathJoin } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
@@ -20,6 +20,7 @@ import nl from "@/dictionaries/nl/ui.json";
 import type { ArbiterBoard, ArbiterFlag, ArbiterRound } from "@/lib/arbiter-view";
 import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
 import {
+  ArbiterPanel,
   ArbiterScreen,
   arbiterJoinStateFromError,
   nextOffSince,
@@ -29,6 +30,9 @@ import {
   type ArbiterVideoView,
 } from "../arbiter-panel";
 import { ApiV1Error } from "@/lib/client-v1";
+// The container's first render (effects never run here): only the router's
+// existence is needed.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 import { ArbiterGuardError } from "../arbiter-camera";
 
 const LOCALES = { en, es, fr, nl } as const;
@@ -112,6 +116,7 @@ const noop = () => undefined;
 function props(over: Partial<ArbiterScreenProps> = {}): ArbiterScreenProps {
   return {
     round: ROUND,
+    requested: null,
     decision: initialArbiterDecision("f3"),
     video: WATCHING,
     nowMs: NOW,
@@ -170,6 +175,61 @@ describe("the empty cases first", () => {
     const t = text(h);
     expect(t).toContain(EN["arbiter.flags.none"]);
     expect(t).not.toContain(EN["arbiter.flag.pending.chip"]);
+  });
+});
+
+describe("?fixture= — exactly that board, or said plainly (I3)", () => {
+  const CURRENT = 'href="/o/club/c/autumn/d/open/arbiter"';
+  it("a board that is not here: the plain sentence and a way to the current round — no board, no tile, nothing pressed", () => {
+    const h = html(props({ round: null, requested: "unavailable", decision: initialArbiterDecision("gone"), video: { kind: "idle" } }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.requested.unavailable"]);
+    expect(t).toContain(EN["arbiter.requested.current"]);
+    expect(h).toContain(CURRENT);
+    expect(t, "not the 'no round open' state").not.toContain(EN["arbiter.empty.title"]);
+    expect(count(h, "<figure")).toBe(0);
+    expect(count(h, "<button")).toBe(0);
+  });
+
+  it("C1: the viewer's own board, asked for by link: named as theirs, never opened", () => {
+    const h = html(props({ round: null, requested: "own", decision: initialArbiterDecision("mine"), video: { kind: "idle" } }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.requested.own"]);
+    expect(t).not.toContain(EN["arbiter.requested.unavailable"]);
+    expect(h).toContain(CURRENT);
+    expect(count(h, "<figure")).toBe(0);
+  });
+
+  it("the board on screen is not in the round (it left between the link and the read, or a refresh dropped it): said so — never the first board in its place", () => {
+    const h = html(props({ decision: initialArbiterDecision("not-in-round") }));
+    const t = text(h);
+    expect(t).toContain(EN["arbiter.requested.unavailable"]);
+    expect(h).toContain(CURRENT);
+    expect(count(h, "<figure"), "no tile of another board").toBe(0);
+    expect(h, "no board pressed").not.toContain('aria-pressed="true"');
+    expect(t).not.toContain(EN["arbiter.emptyBoards"]);
+    // The positive pair: a board that IS in the round opens.
+    expect(count(html(props({ decision: initialArbiterDecision("f1") })), "<figure")).toBe(2);
+  });
+});
+
+describe("the panel's first board (the container, first render)", () => {
+  const panel = (initialFixtureId: string | null) =>
+    renderToStaticMarkup(
+      <DictProvider dict={en as unknown as Dict} locale="en">
+        <ArbiterPanel round={ROUND} requested={null} slugs={{ org: "club", comp: "autumn", div: "open" }} initialFixtureId={initialFixtureId} />
+      </DictProvider>,
+    );
+  const pressed = (h: string) => [...h.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([\s\S]*?)<\/button>/g)].map((m) => text(m[1]!));
+
+  it("I3: the board asked for opens — and one not in the round is SAID, never the first board in its place", () => {
+    expect(pressed(panel("f3")).map((l) => l.split(" · ")[0])).toEqual(["Board 3"]);
+    const missing = panel("not-in-round");
+    expect(text(missing)).toContain(EN["arbiter.requested.unavailable"]);
+    expect(pressed(missing)).toEqual([]);
+    expect(count(missing, "<figure")).toBe(0);
+    // Nothing asked for: the first board.
+    expect(pressed(panel(null)).map((l) => l.split(" · ")[0])).toEqual(["Board 1"]);
   });
 });
 
@@ -575,6 +635,8 @@ describe("every locale", () => {
       props({ round: null, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ round: { ...ROUND, boards: [], ownBoards: 1 }, decision: initialArbiterDecision(null), video: { kind: "idle" } }),
       props({ video: { kind: "own" } }),
+      props({ round: null, requested: "unavailable", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
+      props({ round: null, requested: "own", decision: initialArbiterDecision("x"), video: { kind: "idle" } }),
       props({
         round: {
           ...ROUND,
@@ -591,7 +653,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked).toBe(32);
+    expect(checked).toBe(40);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {

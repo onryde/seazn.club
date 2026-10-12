@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision } from "@/server/usecases/divisions";
-import { loadArbiterRound } from "@/server/usecases/external-play";
+import { arbiterRequestedRound, loadArbiterRound } from "@/server/usecases/external-play";
 import { ArbiterPanel } from "@/components/v2/arbiter-panel";
 
 export default async function DivisionArbiterPage({
@@ -25,12 +25,22 @@ export default async function DivisionArbiterPage({
   const division = await getDivision(page.auth, page.division.id);
   const onlinePlay = (division.config as { onlinePlay?: unknown } | null)?.onlinePlay;
   if (division.sport_key !== "boardgame" || onlinePlay !== "lichess") notFound();
-  const round = await loadArbiterRound(page.auth, page.division.id);
+  // I3: `?fixture=` opens exactly that board — in its own round, an earlier
+  // one included — or the panel says it is not here. No round is loaded for
+  // a board that is not here, so no other board can be opened in its place.
+  const fixtureId = typeof fixture === "string" ? fixture : null;
+  const asked = fixtureId === null ? null : await arbiterRequestedRound(page.auth, page.division.id, fixtureId);
+  const requested = asked === null || asked.kind === "round" ? null : asked.kind;
+  const round =
+    requested !== null
+      ? null
+      : await loadArbiterRound(page.auth, page.division.id, asked?.kind === "round" ? { round: { stageId: asked.stageId, roundNo: asked.roundNo } } : {});
   return (
     <ArbiterPanel
       round={round}
+      requested={requested}
       slugs={{ org: orgSlug, comp: compSlug, div: divSlug }}
-      initialFixtureId={typeof fixture === "string" ? fixture : null}
+      initialFixtureId={fixtureId}
     />
   );
 }
