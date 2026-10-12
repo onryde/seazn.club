@@ -46,7 +46,7 @@ export function fill(key: string, vars: Record<string, string | number> = {}): s
 
 /** The play grant's scopes, read from lib/oauth.ts (server-only, so it cannot
  *  be imported here) — a grant missing one is a re-consent screen, not a seat. */
-function playScopes(): string[] {
+export function playScopes(): string[] {
   const src = readFileSync(fileURLToPath(new URL("../src/lib/oauth.ts", import.meta.url)), "utf8");
   const m = /export const LICHESS_OAUTH_SCOPES = "([^"]+)"/.exec(src);
   if (!m) throw new Error("match-room-kit: LICHESS_OAUTH_SCOPES not found in lib/oauth.ts");

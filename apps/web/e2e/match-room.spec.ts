@@ -22,12 +22,13 @@ import { Chess } from "chess.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
-import { apiJson, loginUi } from "./helpers";
+import { apiJson, loginUi, withDb } from "./helpers";
 import {
   bridgeRow,
   checkedInAt,
   fill,
   longName,
+  playScopes,
   seedGameSql,
   seedMatchRoom,
   uiEn,
@@ -429,6 +430,61 @@ test("the board: legal dots from the rules, a move sent as UCI with the personal
   acts.release();
   // The refusal puts the knight back where the ledger has it.
   await expect.poll(() => piecesOnBoard(p)).toEqual(piecesOf(fen));
+  expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
+  await ctx.close();
+});
+
+test("a move through the REAL server: a grant downgraded mid-game is refused by T2's gate before Lichess, and the room asks to re-link", async ({
+  page,
+  browser,
+}) => {
+  // Nothing intercepted: the board's move goes to the real act route and the
+  // real usecase. Every act asks the play grant first (play.ts step 4), so a
+  // grant that lost a play scope after the game began is refused there — the
+  // server's own answer, before any token is opened or Lichess is called.
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  expect(await screenOf(p)).toBe("live");
+
+  const dropped = playScopes()[0]!;
+  const left = await withDb(async (sql) => {
+    const rows = await sql<{ scopes: string[] }[]>`
+      update user_external_accounts set scopes = array_remove(scopes, ${dropped})
+       where user_id = ${room.white.userId} and provider = 'lichess'
+      returning scopes`;
+    return rows;
+  });
+  expect(left.length, "White's grant was found and narrowed").toBe(1);
+  expect(left[0]!.scopes).not.toContain(dropped);
+
+  const answered = p.waitForResponse((r) => r.request().method() === "POST" && /\/external-play\/room\/act(\?|$)/.test(new URL(r.url()).pathname));
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  const res = await answered;
+  expect(res.request().postDataJSON(), "the board sent the move it was given").toEqual({ kind: "move", uci: "g1f3" });
+  expect(new URL(res.url()).searchParams.get("t")).toBe(room.white.token);
+  expect(res.status()).toBe(200);
+  expect(await res.json(), "the server's own refusal").toMatchObject({
+    ok: true,
+    data: { ok: false, reconcile: false, reason: "lichess_reconsent_required" },
+  });
+
+  await expect.poll(() => screenOf(p)).toBe("relink");
+  await expect(p.getByTestId("room-state-relink")).toBeVisible();
+  const href = new URL((await p.getByTestId("room-relink").getAttribute("href"))!, "http://x");
+  expect(href.pathname, "re-link starts the Lichess link flow").toBe("/api/auth/lichess");
+  expect(href.searchParams.get("org")).toBe(room.fixturePath.split("/")[2]);
+  expect(href.searchParams.get("next"), "and comes back to this room, with its link").toBe(
+    `${room.roomPath}?t=${encodeURIComponent(room.white.token)}`,
+  );
+  // The re-link screen survives the room's next read (the read never asks the grant).
+  await p.waitForResponse((r) => r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname), { timeout: 15_000 });
+  await p.waitForTimeout(200);
+  expect(await screenOf(p)).toBe("relink");
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
   await ctx.close();
 });
