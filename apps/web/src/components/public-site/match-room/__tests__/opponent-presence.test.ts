@@ -68,10 +68,12 @@ type Cmd =
   | { k: "camResume" }
   | { k: "camClose" }
   | { k: "screen" }
+  | { k: "mic" }
   | { k: "arbiterJoin" }
   | { k: "drop" }
   | { k: "rejoin" }
   | { k: "mediaRejoin" }
+  | { k: "rejoinWindow" }
   | { k: "wait"; ms: number };
 // Weighted towards what it takes to REACH "live" (opponent in, camera on,
 // settled) so all three outcomes are visited often, not by luck.
@@ -83,10 +85,12 @@ const cmd: fc.Arbitrary<Cmd> = fc.oneof(
   { arbitrary: fc.constant({ k: "camResume" } as const), weight: 2 },
   { arbitrary: fc.constant({ k: "camClose" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "screen" } as const), weight: 1 },
+  { arbitrary: fc.constant({ k: "mic" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "arbiterJoin" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "drop" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "rejoin" } as const), weight: 1 },
   { arbitrary: fc.constant({ k: "mediaRejoin" } as const), weight: 1 },
+  { arbitrary: fc.constant({ k: "rejoinWindow" } as const), weight: 1 },
   {
     arbitrary: fc.constantFrom(500, PRESENCE_TICK_MS, PRESENCE_SETTLE_MS - 1, PRESENCE_SETTLE_MS, 7_000).map((ms) => ({ k: "wait", ms }) as const),
     weight: 5,
@@ -160,6 +164,10 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
               case "screen":
                 if (model.oppIn) m.produce(OPP.peer, { producerId: `screen-${(camSeq += 1)}`, kind: "video", screenShare: true });
                 break;
+              case "mic":
+                // A microphone is not a camera: the pill does not move.
+                if (model.oppIn) m.produce(OPP.peer, { producerId: `mic-${(camSeq += 1)}`, kind: "audio", screenShare: false });
+                break;
               case "arbiterJoin":
                 m.peerJoins(`arb-${(camSeq += 1)}`, "rtk-arbiter");
                 break;
@@ -179,6 +187,13 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
                 model.connected = true;
                 model.joinedAt = now;
                 break;
+              case "rejoinWindow":
+                // A socket rejoin with the opponent's media-join broadcast
+                // landing before ours (review re-2 Q4) — selects in ACTIVE_GRID.
+                await m.reconnect({ inWindow: (x) => x.peerMediaJoined(OPP.peer) });
+                model.connected = true;
+                model.joinedAt = now;
+                break;
               case "wait":
                 now += c.ms;
                 vi.setSystemTime(now);
@@ -192,6 +207,8 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
             // D7 holds throughout, whatever the pill says.
             expect(m.participants.videoSubscribed.size).toBe(0);
             expect(m.consumedVideo).toEqual([]);
+            expect(m.participants.audioSubscribed.size).toBe(0);
+            expect(m.consumedAudio).toEqual([]);
           }
           await cam.leave();
           expect(opponentPresenceView(cam.link(), { participantId: OPP.user }, now), "left ⇒ no pill").toBeNull();
@@ -207,7 +224,7 @@ describe("the pill over a meeting's life — real loader, ported SDK, any order 
     expect(seen.off, "off reached").toBeGreaterThan(50);
     expect(seen.none, "no pill reached").toBeGreaterThan(50);
     // Every event kind applied.
-    for (const k of ["oppJoin", "oppLeave", "camOn", "camPause", "camResume", "camClose", "screen", "arbiterJoin", "drop", "rejoin", "mediaRejoin", "wait"]) {
+    for (const k of ["oppJoin", "oppLeave", "camOn", "camPause", "camResume", "camClose", "screen", "mic", "arbiterJoin", "drop", "rejoin", "mediaRejoin", "rejoinWindow", "wait"]) {
       expect(applied.get(k) ?? 0, `applied: ${k}`).toBeGreaterThan(20);
     }
   });

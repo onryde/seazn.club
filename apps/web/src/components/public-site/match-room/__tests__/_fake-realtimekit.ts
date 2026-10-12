@@ -14,12 +14,23 @@
 //   - SOCKET_PEERS on every socket (re)join: clears the joined and subscribed
 //     maps and resets viewMode to ACTIVE_GRID, then re-adds the peers
 //     (l.18385) — a MANUAL view does not survive a reconnect. Re-adding a peer
-//     selects nobody (onParticipantSocketJoined, l.18990: `joined.add` only);
-//     the selection comes ONCE, over the whole joined set, from the server's
-//     selected-peer broadcast (onSelectedPeers → computeActivateParticipants,
-//     l.18520) — so the cap-0 leak lands a peer in a single update. Whether
-//     the server sends a selection to a room holding nobody else cannot be
-//     read from the client build: modelled as not sent, the stricter case.
+//     selects nobody (onParticipantSocketJoined, l.18990: `joined.add` only).
+//   - The selection runs when the media join completes (selfJoinComplete,
+//     l.18405-18418): one UPDATE_ACTIVE per peer (onParticipantMediaJoined,
+//     l.~18960), then UPDATE_ACTIVE{createAllConsumers} (l.18963), which
+//     clears BOTH subscribed maps and re-selects in the CURRENT mode before
+//     scheduling the sync — so it empties them only if the view is MANUAL by
+//     then. The server's selected-peer broadcast alone updates no map
+//     (computeActivateParticipants → updateActiveParticipantsWithPriorities
+//     with emit false). A peer's media-join broadcast (l.18396) is gated on
+//     OUR media being joined, which a socket-only drop leaves up: it can land
+//     between SOCKET_PEERS and our own selfJoinComplete and select in
+//     ACTIVE_GRID (`reconnect({ inWindow })`, review re-2 Q4).
+//   - Audio (review re-2 M1): in ACTIVE_GRID `audioSubscribed` =
+//     selectActivePeers(cap + 4) (l.18627-18632) — with cap 0, up to three
+//     peers, the opponent first. syncConsumers' audio half (l.18696-18702)
+//     consumes every audio producer of a subscribed peer, paused or not, and
+//     the SDK auto-plays it.
 //   - `roomJoined` comes LATER than SOCKET_PEERS: only after the media join's
 //     network awaits (joinMediaRoom, l.24515-24535; on a socket rejoin via
 //     SOCKET_SERVICE_RECONNECTED → resetSelf → joinRoom, l.24416). Anything
@@ -157,6 +168,7 @@ class FakeParticipants extends Emitter {
   }
   async setViewMode(mode: ViewMode): Promise<void> {
     this.m.calls.push(`setViewMode:${mode}`);
+    this.m.injectedFailure("setViewMode");
     if (this.viewMode === mode) return;
     this.viewMode = mode;
     if (mode !== "MANUAL") this.m.updateActive();
@@ -167,9 +179,17 @@ class FakeParticipants extends Emitter {
     for (const id of ids) {
       const n = this.joined.get(id);
       if (!n) continue;
+      if (kinds.includes("audio")) {
+        n.manualProducerConfig = { ...n.manualProducerConfig, audio: true };
+        if (!this.audioSubscribed.has(n.id)) this.audioSubscribed.add(n);
+      }
       if (kinds.includes("video")) {
         n.manualProducerConfig = { ...n.manualProducerConfig, video: true };
         if (!this.videoSubscribed.has(n.id)) this.videoSubscribed.add(n);
+      }
+      if (kinds.includes("screenshareAudio")) {
+        n.manualProducerConfig = { ...n.manualProducerConfig, screenshareAudio: true };
+        if (!this.audioSubscribed.has(n.id)) this.audioSubscribed.add(n);
       }
       if (kinds.includes("screenshareVideo")) {
         n.manualProducerConfig = { ...n.manualProducerConfig, screenshareVideo: true };
@@ -181,9 +201,21 @@ class FakeParticipants extends Emitter {
   async unsubscribe(ids: string[], kinds: Kind[] = ALL_KINDS): Promise<void> {
     this.m.calls.push(`unsubscribe:${ids.join(",")}:${kinds.join("+")}`);
     if (this.viewMode !== "MANUAL") throw new Error("MANUAL subscription mode was not activated.");
+    this.m.injectedFailure("unsubscribe");
+    const hook = this.m.duringNextUnsubscribe;
+    this.m.duringNextUnsubscribe = null;
+    hook?.(this.m);
     for (const id of ids) {
       const n = this.joined.get(id);
       if (!n) continue;
+      if (kinds.includes("audio")) {
+        n.manualProducerConfig = { ...n.manualProducerConfig, audio: false };
+        if (!n.manualProducerConfig.screenshareAudio) this.audioSubscribed.delete(n.id);
+      }
+      if (kinds.includes("screenshareAudio")) {
+        n.manualProducerConfig = { ...n.manualProducerConfig, screenshareAudio: false };
+        if (!n.manualProducerConfig.audio) this.audioSubscribed.delete(n.id);
+      }
       if (kinds.includes("video")) {
         n.manualProducerConfig = { ...n.manualProducerConfig, video: false };
         if (!n.manualProducerConfig.screenshareVideo) this.videoSubscribed.delete(n.id);
@@ -223,6 +255,19 @@ export class FakeMeeting {
   socketJoined = false;
   /** Every remote VIDEO consumer this client ever created — D7's evidence. */
   consumedVideo: { peerId: string; producerId: string }[] = [];
+  /** Every remote AUDIO consumer — the SDK auto-plays these. */
+  consumedAudio: { peerId: string; producerId: string }[] = [];
+  // ── test seams (not SDK behaviour) ────────────────────────────────────
+  /** Make the next N calls of a method throw, as a future SDK might. */
+  failNext: { setViewMode: number; unsubscribe: number } = { setViewMode: 0, unsubscribe: 0 };
+  /** Runs once inside the next unsubscribe — an arrival mid-enforcement. */
+  duringNextUnsubscribe: ((m: FakeMeeting) => void) | null = null;
+  injectedFailure(method: "setViewMode" | "unsubscribe"): void {
+    if (this.failNext[method] > 0) {
+      this.failNext[method] -= 1;
+      throw new Error(`injected ${method} failure`);
+    }
+  }
   constructor(
     public authToken: string,
     selfUserId: string,
@@ -236,6 +281,8 @@ export class FakeMeeting {
     this.calls.push("join");
     this.socketPeers();
     await mediaJoinGap();
+    this.selfJoinComplete();
+    await mediaJoinGap(); // shareMediaTracks (l.24535)
     this.self.emit("roomJoined", { reconnected: false });
   }
   async leave(): Promise<void> {
@@ -255,14 +302,23 @@ export class FakeMeeting {
     p.viewMode = "ACTIVE_GRID";
     this.socketJoined = true;
     for (const peer of this.roster) p.joined.add(peer);
-    // The server's selected-peer broadcast that follows.
-    if (this.roster.length > 0) this.updateActive();
+  }
+
+  /** selfJoinComplete (l.18405-18418): each peer's media join, then the
+   *  createAllConsumers update. */
+  private selfJoinComplete(): void {
+    for (const peer of this.roster) if (this.participants.joined.has(peer.id)) this.updateActive();
+    this.updateActive({ createAllConsumers: true });
   }
 
   /** UPDATE_ACTIVE → updateMediaSubscribedMaps (l.18601), then a consumer
    *  sync on a timer (scheduleSyncConsumers, l.18640). */
-  updateActive(): void {
+  updateActive(opts: { createAllConsumers?: boolean } = {}): void {
     const p = this.participants;
+    if (opts.createAllConsumers) {
+      p.videoSubscribed.clear();
+      p.audioSubscribed.clear();
+    }
     if (p.viewMode === "ACTIVE_GRID") {
       updateMap(p.videoSubscribed, this.selectActivePeers(p.maxActiveParticipantsCount), p.joined);
       updateMap(p.audioSubscribed, this.selectActivePeers(p.maxActiveParticipantsCount + 4), p.joined);
@@ -289,7 +345,7 @@ export class FakeMeeting {
     return d;
   }
 
-  /** syncConsumers (l.18680), video half. */
+  /** syncConsumers (l.18680): the video half, then the audio half. */
   private syncConsumers(): void {
     const p = this.participants;
     if (!this.socketJoined) return;
@@ -301,6 +357,18 @@ export class FakeMeeting {
         const share = (j.manualProducerConfig.screenshareVideo ?? true) && x.screenShare;
         if ((cam || share) && !x.pause && !this.consumedVideo.some((c) => c.producerId === x.producerId)) {
           this.consumedVideo.push({ peerId: sub.id, producerId: x.producerId });
+        }
+      }
+    }
+    for (const sub of p.audioSubscribed.values()) {
+      const j = p.joined.get(sub.id);
+      if (!j) continue;
+      for (const x of sub.producers.filter((k) => k.kind === "audio")) {
+        const mic = (j.manualProducerConfig.audio ?? true) && !x.screenShare;
+        const share = (j.manualProducerConfig.screenshareAudio ?? true) && x.screenShare;
+        // No pause check for audio (l.18701).
+        if ((mic || share) && !this.consumedAudio.some((c) => c.producerId === x.producerId)) {
+          this.consumedAudio.push({ peerId: sub.id, producerId: x.producerId });
         }
       }
     }
@@ -331,7 +399,8 @@ export class FakeMeeting {
     const peer = this.roster.find((x) => x.id === peerId);
     if (!peer) throw new Error(`no peer ${peerId}`);
     peer.producers.push({ pause: false, ...producer });
-    if (this.participants.videoSubscribed.has(peerId) || producer.screenShare) setTimeout(() => this.syncConsumers(), 0);
+    const subscribed = producer.kind === "audio" ? this.participants.audioSubscribed : this.participants.videoSubscribed;
+    if (subscribed.has(peerId) || producer.screenShare) setTimeout(() => this.syncConsumers(), 0);
   }
   /** PRODUCER_TOGGLE (l.18489): flips `pause`, nothing else. */
   toggle(peerId: string, producerId: string, pause: boolean): void {
@@ -354,19 +423,31 @@ export class FakeMeeting {
     this.self.emit("roomLeft", { state: "disconnected" });
   }
   /** The socket drops and comes back (l.14463, l.24416): connected, then
-   *  SOCKET_PEERS, then — after the media join's awaits — roomJoined. */
-  async reconnect(): Promise<void> {
+   *  SOCKET_PEERS, then — after the media join's awaits — selfJoinComplete
+   *  and roomJoined. `inWindow` runs between SOCKET_PEERS and the media join
+   *  (e.g. a peer's media-join broadcast). */
+  async reconnect(opts: { inWindow?: (m: FakeMeeting) => void } = {}): Promise<void> {
     this.dropSocket();
     this.meta.emit("socketConnectionUpdate", { state: "connected", reconnected: true, reconnectionAttempt: undefined });
     this.socketPeers();
+    opts.inWindow?.(this);
+    await mediaJoinGap();
+    this.selfJoinComplete();
     await mediaJoinGap();
     this.self.emit("roomJoined", { reconnected: true });
+  }
+  /** A peer's media-join broadcast (l.18396 → onParticipantMediaJoined):
+   *  UPDATE_ACTIVE in the CURRENT view mode. */
+  peerMediaJoined(peerId: string): void {
+    if (this.participants.joined.has(peerId)) this.updateActive();
   }
   /** The media node drops and comes back; the socket and its peers stay
    *  (ROOM_NODE_DISCONNECTED / ROOM_NODE_RECONNECTED, l.24411-24413). */
   async mediaReconnect(): Promise<void> {
     this.self.emit("roomLeft", { state: "disconnected" });
     await mediaJoinGap();
+    // "Transport reconnected" (l.22656): UPDATE_ACTIVE{createAllConsumers}.
+    this.updateActive({ createAllConsumers: true });
     this.self.emit("roomJoined", { reconnected: true });
   }
 }
