@@ -207,21 +207,6 @@
     ]
   },
   {
-    "id": "pad-payload-clause",
-    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
-    "find": "    if (\"event\" in tile.action && isOrganiserOnlyEvent(tile.action.event.type, tile.action.event.payload)) return false;\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts"
-        ],
-        "name": "D-O1 \\(W2b D15\\): every forfeit shape is a core\\.forfeit tile the block drops"
-      }
-    ]
-  },
-  {
     "id": "own-key-guard",
     "file": "apps/web/src/lib/organiser-only-events.ts",
     "find": "  if (!Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, type)) return false;\n",

@@ -80,7 +80,9 @@ describe("the tile grid cannot represent an authority action (D-12)", () => {
   it("D-O1 (W2b D15): every forfeit shape is a core.forfeit tile the block drops, and no sport event is organiser-only by its payload any more", () => {
     // Empty case first: W2b retired chess's forfeit methods on write for EVERY writer (D15), so the payload-scoped
     // table the pad and the server share is empty (W2b-R15: the D-O1 entries removed).
-    expect(ORGANISER_ONLY_SPORT_EVENTS).toEqual({});
+    // A GUARD, not just the empty case: filterTilesByBand has no payload clause (removed as dead while this table is
+    // empty), so a row here would render a direct tile the server refuses 403 until that clause comes back.
+    expect(ORGANISER_ONLY_SPORT_EVENTS, "a payload-scoped organiser-only row owes filterTilesByBand its payload clause back").toEqual({});
     let checked = 0;
     // Every forfeit the engine's vocabulary can say (each reason, and a double walkover) reaches the grid only as
     // core.forfeit — the server's predicate, read by identity, drops each one.

@@ -766,9 +766,8 @@ export function filterTilesByBand(
     const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
     if (AUTHORITY_ONLY_EVENT_TYPES.has(type)) return false;
-    // D-O1: a direct tile whose PAYLOAD records a sport forfeit (chess `boardgame.result` method forfeit) is the same
-    // authority action by another door — the server's own predicate, so the grid and the 403 cannot disagree.
-    if ("event" in tile.action && isOrganiserOnlyEvent(tile.action.event.type, tile.action.event.payload)) return false;
+    // No payload clause: since W2b D15 no sport event is organiser-only by its payload (`ORGANISER_ONLY_SPORT_EVENTS`
+    // is empty, pinned so in authority-only-tiles.test.ts). A row there owes a direct tile's payload check here.
     const band = fidelity[type];
     if (band === undefined) return true;
     // A LADDER, not a set (W1 / Task 4). The fifth argument used to be the
@@ -1237,7 +1236,7 @@ export function resolveDockSpec(
  * W2a (owner ruling D-O1; loop-H addendum 2) — THE dock a viewer is offered: the skin's own, minus every chip whose
  * write the server refuses this viewer. A chip only rewrites the held payload (`DockChip.mutate`), so "would this chip
  * write an organiser-only event" is the server's own predicate on the mutated payload — `isOrganiserOnlyEvent`, the
- * one list (scoring.ts's 403, this file's tile filter), never a second one. Chess is the case today: a scorer's
+ * one list (scoring.ts's 403), never a second one. Chess is the case today: a scorer's
  * decisive tap offers "forfeit" and the drawn tap "double forfeit", each a 403 for anyone but an organiser.
  *
  * Read by BOTH the render (`resolveDockSpec`) and the dispatch's soft-commit decision, so the dock a scorer sees and
