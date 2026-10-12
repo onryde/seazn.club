@@ -160,6 +160,9 @@ const I2: InvariantSpec = {
         checked++;
         const lost = new Set<string>();
         for (const f of s.fixtures.filter(twoSided)) {
+          // W2b Task 16 (ruling R16-1): a double walkover the product STORED beats both its sides (X-DW-1) — read from
+          // the fixture's outcome, never from the scenario's intent — and is no level result to flag.
+          if (f.outcome?.kind === "double_walkover") { lost.add(f.home!); lost.add(f.away!); continue; }
           const w = winnerOf(f.outcome);
           if (w === null) { if (isTerminal(f.status) && f.outcome !== null) fails.push(`${f.id}: bracket fixture ended ${f.outcome.kind}`); continue; }
           lost.add(w === f.home ? f.away! : f.home!);

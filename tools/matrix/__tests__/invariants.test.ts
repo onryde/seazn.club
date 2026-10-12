@@ -199,6 +199,37 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
     drawn.fixtures = drawn.fixtures.map((f) => (f.roundNo === 2 ? { ...f, outcome: { kind: "draw" as const } } : f));
     expect(evaluateInvariant(I2, run([drawn])).evidence.join(" ")).toMatch(/bracket fixture ended draw/);
   });
+  // W2b Task 16, controller ruling R16-1: a double walkover the product STORED (outcome kind double_walkover, read
+  // from the fixture, never from the scenario's intent) beats both its sides. Before the fix both read as unbeaten
+  // and the fixture was flagged "ended double_walkover", so every DW-ALL / WD-CASC knockout red on I2.
+  const BYE: ObservedOutcome = { kind: "award", winner: "a", loser: null, reason: "bye" };
+  const dwBracket = (finalRanks: string[], opener: ObservedOutcome | null = win("a"), final: { away: string | null; outcome: ObservedOutcome | null } = { away: null, outcome: BYE }) => stage({
+    kind: "knockout", field: ["a", "b", "c", "d"],
+    fixtures: [
+      fx({ roundNo: 1, home: "a", away: "d", status: opener === null ? "scheduled" : "decided", outcome: opener }),
+      fx({ roundNo: 1, home: "b", away: "c", status: "forfeited", outcome: { kind: "double_walkover" } }),
+      fx({ roundNo: 2, home: "a", away: final.away, status: final.outcome === null ? "scheduled" : "forfeited", outcome: final.outcome }),
+    ],
+    complete: { status: 200, code: null, completed: true, finalRanks },
+  });
+  it("R16-1: an observed double walkover beats both its sides and is not flagged — the champion is the one unbeaten", () => {
+    const v = evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"])]));
+    expect(v.evidence.join(" ")).not.toMatch(/ended double_walkover|unbeaten entrants/);
+    expect(v).toMatchObject({ verdict: "pass", checked: 5 });
+  });
+  it("R16-1: I2 still reds on a real violation beside a double walkover — a wrong rank 1, a drawn final, an unplayed opener", () => {
+    expect(evaluateInvariant(I2, run([dwBracket(["d", "a", "b", "c"])])).evidence.join(" ")).toMatch(/rank 1 is d, unbeaten is a/);
+    expect(evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"], win("a"), { away: "d", outcome: { kind: "draw" } })])).evidence.join(" ")).toMatch(/bracket fixture ended draw/);
+    expect(evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"], null)])).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,d/);
+  });
+  it("R16-1: a double walkover in the FINAL leaves nobody unbeaten — 0 unbeaten fails (a vacant final has no champion)", () => {
+    const vacant = stage({
+      kind: "knockout", field: ["a", "b", "c", "d"],
+      fixtures: [fx({ roundNo: 1, home: "a", away: "d", outcome: win("a") }), fx({ roundNo: 1, home: "b", away: "c", outcome: win("b") }), fx({ roundNo: 2, home: "a", away: "b", status: "forfeited", outcome: { kind: "double_walkover" } })],
+      complete: { status: 200, code: null, completed: true, finalRanks: ["a", "b", "c", "d"] },
+    });
+    expect(evaluateInvariant(I2, run([vacant])).evidence.join(" ")).toMatch(/0 unbeaten entrants/);
+  });
   it("abstain: stage not completed; shared place declared", () => {
     expect(evaluateInvariant(I2, run([bracket(null, false)])).verdict).toBe("abstain");
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"])], { facts: facts("shared_place_declared") })).verdict).toBe("abstain");
