@@ -462,7 +462,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     for (const k of ["volleyball", "tabletennis", "badminton"]) expect([...bestOfOne], k).toContain(k);
     expect(after).toBe(ROWS.length);
   });
-  it("X-WD-6 + X-RT-1 (PF-7, rulings 112, 113): a withdrawal or a disqualification after a bare Start — nothing played — credits the walkover, as before the start; so does a withdrawal whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
+  it("X-WD-6 + X-RT-1 — pending owner ruling (DQ with nothing played): pins current behaviour — a withdrawal (PF-7, rulings 112, 113) or a disqualification after a bare Start — nothing played — credits the walkover, as before the start; so does a withdrawal whose only play was voided, and so does a walkover there — every declared cfg of every sport, and Best of 1 (R112 I-1)", () => {
     // Ruling 112: a Start with no sport event after it is still "before play" for a walkover, and the credit follows the
     // same fact. The expected credit is Appendix A's walkover row, from the cfg (EXPECTED_WALKOVER) — never the module's.
     let checked = 0;

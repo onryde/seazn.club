@@ -46,7 +46,7 @@ function refusalOf(c: CreditCase): CreditRefusal | "answered" {
 }
 
 describe("walkover-credit: the empty case first", () => {
-  it("X-WO-1 + X-RS-1 + X-WD-6 (ruling 113): an EMPTY scoresheet (play started, nothing scored) is not started — the retirement is refused, and the disqualification and the withdrawal credit exactly the walkover — every cfg of every sport; only players' stats differ (X-PS-2)", () => {
+  it("X-WO-1 + X-RS-1 + X-WD-6 — pending owner ruling (DQ with nothing played): pins current behaviour — an EMPTY scoresheet (play started, nothing scored) is not started (ruling 113) — the retirement is refused, and the disqualification and the withdrawal credit exactly the walkover — every cfg of every sport; only players' stats differ (X-PS-2)", () => {
     // An empty input answers every question. Ruling 113: nothing played means not started, for every reason — nobody
     // retires from a match never played, and a disqualification or a withdrawal there is credited as before play; only
     // statsMatch moves for the disqualification (an in-match disqualification is a match played, X-PS-2).
@@ -66,7 +66,7 @@ describe("walkover-credit: the empty case first", () => {
     expect(checked).toBe(44); // 5+5+4+3+2+4+4+4+5+3+5 cfg entries in walkover-credit-cfgs.ts
   });
 
-  it("X-WD-6 + X-RT-1 (ruling 113): a Best of 1 with nothing played credits its one set at setTo (VB-WO-1's 25-0), never its deciding-set target — the withdrawal and the disqualification alike", () => {
+  it("X-WD-6 + X-RT-1 — pending owner ruling (DQ with nothing played): pins current behaviour — a Best of 1 with nothing played credits its one set at setTo (VB-WO-1's 25-0), never its deciding-set target — the withdrawal (ruling 113) and the disqualification alike", () => {
     // single-sport: volleyball's Best of 1 is the case where "as before the start" and "the retirement credit of an
     // empty sheet" part — its only set is the deciding set (finalSetTo 15); a walkover gives the sets needed, each 25-0.
     const bo1 = { bestOf: 1, setTo: 25, finalSetTo: 15, winBy: 2, cap: null };

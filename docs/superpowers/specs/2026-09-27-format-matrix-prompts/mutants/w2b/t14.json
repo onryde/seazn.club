@@ -178,5 +178,50 @@
     "name": "W2b: each row's text is Appendix A's"
    }
   ]
+ },
+ {
+  "id": "x-wd-6-played-score-standing",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "the sport's retirement credit once something is played (a held level result included, X-WD-1).",
+  "replace": "the sport's retirement credit once something is played, the played score standing (a held level result included, X-WD-1).",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "x-rs-1-withdrawal-any-phase",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "and a withdrawal in any phase until the match has a result, or over a held level result (PF-1).",
+  "replace": "and a withdrawal in any phase.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "spec-x-rt-1-dq-walkover-credit",
+  "file": "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md",
+  "find": "a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
+  "replace": "with nothing played (a bare Start) a disqualification, like a withdrawal (X-WD-6), takes the walkover credit — the retirement credit has no played score to keep.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
  }
 ]

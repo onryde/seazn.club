@@ -142,12 +142,8 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "Appendix A's own amend line (ruling 84): \"a win\" became \"a win or a double walkover\"",
   },
   "X-RS-1": {
-    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase.",
+    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase until the match has a result, or over a held level result (PF-1).",
     by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start",
-  },
-  "X-RT-1": {
-    says: "In-match disqualification takes the sport's retirement credit for that match (the cascade to other fixtures is W5); a retirement is recorded only once something is played (ruling 113: nobody retires from a match never played); a disqualification with nothing played (a bare Start): its credit and stats are pending owner ruling (DQ with nothing played).",
-    by: "owner ruling 113 (2026-10-11): a retirement waits for play; a disqualification with nothing played is pending owner ruling, so Appendix A's walkover-credit clause is not stated",
   },
   "X-WO-1": {
     says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
@@ -178,7 +174,7 @@ const NOT_IN_APPENDIX_A: Readonly<Record<string, { says: string; by: string }>> 
     by: "plan PF-6",
   },
   "X-WD-6": {
-    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit while nothing is played (no Start, or a Start with nothing played, ruling 113) and the sport's retirement credit once something is played, the played score standing (a held level result included, X-WD-1); unlimited-overs cricket's walkover credit is CK-WO-2's.",
+    says: "A withdrawal (reason \"withdrew\") takes the sport's walkover credit while nothing is played (no Start, or a Start with nothing played, ruling 113) and the sport's retirement credit once something is played (a held level result included, X-WD-1).",
     by: "plan PF-7 and ruling 113",
   },
 };

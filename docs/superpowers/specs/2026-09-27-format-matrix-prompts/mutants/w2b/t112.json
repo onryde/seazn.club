@@ -515,7 +515,7 @@
     "files": [
      "src/sport/forfeit-credit.test.ts"
     ],
-    "name": "X-WD-6 \\+ X-RT-1 \\(PF-7, rulings 112, 113\\)"
+    "name": "X-WD-6 \\+ X-RT-1 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour — a withdrawal \\(PF-7, rulings 112, 113\\)"
    }
   ]
  },
@@ -700,7 +700,7 @@
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 \\(ruling 113\\)"
+    "name": "X-WO-1 \\+ X-RS-1 \\+ X-WD-6 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour"
    },
    {
     "cwd": "packages/reference",
@@ -722,7 +722,7 @@
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "X-WD-6 \\+ X-RT-1 \\(ruling 113\\): a Best of 1 with nothing played"
+    "name": "X-WD-6 \\+ X-RT-1 — pending owner ruling \\(DQ with nothing played\\): pins current behaviour — a Best of 1 with nothing played"
    }
   ]
  },

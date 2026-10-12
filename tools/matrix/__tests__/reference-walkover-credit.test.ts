@@ -369,7 +369,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expect(() => expectAgreement(empty, "no case")).toThrow(/zero compared/);
   });
 
-  it("X-RS-1 + X-RT-1 + X-WD-1 (ruling 113): an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine, and retired is refused by both", () => {
+  it("X-RS-1 + X-RT-1 + X-WD-1 — pending owner ruling (DQ with nothing played): pins current behaviour — an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine, and retired is refused by both (ruling 113)", () => {
     const cases: CreditCase[] = [];
     for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
       for (const e of data.cfgs) {
