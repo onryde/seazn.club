@@ -2027,6 +2027,7 @@
   "matchPoster.download": "Póster",
   "matchPoster.downloadAria": "Descargar el póster del partido",
   "schedule.vs": "vs",
+  "schedule.withdrawnSide": "{name} (retirado)",
   "schedule.chip.scheduled": "Programado",
   "schedule.chip.unscheduled": "Sin programar",
   "schedule.chip.timedTitle": "Este partido tiene hora de inicio",

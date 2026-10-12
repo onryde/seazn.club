@@ -2027,6 +2027,7 @@
   "matchPoster.download": "Poster",
   "matchPoster.downloadAria": "Download de wedstrijdposter",
   "schedule.vs": "vs",
+  "schedule.withdrawnSide": "{name} (teruggetrokken)",
   "schedule.chip.scheduled": "Ingepland",
   "schedule.chip.unscheduled": "Niet ingepland",
   "schedule.chip.timedTitle": "Deze wedstrijd heeft een aanvangstijd",

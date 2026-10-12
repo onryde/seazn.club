@@ -30,6 +30,7 @@ import {
   forfeitTag,
   forfeitWords,
   unseatedForfeitLoserName,
+  unseatedWithdrew,
 } from "../forfeit-tag";
 import { t } from "../i18n-runtime";
 import type { Dict } from "../i18n-constants";
@@ -458,5 +459,31 @@ describe("the forfeit sentences end like the result lines they sit beside (audit
     }
     expect(sentences, `forfeit sentences checked: ${sentences}`).toBe(FORFEIT_SENTENCE_KEYS.length * 4);
     expect(results, `result lines checked: ${results}`).toBeGreaterThan(4);
+  });
+});
+
+// Design audit 4.1: the empty seat ruling 116 names is a side that WITHDREW, and the organiser surfaces named her as if
+// she were seated ("X won (w/o)" — withdrew shares the w/o tag, X-RS-2). `unseatedWithdrew` is the one predicate they
+// mark her by: true exactly where the reader names her AND the award's reason is the withdrawal. The rows that tell it
+// apart: a seated loser, a bye, a walkover naming an unseated loser for another reason, no result.
+describe("unseatedWithdrew — the empty seat names a side that withdrew (audit 4.1)", () => {
+  it("true only in her empty seat facing the winner, on a withdrawal; every other row false", () => {
+    const award = (reason: string, loser: string | null = "her") => ({ kind: "award", winner: "w", loser, reason });
+    const row = (home: string | null, away: string | null, outcome: unknown = award("withdrew")) => ({ outcome, home_entrant_id: home, away_entrant_id: away });
+    const ROWS: [name: string, r: ReturnType<typeof row>, want: [boolean, boolean]][] = [
+      ["her seat home", row(null, "w"), [true, false]],
+      ["her seat away", row("w", null), [false, true]],
+      ["a seated loser who withdrew", row("her", "w"), [false, false]],
+      ["both seats empty", row(null, null), [false, false]],
+      ["a bye (no loser)", row(null, "w", award("bye", null)), [false, false]],
+      ["an unseated loser walked over (not a withdrawal)", row(null, "w", award("walkover")), [false, false]],
+      ["no result", row(null, "w", null), [false, false]],
+    ];
+    let checked = 0;
+    for (const [name, r, want] of ROWS) {
+      expect([unseatedWithdrew(r, "home"), unseatedWithdrew(r, "away")], name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 });

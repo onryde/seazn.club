@@ -578,6 +578,10 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
         screens++;
       }
       await expect(s.row, `${width}: no "has a bye"`).not.toContainText(hasBye.replace("{name}", arrivingName));
+      // Design audit 4.1: her name is marked as withdrawn — one chip, the entrant status's word, inside the row's line.
+      const chip = s.row.getByTestId("run-sheet-withdrawn");
+      await expect(chip, `${width}: one Withdrawn chip`).toHaveCount(1);
+      await expect(chip, `${width}: the entrant status's word`).toHaveText(UI["entrants.status.withdrawn"]!);
       await expectNoHorizontalScroll(page);
       await crop(s.row, `organiser-run-sheet-withdrew-final-${width}`);
       await crop(s.node, `organiser-bracket-withdrew-final-${width}`);
@@ -605,6 +609,7 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
     await expect(dqBye, "naming nobody else").not.toContainText(dqName);
     await expect(d.node, "the bracket panel keeps the bye").toContainText(BYE, { useInnerText: true });
     await expect(d.node, "and never prints her").not.toContainText(dqName);
+    await expect(page.getByTestId("run-sheet").getByTestId("run-sheet-withdrawn"), "DQ: no Withdrawn chip on the sheet (audit 4.1)").toHaveCount(0);
     console.log(`R116-3 DQ run sheet: ${(await dqBye.innerText()).replace(/\s+/g, " ").trim()}`);
     console.log(`R116-3 DQ bracket node: ${(await d.node.innerText()).replace(/\s+/g, " ").trim()}`);
   });
@@ -698,6 +703,11 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
     // Her seat: the final's empty one. The header and the list print home first.
     const herHome = final.home_entrant_id === null;
     const pair = herHome ? [herName, arrivingName] : [arrivingName, herName];
+    // Design audit 4.1: the string surfaces (board card, officials list) mark her name; 4.2: the dictionary's "vs".
+    const markOf = (name: string) => UI["schedule.withdrawnSide"]!.replace("{name}", name);
+    const MARK_TAIL = markOf("");
+    expect(MARK_TAIL.trim(), "premise: the mark adds words").not.toBe("");
+    const marked = pair.map((x) => (x === herName ? markOf(x) : x));
 
     let screens = 0;
     for (const width of WIDTHS) {
@@ -717,6 +727,8 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
       expect(card, `${width}: the board card names her`).toContain(herName);
       expect(card.indexOf(pair[0]!) < card.indexOf(pair[1]!), `${width}: in her seat (${card})`).toBe(true);
       expect(card, `${width}: the board card prints no bye word`).not.toMatch(BYE);
+      expect(card, `${width}: the board card marks her as withdrawn (audit 4.1)`).toContain(markOf(herName));
+      expect(card, `${width}: and only her`).not.toContain(markOf(arrivingName));
       await expectNoHorizontalScroll(page);
       await crop(s.card, `organiser-board-card-withdrew-final-${width}`);
       console.log(`R116-4 ${width} board card: ${card}`);
@@ -726,7 +738,7 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
       const row = officialsRow(herName, arrivingName);
       await expect(row, `${width}: the officials list names her opposite the arriving side`).toHaveCount(1, { timeout: STEP_MS });
       const label = await quote(row.locator("td").first());
-      expect(label, `${width}: her name in her seat`).toBe(`${pair[0]} vs ${pair[1]}`);
+      expect(label, `${width}: her name in her seat, marked as withdrawn (audit 4.1)`).toBe(`${marked[0]} ${UI["schedule.vs"]} ${marked[1]}`);
       await expect(officialsRow(BYE), `${width}: no bye word in the officials list`).toHaveCount(0);
       await expectNoHorizontalScroll(page);
       await crop(row, `organiser-officials-withdrew-final-${width}`);
@@ -756,10 +768,12 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
     await d.openBoard();
     const dqCard = await quote(d.card);
     expect([dqCard.includes(dqArrivingName), dqCard.includes(dqName)], `DQ: the board card names the arriving side, never her (${dqCard})`).toEqual([true, false]);
+    expect(dqCard, "DQ: and marks nobody as withdrawn (audit 4.1)").not.toContain(MARK_TAIL);
     console.log(`R116-4 DQ board card: ${dqCard}`);
     await d.open(d.officialsUrl);
     await expect(officialsRow(BYE, dqArrivingName), "DQ: the officials list keeps the bye word").toHaveCount(1, { timeout: STEP_MS });
     await expect(officialsRow(dqName, dqArrivingName), "DQ: and never pairs her with the arriving side").toHaveCount(0);
+    await expect(officialsRow(BYE, dqArrivingName), "DQ: marking nobody as withdrawn (audit 4.1)").not.toContainText(MARK_TAIL);
     console.log(`R116-4 DQ officials row: ${await quote(officialsRow(BYE, dqArrivingName).first())}`);
   });
 });

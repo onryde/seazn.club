@@ -619,7 +619,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       expect(sent.length, "rig: the appointment sent one email").toBe(1);
       const row = (await getMyOfficiating(user!.id)).completed.find((a) => a.fixture_id === id);
       if (!row) throw new Error(`rig: ${id} is not in the official's finished duties`);
-      return { label: sent[0]!.fixtures[0]!.label, me: [row.home_name, row.away_name] };
+      return { label: sent[0]!.fixtures[0]!.label, me: [row.home_name, row.away_name], meWithdrew: [row.home_withdrew === true, row.away_withdrew === true] };
     };
     const vs = (pair: readonly string[]) => pair.join(` ${enUi("schedule.vs")} `);
 
@@ -636,10 +636,16 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       const seat = mine.winner_to_slot!;
       seats.add(seat);
       const want = seat === 1 ? [her, them] : [them, her];
-      expect(await boardCard(s.auth, s.divisionId, sib.parentId), `seat ${seat}: the board card names her in her seat`).toBe(vs(want));
-      const { label, me } = await appoint(s.auth, sib.parentId);
-      expect(label, `seat ${seat}: the assignment email names her in her seat`).toBe(vs(want));
+      // Design audit 4.1: the string surfaces mark her name as withdrawn (the dictionary's mark, never typed here); the
+      // /me lane carries the flag for its chip, on her seat alone.
+      const herMarked = enUi("schedule.withdrawnSide", { name: her });
+      expect(herMarked, "premise: the mark adds to her name").not.toBe(her);
+      const marked = want.map((x) => (x === her ? herMarked : x));
+      expect(await boardCard(s.auth, s.divisionId, sib.parentId), `seat ${seat}: the board card names her in her seat, marked`).toBe(vs(marked));
+      const { label, me, meWithdrew } = await appoint(s.auth, sib.parentId);
+      expect(label, `seat ${seat}: the assignment email names her in her seat, marked`).toBe(vs(marked));
       expect(me, `seat ${seat}: the official's finished duty names her in her seat`).toEqual(want);
+      expect(meWithdrew, `seat ${seat}: and flags her seat alone as withdrawn`).toEqual(want.map((x) => x === her));
     }
     expect([...seats].sort(), "both seats reached").toEqual([1, 2]);
 
@@ -654,6 +660,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const oddDuty = await appoint(odd.auth, bye.id);
     expect(oddDuty.label, "a bye's email keeps the bye").toBe(vs(byePair));
     expect(oddDuty.me, "and the /me lane's empty seat names nobody").toEqual(byePair.map((x) => (x === BYE ? null : x)));
+    expect(oddDuty.meWithdrew, "and flags nobody as withdrawn (audit 4.1)").toEqual([false, false]);
 
     const dq = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
     const sib = siblingsInto(await rowsOf(dq.stageId));
@@ -668,5 +675,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect([dqDuty.label.includes(BYE), dqDuty.label.includes(dqName)], "and so does the email").toEqual([true, false]);
     expect(dqDuty.me.filter((x) => x === null).length, "and the /me lane's empty seat names nobody").toBe(1);
     expect(dqDuty.me, "never her").not.toContain(dqName);
+    expect(dqDuty.meWithdrew, "and flags nobody as withdrawn (audit 4.1)").toEqual([false, false]);
+    expect(card.includes(enUi("schedule.withdrawnSide", { name: dqThem })), "the arriving side is never marked").toBe(false);
   }, 240_000);
 });

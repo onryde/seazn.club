@@ -15,7 +15,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 // cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
 // doc comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
-import { unseatedForfeitLoserName } from "@/lib/forfeit-tag";
+import { unseatedForfeitLoserName, unseatedWithdrew } from "@/lib/forfeit-tag";
 
 // refreshOfficialsCache is typed for the tenant tx; it only uses the tagged
 // template + .json, which the superuser `sql` shares — safe structural cast.
@@ -41,6 +41,10 @@ export interface MyOfficiatingAssignment {
   sport_key: string;
   home_name: string | null;
   away_name: string | null;
+  /** Design audit 4.1 — a finished duty's empty seat names ruling 116's withdrawn winner (`home_name`/`away_name` is
+   *  hers): the lane marks her as gone. Set on a finished duty only; absent means no. */
+  home_withdrew?: boolean;
+  away_withdrew?: boolean;
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   /** Cross-org doc, so each duty is localized by ITS OWN org's default
@@ -209,6 +213,8 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
       ...r,
       home_name: r.home_name ?? unseatedForfeitLoserName(seats, "home"),
       away_name: r.away_name ?? unseatedForfeitLoserName(seats, "away"),
+      home_withdrew: unseatedWithdrew(seats, "home") && unseatedForfeitLoserName(seats, "home") !== null,
+      away_withdrew: unseatedWithdrew(seats, "away") && unseatedForfeitLoserName(seats, "away") !== null,
     });
   });
 

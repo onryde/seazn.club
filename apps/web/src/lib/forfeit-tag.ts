@@ -188,6 +188,16 @@ export function unseatedForfeitLoser(
   return mine === null && theirs === winner && loser !== winner ? loser : null;
 }
 
+/** Design audit 4.1 — the empty seat names a side that WITHDREW: `unseatedForfeitLoser`'s seat, on an award whose reason
+ *  is the withdrawal (ruling 116's shape). An organiser surface marks her name by it, as a departed entrant is marked
+ *  elsewhere in the organiser UI; a seated loser, a bye and any other reason answer false. */
+export function unseatedWithdrew(
+  fixture: Parameters<typeof unseatedForfeitLoser>[0],
+  seat: "home" | "away",
+): boolean {
+  return unseatedForfeitLoser(fixture, seat) !== null && forfeitTag(fixture.outcome, NO_LEDGER)?.kind === "withdrew";
+}
+
 /**
  * R116-4 — `unseatedForfeitLoser` for a read that names sides by a SQL join rather than by id: it joined the display
  * name of the outcome's loser (`forfeit_loser_name`) beside its seats. That name is printed in an empty seat only where

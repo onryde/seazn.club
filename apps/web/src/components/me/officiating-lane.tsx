@@ -125,6 +125,20 @@ const SCOREABLE = new Set(["scheduled", "in_play", "needs_decision"]); // the li
  *  CTA (draft/submitted state chip) that opens the report form inline. */
 function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
   const msg = useMsg();
+  // Design audit 4.1: a side named in an empty seat that WITHDREW (ruling 116) is marked as a departed entrant is in the
+  // ladder (`ladder-panel.tsx`): her name muted, then the entrant status's own word in a chip (slate-600: the ladder's
+  // slate-500 measures 4.3:1 on slate-100).
+  const seatName = (name: string | null, withdrew: boolean) =>
+    name !== null && withdrew ? (
+      <>
+        <span className="text-slate-500">{name}</span>
+        <span data-testid="me-withdrawn" className="ml-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+          {msg("entrants.status.withdrawn")}
+        </span>
+      </>
+    ) : (
+      name
+    );
   const [open, setOpen] = useState(false);
   const canReport = a.response === "accepted" && REPORTABLE.has(a.fixture_status);
   const ctaLabel =
@@ -137,9 +151,9 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
     <li className="card space-y-1 border-l-4 border-l-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="min-w-0 truncate text-sm text-slate-700">
-          {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
-          <span className="text-slate-400">vs</span>{" "}
-          {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
+          {seatName(a.home_name, a.home_withdrew === true) ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
+          <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
+          {seatName(a.away_name, a.away_withdrew === true) ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
           <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
             {msg("me.off.role", { role: a.role_key })}
           </span>
@@ -285,7 +299,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-slate-800">
             {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
-            <span className="text-slate-400">vs</span>{" "}
+            <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
             {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
             <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
               {msg("me.off.role", { role: a.role_key })}

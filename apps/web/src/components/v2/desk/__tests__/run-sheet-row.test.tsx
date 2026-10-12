@@ -347,6 +347,12 @@ describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a 
       expect(html, `${dead}: and the winner`).toContain("Alpha");
       expect(html, `${dead}: the walkover's result`).toContain(outcomeText(msg, outcome, NAMES)!);
       expect(rowAction(html), `${dead}: the ordinary walkover's action`).toBe(rowAction(ordinary));
+      // Design audit 4.1: and marks her as gone — the departed-entrant chip right after her name (ladder-panel's
+      // pattern), the entrant status's own word; the ordinary walkover (her seated) has none.
+      const chip = new RegExp(`Charlie</span><span data-testid="run-sheet-withdrawn"[^>]*>${msg("entrants.status.withdrawn")}</span>`);
+      expect(html, `${dead}: her name, then the Withdrawn chip`).toMatch(chip);
+      expect((html.match(/data-testid="run-sheet-withdrawn"/g) ?? []).length, `${dead}: one chip, hers`).toBe(1);
+      expect(ordinary, `${dead}: a seated side carries no chip`).not.toContain('data-testid="run-sheet-withdrawn"');
       checked++;
     }
     expect(checked).toBe(2);
@@ -359,6 +365,7 @@ describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a 
     expect(html).toContain('data-testid="run-sheet-bye"');
     expect(html).toContain(msg("schedule.bye", { name: "Alpha" }));
     expect(html).not.toContain("Charlie");
+    expect(html, "no Withdrawn chip on a bye (audit 4.1)").not.toContain('data-testid="run-sheet-withdrawn"');
   });
 });
 

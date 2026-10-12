@@ -2027,6 +2027,7 @@
   "matchPoster.download": "Poster",
   "matchPoster.downloadAria": "Download the match poster",
   "schedule.vs": "vs",
+  "schedule.withdrawnSide": "{name} (withdrawn)",
   "schedule.chip.scheduled": "Scheduled",
   "schedule.chip.unscheduled": "Unscheduled",
   "schedule.chip.timedTitle": "This match has a kick-off time",

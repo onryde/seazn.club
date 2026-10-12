@@ -120,6 +120,7 @@ vi.mock("@/lib/db", () => ({
 import DivisionSchedulePage from "../page";
 import { msg } from "@/lib/messages";
 import { OfficialsPanel } from "@/components/v2/officials-panel";
+import frUi from "@/dictionaries/fr/ui.json";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -163,6 +164,17 @@ describe("officials-tab fixture picker resolves slot labels via resolveLocale() 
   // hardcoded to the client-safe English msg() regardless of ANY locale
   // signal, so this would still read "Winner of Group A vs Winner of Group
   // B" even with the switcher cookie set to Spanish.
+  // Audit 4.2's sibling on this page: the join was a typed English " vs " in every locale; French says "contre".
+  it("seazn_locale=fr -> the label joins its sides with the French dictionary's word, never English vs", async () => {
+    localeCookie.value = "fr";
+    const panel = find(await renderOfficialsTab(), OfficialsPanel);
+    const label = (panel!.props as { fixtures: { label: string }[] }).fixtures[0]!.label;
+    const word = (frUi as Record<string, string>)["schedule.vs"]!;
+    expect(word, "premise: French has its own word").not.toBe("vs");
+    expect(label).toContain(` ${word} `);
+    expect(label).not.toContain(" vs ");
+  });
+
   it("seazn_locale=es -> resolves the SAME fixture's label in Spanish", async () => {
     localeCookie.value = "es";
     const panel = find(await renderOfficialsTab(), OfficialsPanel);
@@ -204,11 +216,16 @@ describe("officials-tab fixture picker names ruling 116's withdrawn winner in he
       { id: "e-bears", display_name: "Bears of Brockley" },
       { id: "e-gone", display_name: "Charlie Gone" },
     ];
+    // Design audit 4.1: her name carries the dictionary's withdrawn mark (a departed side is marked across the organiser
+    // UI); audit 4.2's sibling: the join is the dictionary's own "vs".
+    const her = msg("schedule.withdrawnSide", { name: "Charlie Gone" });
+    expect(her, "premise: the mark adds to her name").not.toBe("Charlie Gone");
+    const vs = (a: string, b: string) => `${a} ${msg("schedule.vs")} ${b}`;
     const ROWS: [id: string, row: unknown, want: string][] = [
-      ["her seat home", row("f-home", null, "e-bears", withdrew("e-bears")), "Charlie Gone vs Bears of Brockley"],
-      ["her seat away", row("f-away", "e-bears", null, withdrew("e-bears")), "Bears of Brockley vs Charlie Gone"],
-      ["a bye", row("f-bye", "e-bears", null, bye("e-bears")), `Bears of Brockley vs ${BYE_WORD}`],
-      ["a DQ'd winner's dead seat", row("f-dq", null, "e-bears", bye("e-bears")), `${BYE_WORD} vs Bears of Brockley`],
+      ["her seat home", row("f-home", null, "e-bears", withdrew("e-bears")), vs(her, "Bears of Brockley")],
+      ["her seat away", row("f-away", "e-bears", null, withdrew("e-bears")), vs("Bears of Brockley", her)],
+      ["a bye", row("f-bye", "e-bears", null, bye("e-bears")), vs("Bears of Brockley", BYE_WORD)],
+      ["a DQ'd winner's dead seat", row("f-dq", null, "e-bears", bye("e-bears")), vs(BYE_WORD, "Bears of Brockley")],
     ];
     scene.rows = ROWS.map(([, r]) => r);
     try {

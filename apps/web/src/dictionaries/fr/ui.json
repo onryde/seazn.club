@@ -2027,6 +2027,7 @@
   "matchPoster.download": "Affiche",
   "matchPoster.downloadAria": "Télécharger l’affiche du match",
   "schedule.vs": "contre",
+  "schedule.withdrawnSide": "{name} (retiré)",
   "schedule.chip.scheduled": "Planifié",
   "schedule.chip.unscheduled": "Non planifié",
   "schedule.chip.timedTitle": "Ce match a une heure de coup d'envoi",

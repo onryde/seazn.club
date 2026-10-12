@@ -31,7 +31,7 @@ import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
 import { outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
-import { forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -282,6 +282,20 @@ export function RunSheetRow({
   const away = awayId
     ? (entrantNames[awayId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
+  // Design audit 4.1: the side named in that empty seat WITHDREW, and the result alone ("X won (w/o)") cannot say so —
+  // withdrew shares the walkover tag. Marked as a departed entrant is in the ladder (`ladder-panel.tsx`): her name
+  // muted, then the entrant status's own word in a chip (slate-600, not the ladder's slate-500: 4.3:1 on slate-100).
+  const seatName = (seat: "home" | "away", name: string) =>
+    unseatedWithdrew(fixture, seat) ? (
+      <>
+        <span className="text-slate-500">{name}</span>
+        <span data-testid="run-sheet-withdrawn" className="ml-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+          {msg("entrants.status.withdrawn")}
+        </span>
+      </>
+    ) : (
+      name
+    );
   // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
   // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
   const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
@@ -517,7 +531,7 @@ export function RunSheetRow({
               href={href}
               className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
-              {home}
+              {seatName("home", home)}
               {/* slate-500, not slate-400. `#94a3b8` on white measures ~2.9:1
                   — below the 4.5:1 AA floor for body text — and axe reports it
                   at SERIOUS impact. Found by the scoped axe scan fix round 5
@@ -530,7 +544,7 @@ export function RunSheetRow({
                   entrant names it separates — the same remedy `move-panel.tsx`
                   already applied to its own contrast finding. */}
               <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
-              {away}
+              {seatName("away", away)}
             </Link>
             {/* Task 9: `hidden md:block`, same reasoning as the meta line
                 above — `phoneLineTwo` is the phone's copy of this text. */}

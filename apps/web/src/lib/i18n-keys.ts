@@ -5518,6 +5518,7 @@ export type DictionaryKey =
   | "schedule.unscheduled.title"
   | "schedule.view"
   | "schedule.vs"
+  | "schedule.withdrawnSide"
   | "schedule.working"
   | "scheduling.aidemo.card.club-night.name"
   | "scheduling.aidemo.card.club-night.what"
