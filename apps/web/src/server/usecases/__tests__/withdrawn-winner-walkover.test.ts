@@ -16,7 +16,13 @@
 // the match page, both kiosk builders (results and bracket), the calendar feed and the poster's draw. A genuine bye,
 // and a dead seat nobody withdrew from, still read the bye word on every one of them (the positive pairs).
 //
+// R116-2 (coordinator ruling): "like any other walkover" includes its score. The tie shows the sport's walkover credit
+// — the engine's own (the module's summary over the award, which reads its `forfeitCredit` under the fixture's cfg) —
+// equal to Appendix A's declaration from the cfg alone and to an ordinary withdrawal walkover's in the same division.
+// It is still no match played in players' stats (X-PS-1), and a genuine bye still shows no score.
+//
 // Real Postgres required; skipped without DATABASE_URL.
+import { builtinModules } from "@seazn/engine/sports";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -45,6 +51,7 @@ import { buildDrawModel } from "@/lib/poster-draw";
 import { poolLabel } from "@/lib/pool-label";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { buildDivisionSlides, buildPublicDivisionSlides } from "@/server/slideshow-data";
+import { fixturesPlayedInStats } from "@/server/usecases/player-stats";
 
 // The public reads go through `unstable_cache`, which has no incrementalCache outside a real request: a passthrough,
 // never a memoising double (competition-hub-db.test.ts's own reason).
@@ -117,6 +124,27 @@ const nameOf = async (id: string) => (await sql<{ display_name: string }[]>`sele
 const activeEvents = async (id: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id}`)[0]!.n;
 
+/** R116-2 — Appendix A's walkover credit to the side that turned up, from the cfg alone (the engine's own table,
+ *  forfeit-credit.test.ts `EXPECTED_WALKOVER`): football's `awardScore.goals` (FB-WO-1), badminton's best-of majority
+ *  of games (the set sports' rule). Never read back from `forfeitCredit` or a summary. */
+const WALKOVER_CREDIT: Record<string, (cfg: Record<string, unknown>) => number> = {
+  football: (c) => (c.awardScore as { goals: number }).goals,
+  badminton: (c) => Math.ceil((c.bestOf as number) / 2),
+};
+/** The division's cfg as its module parses it, with the sport and module version the stats reader keys on. */
+async function divisionOf(divisionId: string) {
+  const [d] = await sql<{ config: unknown; sport_key: string; module_version: string }[]>`
+    select config, sport_key, module_version from divisions where id = ${divisionId}`;
+  const m = builtinModules.find((x) => x.key === d!.sport_key)!;
+  return { cfg: m.configSchema.parse(d!.config ?? {}) as Record<string, unknown>, sport_key: d!.sport_key, module_version: d!.module_version };
+}
+/** A fixture's stored score lines by entrant (the summary every surface reads), or null when it has none. */
+async function storedLines(id: string): Promise<Record<string, string> | null> {
+  const [r] = await sql<{ summary: { perSide: { entrantId: string; line: string }[] } | null }[]>`
+    select summary from public_fixtures_v where id = ${id}`;
+  return r?.summary == null ? null : Object.fromEntries(r.summary.perSide.map((p) => [p.entrantId, p.line]));
+}
+
 /** Publish the seeded competition and read the public's own documents of it. */
 async function publicOf(s: { competitionId: string; divisionId: string }) {
   // An end date, so the calendar feed carries an untimed fixture (it anchors one to the competition's last day).
@@ -158,7 +186,12 @@ function linkTo(html: string, fixtureId: string, where: string): { text: string;
 async function surfacesOf(
   s: { auth: AuthCtx; competitionId: string; divisionId: string },
   fixtureId: string,
-): Promise<{ text: Record<string, string>; hubByeSides: readonly boolean[] | undefined; sideIds: Record<string, string[]> }> {
+): Promise<{
+  text: Record<string, string>;
+  hubByeSides: readonly boolean[] | undefined;
+  sideIds: Record<string, string[]>;
+  scores: Record<string, Record<string, string | null>>;
+}> {
   const pub = await publicOf(s);
   const tie = pub.detail.fixtures.find((f) => f.id === fixtureId);
   if (!tie) throw new Error(`rig: ${fixtureId} is not in the public division read`);
@@ -228,6 +261,11 @@ async function surfacesOf(
     hubByeSides: hub.byeSides,
     // Who each side IS on the two surfaces that draw a crest: "" is the waiting-slot look (the "?" crest, muted italic).
     sideIds: { hub: hub.header.sides.map((x) => x.entrantId), "match page": doc.header.sides.map((x) => x.entrantId) },
+    // R116-2 — the score each crest-drawing surface prints beside each side, keyed by who the side is.
+    scores: {
+      hub: Object.fromEntries(hub.header.sides.map((x, i) => [x.entrantId, hub.header.scoreLines[i] ?? null])),
+      "match page": Object.fromEntries(doc.header.sides.map((x, i) => [x.entrantId, doc.header.scoreLines[i] ?? null])),
+    },
   };
 }
 
@@ -309,11 +347,43 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
         expect([...ids].sort(), `${sport}: ${where} draws both sides as entrants`).toEqual([w1, arriving].sort());
         surfaces++;
       }
+
+      // R116-2: the sport's walkover credit, like any walkover — Appendix A's declaration under the division's cfg, to
+      // the side that turned up, nil to her. The credit must differ from an unplayed 0, or nothing here could tell.
+      const division = await divisionOf(s.divisionId);
+      const credit = WALKOVER_CREDIT[sport]!(division.cfg);
+      expect(credit, `${sport}: premise, the walkover credits something`).toBeGreaterThan(0);
+      const wantLines = { [arriving]: String(credit), [w1]: "0" };
+      expect(await storedLines(parentId), `${sport}: the stored summary every surface reads`).toEqual(wantLines);
+      for (const [where, byId] of Object.entries(seen.scores)) {
+        expect(byId, `${sport}: ${where} shows the walkover credit`).toEqual(wantLines);
+        surfaces++;
+      }
+      // …the SAME credit an ordinary withdrawal walkover shows in this division: another seated first-round line, one
+      // of whose sides withdraws before it is played (the cascade's `core.forfeit{reason: "withdrew"}`).
+      const ordinary = (await rowsOf(s.stageId)).find(
+        (r) => r.round_no === a.round_no && r.id !== a.id && r.id !== b.id && r.home_entrant_id && r.away_entrant_id && r.status === "scheduled",
+      );
+      if (!ordinary) throw new Error(`rig: ${sport} has no unplayed seated first-round line left`);
+      await withdrawEntrantCascade(s.auth, ordinary.away_entrant_id!);
+      const walked = await fixtureRow(ordinary.id);
+      expect([walked.status, walked.outcome], `${sport}: premise, an ordinary withdrawal walkover`).toEqual([
+        "forfeited",
+        { kind: "award", winner: ordinary.home_entrant_id, loser: ordinary.away_entrant_id, reason: "withdrew" },
+      ]);
+      const ordinaryLines = (await storedLines(ordinary.id))!;
+      expect(
+        [ordinaryLines[ordinary.home_entrant_id!], ordinaryLines[ordinary.away_entrant_id!]],
+        `${sport}: ruling 116's tie shows what any withdrawal walkover shows`,
+      ).toEqual([wantLines[arriving], wantLines[w1]]);
+      // X-PS-1: still no match played, for anybody — the stats reader's own answer; a line played is its positive pair.
+      const played = await fixturesPlayedInStats(sql, [parentId, a.id].map((id) => ({ id, ...division })));
+      expect([played.has(parentId), played.has(a.id)], `${sport}: no match played (X-PS-1); the played line is`).toEqual([false, true]);
       checked++;
     }
     expect(checked).toBe(SPORTS.length);
     expect(checked).toBeGreaterThanOrEqual(2);
-    expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 12);
+    expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 14);
   }, 240_000);
 
   it("the ranks do not move: she is no loser of a tie she never sat in, so she ranks where a departed entrant always has — below every field entrant", async () => {
@@ -365,6 +435,12 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
         expect(ids.filter((x) => x === "").length, `${what}: ${where} keeps the empty seat a slot`).toBe(1);
         byeSurfaces++;
       }
+      // R116-2's positive pair: a bye credits no score — nothing stored, nothing printed beside either side.
+      expect(await storedLines(id), `${what}: no stored summary`).toBeNull();
+      for (const [where, byId] of Object.entries(seen.scores)) {
+        expect(Object.values(byId), `${what}: ${where} shows no score`).toEqual([null, null]);
+        byeSurfaces++;
+      }
     };
     await stillBye(odd, byes[0]!.id, "a genuine bye");
 
@@ -378,6 +454,6 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect([tie.status, tie.outcome], "a bye: nobody withdrew").toEqual(["forfeited", { kind: "award", winner: arriving, loser: null, reason: "bye" }]);
     expect((await publicOf(dw)).words.has(parentId), "and reads no forfeit words").toBe(false);
     await stillBye(dw, parentId, "a double walkover's dead seat");
-    expect(byeSurfaces, "every surface, both byes").toBe(2 * 12);
+    expect(byeSurfaces, "every surface, both byes").toBe(2 * 14);
   }, 240_000);
 });

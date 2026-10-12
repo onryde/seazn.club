@@ -11,6 +11,7 @@ import {
   type RoundCodeRef,
 } from "@/lib/next-match-started";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
+import { clearAwardedMatchState } from "./awarded-state";
 
 // OWNER RULING 2026-09-23 — a write that takes back a knockout decision takes
 // back the names that decision advanced.
@@ -537,6 +538,8 @@ async function writePlan(tx: Tx, plan: readonly Step[]): Promise<string[]> {
       : await tx<{ id: string }[]>`
           update fixtures set ${seatCol} = null, ${labelCol} = ${json}
           where id = ${p.target} and ${seated} returning id`;
+    // R116-2: a reset award takes the score written beside it (ruling 116's walkover).
+    if (row && p.reset) await clearAwardedMatchState(tx, row.id);
     if (row && !released.includes(row.id)) released.push(row.id);
   }
   return released;

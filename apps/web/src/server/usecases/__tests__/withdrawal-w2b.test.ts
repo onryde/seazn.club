@@ -492,6 +492,14 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     // Owner ruling 116: the walkover over her stamp names her, who withdrew.
     expect([walked.status, walked.outcome], "rig: QF-B's winner walked over her stamp").toEqual(["forfeited", withdrewAward(b.home_entrant_id!, a.home_entrant_id!)]);
     expect(seatOf(await fixtureRow(walked.winner_to_fixture!), walked.winner_to_slot), "rig: and went on").toBe(b.home_entrant_id);
+    // R116-2: the walkover shows its credit — the score written beside an award no event recorded.
+    const storedLines = async () =>
+      (await sql<{ lines: string[] }[]>`
+        select array(select p ->> 'line' from jsonb_array_elements(summary -> 'perSide') p) as lines
+        from match_states where fixture_id = ${parentId}`)[0]?.lines ?? null;
+    const credited = await storedLines();
+    expect(credited, "R116-2: the walkover's credited score").not.toBeNull();
+    expect(credited!.some((l) => /[1-9]/.test(l)), `R116-2: it credits something (${credited})`).toBe(true);
     await voidLatest(s.auth, a.id);
     const reset = await fixtureRow(parentId);
     expect([reset.status, reset.outcome, seatOf(reset, a.winner_to_slot), slotLabel(reset, a.winner_to_slot), seatOf(reset, b.winner_to_slot)]).toEqual([
@@ -501,6 +509,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       drawn,
       b.home_entrant_id,
     ]);
+    // R116-2: …and the reset takes it back: a re-opened tie shows no score, as before it was awarded.
+    expect(await storedLines(), "R116-2: the reset tie stores no score").toBeNull();
     const final = await fixtureRow(walked.winner_to_fixture!);
     expect(seatOf(final, walked.winner_to_slot), "the walkover's advance is taken back").toBeNull();
     expect(slotLabel(final, walked.winner_to_slot)).toEqual({ key: "slot.winner_match", params: { round: walked.round_no, seq: walked.seq_in_round } });
@@ -515,6 +525,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       withdrewAward(b.home_entrant_id!, a.home_entrant_id!),
     ]);
     expect(seatOf(await fixtureRow(again.winner_to_fixture!), again.winner_to_slot)).toBe(b.home_entrant_id);
+    expect(await storedLines(), "R116-2: walked over again, the same credit").toEqual(credited);
   });
 
   it("I-1: when the match her stamp's walkover fed has STARTED, the void is refused NEXT_MATCH_STARTED and nothing is written", async () => {

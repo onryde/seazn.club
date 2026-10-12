@@ -53,6 +53,9 @@ describe("W2b PF-1 (loop D carry-in): every summary reader in apps/web goes thro
     expect(readers.sort()).toEqual([
       "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
       "apps/web/src/server/engine-db/append-event.ts",
+      // R116-2: the module's own summary of an award no event recorded (ruling 116's walkover) — the fold of an empty
+      // ledger holding the award, so a bare module.summary( is never needed.
+      "apps/web/src/server/engine-db/awarded-state.ts",
       "apps/web/src/server/engine-db/fold.ts",
       "apps/web/src/server/overlay/recent.ts",
       "apps/web/src/server/public-site/public-player-matches.ts",
@@ -85,8 +88,10 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     // Exactly the six fold readers Step 8 moves (preflight C8), plus the two module player-stat folds
     // (ruling D-C3). A later task that adds a reader adds it here by name. W2b ruling 112: the testkit's
     // `onePlayEvent` refuses a drawn event that decides the match, through outcomeOf (settle-aware like every reader).
+    // R116-2: `awardedMatchState` refuses a walkover whose fold decides other than the stored award.
     expect(readers.sort()).toEqual([
       "apps/web/src/server/engine-db/append-event.ts",
+      "apps/web/src/server/engine-db/awarded-state.ts",
       "apps/web/src/server/engine-db/fold.ts",
       "apps/web/src/server/usecases/event-import.ts",
       "packages/engine/src/sports/carrom/carrom.ts",

@@ -265,6 +265,35 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
     expect(checked).toBe(FORFEIT_REASONS.length * 2);
   });
 
+  it("R116-2: ruling 116's walkover over her dead seat stacks its credited score like any walkover, either seat", async () => {
+    // Her seat is empty (she withdrew after winning in, X-WD-3); the award names her, and its stored summary keys her
+    // line by her id. The row must read as the ordinary walkover above — not fall back to the headline chip.
+    let checked = 0;
+    for (const [winner, her] of [["h", "a"], ["a", "h"]] as const) {
+      const credited = { headline: "3–0", perSide: [{ entrantId: winner, line: "3" }, { entrantId: her, line: "0" }] };
+      const fx = fixture({
+        [her === "h" ? "home_entrant_id" : "away_entrant_id"]: null,
+        outcome: award("withdrew", winner, her) as never,
+        summary: credited as never,
+      });
+      const row = rowOf(await render([fx]), "f1");
+      const what = `her ${her === "h" ? "home" : "away"} seat`;
+      const [homeHalf, awayHalf] = row.split('title="Harbour United"');
+      const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
+      expect(win, `${what}: the winner's row carries the tag before its credit`).toMatch(/role="img"[^]*>3<\/span>/);
+      expect(lose, `${what}: her row shows nil`).toMatch(/>0<\/span>/);
+      expect(lose, `${what}: and no tag`).not.toContain('role="img"');
+      expect(row, `${what}: not the headline chip of a row with no lines`).not.toContain(">3–0<");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: a genuine bye has nobody to credit and no score — no line, no headline, no tag.
+    const bye = fixture({ away_entrant_id: null, outcome: { kind: "award", winner: "h", loser: null, reason: "bye" } as never, summary: null });
+    const byeRow = rowOf(await render([bye]), "f1");
+    expect(byeRow).not.toMatch(/>\d+<\/span>/);
+    expect(byeRow).not.toContain('role="img"');
+  });
+
   it("a double walkover reads Ended and its 2× w/o tag — never an unplayed 0 — 0", async () => {
     const dw = fixture({ outcome: { kind: "double_walkover" } as never, summary: { headline: "0 — 0", perSide: [{ entrantId: "h", line: "0" }, { entrantId: "a", line: "0" }] } as never });
     const row = rowOf(await render([dw]), "f1");

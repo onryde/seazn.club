@@ -60,6 +60,7 @@ import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
   isSwissBoardSeated,
   latestSeatedSwissRound,
@@ -3689,9 +3690,13 @@ export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number)
  *  stays the bye it was, byte for byte. The ruling's scope, no wider: only the
  *  winner edge (a departed LOSER's dead loser-edge seat, X-WD-5, stays a bye),
  *  and only a withdrawal — a DISQUALIFIED winner (the other departed status) is
- *  no "withdrew", and stays a bye until a ruling words it. */
+ *  no "withdrew", and stays a bye until a ruling words it.
+ *
+ *  R116-2: like any other walkover it shows the sport's walkover credit. No event records it (nobody played it, X-PS-1),
+ *  so its score is written beside it — `writeAwardedMatchState`, the module's own summary of the award under the
+ *  fixture's cfg, into the cache every surface reads. A bye credits no score and gets no row, as before. */
 async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
-  const rows = await tx<{ id: string }[]>`
+  const rows = await tx<{ id: string; withdrew: boolean }[]>`
     with lines as (
       select f.id, coalesce(f.home_entrant_id, f.away_entrant_id) as winner,
              (select src.outcome ->> 'winner' from fixtures src
@@ -3719,7 +3724,8 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
         'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)
     from lines
     where fixtures.id = lines.id
-    returning fixtures.id`;
+    returning fixtures.id, lines.withdrawn is not null as withdrew`;
+  for (const r of rows) if (r.withdrew) await writeAwardedMatchState(tx, r.id);
   return rows.map((r) => r.id);
 }
 

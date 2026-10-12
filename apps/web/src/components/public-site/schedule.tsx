@@ -167,14 +167,18 @@ export function sharedRoundNames(
 }
 
 /** Per-side score lines fit the stacked layout only when short ("3", "21").
-    Long lines (cricket innings, set strings) fall back to the headline chip. */
+    Long lines (cricket innings, set strings) fall back to the headline chip.
+    R116-2: an empty seat a walkover was won over (ruling 116) is HER side, so its line is read by her id — the row
+    stacks its credited score as any walkover does. */
 function sideLines(f: PublicFixture): [string, string] | null {
   const perSide = f.summary?.perSide;
   if (!perSide || perSide.length !== 2) return null;
   if (perSide.some((s) => s.line.length > 7)) return null;
   const byId = Object.fromEntries(perSide.map((s) => [s.entrantId, s.line]));
-  const home = f.home_entrant_id ? byId[f.home_entrant_id] : undefined;
-  const away = f.away_entrant_id ? byId[f.away_entrant_id] : undefined;
+  const homeId = f.home_entrant_id ?? unseatedForfeitLoser(f, "home");
+  const awayId = f.away_entrant_id ?? unseatedForfeitLoser(f, "away");
+  const home = homeId ? byId[homeId] : undefined;
+  const away = awayId ? byId[awayId] : undefined;
   return home != null && away != null ? [home, away] : null;
 }
 
