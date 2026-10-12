@@ -663,6 +663,30 @@ describe("playMatchByTaps routes by the product's organiser-only predicate (T9, 
     if (Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).length > 0) expect(organiser).toBeGreaterThan(0);
   });
 
+  it("D-O1 witness: a CONFIGURED sport row routes by the value it lists — the listed method is the console's, an unlisted one the scorer's (the driver reads the payload, not the type)", async () => {
+    // single-sport: boardgame. The product's table is empty since W2b D15, so the sweep above checks nothing. A row is
+    // configured here on the product's live table object — the one the driver's predicate reads — and removed in
+    // `finally`. The listed value is deliberately not "forfeit".
+    const TYPE = "boardgame.result";
+    const table = PRODUCT_ORGANISER_ONLY_SPORT_EVENTS as Record<string, { field: string; values: readonly string[] }>;
+    expect(Object.hasOwn(table, TYPE), "the rig: the type carries no row of its own").toBe(false);
+    const routed: string[] = [];
+    table[TYPE] = { field: "method", values: ["resign"] };
+    try {
+      for (const [method, route] of [["resign", "organiser"], ["checkmate", "adapter"]] as const) {
+        const events = [START, { type: TYPE, payload: { method } }];
+        const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
+        const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
+        expect(joined(result.findings), method).toMatch(new RegExp(`^${route}: cannot map event 1 \\(${escapeRe(TYPE)}\\)`));
+        routed.push(`${method}:${route}`);
+      }
+    } finally {
+      delete table[TYPE];
+    }
+    expect(Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS), "the configured row is removed").toEqual([]);
+    expect(routed).toEqual(["resign:organiser", "checkmate:adapter"]);
+  });
+
   it("the product declares NO organiser-only sport events since W2b (D15), so chess's retired forfeit methods are the scorer's", async () => {
     // The sweep above runs over whatever the product declares. W2b emptied the table: chess's two forfeit methods
     // (`boardgame.result{method: forfeit | double_forfeit}`) are RETIRED ON WRITE, and a chess forfeit is a

@@ -781,7 +781,7 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
     expect(await seq(id)).toBe(before + 1);
   });
 
-  it("X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists, through the real gate — a non-organiser is refused 403 and nothing is written, an organiser is admitted, and a value the row does not list still passes", async () => {
+  it("X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists, through the real gate — a non-organiser is refused 403 and nothing is written, an organiser is admitted, a value the row does not list still passes, and a malformed payload is not organiser-only", async () => {
     // single-sport: boardgame. The derived table is empty since W2b D15, so the payload arm (the sport half of X-ST-2,
     // which X-RS-3 routes through) is reached only by a row configured here — on the live table object the gate reads,
     // removed in `finally`. The listed value is deliberately NOT "forfeit": the arm matches the row's own values, never
@@ -792,8 +792,17 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
     let refused = 0;
     let admitted = 0;
     let unlisted = 0;
+    let malformed = 0;
     table[TYPE] = { field: "method", values: ["resign"] };
     try {
+      // The predicate first, with the row in place: the listed value is organiser-only, and a malformed payload is not
+      // — the payload guard answers before the field is read (with the table empty, the own-key guard answers first and
+      // hides it).
+      expect(isOrganiserOnlyEvent(TYPE, { method: "resign" }), "the listed value").toBe(true);
+      for (const p of [undefined, null, "resign", 7, {}, { method: 7 }]) {
+        expect(isOrganiserOnlyEvent(TYPE, p), `malformed ${String(JSON.stringify(p))}`).toBe(false);
+        malformed++;
+      }
       for (const who of [...REFUSED, ...ALLOWED]) {
         const { s, id, f } = await ready({ sport: "boardgame" });
         const auth = await asAuthority(s, id, who);
@@ -822,6 +831,6 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
       delete table[TYPE];
     }
     expect(Object.keys(ORGANISER_ONLY_SPORT_EVENTS), "the configured row is removed").toEqual([]);
-    expect({ refused, admitted, unlisted }).toEqual({ refused: REFUSED.length, admitted: ALLOWED.length, unlisted: REFUSED.length });
+    expect({ refused, admitted, unlisted, malformed }).toEqual({ refused: REFUSED.length, admitted: ALLOWED.length, unlisted: REFUSED.length, malformed: 6 });
   });
 });
