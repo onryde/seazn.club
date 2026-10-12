@@ -20,7 +20,7 @@ vi.mock("../camera-loader", async (actual) => ({
 import { RoomShell, Screen } from "../room-shell";
 import { CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
-import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "../camera-session";
+import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS, STAMP_RETRY_MS } from "../camera-session";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
@@ -462,8 +462,11 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
   };
   const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
   let stamps: { url: string; body: unknown }[] = [];
+  /** The camera-fault answers to fail, in order: 0 ⇒ the network is down. */
+  let faultFailures: { status: number; code?: string }[] = [];
   function stubFetch() {
     stamps = [];
+    faultFailures = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
@@ -471,6 +474,9 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
         if (init.method === "POST" && url.includes("/external-play/room/camera-fault?")) {
           const body = JSON.parse(String(init.body)) as { state: string };
           stamps.push({ url, body });
+          const fail = faultFailures.shift();
+          if (fail?.status === 0) throw new TypeError("Failed to fetch");
+          if (fail) return new Response(JSON.stringify({ ok: false, error: { code: fail.code ?? "INTERNAL" } }), { status: fail.status });
           return ok({ open: body.state === "start" });
         }
         if (init.method === "POST" && url.startsWith("/api/v1/fixtures/f1/external-play/room?")) return ok(seatAnswers.shift()?.());
@@ -512,6 +518,38 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     expect(cameraStatus(island), "back").toBe("live");
     expect(screenOf(island)).toBe("live");
     island.unmount();
+  });
+
+  // T14 fix round 6, M-3: through the REAL shell → session → room-api: a
+  // stamp the server did not take is sent again on the ladder; a final 4xx
+  // (the cap's 429) is not.
+  it("a stamp the server did not take (a 503, then the network down) is re-sent on the ladder until it lands, and the end waits behind it; the cap's 429 is final — sent once", async () => {
+    const live = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
+    let checked = 0;
+    for (const c of [
+      { failures: [{ status: 503 }, { status: 0 }], states: ["start", "start", "start", "end"] },
+      { failures: [{ status: 429, code: "CAMERA_FAULT_CAP_REACHED" }], states: ["start", "end"] },
+    ]) {
+      stubFetch();
+      faultFailures = [...c.failures];
+      getAnswer = live;
+      seatAnswers = [() => ({ snapshot: getAnswer(), seat: { seated: true, participant: PARTICIPANT } })];
+      const first = faultingCamera();
+      join.fn.mockReset();
+      join.fn.mockResolvedValueOnce(first.cam).mockResolvedValueOnce(liveCamera());
+      const island = renderIsland(RoomShell, { initial: live(), token: "tok", selfPath: "/x" });
+      await settle();
+      expect(cameraStatus(island), "premise: live").toBe("live");
+      first.fault();
+      await settle();
+      expect(cameraStatus(island), "premise: back at once").toBe("live");
+      await settle(STAMP_RETRY_MS.reduce((a, b) => a + b, 0) + 1_000);
+      expect(stamps.map((x) => (x.body as { state: string }).state), JSON.stringify(c.failures)).toEqual(c.states);
+      expect(faultFailures, "every scripted failure was met").toEqual([]);
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("on the check-in (refused for camera, camera up): a fault keeps the player on the check-in — never the camera-required card — and the seat is re-asked once back", async () => {

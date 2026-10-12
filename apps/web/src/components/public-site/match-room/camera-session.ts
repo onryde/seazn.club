@@ -26,6 +26,11 @@
 // for the same reason: an unload's POST may never arrive, and an end sent at
 // the unload would leave the page load and the join uncovered. Every other
 // stop closes it. The open time still counts toward job 5's neutral flag.
+//
+// Delivering a stamp (fix round 6, M-3): a stamp request that REJECTS (the
+// shell maps a network error or a 5xx to a rejection; a final 4xx resolves)
+// is sent again after each wait of STAMP_RETRY_MS, then dropped. Every stamp
+// goes through ONE serial queue, so a start's retry never lands after its end.
 import { D7GuardError, type JoinOwnCamera, type MeetingLink, type OwnCamera } from "./camera-loader";
 
 export type CameraStatus = "idle" | "joining" | "live" | "off" | "failed" | "recovering" | "gave_up";
@@ -39,10 +44,15 @@ export const RECOVER_BACKOFF_MS = [0, 1_000, 2_000, 4_000, 8_000] as const;
  *  to 71 s, inside the ruled 60–90 s (fix round 5). */
 export const RECOVER_MAX_ATTEMPTS = 12;
 
+/** Waits before each re-send of a stamp request that failed (M-3): bounded,
+ *  1 + its length attempts in all, about 7.5 s of waiting. */
+export const STAMP_RETRY_MS = [500, 1_000, 2_000, 4_000] as const;
+
 export type CameraSessionOptions = {
-  /** Tells the server our guard's gap started / ended (room camera-fault). */
+  /** Tells the server our guard's gap started / ended (room camera-fault).
+   *  A rejection (or a throw) is a request to re-send; a resolve is final. */
   stamp?: (state: "start" | "end") => Promise<unknown> | void;
-  /** Test seam: the back-off's wait. */
+  /** Test seam: the back-off's wait — the re-join's and the stamp's. */
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -64,14 +74,29 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
   let faultOpen = false;
   let gaveUp = false;
 
+  // One queue for every stamp request: a start's retries all run before its
+  // end is sent. Idle, a request is sent AT ONCE — the start goes out before
+  // the old meeting is left. A stamp is evidence for the organiser; it never
+  // stops the camera, so nothing here rejects.
+  let stampQueue: Promise<void> = Promise.resolve();
+  let queued = 0;
+  const deliver = async (state: "start" | "end") => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await opts.stamp?.(state);
+        return;
+      } catch {
+        if (attempt >= STAMP_RETRY_MS.length) return;
+        await sleep(STAMP_RETRY_MS[attempt]!);
+      }
+    }
+  };
   const stamp = (state: "start" | "end") => {
     if ((state === "start") === faultOpen) return;
     faultOpen = state === "start";
-    try {
-      void Promise.resolve(opts.stamp?.(state)).catch(() => undefined);
-    } catch {
-      // A stamp is evidence for the organiser; it never stops the camera.
-    }
+    const send = () => deliver(state).finally(() => void (queued -= 1));
+    queued += 1;
+    stampQueue = queued === 1 ? send() : stampQueue.then(send);
   };
 
   const attach = (joined: OwnCamera) => {

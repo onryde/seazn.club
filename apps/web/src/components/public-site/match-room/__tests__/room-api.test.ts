@@ -8,6 +8,7 @@ import type { SeatWire, RoomClaim, CameraFaultReport } from "@/server/usecases/e
 import type { ParticipantToken } from "@/server/external-play/video/realtimekit";
 import {
   claimSeat,
+  deliverCameraFault,
   fetchRoom,
   roomApiPath,
   sendAct,
@@ -85,6 +86,29 @@ describe("the calls", () => {
     expect(JSON.parse(String(seen[0]!.init.body))).toEqual({ state: "end", participantId: "pt-1" });
     expect(new Headers(seen[0]!.init.headers).get("content-type")).toBe("application/json");
     expect(seen[0]!.init.keepalive).toBe(true);
+  });
+
+  it("delivering a stamp (M-3): network down or a 5xx REJECTS (the session retries it); a 2xx or any 4xx — the cap's 429, a 404 — resolves (final)", async () => {
+    const body = { state: "start" as const, participantId: "pt-1" };
+    let checked = 0;
+    const thrown: typeof fetch = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    await expect(deliverCameraFault("f-1", "tok", body, thrown), "status 0").rejects.toThrow();
+    checked += 1;
+    for (const status of [500, 502, 503]) {
+      await expect(deliverCameraFault("f-1", "tok", body, fakeFetch(() => failure(status, "X")).f), `${status}`).rejects.toThrow();
+      checked += 1;
+    }
+    for (const [status, code] of [[429, "CAMERA_FAULT_CAP_REACHED"], [404, "NOT_FOUND"], [400, "VALIDATION"], [401, "UNAUTHORIZED"]] as const) {
+      await expect(deliverCameraFault("f-1", "tok", body, fakeFetch(() => failure(status, code)).f), `${status}`).resolves.toBeUndefined();
+      checked += 1;
+    }
+    const { f, seen } = fakeFetch(() => envelope({ open: true }));
+    await expect(deliverCameraFault("f-1", "tok", body, f)).resolves.toBeUndefined();
+    expect(JSON.parse(String(seen[0]!.init.body)), "the same request as sendCameraFault").toEqual(body);
+    checked += 1;
+    expect(checked).toBe(9);
   });
 
   it("act posts the action as JSON, verbatim", async () => {
