@@ -49,13 +49,20 @@ function activeAbandonOf(tx: postgres.Sql | Tx, on: string) {
  * with an abandon's method (`ABANDON_WIN_METHODS`: DLS, the award policy's leader), or a level kind (draw, tie,
  * no_result). So an ordinary played result — the commonest row on every division read and public cache miss — is never
  * probed. The latest active abandon wins (the kernel refuses a second once one decided).
+ *
+ * T16 review m3 (X-AB-1): NO outcome is probed too, at status `abandoned` only — where an abandon that decided nobody
+ * lives (the replay policy; R16-3's level abandon where the cfg refuses a draw), and the reader now tags it. A null
+ * outcome at any other status (a scheduled row, the commonest of all) is never probed, and the generator's void at
+ * `abandoned` has no ledger, so it reads null. A withdrawal's EXPUNGE (`expunge: true`) reads null, as the reader's
+ * `forfeitLedgerOf` does: it took the match out of the table, so nothing is owed on it.
  */
 const ABANDON_LEVEL_KINDS = ABANDON_RESULT_KINDS.filter((kind) => kind !== "win");
 export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
   const f = tx(on);
   return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})
-                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (
-    select a.payload ->> 'reason' from score_events a
+                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}
+                    or (${f}.outcome is null and ${f}.status = 'abandoned') then (
+    select case when a.payload ->> 'expunge' = 'true' then null else a.payload ->> 'reason' end from score_events a
     where ${activeAbandonOf(tx, on)}
     order by a.seq desc limit 1) end)`;
 }

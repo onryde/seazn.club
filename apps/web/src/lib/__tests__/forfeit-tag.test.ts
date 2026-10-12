@@ -89,6 +89,9 @@ const reducedChasePlayedOut = () => [
   ev(4, "cricket.innings.summary", { runs: 167, wickets: 3, legalBalls: 140 }),
 ];
 
+/** A ledger holding one active abandon, as a surface's active events hold it. */
+const forfeitableAbandon = (reason: string) => [{ type: "core.start", payload: {} }, { type: "core.abandon", payload: { reason } }];
+
 const PUBLIC: Record<string, Record<string, string>> = { en: pubEn, es: pubEs, fr: pubFr, nl: pubNl };
 const UI: Record<string, Record<string, string>> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl };
 const en = (key: string, vars?: Record<string, string>) => t(pubEn as unknown as Dict, key, vars);
@@ -239,10 +242,14 @@ describe("forfeitTag — one row per member (UI-2's tags, counted)", () => {
 });
 
 describe("the abandon tags, swept over every sport's own abandon (the engine's, never a table)", () => {
-  it("every sport: after kick-off an abandon's outcome is tagged from the ledger, or there is no outcome to tag", () => {
+  // T16 review m3 (X-AB-1): an abandon that leaves NO result is still an abandon on every public surface — out of the
+  // table and flagged for replay or settle, it reads "abandoned" with its reason (the bare sentence: there is no result
+  // to append). Before, it read nothing: R16-3 turned a no-draw cfg's level bracket abandon from a draw (tagged) into no
+  // result, and the public lost its "Abandoned (reason)".
+  it("every sport: after kick-off an abandon is tagged from the ledger — its result's tag, or with no result, abandoned (X-AB-1)", () => {
     let sports = 0;
-    let tagged = 0;
-    let untagged = 0;
+    let resulted = 0;
+    let noResult = 0;
     for (const m of builtinModules) {
       sports++;
       const policies = "abandonPolicy" in (m.configSchema.parse(firstCfg(m)) as object) ? ["replay", "award"] : [null];
@@ -250,20 +257,46 @@ describe("the abandon tags, swept over every sport's own abandon (the engine's, 
         const cfg = policy === null ? firstCfg(m) : m.configSchema.parse({ ...(firstCfg(m) as object), abandonPolicy: policy });
         const f = fold(m, cfg, () => [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })]);
         const tag = forfeitTag(f.outcome, forfeitLedgerOf(f.active));
+        const name = `${m.key}/${policy}: ${JSON.stringify(f.outcome)}`;
         if (f.outcome === null) {
-          expect(tag, `${m.key}/${policy}`).toBeNull();
-          untagged++;
+          expect(tag, name).toEqual({ kind: "abandoned", tagKey: "forfeit.tag.abandoned", sentenceKey: "forfeit.sentence.abandoned", params: { reason: "rain" } });
+          expect(en(forfeitSentence(tag!, () => "?").key, { reason: "rain" }), name).toBe("Abandoned (rain).");
+          noResult++;
         } else {
-          expect((ABANDON_RESULT_KINDS as readonly string[]).includes(f.outcome.kind), `${m.key}: ${f.outcome.kind}`).toBe(true);
-          expect(tag?.kind, `${m.key}/${policy}: ${JSON.stringify(f.outcome)}`).toMatch(/^abandoned/);
+          expect((ABANDON_RESULT_KINDS as readonly string[]).includes(f.outcome.kind), name).toBe(true);
+          expect(tag?.kind, name).toMatch(/^abandoned/);
           expect(tag?.params.reason).toBe("rain");
-          tagged++;
+          resulted++;
         }
       }
     }
     expect(sports).toBe(builtinModules.length);
-    expect(tagged, "some sport's abandon leaves a result to tag").toBeGreaterThan(0);
-    expect(untagged, "some sport's abandon leaves none").toBeGreaterThan(0);
+    expect(resulted, "some sport's abandon leaves a result to tag").toBeGreaterThan(0);
+    expect(noResult, "some sport's abandon leaves none").toBeGreaterThan(0);
+  });
+
+  it("no result, the edges: an empty ledger, a voided abandon and a withdrawal's expunge read nothing; a scheduled row's outcome is null too", () => {
+    // The positive pair of the case above: a null outcome is tagged ONLY beside an active abandon that is not an
+    // expunge. A withdrawal's expunge (withdrawal.ts `expungeAbandon`, reason "withdrew", D5) took the match out of the
+    // table altogether, so nothing is owed on it: it is no abandon flagged for replay or settle, and reads as before.
+    const generic = mod("generic");
+    const cfg = firstCfg(generic);
+    const voided = fold(generic, cfg, () => [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" }), ev(3, "core.void", {}, "e-2")]);
+    const expunged = fold(generic, cfg, () => [ev(1, "core.start"), ev(2, "core.abandon", { reason: "withdrew", expunge: true })]);
+    let checked = 0;
+    for (const [name, outcome, ledger] of [
+      ["a scheduled row: no ledger", null, NO_LEDGER],
+      ["a voided abandon", voided.outcome, forfeitLedgerOf(voided.active)],
+      ["an expunge", expunged.outcome, forfeitLedgerOf(expunged.active)],
+    ] as const) {
+      expect(outcome, `${name}: premise, no outcome`).toBeNull();
+      expect(forfeitTag(outcome, ledger), name).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(forfeitLedgerOf(expunged.active), "an expunge is no abandon to the reader").toEqual(NO_LEDGER);
+    // …and an expunge with an earlier active abandon behind it is still no abandon: the latest active one decides.
+    expect(forfeitLedgerOf([...forfeitableAbandon("rain"), { type: "core.abandon", payload: { reason: "withdrew", expunge: true } }])).toEqual(NO_LEDGER);
   });
 
   it("every sport's walkover reads w/o and names the side that did not show", () => {

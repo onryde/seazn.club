@@ -1,6 +1,8 @@
 // W2b Task 13 (spec §5.4/§5.5, X-AB-2) — `activeAbandonReasonSql`, the stored projection of the ledger fact the public
 // abandon tag reads: the reason of the row's ACTIVE `core.abandon`, for an outcome an abandon can leave. It is NOT
-// status-gated (a DLS abandon is `decided`, ST-G1), it ignores a voided abandon, and it answers the latest of two.
+// status-gated for a result (a DLS abandon is `decided`, ST-G1), it ignores a voided abandon, and it answers the latest
+// of two. NO outcome is read at status `abandoned` only (T16 review m3, X-AB-1: an abandon that decided nobody), never
+// for a withdrawal's expunge.
 // Each row is a real fixture with its own ledger rows; the outcome column is set as the fold would store it.
 //
 // Real Postgres required; skipped without DATABASE_URL.
@@ -64,7 +66,7 @@ describe.skipIf(!HAS_DB)("activeAbandonReasonSql — the ledger's abandon reason
     expect(rows.find((r) => r.id === fixtureId)?.abandon_reason).toBe("rain");
   });
 
-  it("every outcome kind an abandon can leave reads it; a forfeit's and none do not (the reader's own list)", async () => {
+  it("every outcome kind an abandon can leave reads it, and so does no outcome at abandoned (X-AB-1); a forfeit's and an expunge do not", async () => {
     const outcomes: Record<string, unknown> = { win: dls, draw: { kind: "draw" }, tie: { kind: "tie" }, no_result: { kind: "no_result" } };
     let read = 0;
     for (const kind of ABANDON_RESULT_KINDS) {
@@ -72,7 +74,10 @@ describe.skipIf(!HAS_DB)("activeAbandonReasonSql — the ledger's abandon reason
       read++;
     }
     expect(read).toBe(ABANDON_RESULT_KINDS.length);
-    expect(await scene(fixtureId, "abandoned", null, [start, abandon("rain")]), "no outcome").toBeNull();
+    // T16 review m3: an abandon that decided nobody (the replay policy; R16-3's level abandon where draws are refused)
+    // reads its reason, as the public tag now does; a withdrawal's expunge took the match out altogether and does not.
+    expect(await scene(fixtureId, "abandoned", null, [start, abandon("rain")]), "no outcome, abandoned").toBe("rain");
+    expect(await scene(fixtureId, "abandoned", null, [start, { type: "core.abandon", payload: { reason: "withdrew", expunge: true } }]), "an expunge").toBeNull();
     expect(await scene(fixtureId, "forfeited", { kind: "double_walkover" }, [start, abandon("rain")]), "a double walkover").toBeNull();
   });
 
@@ -98,12 +103,16 @@ describe.skipIf(!HAS_DB)("activeAbandonReasonSql — the ledger's abandon reason
     for (const [name, outcome] of Object.entries(shapes)) {
       // an ABANDON tag (a forfeit or a double walkover is tagged by its own kind, ledger or not)
       const readerTags = forfeitTag(outcome, { abandon: { reason: "rain" } })?.kind.startsWith("abandoned") === true;
-      const got = await scene(fixtureId, "decided", outcome, [start, abandon("rain")]);
+      // No outcome beside an active abandon lives at `abandoned` (the abandon's own status); a result at `decided`.
+      const got = await scene(fixtureId, outcome === null ? "abandoned" : "decided", outcome, [start, abandon("rain")]);
       expect(got, name).toBe(readerTags ? "rain" : null);
       if (readerTags) probed++;
       else skipped++;
     }
-    expect([probed, skipped], "both halves reached").toEqual([5, 7]);
+    expect([probed, skipped], "both halves reached").toEqual([6, 6]);
+    // …and the gate: the commonest null-outcome row, a scheduled one, is never probed (T16 review m3). Its ledger here is
+    // one no scheduled row holds, so a probe would read it and show.
+    expect(await scene(fixtureId, "scheduled", null, [start, abandon("rain")]), "a scheduled row is never probed").toBeNull();
   });
 
   it("after a void: a voided abandon is no abandon; the latest active one wins", async () => {

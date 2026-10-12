@@ -10,15 +10,30 @@
 // status rule and the standings fold all run. The cases are the engine's own declarations — every declared variant of
 // every module that keeps `abandonPolicy: "award"`, `supportsDraws`, `DRAW_KINDS` — never a typed list; each sweep
 // counts what it judged, and zero is a failure.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { DRAW_KINDS, type StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
+import { ABANDONED_BARE_KEY, forfeitCopyOf } from "@/lib/forfeit-tag";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import pubEn from "@/dictionaries/en/public.json";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { loadCompetitionHub } from "@/server/public-site/competition-hub";
+import { getPublicDivision } from "@/server/public-site/data";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { getStandings } from "@/server/usecases/stages";
 import { recomputeStandings } from "../competition";
 import { seedBracket } from "./helpers/seed-bracket";
+
+// The public reads below go through `unstable_cache`, a Next server-runtime API with no incrementalCache outside a real
+// request: a passthrough, never a memoising double (competition-hub-db.test.ts's own reason).
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+  revalidatePath: vi.fn(),
+}));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -120,6 +135,51 @@ describe.runIf(HAS_DB)("R16-3, ruling 117: a level award-policy abandon where th
     }
     expect(checked).toBeGreaterThan(0);
   }, 120_000);
+
+  // T16 review m3 (X-AB-1): the abandon that decided nobody is still an abandon on the public surfaces, with its reason.
+  // R16-3 turned a no-draw cfg's level BRACKET abandon from a (tagged) draw into no result, and the public lost its
+  // "Abandoned (reason)": `forfeitTag(null)` read nothing. Through the console's write and the public's own reads — the
+  // division read (`getPublicDivision`, whose `abandon_reason` the schedule and the bracket word through
+  // `bracketForfeitWords`) and the hub card (`loadCompetitionHub`) — for every refusing cfg (a second sport included),
+  // in a draw kind and a bracket kind. The copy is the dictionary's, never the reader's. Then the sequence: voiding the
+  // abandon takes the tag away (play resumes).
+  it("T16 review m3: the public reads it as abandoned with its reason — schedule and bracket words, and the hub card; a void takes it away", async () => {
+    const en = (key: string, vars?: Record<string, string>) => t(pubEn as unknown as Dict, key, vars);
+    const want = { kind: "abandoned", tag: en("forfeit.tag.abandoned"), sentence: en(ABANDONED_BARE_KEY, { reason: "floodlights" }) };
+    expect(want.sentence, "premise: the bare sentence names the reason").toContain("floodlights");
+    const copy = forfeitCopyOf((k) => en(k));
+    const cfgs = [...new Map(REFUSING.map((r) => [`${r.m.key}/${r.variant}`, r])).values()];
+    const sports = new Set(cfgs.map((c) => c.m.key));
+    let checked = 0;
+    for (const c of cfgs) {
+      for (const kind of ["league", "knockout"] as const) {
+        const name = `${c.m.key}/${c.variant} ${kind}`;
+        const { s, id } = await levelAbandon(c, kind);
+        expect(await rowOf(id), `${name}: premise, no result`).toMatchObject({ status: "abandoned", outcome: null });
+        await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+        const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+          select o.slug as org, c.slug as comp, d.slug as div from divisions d
+          join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id where d.id = ${s.divisionId}`;
+        const detail = (await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div))!;
+        expect(detail.fixtures.find((f) => f.id === id)?.abandon_reason, `${name}: the division read`).toBe("floodlights");
+        const words = bracketForfeitWords(detail.fixtures, {}, copy);
+        expect(words.get(id), `${name}: schedule and bracket`).toEqual(want);
+        // The positive pair: no other fixture of the division (each scheduled, no outcome) carries a tag.
+        expect([...words.keys()], `${name}: only the abandoned fixture`).toEqual([id]);
+        const hub = (await loadCompetitionHub(slugs!.org, slugs!.comp))!;
+        expect(hub.matches.find((m) => m.fixtureId === id)?.forfeit, `${name}: the hub card`).toEqual(want);
+        // The sequence: the console's undo of the abandon. Play resumes, and the public reads no abandon.
+        const [abandon] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and type = 'core.abandon'`;
+        await post(s.auth, id, "core.void", { event_id: abandon!.id });
+        const after = (await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div))!;
+        expect(after.fixtures.find((f) => f.id === id)?.abandon_reason ?? null, `${name}: voided`).toBeNull();
+        expect(bracketForfeitWords(after.fixtures, {}, copy).get(id), `${name}: voided, no tag`).toBeUndefined();
+        checked++;
+      }
+    }
+    expect(checked).toBe(cfgs.length * 2);
+    expect([...sports].sort(), "a second sport is swept").toEqual(expect.arrayContaining(["hockey", "icehockey"]));
+  }, 240_000);
 
   it("the positive pair: where the cfg takes a draw, the level abandon is a decided draw with the real score, credited as one", async () => {
     let checked = 0;

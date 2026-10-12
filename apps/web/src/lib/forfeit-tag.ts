@@ -35,13 +35,17 @@ export function forfeitLedgerOfReason(reason: string | null | undefined): Forfei
 }
 
 /** The ledger from a fixture's ACTIVE events (voids already resolved — `resolveVoids`): its last `core.abandon`.
- *  The kernel refuses a second abandon once one has decided, so "last" only matters to a ledger it would refuse. */
+ *  The kernel refuses a second abandon once one has decided, so "last" only matters to a ledger it would refuse.
+ *  A withdrawal's EXPUNGE (`expunge: true`, withdrawal.ts `expungeAbandon`, D5) is no abandon to this reader: it took
+ *  the match out of the table altogether, nothing is owed on it, and it reads as it always has (T16 review m3) —
+ *  `activeAbandonReasonSql` answers the same. */
 export function forfeitLedgerOf(events: readonly { readonly type: string; readonly payload: unknown }[]): ForfeitLedger {
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i]!;
     if (e.type !== "core.abandon") continue;
-    const reason = (e.payload as { reason?: unknown } | null)?.reason;
-    return forfeitLedgerOfReason(typeof reason === "string" ? reason : null);
+    const payload = e.payload as { reason?: unknown; expunge?: unknown } | null;
+    if (payload?.expunge === true) return NO_LEDGER;
+    return forfeitLedgerOfReason(typeof payload?.reason === "string" ? payload.reason : null);
   }
   return NO_LEDGER;
 }
@@ -126,11 +130,17 @@ function abandonKindOf(o: { kind?: unknown; method?: unknown }): AbandonTagKind 
 }
 
 /**
- * The tag and sentence for a fixture's outcome, or null — a played result, a bye, no outcome, or an abandon the
- * ledger does not hold. `outcome` is the stored `MatchOutcome` as any surface holds it (loose JSON is fine).
+ * The tag and sentence for a fixture's outcome, or null — a played result, a bye, no outcome with no abandon, or an
+ * abandon the ledger does not hold. `outcome` is the stored `MatchOutcome` as any surface holds it (loose JSON is fine).
+ *
+ * T16 review m3 (X-AB-1): NO outcome beside an active abandon is an abandon that decided nobody — out of the table,
+ * flagged for replay or settle (a replay-policy abandon; R16-3's level abandon where the cfg refuses a draw) — and reads
+ * "abandoned" with its reason, as a level one does. Before, it read nothing, so R16-3 took the public "Abandoned
+ * (reason)" off a no-draw cfg's bracket abandon, which had been a (tagged) draw.
  */
 export function forfeitTag(outcome: unknown, ledger: ForfeitLedger): ForfeitTag | null {
-  if (outcome === null || typeof outcome !== "object") return null;
+  if (outcome === null || outcome === undefined) return ledger.abandon === null ? null : tagOf("abandoned", { reason: ledger.abandon.reason });
+  if (typeof outcome !== "object") return null;
   const o = outcome as { kind?: unknown; winner?: unknown; loser?: unknown; reason?: unknown; method?: unknown };
   const ids = {
     ...(typeof o.winner === "string" ? { winner: o.winner } : {}),
