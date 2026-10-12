@@ -2,7 +2,7 @@
 // console read it from here, so the two cannot word one result two ways (W2b loop H F2). Moved verbatim from
 // `components/v2/stages-panel.tsx`, which re-exports it for its existing importers. Client-safe: no `server-only`.
 import type { MessageKey } from "@/lib/messages";
-import { NO_LEDGER, forfeitTag, type ForfeitLedger } from "@/lib/forfeit-tag";
+import { NO_LEDGER, forfeitTag, type ForfeitLedger, type ForfeitTagKind } from "@/lib/forfeit-tag";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -85,4 +85,25 @@ export function splitResultTail(line: string, tail: string | null | undefined): 
   const before = line.slice(0, line.length - tail.length);
   const lead = before.trimEnd();
   return { lead, tail: before.slice(lead.length) + tail };
+}
+
+/** Design audit 4.3 — each tag's expansion (ui.json), the words a screen reader and a tooltip give for "w/o", "ret.",
+ *  "DQ", "2× w/o" or "Aband. · DLS" on the organiser's one-line result. A withdrawal shares the walkover's tag (X-RS-2)
+ *  but not its expansion: the organiser is told she withdrew. */
+export const FORFEIT_TAG_FULL_KEY = {
+  walkover: "forfeit.tagFull.walkover",
+  withdrew: "forfeit.tagFull.withdrew",
+  retired: "forfeit.tagFull.retired",
+  disqualified: "forfeit.tagFull.disqualified",
+  double_walkover: "forfeit.tagFull.doubleWalkover",
+  abandoned_dls: "forfeit.tagFull.abandonedDls",
+  abandoned_no_result: "forfeit.tagFull.abandonedNoResult",
+  abandoned: "forfeit.tagFull.abandoned",
+} as const satisfies Record<ForfeitTagKind, MessageKey>;
+
+/** The tag `outcomeText` prints for this result and its expansion, or null when it prints none (a bye, a played
+ *  result, no result). Read through `forfeitTag`, the one reader, with the same ledger the line was built with. */
+export function outcomeTagWords(msg: Msg, outcome: unknown, ledger: ForfeitLedger = NO_LEDGER): { word: string; full: string } | null {
+  const tag = forfeitTag(outcome, ledger);
+  return tag === null ? null : { word: msg(tag.tagKey), full: msg(FORFEIT_TAG_FULL_KEY[tag.kind]) };
 }

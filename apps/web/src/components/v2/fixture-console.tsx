@@ -36,7 +36,8 @@ import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-bann
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { forfeitLedgerOf, forfeitTag } from "@/lib/forfeit-tag";
-import { outcomeText } from "@/lib/outcome-text";
+import { outcomeTagWords, outcomeText } from "@/lib/outcome-text";
+import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -76,7 +77,6 @@ import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorde
 import { lineupPairFrom } from "@/components/v2/scorepad/registry";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
-import { ScoreSentence } from "@/components/score-sentence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -1020,6 +1020,8 @@ export function FixtureConsole({
   // Any other result keeps this console's own method sentence ("won after extra time").
   const voidedIds = new Set(events.flatMap((e) => (e.type === "core.void" && e.voids_event_id !== null ? [e.voids_event_id] : [])));
   const forfeitLedger = forfeitLedgerOf(events.filter((e) => e.type !== "core.void" && !voidedIds.has(e.id)));
+  // Design audit 4.3: the tag in that line, with its expansion (accessible name and tooltip).
+  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger);
   const decidedLine =
     forfeitTag(outcome, forfeitLedger) !== null
       ? outcomeText(msg, outcome, entrantNames, forfeitLedger)
@@ -1214,7 +1216,7 @@ export function FixtureConsole({
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && (
           <p data-testid="console-decided-line" className="mt-1 text-sm font-medium text-slate-700">
-            <ScoreSentence text={decidedLine} />
+            <OutcomeTagText text={decidedLine} tag={decidedTag} scores />
           </p>
         )}
         {/* Phone-only: the round/venue/time line sits behind

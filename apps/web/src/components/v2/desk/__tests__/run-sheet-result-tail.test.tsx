@@ -194,8 +194,13 @@ function phoneLine(html: string): { cls: string[]; inner: string } {
   expect(found, "exactly one phone line").toHaveLength(1);
   return { cls: classesOf(found[0]![1]!), inner: found[0]![2]! };
 }
+/** The line's spans, each with its TEXT. Since design audit 4.3 the tail holds its tag as a nested named symbol
+ *  (`<span role="img" …>w/o</span>`) — the one child a span may carry here; its text is read through it. */
 const spans = (inner: string) =>
-  [...inner.matchAll(/<span class="([^"]*)">([^<]*)<\/span>/g)].map((m) => ({ cls: classesOf(m[1]!), text: decode(m[2]!) }));
+  [...inner.matchAll(/<span class="([^"]*)">((?:[^<]|<span role="img"[^>]*>[^<]*<\/span>)*)<\/span>/g)].map((m) => ({
+    cls: classesOf(m[1]!),
+    text: decode(m[2]!.replace(/<[^>]+>/g, "")),
+  }));
 
 describe("the run sheet's phone line never truncates the result's tail (loop H F1)", () => {
   const en = LOCALES.en!;

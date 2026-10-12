@@ -120,3 +120,72 @@ describe("the console's decided line names a credited result as the run sheet do
     expect(decidedLine("abandoned", null, ABANDON)).toBeNull();
   });
 });
+
+// Design audit 4.3: the organiser's tag ("w/o", "ret.", "DQ", "2× w/o", "Aband. · DLS") was bare text — a screen reader
+// read "ret dot", a hover showed nothing. It is now the public chip's pattern (`forfeit-tag-chip.tsx`): a symbol whose
+// accessible name and tooltip are the full words. Each row names the expansion it owes by KEY (this table, not the code
+// under test), and the value is the dictionary's.
+describe("the console's decided line names its tag in full (audit 4.3)", () => {
+  it("every forfeit kind, a double walkover and each abandon: role=img, aria-label and title the expansion, the tag shown", () => {
+    const html = (status: string, outcome: unknown, events: EventIn[] = []) =>
+      renderToStaticMarkup(
+        <FixtureConsole
+          fixture={{ id: "f1", status, scheduled_at: null, venue_name: null, court_name: null, round_no: 2 }}
+          sport={sport}
+          home={HOME}
+          away={AWAY}
+          initialState={{ status, last_seq: events.length, summary: null, state: null, outcome }}
+          initialEvents={events}
+          canEdit
+          canOrganise
+          stageKind="league"
+          recorderNames={{}}
+          audit={null}
+          viewerPlan="community"
+        />,
+      );
+    const ROWS: [name: string, status: string, outcome: unknown, events: EventIn[], tagKey: string, fullKey: string][] = [
+      ["walkover", "forfeited", { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "walkover" }, [], "forfeit.tag.walkover", "forfeit.tagFull.walkover"],
+      ["withdrew", "forfeited", { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "withdrew" }, [], "forfeit.tag.walkover", "forfeit.tagFull.withdrew"],
+      ["retired", "forfeited", { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "retired" }, [], "forfeit.tag.retired", "forfeit.tagFull.retired"],
+      ["disqualified", "forfeited", { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "disqualified" }, [], "forfeit.tag.disqualified", "forfeit.tagFull.disqualified"],
+      ["double walkover", "forfeited", { kind: "double_walkover" }, [], "forfeit.tag.doubleWalkover", "forfeit.tagFull.doubleWalkover"],
+      ["DLS abandon", "decided", { kind: "win", winner: HOME.id, loser: AWAY.id, method: "dls" }, ABANDON, "forfeit.tag.abandonedDls", "forfeit.tagFull.abandonedDls"],
+      ["award-policy abandon", "decided", { kind: "win", winner: HOME.id, loser: AWAY.id, method: "abandoned" }, ABANDON, "forfeit.tag.abandoned", "forfeit.tagFull.abandoned"],
+      ["level abandon", "decided", { kind: "draw" }, ABANDON, "forfeit.tag.abandoned", "forfeit.tagFull.abandoned"],
+    ];
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let checked = 0;
+    for (const [name, status, outcome, events, tagKey, fullKey] of ROWS) {
+      const full = word(fullKey);
+      expect(full, `${name}: the expansion is not the tag`).not.toBe(word(tagKey));
+      const line = /<p[^>]*data-testid="console-decided-line"[^>]*>([\s\S]*?)<\/p>/.exec(html(status, outcome, events))?.[1] ?? "";
+      expect(line, `${name}: the tag, named in full`).toMatch(new RegExp(`<span role="img" aria-label="${esc(full)}" title="${esc(full)}">${esc(word(tagKey))}</span>`));
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+
+  it("the pair: an untagged result carries no symbol", () => {
+    const line = /<p[^>]*data-testid="console-decided-line"[^>]*>([\s\S]*?)<\/p>/.exec(
+      renderToStaticMarkup(
+        <FixtureConsole
+          fixture={{ id: "f1", status: "decided", scheduled_at: null, venue_name: null, court_name: null, round_no: 2 }}
+          sport={sport}
+          home={HOME}
+          away={AWAY}
+          initialState={{ status: "decided", last_seq: 0, summary: null, state: null, outcome: { kind: "win", winner: HOME.id, loser: AWAY.id, method: "extra_time" } }}
+          initialEvents={[]}
+          canEdit
+          canOrganise
+          stageKind="league"
+          recorderNames={{}}
+          audit={null}
+          viewerPlan="community"
+        />,
+      ),
+    )?.[1];
+    expect(line, "a line is printed").toBeDefined();
+    expect(line).not.toContain('role="img"');
+  });
+});

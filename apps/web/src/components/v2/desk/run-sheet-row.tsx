@@ -30,8 +30,9 @@ import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
-import { outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
+import { outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
 import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
+import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -299,6 +300,8 @@ export function RunSheetRow({
   // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
   // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
   const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
+  // Design audit 4.3: the tag in that result, with its expansion — both copies below render it as a named symbol.
+  const decidedTag = outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason));
   const decided = decidedParts === null ? null : decidedParts.lead + decidedParts.tail;
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,
@@ -549,7 +552,9 @@ export function RunSheetRow({
             {/* Task 9: `hidden md:block`, same reasoning as the meta line
                 above — `phoneLineTwo` is the phone's copy of this text. */}
             {subLine !== null && subLine !== "" && (
-              <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{subLine}</p>
+              <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">
+                <OutcomeTagText text={subLine} tag={decidedTag} />
+              </p>
             )}
           </div>
         </div>
@@ -573,7 +578,11 @@ export function RunSheetRow({
               leading space, which a flex item would otherwise drop). */}
           <p className={`flex min-w-0 flex-1 text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>
             <span className="min-w-0 truncate">{phoneLine.lead}</span>
-            {phoneLine.tail !== "" && <span className="shrink-0 whitespace-pre">{phoneLine.tail}</span>}
+            {phoneLine.tail !== "" && (
+              <span className="shrink-0 whitespace-pre">
+                <OutcomeTagText text={phoneLine.tail} tag={decidedTag} />
+              </span>
+            )}
           </p>
           {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
               chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture

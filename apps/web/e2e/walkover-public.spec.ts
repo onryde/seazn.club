@@ -830,25 +830,49 @@ async function longNameDivision(r: APIRequestContext, kind: "league" | "knockout
 /** Every RENDERED copy of `tail` inside `row`, measured against each clipping ancestor up to the row. `crowded`: the line
  *  holding it really was short of room (its lead, or the line itself, overflows) — the precondition that makes a 320
  *  pass mean something. `broken`: a copy whose glyphs sit on more than one line (a tag wrapped is a tag broken).
- *  `glued`: a copy that starts its own box with no visible space after the box before it ("forfeited ·2× w/o"). */
+ *  `glued`: a copy that starts its own box with no visible space after the box before it ("forfeited ·2× w/o").
+ *  Design audit 4.3: the tag inside the tail is its own named symbol (`<span role="img">`), so a copy is found across
+ *  text nodes — the row's text concatenated, each match mapped back to its nodes — and its box is the symbol's parent. */
 async function measureTail(row: Locator, tail: string) {
   return row.evaluate((rowEl, t) => {
     const out = { measured: 0, clipped: [] as string[], crowded: false, broken: 0, glued: [] as number[] };
+    const nodes: { n: Text; from: number }[] = [];
+    let all = "";
     const walker = document.createTreeWalker(rowEl, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const text = n.textContent ?? "";
-      const at = text.indexOf(t);
-      if (at === -1) continue;
+      nodes.push({ n: n as Text, from: all.length });
+      all += n.textContent ?? "";
+    }
+    /** The text node and offset of a position in `all`: a START lies in the last node beginning at or before it, an END
+     *  in the last node beginning before it. */
+    const locate = (pos: number, end: boolean): [Text, number] => {
+      for (let i = nodes.length - 1; i >= 0; i--) if (end ? pos > nodes[i]!.from : pos >= nodes[i]!.from) return [nodes[i]!.n, pos - nodes[i]!.from];
+      return [nodes[0]!.n, 0];
+    };
+    for (let at = all.indexOf(t); at !== -1; at = all.indexOf(t, at + 1)) {
+      const [sn, so] = locate(at, false);
+      const [en, eo] = locate(at + t.length, true);
       const range = document.createRange();
-      range.setStart(n, at);
-      range.setEnd(n, at + t.length);
-      if ([...range.getClientRects()].every((x) => x.width === 0)) continue; // the other breakpoint's copy (display:none)
+      range.setStart(sn, so);
+      range.setEnd(en, eo);
+      // The glyphs' own boxes, node by node: a range across elements also reports the elements' border boxes.
+      const glyphs = nodes.filter((x) => x.n === sn || x.n === en || (range.intersectsNode(x.n) && x.from > at && x.from < at + t.length)).flatMap((x) => {
+        const piece = document.createRange();
+        piece.setStart(x.n, x.n === sn ? so : 0);
+        piece.setEnd(x.n, x.n === en ? eo : (x.n.textContent ?? "").length);
+        return [...piece.getClientRects()];
+      });
+      if (glyphs.every((x) => x.width === 0)) continue; // the other breakpoint's copy (display:none)
       const box = range.getBoundingClientRect();
       out.measured++;
-      if (new Set([...range.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top))).size > 1) out.broken++;
-      const holder = n.parentElement!;
+      if (new Set(glyphs.filter((x) => x.width > 0).map((x) => Math.round(x.top))).size > 1) out.broken++;
+      let holder = sn.parentElement!;
+      if (holder.getAttribute("role") === "img") holder = holder.parentElement!;
       const lead = holder.previousElementSibling;
-      if (text.slice(0, at).trim() === "" && lead !== null) {
+      const before = document.createRange();
+      before.setStart(holder, 0);
+      before.setEnd(sn, so);
+      if (before.toString().trim() === "" && lead !== null) {
         const gap = box.left - lead.getBoundingClientRect().right;
         if (gap < 2) out.glued.push(Math.round(gap * 10) / 10);
       }
@@ -897,12 +921,13 @@ async function organiserResultRows(request: APIRequestContext) {
   await post(request, dw.id, "core.forfeit", { by: "both", reason: "walkover" });
   expect((await read(request, dw.id)).outcome, "a double walkover").toEqual({ kind: "double_walkover" });
 
+  // `fullKey` (design audit 4.3): the expansion each tag owes as its accessible name and tooltip, named here by key.
   const rows = [
-    { name: "walkover", div: lg.divId, f: fW, tagKey: "forfeit.tag.walkover", winner: lg.nameOf.get(fW.home_entrant_id!)! },
-    { name: "retired", div: lg.divId, f: fR, tagKey: "forfeit.tag.retired", winner: lg.nameOf.get(fR.home_entrant_id!)! },
-    { name: "disqualified", div: lg.divId, f: fD, tagKey: "forfeit.tag.disqualified", winner: lg.nameOf.get(fD.home_entrant_id!)! },
-    { name: "abandoned", div: lg.divId, f: fA, tagKey: "forfeit.tag.abandoned", winner: lg.nameOf.get(fA.home_entrant_id!)! },
-    { name: "double-walkover", div: ko.divId, f: dw, tagKey: "forfeit.tag.doubleWalkover", winner: null },
+    { name: "walkover", div: lg.divId, f: fW, tagKey: "forfeit.tag.walkover", fullKey: "forfeit.tagFull.walkover", winner: lg.nameOf.get(fW.home_entrant_id!)! },
+    { name: "retired", div: lg.divId, f: fR, tagKey: "forfeit.tag.retired", fullKey: "forfeit.tagFull.retired", winner: lg.nameOf.get(fR.home_entrant_id!)! },
+    { name: "disqualified", div: lg.divId, f: fD, tagKey: "forfeit.tag.disqualified", fullKey: "forfeit.tagFull.disqualified", winner: lg.nameOf.get(fD.home_entrant_id!)! },
+    { name: "abandoned", div: lg.divId, f: fA, tagKey: "forfeit.tag.abandoned", fullKey: "forfeit.tagFull.abandoned", winner: lg.nameOf.get(fA.home_entrant_id!)! },
+    { name: "double-walkover", div: ko.divId, f: dw, tagKey: "forfeit.tag.doubleWalkover", fullKey: "forfeit.tagFull.doubleWalkover", winner: null },
   ];
   const lineOf = (r: (typeof rows)[number]) => (r.winner === null ? ui(r.tagKey) : wonTagged(r.winner, r.tagKey));
   const tailOf = (r: (typeof rows)[number]) => (r.winner === null ? ui(r.tagKey) : wonTaggedTail(r.tagKey));
@@ -933,6 +958,11 @@ test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", ()
           expect(m.glued, `${width} ${r.name}: a space separates the tail from what precedes it (px)`).toEqual([]);
           // At 320 a 43-character name cannot fit beside the tag: the name is what gave way (the precondition).
           if (width === 320 && r.winner !== null) expect(m.crowded, `${width} ${r.name}: the line really was short of room`).toBe(true);
+          // Design audit 4.3: the tag is a symbol named in full — one visible copy at this width, its tooltip the same words.
+          const symbol = row.getByRole("img", { name: ui(r.fullKey), exact: true });
+          await expect(symbol, `${width} ${r.name}: the tag named "${ui(r.fullKey)}"`).toHaveCount(1);
+          await expect(symbol, `${width} ${r.name}: showing the tag`).toHaveText(ui(r.tagKey));
+          await expect(symbol, `${width} ${r.name}: its tooltip the expansion`).toHaveAttribute("title", ui(r.fullKey));
           await shot(row, `f1-run-sheet-${r.name}-${width}`);
           measured++;
         }
@@ -958,6 +988,7 @@ test.describe("W2b loop H F2 — the fixture console names a credited result as 
         await dismissCookieBanner(page);
         const line = page.getByTestId("console-decided-line");
         await expect(line, `${width} ${r.name}: the console's decided line`).toHaveText(lineOf(r), { timeout: STEP_MS });
+        await expect(line.getByRole("img", { name: ui(r.fullKey), exact: true }), `${width} ${r.name}: its tag named in full (audit 4.3)`).toHaveText(ui(r.tagKey));
         await expectNoHorizontalScroll(page);
         await shot(page.locator("header.card").first(), `f2-console-${r.name}-${width}`);
         consoles++;

@@ -64,6 +64,9 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
+/** The markup's TEXT: a result's tag is its own element since design audit 4.3, so a sentence is read across tags. */
+const textOf = (html: string) => html.replace(/<[^>]+>/g, "");
+
 function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null, awaitsSettle = false): string {
   return renderToStaticMarkup(
     <RunSheetRow
@@ -174,7 +177,7 @@ describe("a voided row says WHY it is struck through", () => {
     const outcome = { kind: "win", winner: "e1", loser: "e2", method: "dls" };
     const abandoned = rowHtml(fx({ status: "decided", outcome, abandon_reason: "rain" }));
     expectRowRendered(abandoned);
-    expect(abandoned).toContain(`Alpha won (${messages["forfeit.tag.abandonedDls"]})`);
+    expect(textOf(abandoned)).toContain(`Alpha won (${messages["forfeit.tag.abandonedDls"]})`);
     const played = rowHtml(fx({ status: "decided", outcome, abandon_reason: null }));
     expect(played).toContain("Alpha won");
     expect(played).not.toContain(messages["forfeit.tag.abandonedDls"]);
@@ -345,7 +348,7 @@ describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a 
       expect(html, `${dead}: no bye label`).not.toContain(`>${msg("bracket.slot.bye")}<`);
       expect(html, `${dead}: names her`).toContain("Charlie");
       expect(html, `${dead}: and the winner`).toContain("Alpha");
-      expect(html, `${dead}: the walkover's result`).toContain(outcomeText(msg, outcome, NAMES)!);
+      expect(textOf(html), `${dead}: the walkover's result`).toContain(outcomeText(msg, outcome, NAMES)!);
       expect(rowAction(html), `${dead}: the ordinary walkover's action`).toBe(rowAction(ordinary));
       // Design audit 4.1: and marks her as gone — the departed-entrant chip right after her name (ladder-panel's
       // pattern), the entrant status's own word; the ordinary walkover (her seated) has none.
@@ -463,5 +466,38 @@ describe("the inline editor maps a wire code to organiser copy, never a raw mess
     expect(messages["schedule.error.conflict"]!.length).toBeGreaterThan(
       messages[SCHEDULE_ERROR_FALLBACK_KEY]!.length,
     );
+  });
+});
+
+// Design audit 4.3: the run sheet's tag is bare text no more — both copies of the result (the desktop sub-line and the
+// phone line's tail) render it as the public chip does, a symbol named in full ("ret." → "retired"). The expansion owed
+// is named by KEY per row here; the pair: a bye's "won (w/o)" carries no tag, so no symbol.
+describe("the run sheet names its tag in full (audit 4.3)", () => {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  it("each forfeit reason and a double walkover: the tag as role=img, named and titled in full, in both copies", () => {
+    const ROWS: [reason: string, outcome: unknown, tagKey: string, fullKey: string][] = [
+      ["walkover", { kind: "award", winner: "e1", loser: "e2", reason: "walkover" }, "forfeit.tag.walkover", "forfeit.tagFull.walkover"],
+      ["withdrew", { kind: "award", winner: "e1", loser: "e2", reason: "withdrew" }, "forfeit.tag.walkover", "forfeit.tagFull.withdrew"],
+      ["retired", { kind: "award", winner: "e1", loser: "e2", reason: "retired" }, "forfeit.tag.retired", "forfeit.tagFull.retired"],
+      ["disqualified", { kind: "award", winner: "e1", loser: "e2", reason: "disqualified" }, "forfeit.tag.disqualified", "forfeit.tagFull.disqualified"],
+      ["double walkover", { kind: "double_walkover" }, "forfeit.tag.doubleWalkover", "forfeit.tagFull.doubleWalkover"],
+    ];
+    let checked = 0;
+    for (const [reason, outcome, tagKey, fullKey] of ROWS) {
+      const full = msg(fullKey as never);
+      expect(full, `${reason}: the expansion is not the tag`).not.toBe(msg(tagKey as never));
+      const html = rowHtml(fx({ status: "forfeited", outcome: outcome as never, scheduled_at: null }));
+      const symbol = new RegExp(`<span role="img" aria-label="${esc(full)}" title="${esc(full)}">${esc(msg(tagKey as never))}</span>`, "g");
+      expect((html.match(symbol) ?? []).length, `${reason}: the desktop sub-line and the phone tail`).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+  it("the pair: a bye's walkover result names no tag", () => {
+    const html = rowHtml(
+      fx({ status: "forfeited", outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } as never, scheduled_at: null, away_entrant_id: null, away_slot_label: { key: "bracket.slot.bye", params: {} } }),
+    );
+    expect(html).toContain('data-testid="run-sheet-bye"');
+    expect(html).not.toContain('role="img"');
   });
 });
