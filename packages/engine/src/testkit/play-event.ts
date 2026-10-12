@@ -15,7 +15,7 @@ export const PLAY_EVENT_SEEDS = 64;
  *  - `tally`, the played tally, which is what a bye credits (C-5: "a bye's credit IS the played tally"). */
 function scoreOf(module: AnySportModule, cfg: unknown, state: unknown): { lines: string; tally: string } {
   const lines = JSON.stringify(module.summary(state as never).perSide.map((s) => s.line));
-  const tally = JSON.stringify(module.forfeitCredit(cfg as never, state as never, "bye", "home").perSide);
+  const tally = JSON.stringify(module.forfeitCredit(cfg, state, "bye", "home").perSide);
   return { lines, tally };
 }
 

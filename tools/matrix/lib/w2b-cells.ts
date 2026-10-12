@@ -65,10 +65,6 @@ function streamBuilds(sport: string, cfg: unknown, stageKind: StageKind, outcome
   }
 }
 
-function generatorBuilds(row: RowKey, sport: string, outcome: RequestedOutcome, overrides: Record<string, unknown> = {}): boolean {
-  return streamBuilds(sport, rootCfgOf(row, sport, overrides), rootKind(row), outcome);
-}
-
 /** RT-PART's in-match reasons for a sport under a stage's cfg, in the order its drives alternate them: the retirement
  *  and the disqualification (X-RT-1), each where the sport's generator builds it after START and partial play. Ruling
  *  113 refuses a retirement where nothing is played short of the result (chess), so there the disqualification is

@@ -594,7 +594,7 @@ const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
       const n = drives.length;
       const by: Side = n % 2 === 0 ? "home" : "away";
       // X-RT-1: an in-match disqualification takes the retirement's credit, so the two reasons alternate.
-      const d = await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: reasons[n % reasons.length]!, at: "after_start" });
+      const d = await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: reasons[n % reasons.length], at: "after_start" });
       const tip = (await ctx.driver.fixtureState(f.id)).last_seq;
       drives.push({ ...d, seq: tip, posted: rec.streams.get(f.id)?.length ?? 0 });
     },

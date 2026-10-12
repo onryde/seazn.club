@@ -396,7 +396,7 @@ export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events
       }
       case "boardgame":
         // BG: the game IS its result — nothing is played short of it.
-        if (played.length > 0) unread(`${played[0]!.type} before the forfeit: a chess game has no scoring event short of its result`);
+        if (played.length > 0) unread(`${played[0].type} before the forfeit: a chess game has no scoring event short of its result`);
         return { home: [], away: [] };
       default:
         return unread("no scoresheet reading for this sport");

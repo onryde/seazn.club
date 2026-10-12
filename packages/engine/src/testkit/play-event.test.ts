@@ -20,8 +20,8 @@ const start = makeEnvelope(1, { type: "core.start", payload: {} });
 /** The module's per-side score lines and its played tally after `ledger`, as one comparable string each. */
 function score(m: AnySportModule, cfg: unknown, ledger: readonly EventEnvelope[]): { lines: string; tally: string } {
   const f = foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), ledger);
-  const s = m.summary(f.state as never);
-  const t = m.forfeitCredit(cfg as never, f.state as never, "bye", "home");
+  const s = m.summary(f.state);
+  const t = m.forfeitCredit(cfg, f.state, "bye", "home");
   return { lines: JSON.stringify(s.perSide.map((x) => x.line)), tally: JSON.stringify(t.perSide) };
 }
 
@@ -32,7 +32,7 @@ function cfgsOf(m: AnySportModule): { name: string; cfg: unknown }[] {
   for (const { name, cfg } of declaredCfgs(m as never)) {
     const c = cfg as Record<string, unknown>;
     out.push({ name, cfg: c });
-    out.push({ name: `${name} + bracket deciders`, cfg: m.configSchema.parse({ ...c, ...m.bracketDeciders(c as never) }) });
+    out.push({ name: `${name} + bracket deciders`, cfg: m.configSchema.parse({ ...c, ...m.bracketDeciders(c) }) });
     if (typeof c.bestOf === "number" && c.bestOf > 1) {
       const one = m.configSchema.safeParse({ ...c, bestOf: 1 });
       if (one.success) out.push({ name: `${name} at Best of 1`, cfg: one.data });
@@ -80,7 +80,7 @@ describe("onePlayEvent: the play it hands over moves the score (R112 review M-2)
       const before = score(m, cfg, [start]);
       const seen = new Set<string>();
       for (let seed = 1; seed <= PLAY_EVENT_SEEDS; seed++) {
-        const d = m.arbitraryEvent(state as never, mulberry32(seed));
+        const d = m.arbitraryEvent(state, mulberry32(seed));
         if (d === null || isCoreEventType(d.type) || seen.has(d.type)) continue;
         seen.add(d.type);
         let after;
@@ -103,14 +103,14 @@ describe("onePlayEvent: the play it hands over moves the score (R112 review M-2)
     const fbCfg = declaredCfgs(fb as never)[0]!.cfg;
     const g = onePlayEvent(fb, fbCfg, defaultLineupPair(fb.positions), [start])!;
     const fold = foldMatchWithStoppage(fb as never, fbCfg as never, defaultLineupPair(fb.positions), [start, g]);
-    const [h, a] = fb.forfeitCredit(fbCfg as never, fold.state as never, "bye", "home").perSide;
+    const [h, a] = fb.forfeitCredit(fbCfg, fold.state, "bye", "home").perSide;
     expect((h.gf ?? 0) + (a.gf ?? 0), `football play ${g.type}`).toBe(1);
 
     const vb = builtinModules.find((x) => x.key === "volleyball")!;
     const vbCfg = vb.configSchema.parse({ bestOf: 1 });
     const p = onePlayEvent(vb, vbCfg, defaultLineupPair(vb.positions), [start])!;
     const vf = foldMatchWithStoppage(vb as never, vbCfg as never, defaultLineupPair(vb.positions), [start, p]);
-    const [vh, va] = vb.forfeitCredit(vbCfg as never, vf.state as never, "bye", "home").perSide;
+    const [vh, va] = vb.forfeitCredit(vbCfg as never, vf.state, "bye", "home").perSide;
     expect((vh.points_won ?? 0) + (va.points_won ?? 0), `volleyball Bo1 play ${p.type}`).toBeGreaterThan(0);
   });
 });
