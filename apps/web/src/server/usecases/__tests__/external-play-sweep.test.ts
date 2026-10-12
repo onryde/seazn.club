@@ -58,6 +58,7 @@ import { withdrawEntrantCascade } from "../withdrawal";
 import { patchDivision } from "../divisions";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { joinAsArbiter, loadArbiterRound, type ArbiterVideo } from "../external-play/arbiter";
+import { closeExternalPlayFlags } from "../external-play/flags";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
@@ -2892,6 +2893,41 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     // D10: the organiser decides — nothing about the match moved.
     expect(await fixtureRow(m.b.fixtureId)).toEqual(before);
     expect(await bridgeOf(m.b.fixtureId)).toEqual(bridge);
+  });
+
+  // T16 (controller ruling B, AGENTS.md class 13): "Let the game go on"
+  // closes what the organiser saw. A flag closed DURING the match must not
+  // swallow the camera judgment that only comes after it — and a camera flag
+  // the organiser has closed is already-judged evidence: a later pass over the
+  // same room raises nothing (V436's one settle per room).
+  it("T16: a flag closed mid-match does not stop the camera judgment; the judged camera flag, once closed, is never raised again", async () => {
+    const m = await playedMatch();
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt, gaps: [[m.startedAt + 200_000, m.startedAt + 400_000]] });
+    connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+    const owner = await mintOrgOwnerAuth(m.b.orgId);
+    // Earlier evidence on the board, reviewed and let go on mid-match (a
+    // stand-in row: reconcile's producer is driven in its own suite).
+    const [earlier] = await sql<{ id: string }[]>`
+      insert into fixture_play_flags (fixture_id, org_id, kind, note)
+      values (${m.b.fixtureId}, ${m.b.orgId}, 'out_of_band_play', 'plies 3-4 (e7e5 g1f3); camera required')
+      returning id`;
+    expect(await closeExternalPlayFlags(owner, m.b.fixtureId, [earlier!.id])).toEqual({ closed: 1, stillOpen: 0 });
+
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect(cameraFailures(r)).toEqual([]);
+    expect(r.cameraFlags, "NEW evidence after a close is raised").toBe(1);
+    const shown = (await loadArbiterRound(owner, m.b.divisionId))!.boards.find((x) => x.fixtureId === m.b.fixtureId)!.flags;
+    expect(shown.map((f) => f.kind), "the panel shows the new camera flag only").toEqual(["camera_lost"]);
+
+    expect(await closeExternalPlayFlags(owner, m.b.fixtureId, shown.map((f) => f.id))).toEqual({ closed: 1, stillOpen: 0 });
+    const again = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + 10 * 60_000));
+    expect(cameraFailures(again)).toEqual([]);
+    expect([again.cameraSettled, again.cameraFlags], "already judged: nothing re-raised").toEqual([0, 0]);
+    expect((await flagsOf(m.b.fixtureId)).map((f) => [f.kind, f.closed_at === null])).toEqual([
+      ["out_of_band_play", false],
+      ["camera_lost", false],
+    ]);
   });
 
   it("a RELOAD (two peers in one session) is one camera, not a loss", async () => {

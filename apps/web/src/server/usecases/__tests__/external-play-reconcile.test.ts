@@ -34,6 +34,7 @@ import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { loadArbiterRound, resyncExternalPlay } from "../external-play/arbiter";
+import { closeExternalPlayFlags } from "../external-play/flags";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import {
@@ -1658,6 +1659,37 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     expect(await resyncExternalPlay(auth, g.fixtureId, observed().deps)).toEqual({ read: true, adopted: LINE.length, finished: false });
     expect(await resyncExternalPlay(auth, g.fixtureId, observed(later(1_000)).deps)).toEqual({ read: true, adopted: 0, finished: false });
     expect(streams().map((x) => x.gameId), "each press is one read").toEqual([g.gameId, g.gameId]);
+  });
+
+  // T16 (controller ruling B, AGENTS.md class 13): "Let the game go on" closes
+  // the flags the organiser saw. Evidence already judged must not come back —
+  // and evidence that is NEW after the close must not be swallowed by it.
+  it("T16: after 'Let the game go on', a re-read of the judged line raises NOTHING; a later adoption raises a NEW open flag", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, MID, { moves: LINE.slice(0, 3) }));
+    await reconcile(g.fixtureId, "sweep", observed().deps);
+    const owner = await mintOrgOwnerAuth(g.orgId);
+    const shown = (await loadArbiterRound(owner, g.divisionId))!.boards.find((b) => b.fixtureId === g.fixtureId)!.flags;
+    expect(shown.map((f) => f.kind), "premise: the producer's flag, as the panel shows it").toEqual(["out_of_band_play"]);
+    expect(await closeExternalPlayFlags(owner, g.fixtureId, shown.map((f) => f.id))).toEqual({ closed: 1, stillOpen: 0 });
+
+    // The judged evidence, read again — twice: nothing new is raised.
+    for (const at of [later(1_000), later(30_000)]) {
+      expect(await reconcile(g.fixtureId, "sweep", observed(at).deps)).toMatchObject({ adopted: 0 });
+    }
+    expect((await flagsOf(g.fixtureId)).map((f) => f.closed_at === null), "the judged flag stays closed, no new one").toEqual([false]);
+
+    // NEW evidence after the close: plies played off Seazn since.
+    serveStream(gameFull(g, MID));
+    await reconcile(g.fixtureId, "sweep", observed(later(60_000)).deps);
+    const flags = await flagsOf(g.fixtureId);
+    expect(flags.map((f) => f.closed_at === null), "closed, then a new OPEN flag").toEqual([false, true]);
+    expect(flags[1]!.note).toContain(`plies 4-${LINE.length}`);
+    expect(flags[1]).toMatchObject({ resolved_by: null });
+    const [newest] = await sql<{ id: string }[]>`
+      select id from fixture_play_flags where fixture_id = ${g.fixtureId} and closed_at is null`;
+    const after = (await loadArbiterRound(owner, g.divisionId))!.boards.find((b) => b.fixtureId === g.fixtureId)!.flags;
+    expect(after.map((f) => f.id), "the panel shows the new evidence only").toEqual([newest!.id]);
   });
 
   it("each LATER adoption is its own flag, naming only its own plies", async () => {

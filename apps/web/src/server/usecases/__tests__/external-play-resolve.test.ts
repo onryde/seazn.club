@@ -25,7 +25,8 @@ import { loadArbiterRound } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { RESOLVE_KINDS, resolveExternalPlay, type ResolveKind } from "../external-play/resolve";
-import { holdForOrganiser, holdRefusedNoShow } from "../external-play/result";
+import { holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, tiebreakIsPending } from "../external-play/result";
+import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { makeUser } from "./_seed";
 import { seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
@@ -272,6 +273,20 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     expect((await fixtureOf(b.fixtureId)).outcome).toMatchObject({ kind: "win", winner: b.away.entrantId, method: "settled_organiser" });
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "finished", needs_reason: null });
     expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).toEqual([]);
+  });
+
+  it("a tie-break settled BY HAND meanwhile is never held again: the engine still says a decider is pending after a settle (D-C5), so the hold re-reads the fixture", async () => {
+    const r = await round({ knockout: true });
+    const b = r.boards[0]!;
+    await pendingBridge(r, b);
+    await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
+    await resolveExternalPlay(r.owner, b.fixtureId, "draw");
+    const fs = await getFixtureState(r.owner, b.fixtureId);
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq, type: "core.settle", payload: { winner: b.home.entrantId, method: "lot" } });
+    await sql`update fixture_external_play set status = 'pending', needs_reason = null, last_error = null where fixture_id = ${b.fixtureId}`;
+    expect(tiebreakIsPending(await getFixtureState(r.owner, b.fixtureId)), "premise: the module still reads tiebreak").toBe(true);
+    expect(await holdOwedTiebreak(b.fixtureId, r.owner, "TEST")).toBe(false);
+    expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "pending", needs_reason: null });
   });
 
   it("No result in a knockout is the engine's no_result — never a tie-break (ruling T15-R1); W2a's needs_decision takes it on (X-BR-2)", async () => {
