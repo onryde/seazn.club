@@ -85,10 +85,11 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     return c;
   };
 
-  /** Our guard's fault: from a live camera (onFault), or a join it could
-   *  not hold (`from` null). Re-joins until it holds, or until stop. */
+  /** Our guard's fault: from a live camera (onFault — released with the
+   *  camera, so a replaced one is never heard), or a join it could not hold
+   *  (`from` null). Re-joins until it holds, or until stop. */
   async function recover(from: OwnCamera | null): Promise<void> {
-    if (stopped || (from !== null && cam !== from)) return;
+    if (stopped) return;
     detach();
     busy = true;
     stamp("start");

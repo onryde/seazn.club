@@ -233,8 +233,8 @@ export function makeJoinOwnCamera(
     const faultListeners = new Set<() => void>();
     let leaving: Promise<void> | null = null;
     async function failClosed(err: unknown): Promise<void> {
+      // A quiet retry still waiting finds the camera closed and does nothing.
       closed = true;
-      stopQuiet();
       report("d7_fail_closed", err);
       joinedAt = null;
       changed();

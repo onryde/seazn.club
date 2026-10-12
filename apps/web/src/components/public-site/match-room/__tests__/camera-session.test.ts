@@ -233,7 +233,13 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     const seen: ("start" | "end")[] = [];
     return { seen, stamp: async (state: "start" | "end") => void seen.push(state) };
   }
-  const instant = { sleep: async () => {} };
+  // Each back-off wait is a real macrotask (of zero length), so a re-join
+  // loop that never ends can never starve the test's own timers: a defect
+  // here FAILS, it does not hang.
+  const instant = { sleep: () => new Promise<void>((res) => setTimeout(res, 0)) };
+  const flush = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((res) => setTimeout(res, 0));
+  };
 
   it("a fault ⇒ recovering (never off/failed) ⇒ a fresh join ⇒ live; the old camera left, its listeners released; stamped start then end", async () => {
     const r = record();
@@ -246,7 +252,7 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     first.fault();
     expect(r.views.at(-1), "at once: ours, reconnecting").toEqual({ status: "recovering", track: null });
     expect(st.seen, "stamped before anything else happens").toEqual(["start"]);
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(j.tokens, "re-joined with the seat's own token").toEqual(["own-token", "own-token"]);
     expect(r.statuses()).toEqual(["joining", "live", "recovering", "live"]);
     expect(st.seen).toEqual(["start", "end"]);
@@ -265,10 +271,16 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     const j = joins(first.cam, ...fails, fakeCamera(TRACK).cam);
     const waits: number[] = [];
     const st = stamps();
-    const s = cameraSession(j.join, r.emit, { stamp: st.stamp, sleep: async (ms) => void waits.push(ms) });
+    const s = cameraSession(j.join, r.emit, {
+      stamp: st.stamp,
+      sleep: async (ms) => {
+        waits.push(ms);
+        await new Promise((res) => setTimeout(res, 0));
+      },
+    });
     await s.start("t");
     first.fault();
-    for (let i = 0; i < 20 && r.views.at(-1)?.status !== "live"; i += 1) await new Promise((res) => setTimeout(res, 0));
+    for (let i = 0; i < 20 && r.views.at(-1)?.status !== "live"; i += 1) await flush();
     expect(waits).toEqual([...RECOVER_BACKOFF_MS, RECOVER_BACKOFF_MS.at(-1), RECOVER_BACKOFF_MS.at(-1)]);
     expect(r.statuses()).toEqual(["joining", "live", "recovering", "live"]);
     expect(st.seen, "one interval, however many attempts").toEqual(["start", "end"]);
@@ -287,7 +299,7 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     const later = fakeCamera(TRACK);
     const s = cameraSession(joins(new D7GuardError(new Error("cap")), later.cam).join, r.emit, { stamp: st.stamp, ...instant });
     await s.start("t");
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(r.statuses()).toEqual(["joining", "recovering", "live"]);
     expect(st.seen).toEqual(["start", "end"]);
 
@@ -310,12 +322,12 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     const s = cameraSession(join, r.emit, { stamp: st.stamp, ...instant });
     await s.start("t");
     first.fault();
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(n, "premise: the re-join is in flight").toBe(2);
     await s.stop();
     expect(st.seen, "the page is gone: our interval ends with it").toEqual(["start", "end"]);
     release(late.cam);
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(late.calls.leave).toBe(1);
     expect(r.statuses()).toEqual(["joining", "live", "recovering"]);
   });
@@ -329,12 +341,12 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     const s = cameraSession(joins(a.cam, b.cam, c.cam).join, r.emit, { stamp: st.stamp, ...instant });
     await s.start("t");
     a.fault();
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     b.fault();
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(st.seen).toEqual(["start", "end", "start", "end"]);
     a.fault(); // its listener was released; nothing may happen
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(st.seen).toEqual(["start", "end", "start", "end"]);
     expect(r.statuses()).toEqual(["joining", "live", "recovering", "live", "recovering", "live"]);
   });
@@ -352,7 +364,7 @@ describe("cameraSession — our guard's fault: re-join, never blame (I-1)", () =
     expect(first.calls.enable, "not into the left meeting").toBe(0);
     await s.start("seat-2"); // a later seat answer
     gate();
-    await new Promise((res) => setTimeout(res, 0));
+    await flush();
     expect(j.tokens).toEqual(["seat-1", "seat-2"]);
     expect(r.statuses()).toEqual(["joining", "live", "recovering", "live"]);
   });
