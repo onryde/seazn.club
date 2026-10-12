@@ -368,6 +368,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /fixtures/:id/external-play/lobby",
   "POST /fixtures/:id/external-play/lobby",
   "POST /fixtures/:id/external-play/resolve",
+  // T15 (design §5.3, D11): the arbiter's join hands out a token that WATCHES
+  // players' cameras — a person's act, never a key's; the override's audit
+  // record names the signed-in user; the resync sits beside them.
+  "POST /fixtures/:id/external-play/arbiter",
+  "POST /fixtures/:id/external-play/resync",
+  "POST /fixtures/:id/external-play/video-override",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

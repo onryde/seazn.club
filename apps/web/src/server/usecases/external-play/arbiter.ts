@@ -39,7 +39,8 @@ import {
 } from "@/server/external-play/video/realtimekit";
 import { gameClocks, resultFor, turnAfter } from "@/components/public-site/match-room/room-snapshot";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
-import { isPlayableFixtureStatus } from "./preflight";
+import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
+import { reconcile, type ReconcileDeps } from "./reconcile";
 
 // ---------------------------------------------------------------------------
 // The round in view
@@ -393,4 +394,48 @@ async function storedArbiter(a: { fixtureId: string; userId: string }): Promise<
      where fixture_id = ${a.fixtureId} and preset = 'arbiter' and user_id = ${a.userId}
      limit 1`;
   return row?.participant_id ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// The organiser's two decision actions that have a usecase (T15 brief
+// addendum: map to existing usecases; T16 was named the owner of these two
+// routes and now consumes them).
+// ---------------------------------------------------------------------------
+
+function requireSession(auth: AuthCtx, what: string): string {
+  if (auth.via !== "session" || auth.userId === null) {
+    throw new HttpError(403, `${what} needs a signed-in organiser`, "ORGANISER_SESSION_REQUIRED");
+  }
+  return auth.userId;
+}
+
+async function requireOwnFixture(auth: AuthCtx, fixtureId: string): Promise<void> {
+  const [row] = await sql<{ org_id: string }[]>`select org_id from fixtures where id = ${fixtureId}`;
+  if (!row || row.org_id !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+}
+
+/** "Resync from Lichess": reconcile's `organiser` trigger (design §3.5). */
+export async function resyncExternalPlay(
+  auth: AuthCtx,
+  fixtureId: string,
+  deps: ReconcileDeps = {},
+): Promise<{ read: boolean; adopted: number; finished: boolean }> {
+  requireSession(auth, "A resync");
+  await requireOwnFixture(auth, fixtureId);
+  const out = await reconcile(fixtureId, "organiser", deps);
+  return { read: out !== null, adopted: out?.adopted ?? 0, finished: out?.finished ?? false };
+}
+
+/** "Let this board play without video" (D11): Task 8's
+ *  organiserOverrideVideo, which owns every refusal (FIXTURE_NOT_PLAYABLE,
+ *  VIDEO_NOT_REQUIRED) and the one audit record. */
+export async function overrideVideoAsOrganiser(
+  auth: AuthCtx,
+  fixtureId: string,
+  note: string,
+): Promise<{ overridden: true }> {
+  const actorUserId = requireSession(auth, "Letting a board play without video");
+  await requireOwnFixture(auth, fixtureId);
+  await organiserOverrideVideo({ fixtureId, actorUserId, note });
+  return { overridden: true };
 }
