@@ -45,6 +45,7 @@ describe("POST /api/cron/external-play", () => {
       heldForOrganiser: 5,
       cameraSettled: 6,
       cameraFlags: 7,
+      connectionFlags: 8,
       scanned: 15,
       failures: [
         {

@@ -15,7 +15,13 @@ import {
   videoOffCoverage,
   type VideoOffCoverage,
 } from "../realtimekit";
-import { MATCH_OFF_MIN_MS, matchCameraOff } from "../match-camera-off";
+import {
+  GUARD_FAULT_FLAG_SECONDS,
+  GUARD_FAULT_FLAG_STAMPS,
+  MATCH_OFF_MIN_MS,
+  matchCameraOff,
+  stampedInMatch,
+} from "../match-camera-off";
 
 const ZERO = Date.parse("2026-10-11T10:00:00.000Z");
 const at = (sec: number) => new Date(ZERO + Math.round(sec * 1000)).toISOString();
@@ -166,5 +172,66 @@ describe("matchCameraOff — our guard's faults are not the player's (I-1)", () 
 
   it("an inverted fault is refused — a stamp whose end precedes its start is not evidence", () => {
     expect(() => matchCameraOff(win(60, 840), [], [span(400, 300)])).toThrow(/fault/);
+  });
+});
+
+// T14 fix round 5, ruling 1: a stamp excuses, it never HIDES. Past either
+// threshold in one match — stamped time over GUARD_FAULT_FLAG_SECONDS, or more
+// than GUARD_FAULT_FLAG_STAMPS stamps — the organiser is told, neutrally.
+// Every case below is built from the two constants, so moving a threshold
+// moves the test with it.
+describe("stampedInMatch: our safeguard's stamps in ONE match, and when the organiser is told", () => {
+  const span = (from: number, to: number) => ({ from: new Date(at(from)), to: new Date(at(to)) });
+  const W = win(0, 3_600);
+  /** `n` stamps of `each` seconds, 100 s apart, inside W. */
+  const stamps = (n: number, each: number) => Array.from({ length: n }, (_, i) => span(100 + i * 100, 100 + i * 100 + each));
+
+  it("the thresholds are the controller's ruling (2026-10-12): over 60 s in total, or more than 3 stamps", () => {
+    expect([GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS]).toEqual([60, 3]);
+  });
+
+  it("no stamp: nothing stamped, no flag (the empty case)", () => {
+    expect(stampedInMatch(W, [])).toEqual({ stamps: 0, seconds: 0, intervals: [], flag: false });
+  });
+
+  it("AT both thresholds — exactly the limit of stamps, exactly the limit of seconds between them — is no flag", () => {
+    const each = GUARD_FAULT_FLAG_SECONDS / GUARD_FAULT_FLAG_STAMPS;
+    const r = stampedInMatch(W, stamps(GUARD_FAULT_FLAG_STAMPS, each));
+    expect([r.stamps, r.seconds], "premise: on both limits").toEqual([GUARD_FAULT_FLAG_STAMPS, GUARD_FAULT_FLAG_SECONDS]);
+    expect(r.flag).toBe(false);
+  });
+
+  it("past the seconds (one stamp, one second over) is the flag; past the count (one stamp more, one second each) is the flag", () => {
+    const long = stampedInMatch(W, [span(100, 100 + GUARD_FAULT_FLAG_SECONDS + 1)]);
+    expect([long.stamps, long.seconds, long.flag]).toEqual([1, GUARD_FAULT_FLAG_SECONDS + 1, true]);
+    const many = stampedInMatch(W, stamps(GUARD_FAULT_FLAG_STAMPS + 1, 1));
+    expect([many.stamps, many.seconds, many.flag]).toEqual([GUARD_FAULT_FLAG_STAMPS + 1, GUARD_FAULT_FLAG_STAMPS + 1, true]);
+  });
+
+  it("only the match counts: a stamp wholly outside is not one, a stamp across an edge counts its part inside", () => {
+    const outside = [span(-500, -400), span(3_700, 3_800), span(3_700, 3_700)];
+    expect(stampedInMatch(W, outside)).toEqual({ stamps: 0, seconds: 0, intervals: [], flag: false });
+    const across = stampedInMatch(W, [span(-30, GUARD_FAULT_FLAG_SECONDS), span(3_600 - 10, 3_650)]);
+    expect([across.stamps, across.seconds], "60 s + 10 s inside: past the limit only together").toEqual([2, GUARD_FAULT_FLAG_SECONDS + 10]);
+    expect(across.intervals).toEqual([
+      { from: at(0), to: at(GUARD_FAULT_FLAG_SECONDS) },
+      { from: at(3_590), to: at(3_600) },
+    ]);
+    expect(across.flag).toBe(true);
+  });
+
+  it("overlapping stamps are not counted twice in the seconds (each is still a stamp)", () => {
+    const r = stampedInMatch(W, [span(100, 140), span(120, 160)]);
+    expect([r.stamps, r.seconds, r.flag]).toEqual([2, 60, false]);
+    expect(r.intervals).toEqual([{ from: at(100), to: at(160) }]);
+  });
+
+  it("a zero-length stamp inside the match is a stamp (a re-join that landed at once still left the meeting)", () => {
+    const r = stampedInMatch(W, [...stamps(GUARD_FAULT_FLAG_STAMPS, 0), span(900, 900)]);
+    expect([r.stamps, r.seconds, r.flag]).toEqual([GUARD_FAULT_FLAG_STAMPS + 1, 0, true]);
+  });
+
+  it("an inverted stamp is refused, as matchCameraOff refuses it", () => {
+    expect(() => stampedInMatch(W, [span(400, 300)])).toThrow(/fault/);
   });
 });

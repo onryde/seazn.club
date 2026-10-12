@@ -179,3 +179,24 @@ describe("camera policy copy", () => {
     expect(checked).toBe(4);
   });
 });
+
+// T14 fix round 5, ruling 1: job 5's camera_connection_problems flag is
+// NEUTRAL — our safeguard's re-joins, told to the organiser, never an
+// accusation. T16 renders it in the Flagged list; the en label is typed from
+// the controller's ruling (2026-10-12), never read back from the dictionary.
+describe("the camera_connection_problems flag's organiser label (fix round 5)", () => {
+  const KEY = "externalPlay.flag.cameraConnectionProblems";
+  it("en is the ruled label verbatim; every locale has its own, with ONE {duration} slot", () => {
+    expect(DICTS.en[KEY]).toBe("Camera connection problems (our side) — {duration}");
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const v = DICTS[loc][KEY];
+      expect(v, loc).toBeTruthy();
+      expect(v!.match(/\{duration\}/g), `${loc}: one slot`).toHaveLength(1);
+      if (loc !== "en") expect(v, `${loc} is not the English`).not.toBe(DICTS.en[KEY]);
+      expect(v, `${loc}: neutral — never the camera-off wording`).not.toMatch(MONITORED);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(4);
+  });
+});
