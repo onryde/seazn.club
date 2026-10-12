@@ -82,7 +82,7 @@ describe.skipIf(!HAS_DB)("loadMatchCentre — the forfeit sentence's outside wor
     const next = await nameOf(sf2.home_entrant_id!);
     expect(late.header.statusLine).toEqual({ key: "forfeit.sentence.doubleWalkoverNext", params: { next } });
     expect(t(EN, late.header.statusLine!.key, late.header.statusLine!.params)).toBe(
-      `Neither side showed up — both lose. Next round: walkover for ${next}.`,
+      `Neither side turned up — both lose. Next round: walkover for ${next}.`,
     );
   });
 

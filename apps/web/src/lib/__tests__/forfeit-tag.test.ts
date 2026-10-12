@@ -163,18 +163,18 @@ describe("forfeitTag — one row per member (UI-2's tags, counted)", () => {
       return forfeitWords(forfeitTag(f.outcome, NO_LEDGER)!, en, () => "Harbour United").sentence;
     });
     expect(new Set(words).size).toBe(FORFEIT_REASONS.length);
-    expect(words[FORFEIT_REASONS.indexOf("walkover")]).toBe("Harbour United didn't show up — walkover.");
+    expect(words[FORFEIT_REASONS.indexOf("walkover")]).toBe("Harbour United didn't turn up — walkover.");
   });
 
-  it("X-DW-1: a double walkover → 2× w/o, \"Neither side showed up — both lose.\"; the next-round clause only when a seat was fed", () => {
+  it("X-DW-1: a double walkover → 2× w/o, \"Neither side turned up — both lose.\"; the next-round clause only when a seat was fed", () => {
     const f = fold(generic, cfg, () => [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
     expect(f.outcome).toEqual({ kind: "double_walkover" });
     const tag = forfeitTag(f.outcome, NO_LEDGER)!;
     expect(tag).not.toBeNull();
     expect(en(tag.tagKey)).toBe("2× w/o");
-    expect(forfeitWords(tag, en, String).sentence).toBe("Neither side showed up — both lose.");
+    expect(forfeitWords(tag, en, String).sentence).toBe("Neither side turned up — both lose.");
     expect(forfeitWords(tag, en, String, { next: "Bears" }).sentence).toBe(
-      "Neither side showed up — both lose. Next round: walkover for Bears.",
+      "Neither side turned up — both lose. Next round: walkover for Bears.",
     );
     // The clause's source: a line that feeds a next match, whose match stands walked over (the cascade's seat arrival).
     const walkedOver = { outcome: { kind: "award", winner: "bears", loser: null, reason: "walkover" } };
@@ -405,5 +405,31 @@ describe("unseatedForfeitLoserName — the reader's answer, by name (R116-4)", (
       checked++;
     }
     expect(checked).toBe(ROWS.length);
+  });
+});
+
+// Design audit 3.4: one verb for a no-show. The match centre's own timeline, the forfeit dialog and the event copy say a
+// side "didn't turn up"; the public sentences said "didn't show up" / "Neither side showed up" — on the same page as the
+// timeline. The timeline's phrase is the authority (read, never retyped): each locale's walkover sentence carries it.
+// The split was en's alone (fr/es/nl use one verb throughout), and en's public copy carries no "show(ed) up" at all.
+describe("one verb for a no-show on the public site (audit 3.4)", () => {
+  const PUB: Record<string, Record<string, string>> = { en: pubEn, fr: pubFr, es: pubEs, nl: pubNl } as never;
+  it("every locale: the walkover sentence uses the timeline's own phrase for the side that did not turn up", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(PUB)) {
+      const timeline = d["timeline.core.forfeit.walkover"]!;
+      const at = timeline.indexOf("{side} ");
+      expect(at, `${locale}: the timeline names the side, then what it did`).toBeGreaterThan(-1);
+      const phrase = timeline.slice(at + "{side} ".length);
+      expect(phrase.length, `${locale}: a phrase to compare`).toBeGreaterThan(0);
+      expect(d["forfeit.sentence.walkover"], `${locale}: "${phrase}"`).toContain(`{loser} ${phrase}`);
+      checked++;
+    }
+    expect(checked, `locales checked: ${checked}`).toBe(4);
+  });
+  it("en: no public sentence says \"show(ed) up\" beside the timeline's \"turn(ed) up\"", () => {
+    const shown = Object.entries(pubEn as Record<string, string>).filter(([, v]) => /\bshow(s|ed|n)? up\b/iu.test(v)).map(([k]) => k);
+    expect(shown).toEqual([]);
+    expect(Object.values(pubEn as Record<string, string>).filter((v) => /\bturn(s|ed)? up\b/iu.test(v)).length, "premise: the timeline's verb is there").toBeGreaterThan(0);
   });
 });

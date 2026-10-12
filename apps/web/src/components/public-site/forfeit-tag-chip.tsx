@@ -1,6 +1,6 @@
 // W2b Task 13 (spec §5.5, UI-2 option A) — the short tag a tight public surface shows beside a credited score ("w/o",
 // "ret.", "DQ", "2× w/o", "Aband. · DLS"), with the full sentence as its tooltip AND its accessible name: a screen
-// reader always gets "Harbour United didn't show up — walkover.", never the abbreviation. The words come pre-resolved
+// reader always gets "Harbour United didn't turn up — walkover.", never the abbreviation. The words come pre-resolved
 // from `forfeitWords` (lib/forfeit-tag.ts) — this component decides nothing.
 //
 // `role="img"` + `aria-label`: the tag is a symbol standing for the sentence (the pattern for a glyph with a meaning),

@@ -901,7 +901,7 @@ describe("KnockoutTab — the champion banner", () => {
 // double walkover), its accessible name and tooltip are the sentence, and the node is described by it. The final's
 // winner is Eli on the SECOND row, so a chip pinned to the first row reads differently from the right one.
 describe("KnockoutTab — the Draw node's forfeit tag (T13 review I-1)", () => {
-  const SENTENCE = "Dev didn't show up — walkover.";
+  const SENTENCE = "Dev didn't turn up — walkover.";
   const drawWith = (forfeit: { kind: string; tag: string; sentence: string } | null, winnerIndex: 0 | 1 | null) =>
     hubDoc({
       matches: DONE_MATCHES.map((x) => (x.fixtureId === "f1" ? { ...x, winnerIndex, ...(forfeit ? { forfeit } : {}) } : x)),
