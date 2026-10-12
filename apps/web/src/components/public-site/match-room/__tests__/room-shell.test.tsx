@@ -11,7 +11,9 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { RoomShell } from "../room-shell";
+import { CAMERA_POLICIES } from "@/lib/camera-policy";
+import { RoomShell, Screen } from "../room-shell";
+import { initialRoomState } from "../room-state";
 import type { RoomGame, RoomSnapshot } from "../room-snapshot";
 
 const LOCALES = { en, es, fr, nl } as const;
@@ -161,5 +163,73 @@ describe("the room's first paint", () => {
     }
     expect(checked, "anti-vacuity: locale × screen").toBe(40);
     expect(paint(snap(), "nl"), "nl is not English").not.toContain("Your board is open");
+  });
+});
+
+describe("I3/I4: the camera duty is the REQUIRED policy's; an unknown presence accuses nobody", () => {
+  const notice = en["onlineChess.camera.playerNotice" as keyof typeof en];
+  // The live screen with the player's own camera in a given state — the
+  // banner reads the camera hook, which never runs in a first paint.
+  function paintLive(s: RoomSnapshot, cameraStatus: "idle" | "joining" | "live" | "off" | "failed") {
+    const state = initialRoomState(s, T0);
+    const noop = async () => null;
+    return renderToStaticMarkup(
+      <DictProvider dict={en as unknown as Dict} locale="en">
+        <Screen
+          screen={{ kind: "live" }}
+          state={state}
+          room={{ state, refresh: noop, claim: noop, act: noop, clockZero: noop, subscribed: false } as never}
+          camera={{ status: cameraStatus, stream: null, enable: () => {} }}
+          busy={false}
+          tryAgain={() => {}}
+          relinkHref="/x"
+          locale="en"
+          t={((k: string) => k) as never}
+          plural={((k: string) => k) as never}
+        />
+      </DictProvider>,
+    );
+  }
+
+  it("every policy: the notice (live and check-in) and the camera-off banner show for `required` only; the tile for any camera policy", () => {
+    // Controller ruling (review I3): the notice and banner state a DUTY to
+    // keep the camera on — under `optional` there is none, so neither shows.
+    const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+    let checked = 0;
+    for (const policy of CAMERA_POLICIES) {
+      const duty = policy === "required";
+      const live = paint(snap({ game: GAME, you, cameraPolicy: policy, opponentCameraLive: policy === "off" ? null : true }));
+      expect(live.includes(notice), `${policy}: live notice`).toBe(duty);
+      expect(ids(live).includes("room-tile-strip"), `${policy}: tile strip`).toBe(policy !== "off");
+      const checkin = paint(snap({ cameraPolicy: policy }));
+      expect(screenOf(checkin)).toBe("checkin");
+      expect(checkin.includes(notice), `${policy}: check-in notice`).toBe(duty);
+      for (const status of ["off", "failed"] as const) {
+        const html = paintLive(snap({ game: GAME, you, cameraPolicy: policy }), status);
+        expect(ids(html).includes("room-camera-off"), `${policy}/${status}: banner`).toBe(duty);
+      }
+      // The pair for the banner: a camera that is up never shows it.
+      expect(ids(paintLive(snap({ game: GAME, you, cameraPolicy: policy }), "live")).includes("room-camera-off")).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: policies").toBe(3);
+  });
+
+  it("presence: live ⇒ on camera, false ⇒ camera off, null (not asked, or the vendor did not answer) ⇒ NO pill at all", () => {
+    const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+    const cases: [boolean | null, string | null][] = [
+      [true, "live"],
+      [false, "off"],
+      [null, null],
+    ];
+    let checked = 0;
+    for (const [live, state] of cases) {
+      const html = paint(snap({ game: GAME, you, cameraPolicy: "required", opponentCameraLive: live }));
+      const pill = /data-testid="room-presence-pill" data-state="([^"]+)"/.exec(html)?.[1] ?? null;
+      expect(pill, String(live)).toBe(state);
+      if (live === null) expect(html, "no accusation on an unknown answer").not.toContain("camera off");
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 });
