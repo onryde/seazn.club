@@ -1,131 +1,141 @@
 import "server-only";
-// The match room usecase (chess Lichess external-play redesign, Task 8 —
-// spec §5 steps 6-7, §8.2, §12.1). Three entry points front every player
-// interaction with the room:
-//   - readMatchRoom   — GET. NEVER writes (spec §12.1: "GET never writes").
-//   - checkInToMatchRoom — POST check-in. Stamps fixture_availability, pings
-//     the lobby channel, then attempts a mint (a no-op unless this call was
-//     the second check-in).
-//   - mintIfReady     — the check-in-and-mint core (spec §8.2): claims the
-//     row with a short, stale-recoverable claim, calls Lichess OUTSIDE any
-//     transaction, then commits the result with an update conditional on
-//     that SAME claim, so a takeover mid-flight can never stomp another
-//     minter's work.
+// The match room usecase (chess in-page board design §6, T14). Four entry
+// points front every player interaction with the room, each resolving the
+// caller to ONE of the fixture's two players first (a session user, or a
+// personal link token bound to the round's open) and collapsing every
+// failure to one 404:
+//   - readRoom       — GET. NEVER writes (spec §12.1).
+//   - claimRoomSeat  — POST. Takes the seat through preflight's seatPlayer
+//     (the server-verified camera gate), stamps the check-in inside the
+//     window, and — when both players are in — asks T9's createGameIfReady.
+//     It is the ONE challenge producer here: T8's mintIfReady was a second
+//     one with no production caller and is gone (T9 ruling).
+//   - actInRoom      — POST act. T10's `act`, then T11's reconcile(game_end)
+//     on any answer that ended the game, awaited, so the bridge's
+//     finished_at is written by THAT reconcile and not a later sweep (T13
+//     job 5's camera window ends there).
+//   - reportClockZero — POST clock-zero. A client clock reached zero; if the
+//     server's own arithmetic agrees, reconcile(clock_zero) asks Lichess
+//     (the measured read + one re-read live in reconcile). We never declare
+//     a flag from arithmetic.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { publishExternalPlayLobby } from "@/lib/realtime";
-import {
-  MINT_CLAIM_STALE_MS,
-  checkInCounts,
-  roomPhase,
-  windowFor,
-  type RoomPhase,
-} from "@/server/external-play/window";
-import { defaultLichessAdapter } from "@/server/external-play/lichess/client";
-import { roundOpenFor } from "@/server/external-play/round-open";
-import type { ExternalPlayAdapter, ExternalPlayStatus, NeedsReason } from "@/server/external-play/types";
+import { log } from "@/server/logger";
+import { routes } from "@/lib/routes";
+import { externalPlayLobbyTopic, mintExternalPlayLobbyToken, publishExternalPlayLobby } from "@/lib/realtime";
+import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import { roundOpenFor, type RoundOpenRow } from "@/server/external-play/round-open";
+import { checkInCounts } from "@/server/external-play/window";
+import { hasLiveVideoPublisher, RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { stampFixtureCheckIn } from "@/server/usecases/me";
 import {
+  frozenFor,
+  gameClocks,
+  realtimeExpiry,
+  resultFor,
+  roomPhaseWire,
+  turnAfter,
+  windowWire,
+  type Colour,
+  type RoomGame,
+  type RoomSnapshot,
+  type SeatRefusal,
+} from "@/components/public-site/match-room/room-snapshot";
+import {
   effectiveBridge,
-  ensureBridgeRow,
   loadOnlinePlayFixture,
   loadSides,
   resetStaleBridge,
   whiteSideOf,
   type OnlinePlayFixture,
-  type Side,
   type SidePlayer,
 } from "./guard";
+import { createGameIfReady, type CreateOutcome } from "./create-game";
+import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
+import { act, fenAfter, type PlayAction, type PlayResult } from "./play";
+import { seatPlayer, type SeatResult } from "./preflight";
+import { reconcile } from "./reconcile";
+import { throttledRetryAt } from "./sweep";
 
 /** The caller identifies as either a signed-in session (must be one of the
  *  two players) or a personal match-room link token (spec §12.1). */
 export type RoomIdentity = { kind: "session"; userId: string } | { kind: "token"; token: string };
 
-export type MatchRoomView = {
-  fixtureId: string;
-  phase: RoomPhase;
-  /** `null` ⇒ nothing to show yet: the round is not opened and the board has
-   *  no start time (ruling 2026-10-10). */
-  opensAt: string | null;
-  deadline: string | null;
-  you: { side: Side; colour: "white" | "black"; checkedIn: boolean };
-  opponent: { name: string; checkedIn: boolean };
-  status: ExternalPlayStatus;
-  needsReason: NeedsReason | null;
-  /** https://lichess.org/{challengeId} — once the game is live or finished. */
-  watchUrl: string | null;
-  /** Both checked in, phase open, no challenge minted yet — the client may
-   *  POST a check-in/mint retry. */
-  canMint: boolean;
-};
-
 export type RoomDeps = {
   now?: Date;
-  adapter?: ExternalPlayAdapter;
+  seat?: typeof seatPlayer;
+  create?: (fixtureId: string) => Promise<CreateOutcome>;
   publish?: (fixtureId: string) => Promise<void>;
+  offered?: (asker: OnlineChessAsker) => Promise<boolean>;
+  presence?: (a: { meetingId: string; participantId: string }) => Promise<boolean>;
+  mintRealtime?: typeof mintExternalPlayLobbyToken;
+  play?: (a: { fixtureId: string; personId: string; action: PlayAction }) => Promise<PlayResult>;
+  reconcile?: (fixtureId: string, trigger: "game_end" | "clock_zero") => Promise<unknown>;
 };
+
+/** A seat answer as the CLIENT receives it: the caller's own participant
+ *  token (to join the meeting and publish their camera) and nothing else. */
+export type SeatWire =
+  | { seated: true; participant: ParticipantToken | null }
+  | { seated: false; reason: SeatRefusal; participant: ParticipantToken | null };
+
+export type RoomClaim = {
+  snapshot: RoomSnapshot;
+  /** null ⇒ the seat was not asked: online chess is off for this club and no
+   *  game is on file (T20) — the snapshot says so. */
+  seat: SeatWire | null;
+  /** T9's answer when both players were in and a game was asked for. */
+  create: CreateOutcome | null;
+};
+
+/** How close to zero the server's own arithmetic must put the side to move
+ *  before a clock-zero report is worth a Lichess read. Generous: the client
+ *  ticks from the broadcast's receipt, so it runs a little behind the
+ *  server; a report earlier than this is refused without a read. */
+export const CLOCK_ZERO_TOLERANCE_MS = 2_000;
 
 const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
 
+type Resolved = {
+  f: OnlinePlayFixture;
+  player: SidePlayer & { personId: string };
+  home: SidePlayer;
+  away: SidePlayer;
+  open: RoundOpenRow | null;
+};
+
 /**
- * Which of the fixture's two players (if either) `identity` resolves to.
- * Session identity matches ONLY `SidePlayer.userId` (never personId alone —
- * a person with no linked user cannot open the room via session). Token
- * identity additionally requires the token's `fixtureId` to match THIS
- * fixture and its `scheduledAt` snapshot to match the fixture's CURRENT
- * `scheduledAt` (a reschedule after the link was minted kills the old link —
- * spec §12.1's `sat` claim). Every failure — bad signature, expired,
- * wrong fixture, stale `sat`, a personId that resolves to neither side —
- * collapses to the same `null`; the caller turns that into an identical 404
- * `NOT_FOUND` so a probe can never learn whether the fixture even exists,
- * let alone which specific check failed.
+ * The fixture, the round's open and which of its two players `identity` is.
+ * Session identity matches ONLY a side's solo `userId`. Token identity
+ * requires the token's fixture to be THIS fixture and its `roundOpenId` to be
+ * this fixture's round's open (T19 review M4: bound to the open, not the
+ * schedule — a NULL-time board resolves; a token for another round never
+ * does). Every failure — no such fixture, not an online fixture, a bad or
+ * expired token, another fixture or round, a person on neither side —
+ * collapses to the same 404 so a probe learns nothing.
  */
-export async function resolveRoomPlayer(
-  identity: RoomIdentity,
-  f: OnlinePlayFixture,
-): Promise<SidePlayer | null> {
-  const resolved = await resolveWithSides(identity, f);
-  return resolved?.player ?? null;
-}
-
-/** Internal twin of `resolveRoomPlayer` that also hands back the already-
- *  loaded `{ home, away }` sides, so `readMatchRoom`/`checkInToMatchRoom`
- *  don't pay for a second `loadSides` round trip to build the rest of the
- *  view. */
-async function resolveWithSides(
-  identity: RoomIdentity,
-  f: OnlinePlayFixture,
-): Promise<{ player: SidePlayer; home: SidePlayer; away: SidePlayer } | null> {
-  const { home, away } = await loadSides(f);
+async function resolveRoom(identity: RoomIdentity, fixtureId: string): Promise<Resolved> {
+  const f = await loadOnlinePlayFixture(fixtureId);
+  if (!f) throw ROOM_NOT_FOUND();
+  const [{ home, away }, open] = await Promise.all([loadSides(f), roundOpenFor(sql, fixtureId)]);
+  let player: SidePlayer | undefined;
   if (identity.kind === "session") {
-    const player = [home, away].find((s) => s.userId === identity.userId) ?? null;
-    return player ? { player, home, away } : null;
+    player = [home, away].find((s) => s.userId !== null && s.userId === identity.userId);
+  } else {
+    const claims = await verifyMatchRoomToken(identity.token).catch(() => null);
+    if (!claims || claims.fixtureId !== f.fixtureId) throw ROOM_NOT_FOUND();
+    if (open === null || claims.roundOpenId !== open.id) throw ROOM_NOT_FOUND();
+    player = [home, away].find((s) => s.personId !== null && s.personId === claims.personId);
   }
-  const claims = await verifyMatchRoomToken(identity.token).catch(() => null);
-  if (!claims || claims.fixtureId !== f.fixtureId) return null;
-  // rescheduled ⇒ link dead. A board with no start time matches no `sat`
-  // claim at all (nothing mints one for it).
-  if (f.scheduledAt === null || Date.parse(claims.scheduledAt) !== f.scheduledAt.getTime()) return null;
-  const player = [home, away].find((s) => s.personId === claims.personId) ?? null;
-  return player ? { player, home, away } : null;
-}
-
-/** D12: the organiser's open stamp for this fixture's round, or null when
- *  nobody has opened it. Every window question in this file (phase, opensAt,
- *  deadline, which check-ins count, the mint's expires_at) hangs off it. */
-async function openAnchor(fixtureId: string): Promise<Date | null> {
-  return (await roundOpenFor(sql, fixtureId))?.roundOpenedAt ?? null;
+  // An empty side has personId null; it can never be the caller.
+  if (!player || player.personId === null) throw ROOM_NOT_FOUND();
+  return { f, player: player as SidePlayer & { personId: string }, home, away, open };
 }
 
 /** Check-in state for both sides, scoped by fixture_id AND the two resolved
- *  person ids. A side with no resolved `personId` (unrostered entrant, or a
- *  merge tombstone) can never have a row, so it is dropped from the `IN`
- *  list rather than compared against it — postgres.js's `sql([])` renders an
- *  empty list as `(null)`, which is at best a wasted round trip and, if both
- *  sides were ever personId-less, a query this function must not even
- *  attempt. Exported for T13's no-show sweep, which must judge "who came"
- *  by exactly this reading. */
+ *  person ids, judged against the open's window. Exported for T13's no-show
+ *  sweep, which must judge "who came" by exactly this reading. */
 export async function checkIns(
   f: OnlinePlayFixture,
   home: SidePlayer,
@@ -150,217 +160,299 @@ export async function checkIns(
   };
 }
 
-/** Assembles the caller-facing view. Reads only — the one write this
- *  function's callers must never let it perform is why `effectiveBridge`
- *  (pure) is used here, never `resetStaleBridge`. */
-async function buildView(
-  f: OnlinePlayFixture,
-  resolved: { player: SidePlayer; home: SidePlayer; away: SidePlayer },
-  now: Date,
-  anchor: Date | null,
-): Promise<MatchRoomView> {
-  const { player, home, away } = resolved;
+/** Display and lifecycle facts the guard's snapshot does not carry. */
+type RoomFacts = {
+  divisionName: string;
+  roundNo: number;
+  boardNo: number;
+  lastError: string | null;
+  createSentAt: Date | null;
+  gameOverAt: Date | null;
+  videoOverrideAt: Date | null;
+};
+
+async function roomFacts(fixtureId: string): Promise<RoomFacts> {
+  const [row] = await sql<RoomFacts[]>`
+    select d.name as "divisionName", f.round_no as "roundNo", f.seq_in_round as "boardNo",
+           ep.last_error as "lastError", ep.create_sent_at as "createSentAt",
+           ep.game_over_at as "gameOverAt", ep.video_override_at as "videoOverrideAt"
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      left join fixture_external_play ep on ep.fixture_id = f.id
+     where f.id = ${fixtureId}`;
+  if (!row) throw ROOM_NOT_FOUND();
+  return row;
+}
+
+/** The latest boardgame.result on the ledger that nothing voided. */
+async function recordedResult(fixtureId: string): Promise<{ winner: string | null; method: string | null } | null> {
+  const [row] = await sql<{ payload: { winner?: string | null; method?: string } }[]>`
+    select e.payload from score_events e
+     where e.fixture_id = ${fixtureId} and e.type = 'boardgame.result'
+       and not exists (select 1 from score_events v where v.voids_event_id = e.id)
+     order by e.seq desc limit 1`;
+  if (!row) return null;
+  return { winner: row.payload.winner ?? null, method: row.payload.method ?? null };
+}
+
+/** The opponent's camera as the meeting reports it: joined and not left.
+ *  null ⇒ not asked (no meeting, no participant yet, an override) or the
+ *  vendor did not answer — the pill then shows nothing rather than a guess. */
+async function opponentPresence(
+  fixtureId: string,
+  opponentPersonId: string | null,
+  deps: RoomDeps,
+): Promise<boolean | null> {
+  if (opponentPersonId === null) return null;
+  const [row] = await sql<{ meetingId: string; participantId: string }[]>`
+    select m.meeting_id as "meetingId", p.participant_id as "participantId"
+      from fixture_video_meetings m
+      join fixture_video_participants p on p.fixture_id = m.fixture_id
+     where m.fixture_id = ${fixtureId} and m.ended_at is null
+       and p.person_id = ${opponentPersonId} and p.preset = 'player'
+     order by p.created_at, p.id
+     limit 1`;
+  if (!row) return false;
+  try {
+    return await (deps.presence ?? hasLiveVideoPublisher)(row);
+  } catch (err) {
+    if (err instanceof RealtimeKitError) return null;
+    throw err;
+  }
+}
+
+async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnapshot> {
+  const { f, player, home, away, open } = r;
+  const anchor = open?.roundOpenedAt ?? null;
   const bridge = effectiveBridge(f);
-  // D12: no open stamp ⇒ the round has not started, whatever the timetable
-  // says. The scheduled time is still what the player is SHOWN (opensAt and
-  // deadline below), as the estimate it is.
-  const phase: RoomPhase = anchor === null ? "before" : roomPhase(now, anchor);
+  const facts = await roomFacts(f.fixtureId);
+  const phase = roomPhaseWire({ now, roundOpenedAt: anchor });
   const ci = await checkIns(f, home, away, anchor);
   const opponent = player.side === "home" ? away : home;
-  const youCheckedIn = player.side === "home" ? ci.home : ci.away;
-  const opponentCheckedIn = player.side === "home" ? ci.away : ci.home;
 
-  const whiteSide: Side = bridge?.white_side ?? (await whiteSideOf(f));
-  const colour: "white" | "black" = whiteSide === player.side ? "white" : "black";
+  // T10 review carry: once a game exists its RECORDED colours are the truth;
+  // the pairing is read only before one does.
+  const whiteSide = bridge?.white_side ?? (await whiteSideOf(f));
+  const mine: Colour = whiteSide === player.side ? "white" : "black";
+  const theirs: Colour = mine === "white" ? "black" : "white";
 
-  const status: ExternalPlayStatus = bridge?.status ?? "pending";
-  const needsReason = bridge?.needs_reason ?? null;
+  const gameOnFile = bridge !== null && bridge.challenge_id !== null;
+  const over = bridge !== null && (bridge.status === "finished" || facts.gameOverAt !== null);
+  let game: RoomGame | null = null;
+  if (bridge !== null && bridge.challenge_id !== null) {
+    const moves = bridge.moves_uci;
+    const last = moves.length > 0 ? moves[moves.length - 1]! : null;
+    game = {
+      gameId: bridge.challenge_id,
+      moves,
+      fen: fenAfter(moves).fen,
+      lastMove: last === null ? null : [last.slice(0, 2), last.slice(2, 4)],
+      turn: turnAfter(bridge.move_count),
+      ...gameClocks({
+        limitMs: f.clock.limit * 1_000,
+        whiteMs: bridge.white_ms,
+        blackMs: bridge.black_ms,
+        lastMoveAt: bridge.last_move_at,
+        moveCount: bridge.move_count,
+        over,
+      }),
+      drawOfferBy: bridge.draw_offer_by,
+      over,
+    };
+  }
 
-  const watchUrl =
-    bridge && (bridge.status === "live" || bridge.status === "finished") && bridge.challenge_id !== null
-      ? `https://lichess.org/${bridge.challenge_id}`
+  // T11 M7: a token_revoked hold freezes a seat (or both, when none was
+  // recorded); the other player's board stays live.
+  const frozen =
+    bridge?.status === "needs_organiser" && bridge.needs_reason === "token_revoked"
+      ? frozenFor(bridge.revoked_seat ?? "both", mine)
       : null;
 
-  // Mirrors mintIfReady's own readiness gate (`!ci.home || !ci.away ||
-  // !home.lichess || !away.lichess`) — an unlinked opponent means mintIfReady
-  // will always return "not_ready", so the client must not be invited to
-  // retry a check-in/mint POST that can never succeed (controller ruling:
-  // unlinked player, both checked in ⇒ canMint false).
-  const canMint =
-    phase === "open" &&
-    youCheckedIn &&
-    opponentCheckedIn &&
-    home.lichess !== null &&
-    away.lichess !== null &&
-    (!bridge || (bridge.status === "pending" && bridge.challenge_id === null));
+  const recorded = f.fixtureStatus === "scheduled" || f.fixtureStatus === "in_play" ? null : await recordedResult(f.fixtureId);
+  const result =
+    recorded === null
+      ? null
+      : resultFor({ winnerEntrantId: recorded.winner, method: recorded.method, myEntrantId: player.entrantId, myColour: mine });
+  // A hold the game is not still playing through (T12's mid-game diagnoses
+  // are token_revoked / provider_error; anything else, or any hold once the
+  // game is over, waits on the organiser).
+  const midGameHold = bridge?.needs_reason === "token_revoked" || bridge?.needs_reason === "provider_error";
+  const held = bridge?.status === "needs_organiser" && result === null && (over || !midGameHold || !gameOnFile);
 
-  const basis = anchor ?? f.scheduledAt;
-  const w = basis === null ? null : windowFor(basis);
+  // T20: online play STARTS only for a club offered it; a board with a game
+  // (or a create already sent) is never gated.
+  const startPending = !gameOnFile && facts.createSentAt === null;
+  const onlineChessOff = startPending && !(await (deps.offered ?? onlineChessOffered)({ orgId: f.orgId, userId: player.userId }));
+
+  const bothIn = ci.home && ci.away;
+  let creation: RoomSnapshot["creation"] = null;
+  if (!gameOnFile && phase === "open" && bothIn && !onlineChessOff && !held) {
+    const throttled = facts.lastError?.startsWith("create:rate_limited") === true;
+    creation = throttled
+      ? { state: "busy", retryAt: throttledRetryAt(facts.lastError ?? "")?.toISOString() ?? null }
+      : { state: "creating" };
+  }
+
+  // T11 re-review: a held board that is still moving keeps its link.
+  const watchUrl = gameOnFile ? `https://lichess.org/${bridge!.challenge_id}` : null;
+
+  const cameraPolicy = await fixtureCameraPolicy(f.fixtureId);
+  const opponentCameraLive =
+    cameraPolicy === "off" || facts.videoOverrideAt !== null || over
+      ? null
+      : await opponentPresence(f.fixtureId, opponent.personId, deps);
+
+  let realtime: RoomSnapshot["realtime"] = null;
+  try {
+    const expiresAt = realtimeExpiry(now);
+    const token = await (deps.mintRealtime ?? mintExternalPlayLobbyToken)(f.fixtureId, player.personId, expiresAt);
+    realtime = { topic: externalPlayLobbyTopic(f.fixtureId), token, expiresAt: expiresAt.toISOString() };
+  } catch {
+    // No realtime key in this environment: the client polls.
+    realtime = null;
+  }
+
+  const youIn = player.side === "home" ? ci.home : ci.away;
+  const theyIn = player.side === "home" ? ci.away : ci.home;
   return {
     fixtureId: f.fixtureId,
+    serverNow: now.toISOString(),
     phase,
-    opensAt: w?.opensAt.toISOString() ?? null,
-    deadline: w?.deadline.toISOString() ?? null,
-    you: { side: player.side, colour, checkedIn: youCheckedIn },
-    opponent: { name: opponent.displayName, checkedIn: opponentCheckedIn },
-    status,
-    needsReason,
+    scheduledAt: f.scheduledAt?.toISOString() ?? null,
+    roundOpenedAt: anchor?.toISOString() ?? null,
+    ...windowWire(anchor),
+    links: {
+      fixture: routes.sharedFixture(f.orgSlug, f.competitionSlug, f.divisionSlug, f.fixtureId),
+      standings: routes.shared(f.orgSlug, f.competitionSlug, f.divisionSlug),
+    },
+    meta: {
+      divisionName: facts.divisionName,
+      roundNo: facts.roundNo,
+      boardNo: facts.boardNo,
+      limitSeconds: f.clock.limit,
+      incrementSeconds: f.clock.increment,
+    },
+    orgSlug: f.orgSlug,
+    you: { colour: mine, name: player.displayName, checkedIn: youIn },
+    opponent: { colour: theirs, name: opponent.displayName, checkedIn: theyIn },
+    cameraPolicy,
+    opponentCameraLive,
+    frozen,
+    onlineChessOff,
+    creation,
+    game,
+    held,
+    result,
     watchUrl,
-    canMint,
+    realtime,
   };
 }
 
-/** GET the room. Guard failure or a caller who isn't one of the two players
- *  both 404 identically (do not reveal whether the fixture exists). NEVER
- *  writes — no `resetStaleBridge`/`ensureBridgeRow` call anywhere in this
- *  function's path; a stale bridge is simply hidden (`effectiveBridge`)
- *  until a write path (check-in, or a later cron pass) resets it. */
-export async function readMatchRoom(
-  identity: RoomIdentity,
-  fixtureId: string,
-  now?: Date,
-): Promise<MatchRoomView> {
-  const f = await loadOnlinePlayFixture(fixtureId);
-  if (!f) throw ROOM_NOT_FOUND();
-  const resolved = await resolveWithSides(identity, f);
-  if (!resolved) throw ROOM_NOT_FOUND();
-  return buildView(f, resolved, now ?? new Date(), await openAnchor(fixtureId));
+/** GET the room. NEVER writes — no stale-row reset, no stamp, no create: a
+ *  stale bridge is simply hidden (`effectiveBridge`) until a write path
+ *  resets it. */
+export async function readRoom(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomSnapshot> {
+  const r = await resolveRoom(identity, fixtureId);
+  return compose(r, deps.now ?? new Date(), deps);
+}
+
+function seatWire(seat: SeatResult): SeatWire {
+  if (seat.seated) return { seated: true, participant: seat.participant };
+  if (seat.reason === "camera_required" || seat.reason === "camera_lost") {
+    return { seated: false, reason: seat.reason, participant: seat.participant };
+  }
+  return { seated: false, reason: seat.reason, participant: null };
 }
 
 /**
- * POST check-in (spec §8.2 step 2). Order: guard → lazy stale-bridge reset →
- * identity → phase gate → stamp → publish → attempt mint → return the fresh
- * view. The phase gate runs AFTER identity resolution so a non-player still
- * gets an identical 404 outside the window (never a 409 that would leak "a
- * player exists, but you aren't one" through a different status code).
+ * POST — take the seat. Order: identity → lazy stale-bridge reset (a write
+ * path) → the T20 start gate (only while no game is on file) → seatPlayer
+ * (preflight: the window, the play grant, the server-verified camera) → on a
+ * seat inside the open window with no game yet, stamp the check-in and ping
+ * the lobby → with BOTH in, ask T9 for the game. A re-entering player (a
+ * reload mid-game) is seated by seatPlayer's own re-entry rule and gets their
+ * camera token back; their check-in is never re-stamped, because a stamp
+ * outside the window would read as never having come.
  */
-export async function checkInToMatchRoom(
+export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomClaim> {
+  const now = deps.now ?? new Date();
+  let r = await resolveRoom(identity, fixtureId);
+  await resetStaleBridge(r.f);
+  r = await resolveRoom(identity, fixtureId);
+  const bridge = effectiveBridge(r.f);
+  const gameOnFile = bridge !== null && bridge.challenge_id !== null;
+  const facts = await roomFacts(fixtureId);
+
+  if (!gameOnFile && facts.createSentAt === null) {
+    const offered = await (deps.offered ?? onlineChessOffered)({ orgId: r.f.orgId, userId: r.player.userId });
+    if (!offered) return { snapshot: await compose(r, now, deps), seat: null, create: null };
+  }
+
+  const seat = await (deps.seat ?? seatPlayer)({ fixtureId, personId: r.player.personId }, { now });
+  let create: CreateOutcome | null = null;
+  const anchor = r.open?.roundOpenedAt ?? null;
+  if (seat.seated && !gameOnFile && roomPhaseWire({ now, roundOpenedAt: anchor }) === "open") {
+    await stampFixtureCheckIn(r.player.personId, fixtureId, r.f.orgId);
+    await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
+    const ci = await checkIns(r.f, r.home, r.away, anchor);
+    if (ci.home && ci.away) create = await (deps.create ?? ((id: string) => createGameIfReady(id, { now })))(fixtureId);
+  }
+  const fresh = await resolveRoom(identity, fixtureId);
+  return { snapshot: await compose(fresh, now, deps), seat: seatWire(seat), create };
+}
+
+/** The answers after which the game is over at Lichess, so T11 must read it
+ *  NOW: resign, abort, a draw "yes" (lila's /draw/yes — it accepts a
+ *  standing offer; on a mere offer the read finds the game running and
+ *  changes nothing), and a move T10 reports as ending it. */
+function endedTheGame(action: PlayAction, result: PlayResult): boolean {
+  if (!result.ok) return false;
+  if (result.ended === true) return true;
+  return action.kind === "resign" || action.kind === "abort" || (action.kind === "draw" && action.accept);
+}
+
+/** POST act — T10's usecase, then reconcile(game_end) on a game-ending
+ *  answer, awaited before the player's answer goes back. */
+export async function actInRoom(
+  identity: RoomIdentity,
+  fixtureId: string,
+  action: PlayAction,
+  deps: RoomDeps = {},
+): Promise<PlayResult> {
+  const r = await resolveRoom(identity, fixtureId);
+  const result = await (deps.play ?? act)({ fixtureId, personId: r.player.personId, action });
+  if (endedTheGame(action, result)) {
+    try {
+      await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "game_end");
+    } catch (err) {
+      // The move or resignation stands at Lichess either way; the sweep
+      // reconciles a game this read missed. Never fail the player's answer.
+      log.error({ fixtureId, err }, "match room: reconcile(game_end) after a game-ending act failed");
+    }
+  }
+  return result;
+}
+
+/** POST clock-zero. `reconciled: false` ⇒ nothing was asked of Lichess:
+ *  there is no running game, or the server's own arithmetic says the side
+ *  to move still has time. */
+export async function reportClockZero(
   identity: RoomIdentity,
   fixtureId: string,
   deps: RoomDeps = {},
-): Promise<MatchRoomView> {
-  const f = await loadOnlinePlayFixture(fixtureId);
-  if (!f) throw ROOM_NOT_FOUND();
-  await resetStaleBridge(f);
-  const resolved = await resolveWithSides(identity, f);
-  if (!resolved) throw ROOM_NOT_FOUND();
-
+): Promise<{ reconciled: boolean }> {
   const now = deps.now ?? new Date();
-  // D12: an unopened round refuses with the same 409 as a closed window —
-  // the player-facing distinction belongs in the view's state (T14), not in a
-  // second error code on a POST.
-  const anchor = await openAnchor(fixtureId);
-  if (anchor === null || roomPhase(now, anchor) !== "open") {
-    throw new HttpError(409, "Check-in is closed for this match", "CHECK_IN_CLOSED");
+  const r = await resolveRoom(identity, fixtureId);
+  const b = effectiveBridge(r.f);
+  if (b === null || b.challenge_id === null || b.status === "finished" || b.last_move_at === null) {
+    return { reconciled: false };
   }
-
-  const { player } = resolved;
-  const personId = player.personId;
-  if (personId === null) {
-    // Unreachable in practice: resolveWithSides only ever matches a side
-    // whose personId is already resolved (session matches on a solo
-    // userId, which only exists alongside a resolved personId; token
-    // matches directly on personId). Narrowed here — not asserted with `!`
-    // — so this function's own type stays honest about SidePlayer.personId
-    // being nullable in general.
-    throw ROOM_NOT_FOUND();
-  }
-  await stampFixtureCheckIn(personId, f.fixtureId, f.orgId);
-  await (deps.publish ?? publishExternalPlayLobby)(f.fixtureId);
-  await mintIfReady(f, deps, anchor);
-  return readMatchRoom(identity, fixtureId, now);
-}
-
-/**
- * The check-in-and-mint core (spec §8.2). Three separate statements — the
- * claim, the Lichess HTTP call, and the ready commit — deliberately never
- * wrapped in one `sql.begin`: a transaction held open across an outbound
- * HTTP call (up to `LICHESS_TIMEOUT_MS`) would hold a row lock, or in the
- * worst case a whole connection out of the pool, for the entire request.
- *
- * Claim safety: the claim UPDATE is conditional on the row being `pending`
- * with no challenge yet and either never claimed or claimed stale
- * (`MINT_CLAIM_STALE_MS` ago) — so a crashed/hung minter is recoverable
- * without a human. The READY commit is conditional not just on `status =
- * 'pending'` but on `mint_claimed_at` still equalling the EXACT value THIS
- * call just wrote: if some other caller's claim went stale and took over
- * mid-flight (bumping `mint_claimed_at` to ITS OWN value) before this call's
- * Lichess round trip returned, this call's ready UPDATE now matches zero
- * rows — it returns "busy" and does not publish, instead of overwriting the
- * new claimant's in-flight work with a stale (and possibly duplicate)
- * challenge. That is the one case a plain `status = 'pending'` guard on the
- * ready commit would miss (status never changed away from 'pending' during
- * a takeover — only `mint_claimed_at` did).
- */
-export async function mintIfReady(
-  f: OnlinePlayFixture,
-  deps: RoomDeps = {},
-  /** The round's open stamp (D12); read here when the caller has not. */
-  anchorIn?: Date | null,
-): Promise<"minted" | "not_ready" | "busy" | "failed"> {
-  const now = deps.now ?? new Date();
-  const anchor = anchorIn === undefined ? await openAnchor(f.fixtureId) : anchorIn;
-  if (anchor === null || roomPhase(now, anchor) !== "open") return "not_ready";
-
-  // A bridge already past 'pending' (ready/live/finished/needs_organiser) is
-  // simply nothing to do — never "busy" (nobody is contesting it) and never
-  // worth a Lichess round trip. `effectiveBridge` hides a STALE non-pending
-  // bridge (isStale never applies to live/finished, so this only masks a
-  // rescheduled ready/needs_organiser row), letting the reset+claim below
-  // run against what is, in the current window, really a fresh 'pending'
-  // fixture.
-  const known = effectiveBridge(f);
-  if (known && known.status !== "pending") return "not_ready";
-
-  const { home, away } = await loadSides(f);
-  const ci = await checkIns(f, home, away, anchor);
-  if (!ci.home || !ci.away || !home.lichess || !away.lichess) return "not_ready";
-
-  await resetStaleBridge(f);
-  await ensureBridgeRow(f);
-
-  const claimed = await sql<{ fixture_id: string }[]>`
-    update fixture_external_play set mint_claimed_at = ${now}, updated_at = now()
-     where fixture_id = ${f.fixtureId} and status = 'pending' and challenge_id is null
-       and (mint_claimed_at is null or mint_claimed_at < ${new Date(now.getTime() - MINT_CLAIM_STALE_MS)})
-     returning fixture_id`;
-  if (claimed.length === 0) return "busy";
-
-  const whiteSide = await whiteSideOf(f);
-  const white = whiteSide === "home" ? home : away;
-  const black = whiteSide === "home" ? away : home;
-  // No-`!` narrowing (repo rule): the truthy check above covered
-  // home.lichess/away.lichess, but TS cannot carry that through the
-  // whiteSide-dependent reassignment into white/black.
-  const wl = white.lichess;
-  const bl = black.lichess;
-  if (!wl || !bl) return "not_ready";
-
-  const adapter = deps.adapter ?? defaultLichessAdapter();
-  const deadline = windowFor(anchor).deadline;
-  try {
-    const ch = await adapter.createOpenChallenge({
-      // Outside any transaction — see this function's doc comment.
-      whiteUsername: wl.username,
-      blackUsername: bl.username,
-      clock: f.clock,
-      expiresAt: deadline,
-    });
-    const ready = await sql<{ fixture_id: string }[]>`
-      update fixture_external_play
-         set status = 'ready', challenge_id = ${ch.challengeId}, white_side = ${whiteSide},
-             white_lichess_id = ${wl.id}, black_lichess_id = ${bl.id},
-             expires_at = ${deadline}, mint_claimed_at = null, last_error = null, updated_at = now()
-       where fixture_id = ${f.fixtureId} and status = 'pending' and mint_claimed_at = ${now}
-       returning fixture_id`;
-    if (ready.length === 0) return "busy"; // lost the claim to a takeover mid-flight; do not publish
-    await (deps.publish ?? publishExternalPlayLobby)(f.fixtureId);
-    return "minted";
-  } catch (err) {
-    await sql`
-      update fixture_external_play
-         set mint_claimed_at = null, last_error = ${err instanceof Error ? err.message.slice(0, 500) : "mint_failed"}, updated_at = now()
-       where fixture_id = ${f.fixtureId} and status = 'pending'`;
-    return "failed";
-  }
+  if (b.move_count < 2) return { reconciled: false };
+  const toMove = turnAfter(b.move_count);
+  const base = toMove === "white" ? b.white_ms : b.black_ms;
+  if (base === null) return { reconciled: false };
+  const remaining = base - (now.getTime() - b.last_move_at.getTime());
+  if (remaining > CLOCK_ZERO_TOLERANCE_MS) return { reconciled: false };
+  await (deps.reconcile ?? ((id, trigger) => reconcile(id, trigger)))(fixtureId, "clock_zero");
+  return { reconciled: true };
 }
