@@ -33,7 +33,7 @@ import { exportGame as wiredExportGame, readGameStream as wiredReadGameStream } 
 import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { loadArbiterRound } from "../external-play/arbiter";
+import { loadArbiterRound, resyncExternalPlay } from "../external-play/arbiter";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import {
@@ -1649,6 +1649,15 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     expect(flags).toEqual([
       expect.objectContaining({ kind: "out_of_band_play", plies: { from: 2, to: LINE.length } }),
     ]);
+  });
+
+  it("T15: the arbiter's 'Resync from Lichess' (resyncExternalPlay) answers what THIS reconcile did — a read, the plies adopted; a second press adopts nothing", async () => {
+    const g = await readyGame();
+    serveStream(gameFull(g, MID));
+    const auth = await mintOrgOwnerAuth(g.orgId);
+    expect(await resyncExternalPlay(auth, g.fixtureId, observed().deps)).toEqual({ read: true, adopted: LINE.length, finished: false });
+    expect(await resyncExternalPlay(auth, g.fixtureId, observed(later(1_000)).deps)).toEqual({ read: true, adopted: 0, finished: false });
+    expect(streams().map((x) => x.gameId), "each press is one read").toEqual([g.gameId, g.gameId]);
   });
 
   it("each LATER adoption is its own flag, naming only its own plies", async () => {
