@@ -220,3 +220,139 @@ test("R115-1: /me, the public player card and the console count only matches pla
   expect(seen.length, "surfaces read").toBe(6);
   testInfo.annotations.push({ type: "numbers", description: seen.join(" | ") });
 });
+
+// W2b ruling 122 (owner "B", 2026-10-12): a team match counts on a person's career record only for players — the
+// side's recorded lineup, or its roster's players when it recorded none. A coach never gets one; a player added to the
+// roster after a lineup-less fixture still does (the accepted residue: no join date is stored).
+//
+// Two generic team divisions in one public competition (the public card's career rollup shows only where it
+// aggregates), each Mine v Theirs, one played match each, recorded through the organiser's own doors:
+//   A — no lineup; after the match Lou joins Mine's roster.   B — Mine records a sheet: Pia as player, Cole as coach.
+// Expected, from the ruling: Pia 2 matches (A by the roster, B by the sheet); Cole, registered as coach, none; Lou 1 (A).
+test("ruling 122: the coach is listed with no team match; the player keeps both; a player added after the lineup-less match keeps it (accepted residue)", async ({ page, browser }, testInfo) => {
+  test.setTimeout(240_000);
+  const person = async (n: string, lane: "player" | "coach") => {
+    const res = await apiJson<{ id: string }>(page.request, "/api/v1/persons", "POST", { full_name: `${n} ${TAG}`, consent: { public_name: true }, lane });
+    expect(res.status, `person ${n}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+    return res.data!.id;
+  };
+  const pia = await person("Pia Player", "player");
+  const cole = await person("Cole Coach", "coach");
+  const lou = await person("Lou Late", "player");
+  const oz = await person("Oz Opp", "player");
+  const comp = await apiJson<{ id: string; slug: string; org_id: string }>(page.request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Players only ${TAG}`,
+    visibility: "public",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+
+  const teamDivision = async (name: string, sheet: boolean) => {
+    const div = await apiJson<{ id: string }>(page.request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name,
+      sport_key: "generic",
+      variant_key: "score",
+    });
+    expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+    const divisionId = div.data!.id;
+    const ents = await apiJson<{ id: string }[]>(page.request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [
+      { kind: "team", display_name: `${name} Mine ${TAG}`, seed: 1, members: [{ person_id: pia }, { person_id: cole }] },
+      { kind: "team", display_name: `${name} Theirs ${TAG}`, seed: 2, members: [{ person_id: oz }] },
+    ]);
+    expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
+    const mineId = ents.data![0]!.id;
+    const stage = await apiJson<{ id: string }>(page.request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+    const gen = await apiJson<{ fixtures: Fixture[] }>(page.request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+    expect(gen.status).toBeLessThan(300);
+    await apiJson(page.request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    const fixtures = gen.data!.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(fixtures.length, `${name}: one match`).toBe(1);
+    const f = fixtures[0]!;
+    if (sheet) {
+      const put = await apiJson(page.request, `/api/v1/fixtures/${f.id}/lineups/${mineId}`, "PUT", {
+        slots: [
+          { person_id: pia, slot: "starting", role: "player" },
+          { person_id: cole, slot: "starting", role: "coach" },
+        ],
+      });
+      expect(put.status, `${name} sheet: ${JSON.stringify(put.error)}`).toBeLessThan(300);
+    }
+    const seq = { n: 0 };
+    await post(page.request, f.id, seq, "core.start", {});
+    for (const e of SPORTS.generic.win(f.home_entrant_id === mineId ? "home" : "away")) await post(page.request, f.id, seq, e.type, e.payload);
+    return { divisionId, mineId };
+  };
+  const a = await teamDivision("Team A", false);
+  await teamDivision("Team B", true);
+  // Lou joins Mine of A after its match was played.
+  const joined = await apiJson(page.request, `/api/v1/entrants/${a.mineId}`, "PATCH", {
+    members: [{ person_id: pia }, { person_id: cole }, { person_id: lou }],
+  });
+  expect(joined.status, `late join: ${JSON.stringify(joined.error)}`).toBeLessThan(300);
+
+  // ---- the console API (?group=sport) ---------------------------------------------------------------------------
+  const consoleMatches = async (id: string) => {
+    const res = await apiJson<{ sports: { sport_key: string; matches: number }[] }>(page.request, `/api/v1/persons/${id}/stats?group=sport`);
+    expect(res.status).toBe(200);
+    return res.data!.sports.map((s) => [s.sport_key, s.matches]);
+  };
+  expect(await consoleMatches(pia), "console: Pia").toEqual([["generic", 2]]);
+  expect(await consoleMatches(cole), "console: Cole, the coach").toEqual([]);
+  expect(await consoleMatches(lou), "console: Lou, added after the lineup-less match").toEqual([["generic", 1]]);
+
+  const seen: string[] = [];
+  // ---- /me, as the coach -----------------------------------------------------------------------------------------
+  const coachCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const me = await coachCtx.newPage();
+  await loginUi(me, `cole-coach-${TAG}@example.com`, "/me");
+  const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
+  expect(whoami.status).toBe(200);
+  await linkPersonToUserBySql(cole, whoami.data!.id);
+  await me.goto("/me");
+  await me.getByTestId("cookie-accept").click();
+  for (const width of [1280, 768, 320]) {
+    await me.setViewportSize({ width, height: 900 });
+    const career = me.getByTestId("me-career");
+    await expect(career).toBeVisible({ timeout: 20_000 });
+    await expect(career.getByTestId("me-career-empty")).toBeVisible();
+    await expect(career.locator('[data-testid^="career-sport-"]')).toHaveCount(0);
+    await expectNoHorizontalScroll(me);
+    seen.push(`/me coach@${width}: "${(await career.innerText()).replace(/\s+/g, " ").trim()}"`);
+    await career.screenshot({ path: testInfo.outputPath(`r122-me-coach-${width}.png`) });
+  }
+  await coachCtx.close();
+
+  // ---- the public player cards, anonymous -----------------------------------------------------------------------
+  const orgs = await apiJson<{ id: string; slug: string }[]>(page.request, "/api/orgs");
+  const orgSlug = orgs.data!.find((o) => o.id === comp.data!.org_id)!.slug;
+  const anonCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const anon = await anonCtx.newPage();
+  let banner = true;
+  for (const [who, id, want] of [
+    ["Cole", cole, { lines: 0, rollup: null }],
+    ["Pia", pia, { lines: 2, rollup: "2 matches" }],
+    ["Lou", lou, { lines: 1, rollup: null }],
+  ] as const) {
+    await anon.goto(`/shared/${orgSlug}/${comp.data!.slug}/players/${id}`, { waitUntil: "load" });
+    if (banner) {
+      await anon.getByTestId("cookie-accept").click();
+      banner = false;
+    }
+    for (const width of [1280, 768, 320]) {
+      await anon.setViewportSize({ width, height: 900 });
+      const list = anon.getByTestId("mh-player-matches");
+      await expect(list).toBeVisible({ timeout: 20_000 });
+      await expect(list.locator('[data-testid^="mh-player-match-"]'), `${who} lines at ${width}`).toHaveCount(want.lines);
+      const rollup = anon.getByTestId("player-career");
+      if (want.rollup === null) await expect(rollup, `${who}: no career rollup at ${width}`).toHaveCount(0);
+      else await expect(rollup.getByTestId("career-sport-generic")).toContainText(want.rollup);
+      await expectNoHorizontalScroll(anon);
+      const rollupText = want.rollup === null ? "none" : `"${(await rollup.getByTestId("career-sport-generic").locator("p").nth(1).innerText()).trim()}"`;
+      seen.push(`public ${who}@${width}: matches "${(await list.innerText()).replace(/\s+/g, " ").trim().slice(0, 120)}"; career ${rollupText}`);
+      await list.screenshot({ path: testInfo.outputPath(`r122-public-${who.toLowerCase()}-${width}.png`) });
+    }
+  }
+  await anonCtx.close();
+  expect(seen.length, "surfaces read").toBe(12);
+  testInfo.annotations.push({ type: "numbers", description: seen.join(" | ") });
+});

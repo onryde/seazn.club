@@ -25,7 +25,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, archiveDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { createPerson } from "../persons";
 import { divisionPlayerStats } from "../player-stats";
 import { putLineup } from "../fixtures";
@@ -277,6 +277,38 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
     expect(bdByKey.points_won).toBe(23); // 15 + 8 — real summation, not first-row-wins (15) or last (8)
     expect(bdByKey.sets_won).toBe(3); // 2 + 1
     expect(bdByKey.sets_lost).toBe(1); // 0 (absent in Spring) + 1 (Summer)
+  });
+
+  it("ruling 122: volleyball — the roster's coach is listed with no match; a player added after the lineup-less fixture is still listed with it (accepted residue: no join date is stored)", async () => {
+    // The reviewer's scene from 30284f140's review: a volleyball coach and a member added after the fixture were each
+    // listed with 1 match. Ruling 122: a person gets a match only with the player role (a coach never does); with no
+    // lineup recorded, the roster's players get it — and a player added later is among them, because the roster
+    // stores no join date.
+    const { auth } = await seedOrg();
+    const named = async (full_name: string, lane: "player" | "coach") =>
+      createPerson(auth, { full_name, consent: {}, dob: null, gender: null, external_ref: null, lane } as never);
+    const player = await named("VB Player", "player");
+    const coach = await named("VB Coach", "coach");
+    const late = await named("VB Late", "player");
+    const opp = await named("VB Opp", "player");
+    const vb = await seedDivisionWithStage(auth, "volleyball", "default", "Rec");
+    const mine = await makeEntrant(auth, vb.divisionId, "team", "Team Robin", [player.id, coach.id]);
+    const theirs = await makeEntrant(auth, vb.divisionId, "team", "Team Opponent", [opp.id]);
+    await insertFinalizedFixture(vb.stageId, vb.divisionId, mine, theirs);
+    await patchEntrant(auth, mine, {
+      members: [player.id, coach.id, late.id].map((person_id) => ({
+        person_id,
+        squad_number: null,
+        default_position_key: null,
+        is_captain: false,
+        roles: [],
+      })),
+    } as never);
+
+    const card = async (personId: string) => (await personCareerStats(auth, personId)).sports.map((s) => [s.sport_key, s.divisions, s.matches]);
+    expect(await card(player.id), "the roster's player").toEqual([["volleyball", 1, 1]]);
+    expect(await card(coach.id), "the roster's coach: no match, so no card").toEqual([]);
+    expect(await card(late.id), "added after the fixture: still credited (ruling 122's accepted residue)").toEqual([["volleyball", 1, 1]]);
   });
 
   it("a person with zero snapshots gets an empty sports list, not a 404", async () => {

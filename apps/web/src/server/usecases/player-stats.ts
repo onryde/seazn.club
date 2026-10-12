@@ -1030,24 +1030,35 @@ export async function careerMatchesByDivision(
   divisionIds: readonly string[],
 ): Promise<Map<string, CareerPlayedDivision>> {
   if (divisionIds.length === 0) return new Map();
-  const rows =
+  const owned =
     owner.by === "person"
-      ? await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
-          select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
-          from fixtures f
-          join divisions d on d.id = f.division_id
-          join entrant_members em on em.person_id = ${owner.personId}
-            and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-          where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(STATS_MATCH_STATUSES as string[])}`
-      : await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
-          select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
-          from fixtures f
-          join divisions d on d.id = f.division_id
-          join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-          join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
-          where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(STATS_MATCH_STATUSES as string[])}`;
+      ? db`p.id = ${owner.personId}`
+      : db`p.user_id = ${owner.userId} and p.merged_into is null`;
+  // Who a side's match credits (ruling 122, owner "B", 2026-10-12). An individual or pair entrant: its roster, as
+  // always. A team: only players — the side's recorded lineup where it declared one for the fixture (its `player`
+  // rows, bench included; who of the bench came on is ruling 121's later rule), else the roster's members registered
+  // in the player lane. A coach or staff member never gets the match: the roster row carries no such role (its
+  // `roles` are the sport's catalog roles, captain and the like), so the fallback reads the person's lane (V356) and
+  // a sheet reads its own `role` (V357). A player added after a lineup-less fixture is credited with it — no join
+  // date is stored (ruling 122's accepted residue). The public match lines apply the same rule
+  // (`readPlayerMatchSeeds`).
+  const rows = await db<(StatsFixture & { division_id: string; variant_key: string })[]>`
+    select distinct f.id, f.division_id, d.sport_key, d.module_version, d.variant_key
+    from fixtures f
+    join divisions d on d.id = f.division_id
+    join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
+    join persons p on ${owned}
+    where f.division_id in ${db(divisionIds as string[])}
+      and f.status in ${db(STATS_MATCH_STATUSES as string[])}
+      and (
+        (e.kind = 'team'
+          and exists (select 1 from lineups l
+                      where l.fixture_id = f.id and l.entrant_id = e.id and l.person_id = p.id and l.role = 'player'))
+        or (exists (select 1 from entrant_members em where em.entrant_id = e.id and em.person_id = p.id)
+          and (e.kind <> 'team'
+            or (p.lane = 'player'
+              and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = e.id))))
+      )`;
   const played = await fixturesPlayedInStats(db, rows);
   const matches = new Map<string, CareerPlayedDivision>();
   for (const r of rows) {

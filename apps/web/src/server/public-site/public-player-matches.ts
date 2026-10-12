@@ -15,7 +15,8 @@ import "server-only";
 // playing record (the engine's own ruling, `core/lineup.ts` `SquadRole`) — and
 // only a row on an entrant that IS a side of the fixture. A bench row counts
 // only by `benchRowIsAppearance` below. Where a side declared NO lineup for the
-// fixture, its rostered members stand in for one — the only writer of `lineups`
+// fixture, its rostered members stand in for one (a team's players only, ruling
+// 122: its coach and staff never) — the only writer of `lineups`
 // is the organiser's `putLineup`, so an individual or pair entrant (badminton,
 // tennis, …) almost never has a row, and a lineups-only read would list no
 // match at all for those players. Only fixtures that have started count: the
@@ -381,7 +382,10 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
   // `mine` is the person's side of each fixture: their `player` lineup row on
   // one of its two sides where one exists (precedence 0), else their roster
   // membership of a side that declared no lineup for this fixture (precedence
-  // 1). An inner lateral join, so a fixture with neither is not a row at all.
+  // 1) — on a team, only a member registered in the player lane: a coach or
+  // staff member never gets a match (ruling 122, the career count's own rule,
+  // `careerMatchesByDivision`). An inner lateral join, so a fixture with
+  // neither is not a row at all.
   // Someone placed on BOTH sides resolves the same way every read: lineup
   // before roster, then home before away. (`is_home` is a column because a
   // UNION's ORDER BY may name output columns only.)
@@ -413,9 +417,12 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
       union all
       select em.entrant_id, null::text as slot, 1 as precedence, em.entrant_id = f.home_entrant_id as is_home
       from entrant_members em
+      join entrants re on re.id = em.entrant_id
+      join persons rp on rp.id = em.person_id
       where em.person_id = ${personId}
         and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
         and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = em.entrant_id)
+        and (re.kind <> 'team' or rp.lane = 'player')
       order by precedence, is_home desc
       limit 1
     ) mine on true

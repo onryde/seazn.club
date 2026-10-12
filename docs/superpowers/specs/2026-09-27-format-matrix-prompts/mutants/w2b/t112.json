@@ -1692,5 +1692,139 @@
     "name": "a played abandon is Pat"
    }
   ]
+ },
+ {
+  "id": "r122-career-team-roster-lane-dropped",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "            or (p.lane = 'player'\n",
+  "replace": "            or (true\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career.test.ts"
+    ],
+    "name": "ruling 122: volleyball"
+   }
+  ]
+ },
+ {
+  "id": "r122-career-sheet-role-dropped",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "l.person_id = p.id and l.role = 'player'))",
+  "replace": "l.person_id = p.id))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122-career-roster-stands-in-despite-sheet",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "              and not exists (select 1 from lineups dl where dl.fixture_id = f.id and dl.entrant_id = e.id))))",
+  "replace": "              and true)))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122-career-lane-read-for-every-kind",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "          and (e.kind <> 'team'\n",
+  "replace": "          and (false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every individual-entrant sport is unchanged"
+   }
+  ]
+ },
+ {
+  "id": "r122-career-sheet-branch-dropped",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "        (e.kind = 'team'\n",
+  "replace": "        (false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "a lineup-only player"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122-career-sheet-gates-every-kind",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "          and (e.kind <> 'team'\n",
+  "replace": "          and ((e.kind <> 'team' and not exists (select 1 from lineups il where il.fixture_id = f.id and il.entrant_id = e.id))\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "a sheet naming an individual entrant"
+   }
+  ]
+ },
+ {
+  "id": "r122-public-seeds-roster-lane-dropped",
+  "file": "apps/web/src/server/public-site/public-player-matches.ts",
+  "find": "        and (re.kind <> 'team' or rp.lane = 'player')\n",
+  "replace": "        and true\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every team sport"
+   }
+  ]
+ },
+ {
+  "id": "r122-public-seeds-lane-read-for-every-kind",
+  "file": "apps/web/src/server/public-site/public-player-matches.ts",
+  "find": "        and (re.kind <> 'team' or rp.lane = 'player')\n",
+  "replace": "        and (rp.lane = 'player')\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-career-team-players-r122.test.ts"
+    ],
+    "name": "every individual-entrant sport is unchanged"
+   }
+  ]
  }
 ]
