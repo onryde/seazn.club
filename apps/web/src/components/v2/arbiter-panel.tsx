@@ -685,7 +685,9 @@ function noticeSentence(n: ArbiterNotice, f: Fmt): string {
         ? f.t("arbiter.notice.notPlayable")
         : n.code === "VIDEO_NOT_REQUIRED"
           ? f.t("arbiter.notice.notRequired")
-          : f.t("arbiter.notice.failed");
+          : n.code === "ARBITER_PLAYS_THIS_BOARD"
+            ? f.t("arbiter.notice.ownBoard")
+            : f.t("arbiter.notice.failed");
   }
 }
 

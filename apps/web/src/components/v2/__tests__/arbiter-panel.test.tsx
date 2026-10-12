@@ -542,6 +542,8 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
       [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
       [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
+      // Self-override: seated after the panel loaded (it hides own boards).
+      [{ boardId: "f3", kind: "override_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.ownBoard"]!],
       [{ boardId: "f3", kind: "override_failed", code: "UNKNOWN" }, EN["arbiter.notice.failed"]!],
     ];
     const seen = new Set<string>();
@@ -551,7 +553,7 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    expect(seen.size, "ten notices, ten distinct sentences").toBe(10);
+    expect(seen.size, "eleven notices, eleven distinct sentences").toBe(11);
   });
 });
 

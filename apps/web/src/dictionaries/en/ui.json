@@ -6077,6 +6077,7 @@
   "arbiter.notice.overridden": "This board now plays without video. It's in the audit log.",
   "arbiter.notice.notPlayable": "This board is no longer being played.",
   "arbiter.notice.notRequired": "Video isn't required on this board.",
+  "arbiter.notice.ownBoard": "You play on this board, so another organiser must decide on its video.",
   "arbiter.notice.failed": "That didn't go through. Try again.",
   "arbiter.outage.eyebrow": "Only during a video outage",
   "arbiter.outage.title": "Video is unavailable right now",

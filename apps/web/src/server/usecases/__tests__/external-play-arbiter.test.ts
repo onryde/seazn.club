@@ -797,6 +797,48 @@ describe.runIf(HAS_DB)("the decision actions' usecases — who may press them", 
       await sql`select actor_user_id, note from online_chess_audit where fixture_id = ${board.fixtureId} and kind = 'video_override'`,
     ).toEqual([{ actor_user_id: r.ownerUserId, note: "video down" }]);
   });
+
+  // Self-override (coordinator ruling, 2026-10-12): letting a board play
+  // without video excuses its players' cameras, so an organiser who plays on
+  // the board would be excusing their own. C1's shared seated predicate
+  // decides; resync stays allowed, because it only re-reads Lichess.
+  it("self-override: an admin seated on board 1 is refused the override there (any seat kind, nothing written) but may override board 2; resync on board 1 is allowed", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const [one, two] = r.boards;
+    for (const b of [one!, two!]) await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(one!.fixtureId, r.orgId);
+    const onRoster = await seatedAdmin(r, one!.home.userId);
+    // Off the roster, still a player participant: the seat only the shared
+    // predicate sees (a roster-only check would let this one through).
+    const offRoster = await seatedAdmin(r, one!.away.userId);
+    await playerParticipant(one!.fixtureId, one!.away.personId);
+    await replaceMember(one!.away.entrantId, r.orgId);
+    let checked = 0;
+    for (const [who, auth] of [["on the roster", onRoster], ["off the roster, player participant", offRoster]] as const) {
+      expect(await codeOf(overrideVideoAsOrganiser(auth, one!.fixtureId, "video down")), who).toEqual([
+        403,
+        "ARBITER_PLAYS_THIS_BOARD",
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await audits(one!.fixtureId), "no record for the refused board").toHaveLength(0);
+    expect(
+      (await sql<{ at: Date | null }[]>`select video_override_at as at from fixture_external_play where fixture_id = ${one!.fixtureId}`)[0]?.at,
+      "board 1 still needs its cameras",
+    ).toBeNull();
+    // The positive pair: the same admin, a board they do not play on.
+    expect(await overrideVideoAsOrganiser(onRoster, two!.fixtureId, "video down")).toEqual({ overridden: true });
+    expect(
+      await sql`select actor_user_id, note from online_chess_audit where fixture_id = ${two!.fixtureId} and kind = 'video_override'`,
+    ).toEqual([{ actor_user_id: one!.home.userId, note: "video down" }]);
+    // Resync on their OWN board: allowed, and Lichess is read.
+    const reads: string[] = [];
+    const out = await resyncExternalPlay(onRoster, one!.fixtureId, { exportGame: async (id: string) => (reads.push(id), null) });
+    expect(reads, "Lichess read once for board 1").toHaveLength(1);
+    expect(out.adopted).toBe(0);
+  });
 });
 
 describe.runIf(HAS_DB)("fixture_video_participants.user_id / removed_at — V436's guards (SQLSTATE + constraint name)", () => {

@@ -561,8 +561,14 @@ export async function resyncExternalPlay(
 }
 
 /** "Let this board play without video" (D11): Task 8's
- *  organiserOverrideVideo, which owns every refusal (FIXTURE_NOT_PLAYABLE,
- *  VIDEO_NOT_REQUIRED) and the one audit record. */
+ *  organiserOverrideVideo, which owns every other refusal
+ *  (FIXTURE_NOT_PLAYABLE, VIDEO_NOT_REQUIRED) and the one audit record.
+ *
+ *  Self-override (coordinator ruling, 2026-10-12): the override excuses the
+ *  board's cameras, so an organiser who plays on the board would be excusing
+ *  their own — a conflict of interest. C1's shared seated predicate decides,
+ *  before anything is written. Resync has no such guard: it only re-reads
+ *  Lichess and decides nothing. */
 export async function overrideVideoAsOrganiser(
   auth: AuthCtx,
   fixtureId: string,
@@ -570,6 +576,9 @@ export async function overrideVideoAsOrganiser(
 ): Promise<{ overridden: true }> {
   const actorUserId = requireSession(auth, "Letting a board play without video");
   await requireOwnFixture(auth, fixtureId);
+  if (await isSeatedOn(actorUserId, fixtureId)) {
+    throw new HttpError(403, "You play on this board, so another organiser must decide on its video", "ARBITER_PLAYS_THIS_BOARD");
+  }
   await organiserOverrideVideo({ fixtureId, actorUserId, note });
   return { overridden: true };
 }
