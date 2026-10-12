@@ -18,7 +18,7 @@ import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import type { CaptureRecordLine } from "@/server/api-v1/capture-schemas";
 import {
-  attributeLines, keptLines, screenRecordLine, secretRulesOf, tokenTag, type AttributableLine, type ScreenedLine,
+  attributeLines, hasDuplicateKey, keptLines, screenRecordLine, secretRulesOf, tokenTag, type AttributableLine, type ScreenedLine,
 } from "../capture-record";
 
 type Json = Record<string, unknown>;
@@ -26,6 +26,8 @@ const CONTRACTS = resolve(import.meta.dirname, "../../../../../../../docs/contra
 const DIR = resolve(CONTRACTS, "fixtures/capture-record.v1");
 const CONTRACT = JSON.parse(readFileSync(resolve(CONTRACTS, "capture-record.v1.json"), "utf8")) as Json;
 const fixture = (name: string): Json => JSON.parse(readFileSync(resolve(DIR, `${name}.json`), "utf8")) as Json;
+/** A fixture's bytes, as the wire carries them (a `line-server-*` fixture's rule is on its TEXT). */
+const rawFixture = (name: string): string => readFileSync(resolve(DIR, `${name}.json`), "utf8");
 const lineNames = readdirSync(DIR).filter((f) => f.startsWith("line-") && f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
 
 /** The S1 vector's Bearer: `line-secret-sending-tok` carries it as a plain word (capture-contract.test.ts pins it). */
@@ -65,12 +67,12 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
     expect(screenRecordLine("", OTHER_TOK)).toEqual({ ok: false, why: "shape" });
   });
 
-  it("every contract line fixture: valid* ok, invalid*/tampered unreadable (dropped), each secret vector dropped on its OWN rule — the verdict agrees with the file's shape, counted per kind", () => {
+  it("every contract line fixture: valid* ok, invalid*/tampered unreadable (dropped), each secret vector dropped on its OWN rule, each line-server-* (its raw TEXT) unreadable — the verdict agrees with the file's shape, counted per kind", () => {
     const SECRET_RULE: Record<string, string> = {
       "line-secret-sending-tok": "S1", "line-secret-ingest-url": "S2", "line-secret-srt-streamid": "S3",
       "line-secret-streamid-space": "S3", "line-secret-userinfo": "S4", "line-secret-bearer": "S5",
     };
-    let valid = 0, invalid = 0, secret = 0;
+    let valid = 0, invalid = 0, secret = 0, server = 0;
     for (const name of lineNames) {
       const value = fixture(name);
       const r = screenRecordLine(JSON.stringify(value), SENDING_TOK);
@@ -87,12 +89,20 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
         expect(r.ok ? null : r.why === "secret" ? r.rule : r.why, name).toBe(SECRET_RULE[name]);
         expect(fileReads(value), `${name}: premise — the file's shape admits it`).toBe(true);
         secret++;
+      } else if (/^line-server-/.test(name)) {
+        // Review fix 1: the parsed value is a good line (the file reads it); its TEXT names a key twice, and the
+        // server screens the text, so the line is unreadable and dropped.
+        expect(screenRecordLine(rawFixture(name), SENDING_TOK), `${name}: unreadable, dropped`).toEqual({ ok: false, why: "shape" });
+        expect(fileReads(value), `${name}: premise — the file's shape admits the parsed value`).toBe(true);
+        expect(r.ok, `${name}: premise — re-serialised, the duplicate is gone and the line reads ok`).toBe(true);
+        server++;
       } else expect.fail(`${name}: an unrouted line fixture`);
     }
     expect(valid).toBe(22);
-    expect(invalid).toBe(16);
+    expect(invalid).toBe(17);
     expect(secret).toBe(6);
-    expect(valid + invalid + secret).toBe(44);
+    expect(server).toBe(1);
+    expect(valid + invalid + secret + server).toBe(46);
   });
 
   it("S1 is the SENDING Bearer: its vector is ok under another Bearer (a plain word), and dropped as S1 under its own", () => {
@@ -191,6 +201,88 @@ describe("screenRecordLine (§5 under owner ruling RL): the allow-list, then S1�
       checked++;
     }
     expect(checked).toBe(11);
+  });
+
+  it("review fix 1 (PR #943): a key named twice is unreadable — JSON.parse keeps the LAST value, so a first, secret-shaped value would pass a screen of the parsed object; escaped key spellings are the same key — counted", () => {
+    const bearer = "request headers: Authorization: Bearer FAKE-BEARER-VALUE";
+    const cases = [
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"command-failed","message":"${bearer}","message":"ok"}`,
+      // \u0061 is "a": the same key, spelled two ways.
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"command-failed","message":"${bearer}","mess\\u0061ge":"ok"}`,
+      // A reserved key twice, the second a good value.
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"x","kind":"command-failed"}`,
+    ];
+    let checked = 0;
+    for (const text of cases) {
+      expect(JSON.parse(text), `premise — JSON.parse admits it: ${text}`).toBeTypeOf("object");
+      const r = screenRecordLine(text, OTHER_TOK);
+      expect(r, text).toEqual({ ok: false, why: "shape" });
+      expect(JSON.stringify(r)).not.toContain("FAKE-BEARER-VALUE");
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Its positive pair: the same line with the key once, and a value that merely QUOTES a key, read ok.
+    expect(screenRecordLine(`{"at":"2026-10-11T21:19:03.123Z","kind":"command-failed","message":"ok"}`, OTHER_TOK).ok).toBe(true);
+    expect(screenRecordLine(`{"at":"2026-10-11T21:19:03.123Z","kind":"command-failed","message":"\\"message\\": twice"}`, OTHER_TOK).ok).toBe(true);
+  });
+
+  it("review fix 2 (PR #943): an own __proto__ key is unreadable whatever its value — the nested secret never reaches the string-only scan; constructor and prototype (off the list) too — counted", () => {
+    const cases = [
+      rawFixture("line-invalid-proto-key"),
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"thermal","__proto__":"ok"}`,
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"thermal","__proto__":null}`,
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"thermal","constructor":"Bearer FAKE-BEARER-VALUE"}`,
+      `{"at":"2026-10-11T21:19:03.123Z","kind":"thermal","prototype":"Bearer FAKE-BEARER-VALUE"}`,
+    ];
+    let checked = 0;
+    for (const text of cases) {
+      expect(screenRecordLine(text, OTHER_TOK), text).toEqual({ ok: false, why: "shape" });
+      expect(fileReads(JSON.parse(text)), `the file agrees: ${text}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("review fix 1 (PR #943): an ok verdict carries the text the server STORES — the object it screened, re-serialised, never the bytes sent", () => {
+    const sent = `{ "at" : "2026-10-11T21:19:03.123Z", "kind":"thermal", "st\\u0061tus" : 3 , "headroom":0.40 }`;
+    const r = screenRecordLine(sent, OTHER_TOK);
+    expect(r.ok).toBe(true);
+    // Typed from JSON's own rules: the escape decoded, the whitespace gone, 0.40 written 0.4.
+    expect(r.ok ? r.text : null).toBe(`{"at":"2026-10-11T21:19:03.123Z","kind":"thermal","status":3,"headroom":0.4}`);
+  });
+});
+
+describe("hasDuplicateKey (review fix 1): whether a JSON text names one key twice in any object, keys compared decoded", () => {
+  it("the empty cases first: an empty object, an empty array and a bare scalar name no key", () => {
+    expect(hasDuplicateKey("{}")).toBe(false);
+    expect(hasDuplicateKey("[]")).toBe(false);
+    expect(hasDuplicateKey("3")).toBe(false);
+  });
+
+  it("a table typed from RFC 8259 §4 (names SHOULD be unique; a parser keeps the last) — counted", () => {
+    const TABLE: [text: string, dup: boolean][] = [
+      ['{"a":1,"b":2}', false],
+      ['{"a":1,"a":2}', true],
+      ['{"a":1,"\\u0061":2}', true],
+      ['{"a":{"a":1}}', false],                        // the same name in two objects is two keys
+      ['{"a":{"b":1,"b":2}}', true],                   // nested
+      ['[{"a":1},{"a":2}]', false],                    // two objects in an array
+      ['[{"a":1,"a":2}]', true],
+      ['{"a":"\\"a\\":1","b":"a"}', false],        // a key's spelling inside a string VALUE is not a key
+      ['{"a":["a","a"],"b":1}', false],                // strings in an array are values
+      ['{"a\\\\":1,"a":2}', false],                // "a\\" is a backslash after a: another key
+    ];
+    let checked = 0;
+    for (const [text, dup] of TABLE) {
+      expect(JSON.parse(text), `premise — valid JSON: ${text}`).not.toBeUndefined();
+      expect(hasDuplicateKey(text), text).toBe(dup);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
+  it("an assumption made a guard: it is only ever handed text JSON.parse accepted — an unterminated string is a named refusal, never a hang", () => {
+    expect(() => hasDuplicateKey('{"a')).toThrow(/hasDuplicateKey: not JSON/);
   });
 });
 
@@ -312,7 +404,7 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
 // keptLines — the owner's ruling RL (2026-10-12): a bad line is dropped, never the body refused.
 // ---------------------------------------------------------------------------------------------------------------
 const asLine = (l: AttributableLine): CaptureRecordLine => ({ at: AT, ...l }) as CaptureRecordLine;
-const ok = (l: AttributableLine): ScreenedLine => ({ ok: true, line: asLine(l) });
+const ok = (l: AttributableLine): ScreenedLine => ({ ok: true, line: asLine(l), text: JSON.stringify(asLine(l)) });
 const secretOf = (l: AttributableLine): ScreenedLine => ({ ok: false, why: "secret", rule: "S2", line: asLine(l) });
 const unreadable: ScreenedLine = { ok: false, why: "shape" };
 

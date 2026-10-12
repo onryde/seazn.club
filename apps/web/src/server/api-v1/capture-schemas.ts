@@ -243,8 +243,14 @@ const keyed = <K extends string, T extends z.ZodType>(keys: readonly K[], make: 
 /** ONE NDJSON line (§5). `at` is the beat's `at`, byte for byte (R5); `level` absent means info; `sid` only what
  *  attribution can judge (a uuid, the mask, null); `tokenTag` eight lowercase hex digits, never masked. Strict: a line
  *  with any other key — a never key included, even masked — is refused by this shape, and the server DROPS it (owner
- *  ruling RL, 2026-10-12: a bad line is dropped, never the body refused). The secret-shaped rules run on top (S1–S5). */
-export const CaptureRecordLine = z.strictObject({
+ *  ruling RL, 2026-10-12: a bad line is dropped, never the body refused). The secret-shaped rules run on top (S1–S5).
+ *
+ *  Review fix 2 (PR #943): zod's strict check SKIPS a key named `__proto__` (so the key cannot swap its result's
+ *  prototype), and it skips it silently — such a line would pass, its value (any shape: a nested object escapes the
+ *  string-only secret scan) still in the parsed input. JSON.parse writes `"__proto__"` as an OWN key, which ajv refuses
+ *  like any key off the list; the preprocess refuses it here too, so the twin agrees with the file. It adds an issue
+ *  and changes nothing, so toJSONSchema (input and output) is the object's own and the parity test is unchanged. */
+const recordLineObject = z.strictObject({
   at: BeatAt,
   kind: RecordWord,
   level: z.enum(["debug", "info", "warn", "error", "***"]).optional(),
@@ -256,6 +262,12 @@ export const CaptureRecordLine = z.strictObject({
   ...keyed(RECORD_SCALAR_KEYS, scalar),
   ...RECORD_NARROWED_SCALARS,
 });
+export const CaptureRecordLine = z.preprocess((input, ctx) => {
+  if (typeof input === "object" && input !== null && Object.hasOwn(input, "__proto__")) {
+    ctx.addIssue({ code: "custom", message: "a key off the allow-list (__proto__)", input });
+  }
+  return input;
+}, recordLineObject);
 export type CaptureRecordLine = z.infer<typeof CaptureRecordLine>;
 
 /** P9: `R-` and 4 upper-case Crockford base32 characters (no I, L, O or U); up to 8 without a new version. */

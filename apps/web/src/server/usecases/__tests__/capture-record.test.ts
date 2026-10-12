@@ -112,7 +112,7 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     expect(await records(r.fixtureId)).toEqual([]);
   });
 
-  it("201: the kept lines are stored verbatim with their counts, the code's slot, the org and competition, 30 days' expiry and the session link — then a SECOND upload stores a second record with a new ref (not idempotent)", async () => {
+  it("201: the kept lines are stored (as the server re-serialises them: byte for byte here, since each was sent as JSON.stringify writes it) with their counts, the code's slot, the org and competition, 30 days' expiry and the session link — then a SECOND upload stores a second record with a new ref (not idempotent)", async () => {
     const r = await captureRig({ credits: 1 });
     const S = await r.start(phoneId("a"));
     const lines = [pairLine(r.tok), deviceLine("inside"), sidLine(S, "own session"), unpairedLine()];
@@ -254,6 +254,28 @@ describe.skipIf(!HAS_DB)("postCaptureRecord (spec 2026-10-12)", () => {
     for (const entry of logged) for (const leaked of ["FAKE-STREAM-KEY", "battery", "FAKE-NOT-JSON"]) expect(entry).not.toContain(leaked);
     // The log line carries the counts, the bad lines' count among them.
     expect(logged.some((e) => e.includes("\"invalid\":6"))).toBe(true);
+  });
+
+  it("review fixes 1–2 (PR #943): a kept line is stored as the server re-serialised the object it SCREENED, never the bytes sent; a key named twice (its first value a Bearer) and an own __proto__ key (its value an object holding one) are each dropped as bad — neither value stored, linked or logged", async () => {
+    const r = await captureRig();
+    const canonSent = `{ "at" : "${AT}", "kind":"thermal", "st\\u0061tus" : 3 , "message":"canon" }`;
+    const rows = [
+      JSON.stringify(pairLine(r.tok, "own pair")),
+      canonSent,
+      `{"at":"${AT}","kind":"command-failed","message":"request headers: Authorization: Bearer FAKE-DUP-BEARER","message":"ok"}`,
+      `{"at":"${AT}","kind":"thermal","status":2,"__proto__":{"message":"Authorization: Bearer FAKE-PROTO-BEARER"}}`,
+    ];
+    // Premises: JSON.parse reads the duplicate as its LAST value, and the __proto__ value as an own key.
+    expect((JSON.parse(rows[2]!) as { message: string }).message).toBe("ok");
+    expect(Object.hasOwn(JSON.parse(rows[3]!) as object, "__proto__")).toBe(true);
+    const answer = await postCaptureRecord(r.code, r.tok, post(rows.join("\n")), r.now());
+    expect(answer).toMatchObject({ kept: 2, dropped: 2 });
+    const [row] = await records(r.fixtureId);
+    // Typed from JSON's rules, not from the module: the escape decoded, the whitespace gone.
+    const canonStored = `{"at":"${AT}","kind":"thermal","status":3,"message":"canon"}`;
+    expect(row).toMatchObject({ received_lines: 4, kept_lines: 2, dropped_lines: 2, invalid_lines: 2, lines: `${rows[0]}\n${canonStored}` });
+    for (const leaked of ["FAKE-DUP-BEARER", "FAKE-PROTO-BEARER", "__proto__", "st\\u0061tus"]) expect(row!.lines, leaked).not.toContain(leaked);
+    for (const entry of logged) for (const leaked of ["FAKE-DUP-BEARER", "FAKE-PROTO-BEARER"]) expect(entry).not.toContain(leaked);
   });
 
   it("ruling RL's empty case: a record whose EVERY line is bad is still 201 with kept 0 (P10), stored as counts — dropped and invalid_lines both all of it", async () => {

@@ -63,12 +63,10 @@ export async function postCaptureRecord(
   const sessionsOfCode = new Set(ofCode.map((r) => r.id));
   // §6 A2: T(code) is every tok issued for the code — one today, the Bearer that sent the record (§0.1).
   const keep = keptLines(screened, { sessionsOfCode, tagsOfCode: new Set([tokenTag(tok)]) });
-  // keptLines keeps only an `ok` verdict, which is only ever read from a decoded line; the filter restates both in the
-  // safe direction, so no reading of `keep` can ever store a bad line.
-  const keptPairs = screened.flatMap((s, i) => {
-    const text = body.lines[i];
-    return keep[i] && s.ok && typeof text === "string" ? [{ text, line: s.line }] : [];
-  });
+  // keptLines keeps only an `ok` verdict; the filter restates it in the safe direction, so no reading of `keep` can
+  // ever store a bad line. What is stored is the verdict's `text` — the object the screen judged, re-serialised — never
+  // the bytes sent (review fix 1, PR #943: a spelling the screen never saw, such as a key named twice, cannot be kept).
+  const keptPairs = screened.flatMap((s, i) => (keep[i] && s.ok ? [{ text: s.text, line: s.line }] : []));
   const keptTexts = keptPairs.map((p) => p.text);
   const linked = sidsOf(keptPairs.map((p) => p.line));
   // A1 kept a uuid-sid line only when its session is the code's, so every link is one A1 read above.

@@ -61,9 +61,46 @@ export function secretRulesOf(value: string, bearer: string): SecretRule[] {
  * The verdict carries no value and no key name: a dropped line is counted and nothing more.
  */
 export type ScreenedLine =
-  | { ok: true; line: CaptureRecordLine }
+  /** `text` is what the server STORES: the very object it screened, re-serialised — never the bytes sent (review fix
+   *  1, PR #943), so no spelling the screen did not see can reach storage. */
+  | { ok: true; line: CaptureRecordLine; text: string }
   | { ok: false; why: "secret"; rule: SecretRule; line: CaptureRecordLine }
   | { ok: false; why: "shape" };
+
+/**
+ * Whether a JSON text names one key twice in any object (review fix 1, PR #943). JSON.parse keeps the LAST of two
+ * same-named keys, so a first value — a credential, say — would pass a screen of the parsed object unseen. Keys
+ * compare DECODED (`"a"` and `"a"` are one key). Only ever handed text JSON.parse accepted: an unterminated
+ * string breaks that, and is a named refusal rather than a scan past the end.
+ */
+export function hasDuplicateKey(text: string): boolean {
+  const objects: ({ keys: Set<string>; expectKey: boolean } | null)[] = [];   // null: an array
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') {
+        if (j >= text.length) throw new RangeError("hasDuplicateKey: not JSON (an unterminated string)");
+        j += text[j] === "\\" ? 2 : 1;
+      }
+      const top = objects.at(-1);
+      if (top?.expectKey) {
+        const key = JSON.parse(text.slice(i, j + 1)) as string;
+        if (top.keys.has(key)) return true;
+        top.keys.add(key);
+        top.expectKey = false;
+      }
+      i = j;
+    } else if (c === "{") objects.push({ keys: new Set(), expectKey: true });
+    else if (c === "[") objects.push(null);
+    else if (c === "}" || c === "]") objects.pop();
+    else if (c === ",") {
+      const top = objects.at(-1);
+      if (top) top.expectKey = true;
+    }
+  }
+  return false;
+}
 
 export function screenRecordLine(text: string | null, bearer: string): ScreenedLine {
   if (text === null) return { ok: false, why: "shape" };
@@ -73,6 +110,9 @@ export function screenRecordLine(text: string | null, bearer: string): ScreenedL
   } catch {
     return { ok: false, why: "shape" };
   }
+  // Review fix 1: a key named twice hides its first value from everything below — the line cannot be read as sent.
+  if (hasDuplicateKey(text)) return { ok: false, why: "shape" };
+  // Review fix 2: the twin also refuses an own `__proto__` key, which zod's strict check would otherwise skip.
   const parsed = CaptureRecordLine.safeParse(raw);
   if (!parsed.success) return { ok: false, why: "shape" };
   // The RAW parsed values, not the twin's output: `at` is normalised by the twin, and the rule reads what was sent.
@@ -81,7 +121,7 @@ export function screenRecordLine(text: string | null, bearer: string): ScreenedL
     const rules = secretRulesOf(value, bearer);
     if (rules.length > 0) return { ok: false, why: "secret", rule: rules[0]!, line: parsed.data };
   }
-  return { ok: true, line: parsed.data };
+  return { ok: true, line: parsed.data, text: JSON.stringify(raw) };
 }
 
 /** What attribution reads of a line: its kind, its sid and a pair line's tag. */

@@ -54,7 +54,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "ee52b024e897a9ca67f45e79d0b561d88fb45503ecf5fd9bcd21d2df3ff231cf",
+  "capture-record.v1.json": "eeeb9711f0de4c5ed9b1b284f505c2fb0fa8a5a30873b49b74f7a8600043f638",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -271,7 +271,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
-  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 58 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 60 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -279,7 +279,7 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
 // ---------------------------------------------------------------------------------------------------------------
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 44], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 46], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
 /** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190 (branch feat/s1-d3-fixes), list for list: the rulebook the
  *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
@@ -321,6 +321,15 @@ const RECORD_SERVER_ONLY: Record<string, [rule: "S1" | "S2" | "S3" | "S4" | "S5"
   "line-secret-userinfo": ["S4", "S4 a URL with userinfo"],
   "line-secret-bearer": ["S5", "S5 a Bearer credential"],
 };
+/** Review fix 1 (PR #943): rules on a line's TEXT, which no JSON Schema can state because a parser has already applied
+ *  them — a key named twice (JSON.parse keeps the LAST value, so a first, secret-shaped value would pass a screen of
+ *  the parsed object). Each entry: the premise its fixture's raw text must meet, typed here (a count of one key's
+ *  occurrences, never the server's own scanner), and the words the root states. */
+const RECORD_SERVER_TEXT_RULES: Record<string, [premise: (text: string) => boolean, stated: string]> = {
+  "line-server-duplicate-key": [(t) => t.split('"message":').length - 1 === 2, "names any key twice"],
+};
+/** A fixture's bytes, as the server would read them off the wire. */
+const rawFixture = (dir: string, name: string): string => readFileSync(resolve(FIXTURES, dir, `${name}.json`), "utf8");
 /** Review fix 1 (2026-10-12): every rule skips the scrub's mask, so capture's OWN scrubbed output is admitted. Each
  *  near miss is a `line-valid-*` line whose `message` carries a credential masked in place (`***`): it trips no rule,
  *  and the same line with the mask replaced by a credential trips exactly the rule named here. The srt one is
@@ -499,6 +508,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         // A record `line-secret-*` vector: the line shape (twin AND file) admits it; only the server's S1–S5 refuse it,
         // which the record's own tests below prove rule by rule.
         else if (dir === RECORD_DIR && prefix === "line-" && /^secret-.+$/.test(kind)) admitted = true;
+        // A record `line-server-*` fixture: its PARSED value is a good line (both shapes admit it); the server reads the
+        // line's TEXT and drops it on a rule no schema can state (review fix 1: a key named twice).
+        else if (dir === RECORD_DIR && prefix === "line-" && /^server-.+$/.test(kind)) admitted = true;
         else expect.fail(`${dir}/${name}: neither valid* nor invalid-*/tampered*/wrong-version`);
         expect(parses(twin, value), `${dir}/${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
         // A ZOD_ONLY fixture breaks a rule the file states in prose only: ajv ADMITS it, and only the twin refuses it.
@@ -516,7 +528,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 58);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 60);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1117,7 +1129,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const root = rootOf(contract(RECORD));
     const names = readdirSync(resolve(FIXTURES, RECORD_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
     const perRoute = new Map<string, number>();
-    let secrets = 0;
+    let secrets = 0, serverOnly = 0;
     for (const name of names) {
       const route = RECORD_ROUTES.find(([prefix]) => name.startsWith(prefix));
       expect(route, `${RECORD_DIR}/${name}: no shape routes this fixture`).toBeDefined();
@@ -1134,7 +1146,16 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         expect(root.description, `${name}: the root states "${entry![1]}"`).toContain(entry![1]);
         admitted = true;
         secrets++;
-      } else expect.fail(`${RECORD_DIR}/${name}: neither valid* nor invalid-*/tampered* nor line-secret-*`);
+      } else if (prefix === "line-" && /^server-.+$/.test(kind)) {
+        // Review fix 1: a rule on the line's TEXT. The file's shape admits the parsed value; the server drops the line,
+        // and the root says so in the words its entry names.
+        const entry = RECORD_SERVER_TEXT_RULES[name];
+        expect(entry, `${name}: a server-only text rule names itself`).toBeDefined();
+        expect(root.description, `${name}: the root states "${entry![1]}"`).toContain(entry![1]);
+        expect(entry![0](rawFixture(RECORD_DIR, name)), `${name}: premise — the file's TEXT breaks the rule`).toBe(true);
+        admitted = true;
+        serverOnly++;
+      } else expect.fail(`${RECORD_DIR}/${name}: neither valid* nor invalid-*/tampered* nor line-secret-* nor line-server-*`);
       expect(fileAdmits(RECORD, pointer, value), `${RECORD_DIR}/${name}: ${RECORD}${pointer} ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
       perRoute.set(prefix, (perRoute.get(prefix) ?? 0) + 1);
     }
@@ -1144,10 +1165,12 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(44 + 6 + 8);
+    expect(names).toHaveLength(46 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
+    expect(serverOnly, "server-only text rules swept").toBe(Object.keys(RECORD_SERVER_TEXT_RULES).length);
+    expect(serverOnly).toBe(1);
     // S1's vector is the Bearer the route's test will send, as a plain word the file cannot tell from any other.
     expect(fixture(RECORD_DIR, "line-secret-sending-tok").state).toBe(RECORD_SENDING_TOK);
     expect(Object.keys(contract(RECORD).$defs as Json).sort()).toEqual([...RECORD_DEFS].sort());
