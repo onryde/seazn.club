@@ -18,6 +18,7 @@ vi.mock("../camera-loader", async (actual) => ({
 }));
 
 import { RoomShell, Screen } from "../room-shell";
+import { CameraGaveUpNotice } from "../room-cards";
 import { initialRoomState } from "../room-state";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "../camera-session";
 import type { RoomSnapshot } from "../room-snapshot";
@@ -607,5 +608,14 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     (propsOf(notices[0]!).onReload as () => void)();
     expect(reload).toHaveBeenCalledTimes(1);
     island.unmount();
+
+    // …and the notice's own button is what fires it.
+    const onReload = vi.fn();
+    const card = renderIsland(CameraGaveUpNotice, { onReload, t: ((k: string) => k) as never });
+    const buttons = [...new Set(walk(card.tree()).filter((e) => propsOf(e)["data-testid"] === "room-camera-reload"))];
+    expect(buttons).toHaveLength(1);
+    (propsOf(buttons[0]!).onClick as () => void)();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    card.unmount();
   });
 });
