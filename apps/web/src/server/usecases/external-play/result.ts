@@ -368,6 +368,46 @@ async function afterDraw(s: GameSnapshot, fixtureId: string, auth: Awaited<Retur
   return h.held ? heldAnswer(h.reason) : { wrote: "draw" };
 }
 
+/** T16: a draw the ORGANISER wrote (resolveExternalPlay's "Draw") is the
+ *  same producer R2 names — a written draw whose fold then awaits its
+ *  decider — so it is held `tiebreak_owed`, under the same fixture lock as
+ *  hold(). Unlike a snapshot's hold it REPLACES any reason on the row: the
+ *  organiser's own decision is the newest word on the board, and the queue
+ *  must now ask for the winner, not repeat the diagnosis just decided.
+ *  `true` when the board is now held. */
+export async function holdOwedTiebreak(fixtureId: string, auth: Awaited<ReturnType<typeof mintOrgOwnerAuth>>, detail: string): Promise<boolean> {
+  if (!tiebreakPending(await getFixtureState(auth, fixtureId))) return false;
+  return sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+    const [row] = await tx<{ status: string; fixture_status: string }[]>`
+      select ep.status, f.status as fixture_status
+        from fixture_external_play ep join fixtures f on f.id = ep.fixture_id
+       where ep.fixture_id = ${fixtureId}
+         for update of ep`;
+    // hold()'s two refusals: a closed bridge, a fixture settled meanwhile.
+    if (!row || row.status === "finished" || !isPlayableFixtureStatus(row.fixture_status)) return false;
+    await tx`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'tiebreak_owed', revoked_seat = null,
+             draw_offer_by = null, last_error = ${detail}, updated_at = now()
+       where fixture_id = ${fixtureId}`;
+    return true;
+  });
+}
+
+/** The engine's own "a tie-break is owed" (boardgame.awaitingDecider), for
+ *  T16's resolve: such a board takes a winner only, as the organiser's
+ *  settle (W2a). */
+export function tiebreakIsPending(fs: { state: unknown }): boolean {
+  return tiebreakPending(fs);
+}
+
+/** The fold's phase (`pre` before any event), for T16's resolve: a result
+ *  is written to a `live` fold only (boardgame decideResult). */
+export function foldPhaseOf(state: unknown): string {
+  return phaseOf(state);
+}
+
 function phaseOf(state: unknown): string {
   if (state === null || state === undefined) return "pre"; // no event yet
   const phase = (state as { phase?: unknown }).phase;

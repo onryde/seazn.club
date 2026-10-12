@@ -1,0 +1,195 @@
+import "server-only";
+// T16 — the organiser settles an online board (chess design §3.6, §7): the
+// queue's "Settle the result" for a held board, and the arbiter panel's
+// "Settle the result now…" for any board still being played.
+//
+// The result is written through the normal scoring path under the CALLER's
+// own authority — a signed-in owner or admin, whom W2a's organiser-only gate
+// admits — so the ledger's `recorded_by` names who settled it. That row is
+// the audit record (controller ruling 2026-10-12: one authority per fact).
+//
+// Never gated by the online-chess flag: settling FINISHES play (T20).
+//
+// What the organiser's choice means on the ledger (FIDE Laws: a player absent
+// at the start of play loses by default, Art. 6.7; any other decision of an
+// arbiter is an adjudication):
+//   - "X wins"  — `boardgame.result {winner: X}`, method `forfeit` when the
+//                 LOSER is a recorded no-show, `adjudication` otherwise;
+//   - "Draw"    — `boardgame.result {winner: null, method: adjudication}`. In
+//                 a bracket the engine opens the tie-break, and the board is
+//                 held `tiebreak_owed` by the same rule as a game's draw (R2):
+//                 a knockout draw is never decided;
+//   - "No result" — `{winner: null, method: double_forfeit}`, the engine's
+//                 no_result (never a tie-break);
+//   - a board whose tie-break is owed takes a winner only, written as the
+//     organiser's settle (`core.settle {method: organiser}`, W2a).
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import { getFixtureState } from "../fixtures";
+import { scoreEvent } from "../scoring";
+import { whiteSideOf, type Side } from "./guard";
+import { isPlayableFixtureStatus } from "./preflight";
+import { foldPhaseOf, holdOwedTiebreak, tiebreakIsPending } from "./result";
+import { isSeatedOn } from "./seated";
+
+export const RESOLVE_KINDS = ["home_wins", "away_wins", "draw", "no_result"] as const;
+export type ResolveKind = (typeof RESOLVE_KINDS)[number];
+
+/** `finished`: the board has its result. `tiebreak_owed`: the organiser's
+ *  draw opened a bracket tie-break — the board stays held for the winner. */
+export type ResolveOutcome = { status: "finished" | "tiebreak_owed" };
+
+/** The holds whose colour stayed away (sweep.ts, result.ts NO_SHOW_REASONS):
+ *  a win against that colour is a default. Both absent: every loser is one. */
+const ABSENT_BY_REASON: Partial<Record<NeedsReason, "white" | "black" | "both">> = {
+  no_show_white: "white",
+  no_show_black: "black",
+  no_show_both: "both",
+  double_walkover_blocked: "both",
+};
+
+type Board = {
+  orgId: string;
+  fixtureStatus: string;
+  homeEntrantId: string | null;
+  awayEntrantId: string | null;
+  bridgeStatus: string;
+  needsReason: string | null;
+  whiteSide: Side | null;
+};
+
+function requireOrganiserSession(auth: AuthCtx): string {
+  if (auth.via !== "session" || auth.userId === null) {
+    throw new HttpError(403, "Settling a board needs a signed-in organiser", "ORGANISER_SESSION_REQUIRED");
+  }
+  return auth.userId;
+}
+
+/** The board as this club holds it. Online play may have been switched off
+ *  since the open: the bridge row is what makes it an online board to settle,
+ *  so the guard's "online now" is not asked. */
+async function loadBoard(auth: AuthCtx, fixtureId: string): Promise<Board> {
+  const [row] = await sql<Board[]>`
+    select f.org_id as "orgId", f.status as "fixtureStatus",
+           f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
+           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.white_side as "whiteSide"
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      join fixture_external_play ep on ep.fixture_id = f.id
+     where f.id = ${fixtureId} and d.sport_key = 'boardgame'`;
+  if (!row || row.orgId !== auth.orgId) throw new HttpError(404, "no online board here", "NOT_FOUND");
+  return row;
+}
+
+/** A board whose fixture was settled through another path while its bridge
+ *  row still reads held or in play: the fixture's decision stands, and the
+ *  row is closed so the queue and the panel agree with it. */
+async function closeBridge(fixtureId: string): Promise<void> {
+  await sql`
+    update fixture_external_play
+       set status = 'finished', needs_reason = null, revoked_seat = null, draw_offer_by = null,
+           finished_at = coalesce(finished_at, now()), updated_at = now()
+     where fixture_id = ${fixtureId} and status <> 'finished'`;
+}
+
+function readReason(raw: string | null): NeedsReason | null {
+  if (raw === null) return null;
+  const r = NEEDS_REASONS.find((x) => x === raw);
+  // V433's CHECK keeps the column inside the vocabulary; a drift is refused
+  // loudly rather than settled on a guess.
+  if (!r) throw new HttpError(500, `needs_organiser row with unknown reason ${JSON.stringify(raw)}`, "NEEDS_REASON_UNKNOWN");
+  return r;
+}
+
+/**
+ * Settle one online board. Refusals, each before anything is written:
+ *  - 403 ORGANISER_SESSION_REQUIRED: not a signed-in person;
+ *  - 404 NOT_FOUND: not this club's online board;
+ *  - 403 ARBITER_PLAYS_THIS_BOARD: the organiser plays on it (T15's seated
+ *    predicate) — another organiser must settle it;
+ *  - 409 ALREADY_RESOLVED: the board already has its result;
+ *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
+ *    tie-break is owed.
+ */
+export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind: ResolveKind): Promise<ResolveOutcome> {
+  if (!(RESOLVE_KINDS as readonly string[]).includes(kind)) {
+    throw new HttpError(422, `not a way to settle a board: ${JSON.stringify(kind)}`, "RESOLVE_KIND_UNKNOWN");
+  }
+  const actorUserId = requireOrganiserSession(auth);
+  const b = await loadBoard(auth, fixtureId);
+  if (await isSeatedOn(actorUserId, fixtureId)) {
+    throw new HttpError(403, "You play on this board, so another organiser must settle it", "ARBITER_PLAYS_THIS_BOARD");
+  }
+  if (!isPlayableFixtureStatus(b.fixtureStatus)) {
+    await closeBridge(fixtureId);
+    throw new HttpError(409, "This board already has its result", "ALREADY_RESOLVED");
+  }
+  if (b.bridgeStatus === "finished") throw new HttpError(409, "This board already has its result", "ALREADY_RESOLVED");
+  if (b.homeEntrantId === null || b.awayEntrantId === null) {
+    // An online board is paired by construction (guard.ts); a seat emptied
+    // since is not one to give a result to.
+    throw new HttpError(409, "This board has no opponent to settle against", "FIXTURE_NOT_PLAYABLE");
+  }
+  const reason = readReason(b.needsReason);
+
+  const fs = await getFixtureState(auth, fixtureId);
+  const winnerOf = (k: ResolveKind) => (k === "home_wins" ? b.homeEntrantId : k === "away_wins" ? b.awayEntrantId : null);
+
+  // A tie-break owed (a bracket draw on file): the organiser picks who goes
+  // through — W2a's settle, never a second game result.
+  if (tiebreakIsPending(fs)) {
+    const winner = winnerOf(kind);
+    if (winner === null) {
+      throw new HttpError(409, "A drawn knockout game needs a winner to go through", "TIEBREAK_NEEDS_WINNER");
+    }
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: fs.last_seq,
+      type: "core.settle",
+      payload: { winner, method: "organiser" },
+      idempotency_key: `extplay:resolve:${fixtureId}:${fs.last_seq}`,
+    });
+    await closeBridge(fixtureId);
+    return { status: "finished" };
+  }
+
+  let payload: { winner: string | null; method: "forfeit" | "adjudication" | "double_forfeit" };
+  if (kind === "draw") payload = { winner: null, method: "adjudication" };
+  else if (kind === "no_result") payload = { winner: null, method: "double_forfeit" };
+  else {
+    const absent = reason === null ? undefined : ABSENT_BY_REASON[reason];
+    let loserAbsent = absent === "both";
+    if (absent === "white" || absent === "black") {
+      const whiteSide = b.whiteSide ?? (await whiteSideOf({ fixtureId, orgId: b.orgId }));
+      const loserSide: Side = kind === "home_wins" ? "away" : "home";
+      loserAbsent = (loserSide === whiteSide) === (absent === "white");
+    }
+    payload = { winner: winnerOf(kind), method: loserAbsent ? "forfeit" : "adjudication" };
+  }
+
+  // boardgame refuses a result before the game starts (decideResult): start
+  // the fold first, as T12's writer does.
+  let seq = fs.last_seq;
+  const phase = foldPhaseOf(fs.state);
+  if (phase === "pre") {
+    await scoreEvent(auth, fixtureId, { expected_seq: seq, type: "core.start", payload: {} });
+    seq += 1;
+  } else if (phase !== "live") {
+    // A playable fixture's fold is pre, live or a pending tie-break (answered
+    // above): anything else is a writer that committed in between.
+    throw new HttpError(409, "This board changed while you were settling it — reload and try again", "ALREADY_RESOLVED");
+  }
+  await scoreEvent(auth, fixtureId, {
+    expected_seq: seq,
+    type: "boardgame.result",
+    payload,
+    idempotency_key: `extplay:resolve:${fixtureId}:${seq}`,
+  });
+
+  if (kind === "draw" && (await holdOwedTiebreak(fixtureId, auth, "the organiser recorded a draw in a bracket: the tie-break is owed"))) {
+    return { status: "tiebreak_owed" };
+  }
+  await closeBridge(fixtureId);
+  return { status: "finished" };
+}

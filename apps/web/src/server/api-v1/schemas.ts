@@ -1363,7 +1363,6 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
-/** POST /fixtures/{id}/external-play/resolve — organiser settles a needs_organiser bridge. */
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3) — the
  *  arbiter's OWN RealtimeKit token for the board's meeting (preset `arbiter`,
  *  receive-only), a FRESH participant per open (fix round 1, I2) whose id
@@ -1412,23 +1411,37 @@ export const ExternalPlayLobbyOut = z.union([
   }),
 ]);
 
+/** POST /fixtures/{id}/external-play/resolve (T16) — the organiser settles
+ *  an online board: the canvas's four buttons ("X wins", "Y wins", "Draw",
+ *  "No result"). The kinds are resolve.ts's RESOLVE_KINDS (kept in step by
+ *  fixtures/[id]/external-play/__tests__/decision-routes.test.ts). */
 export const ResolveExternalPlay = z
   .object({
-    kind: z.enum(["home_forfeit", "away_forfeit", "draw", "no_result"]),
+    kind: z.enum(["home_wins", "away_wins", "draw", "no_result"]),
   })
   .strict();
 export type ResolveExternalPlay = z.infer<typeof ResolveExternalPlay>;
 
+/** `finished`: the board has its result. `tiebreak_owed`: the draw opened a
+ *  bracket tie-break, and the board waits for the organiser to pick who goes
+ *  through. */
 export const ResolveExternalPlayOut = z.object({
-  status: z.literal("finished"),
-  score: z.object({
-    seq: z.number().int(),
-    state_summary: z.unknown(),
-    outcome: z.unknown(),
-    status: z.string(),
-  }),
+  status: z.enum(["finished", "tiebreak_owed"]),
 });
 export type ResolveExternalPlayOut = z.infer<typeof ResolveExternalPlayOut>;
+
+/** POST /fixtures/{id}/external-play/flags/close (T16) — "Let the game go
+ *  on": the flags the organiser was shown, by id. */
+export const CloseExternalPlayFlags = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1).max(50),
+  })
+  .strict();
+export type CloseExternalPlayFlags = z.infer<typeof CloseExternalPlayFlags>;
+export const CloseExternalPlayFlagsOut = z.object({
+  closed: z.number().int(),
+  stillOpen: z.number().int(),
+});
 
 /** POST /fixtures/{id}/external-play/room/act (T14) — a player's intended
  *  move, draw offer/answer, resignation or abort, forwarded by T10's `act`.

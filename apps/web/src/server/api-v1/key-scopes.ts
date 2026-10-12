@@ -368,6 +368,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // authority with a named user, which a key does not have.
   "GET /fixtures/:id/external-play/lobby",
   "POST /fixtures/:id/external-play/resolve",
+  // T16: "Let the game go on" — the closed flag names the signed-in user who
+  // reviewed it (the audit record); a key has no person to name.
+  "POST /fixtures/:id/external-play/flags/close",
   // T15 (design §5.3, D11): the arbiter's join hands out a token that WATCHES
   // players' cameras — a person's act, never a key's; the override's audit
   // record names the signed-in user; the resync sits beside them.
