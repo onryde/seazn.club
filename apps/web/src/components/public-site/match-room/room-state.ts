@@ -67,11 +67,13 @@ export type MoveNotice = "offline" | "refused" | "invalid" | "failed";
 
 /** The act route's answers that are a RULE refusing the act, not a failure
  *  (notice routing ruling): 400 — the move string itself (T3's INVALID_UCI,
- *  a promotion with no piece, a malformed body); 404 — T10 refusing a board
- *  it will not take this act on (a frozen seat, no game; review I2); 422 —
- *  semantically invalid. Any other status — a 5xx, a 401, a 409, a 429 — is a
- *  failure: the act "didn't go through", and never "isn't allowed". */
-export const ACT_RULE_REFUSAL_STATUSES: readonly number[] = [400, 404, 422];
+ *  a promotion with no piece, a malformed body); 422 — semantically invalid.
+ *  Any other status — a 5xx, a 401, a 409, a 429 — is a failure: the act
+ *  "didn't go through", and never "isn't allowed". So is play's 404 (T14
+ *  re-review 5, I-1): its every cause — no playable game, a hold, a frozen
+ *  seat, a linked account that is not the game's — is the board, the seat or
+ *  the account, never a rule; the re-read that follows says which. */
+export const ACT_RULE_REFUSAL_STATUSES: readonly number[] = [400, 422];
 
 export type RoomState = {
   snap: RoomSnapshot;
@@ -187,15 +189,25 @@ function applyBroadcast(s: RoomState, b: RoomBroadcastWire, receivedAt: number):
   return { ...s, snap: { ...s.snap, game } };
 }
 
+/** The hold and seat state a move notice was raised on: who may act, and
+ *  why not. A change of any of it ends the notice (T14 re-review 5, I-1). */
+function seatState(snap: RoomSnapshot): string {
+  return `${snap.canAct}|${snap.frozen}|${snap.held}`;
+}
+
 /** The notices' endings that no request of the player's causes: a read
  *  that got an answer ends "offline" (even a stale one — the connection is
- *  back), and a board that moved past the refused position ends C2/C3 (it
- *  speaks of a position that no longer stands). */
+ *  back), and C2/C3 end with the board they spoke of — when it moves past
+ *  the refused position, when the server says nobody may act on it (a hold,
+ *  a frozen seat: the screen that says so outranks the notice), and when the
+ *  hold or seat state changes at all, so a stale notice never comes back
+ *  once a hold lifts at the same ply (T14 re-review 5, I-1). */
 function endNotices(before: RoomState, after: RoomState, answered: boolean): RoomState {
   const offlineEnds = answered && after.error === "network";
-  const movedOn =
-    (after.error === "refused" || after.error === "invalid") && plyOf(after.snap.game) > plyOf(before.snap.game);
-  return offlineEnds || movedOn ? { ...after, error: null } : after;
+  const moveNoticeEnds =
+    (after.error === "refused" || after.error === "invalid") &&
+    (plyOf(after.snap.game) > plyOf(before.snap.game) || !after.snap.canAct || seatState(after.snap) !== seatState(before.snap));
+  return offlineEnds || moveNoticeEnds ? { ...after, error: null } : after;
 }
 
 export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
