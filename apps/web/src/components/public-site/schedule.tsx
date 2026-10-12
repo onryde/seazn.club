@@ -170,6 +170,10 @@ export function sharedRoundNames(
     Long lines (cricket innings, set strings) fall back to the headline chip.
     R116-2: an empty seat a walkover was won over (ruling 116) is HER side, so its line is read by her id — the row
     stacks its credited score as any walkover does. */
+/** A decided row's credited headline when it has no per-side lines: the accent pill. Design audit 3.3: a forfeited row
+ *  (its tag beside it) wears the same pill as every other decided row in the list. */
+const HEADLINE_PILL = "rounded-full bg-accent-soft px-2.5 py-0.5 font-display text-sm font-semibold tabular-nums text-accent-strong";
+
 function sideLines(f: PublicFixture): [string, string] | null {
   const perSide = f.summary?.perSide;
   if (!perSide || perSide.length !== 2) return null;
@@ -294,16 +298,14 @@ function ScorebugRow({
         // credited headline when there is one — never a double walkover's 0 — 0.
         <span className="row-span-2 flex items-center gap-1.5 self-center">
           {!doubleWalkover && f.summary?.headline ? (
-            <span className="font-display text-sm font-semibold tabular-nums text-ink">{f.summary.headline}</span>
+            <span className={HEADLINE_PILL}>{f.summary.headline}</span>
           ) : null}
           {chip}
         </span>
       ) : (
         <span
           className={`row-span-2 self-center ${
-            f.summary?.headline
-              ? "rounded-full bg-accent-soft px-2.5 py-0.5 font-display text-sm font-semibold tabular-nums text-accent-strong"
-              : "text-[11px] text-ink-muted"
+            f.summary?.headline ? HEADLINE_PILL : "text-[11px] text-ink-muted"
           }`}
         >
           {f.summary?.headline ?? (f.venue_name && railMode === "time" ? f.venue_name : "")}

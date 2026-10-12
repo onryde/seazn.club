@@ -305,6 +305,24 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
     expect(row).not.toMatch(/>0<\/span>/);
   });
 
+  // Design audit 3.3: a forfeited row with no per-side lines (a line too long for the score column — cricket's
+  // "120/3 (20)") shows its credited headline. Every other decided row in this list shows a headline as the accent
+  // pill; this one read as plain text. The pill's classes are read off a played row's own headline in the same list,
+  // never retyped here.
+  it("audit 3.3: a forfeited row's credited headline wears the list's own headline pill", async () => {
+    const long = { headline: "120/3 – 0/0", perSide: [{ entrantId: "h", line: "120/3 (20)" }, { entrantId: "a", line: "0/0 (0)" }] };
+    const h = await render([
+      fixture({ id: "p1", status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } as never, summary: long as never }),
+      fixture({ id: "f1", outcome: award("walkover") as never, summary: long as never }),
+    ]);
+    const pill = /<span class="([^"]*)">120\/3 – 0\/0<\/span>/.exec(rowOf(h, "p1"))?.[1];
+    expect(pill, "premise: a played row with no per-side lines shows its headline pill").toContain("bg-accent-soft");
+    const forfeited = /<span class="([^"]*)">120\/3 – 0\/0<\/span>/.exec(rowOf(h, "f1"))?.[1];
+    expect(forfeited, "the forfeited row's headline, beside its tag").toBeDefined();
+    expect(new Set(forfeited!.split(/\s+/u)), "the same pill as the played row's").toEqual(new Set(pill!.split(/\s+/u).filter((c) => !c.startsWith("row-span") && !c.startsWith("self-"))));
+    expect(rowOf(h, "f1")).toContain(">w/o<");
+  });
+
   it("the positive pair: a caller that hands no forfeit copy shows no tag", async () => {
     const row = rowOf(await render([fixture({ outcome: award("walkover") as never })], false), "f1");
     expect(row).not.toContain('role="img"');
