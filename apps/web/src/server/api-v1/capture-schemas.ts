@@ -194,6 +194,103 @@ export const CAPTURE_SCORING_LINK_URL_RE = new RegExp("^https://[^/]+/score/dl_[
 export const CaptureScoringLinkOk = z.strictObject({ url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE) });
 export type CaptureScoringLinkOk = z.infer<typeof CaptureScoringLinkOk>;
 
+// ---------------------------------------------------------------------------------------------------------------
+// capture-record.v1 (spec 2026-10-12-capture-record-upload-design.md, approved by the owner 2026-10-12): the record
+// upload `POST …/codes/{code}/records`. The body is NDJSON and THIS line shape is ONE line.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** §5: at most this many NON-EMPTY lines, and at most this many bytes, both measured on the DECOMPRESSED body. */
+export const CAPTURE_RECORD_MAX_LINES = 1000;
+export const CAPTURE_RECORD_MAX_BYTES = 1_048_576;
+
+/** allow-list.json's plainWord (`^[A-Za-z0-9_.:-]{1,64}$`) or the scrub's mask `***`. */
+const RecordWord = z.string().regex(/^([A-Za-z0-9_.:-]{1,64}|[*]{3})$/);
+/** A public https URL with no userinfo, query or fragment, or the mask. */
+const RecordPublicUrl = z.string().regex(new RegExp("^([Hh][Tt][Tt][Pp][Ss]://[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"));
+const Scalar = [z.number(), z.boolean(), z.null()] as const;
+const plain = () => z.union([RecordWord, ...Scalar]).optional();
+const publicUrl = () => z.union([RecordPublicUrl, ...Scalar]).optional();
+const text = () => z.union([z.string(), ...Scalar]).optional();
+const scalar = () => z.union([...Scalar]).optional();
+
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190, class by class (§5). `kind` and
+ *  `sid` and `tokenTag` are plain keys the line narrows below, as are four scalars (RECORD_NARROWED_SCALARS); a plain
+ *  key named like one of the line's own keys is written `field_<key>`. A key capture adds is a contract bump here, in
+ *  step with capture's change. */
+const RECORD_PLAIN_KEYS = [
+  "action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
+  "failure", "field", "from", "host", "intent", "key", "field_kind", "lastEnd", "lock", "mode", "ms", "notReady", "op",
+  "phase", "pickSource", "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed",
+  "side", "site", "slot", "source", "startFailed", "state", "status", "tag", "to", "transport", "word",
+] as const;
+const RECORD_PUBLIC_URL_KEYS = ["url", "playbackUrl", "overlayUrl"] as const;
+const RECORD_TEXT_KEYS = ["message", "problems"] as const;
+const RECORD_SCALAR_KEYS = [
+  "audioFps", "camera", "counted", "encodeListed", "exitAtMs", "failed", "gapMs", "granted", "headroom", "held",
+  "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs",
+  "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
+  "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive",
+] as const;
+/** Scalars the allow-list's own reasons narrow (capture ebac190): a size, a count and a wait — integers of at least 0 —
+ *  and a yes/no. Capture writes them from typed fields (Kotlin Int/Long/Boolean, JS `TextEncoder` length), never null. */
+const count = () => z.number().int().min(0).optional();
+const RECORD_NARROWED_SCALARS = {
+  bytes: count(), failures: count(), retryMs: count(), pickAspect16x9: z.boolean().optional(),
+};
+const keyed = <K extends string, T extends z.ZodType>(keys: readonly K[], make: () => T): Record<K, T> =>
+  Object.fromEntries(keys.map((k) => [k, make()])) as Record<K, T>;
+
+/** ONE NDJSON line (§5). `at` is the beat's `at`, byte for byte (R5); `level` absent means info; `sid` only what
+ *  attribution can judge (a uuid, the mask, null); `tokenTag` eight lowercase hex digits, never masked. Strict: a line
+ *  with any other key — a never key included, even masked — is refused by this shape, and the server DROPS it (owner
+ *  ruling RL, 2026-10-12: a bad line is dropped, never the body refused). The secret-shaped rules run on top (S1–S5).
+ *
+ *  Review fix 2 (PR #943): zod's strict check SKIPS a key named `__proto__` (so the key cannot swap its result's
+ *  prototype), and it skips it silently — such a line would pass, its value (any shape: a nested object escapes the
+ *  string-only secret scan) still in the parsed input. JSON.parse writes `"__proto__"` as an OWN key, which ajv refuses
+ *  like any key off the list; the preprocess refuses it here too, so the twin agrees with the file. It adds an issue
+ *  and changes nothing, so toJSONSchema (input and output) is the object's own and the parity test is unchanged. */
+const recordLineObject = z.strictObject({
+  at: BeatAt,
+  kind: RecordWord,
+  level: z.enum(["debug", "info", "warn", "error", "***"]).optional(),
+  ...keyed(RECORD_PLAIN_KEYS, plain),
+  sid: z.union([z.uuid(), z.literal("***"), z.null()]).optional(),
+  tokenTag: z.string().regex(/^[0-9a-f]{8}$/).optional(),
+  ...keyed(RECORD_PUBLIC_URL_KEYS, publicUrl),
+  ...keyed(RECORD_TEXT_KEYS, text),
+  ...keyed(RECORD_SCALAR_KEYS, scalar),
+  ...RECORD_NARROWED_SCALARS,
+});
+export const CaptureRecordLine = z.preprocess((input, ctx) => {
+  if (typeof input === "object" && input !== null && Object.hasOwn(input, "__proto__")) {
+    ctx.addIssue({ code: "custom", message: "a key off the allow-list (__proto__)", input });
+  }
+  return input;
+}, recordLineObject);
+export type CaptureRecordLine = z.infer<typeof CaptureRecordLine>;
+
+/** P9: `R-` and 4 upper-case Crockford base32 characters (no I, L, O or U); up to 8 without a new version. */
+export const CAPTURE_RECORD_REF_RE = /^R-[0-9A-HJKMNP-TV-Z]{4,8}$/;
+const RecordCount = z.number().int().min(0).max(CAPTURE_RECORD_MAX_LINES);
+/** 201: the bare `{ref, kept, dropped}` (RD: the app shows only the ref). */
+export const CaptureRecordOk = z.strictObject({ ref: z.string().regex(CAPTURE_RECORD_REF_RE), kept: RecordCount, dropped: RecordCount });
+export type CaptureRecordOk = z.infer<typeof CaptureRecordOk>;
+
+/** Q2 (owner, 2026-10-12): the record's OWN refusal twin — `too_large` is a new word, and adding it to the shared
+ *  CaptureRefusalCode would change every other capture contract. Never `replaced` (R4). */
+export const CaptureRecordRefusalCode = z.enum(["code_ended", "not_a_stream_code", "too_large", "invalid", "rate_limited", "unavailable"]);
+export type CaptureRecordRefusalCode = z.infer<typeof CaptureRecordRefusalCode>;
+export const CaptureRecordRefusal = z.strictObject({ code: CaptureRecordRefusalCode, message: z.string() });
+export type CaptureRecordRefusal = z.infer<typeof CaptureRecordRefusal>;
+
+/** P8, the contract's `$defs.secretS2`–`secretS5`, which the server runs on every string value. Each skips the scrub's
+ *  mask: `***` with no letter or digit after it. The parity test pins each pattern to the published bytes. */
+export const CaptureRecordSecretS2 = z.string().regex(new RegExp("[Rr][Tt][Mm][Pp][Ss]?://[^\\s/?#]+/[^\\s/?#]+/(?!\\*\\*\\*(?![A-Za-z0-9]))[^\\s/?#]+"));
+export const CaptureRecordSecretS3 = z.string().regex(new RegExp("\\b(?:[Ss][Tt][Rr][Ee][Aa][Mm][Ii][Dd]|[Pp][Aa][Ss][Ss][Pp][Hh][Rr][Aa][Ss][Ee])(?:=(?!\\*\\*\\*(?![A-Za-z0-9]))[^\\s&]+|\\s+[A-Za-z0-9._~+/=-]{16,})"));
+export const CaptureRecordSecretS4 = z.string().regex(new RegExp("[A-Za-z][A-Za-z0-9+.-]*://(?:[^\\s/?#@:]*:)?(?!\\*\\*\\*@)[^\\s/?#@:]+@"));
+export const CaptureRecordSecretS5 = z.string().regex(new RegExp("\\b[Bb][Ee][Aa][Rr][Ee][Rr]\\s+[A-Za-z0-9._~+/=-]{16,}"));
+
 export const CaptureRefusalCode = z.enum([
   "code_ended", "not_a_stream_code", "already_live", "replaced", "no_destination", "no_credit", "not_entitled",
   "unavailable", "invalid", "rate_limited",

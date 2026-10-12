@@ -128,3 +128,7 @@ export const CHECKOUT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
 export const CAPTURE_CODE_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
 export const CAPTURE_FAIL_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
 export const CAPTURE_START_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 };
+/** Capture record upload (spec 2026-10-12 §8, P2): 10 records an hour per code, in a bucket of its OWN — the records
+ *  route spends this INSTEAD of CAPTURE_CODE_LIMIT, so a Send never pushes a live phone's beats into 429. Fails open as
+ *  the other capture budgets do. */
+export const CAPTURE_RECORD_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 3600 };

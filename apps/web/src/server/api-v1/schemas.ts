@@ -51,6 +51,10 @@ export {
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
   // W27 / W28 (2026-10-06).
   CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_SCORING_LINK_URL_RE, CaptureScoringLinkOk,
+  // capture-record.v1 (spec 2026-10-12, approved).
+  CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
+  CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
+  CaptureRecordSecretS5,
 } from "./capture-schemas.ts";
 // T9: the panel's read model (StreamPhone) reuses the beat's own field shapes, so it cannot drift from the contract.
 import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } from "./capture-schemas.ts";

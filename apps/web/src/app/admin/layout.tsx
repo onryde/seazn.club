@@ -1,12 +1,15 @@
 import { redirect } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { requireStaff } from "@/lib/admin";
+import { getDictionary, t } from "@/lib/i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const staff = await requireStaff().catch(() => null);
   if (!staff) redirect("/login");
+  const dict = await getDictionary(await resolveLocale(), "ui");
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -25,6 +28,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/admin/pass-credit-reversals" className="hover:text-white">Pass credits</Link>
           <Link href="/admin/ai-runs" className="hover:text-white">AI runs</Link>
           <Link href="/admin/fixtures" className="hover:text-white">Fixture config</Link>
+          <Link href="/admin/capture-records" className="hover:text-white">{t(dict, "admin.captureRecords.nav")}</Link>
           <Link href="/admin/settings" className="hover:text-white">Settings</Link>
           <Link href="/admin/audit" className="hover:text-white">Audit</Link>
         </nav>

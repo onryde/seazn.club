@@ -10,14 +10,15 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import { HttpError, handler } from "@/lib/http";
 import { log } from "@/server/logger";
-import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_RECORD_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
-import type { CaptureRefusalCode } from "./capture-schemas";
+import type { CaptureRecordRefusalCode, CaptureRefusalCode } from "./capture-schemas";
 
 export class CaptureRefusalError extends Error {
   constructor(
     readonly status: number,
-    readonly code: CaptureRefusalCode,
+    /** The shared capture words, or the record route's own twin (Q2: `too_large` stays out of the shared list). */
+    readonly code: CaptureRefusalCode | CaptureRecordRefusalCode,
     message: string,
     /** Only `already_live` carries extras on the wire (`{sid, startedBy}`, contract R5). */
     readonly extras?: Record<string, unknown>,
@@ -113,7 +114,8 @@ export function clientIpOf(req: Request): string {
 
 /**
  * A phone route with its rate limits (§10.4, amended §17.4), inside `captureRoute`, in this order:
- *  1. the code's own budget is spent — ONE budget across the phone routes — and a start spends its own on top. Only a
+ *  1. the code's own budget is spent — ONE budget across the phone routes — and a start spends its own on top; the
+ *     records route (spec 2026-10-12 §8) spends its own hourly `capture-record:` bucket INSTEAD of the code's. Only a
  *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing). Both are keyed on the
  *     code AND the caller's credential (`credentialKeyOf`, B6 re-review R-1): a code has one tok, so for every real
  *     caller this is exactly §10.4's "per code", while a wrong tok spends only its own throwaway bucket — a flood that
@@ -128,13 +130,16 @@ export function clientIpOf(req: Request): string {
  * Every 429 is the bare `{code: rate_limited, message}` with `Retry-After` = the window's true remaining seconds.
  */
 export async function capturePhoneRoute(
-  req: Request, rawCode: string, route: "get" | "beats" | "start" | "scoring-link", fn: () => Promise<Response>,
+  req: Request, rawCode: string, route: "get" | "beats" | "start" | "scoring-link" | "records", fn: () => Promise<Response>,
 ): Promise<Response> {
   return captureRoute(async () => {
     const code = normaliseCode(rawCode);
     if (code !== null) {
       const who = credentialKeyOf(req);
-      await rateLimit(`capture-code:${code}:${who}`, CAPTURE_CODE_LIMIT);
+      // Spec 2026-10-12 §8: a record spends its OWN hourly bucket INSTEAD of the code's, so a Send never pushes a live
+      // phone's beats into 429; every other route keeps the shared budget exactly as before.
+      if (route === "records") await rateLimit(`capture-record:${code}:${who}`, CAPTURE_RECORD_LIMIT);
+      else await rateLimit(`capture-code:${code}:${who}`, CAPTURE_CODE_LIMIT);
       if (route === "start") await rateLimit(`capture-start:${code}:${who}`, CAPTURE_START_LIMIT);
     }
     try {

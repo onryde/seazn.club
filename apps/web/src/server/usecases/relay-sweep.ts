@@ -21,6 +21,7 @@ import "server-only";
 //      BEFORE inputs (C2), inputs re-planned over what the pass actually deleted; a 409 is reported and retried tomorrow;
 //      a FULL page is flagged, never read as the whole set (A13).
 //   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 7b. PHONE-BEAT RETENTION (W10, 24 h),
+//   7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, 30 days),
 //   8. ONE storage snapshot.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
@@ -70,6 +71,7 @@ export interface SweepResult {
   headroomMinutes: number;
   videosSeen: number; recordingsFinalised: number; summariesWritten: number; samplesDeleted: number;   // ruling 13 + Dd
   beatsDeleted: number;            // W10: phone-beat history past PHONE_BEAT_RETENTION_HOURS
+  recordsDeleted: number;          // capture record upload (spec 2026-10-12 §9, P6): records past their expires_at
 }
 
 export type BackstopBucket = Exclude<keyof SweepResult["backstop"], "candidates" | "visited" | "skippedLocked" | "errored">;
@@ -209,7 +211,7 @@ export async function sweepStreamSessions(
     runnerGoneConfirmed: 0, runnerGoneDeferred: 0, outputsReleased: 0, outputReleasesFailed: 0,
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
-    headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0,
+    headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
   };
 
   // 1. BACKSTOP — every non-terminal session, PLUS (C27) every session whose runner has not finished dying: `reconcileSession`
@@ -543,6 +545,16 @@ export async function sweepStreamSessions(
        where recorded_at < ${cutoff} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
        returning id`;
     out.beatsDeleted = purged.length;
+  }
+
+  // 7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, P6): a record past its expires_at (created_at + 30 days, written by
+  //     postCaptureRecord) goes; its capture_record_sessions links cascade. The beat purge above is separate and unchanged.
+  {
+    const purged = await sql<{ id: string }[]>`
+      delete from capture_records
+       where expires_at < ${now} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
+       returning id`;
+    out.recordsDeleted = purged.length;
   }
 
   // 8. ONE storage snapshot per run, on the fitted reading (its CHECK: headroom = limit − used − reserved, in integers).

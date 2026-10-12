@@ -15,9 +15,10 @@
 //   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
 //     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
 //     (code 1..8, pool ^[A-Z]$), and `role.kind` as an OPEN string whose prose lists every kind the engine declares.
-//   * the record upload's contract (capture-record.v1, design APPROVED by the owner 2026-10-12): no route and no twin yet, so
-//     its fixtures are judged by the published bytes alone, its keys against capture's allow-list typed here, and a
-//     tripwire fails the day a twin appears without joining the parity test.
+//   * the record upload's contract (capture-record.v1, design APPROVED by the owner 2026-10-12): its twins (the line, the
+//     201, its own refusal and the secret-shaped rules S2–S5) join the parity test and the fixture sweep like every
+//     other file, its keys are checked against capture's allow-list typed here, and the tripwire holds every
+//     record-named export of capture-schemas.ts to the parity list.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
 //
 // Pure — no DB. One "sport" on purpose: the contract reads no sport (the capture surface is sport-agnostic).
@@ -53,7 +54,7 @@ const SHA256: Record<string, string> = {
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
-  "capture-record.v1.json": "09582e858547dde50c43c9e5e2fff0d77d547716a5117787848b4dbe967a4745",
+  "capture-record.v1.json": "eeeb9711f0de4c5ed9b1b284f505c2fb0fa8a5a30873b49b74f7a8600043f638",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -179,6 +180,10 @@ const ZOD_ONLY: Record<string, { sibling: string; field: string; file: string; t
 // Structural helpers.
 // ---------------------------------------------------------------------------------------------------------------
 const PROSE = new Set(["$schema", "$id", "title", "description"]);
+/** `RegExp.prototype.source` writes every `/` as `\/` (so the source can sit between slashes), and zod's
+ *  `toJSONSchema` publishes the source. In an ECMA-262 pattern `\/` and `/` are the same character, so a `pattern`
+ *  is compared with that escape undone on both sides — only an UNescaped backslash's `\/` (an even run before it). */
+const unescapeSlashes = (pattern: string): string => pattern.replace(/(?<!\\)((?:\\\\)*)\\\//g, "$1/");
 /** Drops the prose keys at every level (never a property NAMED like one), sorts `required` and `enum`. */
 function normalise(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(normalise);
@@ -188,6 +193,7 @@ function normalise(node: unknown): unknown {
     if (PROSE.has(k)) continue;
     if (k === "properties") out[k] = Object.fromEntries(Object.entries(v as Json).map(([p, s]) => [p, normalise(s)]));
     else if ((k === "required" || k === "enum") && Array.isArray(v)) out[k] = [...(v as string[])].sort();
+    else if (k === "pattern" && typeof v === "string") out[k] = unescapeSlashes(v);
     else out[k] = normalise(v);
   }
   return out;
@@ -234,8 +240,27 @@ function enumOf(node: Json): string[] {
 // ---------------------------------------------------------------------------------------------------------------
 const QR = "capture-qr.v2.json", DESCRIPTOR = "capture-descriptor.v1.json", BEAT = "capture-beat.v1.json", START = "capture-start.v1.json";
 const SCORING = "capture-scoring-link.v1.json";
+// capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md), twinned by the
+// implementing PR: the line, the 201, its own refusal (Q2) and the secret-shaped rules S2–S5.
+const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
+/** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
+const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
-const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"] };
+const DEFS: Record<string, string[]> = {
+  [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"], [RECORD]: RECORD_DEFS,
+};
+/** The record's twins, by the shape they mirror: the parity test compares each, and the tripwire holds every
+ *  record-named zod export of capture-schemas.ts to exactly this list. `secretShaped` is the union of S2–S5 by `$ref`,
+ *  checked structurally (a zod union inlines its members). */
+const RECORD_TWINS: [pointer: string, twin: Twin, exportName: string][] = [
+  ["", S.CaptureRecordLine, "CaptureRecordLine"],
+  ["#/$defs/ok", S.CaptureRecordOk, "CaptureRecordOk"],
+  ["#/$defs/refusal", S.CaptureRecordRefusal, "CaptureRecordRefusal"],
+  ["#/$defs/secretS2", S.CaptureRecordSecretS2, "CaptureRecordSecretS2"],
+  ["#/$defs/secretS3", S.CaptureRecordSecretS3, "CaptureRecordSecretS3"],
+  ["#/$defs/secretS4", S.CaptureRecordSecretS4, "CaptureRecordSecretS4"],
+  ["#/$defs/secretS5", S.CaptureRecordSecretS5, "CaptureRecordSecretS5"],
+];
 
 /** Per directory: its contract file; [file prefix, twin, the shape's pointer in that file], first match wins; and the
  *  exact fixture count (never 0). */
@@ -246,41 +271,45 @@ const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
+  [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 60 },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
-// capture-record.v1 — design approved 2026-10-12 (spec 2026-10-12-capture-record-upload-design.md). No route, no twin.
+// capture-record.v1's rulebook, typed from the spec and from capture's allow-list.
 // ---------------------------------------------------------------------------------------------------------------
-const RECORD = "capture-record.v1.json", RECORD_DIR = "capture-record.v1";
 /** Per fixture prefix: the shape's pointer and the exact count (never 0). `line-` is ONE NDJSON line (the root). */
 const RECORD_ROUTES: [prefix: string, pointer: "" | "#/$defs/ok" | "#/$defs/refusal", count: number][] = [
-  ["line-", "", 38], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
+  ["line-", "", 46], ["ok-", "#/$defs/ok", 6], ["", "#/$defs/refusal", 8],
 ];
-/** The record file's `$defs`, exactly: the two answers and the secret-shaped rules S2–S5 the server runs. */
-const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
-/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture 7ea8f63, list for list: the rulebook the
+/** Capture's `modules/capture-engine/src/scrub/allow-list.json` at capture ebac190 (branch feat/s1-d3-fixes), list for list: the rulebook the
  *  record's keys come from, typed here and never read off the contract. A key added on capture's side is a contract
  *  bump here (the spec's §Body). */
 const ALLOW_LIST = {
   reserved: ["at", "kind", "level"],
   plain: ["action", "answer", "appVersion", "attempt", "cause", "claim", "count", "delivery", "endReason", "error", "exit",
     "failure", "field", "from", "host", "intent", "key", "kind", "lastEnd", "lock", "mode", "ms", "notReady", "op", "phase",
-    "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side", "sid", "site",
-    "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
+    "pickSource", "problem", "reason", "refusal", "result", "retryAfterS", "rootError", "route", "scene", "shed", "side",
+    "sid", "site", "slot", "source", "startFailed", "state", "status", "tag", "to", "tokenTag", "transport", "word"],
   publicUrl: ["url", "playbackUrl", "overlayUrl"],
   text: ["message", "problems"],
   never: ["tok", "token", "code", "passphrase", "streamKey", "streamId", "bearer", "authorization"],
-  scalars: ["audioFps", "camera", "counted", "encodeListed", "exitAtMs", "failed", "gapMs", "granted", "headroom", "held",
-    "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on", "outageMs",
-    "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "sameArea", "sent", "sinceLastMs",
-    "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps", "wasLive"],
+  scalars: ["audioFps", "bytes", "camera", "counted", "encodeListed", "exitAtMs", "failed", "failures", "gapMs", "granted",
+    "headroom", "held", "intervalMs", "lagGrowthMs", "lagMs", "late", "listed", "minuteEpochMs", "msSinceAdvance", "ok", "on",
+    "outageMs", "pickAspect16x9", "pickHeight", "pickWidth", "publishedMs", "rebaselined", "rebuilds", "refusedSid", "retryMs",
+    "sameArea", "sent", "sinceLastMs", "sound", "srtOffered", "stalledMs", "stopped", "suppressed", "validated", "videoFps",
+    "wasLive"],
 };
+/** The scalars the allow-list's own REASONS narrow (as its reason narrows tokenTag), typed from capture's writers at
+ *  ebac190 and the coordinator's relay of the capture team's answer (2026-10-12): `bytes` is `record.send`'s
+ *  `TextEncoder` length, `failures` a Kotlin Int count, `retryMs` `Rejoin.delayAfter`'s Long, `pickAspect16x9` a
+ *  Kotlin Boolean — none ever null. */
+const NARROWED_SCALARS: Record<string, "count" | "boolean"> = { bytes: "count", failures: "count", retryMs: "count", pickAspect16x9: "boolean" };
 /** The spec's answer table (§Answers): every refusal POST …/records answers, with its status. Never `replaced` (R4). */
 const SPEC_RECORD_REFUSALS: Record<string, number> = {
   code_ended: 401, not_a_stream_code: 404, too_large: 413, invalid: 422, rate_limited: 429, unavailable: 503,
 };
 /** The secret-shaped rules (spec §5, S1–S5): each `line-secret-*` fixture is a line the file's shape ADMITS and the
- *  server refuses on one rule, which the root description states in these words. S2–S5 are also the file's own
+ *  server DROPS on one rule (owner ruling RL, 2026-10-12: dropped, never the body refused), which the root description states in these words. S2–S5 are also the file's own
  *  `$defs.secretS<n>`; S1 needs the Bearer, so it is prose only, and its vector assumes this Bearer (the route's test
  *  sends it). */
 const RECORD_SENDING_TOK = "fake-tok-0000000000000";
@@ -292,6 +321,15 @@ const RECORD_SERVER_ONLY: Record<string, [rule: "S1" | "S2" | "S3" | "S4" | "S5"
   "line-secret-userinfo": ["S4", "S4 a URL with userinfo"],
   "line-secret-bearer": ["S5", "S5 a Bearer credential"],
 };
+/** Review fix 1 (PR #943): rules on a line's TEXT, which no JSON Schema can state because a parser has already applied
+ *  them — a key named twice (JSON.parse keeps the LAST value, so a first, secret-shaped value would pass a screen of
+ *  the parsed object). Each entry: the premise its fixture's raw text must meet, typed here (a count of one key's
+ *  occurrences, never the server's own scanner), and the words the root states. */
+const RECORD_SERVER_TEXT_RULES: Record<string, [premise: (text: string) => boolean, stated: string]> = {
+  "line-server-duplicate-key": [(t) => t.split('"message":').length - 1 === 2, "names any key twice"],
+};
+/** A fixture's bytes, as the server would read them off the wire. */
+const rawFixture = (dir: string, name: string): string => readFileSync(resolve(FIXTURES, dir, `${name}.json`), "utf8");
 /** Review fix 1 (2026-10-12): every rule skips the scrub's mask, so capture's OWN scrubbed output is admitted. Each
  *  near miss is a `line-valid-*` line whose `message` carries a credential masked in place (`***`): it trips no rule,
  *  and the same line with the mask replaced by a credential trips exactly the rule named here. The srt one is
@@ -309,12 +347,17 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
   // Re-review fix 2: capture's vector 24 output (no `=`, a space, the mask).
   "line-valid-scrubbed-streamid-space": "S3",
 };
-/** Every name capture-schemas.ts exports at runtime today (the record has no twin among them). */
+/** Every name capture-schemas.ts exports at runtime: the 23 before the record, then the record's own (its seven
+ *  twins in RECORD_TWINS, its refusal words, its ref pattern and its two limits). */
 const CAPTURE_SCHEMAS_EXPORTS = [
   "CAPTURE_CODE_RE", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
   "CaptureBeatAnswer", "CaptureCause", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
+  // capture-record.v1 (2026-10-12).
+  "CAPTURE_RECORD_MAX_BYTES", "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_REF_RE", "CaptureRecordLine", "CaptureRecordOk",
+  "CaptureRecordRefusal", "CaptureRecordRefusalCode", "CaptureRecordSecretS2", "CaptureRecordSecretS3",
+  "CaptureRecordSecretS4", "CaptureRecordSecretS5",
 ];
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -340,16 +383,17 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(checked).toBe(6);
   });
 
-  it("v1 is gone, and every published capture contract is one of the five twinned ones or the design-only record (W4, §6.13; W27; 2026-10-12)", () => {
+  it("v1 is gone, and every published capture contract is twinned — the record included since its route landed (W4, §6.13; W27; 2026-10-12)", () => {
     expect(existsSync(resolve(CONTRACTS, "capture-qr.v1.json")), "the v1 contract").toBe(false);
     expect(existsSync(resolve(FIXTURES, "capture-qr.v1")), "the v1 fixtures").toBe(false);
     const files = readdirSync(CONTRACTS).filter((f) => f.startsWith("capture-")).sort();
     expect(files).toEqual(Object.keys(SHA256).sort());
     const dirs = readdirSync(FIXTURES).filter((f) => f.startsWith("capture-")).sort();
-    expect(dirs).toEqual([...Object.keys(DIRS), RECORD_DIR].sort());
-    // The twinned five are DIRS; the record is the one contract without a twin, and it is not in DIRS.
-    expect(Object.values(DIRS).map((d) => d.file)).not.toContain(RECORD);
-    expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([RECORD]);
+    expect(dirs).toEqual(Object.keys(DIRS).sort());
+    // Every contract has its fixture directory in DIRS, the record's among them: no contract is left without a twin.
+    expect(Object.values(DIRS).map((d) => d.file)).toContain(RECORD);
+    expect(Object.keys(SHA256).filter((f) => !Object.values(DIRS).some((d) => d.file === f))).toEqual([]);
+    expect(Object.keys(DIRS)).toHaveLength(6);
   });
 
   it("schemas.ts re-exports every twin by identity, never a re-typed copy", () => {
@@ -365,7 +409,10 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       "CaptureNotReady", "CaptureStartFailed", "CaptureWaiting", "CaptureSession", "CaptureDescriptor", "CaptureBeat",
       "CaptureBeatAnswer", "CaptureStartBody", "CaptureStartOk", "CaptureRefusal", "CaptureRefusalCode",
       // W27 / W28 (2026-10-06).
-      "CaptureScoringLinkOk", "CaptureStage"]) {
+      "CaptureScoringLinkOk", "CaptureStage",
+      // capture-record.v1 (2026-10-12): the names the records route and its use-case import.
+      "CaptureRecordLine", "CaptureRecordOk", "CaptureRecordRefusal", "CaptureRecordRefusalCode",
+      "CAPTURE_RECORD_MAX_LINES", "CAPTURE_RECORD_MAX_BYTES"]) {
       expect(names, name).toContain(name);
     }
     expect(checked).toBe(names.length);
@@ -373,14 +420,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
 
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
     const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
+    const record = contract(RECORD);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring], [RECORD, record]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(5);
+    expect(defsChecked).toBe(6);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -392,6 +440,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [SCORING, rootOf(scoring), S.CaptureStartBody],
       [`${SCORING}#/$defs/ok`, defOf(scoring, "ok"), S.CaptureScoringLinkOk],
       [`${SCORING}#/$defs/refusal`, defOf(scoring, "refusal"), S.CaptureRefusal],
+      // capture-record.v1: the line (the root), the 201, its own refusal and the four secret-shaped rules.
+      ...RECORD_TWINS.map(([pointer, twin]): [string, Json, Twin] =>
+        [`${RECORD}${pointer}`, pointer === "" ? rootOf(record) : defOf(record, pointer.slice("#/$defs/".length)), twin]),
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -400,7 +451,22 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         wholeChecked++;
       }
     }
-    expect(wholeChecked).toBe(9 * 2);
+    expect(RECORD_TWINS).toHaveLength(7);
+    expect(wholeChecked).toBe((9 + 7) * 2);
+    // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
+    const shaped = defOf(record, "secretShaped");
+    expect(shaped.type).toBe("string");
+    expect(shaped.anyOf).toEqual(["secretS2", "secretS3", "secretS4", "secretS5"].map((d) => ({ $ref: `#/$defs/${d}` })));
+    // The slash unescape is the only liberty the normaliser takes with a pattern, and it is sound: each record pattern
+    // with a `/` in it compiles to the same RegExp source either way.
+    let slashed = 0;
+    for (const [pointer, twin] of RECORD_TWINS.filter(([p]) => p.startsWith("#/$defs/secret"))) {
+      const filePattern = defOf(record, pointer.slice("#/$defs/".length)).pattern as string;
+      expect(new RegExp(filePattern).source, pointer).toBe((zodJson(twin, "output").pattern as string));
+      if (filePattern.includes("/")) slashed++;
+    }
+    // S2 and S4 in their `://`, S3 and S5 in their token class `[…+/=-]`.
+    expect(slashed, "every secret rule carries a `/`").toBe(4);
 
     const unions: [string, Json, Twin, string[]][] = [
       [DESCRIPTOR, rootOf(desc), S.CaptureDescriptor, Object.keys(DESCRIPTOR_MATRIX)],
@@ -439,6 +505,12 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         let admitted: boolean;
         if (/^valid(-.+)?$/.test(kind)) admitted = true;
         else if (/^(invalid-.+|tampered(-.+)?|wrong-version)$/.test(kind)) admitted = false;
+        // A record `line-secret-*` vector: the line shape (twin AND file) admits it; only the server's S1–S5 refuse it,
+        // which the record's own tests below prove rule by rule.
+        else if (dir === RECORD_DIR && prefix === "line-" && /^secret-.+$/.test(kind)) admitted = true;
+        // A record `line-server-*` fixture: its PARSED value is a good line (both shapes admit it); the server reads the
+        // line's TEXT and drops it on a rule no schema can state (review fix 1: a key named twice).
+        else if (dir === RECORD_DIR && prefix === "line-" && /^server-.+$/.test(kind)) admitted = true;
         else expect.fail(`${dir}/${name}: neither valid* nor invalid-*/tampered*/wrong-version`);
         expect(parses(twin, value), `${dir}/${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
         // A ZOD_ONLY fixture breaks a rule the file states in prose only: ajv ADMITS it, and only the twin refuses it.
@@ -456,7 +528,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 52 + 40 + 18 + 17);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17 + 60);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -1052,12 +1124,12 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
   });
 
-  it("capture-record.v1 (design only): every fixture is judged by the published bytes under ajv, counted per shape — valid* admitted, invalid-*/tampered* refused, and each line-secret-* ADMITTED, its rule being the server's alone and stated in the root's prose", () => {
+  it("capture-record.v1: every fixture is judged by the published bytes under ajv, counted per shape — valid* admitted, invalid-*/tampered* refused, and each line-secret-* ADMITTED, its rule being the server's alone and stated in the root's prose", () => {
     const fileAdmits = fileValidator();
     const root = rootOf(contract(RECORD));
     const names = readdirSync(resolve(FIXTURES, RECORD_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
     const perRoute = new Map<string, number>();
-    let secrets = 0;
+    let secrets = 0, serverOnly = 0;
     for (const name of names) {
       const route = RECORD_ROUTES.find(([prefix]) => name.startsWith(prefix));
       expect(route, `${RECORD_DIR}/${name}: no shape routes this fixture`).toBeDefined();
@@ -1068,13 +1140,22 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       if (/^valid(-.+)?$/.test(kind)) admitted = true;
       else if (/^(invalid-.+|tampered(-.+)?)$/.test(kind)) admitted = false;
       else if (prefix === "line-" && /^secret-.+$/.test(kind)) {
-        // The file's line shape admits it; the server refuses it on the one rule its entry names, which the root states.
+        // The file's line shape admits it; the server drops it on the one rule its entry names, which the root states.
         const entry = RECORD_SERVER_ONLY[name];
         expect(entry, `${name}: a secret-shaped vector names its rule`).toBeDefined();
         expect(root.description, `${name}: the root states "${entry![1]}"`).toContain(entry![1]);
         admitted = true;
         secrets++;
-      } else expect.fail(`${RECORD_DIR}/${name}: neither valid* nor invalid-*/tampered* nor line-secret-*`);
+      } else if (prefix === "line-" && /^server-.+$/.test(kind)) {
+        // Review fix 1: a rule on the line's TEXT. The file's shape admits the parsed value; the server drops the line,
+        // and the root says so in the words its entry names.
+        const entry = RECORD_SERVER_TEXT_RULES[name];
+        expect(entry, `${name}: a server-only text rule names itself`).toBeDefined();
+        expect(root.description, `${name}: the root states "${entry![1]}"`).toContain(entry![1]);
+        expect(entry![0](rawFixture(RECORD_DIR, name)), `${name}: premise — the file's TEXT breaks the rule`).toBe(true);
+        admitted = true;
+        serverOnly++;
+      } else expect.fail(`${RECORD_DIR}/${name}: neither valid* nor invalid-*/tampered* nor line-secret-* nor line-server-*`);
       expect(fileAdmits(RECORD, pointer, value), `${RECORD_DIR}/${name}: ${RECORD}${pointer} ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
       perRoute.set(prefix, (perRoute.get(prefix) ?? 0) + 1);
     }
@@ -1084,10 +1165,12 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       routes++;
     }
     expect(routes).toBe(3);
-    expect(names).toHaveLength(38 + 6 + 8);
+    expect(names).toHaveLength(46 + 6 + 8);
     // Every RECORD_SERVER_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing).
     expect(secrets, "secret-shaped vectors swept").toBe(Object.keys(RECORD_SERVER_ONLY).length);
     expect(secrets).toBe(6);
+    expect(serverOnly, "server-only text rules swept").toBe(Object.keys(RECORD_SERVER_TEXT_RULES).length);
+    expect(serverOnly).toBe(1);
     // S1's vector is the Bearer the route's test will send, as a plain word the file cannot tell from any other.
     expect(fixture(RECORD_DIR, "line-secret-sending-tok").state).toBe(RECORD_SENDING_TOK);
     expect(Object.keys(contract(RECORD).$defs as Json).sort()).toEqual([...RECORD_DEFS].sort());
@@ -1164,7 +1247,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       strings += stringsOf(line).length;
       validLines++;
     }
-    expect(validLines).toBe(19);
+    expect(validLines).toBe(22);
     expect(strings).toBeGreaterThan(validLines);
     // The bare ingest URLs W26 serves carry no credential; a masked RTMPS key or SRT passphrase is no secret either.
     let bare = 0;
@@ -1183,7 +1266,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const expected = [...ALLOW_LIST.reserved, ...ALLOW_LIST.plain.map(written), ...ALLOW_LIST.publicUrl, ...ALLOW_LIST.text, ...ALLOW_LIST.scalars];
     // Premise: the lists are disjoint once `kind` is renamed, so the key count is their sum.
     expect(new Set(expected).size, "premise: disjoint lists").toBe(lists.reduce((n, l) => n + l.length, 0));
-    expect(expected).toHaveLength(3 + 47 + 3 + 2 + 37);
+    expect(expected).toHaveLength(3 + 48 + 3 + 2 + 41);
     expect(Object.keys(root.properties as Json).sort()).toEqual([...expected].sort());
     expect(root.additionalProperties).toBe(false);
     expect([...(root.required as string[])].sort()).toEqual(["at", "kind"]);
@@ -1222,10 +1305,20 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       for (const v of ["free text, with spaces / and ? and =", "", "***", ...SCALARS]) probe(k, v, true);
       for (const v of [{}, ["a"]]) probe(k, v, false);
     }
-    for (const k of ALLOW_LIST.scalars) {
+    for (const k of ALLOW_LIST.scalars.filter((s) => !(s in NARROWED_SCALARS))) {
       for (const v of SCALARS) probe(k, v, true);
       for (const v of ["word", "***", {}]) probe(k, v, false);
     }
+    // The four narrowed scalars: a count is an integer of at least 0 (the safe-integer ceiling is JSON's own); the
+    // yes/no a boolean only. Neither admits null, the mask or a word.
+    const narrowed = Object.entries(NARROWED_SCALARS);
+    for (const [k, cls] of narrowed) {
+      const admits = cls === "count" ? [0, 1, 4000, 48213, Number.MAX_SAFE_INTEGER] : [true, false];
+      const refuses = cls === "count" ? [-1, 0.5, 48213.5, Number.MAX_SAFE_INTEGER + 1, true, null, "4000", "***", {}] : [0, 1, null, "true", "***", {}];
+      for (const v of admits) probe(k, v, true);
+      for (const v of refuses) probe(k, v, false);
+    }
+    expect(narrowed.map(([k]) => k).every((k) => ALLOW_LIST.scalars.includes(k)), "narrowed keys are capture's scalars").toBe(true);
     // The line's own keys. `at` is the beat's R5 shape (review fix 7): any offset, calendar-exact, seconds required,
     // never epoch milliseconds (spec §0.1) — capture's writers send Z with milliseconds; `kind` a word or the mask;
     // `level` one of four or the mask, and optional.
@@ -1245,11 +1338,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // refused whatever they hold, the mask included.
     const unlisted = [...ALLOW_LIST.never, "battery", "cred", "field_at"];
     for (const k of unlisted) for (const v of ["***", 3, null]) probe(k, v, false);
-    expect(plain).toHaveLength(45);
+    expect(plain).toHaveLength(46);
     expect(unlisted).toHaveLength(11);
-    // plain 45 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 37 × 8, at 12, kind 7, level 9,
-    // unlisted 11 × 3.
-    expect(probes).toBe(45 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 12 + 7 + 9 + 11 * 3);
+    // plain 46 × 20, sid 11, tokenTag 10, publicUrl 3 × 16, text 2 × 10, scalars 37 × 8, the narrowed counts 3 × 14 and
+    // yes/no 1 × 8, at 12, kind 7, level 9, unlisted 11 × 3.
+    expect(probes).toBe(46 * 20 + 11 + 10 + 3 * 16 + 2 * 10 + 37 * 8 + 3 * 14 + 8 + 12 + 7 + 9 + 11 * 3);
   });
 
   it("capture-record.v1 answers: 201 is the closed {ref, kept, dropped} with an upper-case Crockford ref; every refusal word of the spec's table has a fixture the file admits; replaced is none of them (R4)", () => {
@@ -1294,13 +1387,33 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(fileAdmits(RECORD, "#/$defs/refusal", fixture(RECORD_DIR, "invalid-replaced"))).toBe(false);
   });
 
-  it("capture-record.v1 is design only: capture-schemas.ts exports exactly today's names, none of them a record twin (a new export under ANY name trips this; if it is the record's twin, it joins DIRS and the parity test)", () => {
+  it("capture-record.v1's twins joined the parity test: capture-schemas.ts exports exactly the pinned names, and every record zod export is one RECORD_TWINS compares (a new export under ANY name trips this until it joins)", () => {
     const names = Object.keys(CS);
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
-    expect(names.filter((n) => /record/i.test(n))).toEqual([]);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23 + 11);
+    // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
+    // identity — an enum is checked by its options instead, a constant by the contract's prose.
+    const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));
+    let joined = 0;
+    for (const name of names.filter((n) => /record/i.test(n))) {
+      const value = (CS as Record<string, unknown>)[name];
+      if (!(value instanceof z.ZodType) || value instanceof z.ZodEnum) continue;
+      expect(twins.get(name)?.twin, `${name}: a record twin outside the parity test`).toBe(value);
+      joined++;
+    }
+    expect(joined, "record twins joined to parity").toBe(RECORD_TWINS.length);
+    expect(joined).toBe(7);
+    // The refusal words twin: the file's closed list exactly, `too_large` among them and `replaced` never (R4) — and
+    // the shared CaptureRefusalCode, which every other capture contract twins, did NOT gain the record's word (Q2).
+    expect([...CS.CaptureRecordRefusalCode.options].sort()).toEqual(Object.keys(SPEC_RECORD_REFUSALS).sort());
+    expect(CS.CaptureRefusalCode.options as readonly string[]).not.toContain("too_large");
+    // The limits are the root's prose, figure for figure.
+    const prose = String(contract(RECORD).description);
+    expect(prose).toContain(`at most ${CS.CAPTURE_RECORD_MAX_LINES} non-empty lines`);
+    expect(prose).toContain(`at most 1 MB (${CS.CAPTURE_RECORD_MAX_BYTES} bytes)`);
+    expect(CS.CAPTURE_RECORD_REF_RE.source).toBe((defOf(contract(RECORD), "ok").properties as Record<string, Json>).ref!.pattern);
   });
 });
 

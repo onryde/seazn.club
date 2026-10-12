@@ -366,6 +366,12 @@ export const POLL_NEAR_WINDOW_MINUTES = 30;
 export const PHONE_LOST_LIVE_MINUTES = 15;
 /** W10 (§6.10): how long the phone-beat history is kept. */
 export const PHONE_BEAT_RETENTION_HOURS = 24;
+/** Capture record upload (spec 2026-10-12 §4 C1(c), Q1): an ENDED code still takes a record this long after it last
+ *  served — the app keeps its credential for 24 h after Over and Replaced, for uploads only. */
+export const CAPTURE_RECORD_TAIL_HOURS = 24;
+/** Capture record upload (spec 2026-10-12 §9, P6): a stored record is kept this long, then the daily relay sweep
+ *  deletes it (its session links cascade). */
+export const CAPTURE_RECORD_RETENTION_DAYS = 30;
 /** W24 (§6.12): the hold before the panel's countdown starts, with no video (and, live, no beat). */
 export const RECONNECT_QUIET_SECONDS = 30;
 /** W9 (§7.4): the phone-health line's thresholds. */

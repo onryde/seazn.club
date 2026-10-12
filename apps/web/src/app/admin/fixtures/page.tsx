@@ -1,5 +1,6 @@
 import Link from "@/components/ui/console-link";
 import { fixtureConfigPanel } from "@/server/usecases/admin-fixture-config";
+import { FixtureCaptureRecords } from "../capture-records/fixture-section";
 import { ResnapshotForm } from "./resnapshot-form";
 
 export const dynamic = "force-dynamic";
@@ -120,6 +121,9 @@ export default async function AdminFixtureConfigPage({
           )}
         </div>
       )}
+
+      {/* Capture record upload (spec 2026-10-12 §10): the records beside each stream session, then the unlinked ones. */}
+      {panel && <FixtureCaptureRecords fixtureId={panel.fixtureId} />}
     </div>
   );
 }

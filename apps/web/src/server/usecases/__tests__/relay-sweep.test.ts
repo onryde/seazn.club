@@ -270,6 +270,35 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(last_beat).toEqual({ battery: 41 });
   });
 
+  it("capture records (spec 2026-10-12 §9, P6): the sweep deletes a record past its expires_at, its session links cascading — and keeps one a minute short of it, and another org's expired record outside the scope (the empty case first: a run with none deletes none)", async () => {
+    const r = await rig();
+    const other = await rig();
+    expect((await sweep(r)).recordsDeleted, "the empty case: nothing to purge").toBe(0);
+    const record = async (x: Rig, expiresInMinutes: number) => {
+      const [ctx] = await sql<{ code_id: string; competition_id: string }[]>`
+        select c.id as code_id, d.competition_id from fixture_stream_codes c join fixtures f on f.id = c.fixture_id
+          join divisions d on d.id = f.division_id where c.fixture_id = ${x.fixtureId} and c.ended_at is null`;
+      const ref = `R-${Array.from(randomBytes(6), (b) => "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[b % 32]).join("")}`;
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into capture_records (org_id, competition_id, fixture_id, code_id, slot, ref, received_lines, kept_lines,
+                                     dropped_lines, invalid_lines, body_bytes, lines, created_at, expires_at)
+        values (${x.orgId}, ${ctx!.competition_id}, ${x.fixtureId}, ${ctx!.code_id}, 0, ${ref}, 1, 1, 0, 0, 10, '{"k":1}',
+                now() - interval '40 days', now() + make_interval(mins => ${expiresInMinutes}))
+        returning id`;
+      await sql`insert into capture_record_sessions (record_id, session_id) values (${id}, ${x.sessionId})`;
+      return id;
+    };
+    const expired = await record(r, -1);
+    const fresh = await record(r, 1);
+    const foreign = await record(other, -1);
+    const res = await sweep(r);
+    expect(res.recordsDeleted).toBe(1);
+    const left = (await sql<{ id: string }[]>`select id from capture_records where id in (${expired}, ${fresh}, ${foreign}) order by id`).map((x) => x.id);
+    expect(left).toEqual([fresh, foreign].sort());
+    const links = (await sql<{ record_id: string }[]>`select record_id from capture_record_sessions where record_id in (${expired}, ${fresh}, ${foreign}) order by record_id`).map((x) => x.record_id);
+    expect(links, "the expired record's link went with it").toEqual([fresh, foreign].sort());
+  });
+
   it("ORPHANS: a Machine with no session, one whose metadata names no session at all, and one whose session is terminal are destroyed — the terminal one through the shared forceDestroy, on EVERY pass (A22(a)); a live session's Machine is kept", async () => {
     const live = await rig("composed");
     const liveMachine = await goLive(live);

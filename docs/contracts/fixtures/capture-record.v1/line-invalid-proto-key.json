@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-11T21:19:03.123Z",
+  "kind": "thermal",
+  "status": 2,
+  "__proto__": {
+    "message": "Authorization: Bearer FAKE-BEARER-VALUE"
+  }
+}

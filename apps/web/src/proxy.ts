@@ -213,5 +213,17 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Run on API routes (CSRF) and all page routes (CSP), but skip Next's static
   // assets, image optimizer, and the favicon — they don't need either.
-  matcher: ["/api/:path*", "/((?!_next/static|_next/image|favicon.ico).*)"],
+  //
+  // ONE /api path is left out: the capture record upload
+  // (`/api/v1/capture/codes/{code}/records`, spec 2026-10-12 §5). While proxy
+  // runs on a path Next buffers the whole request body — up to
+  // `proxyClientMaxBodySize`, 10 MB — before the route's own 1 MB cap, rate
+  // limit and auth. That route is Bearer-only and cookie-less, so the CSRF
+  // Origin check above guards nothing there (src/__tests__/proxy-matcher.test.ts).
+  // Both entries carry the exclusion: the second pattern matches /api paths too.
+  // The values must be literals — Next reads them statically at build time.
+  matcher: [
+    "/api/((?!v1/capture/codes/[^/]+/records/?$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/v1/capture/codes/[^/]+/records/?$).*)",
+  ],
 };
