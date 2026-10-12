@@ -19384,6 +19384,8 @@ async function captureV2Suite(): Promise<void> {
  * the body: 201 `{ref, kept: 2, dropped: 2}` — the closed 201, values typed from the record's construction. SQL then reads
  * the stored row: received 4, kept 2, dropped 2, invalid 1, and neither dropped line's distinctive value is stored.
  * Then the body-level refusals: a wrong tok is 401, 1001 lines are 413 `too_large`, an empty body is 422 `invalid`.
+ * And proxy.ts leaves the records path out of its matcher (review fix 5): a foreign Origin reaches the route there, and
+ * is proxy's 403 on the code's beats.
  * EVERY phone answer is `Cache-Control: private, no-store` — counted, and zero counted is a failure. Five records'
  * worth of calls, well inside the 10-an-hour records budget (§8). Its own Pro org, purged by cleanup().
  * SMOKE_ONLY=captureRecord runs it alone (SELECTABLE_SUITES).
@@ -19393,7 +19395,7 @@ async function captureRecordSuite(): Promise<void> {
     console.log("SKIP  capture-record suite (DATABASE_URL not set — the plan change and the stored row need SQL)");
     return;
   }
-  const EXPECTED_STEPS = 7;
+  const EXPECTED_STEPS = 8;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-record smoke: ${label}`, cond);
@@ -19498,6 +19500,24 @@ async function captureRecordSuite(): Promise<void> {
   step(`1001 lines → 413 too_large (got ${over.status} ${String(over.json?.code)})`, over.status === 413 && over.json?.code === "too_large");
   const empty = await send(qr.tok, "");
   step(`an empty body → 422 invalid (got ${empty.status} ${String(empty.json?.code)})`, empty.status === 422 && empty.json?.code === "invalid");
+
+  // Review fix 5 (PR #943): proxy.ts's matcher leaves the records path out (no 10 MB body buffer ahead of the route's
+  // own cap and auth). Seen on the real build through proxy's one /api behaviour, the CSRF Origin check: a foreign
+  // Origin on a records POST reaches the ROUTE (its 401 for a wrong tok, the capture envelope), while the same Origin on
+  // the code's beats — still under proxy — is proxy's 403 Forbidden (the positive pair: proxy runs there).
+  const foreignOrigin = { Origin: "https://evil.example", Authorization: `Bearer ${randomBytes(16).toString("base64url")}` };
+  const viaRecords = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}/records`, {
+    method: "POST", headers: { ...foreignOrigin, "Content-Type": "application/x-ndjson" }, body: `${JSON.stringify(lines[1])}\n`,
+  });
+  const viaBeats = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}/beats`, {
+    method: "POST", headers: { ...foreignOrigin, "Content-Type": "application/json" }, body: "{}",
+  });
+  const recordsBody = (await viaRecords.json().catch(() => null)) as { code?: string } | null;
+  const beatsBody = (await viaBeats.json().catch(() => null)) as { error?: string } | null;
+  step(
+    `proxy skips the records path, not its siblings: a foreign Origin → records ${viaRecords.status} ${String(recordsBody?.code)} (the route's 401), beats ${viaBeats.status} ${String(beatsBody?.error)} (proxy's 403)`,
+    viaRecords.status === 401 && recordsBody?.code === "code_ended" && viaBeats.status === 403 && beatsBody?.error === "Forbidden",
+  );
 
   // 7. Every phone answer above was private, no-store — and there were answers to judge.
   step(
