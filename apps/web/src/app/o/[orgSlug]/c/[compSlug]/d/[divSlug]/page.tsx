@@ -531,11 +531,10 @@ export default async function DivisionPage({
       ? await onlineChessOffered(auth)
       : false;
 
-  // T15: the way into the arbiter panel — organisers, on the fixtures tab,
-  // only where there is a board to watch (an online chess division with
-  // fixtures). The panel page itself 404s everywhere else.
+  // T15: the way into the arbiter panel — organisers, only where there is a
+  // board to watch (an online chess division with fixtures); it renders
+  // inside the fixtures tab. The panel page itself 404s everywhere else.
   const arbiterHref =
-    tab === "fixtures" &&
     canEdit &&
     division.sport_key === "boardgame" &&
     (division.config as { onlinePlay?: unknown } | null)?.onlinePlay === "lichess" &&
