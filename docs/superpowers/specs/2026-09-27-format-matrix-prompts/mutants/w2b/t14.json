@@ -47,8 +47,8 @@
  {
   "id": "x-rs-1-pre-113-status",
   "file": "packages/engine/rules/cross-sport.md",
-  "find": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11) | signed 113 2026-10-11 |",
-  "replace": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11) | signed 112 2026-10-11 |",
+  "find": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11), 118 (2026-10-12) | signed 118 2026-10-12 |",
+  "replace": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11), 118 (2026-10-12) | signed 112 2026-10-11 |",
   "killers": [
    {
     "cwd": "packages/engine",

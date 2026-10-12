@@ -249,7 +249,8 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
     if (a.offender === "both" && phase === "tiebreak") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R3: the classical game was played
     if ((a.reason === "retired" || a.reason === "disqualified") && phase === "pre") return "FORFEIT_REASON_WRONG_PHASE"; // D3 R4; X-RS-1
     // Ruling 113 (amends X-RS-1, X-RT-1): nobody retires from a match never played — a bare Start is still before play.
-    if (a.reason === "retired" && walkoverPhase === "pre") return "FORFEIT_REASON_WRONG_PHASE";
+    // Ruling 118 (2026-10-12): in chess the Start is play (Seazn records no moves), so a chess retirement stands from it.
+    if (a.reason === "retired" && walkoverPhase === "pre" && !chess) return "FORFEIT_REASON_WRONG_PHASE";
     return null; // D3 R5: withdrew in any phase but over
   };
 

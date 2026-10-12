@@ -41,7 +41,7 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     const { m, l, out } = scenes("generic");
     const decided = out.find((s) => s.name === "decided")!;
     const state = foldMatch(m, decided.cfg as never, l, decided.ledger);
-    expect(forfeitAdmission(m, state, { playRecorded: playRecorded(decided.ledger) })).toEqual({ phase: "over", reasons: [], both: false });
+    expect(forfeitAdmission(m, state, { playRecorded: playRecorded(decided.ledger, m) })).toEqual({ phase: "over", reasons: [], both: false });
     // Ruling 112's fact cannot reopen a decided match: "over" admits nothing whatever was played.
     expect(forfeitAdmission(m, state, { playRecorded: true })).toEqual({ phase: "over", reasons: [], both: false });
   });
@@ -63,7 +63,7 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
       const played = onePlayEvent(m, cfg, l, started);
       if (played === null) throw new Error(`${m.key}: its generator draws no sport event after the start`);
       const ledgers = { pre: [], started, played: [...started, played] };
-      const admitted = (ledger: EventEnvelope[]) => forfeitAdmission(m, foldMatch(m, cfg as never, l, ledger), { playRecorded: playRecorded(ledger) });
+      const admitted = (ledger: EventEnvelope[]) => forfeitAdmission(m, foldMatch(m, cfg as never, l, ledger), { playRecorded: playRecorded(ledger, m) });
       expect(admitted(ledgers.pre), `${m.key} before play`).toEqual({ phase: "pre", reasons: PRE, both: true });
       expect(admitted(ledgers.started), `${m.key} after a bare start`).toEqual({ phase: "play", reasons: STARTED, both: true });
       expect(admitted(ledgers.played), `${m.key} after ${played.type}`).toEqual({ phase: "play", reasons: PLAYED, both: false });
@@ -73,19 +73,20 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
     expect(checked, `default-phase rows checked: ${checked}`).toBe(3 * (builtinModules.length - 1));
   });
 
-  it("BG-WO-3 / W2b-R14 + ruling 113: chess admits a one-side walkover before play, in play and in a pending tie-break; a double walkover never in the tie-break; a retirement only in the tie-break, once the game is played", () => {
-    // Single-sport: boardgame is the only module that widens walkoverPhases (FIDE Laws 6.7.1; R14). Ruling 113: in
-    // phase play nothing is played short of the game's result, so a retirement waits for the tie-break.
+  it("BG-WO-3 / W2b-R14 + ruling 118: chess admits a one-side walkover before play, in play and in a pending tie-break; a double walkover never in the tie-break; a retirement from the Start (its Start is play)", () => {
+    // Single-sport: boardgame is the only module that widens walkoverPhases (FIDE Laws 6.7.1; R14) and declares its
+    // Start play (ruling 118: Seazn records no moves, so a game in progress is a game played and a retirement in it is
+    // recordable; ruling 113 had made it wait for the tie-break).
     const { m, l, out } = scenes("boardgame");
     const want: Record<string, { phase: ForfeitPhase; reasons: ForfeitReason[]; both: boolean }> = {
       "before play": { phase: "pre", reasons: ["walkover", "withdrew"], both: true },
-      "after the start": { phase: "play", reasons: ["walkover", "disqualified", "withdrew"], both: true },
+      "after the start": { phase: "play", reasons: ["walkover", "retired", "disqualified", "withdrew"], both: true },
       "tie-break pending": { phase: "tiebreak", reasons: ["walkover", "retired", "disqualified", "withdrew"], both: false },
     };
     let checked = 0;
     for (const s of out) {
       if (want[s.name] === undefined) continue;
-      expect(forfeitAdmission(m, foldMatch(m, s.cfg as never, l, s.ledger), { playRecorded: playRecorded(s.ledger) }), s.name).toEqual(want[s.name]);
+      expect(forfeitAdmission(m, foldMatch(m, s.cfg as never, l, s.ledger), { playRecorded: playRecorded(s.ledger, m) }), s.name).toEqual(want[s.name]);
       checked++;
     }
     expect(checked).toBe(3);
@@ -98,7 +99,7 @@ describe("forfeitAdmission — the phase guard's own answer, for the console's d
       const { l, out } = scenes(m.key);
       for (const s of out) {
         const state = foldMatch(m, s.cfg as never, l, s.ledger);
-        const a = forfeitAdmission(m, state, { playRecorded: playRecorded(s.ledger) });
+        const a = forfeitAdmission(m, state, { playRecorded: playRecorded(s.ledger, m) });
         expect(a.phase, `${m.key} ${s.name}`).toBe(s.phase);
         const next = s.ledger.length + 1;
         for (const by of [l.away.entrantId, "both"] as const) {

@@ -73,7 +73,7 @@ function refusalOf(f: () => unknown): string | null {
 
 describe("ruling 115: a disqualification with nothing played is treated like a walkover in players' stats (X-PS-1, X-PS-2, X-RT-1)", () => {
   it("ruling 115 + X-PS-1 + X-PS-2 + X-RT-1: a disqualification before the Start, after a bare Start, or after its only play was voided (before or after the forfeit) is no match played — the walkover's rows, matches 0 for every player; after play it is a match — the retirement's rows, matches 1 — every declared cfg of every sport", () => {
-    const n = { cfgs: 0, preRefused: 0, preAdmitted: 0, bare: 0, played: 0, voidedBefore: 0, voidedAfter: 0, noPlay: 0, matchesPinned: 0, perMatchPinned: 0 };
+    const n = { cfgs: 0, startIsPlayCfgs: 0, preRefused: 0, preAdmitted: 0, bare: 0, played: 0, voidedBefore: 0, voidedAfter: 0, noPlay: 0, matchesPinned: 0, perMatchPinned: 0 };
     const sports = new Set<string>();
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
@@ -91,7 +91,7 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
         /** "treated like a walkover": same reading, same rows; no player's matches count moves. */
         const expectWalkoverLike = (steps: Step[], walkover: Step[], what: string, c: unknown = cfg) => {
           const events = seqd(steps);
-          expect(playRecorded(events), label(`${what}: nothing played`)).toBe(false);
+          expect(playRecorded(events, m), label(`${what}: nothing played`)).toBe(false);
           expect(statsMatchOf(model, events), label(`${what}: not a match played`)).toBe(false);
           const rows = rowsOf(m, c, l, events);
           expect(rows, label(`${what}: the walkover's rows`)).toEqual(rowsOf(m, c, l, seqd(walkover)));
@@ -117,11 +117,16 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
         expectWalkoverLike(preDq, [...pre, forfeit("walkover")], "a disqualification before the Start");
 
         // After a bare Start: admitted (a disqualification from the Start), the walkover's credit (ruling 113) and the
-        // walkover's stats (ruling 115).
+        // walkover's stats (ruling 115). Ruling 118: where the Start is play (chess) a bare Start is not nothing played
+        // — a DQ after it is in-match (forfeit-ruling-118.test.ts), so this scene and the voided ones are not its.
+        const startIsPlay = m.startIsPlay === true;
+        if (startIsPlay) n.startIsPlayCfgs++;
         const bare = [...pre, start, forfeit("disqualified")];
         expect(outcomeOf(m as never, fold(bare) as never), label("after a bare Start")).toMatchObject({ kind: "award", winner: H, loser: A, reason: "disqualified" });
-        expectWalkoverLike(bare, [...pre, start, forfeit("walkover")], "after a bare Start");
-        n.bare++;
+        if (!startIsPlay) {
+          expectWalkoverLike(bare, [...pre, start, forfeit("walkover")], "after a bare Start");
+          n.bare++;
+        }
 
         // Something played: the sport's own play from its generator (chess's one event decides a plain game; its
         // bracket deciders hold a draw instead).
@@ -134,13 +139,14 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
 
         const played = [...pre, start, p, forfeit("disqualified")];
         expect(outcomeOf(m as never, fold(played, playCfg) as never), label("after play")).toMatchObject({ kind: "award", winner: H, loser: A, reason: "disqualified" });
-        expect(playRecorded(seqd(played)), label("after play: something played")).toBe(true);
+        expect(playRecorded(seqd(played), m), label("after play: something played")).toBe(true);
         expect(statsMatchOf(model, seqd(played)), label("after play: a match played (X-PS-2)")).toBe(true);
         const rows = rowsOf(m, playCfg, l, seqd(played));
         expect(rows, label("after play: the retirement's rows (X-PS-2)")).toEqual(rowsOf(m, playCfg, l, seqd([...pre, start, p, forfeit("retired")])));
         if (keys.includes("matches")) for (const q of persons) expect(matchesOf(rows, q), label(`after play: ${q}'s matches`)).toBe(1);
         if (keys.length > 0) expect(perMatch(rows, keys), label("after play: a per-match key")).toBeGreaterThan(0);
         n.played++;
+        if (startIsPlay) continue; // ruling 118: voiding the play leaves the Start, which is play
 
         // The only play voided, then the disqualification: nothing played again.
         const voidedBefore = [...pre, start, p, { type: "core.void", payload: {}, voidsIndex: playIndex }, forfeit("disqualified")];
@@ -161,11 +167,12 @@ describe("ruling 115: a disqualification with nothing played is treated like a w
     expect(n.cfgs).toBeGreaterThanOrEqual(40);
     // X-RS-1 records a disqualification from the Start on: the kernel refuses every one before it.
     expect([n.preRefused, n.preAdmitted]).toEqual([n.cfgs, 0]);
-    expect(n.bare).toBe(n.cfgs);
+    expect(n.startIsPlayCfgs, "ruling 118's chess cfgs, left to forfeit-ruling-118.test.ts").toBeGreaterThan(0);
+    expect(n.bare).toBe(n.cfgs - n.startIsPlayCfgs);
     // Every declared cfg reaches play (chess through its bracket deciders' draw).
     expect([n.played, n.noPlay]).toEqual([n.cfgs, 0]);
-    expect(n.voidedBefore).toBe(n.played);
-    expect(n.voidedAfter).toBe(n.played);
+    expect(n.voidedBefore).toBe(n.played - n.startIsPlayCfgs);
+    expect(n.voidedAfter).toBe(n.played - n.startIsPlayCfgs);
     expect(n.matchesPinned).toBeGreaterThan(0);
     expect(n.perMatchPinned).toBeGreaterThan(0);
     // Measured 2026-10-12: 41 declared cfgs in 11 sports, each refused before the Start and reaching play; 72 nothing-played

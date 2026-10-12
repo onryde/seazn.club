@@ -64,7 +64,7 @@ function playedOf(key: string) {
 }
 /** The dialog's model for a fixture, fed the console's own reading of its ledger (`forfeitPlayRecorded`). */
 const model = (fx: { m: Module; cfg: unknown; state: unknown; events: readonly EventEnvelope[] }, noNextMatch = false) =>
-  forfeitDialogModel(fx.m, fx.cfg, fx.state, { noNextMatch, playRecorded: forfeitPlayRecorded(rowsOf(fx.events)) });
+  forfeitDialogModel(fx.m, fx.cfg, fx.state, { noNextMatch, playRecorded: forfeitPlayRecorded(rowsOf(fx.events), fx.m) });
 
 describe("UI-1 forfeit dialog model (spec §5.5)", () => {
   it("empty case first: a decided fixture offers nothing — no side, no reason, no guidance", () => {
@@ -105,14 +105,43 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
   it("X-RS-1 (ruling 112): the console's reading of its ledger rows is the engine's — seq order, not array order; a void by `voids_event_id`; the empty ledger is nothing played", () => {
     // Expected values from the ruling's text: a sport event after an active start is play; a voided one is not.
     const played = playedOf("generic");
+    const m = played.m;
     const rows = rowsOf(played.events);
-    expect(forfeitPlayRecorded([]), "empty ledger").toBe(false);
-    expect(forfeitPlayRecorded(rowsOf(STARTED())), "a bare start").toBe(false);
-    expect(forfeitPlayRecorded(rows), "start, then the sport's own event").toBe(true);
-    expect(forfeitPlayRecorded([...rows].reverse()), "the same rows out of array order").toBe(true);
+    expect(forfeitPlayRecorded([], m), "empty ledger").toBe(false);
+    expect(forfeitPlayRecorded(rowsOf(STARTED()), m), "a bare start").toBe(false);
+    expect(forfeitPlayRecorded(rows, m), "start, then the sport's own event").toBe(true);
+    expect(forfeitPlayRecorded([...rows].reverse(), m), "the same rows out of array order").toBe(true);
     const voided = rowsOf([...played.events, ev(3, "core.void", {}, played.events[1]!.id)]);
-    expect(forfeitPlayRecorded(voided), "the event voided").toBe(false);
-    expect(forfeitPlayRecorded([...voided].reverse()), "the void read before its target").toBe(false);
+    expect(forfeitPlayRecorded(voided, m), "the event voided").toBe(false);
+    expect(forfeitPlayRecorded([...voided].reverse(), m), "the void read before its target").toBe(false);
+  });
+
+  it("ruling 118: the console asks the fixture's own module — in chess a bare Start is play, until the Start is voided; out of array order too", () => {
+    // Ruling 118 (owner "A", 2026-10-12): in chess Start means play has begun — Seazn records no moves. The module says
+    // so (`startIsPlay`); the console passes it through, so the dialog reads what the fold guard reads.
+    const chess = mod("boardgame");
+    expect(chess.startIsPlay, "chess declares its Start play").toBe(true);
+    const started = rowsOf(STARTED());
+    expect(forfeitPlayRecorded([], chess), "chess: empty ledger").toBe(false);
+    expect(forfeitPlayRecorded(started, chess), "chess: a bare start").toBe(true);
+    const unstarted = rowsOf([...STARTED(), ev(2, "core.void", {}, "e-1")]);
+    expect(forfeitPlayRecorded(unstarted, chess), "chess: the start voided").toBe(false);
+    expect(forfeitPlayRecorded([...unstarted].reverse(), chess), "chess: the void read before the start").toBe(false);
+    // The positive pair: the same bare start, asked of a module declaring nothing, is nothing played.
+    expect(forfeitPlayRecorded(started, mod("generic")), "generic: a bare start").toBe(false);
+  });
+
+  it("BG-WO-3 + ruling 118: a chess fixture after a bare Start offers one side's walkover, retirement or disqualification, and Neither; the Start voided takes the retirement back", () => {
+    // Single-sport: boardgame is the one module declaring its Start play. After the Start every reason is recordable for
+    // one side (walkover: chess's wide phases, FIDE 6.7.1; retired and disqualified: ruling 118); Neither stays (a double
+    // walkover in phase play, R1/R3). Withdrew stays the cascade's (PF-2). Before the Start: the walkover only.
+    const started = model(fixtureOf("boardgame", STARTED));
+    expect(started.who).toEqual(["home", "away", "both"]);
+    expect(started.why("away")).toEqual(["walkover", "retired", "disqualified"]);
+    expect(started.why("both")).toEqual(["walkover"]);
+    expect(model(fixtureOf("boardgame", PRE)).why("away"), "before the Start").toEqual(["walkover"]);
+    const voided = model(fixtureOf("boardgame", () => [...STARTED(), ev(2, "core.void", {}, "e-1")]));
+    expect(voided.why("away"), "the Start voided").toEqual(["walkover"]);
   });
 
   it("X-RS-1 (rulings 112, 113) after a void: voiding the one played event, or the start, takes the match back to nothing played — Neither and the walkover return, the retirement goes", () => {
@@ -238,7 +267,7 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     for (const m of builtinModules) {
       const l = defaultLineupPair(m.positions);
       const base = forfeitBaseState(m, firstCfg(m), null, l);
-      const d = forfeitDialogModel(m, firstCfg(m), base, { noNextMatch: false, playRecorded: forfeitPlayRecorded([]) });
+      const d = forfeitDialogModel(m, firstCfg(m), base, { noNextMatch: false, playRecorded: forfeitPlayRecorded([], m) });
       expect(d.who, m.key).toEqual(["home", "away", "both"]);
       expect(d.why("away"), m.key).toEqual(["walkover"]);
       checked++;

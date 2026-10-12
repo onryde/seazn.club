@@ -127,7 +127,7 @@
  {
   "id": "fold-fact-true",
   "file": "packages/engine/src/core/events.ts",
-  "find": "const played = playRecorded(active.slice(0, index));",
+  "find": "const played = playRecorded(active.slice(0, index), module);",
   "replace": "const played = true;",
   "killers": [
    {
@@ -149,7 +149,7 @@
  {
   "id": "fold-fact-false",
   "file": "packages/engine/src/core/events.ts",
-  "find": "const played = playRecorded(active.slice(0, index));",
+  "find": "const played = playRecorded(active.slice(0, index), module);",
   "replace": "const played = false;",
   "killers": [
    {
@@ -245,8 +245,8 @@
  {
   "id": "console-fact-true",
   "file": "apps/web/src/components/v2/fixture-console.tsx",
-  "find": "const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);",
-  "replace": "const playRecorded = useMemo(() => true, [events]);",
+  "find": "const playRecorded = useMemo(() => (sportModule === null ? false : forfeitPlayRecorded(events, sportModule)), [events, sportModule]);",
+  "replace": "const playRecorded = useMemo(() => true, [events, sportModule]);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -260,8 +260,8 @@
  {
   "id": "console-fact-false",
   "file": "apps/web/src/components/v2/fixture-console.tsx",
-  "find": "const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);",
-  "replace": "const playRecorded = useMemo(() => false, [events]);",
+  "find": "const playRecorded = useMemo(() => (sportModule === null ? false : forfeitPlayRecorded(events, sportModule)), [events, sportModule]);",
+  "replace": "const playRecorded = useMemo(() => false, [events, sportModule]);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -350,8 +350,8 @@
  {
   "id": "ref-credit-empty-sheet-is-play",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "const playedAny = sheet !== undefined && [sheet.home, sheet.away].some((xs) => Array.isArray(xs) && xs.length > 0);",
-  "replace": "const playedAny = sheet !== undefined;",
+  "find": "const playedAny = chess ? started : sheet !== undefined && [sheet.home, sheet.away].some((xs) => Array.isArray(xs) && xs.length > 0);",
+  "replace": "const playedAny = chess ? started : sheet !== undefined;",
   "killers": [
    {
     "cwd": "packages/reference",
@@ -476,7 +476,7 @@
  {
   "id": "r113-migration-start-based",
   "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
-  "find": "return playRecorded(prefix) ? \"retired\" : \"walkover\";",
+  "find": "return playRecorded(prefix, {}) ? \"retired\" : \"walkover\";",
   "replace": "return prefix.some((e) => e.type === \"core.start\") ? \"retired\" : \"walkover\";",
   "killers": [
    {
@@ -565,8 +565,8 @@
  {
   "id": "r112-m1-memo-events",
   "file": "apps/web/src/components/v2/fixture-console.tsx",
-  "find": "useMemo(() => forfeitPlayRecorded(events), [events]);",
-  "replace": "useMemo(() => forfeitPlayRecorded(events), []);",
+  "find": "forfeitPlayRecorded(events, sportModule)), [events, sportModule]);",
+  "replace": "forfeitPlayRecorded(events, sportModule)), [sportModule]);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -608,47 +608,17 @@
   ]
  },
  {
-  "id": "r113-streams-unreachable-off",
-  "file": "tools/matrix/lib/streams/index.ts",
-  "find": "if (o.reason === \"retired\" && play.length > 0 && !holdsPlay(play)) {",
-  "replace": "if (false) {",
-  "killers": [
-   {
-    "cwd": ".",
-    "files": [
-     "tools/matrix/__tests__/w2b-generators.test.ts"
-    ],
-    "name": "X-RS-1 \\+ ruling 113"
-   }
-  ]
- },
- {
-  "id": "r113-posting-retired-bare",
-  "file": "tools/matrix/lib/streams/index.ts",
-  "find": "if (forfeit.by !== \"both\" && forfeit.reason === \"retired\" && !holdsPlay(play)) {",
-  "replace": "if (false) {",
-  "killers": [
-   {
-    "cwd": ".",
-    "files": [
-     "tools/matrix/__tests__/w2b-generators.test.ts"
-    ],
-    "name": "forfeitPosting \\(M-2\\)"
-   }
-  ]
- },
- {
   "id": "r113-holdsplay-any-event",
   "file": "tools/matrix/lib/streams/index.ts",
-  "find": "const holdsPlay = (play: readonly StreamEvent[]): boolean => play.some((e) => !e.type.startsWith(\"core.\"));",
-  "replace": "const holdsPlay = (play: readonly StreamEvent[]): boolean => play.length > 0;",
+  "find": "  return play.some((e) => !e.type.startsWith(\"core.\")) || (module.startIsPlay === true && play.some((e) => e.type === START.type));",
+  "replace": "  return play.length > 0;",
   "killers": [
    {
     "cwd": ".",
     "files": [
      "tools/matrix/__tests__/w2b-generators.test.ts"
     ],
-    "name": "X-RS-1 \\+ ruling 113"
+    "name": "X-RS-1 \\+ rulings 113, 118"
    },
    {
     "cwd": ".",
@@ -744,7 +714,7 @@
  {
   "id": "r113-ref-bf-retired-after-bare-start",
   "file": "packages/reference/src/families/bracket-finish.ts",
-  "find": "    if (a.reason === \"retired\" && walkoverPhase === \"pre\") return \"FORFEIT_REASON_WRONG_PHASE\";\n",
+  "find": "    if (a.reason === \"retired\" && walkoverPhase === \"pre\" && !chess) return \"FORFEIT_REASON_WRONG_PHASE\";\n",
   "replace": "",
   "killers": [
    {
@@ -774,8 +744,8 @@
  {
   "id": "r114-nonscoring-not-play",
   "file": "packages/engine/src/core/events.ts",
-  "find": "    else if (started && !isCoreEventType(e.type)) return true;",
-  "replace": "    else if (started && !isCoreEventType(e.type) && !/\\.(period|penalty|shot|sinbin|clock|interruption|sanction|sub|timeout|expedite)/.test(e.type)) return true;",
+  "find": "    } else if (started && !isCoreEventType(e.type)) return true;",
+  "replace": "    } else if (started && !isCoreEventType(e.type) && !/\\.(period|penalty|shot|sinbin|clock|interruption|sanction|sub|timeout|expedite)/.test(e.type)) return true;",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -826,7 +796,7 @@
  {
   "id": "r115-dq-played-ignored",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
   "replace": "    const dqUnplayed = false;\n",
   "killers": [
    {
@@ -862,7 +832,7 @@
  {
   "id": "r115-dq-always-unplayed",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
   "replace": "    const dqUnplayed = reason === \"disqualified\";\n",
   "killers": [
    {
@@ -898,8 +868,8 @@
  {
   "id": "r115-dq-played-whole-ledger",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
-  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events);\n",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
+  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events, module);\n",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -913,8 +883,8 @@
  {
   "id": "r115-dq-played-before-last",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index));\n",
-  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index - 1));\n",
+  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
+  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index - 1), module);\n",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -1038,8 +1008,8 @@
  {
   "id": "r115-row-x-ps-2-status-91",
   "file": "packages/engine/rules/cross-sport.md",
-  "find": "it is X-PS-1's. | product rule W2b-R9; ruling 115 (2026-10-12) | signed 115 2026-10-12 |",
-  "replace": "it is X-PS-1's. | product rule W2b-R9; ruling 115 (2026-10-12) | signed 91 2026-10-08 |",
+  "find": "after the Start is in-match. | product rule W2b-R9; rulings 115, 118 (2026-10-12) | signed 118 2026-10-12 |",
+  "replace": "after the Start is in-match. | product rule W2b-R9; rulings 115, 118 (2026-10-12) | signed 91 2026-10-08 |",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -1324,6 +1294,140 @@
      "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
     ],
     "name": "R115-2: a snapshot folded under an older fold version is recomputed on read"
+   }
+  ]
+ },
+ {
+  "id": "r118-start-is-play-ignored",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "      if (module.startIsPlay === true) return true;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-ruling-118.test.ts"
+    ],
+    "name": "X-RS-1 \\+ X-RT-1 \\(ruling 118\\): after a bare Start chess admits a retirement"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-ruling-118.test.ts"
+    ],
+    "name": "X-PS-2 \\(ruling 118\\)"
+   }
+  ]
+ },
+ {
+  "id": "r118-boardgame-flag-dropped",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "  startIsPlay: true,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-ruling-118.test.ts"
+    ],
+    "name": "ruling 118: chess is read from a module declaration"
+   }
+  ]
+ },
+ {
+  "id": "r118-boardgame-stats-without-module",
+  "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+  "find": "  return forfeitStatsRole(events, isGameResult, boardgame) === \"unplayed\";",
+  "replace": "  return forfeitStatsRole(events, isGameResult) === \"unplayed\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-ruling-118.test.ts"
+    ],
+    "name": "X-PS-2 \\(ruling 118\\)"
+   }
+  ]
+ },
+ {
+  "id": "r118-console-without-module",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "forfeitPlayRecorded(events, sportModule)), [events, sportModule]);",
+  "replace": "forfeitPlayRecorded(events, {})), [events, sportModule]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "ruling 118: a chess console after a bare Start offers the retirement"
+   }
+  ]
+ },
+ {
+  "id": "r118-ref-credit-chess-start-not-play",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "const playedAny = chess ? started : sheet",
+  "replace": "const playedAny = sheet",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/walkover-credit.test.ts"
+    ],
+    "name": "ruling 118 \\(X-RS-1, X-RT-1, X-PS-2 as amended\\)"
+   }
+  ]
+ },
+ {
+  "id": "r118-ref-bf-chess-retire-refused",
+  "file": "packages/reference/src/families/bracket-finish.ts",
+  "find": "walkoverPhase === \"pre\" && !chess) return",
+  "replace": "walkoverPhase === \"pre\") return",
+  "killers": [
+   {
+    "cwd": "packages/reference",
+    "files": [
+     "src/families/bracket-finish.test.ts"
+    ],
+    "name": "BG-WO-2 \\+ FIDE 6\\.7\\.1 \\+ ruling 118"
+   }
+  ]
+ },
+ {
+  "id": "r118-matrix-model-start-not-play",
+  "file": "tools/matrix/lib/model/commands.ts",
+  "find": "const played = startAt >= 0 && (startIsPlay || live.slice(startAt + 1).some((e) => !e.type.startsWith(\"core.\")));",
+  "replace": "const played = startAt >= 0 && live.slice(startAt + 1).some((e) => !e.type.startsWith(\"core.\"));",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "in play \\(phase play\\)"
+   }
+  ]
+ },
+ {
+  "id": "r118-holdsplay-start-clause-dropped",
+  "file": "tools/matrix/lib/streams/index.ts",
+  "find": " || (module.startIsPlay === true && play.some((e) => e.type === START.type));",
+  "replace": ";",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "holdsPlay \\(rulings 113, 118\\)"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/w2b-generators.test.ts"
+    ],
+    "name": "X-RS-1 \\+ rulings 113, 118"
    }
   ]
  }

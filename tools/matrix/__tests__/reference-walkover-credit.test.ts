@@ -371,7 +371,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expect(() => expectAgreement(empty, "no case")).toThrow(/zero compared/);
   });
 
-  it("X-RS-1 + X-RT-1 + X-WD-1 + X-PS-1 — ruling 115: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine and neither is a match in players' stats, and retired is refused by both (ruling 113)", () => {
+  it("X-RS-1 + X-RT-1 + X-WD-1 + X-PS-1 — ruling 115: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine and neither is a match in players' stats, and retired is refused by both (ruling 113) — but in chess, whose Start is play (ruling 118), the retirement and the disqualification agree as a game played", () => {
     const cases: CreditCase[] = [];
     for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
       for (const e of data.cfgs) {
@@ -385,9 +385,13 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     // Every one is START then the forfeit: the empty play folds undecided (each item's own guard, in judge()).
     for (const i of items) expect(i.prefix.filter((e) => e.type !== "core.start"), i.label).toEqual([]);
     // Ruling 113: nobody retires from a match never played. Both sides refuse the retirement, each by its own name: the
-    // reference (nothing-played) and the engine's strict fold (FORFEIT_REASON_WRONG_PHASE).
+    // reference (nothing-played) and the engine's strict fold (FORFEIT_REASON_WRONG_PHASE). Ruling 118: chess's Start
+    // is play — read from the ENGINE's declaration here, and the reference's own reading is the agreement below.
+    const startIsPlay = (sport: string): boolean => sportModule(sport).startIsPlay === true;
+    expect(Object.keys(WALKOVER_CREDIT_DATA).filter(startIsPlay), "ruling 118 names chess").toEqual(["boardgame"]);
+    const refusedHere = (x: (typeof items)[number]): boolean => x.c.reason === "retired" && !startIsPlay(x.c.sport);
     let bothRefused = 0;
-    for (const i of items.filter((x) => x.c.reason === "retired")) {
+    for (const i of items.filter(refusedHere)) {
       let refusal: unknown = null;
       try { walkoverCredit(i.c); } catch (e) { refusal = e instanceof CreditRefused ? e.reason : e; }
       expect(refusal, `${i.label}: the reference`).toBe("nothing-played");
@@ -396,29 +400,31 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
       expect(code, `${i.label}: the engine`).toBe("FORFEIT_REASON_WRONG_PHASE");
       bothRefused++;
     }
-    expect(bothRefused).toBe(44 * 2); // 44 cfg entries × 2 seats
-    const s = sweep(items.filter((x) => x.c.reason !== "retired"));
+    expect(bothRefused).toBe(40 * 2); // 44 cfg entries less chess's 4, × 2 seats
+    const s = sweep(items.filter((x) => !refusedHere(x)));
     // The counts first, so a red sweep still says how much it compared.
-    expect(s.compared).toBe(44 * 2 * 2); // 44 cfg entries (41 declared + 3 named extras) × 2 reasons × 2 seats
+    expect(s.compared).toBe(44 * 2 * 2 + 4 * 2); // 44 cfg entries (41 declared + 3 named extras) × 2 reasons × 2 seats, and chess's 4 retirements × 2 seats
     expect(s.sports.size).toBe(11);
     expectAgreement(s, "the empty scoresheet");
     // Ruling 115 (X-PS-1): nothing played, so neither side counts a match in players' stats — the disqualification as
-    // the withdrawal. Asserted on both answers, not only on their agreement.
-    let notAMatch = 0;
-    for (const i of items.filter((x) => x.c.reason !== "retired")) {
-      expect(walkoverCredit(i.c).statsMatch, `${i.label}: the reference`).toBe(false);
+    // the withdrawal. Ruling 118 (X-PS-2): in chess the Start is play, so its retirement and disqualification ARE a game
+    // played; its withdrawal is not. Asserted on both answers, not only on their agreement.
+    const counts = { notAMatch: 0, chessGame: 0 };
+    for (const i of items.filter((x) => !refusedHere(x))) {
+      const want = startIsPlay(i.c.sport) && i.c.reason !== "withdrew";
+      expect(walkoverCredit(i.c).statsMatch, `${i.label}: the reference`).toBe(want);
       const eng = engineAnswer(i, engineCfgOf(i.c), []);
-      expect(typeof eng === "string" ? eng : eng.statsMatch, `${i.label}: the engine`).toBe(false);
-      notAMatch++;
+      expect(typeof eng === "string" ? eng : eng.statsMatch, `${i.label}: the engine`).toBe(want);
+      counts[want ? "chessGame" : "notAMatch"]++;
     }
-    expect(notAMatch).toBe(44 * 2 * 2);
+    expect(counts).toEqual({ notAMatch: 44 * 2 * 2 - 4 * 2, chessGame: 4 * 2 * 2 });
   });
 
-  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 211 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
-    // the family's own count (walkover-credit.test.ts): 55 base + 158 variants, less the two retirements ruling 113
-    // refuses (the two played scenarios whose sheet holds no play: chess's, generic's untouched win/loss tally). R112
+  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 212 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
+    // the family's own count (walkover-credit.test.ts): 55 base + 158 variants, less the one retirement ruling 113
+    // refuses (generic's untouched win/loss tally; chess's empty sheet is its Start, which is play — ruling 118). R112
     // fix round 2 (m3): generic's win/loss tally scenario (GN-RT-1 keeps it) adds three cases with a scoresheet.
-    expect(CASES.length).toBe(211);
+    expect(CASES.length).toBe(212);
     const { items, unbuildable } = itemsOrUnbuildable(CASES);
     expect(unbuildable, "a scoresheet the cross-check could not rebuild as events is a failing item").toEqual([]);
     const s = sweep(items);
@@ -426,7 +432,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     // forfeit has no scoresheet (both seats): counted from the enumeration.
     const owed = CASES.reduce((n, c) => n + (c.played === undefined && c.reason !== "double_walkover" ? 2 : 1), 0);
     expect(s.compared).toBe(owed);
-    expect(owed).toBe(299); // 88 sheetless single forfeits × 2 + 44 double walkovers + 79 with a scoresheet
+    expect(owed).toBe(300); // 88 sheetless single forfeits × 2 + 44 double walkovers + 80 with a scoresheet
     expect(s.sports.size).toBe(11);
     // Every reason is reached where X-RS-1 records it: a walkover and a double walkover before the start, retired and
     // disqualified after it, withdrew either side of it (PF-7).
@@ -518,7 +524,7 @@ describe("the cross-check's own reading of the engine is not vacuous", () => {
       if (scored) { expect(play.length, `${c.label}`).toBeGreaterThan(0); withPlay++; } else { expect(play, `${c.label}`).toEqual([]); bare++; }
     }
     expect(withPlay).toBeGreaterThan(0);
-    expect(withPlay + bare).toBe(79);
+    expect(withPlay + bare).toBe(80);
   });
 
   it("negative: a reference answer moved off the real engine's on ONE field reds on exactly that field — a credit, a loser's credit, an exclusion, the points, players' stats; and a stream at the wrong seat reds on the outcome", () => {

@@ -892,8 +892,9 @@ export function FixtureConsole({
   const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
   const noNextMatch = fixture.no_next_match === true;
   // Ruling 112: a walkover stays on offer after the Start until something is played — the engine's own reading of the
-  // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state).
-  const playRecorded = useMemo(() => forfeitPlayRecorded(events), [events]);
+  // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state), for this
+  // fixture's module (ruling 118: chess's Start is play). No module, no dialog (below), so nothing to read.
+  const playRecorded = useMemo(() => (sportModule === null ? false : forfeitPlayRecorded(events, sportModule)), [events, sportModule]);
   const forfeitModel = useMemo((): ForfeitDialogModel | null => {
     if (sportModule === null || home === null || away === null) return null;
     try {

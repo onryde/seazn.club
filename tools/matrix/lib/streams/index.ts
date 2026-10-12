@@ -81,9 +81,13 @@ const IN_PLAY_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
 const PRE_PLAY_REASONS: readonly ForfeitReason[] = ["walkover"];
 
 /** W2b ruling 113 (amends X-RS-1, X-RT-1): nobody retires from a match never played. "Played" is the engine's own
- *  reading (core/events.ts playRecorded, ruling 112): a sport — non-`core.` — event after START. A disqualification
- *  needs only START; a retirement needs this. */
-const holdsPlay = (play: readonly StreamEvent[]): boolean => play.some((e) => !e.type.startsWith("core."));
+ *  reading (core/events.ts playRecorded, ruling 112): a sport — non-`core.` — event after START; and (ruling 118) START
+ *  itself where the sport's module declares its Start play (`startIsPlay`: chess, which records no moves). A
+ *  disqualification needs only START; a retirement needs this. Exported for its own test: on the real registry the one
+ *  sport with no partial play is chess, which declares the flag, so generateStream's refusal is reached only here. */
+export function holdsPlay(play: readonly StreamEvent[], module: { readonly startIsPlay?: boolean }): boolean {
+  return play.some((e) => !e.type.startsWith("core.")) || (module.startIsPlay === true && play.some((e) => e.type === START.type));
+}
 
 /** The events a forfeit is posted as, given the fixture's status now — the ONE composition generateStream, the drivers
  *  and decideFixture share (W2b D3, finding 10). On a fixture already under way the forfeit goes in bare. On a
@@ -91,7 +95,10 @@ const holdsPlay = (play: readonly StreamEvent[]): boolean => play.some((e) => !e
  *  (partialPlay — the phase guard refuses one before play, D3 R4), and nothing for a walkover or a double walkover,
  *  which are recorded before START (the guard refuses a walkover after it, R2). `by` is an entrant id, or "both".
  *  On a scheduled fixture, a walkover (or double walkover) WITH play and a retirement or disqualification with NONE
- *  are refused by name (ForfeitPostingRefused), as is play that does not open with START. */
+ *  are refused by name (ForfeitPostingRefused), as is play that does not open with START. Whether the play given is
+ *  enough for a RETIREMENT is the sport's (ruling 113, and ruling 118 for chess's Start): this composition is shared by
+ *  drivers that know no sport, so generateStream judges it (`holdsPlay` with the module) and the product's own guard
+ *  refuses a hand-composed one by name (FORFEIT_REASON_WRONG_PHASE). */
 export function forfeitPosting(status: string, forfeit: { readonly by: string; readonly reason: ForfeitReason }, play: readonly StreamEvent[]): StreamEvent[] {
   const ev: StreamEvent = { type: "core.forfeit", payload: { by: forfeit.by, reason: forfeit.reason } };
   if (status !== "scheduled") return [ev];
@@ -101,9 +108,6 @@ export function forfeitPosting(status: string, forfeit: { readonly by: string; r
   }
   if (forfeit.by !== "both" && IN_PLAY_REASONS.includes(forfeit.reason) && play.length === 0) {
     throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded after ${START.type} and some play, but none was given (D3 R4)`);
-  }
-  if (forfeit.by !== "both" && forfeit.reason === "retired" && !holdsPlay(play)) {
-    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded once something is played, but the play given holds no sport event (ruling 113: nobody retires from a match never played)`);
   }
   const first = play.at(0);
   if (first !== undefined && first.type !== START.type) throw new ForfeitPostingRefused(`the play before a forfeit starts with ${START.type}, not ${first.type}`);
@@ -163,9 +167,9 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const o = req.outcome;
   if (o.kind === "forfeit") {
     const play = o.at === "before_start" ? [] : partialPlay(req);
-    // Ruling 113: a sport with nothing to play short of its result (chess: the game IS its result) cannot retire — named
-    // here, before forfeitPosting would refuse the shape, so a sweep reads it as the sport's, not the request's.
-    if (o.reason === "retired" && play.length > 0 && !holdsPlay(play)) {
+    // Ruling 113: a sport whose partial play holds nothing played cannot retire — named here, so a sweep reads it as the
+    // sport's, not the request's. Ruling 118: chess's partial play is START alone, and its Start is play, so it retires.
+    if (o.reason === "retired" && play.length > 0 && !holdsPlay(play, sportModule(req.sportKey))) {
       throw new OutcomeUnreachable(req.sportKey, label, "ruling 113: nobody retires from a match never played, and the sport's partial play here is START alone (nothing is played short of its result)");
     }
     return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, play);

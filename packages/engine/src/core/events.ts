@@ -347,15 +347,24 @@ const DEFAULT_WALKOVER_PHASES: readonly ForfeitPhase[] = ["pre"];
  *    counts what follows Start, as every module's own phase does (each still reads "pre" there).
  *  - A voided event never counts. `ledger` is in seq order; a `core.void` names its target in `voids` (an envelope's
  *    field; the console maps its `voids_event_id` onto it). Voids are not themselves voidable (`resolveVoids`).
+ *  - Ruling 118: `module` is the fixture's sport module, REQUIRED so no caller can forget it. A module declaring
+ *    `startIsPlay` (chess: Seazn records no moves) is played from an active `core.start`; every other module from its
+ *    first sport event after it.
  */
-export function playRecorded(ledger: readonly { readonly id: string; readonly type: string; readonly voids?: string | null }[]): boolean {
+export function playRecorded(
+  ledger: readonly { readonly id: string; readonly type: string; readonly voids?: string | null }[],
+  module: { readonly startIsPlay?: boolean },
+): boolean {
   const voided = new Set<string>();
   for (const e of ledger) if (e.type === "core.void" && typeof e.voids === "string") voided.add(e.voids);
   let started = false;
   for (const e of ledger) {
     if (voided.has(e.id)) continue;
-    if (e.type === "core.start") started = true;
-    else if (started && !isCoreEventType(e.type)) return true;
+    if (e.type === "core.start") {
+      // Ruling 118: where the sport records nothing between the Start and its result (chess), the Start is play.
+      if (module.startIsPlay === true) return true;
+      started = true;
+    } else if (started && !isCoreEventType(e.type)) return true;
   }
   return false;
 }
@@ -632,6 +641,11 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // boardgame widens it (FIDE Laws 6.7.1: a no-show after the session starts; R14: a tie-break no-show). Ruling 112:
   // the kernel judges a walkover in "pre" while nothing is played after the start (`playRecorded`), whatever the phase.
   walkoverPhases?: readonly ForfeitPhase[];
+  // W2b ruling 118 — the sport records no play between the Start and the result (chess: Seazn records no moves), so
+  // an active `core.start` is itself play (`playRecorded`): after it a retirement is recordable, and a retirement or
+  // a disqualification is a game both players played (X-PS-2). Absent ⇒ false: "nothing played means not started"
+  // (rulings 113–115). Only boardgame declares it.
+  startIsPlay?: boolean;
   // W4a (#425) §7 — every phase in which a STAMPED event may legally occur, in
   // the order they occur, for this cfg. Wider than "the phases where play is
   // running": a card before the opening whistle and a card in the shootout are
@@ -965,7 +979,7 @@ export function foldMatchWithStoppage<Cfg, State>(
       const phase = forfeitPhaseOf(module, state, started, decided);
       if (phase !== "over") {
         const { by, reason } = forfeitOf(event.payload);
-        const played = playRecorded(active.slice(0, index));
+        const played = playRecorded(active.slice(0, index), module);
         const allowed = forfeitReasonsAllowed(phase, walkoverPhases, played);
         // R3 (W2b-R14): never both sides in a tie-break — the classical game was played.
         const bothRefused = by === "both" && phase === "tiebreak";

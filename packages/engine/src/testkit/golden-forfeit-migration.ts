@@ -31,7 +31,9 @@ function forfeitSide(payload: unknown): string {
  *  un-play the match the forfeit was recorded in. */
 function ruledReason(events: readonly MigratableEvent[], index: number): MigratedReason {
   const prefix = events.slice(0, index).map((event, i) => makeEnvelope(i, event as never, event.voids));
-  return playRecorded(prefix) ? "retired" : "walkover";
+  // No module: the migration is the one-off of ruling 113, which ruled no board-game exception (PF-3), and the corpora
+  // it rewrote stay as written. Ruling 118 moves no recorded reason: a chess walkover after the Start stays recordable.
+  return playRecorded(prefix, {}) ? "retired" : "walkover";
 }
 
 /** Rewrites every `core.forfeit` reason in `streams` to the ruled one. `examined` counts every forfeit seen;

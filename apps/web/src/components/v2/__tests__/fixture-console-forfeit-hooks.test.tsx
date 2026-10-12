@@ -11,7 +11,8 @@
 //
 // Expected values are the rules': X-RS-1 / D3 as amended by rulings 112 and 113 for the chips (until something is played
 // a walkover or Neither — after a bare Start too, beside a disqualification; once something is played retired or
-// disqualified; never withdrew — PF-2), §7 for the refusal (the dialog closes, the reason shows on the console).
+// disqualified; never withdrew — PF-2), and ruling 118 for chess (its Start is play, so a bare Start offers the
+// retirement), §7 for the refusal (the dialog closes, the reason shows on the console).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
@@ -201,6 +202,55 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     click(confirm);
     await vi.waitFor(() => expect(d.onClose).toHaveBeenCalledTimes(1));
     expect(d.forfeit).toHaveBeenCalledWith({ by: "both", reason: "walkover" });
+  });
+
+  it("ruling 118: a chess console after a bare Start offers the retirement — the console reads its ledger with the fixture's OWN module — and Confirm sends it; the Start voided takes it back", async () => {
+    // Single-sport: boardgame is the one module declaring its Start play (ruling 118: Seazn records no chess moves, so
+    // a game in progress is a game played). The generic console above, on the same bare Start, offers no retirement —
+    // the positive pair: what moves the chips is the module the console hands `forfeitPlayRecorded`, nothing else.
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    expect(chess.startIsPlay, "rig: chess declares its Start play").toBe(true);
+    const chessCfg = chess.configSchema.parse(Object.values(chess.variants)[0] ?? {});
+    const chessLineups = defaultLineupPair(chess.positions);
+    const chessSport: SportInfo = { ...sport, key: "boardgame" };
+    const open = (ledger: EventEnvelope[]) => {
+      vi.mocked(apiV1).mockImplementation(((url: string) => {
+        if (url.includes("/events")) return Promise.resolve(rowsOf(ledger));
+        return Promise.resolve({ status: "in_play", last_seq: ledger.length, summary: null, state: foldMatch(chess, chessCfg, chessLineups, ledger), outcome: null });
+      }) as typeof apiV1);
+      const base = baseProps("started");
+      const live = { status: "in_play", last_seq: ledger.length, summary: null, state: foldMatch(chess, chessCfg, chessLineups, ledger), outcome: null };
+      const island = renderIsland(FixtureConsole, {
+        ...base,
+        sport: chessSport,
+        initialState: live,
+        initialEvents: rowsOf(ledger),
+        scorePadV2: { ...base.scorePadV2, moduleVersion: chess.version, resolvedConfig: chessCfg },
+      });
+      click(byTestid(island.tree(), "score-forfeit")[0]);
+      const el = island.tree().find((e) => typeof e.type === "function" && propsOf(e).model !== undefined && propsOf(e).forfeit !== undefined);
+      if (el === undefined) throw new Error("score-forfeit did not open the chess forfeit dialog");
+      const d = driveDialog(el);
+      click(byTestid(d.tree(), "forfeit-who-away")[0]);
+      const offered = ["walkover", "retired", "disqualified", "withdrew"].filter((r) => byTestid(d.tree(), `forfeit-why-${r}`).length > 0);
+      return { d, offered };
+    };
+    const original = vi.mocked(apiV1).getMockImplementation()!;
+    try {
+      const started = open([START]);
+      expect(started.offered, "chess after a bare Start: walkover (FIDE 6.7.1), retired and disqualified (ruling 118); withdrew is the cascade's (PF-2)").toEqual(["walkover", "retired", "disqualified"]);
+      (propsOf(byTestid(started.d.tree(), "forfeit-why-retired")[0]!).onChange as () => void)();
+      const confirm = byTestid(started.d.tree(), "forfeit-confirm")[0]!;
+      expect(textOf(confirm)).toBe(en("forfeitDialog.confirm.retired"));
+      click(confirm);
+      await vi.waitFor(() => expect(started.d.onClose).toHaveBeenCalledTimes(1));
+      expect(started.d.forfeit).toHaveBeenCalledWith({ by: AWAY.id, reason: "retired" });
+      // The take-back: the Start voided is nothing played again — the walkover only.
+      const voided = open([START, makeEnvelope(2, { type: "core.void", payload: {} }, START.id)]);
+      expect(voided.offered, "chess, the Start voided").toEqual(["walkover"]);
+    } finally {
+      vi.mocked(apiV1).mockImplementation(original);
+    }
   });
 
   it("X-RS-1 (rulings 112, 113; R112 review M-1): ONE mounted console follows its ledger through resyncs — [start] → [start, play] → [start, play, void play] — and its dialog's reasons move with it each time", async () => {

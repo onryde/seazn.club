@@ -87,7 +87,8 @@ describe("X-RS-1 phase guard (spec §5.1; D3)", () => {
     // Ruling 112: a walkover (and a double walkover) reads "pre" while nothing is played after the start; once the
     // sport's own event is played it is refused, except where the module declares a walkover in that phase (chess,
     // whose tie-break phase never takes both sides, R3). Disqualified: once the Start is pressed (R4). Retired: only
-    // once something is played (ruling 113: nothing played means not started).
+    // once something is played (ruling 113: nothing played means not started) — where the module declares its Start
+    // play (ruling 118, chess), from the Start.
     let checked = 0;
     forEachSport(({ module: m }) => {
       const { cfg, l, played } = playedScene(m);
@@ -99,7 +100,8 @@ describe("X-RS-1 phase guard (spec §5.1; D3)", () => {
         const walkoverAllowed = at !== "after play" || walkoverAfterPlayAllowed(m.key);
         for (const reason of FORFEIT_REASONS) {
           const allowed =
-            reason === "withdrew" || (reason === "walkover" ? walkoverAllowed : reason === "retired" ? at === "after play" : at !== "before");
+            reason === "withdrew" ||
+            (reason === "walkover" ? walkoverAllowed : reason === "retired" ? at === "after play" || (at === "bare start" && m.startIsPlay === true) : at !== "before");
           const run = () => foldMatchWithStoppage(m as never, cfg as never, l, [...prefix, ev(n, "core.forfeit", { by: A, reason })]);
           expect(codeOf(run), `${m.key} ${reason} ${at}`).toBe(allowed ? null : "FORFEIT_REASON_WRONG_PHASE");
           if (allowed) expect(outcomeOf(m as never, run() as never), `${m.key} ${reason} ${at}`).toEqual({ kind: "award", winner: l.home.entrantId, loser: A, reason });

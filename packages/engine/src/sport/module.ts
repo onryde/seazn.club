@@ -797,6 +797,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   forfeitPhase(state: State): ForfeitPhase;
   /** W2b (plan D3 R2) — the phases a walkover may be recorded in. Absent ⇒ ["pre"]; only boardgame widens it. */
   walkoverPhases?: readonly ForfeitPhase[];
+  /** W2b ruling 118 — the Start is play: the sport records nothing between the Start and its result (chess), so the
+   *  kernel's one "played" reading (`playRecorded`) is true from an active `core.start`. See FoldableModule. Absent ⇒
+   *  false; only boardgame declares it. */
+  startIsPlay?: boolean;
   /**
    * W2b (plan D9; spec §5.2) — what an `award` (or a double walkover) credits this sport's table, computed from cfg
    * and the folded state alone (best-of, set targets, overs, `awardScore`), never a literal. `by` is the OFFENDING

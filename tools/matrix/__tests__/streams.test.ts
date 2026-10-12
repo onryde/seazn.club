@@ -58,6 +58,9 @@ const thrownUnsupported = new Set<string>();
 const folded = new Set<string>();
 /** W2b ruling 113: retirement rows the generator refused because nothing is played short of the result. */
 const refusedRetired = new Set<string>();
+/** W2b ruling 118: retirement rows built on START alone — the engine finds nothing to play after it, and the module
+ *  declares its Start play (chess). */
+const startIsPlayRetired = new Set<string>();
 /** The engine's own witness that something can be played after START under a cfg, undecided (testkit onePlayEvent,
  *  drawn from the module's generator — never from the harness's). */
 const enginePlays = (req: StreamRequest): boolean => {
@@ -86,6 +89,7 @@ describe("stream sweep", () => {
           // ENGINE finds nothing to play after START under this cfg.
           expect(req.outcome.reason, key).toBe("retired");
           expect(enginePlays(req), `${key}: the engine plays here, yet the retirement was refused`).toBe(false);
+          expect(sportModule(req.sportKey).startIsPlay, `${key}: the Start is play here (ruling 118), yet the retirement was refused`).not.toBe(true);
           refusedRetired.add(key);
           return;
         }
@@ -106,6 +110,12 @@ describe("stream sweep", () => {
     }
     expect(KNOWN_UNSUPPORTED, `stale KNOWN_UNSUPPORTED entry ${key}`).not.toContain(key);
     const m = sportModule(req.sportKey);
+    if (req.outcome.kind === "forfeit" && req.outcome.reason === "retired" && !enginePlays(req)) {
+      // Ruling 118: built on START alone — only where the module declares its Start play.
+      expect(m.startIsPlay, `${key}: a retirement on START alone where the Start is not play`).toBe(true);
+      expect(events.map((e) => e.type), key).toEqual(["core.start", "core.forfeit"]);
+      startIsPlayRetired.add(key);
+    }
     const declared = (m as { eventSchemas?: Record<string, unknown> }).eventSchemas;
     for (const ev of events) {
       if (ev.type.startsWith("core.") || declared === undefined) continue;
@@ -117,12 +127,15 @@ describe("stream sweep", () => {
     folded.add(key);
   });
 
-  it("ruling 113: the retirement is refused on exactly the rows where the engine finds nothing to play after START (counted)", () => {
+  it("rulings 113, 118: the retirement is refused on exactly the rows where the engine finds nothing to play after START and the Start is not play; where the Start is play (chess) it is built on START alone (counted)", () => {
     const retired = CASES.filter((c) => c.req.outcome.kind === "forfeit" && c.req.outcome.reason === "retired");
-    const nothingPlayed = retired.filter((c) => !enginePlays(c.req)).map((c) => c.key);
+    const nothingPlayed = retired.filter((c) => !enginePlays(c.req));
+    const startIsPlay = (c: (typeof retired)[number]): boolean => sportModule(c.req.sportKey).startIsPlay === true;
     expect(retired.length, "the sweep holds retirement rows").toBeGreaterThan(0);
     expect(nothingPlayed.length, "some sport has nothing to play short of its result").toBeGreaterThan(0);
-    expect([...refusedRetired].sort()).toEqual(nothingPlayed.sort());
+    expect([...refusedRetired].sort()).toEqual(nothingPlayed.filter((c) => !startIsPlay(c)).map((c) => c.key).sort());
+    expect([...startIsPlayRetired].sort()).toEqual(nothingPlayed.filter(startIsPlay).map((c) => c.key).sort());
+    expect(startIsPlayRetired.size, "chess's rows, built on START alone (ruling 118)").toBeGreaterThan(0);
   });
 
   it("every KNOWN_UNSUPPORTED entry was actually thrown (the list cannot outlive its gap)", () => {

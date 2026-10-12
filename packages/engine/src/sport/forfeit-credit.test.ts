@@ -640,8 +640,11 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
           expect(away.metrics, `${m.key}/${name} ${s.name}: withdrawn side`).toMatchObject(want.loser);
           expect([home.won, home.lost, away.won, away.lost], `${m.key}/${name} ${s.name}`).toEqual([1, 0, 0, 1]);
           // Ruling 115 (X-PS-1): with nothing played, no match in players' stats — the disqualification as the walkover.
+          // Ruling 118: where the Start is play (chess) the disqualification after it is a game both played (X-PS-2);
+          // its credit is chess's one forfeit credit either way (the 1-0, BG-WO-1), so only the stats row moves.
           const active = resolveVoids(ledger);
-          expect(m.playerStats?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed", `${m.key}/${name} ${s.name}: players' stats`).toBe(true);
+          const unplayed = !(m.startIsPlay === true && s.reason === "disqualified");
+          expect(m.playerStats?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed", `${m.key}/${name} ${s.name}: players' stats`).toBe(unplayed);
           checked++;
         }
         if (name.endsWith("at Best of 1")) bestOfOne.add(m.key);
@@ -684,10 +687,11 @@ describe("X-WO-1: one credited score — the goal sports' headline shows it (spe
     const l = defaultLineupPair(m.positions);
     const wo = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: H, reason: "walkover" })]);
     expect(m.summary(wo.state as never).headline, "walkover by H").toBe("0 — 1");
-    // Ruling 113: nothing is played in a chess game short of its result, so after the start the forfeit is a
-    // disqualification (a retirement is refused until something is played).
+    // After the start a disqualification, and (ruling 118: chess's Start is play) a retirement, both read the 1-0.
     const dq = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "disqualified" })]);
     expect(m.summary(dq.state as never).headline, "disqualification by A after the start").toBe("1 — 0");
+    const rt = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: H, reason: "retired" })]);
+    expect(m.summary(rt.state as never).headline, "retirement by H after the start").toBe("0 — 1");
     const dw = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
     expect(m.summary(dw.state as never).headline, "double walkover: nobody scores").toBe("0 — 0");
   });

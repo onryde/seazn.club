@@ -665,7 +665,7 @@ const isGameResult = (event: EventEnvelope): boolean => event.type === "boardgam
 /** W2b (X-PS-1) — a chess fixture nobody played: a walkover, a withdrawal or a double walkover before any game result.
  *  A forfeit after the classical game (a tie-break walkover) leaves that game played. */
 function boardgameUnplayed(events: readonly EventEnvelope[]): boolean {
-  return forfeitStatsRole(events, isGameResult) === "unplayed";
+  return forfeitStatsRole(events, isGameResult, boardgame) === "unplayed";
 }
 
 function foldBoardgameStats(
@@ -730,7 +730,7 @@ function foldBoardgameStats(
   // W2b (X-PS-2): a retirement or an in-match disqualification BEFORE any game result is a game both players played,
   // decided against the offender — its win (the plain metric's key, shared below) and its loss. Since W2b chess folds a
   // forfeit through `core.forfeit` (no `boardgame.result`), this is the only place it is credited.
-  if (forfeitStatsRole(events, isGameResult) === "played") {
+  if (forfeitStatsRole(events, isGameResult, boardgame) === "played") {
     const forfeit = [...events].reverse().find((event) => event.type === "core.forfeit");
     const parsed = forfeit === undefined ? undefined : CoreForfeit.safeParse(forfeit.payload);
     if (parsed?.success === true) {
@@ -827,6 +827,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // W2b (plan D3 R2) — chess records a walkover before the game, after the session starts (FIDE Laws 6.7.1: a
   // player absent at the default time) and in a pending tie-break (R14). The only module that widens ["pre"].
   walkoverPhases: ["pre", "play", "tiebreak"],
+  // W2b ruling 118 — Seazn records no chess moves: the Start is play, so a retirement or a disqualification after it is
+  // a game both players played (X-PS-2), and a no-show is still a walkover (the reason the organiser picks tells them
+  // apart).
+  startIsPlay: true,
   // W2b (spec §5.2) — see boardgameForfeitCredit.
   forfeitCredit: boardgameForfeitCredit,
 

@@ -438,6 +438,48 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     await expect(page.getByTestId("needs-decision"), "decided: nothing is held any more").toHaveCount(0, { timeout: 20_000 });
   });
 
+  test("ruling 118: a chess game under way — Start pressed, no move recorded — offers one side's walkover, retirement or disqualification, and Neither; the retirement is recorded and credited 1-0", async ({ page, request }) => {
+    // Ruling 118 (owner "A", 2026-10-12): in chess Start means play has begun — Seazn records no moves, so a game in
+    // progress is a game played. Single-sport: boardgame is the one module declaring its Start play. The badminton
+    // test above is the positive pair: there a bare Start offers no retirement (ruling 113).
+    const { fx, home, away } = await staged(request, "boardgame", "classical", "league", ["W2b Eli", "W2b Fay"].map((n) => `${n} ${TAG}`));
+    await post(request, fx.id, "core.start");
+    expect((await ledger(request, fx.id)).map((e) => e.type), "the Start alone: no move is ever recorded").toEqual(["core.start"]);
+    await page.goto(await fixturePath(request, fx.id));
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      const d = await openDialog(page);
+      expect(await sidesShown(d), `${w}: Neither stays (a double walkover in play, FIDE 6.7.1)`).toEqual(["home", "away", "both"]);
+      await d.getByTestId("forfeit-who-away").click();
+      expect(await reasonsShown(d), `${w}: walkover (FIDE 6.7.1), retired and disqualified (ruling 118); withdrew is the cascade's`).toEqual(["walkover", "retired", "disqualified"]);
+      await expectNoHorizontalScroll(page);
+      await crop(d, "console-forfeit-dialog-chess-after-start", w);
+      await page.keyboard.press("Escape");
+      await expect(dialogOf(page)).toHaveCount(0);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const d = await openDialog(page);
+    await d.getByTestId("forfeit-who-home").click();
+    await d.getByTestId("forfeit-why-retired").check();
+    // BG-WO-1: chess 1-0 — the home player retired, so the away player is credited.
+    await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview", { home, homeScore: 0, away, awayScore: 1 }));
+    await expect(d.getByTestId("forfeit-confirm")).toHaveText(ui("forfeitDialog.confirm.retired"));
+    await d.getByTestId("forfeit-confirm").click();
+
+    await expect.poll(async () => (await forfeitsIn(request, fx.id)).length, { timeout: 20_000 }).toBe(1);
+    const rows = await ledger(request, fx.id);
+    expect(rows.map((e) => [e.type, e.payload]), "the stored shape: start, then the retirement").toEqual([
+      ["core.start", {}],
+      ["core.forfeit", { by: fx.home_entrant_id, reason: "retired" }],
+    ]);
+    await expect(dialogOf(page)).toHaveCount(0);
+    await expect(page.getByTestId("score-forfeit"), "decided: no Forfeit").toHaveCount(0, { timeout: 20_000 });
+    expect(await read(request, fx.id)).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: fx.away_entrant_id, reason: "retired" } });
+  });
+
   test("Review Focus 4: a double tap on Confirm sends ONE core.forfeit; a second page's Confirm is refused and says why", async ({ page, request }) => {
     const { fx } = await badmintonLeague(request);
     const second = await page.context().newPage();

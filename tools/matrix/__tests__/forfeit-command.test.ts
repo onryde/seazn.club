@@ -164,14 +164,15 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(checked).toBe(SPORT_KEYS.length * SIDES.length * REASONS.length);
   });
 
-  it("in play (phase play): a disqualification is accepted from the Start and a retirement once something is played, with the played score kept; a retirement after a bare Start is refused FORFEIT_REASON_WRONG_PHASE (ruling 113); a walkover is refused once something is played (R2, ruling 112) — accepted after a bare Start, and wherever the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
+  it("in play (phase play): a disqualification is accepted from the Start and a retirement once something is played, with the played score kept; a retirement after a bare Start is refused FORFEIT_REASON_WRONG_PHASE (ruling 113) — except in chess, whose Start is play (ruling 118); a walkover is refused once something is played (R2, ruling 112) — accepted after a bare Start, and wherever the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
     // single-sport per case: generic declares walkovers in `pre` only, boardgame in `pre`, `play` and `tiebreak` (D3);
     // football for the played case. Generic's and chess's win streams are START + one deciding event, so the take-back
-    // leaves a bare START — nothing played (rulings 112, 113); football's keeps its goal — something played.
+    // leaves a bare START — nothing played in generic (rulings 112, 113), play in chess (ruling 118: its Start is play);
+    // football's keeps its goal — something played.
     for (const [sport, side, reason, played, code] of [
       ["generic", "home", "retired", false, "FORFEIT_REASON_WRONG_PHASE"], ["generic", "away", "disqualified", false, null], ["generic", "home", "walkover", false, null],
       ["football", "home", "walkover", true, "FORFEIT_REASON_WRONG_PHASE"], ["football", "away", "retired", true, null],
-      ["boardgame", "home", "walkover", false, null], ["boardgame", "away", "retired", false, "FORFEIT_REASON_WRONG_PHASE"], ["boardgame", "away", "disqualified", false, null],
+      ["boardgame", "home", "walkover", false, null], ["boardgame", "away", "retired", false, null], ["boardgame", "away", "disqualified", false, null],
     ] as const) {
       const { m, d, sf1 } = await bracket(sport);
       await run(m, d, "Score", 0, 0);   // sf1 decided by play …

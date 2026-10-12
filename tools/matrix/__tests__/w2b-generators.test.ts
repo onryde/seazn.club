@@ -9,8 +9,8 @@ import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { toObservedOutcome } from "../lib/observed.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
-import { ForfeitPostingRefused, forfeitPosting, generateStream, partialPlay } from "../lib/streams/index.ts";
-import { ALL_OUTCOMES, FORFEIT_REASONS, OutcomeUnreachable, outcomeLabel, type RequestedOutcome, type StreamRequest } from "../lib/streams/types.ts";
+import { ForfeitPostingRefused, forfeitPosting, generateStream, holdsPlay, partialPlay } from "../lib/streams/index.ts";
+import { ALL_OUTCOMES, FORFEIT_REASONS, OutcomeUnreachable, START, outcomeLabel, type RequestedOutcome, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 
@@ -36,9 +36,10 @@ describe("W2b generator breadth (spec §5.6)", () => {
     expect(s.map((e) => e.type)).toEqual(["core.forfeit"]);
   });
 
-  it("X-RS-1 + ruling 113: every sport builds a walkover before START and a disqualification after it; a retirement after START and some play — refused by name where nothing is played short of the result; reasons from the closed list only", () => {
+  it("X-RS-1 + rulings 113, 118: every sport builds a walkover before START and a disqualification after it; a retirement after START and some play — or, where the module declares its Start play (chess), after START alone; reasons from the closed list only", () => {
     let checked = 0;
     let refusedRetired = 0;
+    let startIsPlayRetired = 0;
     for (const sportKey of SPORT_KEYS) {
       const pre = generateStream(req(sportKey, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" }));
       expect(pre[0]?.type, sportKey).toBe("core.forfeit");
@@ -55,6 +56,14 @@ describe("W2b generator breadth (spec §5.6)", () => {
         expect(post[0]?.type, sportKey).toBe("core.start");
         expect(post.slice(1, -1).some((e) => !e.type.startsWith("core.")), `${sportKey}: a sport event is played before the retirement`).toBe(true);
         posted.push(...post);
+      } else if (m.startIsPlay === true) {
+        // Ruling 118: nothing to play short of the result, but the Start is play — START, then the retirement, which
+        // the real engine records as the retiree's loss.
+        const post = retire();
+        expect(post.map((e) => e.type), sportKey).toEqual(["core.start", "core.forfeit"]);
+        expect(foldStream(m, req(sportKey, null).cfg, "H", "A", post).outcome, `${sportKey}: the retirement decides`).toEqual({ kind: "award", winner: "A", loser: "H", reason: "retired" });
+        posted.push(...post);
+        startIsPlayRetired++;
       } else {
         expect(retire, `${sportKey}: nothing is played short of the result, so no retirement (ruling 113)`).toThrow(OutcomeUnreachable);
         expect(retire, sportKey).toThrow(/ruling 113/);
@@ -64,12 +73,32 @@ describe("W2b generator breadth (spec §5.6)", () => {
       checked++;
     }
     expect(checked).toBe(11);
-    // The positive pair of the refusal: most sports retire, and at least one (chess, whose game IS its result) cannot.
-    expect(refusedRetired).toBeGreaterThan(0);
-    expect(refusedRetired).toBeLessThan(checked);
+    // Ruling 118: chess, the one sport with nothing played short of its result, declares its Start play — so on the real
+    // registry every sport retires and the refusal is reached by holdsPlay's own test below.
+    expect([refusedRetired, startIsPlayRetired]).toEqual([0, 1]);
   });
 
-  it("X-RT-1: over EVERY variant of every sport, in a table and a bracket stage, the retirement's play leaves the match undecided — each sport's own scoring event for each side where it has two; refused by name where it has none (chess, ruling 113)", () => {
+  it("holdsPlay (rulings 113, 118): START alone is play only where the module declares it; a sport event after START always is; nothing is never — and every sport's partial play holds play for its own module", () => {
+    const sportEvent = { type: "generic.score", payload: { by: "H", points: 1 } };
+    const rows: [string, Parameters<typeof holdsPlay>[0], { startIsPlay?: boolean }, boolean][] = [
+      ["nothing, no declaration", [], {}, false],
+      ["nothing, Start is play", [], { startIsPlay: true }, false],
+      ["START alone, no declaration (ruling 113)", [START], {}, false],
+      ["START alone, Start is play (ruling 118)", [START], { startIsPlay: true }, true],
+      ["START then a sport event", [START, sportEvent], {}, true],
+      ["START then only kernel events", [START, { type: "core.note", payload: { text: "x" } }], {}, false],
+    ];
+    for (const [name, play, module, want] of rows) expect(holdsPlay(play, module), name).toBe(want);
+    let swept = 0;
+    for (const sportKey of SPORT_KEYS) {
+      const play = partialPlay(req(sportKey, { kind: "forfeit", by: "home", reason: "retired", at: "after_start" }));
+      expect(holdsPlay(play, sportModule(sportKey)), `${sportKey}: its partial play is play`).toBe(true);
+      swept++;
+    }
+    expect([rows.length, swept]).toEqual([6, 11]);
+  });
+
+  it("X-RT-1: over EVERY variant of every sport, in a table and a bracket stage, the retirement's play leaves the match undecided — each sport's own scoring event for each side where it has two; START alone where it has none (chess, ruling 118)", () => {
     let built = 0;
     let refused = 0;
     const scoredBoth = new Set<string>();
@@ -132,15 +161,12 @@ describe("W2b generator breadth (spec §5.6)", () => {
       ["A", "retired", true, null], ["A", "retired", false, /a retired forfeit on a scheduled fixture is recorded after core\.start and some play, but none/],
       ["A", "disqualified", true, null], ["A", "disqualified", false, /a disqualified forfeit .* but none/],
     ];
-    // Ruling 113: START alone is not play — a disqualification takes it, a retirement does not.
+    // START alone: the composition is the shape's (D3 R4: something after START), which a bare START meets for both
+    // reasons. Whether a bare START is enough for a RETIREMENT is the sport's (ruling 113; ruling 118 for chess) —
+    // generateStream judges it with the module (`holdsPlay`, below), never this sport-blind composition.
     const bare = play.slice(0, 1);
-    const bareRows: [string, "retired" | "disqualified", RegExp | null][] = [
-      ["A", "disqualified", null], ["A", "retired", /a retired forfeit on a scheduled fixture is recorded once something is played.*ruling 113/],
-    ];
-    for (const [by, reason, refused] of bareRows) {
-      const post = () => forfeitPosting("scheduled", { by, reason }, bare);
-      if (refused === null) expect(post().map((e) => e.type), `${by} ${reason} bare start`).toEqual(["core.start", "core.forfeit"]);
-      else expect(post, `${by} ${reason} bare start`).toThrow(refused);
+    for (const reason of ["disqualified", "retired"] as const) {
+      expect(forfeitPosting("scheduled", { by: "A", reason }, bare).map((e) => e.type), `A ${reason} bare start`).toEqual(["core.start", "core.forfeit"]);
     }
     let checked = 0;
     for (const [by, reason, withPlay, refused] of rows) {

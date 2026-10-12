@@ -53,7 +53,10 @@ function scenes(m: AnySportModule): { name: string; cfg: unknown; playCfg: unkno
 describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as amended)", () => {
   it("X-RS-1 + X-RT-1 (ruling 113): [start, retired] is refused FORFEIT_REASON_WRONG_PHASE, and the refusal names walkover, disqualified and withdrew — every sport, every declared cfg, either side", () => {
     let refused = 0;
+    let startIsPlay = 0;
     const sports = forEachSport(({ module: m }) => {
+      // Ruling 118: where the Start is play (chess), [start, retired] is admitted — forfeit-ruling-118.test.ts.
+      if (m.startIsPlay === true) return void startIsPlay++;
       for (const { name, cfg, l } of scenes(m)) {
         for (const by of [l.home.entrantId, l.away.entrantId]) {
           const e = refusalOf(() => fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by, reason: "retired" })]));
@@ -67,8 +70,8 @@ describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as ame
         }
       }
     });
-    expect(sports).toBe(11);
-    expect(refused).toBeGreaterThan(2 * sports);
+    expect([sports, startIsPlay]).toEqual([11, 1]);
+    expect(refused).toBeGreaterThan(2 * (sports - startIsPlay));
   });
 
   it("X-RT-1 (ruling 113): [start, play, retired] is admitted — the retiree loses, reason retired — every sport, every declared cfg", () => {
@@ -86,9 +89,10 @@ describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as ame
   it("X-RT-1 (ruling 113): [start, play, void play, retired] is refused again — a voided play is nothing played — every sport, every declared cfg", () => {
     let refused = 0;
     forEachSport(({ module: m }) => {
+      if (m.startIsPlay === true) return; // ruling 118: chess's Start stands, so it is still play
       for (const { name, playCfg, play, l } of scenes(m)) {
         const ledger = [START(), play, ev(3, "core.void", {}, play.id)];
-        expect(playRecorded(ledger), `${m.key}/${name}: rig, nothing active is play`).toBe(false);
+        expect(playRecorded(ledger, m), `${m.key}/${name}: rig, nothing active is play`).toBe(false);
         const e = refusalOf(() => fold(m, playCfg, l, [...ledger, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]));
         expect(e?.code, `${m.key}/${name} retired after ${play.type} voided`).toBe("FORFEIT_REASON_WRONG_PHASE");
         expect((e!.data as { allowed: string[] }).allowed, `${m.key}/${name}`).toEqual(NOTHING_PLAYED);
@@ -96,7 +100,7 @@ describe("ruling 113: a retirement needs something played (X-RS-1, X-RT-1 as ame
         refused++;
       }
     });
-    expect(refused).toBeGreaterThan(builtinModules.length);
+    expect(refused).toBeGreaterThan(builtinModules.length - 1);
   });
 
   it("X-RS-1 (ruling 113): the refusal names whether anything was played — a walkover refused after play says played: true, every sport whose walkover stops at the Start", () => {
@@ -153,20 +157,22 @@ describe("ruling 113: the console's admission is the guard's (forfeitAdmission)"
   it("X-RS-1 + X-RT-1 (ruling 113): after a bare Start forfeitAdmission offers walkover, disqualified, withdrew and Neither; once played it adds the retirement; voided, it takes it back — every sport, every declared cfg", () => {
     let checked = 0;
     forEachSport(({ module: m }) => {
+      if (m.startIsPlay === true) return; // ruling 118: chess offers the retirement from the Start (forfeit-ruling-118)
       for (const { name, cfg, playCfg, play, l } of scenes(m)) {
-        const bare = forfeitAdmission(m as never, fold(m, cfg, l, [START()]).state, { playRecorded: false });
+        expect(playRecorded([START()], m), `${m.key}/${name}: a bare start is nothing played`).toBe(false);
+        const bare = forfeitAdmission(m as never, fold(m, cfg, l, [START()]).state, { playRecorded: playRecorded([START()], m) });
         expect(bare.reasons, `${m.key}/${name} bare start`).toEqual(NOTHING_PLAYED);
         expect(bare.both, `${m.key}/${name} bare start: Neither`).toBe(true);
         const played = forfeitAdmission(m as never, fold(m, playCfg, l, [START(), play]).state, { playRecorded: true });
         expect(played.reasons, `${m.key}/${name} after ${play.type}`).toContain("retired");
         expect(played.reasons, `${m.key}/${name} after ${play.type}`).toContain("disqualified");
         const ledger = [START(), play, ev(3, "core.void", {}, play.id)];
-        const voided = forfeitAdmission(m as never, fold(m, playCfg, l, ledger).state, { playRecorded: playRecorded(ledger) });
+        const voided = forfeitAdmission(m as never, fold(m, playCfg, l, ledger).state, { playRecorded: playRecorded(ledger, m) });
         expect(voided.reasons, `${m.key}/${name} after ${play.type} voided`).not.toContain("retired");
         checked++;
       }
     });
-    expect(checked).toBeGreaterThan(builtinModules.length);
+    expect(checked).toBeGreaterThan(builtinModules.length - 1);
   });
 
   it("D3 R4 + ruling 113 (R112 fix round 2, m1): a retirement needs BOTH — something played AND a phase past \"pre\"; a phase that reads pre is offered the walkover and the withdrawal only, whatever the console's fact says", () => {

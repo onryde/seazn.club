@@ -113,17 +113,17 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
 
   it("X-PS-2: a retirement or an in-match disqualification is a match for both sides' players, W/L as decided — every sport", () => {
     let checked = 0;
-    let nothingPlayed = 0;
+    let startIsPlay = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       const keys = declaredMatchKeys(m.playerStats);
       if (keys.length === 0) return; // cricket: no per-match key (see X-PS-1)
       for (const reason of ["retired", "disqualified"]) {
-        if (reason === "disqualified" && PLAYED[m.key]!.length === 0) {
-          // Ruling 115: chess has nothing played here short of its result, so its disqualification is not in-match —
-          // the walkover's reading, pinned below and swept in player-stats-ruling-115.test.ts. Counted.
-          nothingPlayed++;
-          continue;
+        // Ruling 118: chess records nothing short of its result (PLAYED is empty), and its Start is play — so a
+        // retirement or a disqualification after the bare Start is in-match (sport/forfeit-ruling-118.test.ts). Counted.
+        if (PLAYED[m.key]!.length === 0) {
+          expect(m.startIsPlay, `${m.key}: nothing to play before the forfeit, so its Start must be play`).toBe(true);
+          startIsPlay++;
         }
         // H retires after A's bit of play, so A wins.
         const spec: Spec = [...(PRE[m.key] ?? []), ["core.start"], ...PLAYED[m.key]!, ["core.forfeit", { by: H, reason }]];
@@ -153,7 +153,7 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
       }
     });
     expect(checked).toBeGreaterThanOrEqual(19);
-    expect(nothingPlayed, "chess, whose PLAYED is empty (ruling 115)").toBe(1);
+    expect(startIsPlay, "chess, whose PLAYED is empty and whose Start is play (ruling 118)").toBe(2);
   });
 
   it("X-PS-2 sequence: a note and the finalize recorded after a retirement change no player's row — every sport", () => {
@@ -161,21 +161,11 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     // not from whatever was recorded last.
     let checked = 0;
     let credited = 0;
-    let refused = 0;
-    let dqNothingPlayed = 0;
     forEachSport(({ module: m }) => {
       if (m.playerStats === undefined) return;
       for (const reason of ["retired", "disqualified"]) {
+        // Ruling 118: chess (nothing in PLAYED) retires or is disqualified after its bare Start, which is play.
         const spec: Spec = [...(PRE[m.key] ?? []), ["core.start"], ...PLAYED[m.key]!, ["core.forfeit", { by: H, reason }]];
-        if (reason === "retired" && PLAYED[m.key]!.length === 0) {
-          // Ruling 113: chess has nothing played short of its result, so no retirement after a bare start — counted.
-          const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
-          expect(() => foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), evs(spec)), `${m.key} ${reason}`).toThrowError(
-            expect.objectContaining({ code: "FORFEIT_REASON_WRONG_PHASE" }),
-          );
-          refused++;
-          continue;
-        }
         const after: Spec = [...spec, ["core.note", { text: "arbiter signed the scoresheet" }], ["core.finalize"]];
         // the scene is one the kernel admits: a note and the finalize on a decided match
         const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
@@ -183,16 +173,13 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
         const before = statsOf(m.key, spec).rows;
         expect(statsOf(m.key, after).rows, `${m.key} ${reason}`).toEqual(before);
         if (sumOf(before, declaredMatchKeys(m.playerStats)) > 0) credited++;
-        else if (reason === "disqualified" && PLAYED[m.key]!.length === 0) dqNothingPlayed++; // ruling 115: chess
         checked++;
       }
     });
-    expect(checked + refused).toBeGreaterThanOrEqual(22);
-    expect(refused, "chess's retirement after a bare start (ruling 113)").toBe(1);
-    // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket) —
-    // less chess's disqualification after a bare start, which is no match played (ruling 115)
-    expect(credited).toBeGreaterThanOrEqual(18);
-    expect(dqNothingPlayed, "chess's disqualification with nothing played (ruling 115)").toBe(1);
+    expect(checked).toBeGreaterThanOrEqual(22);
+    // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket),
+    // chess's two included (ruling 118: its Start is play)
+    expect(credited).toBeGreaterThanOrEqual(20);
   });
 
   it("a player-stat key carries one label wherever its model declares it, and no label is empty — every sport", () => {

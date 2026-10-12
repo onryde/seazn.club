@@ -39,12 +39,12 @@ const OPEN = "⬜ open";
  *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it. */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
-    "X-RS-1": signed(113, "2026-10-11"), "X-RS-2": signed(83), "X-RS-3": signed(83),
+    "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
     "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
-    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(115, "2026-10-12"),
+    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(118, "2026-10-12"),
     "X-AB-1": signed(88), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
-    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(115, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
+    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(118, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
     "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },
@@ -148,8 +148,8 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "Appendix A's own amend line (ruling 84): \"a win\" became \"a win or a double walkover\"",
   },
   "X-RS-1": {
-    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase until the match has a result, or over a held level result (PF-1).",
-    by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start",
+    says: "A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text, and nothing played means not started for every reason (rulings 112, 113): played is an active sport (module-owned) event after `core.start`, scoring or not (ruling 114), kernel admin events and voided events not counting; a walkover and a double walkover are recordable until something is played (chess keeps its wider walkover phases, FIDE 6.7.1), a disqualification from the Start, a retirement only once something is played, and a withdrawal in any phase until the match has a result, or over a held level result (PF-1). Amended by ruling 118 (2026-10-12): in chess the Start itself is play (Seazn records no moves), so a chess retirement is recordable from the Start.",
+    by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start; ruling 118 (2026-10-12): in chess the Start itself is play",
   },
   "X-WO-1": {
     says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
@@ -507,7 +507,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
   });
 });
 
-describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115)", () => {
+describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 112, 113, 114, 115, 118)", () => {
   it("empty case first: with no rows, every one of the 55 W2b ids and X-BR-1 is reported missing", () => {
     const problems = w2bProblems([]);
     expect(problems).toHaveLength(56);
@@ -516,7 +516,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
   });
 
-  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113 or 115 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
+  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113, 115 or 118 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
     const ids = w2bIds();
     expect(ids).toHaveLength(55);
     expect(new Set(ids).size).toBe(55); // no id pinned twice

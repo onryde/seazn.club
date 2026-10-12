@@ -2,8 +2,8 @@
   {
     "id": "walkover-rule-inverted",
     "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
-    "find": "return playRecorded(prefix) ? \"retired\" : \"walkover\";",
-    "replace": "return playRecorded(prefix) ? \"walkover\" : \"retired\";",
+    "find": "return playRecorded(prefix, {}) ? \"retired\" : \"walkover\";",
+    "replace": "return playRecorded(prefix, {}) ? \"walkover\" : \"retired\";",
     "killers": [
       {
         "cwd": "packages/engine",

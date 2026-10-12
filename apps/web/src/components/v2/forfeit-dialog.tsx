@@ -44,7 +44,7 @@ export interface ForfeitDialogModel {
 }
 
 /** What the model reads off a sport module: its phase guard, its credit and its table's metric order. */
-export type ForfeitModule = Pick<AnySportModule, "forfeitPhase" | "walkoverPhases" | "forfeitCredit" | "metrics">;
+export type ForfeitModule = Pick<AnySportModule, "forfeitPhase" | "walkoverPhases" | "startIsPlay" | "forfeitCredit" | "metrics">;
 
 const CONFIRM_KEY: Record<ForfeitReason, ForfeitConfirmKey> = {
   walkover: "forfeitDialog.confirm.walkover",
@@ -61,10 +61,14 @@ export type ForfeitLedgerRow = { readonly id: string; readonly seq: number; read
 
 /**
  * Ruling 112's fact for the dialog: has anything been played on this fixture — the engine's own `playRecorded` (the
- * reading its fold guard judges a walkover by), asked of the console's ledger rows in seq order.
+ * reading its fold guard judges a walkover by), asked of the console's ledger rows in seq order, for the fixture's own
+ * module (ruling 118: chess's Start is play).
  */
-export function forfeitPlayRecorded(rows: readonly ForfeitLedgerRow[]): boolean {
-  return playRecorded([...rows].sort((a, b) => a.seq - b.seq).map((r) => ({ id: r.id, type: r.type, voids: r.voids_event_id })));
+export function forfeitPlayRecorded(rows: readonly ForfeitLedgerRow[], module: Pick<ForfeitModule, "startIsPlay">): boolean {
+  return playRecorded(
+    [...rows].sort((a, b) => a.seq - b.seq).map((r) => ({ id: r.id, type: r.type, voids: r.voids_event_id })),
+    module,
+  );
 }
 
 /**

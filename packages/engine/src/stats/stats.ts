@@ -492,11 +492,14 @@ export interface PlayerStatsDiagnostics {
  *   its credit and the forfeit adds none.
  *
  * `events` must already be void-resolved (`aggregatePlayerStats` hands every fold that list), so the last forfeit in
- * it is the effective one.
+ * it is the effective one. `module` is the sport's own declaration for `playRecorded` (ruling 118): a module declaring
+ * `startIsPlay` passes itself (boardgame), so a disqualification after its bare Start is in-match; every other sport
+ * reads as no declaration.
  */
 export function forfeitStatsRole(
   events: readonly EventEnvelope[],
   decidedBefore?: (event: EventEnvelope) => boolean,
+  module: { readonly startIsPlay?: boolean } = {},
 ): "unplayed" | "played" | null {
   let decided = false;
   let role: "unplayed" | "played" | null = null;
@@ -510,7 +513,7 @@ export function forfeitStatsRole(
     }
     const { by, reason } = forfeit.data;
     // Ruling 115: a disqualification with nothing played before it is treated like a walkover.
-    const dqUnplayed = reason === "disqualified" && !playRecorded(events.slice(0, index));
+    const dqUnplayed = reason === "disqualified" && !playRecorded(events.slice(0, index), module);
     if (decided) role = null;
     else role = dqUnplayed || by === "both" || reason === "walkover" || reason === "withdrew" ? "unplayed" : "played";
   }
@@ -553,9 +556,10 @@ export function playedInStats(events: readonly EventEnvelope[], model?: Pick<Pla
  * every snapshot folded by the old rules served as it is until its division changes.
  *
  * History: 1 — every fold before the version existed (its md5 carried none); 2 — W2b's X-PS-1/X-PS-2 and ruling 115
- * (an unplayed forfeit is no match; a disqualification with nothing played is unplayed; a bye is no match, R115-3).
+ * (an unplayed forfeit is no match; a disqualification with nothing played is unplayed; a bye is no match, R115-3);
+ * 3 — ruling 118 (chess: a disqualification after a bare Start is a game both players played).
  */
-export const STATS_FOLD_VERSION = 2;
+export const STATS_FOLD_VERSION = 3;
 
 /**
  * Fold one fixture's event ledger into per-person stat contributions

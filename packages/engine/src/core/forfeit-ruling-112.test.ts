@@ -52,16 +52,21 @@ const NOT_PLAY: readonly string[] = [
 
 describe("ruling 112: what counts as play (X-RS-1 as amended)", () => {
   it("empty case first: no ledger, a bare start, and a start voided are not play", () => {
-    expect(playRecorded([])).toBe(false);
-    expect(playRecorded([START()])).toBe(false);
-    expect(playRecorded([START(), ev(2, "core.void", {}, "e-1")])).toBe(false);
+    // A module declaring nothing (ruling 118's `startIsPlay` is chess's alone, forfeit-ruling-118.test.ts).
+    expect(playRecorded([], {})).toBe(false);
+    expect(playRecorded([START()], {})).toBe(false);
+    expect(playRecorded([START(), ev(2, "core.void", {}, "e-1")], {})).toBe(false);
+    // Ruling 118's declaration: the Start is play, until it is voided.
+    expect(playRecorded([], { startIsPlay: true })).toBe(false);
+    expect(playRecorded([START()], { startIsPlay: true })).toBe(true);
+    expect(playRecorded([START(), ev(2, "core.void", {}, "e-1")], { startIsPlay: true })).toBe(false);
   });
 
   it("X-RS-1 (ruling 112): every kernel type is admin, never play — and every sport's own event after the start is", () => {
     expect([...NOT_PLAY].sort(), "a core type was added: rule on whether it is play").toEqual(Object.keys(CORE_EVENT_SCHEMAS).sort());
     let kernel = 0;
     for (const type of NOT_PLAY) {
-      expect(playRecorded([START(), { id: "e-2", type }]), type).toBe(false);
+      expect(playRecorded([START(), { id: "e-2", type }], {}), type).toBe(false);
       kernel++;
     }
     expect(kernel, `kernel types checked: ${kernel}`).toBe(15);
@@ -69,9 +74,10 @@ describe("ruling 112: what counts as play (X-RS-1 as amended)", () => {
     forEachSport(({ module: m }) => {
       const { played } = playedScene(m);
       expect(played.type.startsWith(`${m.key}.`), `${m.key}: its play is in its own namespace (${played.type})`).toBe(true);
-      expect(playRecorded([START(), played]), `${m.key} ${played.type}`).toBe(true);
-      // The sequence: voiding the one sport event takes it back to nothing played.
-      expect(playRecorded([START(), played, ev(3, "core.void", {}, played.id)]), `${m.key} voided`).toBe(false);
+      expect(playRecorded([START(), played], m), `${m.key} ${played.type}`).toBe(true);
+      // The sequence: voiding the one sport event takes it back to nothing played — except where the Start itself is
+      // play (ruling 118, chess), which stands.
+      expect(playRecorded([START(), played, ev(3, "core.void", {}, played.id)], m), `${m.key} voided`).toBe(m.startIsPlay === true);
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
@@ -96,7 +102,8 @@ describe("ruling 112: what counts as play (X-RS-1 as amended)", () => {
         try { alone = foldMatchWithStoppage(m as never, cfg as never, l, [pre], { strictFromSeq: 1 }); } catch { continue; } // refused before the start
         if (outcomeOf(m as never, alone as never) !== null) continue; // it decided the match (a generic result): no walkover follows
         const stream = [pre, ev(2, "core.start"), ev(3, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })];
-        expect(playRecorded(stream.slice(0, 2)), `${m.key} ${drawn.type} before the start`).toBe(false);
+        // Nothing before the Start counts; the Start itself is play only where the module declares it (ruling 118).
+        expect(playRecorded(stream.slice(0, 2), m), `${m.key} ${drawn.type} before the start`).toBe(m.startIsPlay === true);
         expect(outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, stream, { strictFromSeq: 3 }) as never), `${m.key} ${drawn.type}`).toEqual({
           kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "walkover",
         });
@@ -199,16 +206,19 @@ describe("ruling 112: the stored shapes, every sport (X-RS-1 as amended)", () =>
     expect(checked).toBe(4 * builtinModules.length);
   });
 
-  it("X-RS-1 (ruling 112, amended by 113): a disqualification stays recordable from the start; a retirement after a bare start is refused until something is played", () => {
+  it("X-RS-1 (ruling 112, amended by 113 and 118): a disqualification stays recordable from the start; a retirement after a bare start is refused until something is played — except where the Start is play (chess)", () => {
     // Ruling 112 kept both from the Start; ruling 113 (2026-10-11) withdraws the retirement: nobody retires from a match
-    // never played. core/forfeit-ruling-113.test.ts sweeps every declared cfg; this is the 112 row, re-pinned.
+    // never played. Ruling 118 (2026-10-12): in chess the Start is play, so it keeps the retirement from the Start.
+    // core/forfeit-ruling-113.test.ts and sport/forfeit-ruling-118.test.ts sweep every declared cfg; this is the 112 row.
     let checked = 0;
     forEachSport(({ module: m }) => {
       const cfg = firstCfg(m);
       const l = defaultLineupPair(m.positions);
       const dq = fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "disqualified" })]);
       expect(outcomeOf(m as never, dq as never), `${m.key} disqualified`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "disqualified" });
-      expect(codeOf(() => fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "retired" })])), `${m.key} retired`).toBe("FORFEIT_REASON_WRONG_PHASE");
+      expect(codeOf(() => fold(m, cfg, l, [START(), ev(2, "core.forfeit", { by: l.away.entrantId, reason: "retired" })])), `${m.key} retired`).toBe(
+        m.startIsPlay === true ? null : "FORFEIT_REASON_WRONG_PHASE",
+      );
       checked += 2;
     });
     expect(checked).toBe(2 * builtinModules.length);
@@ -223,7 +233,7 @@ describe("ruling 112: the stored shapes, every sport (X-RS-1 as amended)", () =>
       const { cfg, l, played } = playedScene(m);
       const plain = ev(2, played.type, played.payload);
       const carrying = ev(2, played.type, played.payload, "e-1");
-      expect(playRecorded([START(), carrying]), `${m.key}: play carrying voids`).toBe(true);
+      expect(playRecorded([START(), carrying], m), `${m.key}: play carrying voids`).toBe(true);
       const walkover = ev(3, "core.forfeit", { by: l.away.entrantId, reason: "walkover" });
       expect(codeOf(() => fold(m, cfg, l, [START(), carrying, walkover])), `${m.key}: the walkover after it`).toBe(codeOf(() => fold(m, cfg, l, [START(), plain, walkover])));
       checked++;
@@ -265,7 +275,7 @@ describe("ruling 112: the console's answer agrees with the guard (forfeitAdmissi
         "after play voided": [START(), played, ev(3, "core.void", {}, played.id)],
       };
       for (const [name, ledger] of Object.entries(scenes)) {
-        const a = forfeitAdmission(m as never, fold(m, cfg, l, ledger).state, { playRecorded: playRecorded(ledger) });
+        const a = forfeitAdmission(m as never, fold(m, cfg, l, ledger).state, { playRecorded: playRecorded(ledger, m) });
         for (const by of [l.away.entrantId, "both"]) {
           for (const reason of FORFEIT_REASONS) {
             if (by === "both" && reason !== "walkover") continue; // the schema: "both" is only a walkover

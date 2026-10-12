@@ -539,8 +539,10 @@ export function forfeitVerdict(m: ModelState, f: FixtureModel, by: ForfeitSide, 
   const walkoverPhases = (sportModule(m.sport) as unknown as { walkoverPhases?: readonly string[] }).walkoverPhases ?? ["pre"];
   // Ruling 112, the model's own reading of its known ledger: something is played once a live sport (non-`core.`) event
   // follows a live start; until then a walkover is judged as before play — and (ruling 113) a retirement is refused.
+  // Ruling 118: where the sport's module declares its Start play (chess), the live start alone is.
   const startAt = live.findIndex((e) => e.type === "core.start");
-  const played = startAt >= 0 && live.slice(startAt + 1).some((e) => !e.type.startsWith("core."));
+  const startIsPlay = sportModule(m.sport).startIsPlay === true;
+  const played = startAt >= 0 && (startIsPlay || live.slice(startAt + 1).some((e) => !e.type.startsWith("core.")));
   if (reason === "walkover") {
     if ((by === "both" && phase === "tiebreak") || !walkoverPhases.includes(played ? phase : "pre")) return lastRound ? refuse("FORFEIT_REASON_WRONG_PHASE", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("FORFEIT_REASON_WRONG_PHASE");
     return lastRound ? refuse("DOUBLE_WALKOVER_NO_NEXT_MATCH") : { codes: null };

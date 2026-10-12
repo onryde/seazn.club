@@ -107,7 +107,7 @@ function expectPlayed(s: Scene): void {
   const label = `${s.sport}/${s.cfgName}: ${s.event.type} (${s.source}${s.scoring ? "" : ", non-scoring"})`;
   const { l, cfg, event } = s;
   const ledger = [START(), event];
-  expect(playRecorded(ledger), `${label}: counts as played`).toBe(true);
+  expect(playRecorded(ledger, m), `${label}: counts as played`).toBe(true);
   const state = fold(m, cfg, l, ledger).state;
   const phase = m.forfeitPhase(state);
   // The walkover is refused once something is played, unless the module declares a walkover in that phase (chess).
@@ -124,11 +124,11 @@ function expectPlayed(s: Scene): void {
   const retired = fold(m, cfg, l, [...ledger, ev(3, "core.forfeit", { by: l.away.entrantId, reason: "retired" })]);
   expect(outcomeOf(m as never, retired as never), `${label}: a retirement after it`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "retired" });
   // The console asks the same question (forfeitAdmission with the ledger's own fact).
-  const admitted = forfeitAdmission(m as never, state as never, { playRecorded: playRecorded(ledger) });
+  const admitted = forfeitAdmission(m as never, state as never, { playRecorded: playRecorded(ledger, m) });
   if (!walkoverInPhase) expect(admitted, `${label}: the console's offer`).toMatchObject({ reasons: PLAYED_REASONS, both: false });
   // The workaround: void the event, and the walkover is recordable again — nothing is played.
   const voided = [START(), event, ev(3, "core.void", {}, event.id)];
-  expect(playRecorded(voided), `${label}: voided`).toBe(false);
+  expect(playRecorded(voided, m), `${label}: voided`).toBe(false);
   const wo = fold(m, cfg, l, [...voided, ev(4, "core.forfeit", { by: l.away.entrantId, reason: "walkover" })]);
   expect(outcomeOf(m as never, wo as never), `${label}: a walkover after voiding it`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "walkover" });
 }

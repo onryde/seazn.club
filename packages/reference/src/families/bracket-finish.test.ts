@@ -1087,15 +1087,16 @@ describe("bracket-finish W2b: who may record a forfeit, and when (X-RS-1, X-RS-3
     expect(checked).toBe(10 * 15);
   });
 
-  it("BG-WO-2 + FIDE 6.7.1: a chess walkover is recordable before the game starts AND during play (a double forfeit too); retired and disqualified still only after the start", () => {
+  it("BG-WO-2 + FIDE 6.7.1 + ruling 118: a chess walkover is recordable before the game starts AND during play (a double forfeit too); retired and disqualified only after the start — from a bare Start, which in chess is play", () => {
     // single-sport: BG-WO-2 is chess's row (boardgame)
     const at = (play: PlayResult, a: Action): BracketExpect => expectBracketFinish({ ...base, play, actions: [a] });
     expect(at(NONE, fo("away", "walkover"))).toEqual(forfeitWin("home", "walkover"));
     expect(at(LIVE, fo("away", "walkover"))).toEqual(forfeitWin("home", "walkover"));
     expect(at(LIVE, fo("both", "walkover"))).toEqual(DOUBLE);
     expect(refusedAt(at(NONE, fo("away", "retired")), 0)).toBe("FORFEIT_REASON_WRONG_PHASE");
-    // Ruling 113: after a bare Start chess has played nothing either — no retirement; the disqualification stands.
-    expect(refusedAt(at(STARTED, fo("away", "retired")), 0)).toBe("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 118 (2026-10-12): in chess the Start is play (Seazn records no moves) — after a bare Start the retirement
+    // stands beside the disqualification. Ruling 113's refusal stays every other sport's (the sweep above).
+    expect(at(STARTED, fo("away", "retired"))).toEqual(forfeitWin("home", "retired"));
     expect(at(STARTED, fo("away", "disqualified"))).toEqual(forfeitWin("home", "disqualified"));
     expect(at(LIVE, fo("away", "retired"))).toEqual(forfeitWin("home", "retired"));
   });
@@ -1213,8 +1214,9 @@ function forfeitAnswer(c: BracketCase, a: Extract<Action, { kind: "forfeit" }>, 
   if (parent.status === "in_play") {
     const tiebreakPhase = chess && c.play.kind === "level" && c.play.as === DRAWN;
     if (tiebreakPhase) return a.offender === "both" ? "FORFEIT_REASON_WRONG_PHASE" : "accepted"; // R3; BG-WO-3
-    // Ruling 113: a retirement after a bare Start is before play (nobody retires from a match never played)
-    if (a.reason === "retired" && c.play.kind === "started") return "FORFEIT_REASON_WRONG_PHASE";
+    // Ruling 113: a retirement after a bare Start is before play (nobody retires from a match never played) — except in
+    // chess, whose Start is play (ruling 118)
+    if (a.reason === "retired" && c.play.kind === "started" && !chess) return "FORFEIT_REASON_WRONG_PHASE";
     // R2 (chess: FIDE 6.7.1) — ruling 112: a walkover after a bare Start is still before play; R4/R5 admit
     return a.reason === "walkover" && !chess && c.play.kind !== "started" ? "FORFEIT_REASON_WRONG_PHASE" : "accepted";
   }

@@ -616,7 +616,7 @@
   {
     "id": "boardgame-ps-forfeit-wl",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "if (forfeitStatsRole(events, isGameResult) === \"played\") {",
+    "find": "if (forfeitStatsRole(events, isGameResult, boardgame) === \"played\") {",
     "replace": "if (false) {",
     "killers": [
       {
