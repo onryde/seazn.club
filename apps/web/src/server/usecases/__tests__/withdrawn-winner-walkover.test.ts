@@ -27,7 +27,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import enPublic from "@/dictionaries/en/public.json";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import type { Dict } from "@/lib/i18n-constants";
@@ -52,6 +52,8 @@ import { poolLabel } from "@/lib/pool-label";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { buildDivisionSlides, buildPublicDivisionSlides } from "@/server/slideshow-data";
 import { fixturesPlayedInStats } from "@/server/usecases/player-stats";
+import { buildDivisionDocModel } from "../exports";
+import { playedFixtureIds } from "../fixture-results-sql";
 
 // The public reads go through `unstable_cache`, which has no incrementalCache outside a real request: a passthrough,
 // never a memoising double (competition-hub-db.test.ts's own reason).
@@ -455,5 +457,83 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect((await publicOf(dw)).words.has(parentId), "and reads no forfeit words").toBe(false);
     await stillBye(dw, parentId, "a double walkover's dead seat");
     expect(byeSurfaces, "every surface, both byes").toBe(2 * 14);
+  }, 240_000);
+  it("R116-3: the organiser's exports name her in her dead seat, and the board holds the tie as it holds any walkover; a bye and a DQ'd winner's dead seat keep the bye", async () => {
+    // single-sport: badminton — the exports and the board's played set read the seats, the outcome and the evidence
+    // rows, never the sport.
+    const { sport, variant, play } = SPORTS[0]!;
+    const PRINTED = "2026-10-12T09:00:00.000Z";
+    /** Timetable rows as [home, away] (`fixtureRows`: time, court, home, result, away, stage). */
+    const timetablePairs = async (divisionId: string, auth: AuthCtx) =>
+      (await buildDivisionDocModel(auth, divisionId, "timetable", { printedAt: PRINTED })).sections
+        .flatMap((x) => x.table?.rows ?? [])
+        .map((r) => [String(r[2]), String(r[4])]);
+    const posterNode = async (divisionId: string, auth: AuthCtx, id: string) => {
+      const node = (await buildDivisionDocModel(auth, divisionId, "bracket", { printedAt: PRINTED })).bracket?.nodes.find((x) => x.fixtureId === id);
+      if (!node) throw new Error(`rig: ${id} is not on the poster`);
+      return [node.home, node.away];
+    };
+    const held = async (seed: { auth: AuthCtx; divisionId: string }) => withTenant(seed.auth.orgId, (tx) => playedFixtureIds(tx, seed.divisionId));
+
+    // Ruling 116's tie, and an ordinary withdrawal walkover in the same division as its oracle — her dead seat on each
+    // side of the tie, so either seat's read is reached.
+    const seats = new Set<number>();
+    for (const flip of [false, true]) {
+      const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+      const sib = siblingsInto(await rowsOf(s.stageId));
+      const [mine, other] = flip ? [sib.b, sib.a] : [sib.a, sib.b];
+      const w1 = (await play(s.auth, mine.id)).home_entrant_id!;
+      await withdrawEntrantCascade(s.auth, w1);
+      const arriving = (await play(s.auth, other.id)).home_entrant_id!;
+      expect((await fixtureRow(sib.parentId)).outcome, "premise: ruling 116's walkover").toEqual({ kind: "award", winner: arriving, loser: w1, reason: "withdrew" });
+      const ordinary = (await rowsOf(s.stageId)).find(
+        (r) => r.round_no === mine.round_no && r.id !== mine.id && r.id !== other.id && r.home_entrant_id && r.away_entrant_id && r.status === "scheduled",
+      );
+      if (!ordinary) throw new Error("rig: no unplayed seated first-round line left");
+      await withdrawEntrantCascade(s.auth, ordinary.away_entrant_id!);
+      expect((await fixtureRow(ordinary.id)).status, "premise: an ordinary walkover").toBe("forfeited");
+
+      const [her, them] = [await nameOf(w1), await nameOf(arriving)];
+      const seat = mine.winner_to_slot!;
+      seats.add(seat);
+      const want = seat === 1 ? [her, them] : [them, her];
+      const pairs = await timetablePairs(s.divisionId, s.auth);
+      expect(pairs.length, "the timetable lists the draw").toBeGreaterThan(0);
+      expect(pairs.filter((p) => p.includes(her) && p.includes(them)), `seat ${seat}: the timetable names her in her seat`).toEqual([want]);
+      expect(pairs.flat(), `seat ${seat}: nothing on this draw prints "${BYE}"`).not.toContain(BYE);
+      expect(await posterNode(s.divisionId, s.auth, sib.parentId), `seat ${seat}: the bracket poster names her in her seat`).toEqual(want);
+      // The board: held, as the ordinary walkover is (its recorded forfeit); ruling 116's by its awarded match state.
+      const board = await held(s);
+      expect([board.has(sib.parentId), board.has(ordinary.id)], `seat ${seat}: both walkovers are held on the board`).toEqual([true, true]);
+    }
+    expect([...seats].sort(), "both seats reached").toEqual([1, 2]);
+
+    // The pairs. A genuine bye of an odd draw: two byes, each still printed "Bye", and nothing held.
+    const odd = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 6 });
+    const byes = (await rowsOf(odd.stageId)).filter((r) => (r.outcome as { reason?: unknown } | null)?.reason === "bye");
+    expect(byes.length, "the odd draw has byes").toBe(2);
+    expect((await timetablePairs(odd.divisionId, odd.auth)).filter((p) => p.includes(BYE)).length, "the timetable keeps each bye").toBe(2);
+    for (const r of byes) expect(await posterNode(odd.divisionId, odd.auth, r.id), r.ext_key ?? r.id).toContain(BYE);
+    const oddBoard = await held(odd);
+    expect(byes.filter((r) => oddBoard.has(r.id)).length, "a bye is not held").toBe(0);
+
+    // A DQ'd winner's dead seat (a bare status write, as PATCH /entrants writes one): the arriving side walks over by
+    // bye, naming nobody — so the exports keep the bye and never print her.
+    const dq = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+    const sib = siblingsInto(await rowsOf(dq.stageId));
+    await sql`update entrants set status = 'disqualified' where id = ${sib.a.home_entrant_id}`;
+    const dqd = (await play(dq.auth, sib.a.id)).home_entrant_id!;
+    const dqArriving = (await play(dq.auth, sib.b.id)).home_entrant_id!;
+    const dqTie = await fixtureRow(sib.parentId);
+    expect([dqTie.status, dqTie.outcome], "premise: a walkover by bye, naming nobody").toEqual([
+      "forfeited",
+      { kind: "award", winner: dqArriving, loser: null, reason: "bye" },
+    ]);
+    const [dqName, dqThem] = [await nameOf(dqd), await nameOf(dqArriving)];
+    const dqPairs = (await timetablePairs(dq.divisionId, dq.auth)).filter((p) => p.includes(dqThem) && p.includes(BYE));
+    expect(dqPairs.length, "the timetable keeps the bye opposite the arriving side").toBe(1);
+    expect(dqPairs.flat(), "and never prints her there").not.toContain(dqName);
+    const dqNode = await posterNode(dq.divisionId, dq.auth, sib.parentId);
+    expect([dqNode.includes(BYE), dqNode.includes(dqName)], "the poster keeps the bye").toEqual([true, false]);
   }, 240_000);
 });

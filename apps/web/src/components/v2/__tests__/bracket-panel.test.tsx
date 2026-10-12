@@ -222,3 +222,79 @@ describe("BracketPanel — mixed filled + TBD-with-label rows (regression)", () 
     expect(html).toContain('title="slot.runner_up_group"');
   });
 });
+
+// R116-3 (W2b Task 16; owner ruling 116): a withdrawn winner's dead seat, walked over by the side that arrived, reads
+// as any walkover reads — HER name, muted, beside the winner — on every organiser bracket layout, never the stored bye
+// label. The pair: an award with no loser (an odd draw's bye, a double walkover's dead seat, a DQ'd winner's — all
+// `loser: null`, withdrawal-w2b's `seatWalkover`) keeps the bye label. Her entrant ("Peru") sits nowhere else in each
+// shape, so her name can only come from the dead seat.
+describe("BracketPanel — R116-3: ruling 116's walkover names her on every layout", () => {
+  const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+  const names = { ...entrantNames, e5: "Peru" };
+  const withdrew = (winner: string) => ({ kind: "award", winner, loser: "e5", reason: "withdrew" });
+  const bye = (winner: string) => ({ kind: "award", winner, loser: null, reason: "bye" });
+  /** Each layout's shape with its awarded tie: `dead` is the empty seat, `winner` the side that arrived. */
+  const LAYOUTS: { name: string; kind?: string; testid: string; build: (outcome: (w: string) => unknown) => unknown[] }[] = [
+    {
+      name: "knockout tree",
+      testid: "",
+      build: (o) => [
+        FIX("f1", 0, 1, "e1", "e4", { kind: "win", winner: "e1", loser: "e4" }, "decided", 1),
+        FIX("f2", 0, 2, "e2", "e3", { kind: "win", winner: "e2", loser: "e3" }, "decided", 2),
+        FIX("f3", 1, 1, "e1", null, o("e1"), "forfeited", 3, null, BYE_LABEL),
+      ],
+    },
+    {
+      name: "double elimination",
+      testid: 'data-testid="bracket-panel-de"',
+      build: (o) => [
+        FIX("w1", 1, 1, "e1", "e2", { kind: "win", winner: "e1", loser: "e2" }, "decided", 1),
+        FIX("w2", 1, 2, "e3", "e4", { kind: "win", winner: "e3", loser: "e4" }, "decided", 2),
+        FIX("wf", 2, 1, "e1", null, o("e1"), "forfeited", 3, null, BYE_LABEL),
+        FIX("l1", 5, 1, null, null, null, "scheduled", 4),
+        FIX("lf", 6, 1, null, null, null, "scheduled", 5),
+        FIX("gf", 9, 1, null, null, null, "scheduled", 6),
+      ],
+    },
+    {
+      name: "stepladder",
+      kind: "stepladder",
+      testid: 'data-testid="bracket-panel-ladder"',
+      build: (o) => [
+        FIX("r1", 1, 1, "e1", "e2", { kind: "win", winner: "e1" }, "decided", 1),
+        FIX("r2", 2, 1, "e1", "e3", { kind: "win", winner: "e3" }, "decided", 2),
+        FIX("r3", 3, 1, null, "e4", o("e4"), "forfeited", 3, BYE_LABEL, null),
+      ],
+    },
+    {
+      name: "page playoff",
+      kind: "page_playoff",
+      testid: 'data-testid="bracket-panel-page"',
+      build: (o) => [
+        FIX("q1", 1, 1, "e1", "e2", { kind: "win", winner: "e1" }, "decided", 1),
+        FIX("el", 1, 2, "e3", "e4", { kind: "win", winner: "e3" }, "decided", 2),
+        FIX("q2", 2, 1, "e2", "e3", { kind: "win", winner: "e3" }, "decided", 3),
+        FIX("fin", 3, 1, "e1", null, o("e1"), "forfeited", 4, null, BYE_LABEL),
+      ],
+    },
+  ];
+
+  it("her name, never the bye label; and a bye (no loser) keeps the bye label — all four layouts", () => {
+    let checked = 0;
+    for (const l of LAYOUTS) {
+      const render = (o: (w: string) => unknown) => {
+        const fx = l.build(o);
+        return markup({ fixtures: fx as never, divisionFixtures: fx as never, entrantNames: names, ...(l.kind ? { kind: l.kind as never } : {}) });
+      };
+      const walked = render(withdrew);
+      if (l.testid) expect(walked, `${l.name}: the layout rendered`).toContain(l.testid);
+      expect(walked, `${l.name}: her name in her dead seat`).toContain(">Peru<");
+      expect(walked, `${l.name}: no bye label`).not.toContain("bracket.slot.bye");
+      const byed = render(bye);
+      expect(byed, `${l.name}: the bye keeps its label`).toContain("bracket.slot.bye");
+      expect(byed, `${l.name}: and names nobody there`).not.toContain("Peru");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});

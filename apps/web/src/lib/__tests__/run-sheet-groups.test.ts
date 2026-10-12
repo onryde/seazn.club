@@ -4,7 +4,7 @@
 // builder is proven by its REAL producer and consumer, not by a fixture on
 // both ends (_RULES.md, "the inert seam").
 import { describe, expect, it } from "vitest";
-import { buildRunSheet, type RunSheetInput } from "../run-sheet-groups";
+import { buildRunSheet, isBye, type RunSheetInput } from "../run-sheet-groups";
 
 const TZ = "Europe/London";
 const NOW = Date.UTC(2026, 8, 3, 13, 0); // 14:00 London, Thu 3 Sep
@@ -503,5 +503,30 @@ describe("buildRunSheet — byes are structural, never schedulable (R7)", () => 
       }),
     );
     expect(out).toEqual([]);
+  });
+});
+
+// R116-3 (owner ruling 116): `isBye` is the run sheet's one bye test — the row it draws, the filters that drop it, the
+// stage counts that skip it. A withdrawn winner's dead seat walked over by the side that arrived names a LOSER, so it is
+// a walkover like any other, not a bye. Empty case first.
+describe("isBye — ruling 116's walkover is no bye", () => {
+  const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+  const ROWS: { what: string; over: Partial<RunSheetInput["fixtures"][number]>; bye: boolean }[] = [
+    { what: "empty case: no outcome", over: { away_entrant_id: null }, bye: false },
+    { what: "an odd draw's bye", over: { away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } }, bye: true },
+    { what: "a stamped dead seat with no loser (DW-dead, a DQ'd winner's)", over: { away_entrant_id: null, away_slot_label: BYE_LABEL, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } }, bye: true },
+    { what: "a legacy award with no reason", over: { away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1" } }, bye: true },
+    { what: "ruling 116: her away seat dead", over: { away_entrant_id: null, away_slot_label: BYE_LABEL, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: "x9", reason: "withdrew" } }, bye: false },
+    { what: "ruling 116: her home seat dead", over: { home_entrant_id: null, home_slot_label: BYE_LABEL, status: "forfeited", outcome: { kind: "award", winner: "a1", loser: "x9", reason: "withdrew" } }, bye: false },
+    { what: "an ordinary walkover, both seated", over: { status: "forfeited", outcome: { kind: "award", winner: "h1", loser: "a1", reason: "withdrew" } }, bye: false },
+  ];
+  it("each row (counted)", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(isBye(fx(r.over) as never), r.what).toBe(r.bye);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.bye).length, "both answers are reached").toBeGreaterThan(0);
   });
 });

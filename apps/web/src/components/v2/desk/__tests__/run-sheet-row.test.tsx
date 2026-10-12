@@ -312,6 +312,51 @@ describe("an awarded bye names the sit-out AND the walkover", () => {
   });
 });
 
+// R116-3 (W2b Task 16; owner ruling 116): a withdrawn winner's dead seat, walked over by the side that arrived, is a
+// WALKOVER on the run sheet — the row an ordinary walkover gets, naming her in her seat — never "{name} has a bye". The
+// pair: an award with no loser (an odd draw's bye, a double walkover's dead seat, a DQ'd winner's: withdrawal-w2b's
+// `seatWalkover`) is still the bye row. Either seat dead.
+describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a bye", () => {
+  const BYE_LABEL = { key: "bracket.slot.bye", params: {} };
+  const NAMES = { ...ENTRANTS, e3: "Charlie" };
+  const render = (f: RunSheetFixture) =>
+    renderToStaticMarkup(
+      <RunSheetRow fixture={f} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS} canEdit entrantNames={NAMES} />,
+    );
+
+  it("either seat: her name, the walkover's result, the ordinary walkover's action — and no bye row", () => {
+    let checked = 0;
+    for (const dead of ["home", "away"] as const) {
+      const outcome = { kind: "award" as const, winner: "e1", loser: "e3", reason: "withdrew" as const };
+      const seats =
+        dead === "home"
+          ? { home_entrant_id: null, away_entrant_id: "e1", home_slot_label: BYE_LABEL, away_slot_label: null }
+          : { home_entrant_id: "e1", away_entrant_id: null, home_slot_label: null, away_slot_label: BYE_LABEL };
+      const html = render(fx({ status: "forfeited", outcome, scheduled_at: null, ...seats }));
+      // The oracle: the same walkover with her still seated.
+      const ordinary = render(fx({ status: "forfeited", outcome, scheduled_at: null, home_entrant_id: dead === "home" ? "e3" : "e1", away_entrant_id: dead === "home" ? "e1" : "e3" }));
+      expect(html, `${dead}: not the bye row`).not.toContain('data-testid="run-sheet-bye"');
+      expect(html, `${dead}: no "has a bye"`).not.toContain(msg("schedule.bye", { name: "Alpha" }));
+      expect(html, `${dead}: no bye label`).not.toContain(`>${msg("bracket.slot.bye")}<`);
+      expect(html, `${dead}: names her`).toContain("Charlie");
+      expect(html, `${dead}: and the winner`).toContain("Alpha");
+      expect(html, `${dead}: the walkover's result`).toContain(outcomeText(msg, outcome, NAMES)!);
+      expect(rowAction(html), `${dead}: the ordinary walkover's action`).toBe(rowAction(ordinary));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the pair: an award with no loser over the stamped seat is still the bye row", () => {
+    const html = render(
+      fx({ status: "forfeited", outcome: { kind: "award", winner: "e1", loser: null, reason: "bye" } as never, scheduled_at: null, away_entrant_id: null, away_slot_label: BYE_LABEL }),
+    );
+    expect(html).toContain('data-testid="run-sheet-bye"');
+    expect(html).toContain(msg("schedule.bye", { name: "Alpha" }));
+    expect(html).not.toContain("Charlie");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // FINDING 8 at its CALL SITE. `hasAssignedScorer`'s own table lives in
 // `lib/__tests__/fixture-row-action.test.ts`; this pins that the ROW asks it,

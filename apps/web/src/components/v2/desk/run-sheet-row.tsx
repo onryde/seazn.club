@@ -30,7 +30,7 @@ import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
-import { forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -270,12 +270,16 @@ export function RunSheetRow({
   // (and the live bye collision that depends on it) stated there once.
   // A seat with no stored label and no feeder reaches neither and keeps the
   // localized "schedule.tbd" fallback, exactly as before.
+  // R116-3: an empty seat a walkover was won over (ruling 116) is HER side — named, as any walkover names the side that
+  // did not play, never its stored bye label.
   const feed = feedLabels?.[fixture.id];
-  const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? "?")
+  const homeId = fixture.home_entrant_id ?? unseatedForfeitLoser(fixture, "home");
+  const awayId = fixture.away_entrant_id ?? unseatedForfeitLoser(fixture, "away");
+  const home = homeId
+    ? (entrantNames[homeId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.home_slot_label, feed, "home"), msg, "schedule.tbd");
-  const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? "?")
+  const away = awayId
+    ? (entrantNames[awayId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
   const decided = outcomeText(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;

@@ -52,6 +52,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 type Tx = postgres.TransactionSql;
@@ -246,6 +247,20 @@ interface FixtureExportRow {
   away_color: string | null;
   summary: { sides?: { line: string }[] } | null;
   status: string;
+  /** R116-3: the seats and the outcome `unseatedForfeitLoser` reads, and the display name of the outcome's loser —
+   *  printed only in an empty seat that reader names (`seatName`). */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  outcome: unknown;
+  forfeit_loser_name: string | null;
+}
+
+/** R116-3 (owner ruling 116): what a seat prints before its placeholder label — its entrant, or, for an empty seat a
+ *  walkover was won over (a withdrawn winner's, walked over by the side that arrived), HER, as any walkover prints the
+ *  side that did not play. `unseatedForfeitLoser` is the one reader; a bye (no loser) keeps its label. */
+function seatName(f: FixtureExportRow, seat: "home" | "away"): string | null {
+  const label = seat === "home" ? f.home_label : f.away_label;
+  return label ?? (unseatedForfeitLoser(f, seat) !== null ? f.forfeit_loser_name : null);
 }
 
 async function exportFixtures(
@@ -261,11 +276,13 @@ async function exportFixtures(
            f.home_slot_label, f.away_slot_label,
            htd.colors->>'primary' as home_color,
            atd.colors->>'primary' as away_color,
-           m.summary, f.status
+           m.summary, f.status,
+           f.home_entrant_id, f.away_entrant_id, f.outcome, le.display_name as forfeit_loser_name
     from fixtures f
     join stages s on s.id = f.stage_id
     left join entrants he on he.id = f.home_entrant_id
     left join entrants ae on ae.id = f.away_entrant_id
+    left join entrants le on le.division_id = f.division_id and le.id::text = f.outcome->>'loser'
     left join team_display_v htd on htd.team_id = he.team_id
     left join team_display_v atd on atd.team_id = ae.team_id
     left join match_states m on m.fixture_id = f.id
@@ -291,8 +308,8 @@ function toExportFixture(
     round: f.round_no,
     // A filled side wins; an empty one falls back to its placeholder label,
     // and only a side with neither reaches the localized TBD.
-    home: f.home_label ?? resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
-    away: f.away_label ?? resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
+    home: seatName(f, "home") ?? resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+    away: seatName(f, "away") ?? resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
     ...(f.home_color !== null ? { homeColor: f.home_color } : {}),
     ...(f.away_color !== null ? { awayColor: f.away_color } : {}),
     divisionName,
@@ -548,8 +565,8 @@ export async function buildDivisionDocModel(
           // is a required string ("TBD feeds arrive pre-rendered" per its own
           // doc comment) — home_label/away_label are nullable now that the SQL
           // coalesce is gone, so this resolution can't be skipped here either.
-          const homeLabel = f.home_label ?? resolveSlotLabel(f.home_slot_label, slotLookup, "schedule.tbd");
-          const awayLabel = f.away_label ?? resolveSlotLabel(f.away_slot_label, slotLookup, "schedule.tbd");
+          const homeLabel = seatName(f, "home") ?? resolveSlotLabel(f.home_slot_label, slotLookup, "schedule.tbd");
+          const awayLabel = seatName(f, "away") ?? resolveSlotLabel(f.away_slot_label, slotLookup, "schedule.tbd");
           const input = {
             home: homeLabel,
             away: awayLabel,
@@ -626,28 +643,33 @@ export async function buildDivisionDocModel(
         const names = await tx<{ id: string; display_name: string }[]>`
           select id, display_name from entrants where division_id = ${divisionId}`;
         const nameById = new Map(names.map((n) => [n.id, n.display_name]));
-        const exportFixtures = fixtures.map((f) => ({
-          id: f.id,
-          round_no: f.round_no,
-          seq_in_round: f.seq_in_round,
-          // A filled side wins; an empty one falls back to its placeholder
-          // label — same fallback chain as toExportFixture/the scoresheet
-          // loop, but "bracket.tbd" is THIS surface's own established
-          // fallback key: bracket-panel.tsx, public-site/bracket.tsx and
-          // slideshow.tsx already resolve every other bracket-shaped view
-          // through it, never schedule.tbd. `nameById.get(...) ?? null`
-          // (entrant_id set but the name lookup somehow missed) is left as
-          // a bare null on purpose — that is a data-integrity edge case,
-          // not a day-one placeholder, and out of this scope.
-          home: f.home_entrant_id
-            ? (nameById.get(f.home_entrant_id) ?? null)
-            : resolveSlotLabel(f.home_slot_label, slotLookup, "bracket.tbd"),
-          away: f.away_entrant_id
-            ? (nameById.get(f.away_entrant_id) ?? null)
-            : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
-          headline: f.headline,
-          decided: f.outcome !== null,
-        }));
+        const exportFixtures = fixtures.map((f) => {
+          // R116-3: an empty seat a walkover was won over is HER side (`unseatedForfeitLoser`), as on the live bracket.
+          const homeId = f.home_entrant_id ?? unseatedForfeitLoser(f, "home");
+          const awayId = f.away_entrant_id ?? unseatedForfeitLoser(f, "away");
+          return {
+            id: f.id,
+            round_no: f.round_no,
+            seq_in_round: f.seq_in_round,
+            // A filled side wins; an empty one falls back to its placeholder
+            // label — same fallback chain as toExportFixture/the scoresheet
+            // loop, but "bracket.tbd" is THIS surface's own established
+            // fallback key: bracket-panel.tsx, public-site/bracket.tsx and
+            // slideshow.tsx already resolve every other bracket-shaped view
+            // through it, never schedule.tbd. `nameById.get(...) ?? null`
+            // (entrant_id set but the name lookup somehow missed) is left as
+            // a bare null on purpose — that is a data-integrity edge case,
+            // not a day-one placeholder, and out of this scope.
+            home: homeId
+              ? (nameById.get(homeId) ?? null)
+              : resolveSlotLabel(f.home_slot_label, slotLookup, "bracket.tbd"),
+            away: awayId
+              ? (nameById.get(awayId) ?? null)
+              : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
+            headline: f.headline,
+            decided: f.outcome !== null,
+          };
+        });
         const buildOpts = { ...common, ...(liveUrl !== undefined ? { liveUrl } : {}) };
         if (stage.kind === "double_elim") {
           return buildBracketDe(title, exportFixtures, {
