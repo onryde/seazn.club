@@ -7,6 +7,7 @@ import {
   createStageAndGenerate,
   expectNoHorizontalScroll,
   fixtureConfigSnapshotSql,
+  fixturePath,
   setDivisionConfigSql,
   setOwnerStaffSql,
 } from "./helpers";
@@ -192,6 +193,43 @@ test("a finalized fixture is refused until it is reopened", async ({ page, reque
     await expect(panel).toHaveAttribute("data-can-resnapshot", "no");
     await expect(page.getByTestId("resnapshot-blocked")).toContainText(/reopen/i);
     await expect(page.getByTestId("resnapshot-submit")).toHaveCount(0);
+  } finally {
+    await setOwnerStaffSql(org.id, false);
+  }
+});
+
+test("staff can look a fixture up by pasting the organiser's match URL (#858)", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const { fixtureId } = await seedDrawnFixture(request, "by-link");
+  const path = await fixturePath(request, fixtureId);
+  const org = await activeOrg(page);
+  await setOwnerStaffSql(org.id, true);
+  try {
+    await page.goto("/admin/fixtures");
+    // The absolute form, with a trailing slash and a query — what a browser
+    // address bar actually hands over.
+    await page.getByTestId("fixture-id-input").fill(`${baseURL}${path}/?tab=pad`);
+    await page.getByRole("button", { name: "Look up" }).click();
+
+    const panel = page.getByTestId("fixture-config-panel");
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await expect(panel).toHaveAttribute("data-fixture-id", fixtureId);
+    await expect(page.getByTestId("fixture-not-found")).toHaveCount(0);
+    // The narrowest supported width, with the new "Fixture id" row showing.
+    await page.setViewportSize({ width: 320, height: 640 });
+    await expectNoHorizontalScroll(page);
+
+    // A well-formed link to a match that does not exist: a plain message, no 500.
+    const missing = path.replace(/\/f\/\d+$/, "/f/9999");
+    const res = await page.goto(`/admin/fixtures?id=${encodeURIComponent(missing)}`);
+    expect(res?.status()).toBe(200);
+    await expect(page.getByTestId("fixture-not-found")).toHaveText(
+      "No fixture found for that link.",
+    );
+    await expect(panel).toHaveCount(0);
   } finally {
     await setOwnerStaffSql(org.id, false);
   }
