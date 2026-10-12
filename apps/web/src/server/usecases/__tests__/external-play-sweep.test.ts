@@ -2933,7 +2933,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(f!.note).toContain(`${iso(plain.leave)} to ${iso(plain.back)}`);
 
       const ours = await gapMatch(60_000);
-      expect(await openGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.leave) }), "premise: opened").toBe(true);
+      expect((await openGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.leave) })).outcome, "premise: opened").toBe("opened");
       expect(await closeGuardFault(sql, { ...seat(ours.m, "home"), at: new Date(ours.back) }), "premise: closed").toBe(true);
       const r1 = await pass(ours.m, after(ours.m, CAMERA_EVIDENCE_AFTER_MS));
       expect(cameraFailures(r1)).toEqual([]);
@@ -2987,7 +2987,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
           const x = session(m, m.startedAt - 120_000, m.endedAt);
           connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
           connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
-          expect(await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) }), "premise: opened").toBe(true);
+          expect((await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) })).outcome, "premise: opened").toBe("opened");
           if (closeAtGiveUp) await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(leave + giveUpMs) });
           return { m, leave };
         }
@@ -3055,7 +3055,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
         if (stamped) {
           for (const [off, len] of gaps) {
-            expect(await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off) }), "premise: opened").toBe(true);
+            expect((await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off) })).outcome, "premise: opened").toBe("opened");
             expect(await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off + len) }), "premise: closed").toBe(true);
           }
         }

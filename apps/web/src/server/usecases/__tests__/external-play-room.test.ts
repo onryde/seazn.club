@@ -35,6 +35,9 @@ import {
   type RoomDeps,
 } from "../external-play/room";
 import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
+import { GUARD_FAULT_MAX_STAMPS } from "@/server/external-play/video/guard-faults";
+import { GUARD_FAULT_FLAG_STAMPS } from "@/server/external-play/video/match-camera-off";
+import { CAMERA_FAULT_PING_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
@@ -856,6 +859,131 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
       const seated = vi.fn(async () => ({ seated: true as const, participant: { participantId: part.home, authToken: "x" } }));
       await claimRoomSeat(me, s.fixtureId, deps({ now: t2, seat: seated as never }));
       expect((await faultsOf(s.fixtureId)).map((f) => f.ended_at), "seated: closed at the seat").toEqual([t2]);
+    });
+
+    // T14 fix round 6, M-2: a cost bound on a client that stamps without
+    // end. Every number below comes from the constants.
+    describe("the stamp cap and the ping limit (fix round 6, M-2)", () => {
+      const capWarns = (spy: { mock: { calls: unknown[][] } }, fixtureId: string) =>
+        spy.mock.calls.filter((c) => (c[0] as { fixtureId?: string } | undefined)?.fixtureId === fixtureId && /cap/.test(String(c[1]))).length;
+      /** `n` closed stamps on file for the seat, each a second long, before `now`. */
+      async function priorStamps(fixtureId: string, personId: string, n: number) {
+        for (let i = 0; i < n; i += 1) {
+          const from = new Date(now.getTime() - (n - i) * 10_000);
+          await sql`
+            insert into fixture_video_guard_faults (fixture_id, person_id, started_at, ended_at)
+            values (${fixtureId}, ${personId}, ${from}, ${new Date(from.getTime() + 1_000)})`;
+        }
+      }
+
+      it("the cap leaves room for the organiser to be told first: it is above the told-flag's stamp threshold", () => {
+        expect(GUARD_FAULT_MAX_STAMPS).toBeGreaterThan(GUARD_FAULT_FLAG_STAMPS);
+      });
+
+      it("CAP-1 on file ⇒ a start opens the CAP-th and logs ONCE; a repeat start is a no-op; the end closes it; the next start is REFUSED (429, named), writes nothing, pings nobody, logs nothing more; the other seat is its own count", async () => {
+        const warns = vi.spyOn(log, "warn");
+        try {
+          const { s, part } = await cameraBoard();
+          const me = { kind: "session" as const, userId: s.home.userId };
+          await priorStamps(s.fixtureId, s.home.personId, GUARD_FAULT_MAX_STAMPS - 1);
+          expect(await faultsOf(s.fixtureId), "premise").toHaveLength(GUARD_FAULT_MAX_STAMPS - 1);
+
+          const d1 = deps({ now: t1 });
+          expect(await reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, d1)).toEqual({ open: true });
+          expect(d1.publish).toHaveBeenCalledWith(s.fixtureId);
+          expect(await faultsOf(s.fixtureId)).toHaveLength(GUARD_FAULT_MAX_STAMPS);
+          expect(capWarns(warns, s.fixtureId), "the CAP-th stamp: logged once").toBe(1);
+          expect(warns.mock.calls.find((c) => (c[0] as { fixtureId?: string }).fixtureId === s.fixtureId)?.[0]).toMatchObject({
+            fixtureId: s.fixtureId,
+            personId: s.home.personId,
+            stamps: GUARD_FAULT_MAX_STAMPS,
+          });
+
+          const again = deps({ now: t1 });
+          expect(await reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, again), "open already: a no-op, not a refusal").toEqual({ open: true });
+          expect(again.publish).not.toHaveBeenCalled();
+
+          const d2 = deps({ now: t2 });
+          expect(await reportCameraFault(me, s.fixtureId, { state: "end", participantId: part.home }, d2), "an end is always allowed").toEqual({ open: false });
+          expect(d2.publish).toHaveBeenCalledWith(s.fixtureId);
+
+          const d3 = deps({ now: t2 });
+          await expect(reportCameraFault(me, s.fixtureId, { state: "start", participantId: part.home }, d3)).rejects.toMatchObject({
+            status: 429,
+            code: "CAMERA_FAULT_CAP_REACHED",
+          });
+          expect(await faultsOf(s.fixtureId), "refused: nothing written").toHaveLength(GUARD_FAULT_MAX_STAMPS);
+          expect((await faultsOf(s.fixtureId)).filter((f) => f.ended_at === null), "and nothing left open").toEqual([]);
+          expect(d3.publish, "refused: nobody pinged").not.toHaveBeenCalled();
+          expect(capWarns(warns, s.fixtureId), "logged once, not per refusal").toBe(1);
+          // An end past the cap, with nothing open: fine, and silent.
+          const d4 = deps({ now: t2 });
+          expect(await reportCameraFault(me, s.fixtureId, { state: "end", participantId: part.home }, d4)).toEqual({ open: false });
+          expect(d4.publish).not.toHaveBeenCalled();
+
+          // The pair: the opponent's seat, same fixture, is not capped by home's stamps.
+          const d5 = deps({ now: t2 });
+          expect(await reportCameraFault({ kind: "session", userId: s.away.userId }, s.fixtureId, { state: "start", participantId: part.away }, d5)).toEqual({ open: true });
+          expect(d5.publish).toHaveBeenCalledWith(s.fixtureId);
+          expect(capWarns(warns, s.fixtureId), "away's first stamp is no cap").toBe(1);
+        } finally {
+          warns.mockRestore();
+        }
+      });
+
+      it("the empty case and one under: zero on file ⇒ opened, no cap log; CAP-2 on file ⇒ opened (the CAP-1-th), no cap log", async () => {
+        const warns = vi.spyOn(log, "warn");
+        try {
+          let checked = 0;
+          for (const prior of [0, GUARD_FAULT_MAX_STAMPS - 2]) {
+            const { s, part } = await cameraBoard();
+            await priorStamps(s.fixtureId, s.home.personId, prior);
+            const d = deps({ now: t1 });
+            expect(await reportCameraFault({ kind: "session", userId: s.home.userId }, s.fixtureId, { state: "start", participantId: part.home }, d)).toEqual({ open: true });
+            expect(await faultsOf(s.fixtureId)).toHaveLength(prior + 1);
+            expect(capWarns(warns, s.fixtureId), `${prior} on file: no cap log`).toBe(0);
+            checked += 1;
+          }
+          expect(checked).toBe(2);
+        } finally {
+          warns.mockRestore();
+        }
+      });
+
+      it("the ping is rate-limited per seat: past the limit in its window the stamp is still written and the ping skipped; the other seat pings on its own budget", async () => {
+        const counts = new Map<string, number>();
+        __setRateLimitCounterForTests(async (key) => {
+          const n = (counts.get(key) ?? 0) + 1;
+          counts.set(key, n);
+          return { count: n, ttlMs: CAMERA_FAULT_PING_LIMIT.windowSeconds * 1000 };
+        });
+        try {
+          const { s, part } = await cameraBoard();
+          const me = { kind: "session" as const, userId: s.home.userId };
+          const changes = CAMERA_FAULT_PING_LIMIT.max + 2;
+          expect(Math.ceil(changes / 2), "premise: the starts stay under the cap").toBeLessThan(GUARD_FAULT_MAX_STAMPS);
+          let pinged = 0;
+          for (let i = 0; i < changes; i += 1) {
+            const d = deps({ now: new Date(t1.getTime() + i * 1_000) });
+            const state = i % 2 === 0 ? "start" : "end";
+            expect(await reportCameraFault(me, s.fixtureId, { state, participantId: part.home }, d)).toEqual({ open: state === "start" });
+            pinged += d.publish.mock.calls.length;
+          }
+          expect(pinged, "pinged up to the limit, then skipped").toBe(CAMERA_FAULT_PING_LIMIT.max);
+          expect(await faultsOf(s.fixtureId), "every start was still stamped").toHaveLength(Math.ceil(changes / 2));
+          expect([...counts.keys()].filter((k) => k.includes(s.fixtureId) && k.includes(s.home.personId)), "one bucket, keyed per fixture and seat").toHaveLength(1);
+          // A no-op (nothing changed) spends no budget.
+          const before = [...counts.values()].reduce((a, b) => a + b, 0);
+          await reportCameraFault(me, s.fixtureId, { state: changes % 2 === 0 ? "end" : "start", participantId: part.home }, deps({ now: t2 }));
+          // (an end with none open, or a start with one open)
+          expect([...counts.values()].reduce((a, b) => a + b, 0), "no change: no ping, no count").toBe(before);
+          const da = deps({ now: t2 });
+          await reportCameraFault({ kind: "session", userId: s.away.userId }, s.fixtureId, { state: "start", participantId: part.away }, da);
+          expect(da.publish, "away's own budget").toHaveBeenCalledWith(s.fixtureId);
+        } finally {
+          __setRateLimitCounterForTests(null);
+        }
+      });
     });
   });
 });

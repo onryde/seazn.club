@@ -11,19 +11,45 @@ import "server-only";
 // The writers take the SERVER's clock, never a time from the client. At most
 // one fault is open per player per fixture (the partial unique index), so a
 // repeated start is a no-op rather than a second interval.
+//
+// The cap (T14 fix round 6, M-2): a client that stamps and stamps — buggy or
+// hostile — could otherwise write rows without end. It is a COST bound, not a
+// rule of the game: the count and the insert are one statement, but two
+// starts racing an end can still overrun it by a row or two (READ COMMITTED
+// re-checks the conflict, not the count). An end is never capped.
 import type postgres from "postgres";
 
 type AnySql = postgres.TransactionSql | postgres.Sql;
 type Seat = { fixtureId: string; personId: string };
 
-/** Opens a fault at `at`. false ⇒ one was already open (nothing written). */
-export async function openGuardFault(db: AnySql, a: Seat & { at: Date }): Promise<boolean> {
-  const rows = await db`
-    insert into fixture_video_guard_faults (fixture_id, person_id, started_at)
-    values (${a.fixtureId}, ${a.personId}, ${a.at})
-    on conflict (fixture_id, person_id) where ended_at is null do nothing
-    returning id`;
-  return rows.length > 0;
+/** Stamps one seat may open in one fixture. Above the told-flag's stamp
+ *  threshold (match-camera-off), so the organiser hears before any refusal. */
+export const GUARD_FAULT_MAX_STAMPS = 20;
+
+/** `stamps`: the seat's rows on file after the call. */
+export type GuardFaultOpen = { outcome: "opened" | "open_already" | "capped"; stamps: number };
+
+/** Opens a fault at `at`: `opened`; `open_already` ⇒ one is open (nothing
+ *  written); `capped` ⇒ GUARD_FAULT_MAX_STAMPS on file (nothing written). */
+export async function openGuardFault(db: AnySql, a: Seat & { at: Date }): Promise<GuardFaultOpen> {
+  const [r] = await db<{ n: number; open_n: number; inserted: number }[]>`
+    with prior as (
+      select count(*)::int as n, (count(*) filter (where ended_at is null))::int as open_n
+        from fixture_video_guard_faults
+       where fixture_id = ${a.fixtureId} and person_id = ${a.personId}
+    ), ins as (
+      insert into fixture_video_guard_faults (fixture_id, person_id, started_at)
+      select ${a.fixtureId}, ${a.personId}, ${a.at} from prior where prior.n < ${GUARD_FAULT_MAX_STAMPS}
+      on conflict (fixture_id, person_id) where ended_at is null do nothing
+      returning id
+    )
+    select prior.n, prior.open_n, (select count(*)::int from ins) as inserted from prior`;
+  if (r!.inserted > 0) return { outcome: "opened", stamps: r!.n + 1 };
+  if (r!.open_n > 0) return { outcome: "open_already", stamps: r!.n };
+  if (r!.n >= GUARD_FAULT_MAX_STAMPS) return { outcome: "capped", stamps: r!.n };
+  // Nothing open in our snapshot, room under the cap, yet the insert met a
+  // conflict: a concurrent start opened one first. Open already, as asked.
+  return { outcome: "open_already", stamps: r!.n + 1 };
 }
 
 /** Closes the open fault at `at`. false ⇒ none was open. */
