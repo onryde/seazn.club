@@ -202,8 +202,10 @@ function frozenSeats(b: { status: string; needs_reason: string | null; revoked_s
 }
 
 /** The game a player may act on, or null. A ready or live bridge with a
- *  game id, on a board that is still playable. */
-function playableGame(f: OnlinePlayFixture): Game | null {
+ *  game id, on a board that is still playable. Exported so the match room
+ *  (room.ts) tells a player they may act by THIS predicate — one authority,
+ *  never a second reading of the bridge (T14 review I2). */
+export function playableGame(f: OnlinePlayFixture): Game | null {
   const b = effectiveBridge(f);
   if (!b || b.challenge_id === null) return null;
   // 'finished' and every other hold accept nothing; 'pending' has no game.

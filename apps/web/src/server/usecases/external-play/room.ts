@@ -53,7 +53,7 @@ import {
 } from "./guard";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
-import { act, fenAfter, type PlayAction, type PlayResult } from "./play";
+import { act, fenAfter, playableGame, type PlayAction, type PlayResult } from "./play";
 import { seatPlayer, type SeatResult } from "./preflight";
 import { reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
@@ -261,18 +261,27 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     };
   }
 
-  // T11 M7: a token_revoked hold freezes a seat (or both, when none was
-  // recorded); the other player's board stays live.
-  const frozen =
-    bridge?.status === "needs_organiser" && bridge.needs_reason === "token_revoked"
-      ? frozenFor(bridge.revoked_seat ?? "both", mine)
-      : null;
-
   const recorded = f.fixtureStatus === "scheduled" || f.fixtureStatus === "in_play" ? null : await recordedResult(f.fixtureId);
   const result =
     recorded === null
       ? null
       : resultFor({ winnerEntrantId: recorded.winner, method: recorded.method, myEntrantId: player.entrantId, myColour: mine });
+
+  // T11 M7: a token_revoked hold freezes a seat (or both, when none was
+  // recorded); the other player's board stays live. A WRITTEN result ends
+  // the freeze for the room (T14 review I1, controller ruling): reconcile
+  // writes a held game's result without closing the hold (finish() closes
+  // only ready/live), and the frozen player must see how the game ended.
+  const frozen =
+    result === null && bridge?.status === "needs_organiser" && bridge.needs_reason === "token_revoked"
+      ? frozenFor(bridge.revoked_seat ?? "both", mine)
+      : null;
+
+  // Who may act: play.ts's own predicate, never a second reading (review
+  // I2). A seat it freezes, every other hold and a finished board accept
+  // nothing; the room renders that board held, never live and movable.
+  const playable = gameOnFile ? playableGame(f) : null;
+  const canAct = playable !== null && !playable.frozen.includes(mine);
   // A hold the game is not still playing through (T12's mid-game diagnoses
   // are token_revoked / provider_error; anything else, or any hold once the
   // game is over, waits on the organiser).
@@ -338,6 +347,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     cameraPolicy,
     opponentCameraLive,
     frozen,
+    canAct,
     onlineChessOff,
     creation,
     game,

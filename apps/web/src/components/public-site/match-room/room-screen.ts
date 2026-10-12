@@ -4,9 +4,10 @@
 //
 // The owner-approved canvas (2026-10-11) names the screens: the check-in,
 // the live room, game over, and state cards 1–8 (card 9, the camera-off
-// banner, sits ON the live room, never instead of it). Two states have no
-// approved drawing yet — `revoked` (A) and `offForClub` (B): their logic is
-// final, their presentation a minimal seam (room-seams.tsx).
+// banner, sits ON the live room, never instead of it). Three states have no
+// approved drawing yet — `revoked` (A), `offForClub` (B) and `held` (a game
+// on file the server takes no move on, review I2): their logic is final,
+// their presentation a minimal seam (room-seams.tsx).
 import type { RoomState } from "./room-state";
 import type { SeatRefusal } from "./room-snapshot";
 
@@ -16,6 +17,7 @@ export type RoomScreen =
   | { kind: "revoked" } // seam A
   | { kind: "relink" } // card 8
   | { kind: "over" }
+  | { kind: "held" } // seam: a game on file nobody may act on
   | { kind: "live" }
   | { kind: "notOpened" } // card 1
   | { kind: "cameraRequired" } // card 2
@@ -57,13 +59,19 @@ export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   // file is played out whatever the flag says (the usecase only sets this
   // with no game), so this cannot hide a live board.
   if (snap.onlineChessOff) return { kind: "offForClub" };
+  const game = snap.game;
+  // A written result outranks every hold on the board (review I1): the
+  // frozen player sees how the game ended, never A again.
+  if (snap.result !== null || game?.over === true) return { kind: "over" };
   // A token_revoked hold froze the VIEWER's seat: they cannot move until they
   // re-link (A). The opponent's freeze is theirs to fix; this board plays on.
   if (snap.frozen === "you" || snap.frozen === "both") return { kind: "revoked" };
   // Lichess refused the player's own grant mid-act or at the seat.
   if (s.error === "relink") return { kind: "relink" };
-  const game = snap.game;
-  if (snap.result !== null || game?.over === true) return { kind: "over" };
+  // A game on file the server will not take an act on (play.ts refuses it:
+  // a provider_error hold, T13's deadline hold, a withdrawn board) is shown
+  // as it truly is — held, view-only — never live and movable (review I2).
+  if (game !== null && !snap.canAct) return { kind: "held" };
   if (game !== null) return { kind: "live" };
   if (snap.phase === "not_opened" || snap.phase === "before") return { kind: "notOpened" };
   if (snap.phase === "closed" || snap.held) return { kind: "closed" };

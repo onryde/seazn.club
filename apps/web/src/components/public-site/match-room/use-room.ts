@@ -30,6 +30,14 @@ export function nextClockZeroReport(prev: ClockZeroReport | null, key: string, n
   return { key, attempts: prev.attempts + 1, at: now };
 }
 
+/** How long to wait before re-reading after the `streak`-th act in a row
+ *  that failed or was refused (review I2): the first at once, then doubling
+ *  from 1s, never longer than the idle poll — which re-reads anyway. */
+export function reReadDelayMs(streak: number): number {
+  if (streak <= 1) return 0;
+  return Math.min(IDLE_POLL_MS, 1_000 * 2 ** Math.min(streak - 2, 30));
+}
+
 export function pollIntervalMs(a: { gameLive: boolean; subscribed: boolean }): number {
   return a.gameLive && !a.subscribed ? LIVE_POLL_MS : IDLE_POLL_MS;
 }
@@ -139,6 +147,9 @@ export function useRoom(initial: RoomSnapshot, token: string | null) {
   }, [fixtureId, token]);
 
   // ── act ────────────────────────────────────────────────────────────────
+  // Every answer re-reads: the read says what the board now is. A failed or
+  // refused act never stops the room (review I2); repeats back off.
+  const failStreak = useRef(0);
   const act = useCallback(
     async (action: RoomActBody) => {
       if (stateRef.current.pending !== null) return;
@@ -146,6 +157,9 @@ export function useRoom(initial: RoomSnapshot, token: string | null) {
       const r = await sendAct(fixtureId, token, action);
       if (r.ok) dispatch({ type: "act_answered", answer: r.data });
       else dispatch({ type: "act_failed", status: r.status });
+      failStreak.current = r.ok && r.data.ok ? 0 : failStreak.current + 1;
+      const wait = reReadDelayMs(failStreak.current);
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait));
       await refresh();
     },
     [fixtureId, token, refresh],

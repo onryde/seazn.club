@@ -5995,6 +5995,8 @@
   "externalPlay.room.state.cameraOff.cta": "Camera aanzetten",
   "externalPlay.room.state.revoked.title": "Je Lichess-koppeling is ingetrokken",
   "externalPlay.room.state.revoked.body": "Je organisator is op de hoogte gebracht.",
+  "externalPlay.room.state.held.title": "Deze partij staat stil",
+  "externalPlay.room.state.held.body": "Je organisator bekijkt dit bord. Tot die het heeft afgehandeld, kun je hier geen zetten doen.",
   "externalPlay.room.state.offForClub.title": "Online schaken staat uit voor deze club",
   "externalPlay.room.pieceCredit": "Schaakstukken door Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Jouw bord",

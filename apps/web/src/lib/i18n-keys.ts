@@ -2378,6 +2378,8 @@ export type DictionaryKey =
   | "externalPlay.room.state.checkAgain"
   | "externalPlay.room.state.closed.body"
   | "externalPlay.room.state.closed.title"
+  | "externalPlay.room.state.held.body"
+  | "externalPlay.room.state.held.title"
   | "externalPlay.room.state.notOpened.body"
   | "externalPlay.room.state.notOpened.title"
   | "externalPlay.room.state.offForClub.title"

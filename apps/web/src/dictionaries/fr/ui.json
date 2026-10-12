@@ -5995,6 +5995,8 @@
   "externalPlay.room.state.cameraOff.cta": "Allumer la caméra",
   "externalPlay.room.state.revoked.title": "Votre lien Lichess a été révoqué",
   "externalPlay.room.state.revoked.body": "Votre organisateur a été prévenu.",
+  "externalPlay.room.state.held.title": "Cette partie est suspendue",
+  "externalPlay.room.state.held.body": "Votre organisateur examine cet échiquier. Aucun coup ne peut être joué ici avant sa décision.",
   "externalPlay.room.state.offForClub.title": "Les échecs en ligne sont désactivés pour ce club",
   "externalPlay.room.pieceCredit": "Pièces d'échecs de Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Votre échiquier",

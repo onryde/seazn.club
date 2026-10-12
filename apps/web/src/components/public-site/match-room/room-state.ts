@@ -205,14 +205,15 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
       };
     }
     case "act_failed":
+      // Never "gone" and never a stop (review I2): play's 404 is T10 refusing
+      // a board it will not accept, not the room vanishing. The hook re-reads
+      // and the read says what the board is; only GET room's own 404 stops.
       if (s.pending?.kind !== "act") return s;
       return {
         ...s,
         pending: null,
         error: e.status === 0 ? "network" : "invalid",
         syncKey: s.syncKey + 1,
-        notFound: s.notFound || e.status === 404,
-        polling: s.polling && e.status !== 404,
       };
     case "fetch_failed":
       return {
@@ -224,7 +225,9 @@ export function roomReducer(s: RoomState, e: RoomEvent): RoomState {
   }
 }
 
-/** May the viewer move right now? */
+/** May the viewer move right now? The server's `canAct` (T10's own
+ *  predicate — a frozen seat, every hold, a finished board) gates it; the
+ *  rest is the turn and what this client already knows. */
 export function canMove(s: RoomState): boolean {
   const g = s.snap.game;
   return (
@@ -232,8 +235,7 @@ export function canMove(s: RoomState): boolean {
     !g.over &&
     s.snap.result === null &&
     s.pending === null &&
-    s.snap.frozen !== "you" &&
-    s.snap.frozen !== "both" &&
+    s.snap.canAct &&
     g.turn === s.snap.you.colour
   );
 }

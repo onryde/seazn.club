@@ -5995,6 +5995,8 @@
   "externalPlay.room.state.cameraOff.cta": "Turn camera on",
   "externalPlay.room.state.revoked.title": "Your Lichess link was revoked",
   "externalPlay.room.state.revoked.body": "Your organiser has been told.",
+  "externalPlay.room.state.held.title": "This game is on hold",
+  "externalPlay.room.state.held.body": "Your organiser is looking at this board. No moves can be made here until they settle it.",
   "externalPlay.room.state.offForClub.title": "Online chess is off for this club",
   "externalPlay.room.pieceCredit": "Chess pieces by Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Your board",

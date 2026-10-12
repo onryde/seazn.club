@@ -1,6 +1,8 @@
-// The two room states with NO approved drawing yet (controller, 2026-10-11):
+// The room states with NO approved drawing yet (controller, 2026-10-11):
 //   A — "Lichess link revoked" for the frozen player;
-//   B — "Online chess is off for this club".
+//   B — "Online chess is off for this club";
+//   held — a game on file the server takes no move on (T14 review I2: a
+//          provider_error hold, T13's deadline hold, a withdrawn board).
 // Their LOGIC is final (room-screen.ts decides when each shows, room-state.ts
 // stops polling on B). Their PRESENTATION is deliberately minimal: one plain
 // card each, behind this one seam, until the owner's drawing arrives. Do not
@@ -20,4 +22,14 @@ export function RevokedSeam({ t }: { t: RoomT }) {
 /** Seam B — the club is not offered online chess and no game is on file. */
 export function OffForClubSeam({ t }: { t: RoomT }) {
   return <StateCard testId="room-seam-off-for-club" icon={null} title={t("externalPlay.room.state.offForClub.title")} />;
+}
+
+/** Seam "held" — a game on file nobody may act on. Sits under the true
+ *  clocks and a view-only board (room-shell.tsx). */
+export function HeldSeam({ t }: { t: RoomT }) {
+  return (
+    <StateCard testId="room-seam-held" icon={null} title={t("externalPlay.room.state.held.title")}>
+      <p className="m-0 text-sm text-[#4a3a6b]">{t("externalPlay.room.state.held.body")}</p>
+    </StateCard>
+  );
 }

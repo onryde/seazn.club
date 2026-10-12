@@ -1070,6 +1070,7 @@ async function renderMatchRooms(): Promise<Segment[]> {
     cameraPolicy: "required",
     opponentCameraLive: true,
     frozen: null,
+    canAct: true,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -1097,6 +1098,8 @@ async function renderMatchRooms(): Promise<Segment[]> {
     { ...base, game: { ...game, over: true, drawOfferBy: null }, result: { outcome: "won", method: "checkmate", score: "1–0" } },
     { ...base, phase: "not_opened" },
     { ...base, creation: { state: "creating" } },
+    // A held board (review I2): the held seam's copy is swept too.
+    { ...base, you: { ...base.you, checkedIn: true }, game, canAct: false },
   ];
   const p = { orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: "9zqa", fixtureId: "9zqfixture" };
   const out: Segment[] = [...(await served(MatchRoom, params(p)))];

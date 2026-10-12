@@ -33,7 +33,7 @@ import {
   UnavailableCard,
   VideoDownCard,
 } from "./room-cards";
-import { OffForClubSeam, RevokedSeam } from "./room-seams";
+import { HeldSeam, OffForClubSeam, RevokedSeam } from "./room-seams";
 import { roomScreen } from "./room-screen";
 import { canMove, plyOf, type RoomState } from "./room-state";
 import { formatCountdown, formatTimeOfDay, useServerNow } from "./room-time";
@@ -54,12 +54,16 @@ function Clocks({
   snap,
   skewMs,
   onZero,
+  held = false,
   t,
 }: {
   game: RoomGame;
   snap: RoomSnapshot;
   skewMs: number;
   onZero: () => void;
+  /** A held board: the times are Lichess's and still shown, but nobody is
+   *  told "your move" on a board the room takes no move on. */
+  held?: boolean;
   t: RoomT;
 }) {
   const running = game.clockRunning && !game.over;
@@ -81,7 +85,7 @@ function Clocks({
       you={{ name: snap.you.name, colour: snap.you.colour, ms: ms(snap.you.colour) }}
       opponent={{ name: snap.opponent.name, colour: snap.opponent.colour, ms: ms(snap.opponent.colour) }}
       turn={game.turn}
-      over={game.over || snap.result !== null}
+      over={game.over || snap.result !== null || held}
       t={t}
     />
   );
@@ -119,7 +123,7 @@ export function RoomShell({
   useEffect(() => {
     if (reentered.current) return;
     reentered.current = true;
-    if (cameraOn && snap.you.checkedIn && snap.result === null && !snap.onlineChessOff) void room.claim();
+    if (cameraOn && snap.you.checkedIn && snap.result === null && snap.game?.over !== true && !snap.onlineChessOff) void room.claim();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
   }, []);
 
@@ -260,6 +264,29 @@ function Screen({
           }
           t={t}
         />
+      );
+    }
+    case "held": {
+      // The board as it truly is: the clocks Lichess is running, the
+      // position, nothing movable, and the seam saying why (review I2).
+      const g = snap.game!;
+      return (
+        <div data-testid="room-held" className="flex min-w-0 flex-col gap-3 md:mx-auto md:w-full md:max-w-[560px]">
+          <Clocks game={g} snap={snap} skewMs={state.skewMs} onZero={() => void room.clockZero()} held t={t} />
+          <div data-testid="room-board" data-ply={plyOf(g)} className="mx-auto w-full max-w-[560px]">
+            <Board
+              fen={g.fen}
+              orientation={snap.you.colour}
+              lastMove={g.lastMove}
+              movable={false}
+              syncKey={state.syncKey}
+              onMove={() => {}}
+              label={boardLabel(g, false, t)}
+              t={t}
+            />
+          </div>
+          <HeldSeam t={t} />
+        </div>
       );
     }
     case "live": {
