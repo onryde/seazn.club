@@ -318,6 +318,24 @@ export interface MyStatBlock {
   metrics: LabelledPlayerStat[];
 }
 
+/** R115-4: /me reads `player_stat_snapshots` as they stand, so it asks the
+ *  same bounded read-side check the public stats route asks
+ *  (`reconcilePlayerStatsOnRead`) of every division it is about to show. The
+ *  check runs after the response, at most once a minute per division and
+ *  within a share of the DB pool. It never folds on this request: a snapshot
+ *  that is behind (an older `STATS_FOLD_VERSION`, R115-2, or a refresh lost to
+ *  a restart) is refolded in the background, so this visit shows the rows as
+ *  they stood and the next one shows the refold. Grouped by org, because the
+ *  check runs under each division's own tenant. The refresh module is
+ *  imported lazily: it imports `player-stats`, which this file imports too. */
+async function checkSnapshotsOnRead(rows: readonly { org_id: string; division_id: string }[]): Promise<void> {
+  if (rows.length === 0) return;
+  const byOrg = new Map<string, Set<string>>();
+  for (const r of rows) byOrg.set(r.org_id, (byOrg.get(r.org_id) ?? new Set<string>()).add(r.division_id));
+  const { reconcilePlayerStatsOnRead } = await import("./player-stats-refresh");
+  for (const [orgId, divisionIds] of byOrg) reconcilePlayerStatsOnRead(orgId, [...divisionIds]);
+}
+
 /** G6 — the PROMPT-65 stat blocks, self-view: every snapshot belonging to a
  *  person the user has claimed, across ALL orgs/competitions (private ones
  *  included — these are the player's own numbers; consent gates only the
@@ -330,9 +348,11 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
       published: boolean;
       youth: boolean;
       player_name_display: string | null;
+      division_id: string;
+      org_id: string;
     })[]
   >`
-    select ps.person_id, p.full_name as person_name,
+    select ps.person_id, p.full_name as person_name, ps.division_id, d.org_id,
            o.name as org_name, o.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
            d.name as division_name, d.slug as division_slug,
@@ -373,12 +393,17 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
   // English is the right answer there, not a crash.
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return rows.flatMap(({ module_version, stats, published, youth, player_name_display, ...row }) => {
+  // Every snapshot read is checked, a block with no metric to show included: a stale row can be what hides it.
+  const read: { org_id: string; division_id: string }[] = [];
+  const blocks = rows.flatMap(({ module_version, stats, published, youth, player_name_display, division_id, org_id, ...row }) => {
+    read.push({ org_id, division_id });
     const metrics = labelPlayerStats(row.sport_key, module_version, stats, m);
     if (metrics.length === 0) return [];
     const public_card = playerLinkId(published ? row.person_id : null, { youth, player_name_display }) !== null;
     return [{ ...row, public_card, metrics }];
   });
+  await checkSnapshotsOnRead(read);
+  return blocks;
 }
 
 /** S9/#418 — the /me Career section: every claimed person's snapshot rows,
@@ -396,13 +421,14 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
  *  player_stat_snapshots exactly as they stand, never calls
  *  recomputePlayerStats. */
 export async function listMyCareerStats(userId: string): Promise<CareerSportStats[]> {
-  const rows = await sql<CareerSnapshotRow[]>`
-    select ps.division_id, ps.sport_key, d.variant_key, ps.stats
+  const rows = await sql<(CareerSnapshotRow & { org_id: string })[]>`
+    select ps.division_id, d.org_id, ps.sport_key, d.variant_key, ps.stats
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null
     order by d.slug`;
   if (rows.length === 0) return [];
+  await checkSnapshotsOnRead(rows);
 
   const matchesByDivision = await countMatchesByDivision(
     sql,

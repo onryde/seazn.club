@@ -1523,15 +1523,37 @@ export async function getPublicPlayer(
   // or a lineup seats them there), then the rest by id. An entry holds at most
   // 128 tags (`playerCardTags`), so in a competition with more divisions than
   // that, the ones dropped are divisions this person plays no match in.
-  const competitionDivisions = await sql<{ id: string }[]>`
-    select d.id from divisions d
-    where d.competition_id = ${shell.competition.id}
-    order by (
+  const competitionDivisions = await sql<{ id: string; mine: boolean }[]>`
+    select d.id, (
       exists (select 1 from entrant_members em join entrants e on e.id = em.entrant_id
               where e.division_id = d.id and em.person_id = ${personId})
       or exists (select 1 from lineups l join fixtures f on f.id = l.fixture_id
                  where f.division_id = d.id and l.person_id = ${personId})
-    ) desc, d.id`;
+    ) as mine
+    from divisions d
+    where d.competition_id = ${shell.competition.id}
+    order by mine desc, d.id`;
+
+  // R115-4: the card's per-division tiles are `player_stat_snapshots` as they
+  // stand (inside the entry below). So the card asks the same bounded
+  // read-side check the public stats route asks (`reconcilePlayerStatsOnRead`)
+  // of the divisions this person plays in: the ones a roster or a lineup seats
+  // them in, the only ones a snapshot row of theirs can come from. Read off the
+  // list above, so no statement is added. The check runs after the response,
+  // at most once a minute per division and within a share of the DB pool. It
+  // never folds on this request: a snapshot that is behind (an older
+  // `STATS_FOLD_VERSION`, R115-2) is refolded in the background. The refold
+  // this card's own check runs cannot clear the ISR tags (it runs inside this
+  // page's cache scope; the refresh logs "the ISR tags could not be cleared
+  // from here"), so the CARD shows the refold once its own `revalidate` window
+  // lapses: measured fresh at 305 s, the first regenerating visit after 300 s
+  // (e2e/player-stats-stale-version.spec.ts). Lazy import: the refresh module
+  // reaches back into public-site.
+  const { reconcilePlayerStatsOnRead } = await import("@/server/usecases/player-stats-refresh");
+  reconcilePlayerStatsOnRead(
+    shell.org.id,
+    competitionDivisions.filter((d) => d.mine).map((d) => d.id),
+  );
 
   const detail = await unstable_cache(
     async () => {

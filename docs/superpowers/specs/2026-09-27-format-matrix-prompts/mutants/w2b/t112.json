@@ -1221,5 +1221,65 @@
     "name": "matches 1, W1 L0"
    }
   ]
+ },
+ {
+  "id": "r1154-card-no-check",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "  reconcilePlayerStatsOnRead(\n    shell.org.id,\n    competitionDivisions.filter((d) => d.mine).map((d) => d.id),\n  );\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-read-side-check-r115-4.test.ts"
+    ],
+    "name": "card, /me stats and /me career"
+   }
+  ]
+ },
+ {
+  "id": "r1154-card-checks-other-divisions",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "    competitionDivisions.filter((d) => d.mine).map((d) => d.id),\n",
+  "replace": "    competitionDivisions.filter((d) => !d.mine).map((d) => d.id),\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-read-side-check-r115-4.test.ts"
+    ],
+    "name": "card, /me stats and /me career"
+   }
+  ]
+ },
+ {
+  "id": "r1154-me-stats-no-check",
+  "file": "apps/web/src/server/usecases/me.ts",
+  "find": "  await checkSnapshotsOnRead(read);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-read-side-check-r115-4.test.ts"
+    ],
+    "name": "card, /me stats and /me career"
+   }
+  ]
+ },
+ {
+  "id": "r1154-me-career-no-check",
+  "file": "apps/web/src/server/usecases/me.ts",
+  "find": "  if (rows.length === 0) return [];\n  await checkSnapshotsOnRead(rows);\n",
+  "replace": "  if (rows.length === 0) return [];\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-read-side-check-r115-4.test.ts"
+    ],
+    "name": "card, /me stats and /me career"
+   }
+  ]
  }
 ]

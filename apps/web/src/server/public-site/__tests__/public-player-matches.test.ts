@@ -78,6 +78,15 @@ vi.mock("@/server/engine-db/fold", async (importOriginal) => {
 });
 const foldsOf = (fixtureId: string) => foldSpy.calls.filter((id) => id === fixtureId).length;
 
+// R115-4: `getPublicPlayer` asks the read-side stats check (`reconcilePlayerStatsOnRead`) of the divisions the person
+// plays in, after the response, and that check refolds an owed snapshot. This file's subject is the match lines, and
+// its last test seeds snapshot rows by hand; a background refold landing beside them would collide with that insert.
+// So the after-response window is captured here, not run (`@/lib/deferred` is what the check registers on; nothing
+// else this file drives registers there), and the capture is asserted: a card read queues its check.
+// `player-stats-read-side-check-r115-4.test.ts` runs the window and drives the check itself.
+const afterResponse = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
+vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => void afterResponse.tasks.push(fn) }));
+
 import {
   foldMatch,
   foldMatchWithStoppage,
@@ -1475,7 +1484,14 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(expected).toHaveLength(3);
 
     // Path 1: no sport spans two divisions' snapshots → the early return.
+    // A minute on, so the once-a-minute throttle has let go of every division an earlier test's card read checked.
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true, now: Date.now() + 61_000 });
+    afterResponse.tasks.length = 0;
     const early = await getPublicPlayer(scene.orgSlug, scene.compSlug, scene.persons.h1);
+    vi.useRealTimers();
+    // R115-4: the card queued its read-side check for after the response, and ran none of it on the request.
+    expect(afterResponse.tasks.length, "the card's read-side check, queued after the response").toBe(1);
+    afterResponse.tasks.length = 0;
     expect(early).not.toBeNull();
     expect(early!.career).toEqual([]);
     expect(early!.matches).toEqual(expected);
