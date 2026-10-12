@@ -677,6 +677,56 @@ test("Seam A, the Lichess link revoked: the frozen player's board dimmed and rea
   await ctx.close();
 });
 
+test("Seam A, the game on ANOTHER Lichess account (re-review 5 I-2): White re-links a different account mid-game — A with the account's line, Link Lichess again, read-only — the opponent plays on", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, longName()] });
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  // The pair first: the account the game was created on ⇒ the live board.
+  expect(await screenOf(p)).toBe("live");
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  const relinked = await withDb(
+    (sql) => sql`
+      update user_external_accounts set external_user_id = ${`x-${Date.now().toString(36)}`}
+       where user_id = ${room.white.userId} and provider = 'lichess'
+      returning user_id`,
+  );
+  expect(relinked.length, "White's link was found and re-pointed").toBe(1);
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the other account" }).toBe("revoked");
+  const notice = p.getByTestId("room-revoked-notice");
+  await expect(notice).toHaveAttribute("data-reason", "account");
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.otherAccount"]!);
+  // Nothing was revoked and no organiser was told: never those words here.
+  await expect(notice).not.toContainText(uiEn["externalPlay.room.state.revoked.title"]!);
+  await expect(notice).not.toContainText(uiEn["externalPlay.room.state.revoked.body"]!);
+  const relink = p.getByTestId("room-revoked-relink");
+  await expect(relink).toHaveText(uiEn["externalPlay.room.state.revoked.relink"]!);
+  const href = new URL((await relink.getAttribute("href"))!, "http://x");
+  expect(href.pathname, "Link Lichess again starts the Lichess link flow").toBe("/api/auth/lichess");
+  expect(href.searchParams.get("next"), "and comes back to this room, with its link").toBe(`${room.roomPath}?t=${encodeURIComponent(room.white.token)}`);
+  await boardReady(p);
+  expect(await piecesOnBoard(p), "the board is still the ledger's").toEqual(piecesOf(fen));
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "false");
+  for (const id of ["room-resign", "room-draw", "room-abort", "room-controls", "room-move-notice"]) await expect(p.getByTestId(id), id).toHaveCount(0);
+  await inAside(p, "room-revoked-notice");
+  await p.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-revoked-notice", "room-board", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "a-other-account");
+  // The opponent's account is as recorded: Black's board plays on.
+  const bctx = await cold(browser);
+  const b = await openRoom(bctx, room, room.black.token);
+  expect(await screenOf(b), "the opponent's board stays live").toBe("live");
+  await expect(b.getByTestId("room-revoked-notice")).toHaveCount(0);
+  await bctx.close();
+  await ctx.close();
+});
+
 test("Seam B, online chess off: one calm card — no board, clocks or camera — and Back to fixture, at every width", async ({
   page,
   browser,
@@ -760,7 +810,7 @@ test("Seam C1, offline: a read with no answer shows You're offline — reconnect
   await ctx.close();
 });
 
-test("a move refused with a 404 (review I2): the room is not gone — it re-reads at once, keeps polling, and puts the board back", async ({
+test("a move a RULE refused (400): C3 under the board — the room is not gone, it re-reads at once, keeps polling, puts the board back and keeps the line", async ({
   page,
   browser,
 }) => {
@@ -775,14 +825,15 @@ test("a move refused with a 404 (review I2): the room is not gone — it re-read
     if (r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname)) reads.push(r.status());
   });
   let readsAtAct = -1;
-  // T10's 404, as v1 answers it: the act route refusing a board it will not
-  // accept. Not the room vanishing — only GET room's own 404 means that.
+  // A rule refusing the move (notice routing ruling: 400 — the move string
+  // itself), as v1 answers it. The board sends chess.js-legal UCI, so only an
+  // interception reaches C3 in a browser.
   await p.route("**/external-play/room/act**", async (route: Route) => {
     readsAtAct = reads.length;
     await route.fulfill({
-      status: 404,
+      status: 400,
       contentType: "application/json",
-      body: JSON.stringify({ ok: false, error: { code: "not_found", message: "Not found" }, requestId: "e2e" }),
+      body: JSON.stringify({ ok: false, error: { code: "INVALID_UCI", message: "Not a move" }, requestId: "e2e" }),
     });
   });
   await tap(p, "g1", "white");
@@ -791,12 +842,12 @@ test("a move refused with a 404 (review I2): the room is not gone — it re-read
   // One re-read at once, then the live poll carries on (LIVE_POLL_MS, 3 s):
   // three reads after the refusal, every one answered.
   await expect.poll(() => reads.length - readsAtAct, { timeout: 20_000, message: "the room keeps reading" }).toBeGreaterThanOrEqual(3);
-  expect(reads.slice(readsAtAct).every((s) => s === 200), `reads after the 404: ${reads.slice(readsAtAct).join(",")}`).toBe(true);
+  expect(reads.slice(readsAtAct).every((s) => s === 200), `reads after the 400: ${reads.slice(readsAtAct).join(",")}`).toBe(true);
   expect(await screenOf(p), "still the live board, never the gone card").toBe("live");
   await expect.poll(() => piecesOnBoard(p), { message: "the knight is back where the ledger has it" }).toEqual(piecesOf(fen));
   await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
-  // Seam C3 (canvas MoveInvalidPhone): our server refused it — the purple
-  // line under the board, kept through every read since.
+  // Seam C3 (canvas MoveInvalidPhone): a rule refused it — the purple line
+  // under the board, kept through every read since (the board did not change).
   const notice = p.getByTestId("room-move-notice");
   await expect(notice).toHaveAttribute("data-kind", "invalid");
   await expect(notice).toHaveText(uiEn["externalPlay.room.notice.invalid"]!);
@@ -805,8 +856,81 @@ test("a move refused with a 404 (review I2): the room is not gone — it re-read
   expect(await stackedTopDown(p, ["room-clocks-strip", "room-board", "room-move-notice", "room-controls"]), "anti-vacuity: pairs").toBe(3);
   expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
   await shoot(p, "c3-invalid");
-  // The browser's own notice of the 404 it was handed (Chrome logs every
+  // The browser's own notice of the 400 it was handed (Chrome logs every
   // failed fetch): this test's refusal and nothing else.
+  const own = consoleErrors.filter((e) => /status of 400/.test(e));
+  expect(own.length, "the one refused act").toBeLessThanOrEqual(1);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/status of 400/.test(e)));
+  await ctx.close();
+});
+
+test("play's 404, a move racing into a hold (re-review 5 I-1): C2 — never C3 — then the re-read shows the board held, and no notice comes back when the hold lifts at the same ply", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  expect(await screenOf(p)).toBe("live");
+  await expect(p.getByTestId("room-move-notice"), "the empty case: no notice on a clean board").toHaveCount(0);
+  // The room's reads wait at a gate, so the hold lands while this client
+  // still shows the live board — the race the review found.
+  const isRead = (u: URL) => /\/external-play\/room$/.test(u.pathname);
+  let open!: () => void;
+  const opened = new Promise<void>((done) => (open = done));
+  let gated = 0;
+  const gate = async (route: Route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    gated += 1;
+    await opened;
+    await route.continue();
+  };
+  await p.route(isRead, gate);
+  await p.waitForTimeout(1_000); // a read already in flight lands before the hold
+  const setHold = (on: boolean) =>
+    withDb(
+      (sql) => sql`
+        update fixture_external_play
+           set status = ${on ? "needs_organiser" : "live"}, needs_reason = ${on ? "provider_error" : null}, updated_at = now()
+         where fixture_id = ${room.fixtureId}`,
+    );
+  await setHold(true);
+  // Nothing intercepted on the act: the REAL server refuses the move (play.ts:
+  // no playable game on a provider_error hold) with its 404.
+  const answered = p.waitForResponse((r) => r.request().method() === "POST" && /\/external-play\/room\/act$/.test(new URL(r.url()).pathname));
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  const res = await answered;
+  expect(res.request().postDataJSON(), "the board sent the move").toEqual({ kind: "move", uci: "g1f3" });
+  expect(res.status(), "play's own 404").toBe(404);
+  const notice = p.getByTestId("room-move-notice");
+  await expect(notice, "C2 — the board, not a rule").toHaveAttribute("data-kind", "refused");
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.refused.title"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.refused.body"]!);
+  await expect(notice).not.toContainText(uiEn["externalPlay.room.notice.invalid"]!);
+  await expect.poll(() => piecesOnBoard(p), { message: "the knight is back where the ledger has it" }).toEqual(piecesOf(fen));
+  expect(gated, "anti-vacuity: the re-read is waiting at the gate").toBeGreaterThanOrEqual(1);
+  await p.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board"]), "anti-vacuity: pairs").toBe(2);
+  await shoot(p, "c2-play-404");
+  // The gate opens (every read from now passes straight through): the read
+  // says what the board is — held — and that screen outranks the notice,
+  // which is gone with it.
+  open();
+  await expect.poll(() => screenOf(p), { timeout: 15_000, message: "the re-read shows the hold" }).toBe("held");
+  await expect(notice).toHaveCount(0);
+  // The hold lifts at the SAME ply: the live board, and no stale notice.
+  await setHold(false);
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the lift" }).toBe("live");
+  expect(await piecesOnBoard(p), "the same ply").toEqual(piecesOf(fen));
+  await expect(notice, "never back after the lift").toHaveCount(0);
+  await p.waitForTimeout(3_500); // one more poll
+  await expect(notice).toHaveCount(0);
+  expect(await noSidewaysScroll(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+  // The browser's own line for play's 404, and nothing else.
   const own = consoleErrors.filter((e) => /status of 404/.test(e));
   expect(own.length, "the one refused act").toBeLessThanOrEqual(1);
   consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/status of 404/.test(e)));
