@@ -17,7 +17,7 @@ import { log } from "@/server/logger";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
-import { type CodeCall, codeServes, codeStatus, normaliseCode } from "@/server/relay/domain/stream-code";
+import { type CodeCall, codeServes, codeStatus, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
 import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 
 /** §6.1: 12 characters of lowercase Crockford base32 (60 bits). V430's `code` check admits exactly this alphabet. */
@@ -26,7 +26,7 @@ const CODE_LENGTH = 12;
 /** A drawn code that collides with any other code is redrawn — at most this many times (§6.1, brief T5 Step 3). */
 const CODE_RETRIES = 3;
 /** PR-1 carries one camera: the QR names slot 0. */
-const SLOT = 0;
+export const SLOT = 0;
 
 /** The constant-time compare's stand-in for a code that does not exist (C1): an unknown code costs the SAME hash and the
  *  SAME `timingSafeEqual` as a wrong tok, so the two 401s cannot be told apart by timing. */
@@ -202,6 +202,8 @@ export async function reissueStreamCode(auth: AuthCtx, fixtureId: string): Promi
  *  - C2: a code found past its grace with no open session is ended HERE (written lazily, committed), then refused.
  *  - C1b: an ENDED code answers only the fixture's open session's phone, for a session created before the end, and
  *    only a `get` or a `beat`.
+ *  - `record` (spec 2026-10-12 §4, P11/Q1): C1b without the phone condition (R4), then C1(c)'s 24 h tail. The records
+ *    route passes `phone = null`, so the lazy `code_ended` pairing write below never fires for a record.
  */
 export async function resolveStreamCode(
   rawCode: string, tok: string, call: CodeCall, phone: string | null, now: Date,
@@ -210,8 +212,9 @@ export async function resolveStreamCode(
   if (code === null) throw new CaptureRefusalError(404, "not_a_stream_code", "not a stream code");
   const [row] = await sql<{
     id: string; org_id: string; fixture_id: string; tok_hash: string; issued_by: string; ended_at: Date | null; finished_at: Date | null;
+    end_cause: "reissued" | "expired" | null;
   }[]>`
-    select c.id, c.org_id, c.fixture_id, c.tok_hash, c.issued_by, c.ended_at, f.finished_at
+    select c.id, c.org_id, c.fixture_id, c.tok_hash, c.issued_by, c.ended_at, c.end_cause, f.finished_at
       from fixture_stream_codes c join fixtures f on f.id = c.fixture_id
      where c.code = ${code}`;
   if (!tokMatches(row?.tok_hash ?? null, tok) || !row) throw codeEnded();
@@ -221,15 +224,32 @@ export async function resolveStreamCode(
      where s.fixture_id = ${row.fixture_id} and s.state in ${sql([...ACTIVE_STATES])}
      order by s.created_at desc limit 1`;
   let endedAt = row.ended_at;
+  let endCause = row.end_cause;
   let status = codeStatus({ endedAt, finishedAt: row.finished_at }, now, open !== undefined, graceMinutes());
   if (status === "expiry_due") {
     await sql.begin((tx) => wipeStreamCodeTok(tx, row.id, "expired", null));
     endedAt = now;
+    endCause = "expired";
     status = "ended";
   }
   const callerIsOpenSessionPhone = open !== undefined && phone !== null && open.phone === phone;
   const sessionCreatedBeforeEnd = open !== undefined && endedAt !== null && open.created_at.getTime() < endedAt.getTime();
-  const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call });
+  // Spec 2026-10-12 §4 C1(c): a record call to an ENDED code with no open pre-end session is judged on the 24 h tail,
+  // anchored on the later of the code's own end and the end of the fixture's last session open when it ended.
+  let tail: RecordTail | undefined;
+  if (call === "record") {
+    let anchor: Date | null = null;
+    if (status === "ended" && !sessionCreatedBeforeEnd) {
+      const sessions = await sql<{ created_at: Date; ended_at: Date | null }[]>`
+        select created_at, ended_at from fixture_stream_sessions where fixture_id = ${row.fixture_id} and created_at < ${endedAt}`;
+      anchor = recordTailAnchor({
+        endCause, endedAt, finishedAt: row.finished_at, graceMinutes: graceMinutes(),
+        sessions: sessions.map((s) => ({ createdAt: s.created_at, endedAt: s.ended_at })),
+      });
+    }
+    tail = { now, anchor };
+  }
+  const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call, tail });
   if (!serves) {
     // §5.2: "ENDED(code_ended) is written lazily when a call from the pairing is refused 401" (B6 review M-6). Only a
     // call whose tok VERIFIED speaks for a pairing, and only one C1 refuses: the C1b phone (its open session created
