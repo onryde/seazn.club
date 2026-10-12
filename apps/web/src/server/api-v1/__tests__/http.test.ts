@@ -427,7 +427,8 @@ describe("cursor pagination", () => {
 // then the real v1 envelope, then the copy. The expected list is the rulebook's (spec X-RS-1 as amended by rulings 112
 // and 113): a walkover only in the module's declared walkover phases (default "pre", R2) — and the phase reads "pre" for
 // a walkover while nothing is played after the start —, a disqualification only once play started (R4), a retirement
-// only once something is played (ruling 113), a withdrawal in any phase (R5) — in FORFEIT_REASONS order.
+// only once something is played (ruling 113), a withdrawal in any phase (R5) — in FORFEIT_REASONS order. Ruling 118: a
+// module that declares `startIsPlay` (chess) has played from its Start, so its bare start is "played".
 describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons to the wire and the copy", () => {
   const rulebookAllowed = (phase: string, walkoverPhases: readonly string[], played: boolean) =>
     FORFEIT_REASONS.filter((r) =>
@@ -462,7 +463,9 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
         const cfg = at === "played" ? scene.cfg : first;
         const head = at === "before" ? [] : at === "bare start" ? [start] : [start, scene.played!];
         const phase = mod.forfeitPhase(foldMatch(mod as never, cfg, lineups, head) as never);
-        const engineAllowed = rulebookAllowed(phase, walkoverPhases, at === "played");
+        // Ruling 118: the module's own declaration, never this test's guess, says whether a bare Start is play.
+        const played = at === "played" || (at === "bare start" && mod.startIsPlay === true);
+        const engineAllowed = rulebookAllowed(phase, walkoverPhases, played);
         const allowed = engineAllowed.filter((r) => !PF2_CASCADE_ONLY.includes(r));
         const reason = FORFEIT_REASONS.find((r) => !engineAllowed.includes(r));
         if (reason === undefined) {
@@ -490,7 +493,6 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
           onlyCascade++;
           continue;
         }
-        const played = at === "played";
         expect(error, label).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: (caught as EngineError).message, phase, allowed, both: false, played });
         const words = allowed.map((r) => enM(`forfeit.reason.${r}`)).join(", ");
         expect(scoringErrorText(error.code as string, error.message as string, enM as never, "score.failed", error), label).toBe(
@@ -506,8 +508,10 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
     expect(refused, `refused (nothing to refuse in ${nothingToRefuse}, only the cascade's reason in ${onlyCascade} sport×phase cases)`).toBeGreaterThanOrEqual(sportCases().length);
     expect(refusedAfterPlay, "walkovers refused once something is played").toBe(sportCases().filter(({ module: m }) => m.walkoverPhases === undefined).length);
     expect(refusedAfterPlay).toBeGreaterThan(0);
-    // Ruling 113: every sport refuses a retirement after a bare start.
-    expect(refusedBare, "retirements refused after a bare start").toBe(sportCases().length);
+    // Ruling 113 as amended by 118: every sport refuses a retirement after a bare start, save one whose Start is play.
+    const startIsPlay = sportCases().filter(({ module: m }) => m.startIsPlay === true).length;
+    expect(startIsPlay, "ruling 118's carve-out is reached (chess)").toBeGreaterThan(0);
+    expect(refusedBare, "retirements refused after a bare start").toBe(sportCases().length - startIsPlay);
   });
 
   it("the empty case: an unreadable shape forwards code + message only, and the copy is the code's own", async () => {
