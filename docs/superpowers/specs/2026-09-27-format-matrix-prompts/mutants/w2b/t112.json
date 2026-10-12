@@ -1908,5 +1908,20 @@
     "name": "every team sport"
    }
   ]
+ },
+ {
+  "id": "r122r2-count-bench-figures-ignore-merged-ids",
+  "file": "apps/web/src/server/appearances.ts",
+  "find": "      figures = figuresFor(folds.get(row.fixtureId)!, await figurePeople(db, row.personId));\n",
+  "replace": "      figures = figuresFor(folds.get(row.fixtureId)!, [row.personId]);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/public-player-matches.test.ts"
+    ],
+    "name": "a survivor's cricket bench row counts by the figures the ledger recorded under the absorbed id"
+   }
+  ]
  }
 ]

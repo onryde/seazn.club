@@ -1434,6 +1434,37 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(foldsOf(fixtureId)).toBe(2);
   });
 
+  it("MERGE (bench, ruling 122 round 2): a survivor's cricket bench row counts by the figures the ledger recorded under the absorbed id — in the career count AND the lines", async () => {
+    // Bea sat on the bench, came on and bowled: her figures are recorded under HER id. Merged into a survivor, the
+    // sheet row moves to the survivor and the ledger keeps naming Bea — so both readers must ask the bench rule with
+    // every id the survivor carries (`figurePeople`), or the survivor's bench row is dropped.
+    const { fixtureId, card } = scene.bench;
+    const bea = scene.persons.bea;
+    const figures = expectedCricketLine(card, bea);
+    expect(figures, "premise: Bea bowled in the bench fixture").toMatch(/^\d+\/\d+$/);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name) values (${`merge-${randomUUID().slice(0, 8)}@example.test`}, 'Merger')
+      returning id`;
+    const auth: AuthCtx = { orgId: scene.orgId, via: "session", userId, role: "owner", keyId: null };
+    const survivor = await seedPerson(scene.orgId, "Bo Survivor", { public_name: true });
+    await mergePersons(auth, survivor, bea, { confirmedBy: userId });
+    const [premise] = await sql<{ slot: string | null; survivor_figures: number; bea_mentions: number }[]>`
+      select (select slot from lineups where fixture_id = ${fixtureId} and person_id = ${survivor}) as slot,
+             (select count(*)::int from score_events
+               where fixture_id = ${fixtureId} and payload::text like ${"%" + survivor + "%"}) as survivor_figures,
+             (select count(*)::int from score_events
+               where fixture_id = ${fixtureId} and payload::text like ${"%" + bea + "%"}) as bea_mentions`;
+    expect(premise, "premise: the survivor holds Bea's BENCH row; the ledger names only Bea").toMatchObject({ slot: "bench", survivor_figures: 0 });
+    expect(premise!.bea_mentions).toBeGreaterThan(0);
+
+    const settled = (await linesFor(survivor)).filter((l) => l.result !== "live");
+    expect(settled.map((l) => [l.fixtureId, l.line]), "the lines: the survivor's bench row, with Bea's figures").toEqual([[fixtureId, figures]]);
+    const divisionIds = (await sql<{ id: string }[]>`
+      select id from public_divisions_v where competition_id = ${scene.competitionId}`).map((d) => d.id);
+    const counted = [...(await countMatchesByDivision(sql, { by: "person", personId: survivor }, divisionIds)).values()];
+    expect(counted, "the career count agrees with the lines: one match").toEqual([1]);
+  });
+
   it("GATE: publicPlayerGate refuses exactly when getPublicPlayer does — and folds nothing", async () => {
     const other = await sql<{ id: string }[]>`
       insert into organizations (name, slug) values ('Other', ${"other-" + randomUUID().slice(0, 8)}) returning id`;
