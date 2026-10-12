@@ -542,6 +542,22 @@ export function playedInStats(events: readonly EventEnvelope[], model?: Pick<Pla
 }
 
 /**
+ * The players'-stats fold version (W2b ruling R115-2). BUMP THIS WHEN THE FOLD'S OUTPUT CHANGES for the same ledger and
+ * the same inputs: this file's fold (`aggregatePlayerStatsWithDiagnostics`, `playedInStats`, `forfeitStatsRole`), any
+ * sport's `playerStats` model, or apps/web's `foldDivision` around it.
+ *
+ * apps/web stores each division's folded rows (`player_stat_snapshots`) with an md5 of the fold's inputs, and serves
+ * them for as long as that md5 and the ledger still match (`playerStatsCoverage`). The md5 carries this number, so a
+ * bump makes every stored snapshot read as owed once: the first read that folds (or the read-side check behind the
+ * public stats reads) refolds it under the new rules. No migration, no production write. Forgetting the bump leaves
+ * every snapshot folded by the old rules served as it is until its division changes.
+ *
+ * History: 1 — every fold before the version existed (its md5 carried none); 2 — W2b's X-PS-1/X-PS-2 and ruling 115
+ * (an unplayed forfeit is no match; a disqualification with nothing played is unplayed; a bye is no match, R115-3).
+ */
+export const STATS_FOLD_VERSION = 2;
+
+/**
  * Fold one fixture's event ledger into per-person stat contributions
  * (Jul3/07 §3), plus the `PlayerStatsDiagnostics` described above.
  * `core.void` drops the voided event entirely — a voided goal takes its

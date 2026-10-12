@@ -1161,5 +1161,65 @@
     "name": "playedInStats, the one reader the web counts ask"
    }
   ]
+ },
+ {
+  "id": "r1152-md5-drops-fold-version",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "      ${foldVersion === null ? null : String(foldVersion)}::text,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "pre-version record"
+   }
+  ]
+ },
+ {
+  "id": "r1152-md5-default-no-version",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "  foldVersion: number | null = STATS_FOLD_VERSION,\n",
+  "replace": "  foldVersion: number | null = null,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "pre-version record"
+   }
+  ]
+ },
+ {
+  "id": "r1153-bye-engine-empty-played",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  if (active.length === 0) return false;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches 1, W1 L0"
+   }
+  ]
+ },
+ {
+  "id": "r1153-bye-web-no-ledger-played",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "        : hasLedger.has(f.id) || playedInStats([]);\n",
+  "replace": "        : true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-matches-played-x-ps-1.test.ts"
+    ],
+    "name": "matches 1, W1 L0"
+   }
+  ]
  }
 ]

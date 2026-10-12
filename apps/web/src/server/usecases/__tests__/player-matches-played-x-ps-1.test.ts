@@ -23,7 +23,8 @@ import { randomUUID } from "node:crypto";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { generic } from "@seazn/engine/sports/generic";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { sql } from "@/lib/db";
+import { STATS_FOLD_VERSION } from "@seazn/engine/stats";
+import { sql, withTenant } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { readPlayerMatchSeeds } from "@/server/public-site/public-player-matches";
@@ -34,7 +35,14 @@ import { createPerson } from "../persons";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { countMatchesByDivision, divisionPlayerStats, personCareerStats } from "../player-stats";
+import {
+  countMatchesByDivision,
+  divisionPlayerStats,
+  personCareerStats,
+  playerStatsCoverage,
+  playerStatsInputsMd5,
+  playerStatsOwed,
+} from "../player-stats";
 import { listMyCareerStats } from "../me";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
@@ -249,4 +257,172 @@ describe.skipIf(!HAS_DB)("R115-1 / X-PS-1 / X-PS-2: a person's matches and W/L c
     const seeds = await readPlayerMatchSeeds(sql, { personId: loner, competitionId: s.competitionId, orgSlug: s.orgSlug, compSlug: s.compSlug, locale: "en" });
     expect(seeds).toEqual([]);
   });
+});
+
+// R115-2 (controller ruling 2026-10-12, option b): a snapshot is served while its fold record's ledger map and inputs
+// md5 match the database — and before this ruling the md5 named no fold-code version, so a snapshot folded by OLDER fold
+// rules (every one on staging and production before W2b's X-PS-1/X-PS-2) read as covered and was served as stored, for
+// ever, until something in its division changed. The md5 now carries `STATS_FOLD_VERSION`, so a record written before it
+// (or under any other version) reads as owed and the first read that folds refolds it. No migration, no production write.
+//
+// `playerStatsInputsMd5(tx, id, null)` is the md5 a record folded before the version existed holds, byte for byte:
+// `concat_ws` skips a NULL argument, so the version-less statement is exactly the pre-R115-2 one.
+describe.skipIf(!HAS_DB)("R115-2: a snapshot folded under an older fold version is recomputed on read", () => {
+  for (const c of SPORTS) {
+    it(`${c.module.key}: same version + stale rows → served as stored (the control); pre-version record → owed, and the console read refolds it`, async () => {
+      const s = await seedScene(c);
+      const key = c.module.key;
+      const patRow = async () =>
+        (await divisionPlayerStats(s.auth, s.divisionId, {})).rows.find((r) => r.person_id === s.personId)?.stats;
+      const storedPat = async () =>
+        (await sql<{ stats: Record<string, number> }[]>`
+          select stats from player_stat_snapshots where division_id = ${s.divisionId} and person_id = ${s.personId}`)[0]?.stats;
+      const coverage = () => withTenant(s.auth.orgId, (tx) => playerStatsCoverage(tx, s.divisionId));
+
+      // The first read folds under the current version. Pat's numbers are X-PS-1's: two matches played, W1 L1.
+      const right = await patRow();
+      expect(right, `${key}: Pat has a row`).toBeDefined();
+      if ("matches" in right!) expect(right!.matches, `${key}: matches (X-PS-1)`).toBe(2);
+      if ("wins" in right!) expect([right!.wins, right!.losses], `${key}: W/L (X-PS-1)`).toEqual([1, 1]);
+      expect("matches" in right! || "wins" in right!, `${key}: a rule-derived key was checked`).toBe(true);
+      expect((await coverage()).covered, `${key}: covered after the fold`).toBe(true);
+
+      // A stand-in for an older fold's numbers: every value off by five.
+      const stale = Object.fromEntries(Object.entries(right!).map(([k, v]) => [k, v + 5]));
+      await sql`update player_stat_snapshots set stats = ${sql.json(stale as never)}
+        where division_id = ${s.divisionId} and person_id = ${s.personId}`;
+
+      // The control (the R115-1 live proof): same fold version, nothing in the division changed → the stored rows
+      // are what a read serves. That is the snapshot design, not a defect; it is what lets the version be the trigger.
+      expect((await coverage()).covered, `${key}: an edited row alone breaks no coverage`).toBe(true);
+      expect(await patRow(), `${key}: served as stored`).toEqual(stale);
+
+      // Now the record as the pre-version code wrote it: its md5 has no version in it.
+      const [md5Now, md5Before, md5Next] = await withTenant(s.auth.orgId, async (tx) => [
+        await playerStatsInputsMd5(tx, s.divisionId),
+        await playerStatsInputsMd5(tx, s.divisionId, null),
+        await playerStatsInputsMd5(tx, s.divisionId, STATS_FOLD_VERSION + 1),
+      ]);
+      expect(new Set([md5Now, md5Before, md5Next]).size, `${key}: three versions, three md5s`).toBe(3);
+      await sql`update player_stat_folds set inputs_md5 = ${md5Before} where division_id = ${s.divisionId}`;
+
+      const before = await coverage();
+      expect([before.covered, before.owed, before.inputsSame], `${key}: a pre-version record is owed`).toEqual([false, true, false]);
+      // The public reads' check (`reconcilePlayerStatsOnRead`) asks exactly this, so they queue the refold too.
+      expect(await withTenant(s.auth.orgId, (tx) => playerStatsOwed(tx, s.divisionId)), `${key}: owed to the read-side check`).toBe(true);
+
+      // The first read that folds (the console leaderboard) refolds and writes: the right rows, stored, stamped now.
+      expect(await patRow(), `${key}: refolded on read`).toEqual(right);
+      expect(await storedPat(), `${key}: the refold was written`).toEqual(right);
+      const [{ inputs_md5 }] = await sql<{ inputs_md5: string }[]>`
+        select inputs_md5 from player_stat_folds where division_id = ${s.divisionId}`;
+      expect(inputs_md5, `${key}: re-stamped under the current version`).toBe(md5Now);
+      expect((await coverage()).covered, `${key}: covered again`).toBe(true);
+    });
+  }
+
+  it("the fold version is one positive integer constant (a bump is the only way to retire stored snapshots)", () => {
+    expect(Number.isInteger(STATS_FOLD_VERSION) && STATS_FOLD_VERSION >= 2).toBe(true);
+  });
+});
+
+// R115-3 (controller ruling 2026-10-12): a bye is not a match played. The generator settles it with no event written
+// (`status: 'forfeited'`, `byeAward` — an award nobody forfeited), so X-PS-1's reading of an unplayed award applies:
+// no appearance, no personal W/L, no line in the player's match list. Expected values from that rule alone.
+// Three-entrant knockout, real generator, real `scoreEvent` writes: seed 1 (Pat) gets the bye, 2 v 3 is played, then Pat
+// plays the final and wins. Pat: one match, one win. The semi winner: two matches (semi + final).
+describe.skipIf(!HAS_DB)("R115-3: a bye is no match played — career count, match list, snapshot", () => {
+  for (const c of SPORTS) {
+    it(`${c.module.key}: Pat's bye + won final → matches 1, W1 L0, one public line; the semi winner → matches 2`, async () => {
+      const key = c.module.key;
+      const suffix = randomUUID().slice(0, 8);
+      const [{ id: orgId, slug: orgSlug }] = await sql<{ id: string; slug: string }[]>`
+        insert into organizations (name, slug) values (${"R1153 " + suffix}, ${"r1153-" + suffix}) returning id, slug`;
+      await setOrgPlan(orgId, "pro");
+      await invalidateOrgEntitlements(orgId);
+      const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `R1153 ${key} ${suffix}`, visibility: "public", branding: {} });
+      const division = await createDivision(auth, comp.id, { name: "KO", slug: `ko-${suffix}`, sport_key: key, variant_key: c.variant, config: {} });
+      const names = ["Pat Bye", "Second Seed", "Third Seed"];
+      const people: { id: string }[] = [];
+      for (const full_name of names) {
+        people.push(await createPerson(auth, { full_name, consent: { public_name: true }, dob: null, gender: null, external_ref: null }));
+      }
+      const entrants = await createEntrants(
+        auth,
+        division.id,
+        people.map((p, i) => ({
+          kind: "individual" as const,
+          display_name: names[i]!,
+          seed: i + 1,
+          members: [{ person_id: p.id, squad_number: null, is_captain: false, roles: [], default_position_key: null }],
+        })),
+      );
+      const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "KO", config: {} });
+      await generateStageFixtures(auth, stage!.id);
+      await startDivision(auth, division.id);
+      const pat = entrants[0]!.id;
+      const personOf = new Map(entrants.map((e, i) => [e.id, people[i]!.id]));
+
+      type Row = { id: string; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown; events: number };
+      const rows = () => sql<Row[]>`
+        select f.id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome,
+               (select count(*)::int from score_events se where se.fixture_id = f.id) as events
+        from fixtures f where f.stage_id = ${stage!.id} order by f.round_no, f.seq_in_round`;
+
+      // The producer wrote a bye exactly as R115-3 reads it: one seat (Pat), settled, an award with no loser, no event.
+      const byes = (await rows()).filter((r) => r.status === "forfeited");
+      expect(byes.length, `${key}: one generated bye`).toBe(1);
+      const bye = byes[0]!;
+      expect([bye.home_entrant_id ?? bye.away_entrant_id, bye.events], `${key}: Pat's bye, no event`).toEqual([pat, 0]);
+      expect(bye.outcome, `${key}: the bye award`).toEqual({ kind: "award", winner: pat, loser: null, reason: "bye" });
+
+      const seqOf = new Map<string, number>();
+      const post = async (fixtureId: string, type: string, payload: unknown) => {
+        const expected_seq = seqOf.get(fixtureId) ?? 0;
+        await scoreEvent(auth, fixtureId, { expected_seq, type, payload } as never);
+        seqOf.set(fixtureId, expected_seq + 1);
+      };
+      const playWin = async (fixtureId: string, side: Side) => {
+        await post(fixtureId, "core.start", {});
+        for (const e of c.win(side)) await post(fixtureId, e.type, e.payload);
+      };
+
+      const semi = (await rows()).find((r) => r.home_entrant_id !== null && r.away_entrant_id !== null && r.home_entrant_id !== pat && r.away_entrant_id !== pat);
+      expect(semi, `${key}: the 2 v 3 semi`).toBeDefined();
+      await playWin(semi!.id, "home");
+      const semiWinner = semi!.home_entrant_id!;
+
+      const final = (await rows()).find((r) => r.status === "scheduled" && r.home_entrant_id !== null && r.away_entrant_id !== null);
+      expect(final && [final.home_entrant_id, final.away_entrant_id].sort(), `${key}: the final seats Pat and the semi winner`).toEqual([pat, semiWinner].sort());
+      await playWin(final!.id, final!.home_entrant_id === pat ? "home" : "away");
+
+      const settled = (await rows()).map((r) => r.status).sort();
+      expect(settled, `${key}: every fixture settled`).toEqual(["decided", "decided", "forfeited"]);
+
+      // The career count (person + every web rollup reads it).
+      const patCount = await countMatchesByDivision(sql, { by: "person", personId: personOf.get(pat)! }, [division.id]);
+      expect(patCount.get(division.id), `${key}: Pat — the final only`).toBe(1);
+      const winnerCount = await countMatchesByDivision(sql, { by: "person", personId: personOf.get(semiWinner)! }, [division.id]);
+      expect(winnerCount.get(division.id), `${key}: the semi winner — semi + final`).toBe(2);
+
+      // The public match list: the final, won; no bye line.
+      const seeds = await readPlayerMatchSeeds(sql, { personId: personOf.get(pat)!, competitionId: comp.id, orgSlug, compSlug: comp.slug, locale: "en" });
+      expect(new Map(seeds.map((x) => [x.fixtureId, x.result])), `${key}: Pat's public lines`).toEqual(new Map([[final!.id, "won"]]));
+
+      // The snapshot fold agrees (the engine reader, the same rule).
+      const board = await divisionPlayerStats(auth, division.id, {});
+      const patStats = board.rows.find((r) => r.person_id === personOf.get(pat))?.stats ?? {};
+      let checked = 0;
+      if ((c.module.playerStats?.folded?.keys ?? []).some((k) => k.key === "matches") || "matches" in patStats) {
+        expect(patStats.matches, `${key}: snapshot matches`).toBe(1);
+        checked++;
+      }
+      if ("wins" in patStats || "losses" in patStats) {
+        expect([patStats.wins ?? 0, patStats.losses ?? 0], `${key}: snapshot W/L`).toEqual([1, 0]);
+        checked++;
+      }
+      expect(checked, `${key}: snapshot keys checked`).toBe(1);
+    });
+  }
 });

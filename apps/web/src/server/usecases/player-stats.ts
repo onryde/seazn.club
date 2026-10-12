@@ -6,6 +6,7 @@ import type postgres from "postgres";
 import {
   aggregatePlayerStatsWithDiagnostics,
   playedInStats,
+  STATS_FOLD_VERSION,
   sumPlayerStats,
   type PlayerStatRow,
 } from "@seazn/engine/stats";
@@ -118,10 +119,22 @@ export async function tryLockPlayerStats(tx: Tx, divisionId: string): Promise<bo
  *  unmerge changes every division's md5 once, so each division reads as owed
  *  once and refolds at its next refresh or stats read. Narrowing them to the
  *  persons a division's events and rosters name would need the event payloads
- *  read here, which costs every check more than one refold wave per merge. */
-export async function playerStatsInputsMd5(tx: Tx, divisionId: string): Promise<string> {
+ *  read here, which costs every check more than one refold wave per merge.
+ *
+ *  R115-2: the md5 opens with the engine's `STATS_FOLD_VERSION`, so a snapshot
+ *  folded by older fold rules reads as owed once and refolds on its first
+ *  folding read (no migration). `foldVersion` exists for the test that writes a
+ *  record the way older code did: `null` drops the version, and since
+ *  `concat_ws` skips a NULL argument that is byte for byte the md5 every record
+ *  folded before R115-2 holds. Production passes nothing. */
+export async function playerStatsInputsMd5(
+  tx: Tx,
+  divisionId: string,
+  foldVersion: number | null = STATS_FOLD_VERSION,
+): Promise<string> {
   const [row] = await tx<{ md5: string }[]>`
     select md5(concat_ws('|',
+      ${foldVersion === null ? null : String(foldVersion)}::text,
       (select concat_ws(':', d.sport_key, d.module_version, md5(coalesce(d.config::text, '-')))
          from divisions d where d.id = ${divisionId}),
       (select string_agg(concat_ws(':', f.id, f.stage_id, coalesce(f.home_entrant_id::text, '-'),
