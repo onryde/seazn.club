@@ -509,6 +509,94 @@ test("a move through the REAL server: a grant downgraded mid-game is refused by 
   await ctx.close();
 });
 
+test("a held board (review I2): a game nobody may act on reads as held — the board view-only, no \"your move\", no game actions, the held notice — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, longName()] });
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  // The pair first: on the live board, White (to move) may move.
+  expect(await screenOf(p)).toBe("live");
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  await expect(p.getByTestId("room-clock-you")).toHaveAttribute("data-active", "true");
+  await expect(p.getByTestId("room-resign")).toBeVisible();
+
+  // A mid-game diagnosis: play.ts refuses every act on such a board (its
+  // frozenSeats), so the room must not offer one. The next poll reads it.
+  await withDb(
+    (sql) => sql`
+      update fixture_external_play
+         set status = 'needs_organiser', needs_reason = 'provider_error', updated_at = now()
+       where fixture_id = ${room.fixtureId}`,
+  );
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the hold" }).toBe("held");
+  await expect(p.getByTestId("room-seam-held")).toContainText(uiEn["externalPlay.room.state.held.title"]!);
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "false");
+  await boardReady(p);
+  expect(await piecesOnBoard(p), "the board is still the ledger's").toEqual(piecesOf(fen));
+  await expect(p.getByTestId("room-clock-you")).toHaveAttribute("data-active", "false");
+  await expect(p.getByTestId("room-clock-opponent")).toHaveAttribute("data-active", "false");
+  await expect(p.getByText(uiEn["externalPlay.room.yourMove"]!, { exact: true })).toHaveCount(0);
+  await expect(p.getByTestId("room-resign")).toHaveCount(0);
+  await expect(p.getByTestId("room-draw")).toHaveCount(0);
+  await expect(p.getByTestId("room-abort")).toHaveCount(0);
+  // White's own piece, White to move: a tap selects nothing on a held board.
+  expect(await pieceUnder(p, "g1", "white")).toBe("g1");
+  await tap(p, "g1", "white");
+  await p.waitForTimeout(300); // two frames: a dot, if one were coming, is painted
+  expect(await squaresWith(p, "move-dest"), "no destinations on a held board").toEqual([]);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "held");
+  await ctx.close();
+});
+
+test("a move refused with a 404 (review I2): the room is not gone — it re-reads at once, keeps polling, and puts the board back", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  const reads: number[] = [];
+  p.on("response", (r) => {
+    if (r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname)) reads.push(r.status());
+  });
+  let readsAtAct = -1;
+  // T10's 404, as v1 answers it: the act route refusing a board it will not
+  // accept. Not the room vanishing — only GET room's own 404 means that.
+  await p.route("**/external-play/room/act**", async (route: Route) => {
+    readsAtAct = reads.length;
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: { code: "not_found", message: "Not found" }, requestId: "e2e" }),
+    });
+  });
+  await tap(p, "g1", "white");
+  await tap(p, "f3", "white");
+  await expect.poll(() => readsAtAct, { message: "the move was sent" }).toBeGreaterThanOrEqual(0);
+  // One re-read at once, then the live poll carries on (LIVE_POLL_MS, 3 s):
+  // three reads after the refusal, every one answered.
+  await expect.poll(() => reads.length - readsAtAct, { timeout: 20_000, message: "the room keeps reading" }).toBeGreaterThanOrEqual(3);
+  expect(reads.slice(readsAtAct).every((s) => s === 200), `reads after the 404: ${reads.slice(readsAtAct).join(",")}`).toBe(true);
+  expect(await screenOf(p), "still the live board, never the gone card").toBe("live");
+  await expect.poll(() => piecesOnBoard(p), { message: "the knight is back where the ledger has it" }).toEqual(piecesOf(fen));
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  // The browser's own notice of the 404 it was handed (Chrome logs every
+  // failed fetch): this test's refusal and nothing else.
+  const own = consoleErrors.filter((e) => /status of 404/.test(e));
+  expect(own.length, "the one refused act").toBeLessThanOrEqual(1);
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/status of 404/.test(e)));
+  await ctx.close();
+});
+
 test("promotion: the sheet opens on the last rank, Cancel puts the pawn back, a Knight is sent with its suffix", async ({
   page,
   browser,
