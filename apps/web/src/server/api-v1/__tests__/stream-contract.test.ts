@@ -354,16 +354,17 @@ const keyForm = (method: string, path: string) => `${method.toUpperCase()} ${pat
 const STREAM_ROUTE = /\/(stream-sessions|stream-targets|stream-code|stream-phone|stream-settings)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
-// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the four
-// operations the capture app calls (W27's scoring link the fourth, 2026-10-06), each banned from API keys by name, never
-// merely unlisted.
+// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the five
+// operations the capture app calls (W27's scoring link the fourth, 2026-10-06; the record upload the fifth, 2026-10-12),
+// each banned from API keys by name, never merely unlisted.
 const captureRoutes = ROUTES.filter((r) => r.tag === "capture");
 
 describe("the phone's capture routes are never key-reachable (A16)", () => {
-  it("the `capture` tag holds exactly the FOUR phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
+  it("the `capture` tag holds exactly the FIVE phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
     expect(captureRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
       "GET /capture/codes/:code",
       "POST /capture/codes/:code/beats",
+      "POST /capture/codes/:code/records",
       "POST /capture/codes/:code/scoring-link",
       "POST /capture/codes/:code/start",
     ]);
@@ -375,7 +376,7 @@ describe("the phone's capture routes are never key-reachable (A16)", () => {
       expect(matchKeyRoute(r.method, concrete), `${r.method.toUpperCase()} ${concrete}`).toBeNull();
       checked++;
     }
-    expect(checked, "capture routes checked").toBe(4);
+    expect(checked, "capture routes checked").toBe(5);
   });
 });
 
@@ -476,11 +477,13 @@ describe("the relay's routes are never key-reachable", () => {
       for (const [method, o] of Object.entries(ops)) {
         if (refusesDestinations.has(`${method} ${path}`)) continue;
         const schema = o.responses["422"]?.content["application/json"].schema as
-          | { properties?: { error?: ErrorProps }; anyOf?: ErrorProps[] } | undefined;
+          | { properties?: { error?: ErrorProps; code?: unknown }; anyOf?: ErrorProps[] } | undefined;
         if (!schema) continue;
         // Capture QR v2 (T8a): a BARE phone route refuses with the capture-refusal body itself — its branches are the
-        // error objects, there is no envelope `error`. Either way every error object is checked.
-        const errors = schema.properties?.error ? [schema.properties.error] : (schema.anyOf ?? []);
+        // error objects, there is no envelope `error`. The record upload's own refusal twin (spec 2026-10-12, Q2) is ONE
+        // plain `{code, message}` object, so the schema itself is the error object. Every error object is checked.
+        const errors = schema.properties?.error ? [schema.properties.error]
+          : schema.anyOf ?? (schema.properties?.code ? [schema as ErrorProps] : []);
         expect(errors.length, `${method} ${path}: a 422 with no error object to check`).toBeGreaterThan(0);
         for (const e of errors) expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
         others++;

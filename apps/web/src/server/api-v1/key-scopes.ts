@@ -350,6 +350,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /capture/codes/:code/start",
   // W27 (§6.3.5, 2026-10-06): the phone's scoring link hands out a device link — a credential, like the console's mint.
   "POST /capture/codes/:code/scoring-link",
+  // Capture record upload (spec 2026-10-12, P1): the operator's Send record — the phone's tok, never a key.
+  "POST /capture/codes/:code/records",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

@@ -44314,6 +44314,1647 @@
         ]
       }
     },
+    "/api/v1/capture/codes/{code}/records": {
+      "post": {
+        "summary": "The operator's Send record (Bearer: the stream code's tok; spec 2026-10-12, capture-record.v1). The body is NDJSON (application/x-ndjson, `Content-Encoding: gzip` or none), ONE line per the request schema: at most 1000 non-empty lines and 1 MB decompressed. Any phone holding a currently valid tok of the code may send (R4): an active or finishing code, an ended one while the fixture's session opened before the end is still open, and for 24 h after. Lines of another code are dropped before storage (A1 by session, A2 by pairing window); a dropped line is never stored, logged or echoed. 201 {ref, kept, dropped} — a record whose every line was dropped is still 201 with kept 0. 401 code_ended, 404 not_a_stream_code, 413 too_large, 422 invalid (not NDJSON, a line that is not an object, no lines, a key off capture's allow-list, a value off its class, a secret-shaped value, an unsupported Content-Encoding — the message names the line, key and rule, never the value), 429 rate_limited with Retry-After (10 records an hour per code, a bucket of its own), 503 unavailable. Served private, no-store. Not idempotent. Never 410, never replaced",
+        "tags": [
+          "capture"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                  },
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "debug",
+                      "info",
+                      "warn",
+                      "error",
+                      "***"
+                    ]
+                  },
+                  "action": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "answer": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "appVersion": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "attempt": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "cause": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "claim": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "count": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endReason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "error": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "exit": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failure": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "field": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "from": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "host": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "intent": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "key": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "field_kind": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEnd": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lock": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "mode": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ms": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "notReady": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "op": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "phase": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "problem": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "refusal": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "result": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "retryAfterS": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rootError": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "route": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "scene": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "shed": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "side": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "site": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "slot": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "source": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "startFailed": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "state": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tag": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "to": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "transport": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "word": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([A-Za-z0-9_.:-]{1,64}|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sid": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "string",
+                        "const": "***"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tokenTag": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}$"
+                  },
+                  "url": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(\\/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "playbackUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(\\/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "overlayUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/?#@ \\t\\n\\v\\f\\r:]+(:[0-9]+)?(\\/[^?# \\t\\n\\v\\f\\r]*)?|[*]{3})$"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "message": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "problems": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "audioFps": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "camera": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "counted": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "encodeListed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "exitAtMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "gapMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "granted": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "headroom": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "held": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "intervalMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lagGrowthMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lagMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "late": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "listed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "minuteEpochMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "msSinceAdvance": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ok": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "on": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outageMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pickHeight": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pickWidth": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "publishedMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rebaselined": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rebuilds": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "refusedSid": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sameArea": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sent": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sinceLastMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sound": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "srtOffered": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "stalledMs": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "stopped": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "suppressed": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "validated": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "videoFps": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "wasLive": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "at",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "at": "2026-08-01T09:00:00Z",
+                "kind": "example",
+                "level": "debug",
+                "action": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ref": {
+                      "type": "string",
+                      "pattern": "^R-[0-9A-HJKMNP-TV-Z]{4,8}$"
+                    },
+                    "kept": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000
+                    },
+                    "dropped": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000
+                    }
+                  },
+                  "required": [
+                    "ref",
+                    "kept",
+                    "dropped"
+                  ],
+                  "additionalProperties": false
+                },
+                "example": {
+                  "ref": "example",
+                  "kept": 0,
+                  "dropped": 0
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "code_ended",
+                        "not_a_stream_code",
+                        "too_large",
+                        "invalid",
+                        "rate_limited",
+                        "unavailable"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "captureTok": []
+          }
+        ]
+      }
+    },
     "/api/v1/capture/codes/{code}/scoring-link": {
       "post": {
         "summary": "The match's Remote scoring link (Bearer: the stream code's tok), body {phone}, for the slot's CURRENT phone, with or without a session (capture QR v2 §6.3.5, W27). Returns the match's live scoring link, or creates one — it never removes or replaces an existing link, so a repeat call returns the same url. 200 {url} (https, /score/, the link's secret: a credential, never logged). 409 replaced (not the current phone), 409 match_finished (the match is finalized or cancelled; nothing written), 402 not_entitled (the plan has no scoring links; an Event Pass on the competition lifts it), 503 unavailable (scoring links not configured on this server). 401 code_ended (an ended code serves nothing here), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After (the code's budget, then the console's per-IP mint budget). Served private, no-store. Never 410",
