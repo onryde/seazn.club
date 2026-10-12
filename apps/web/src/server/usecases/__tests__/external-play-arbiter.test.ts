@@ -193,12 +193,12 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
   it("camera policy, and whether the camera report is still to come", async () => {
     const r = await seedOnlineChessRound({ fixtures: 3, cameraPolicy: "required" });
     await openRound(r);
-    const [a, b, c] = r.boards;
+    const [a, b] = r.boards;
     await bridge(a!.fixtureId, r.orgId, { status: "live", moves: 10 });
     await meeting(a!.fixtureId, r.orgId);
     await bridge(b!.fixtureId, r.orgId, { status: "live", moves: 10 });
     await meeting(b!.fixtureId, r.orgId, { evidence: true });
-    // c: no game yet — no report to expect.
+    // The third board: no game yet — no report to expect.
     const view = (await loadArbiterRound(r.owner, r.divisionId))!;
     expect(view.boards.map((x) => x.cameraPolicy)).toEqual(["required", "required", "required"]);
     expect(view.boards.map((x) => x.cameraReport)).toEqual(["pending", "settled", null]);
