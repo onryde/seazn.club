@@ -21,6 +21,12 @@
 // (camera-loader.ts, D7), and stamps the gap on the server
 // (fixture_video_guard_faults). Each stamped interval counts as covered, so
 // only what lies outside it is judged — never a camera_lost for our gap.
+//
+// A stamp excuses; it never HIDES (T14 fix round 5, ruling 1). The stamps are
+// the player's browser's claim, so past either threshold in one match —
+// stamped time over GUARD_FAULT_FLAG_SECONDS, or more than
+// GUARD_FAULT_FLAG_STAMPS stamps — the organiser is told, neutrally
+// (stampedInMatch → job 5's camera_connection_problems flag).
 import {
   PEER_REPORT_MIN_CADENCE_MS,
   VIDEO_OFF_GAP_CADENCES,
@@ -41,27 +47,81 @@ export type CameraOffInMatch = {
 
 type Span = [number, number];
 
+/** Stamped time in one match past this many seconds is told to the organiser. */
+export const GUARD_FAULT_FLAG_SECONDS = 60;
+/** More stamps than this in one match are told to the organiser. */
+export const GUARD_FAULT_FLAG_STAMPS = 3;
+
+function faultSpan(g: { from: Date; to: Date }): Span {
+  const a = g.from.getTime();
+  const b = g.to.getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) {
+    throw new Error("matchCameraOff: a guard fault must be two dates, from <= to");
+  }
+  return [a, b];
+}
+
+function windowSpan(window: { from: Date; to: Date }): Span {
+  const w0 = window.from.getTime();
+  const w1 = window.to.getTime();
+  if (!Number.isFinite(w0) || !Number.isFinite(w1) || w1 < w0) {
+    throw new Error("matchCameraOff: the match window must be two dates, from <= to");
+  }
+  return [w0, w1];
+}
+
+/** The union of spans, each clipped to [w0, w1]; empty pieces dropped. */
+function clippedUnion(spans: readonly Span[], w0: number, w1: number): Span[] {
+  const clipped = spans
+    .map(([a, b]): Span => [Math.max(a, w0), Math.min(b, w1)])
+    .filter(([a, b]) => b > a)
+    .sort((a, b) => a[0] - b[0]);
+  const union: Span[] = [];
+  for (const s of clipped) {
+    const last = union[union.length - 1];
+    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
+    else union.push([s[0], s[1]]);
+  }
+  return union;
+}
+
+export type StampedInMatch = {
+  /** Stamps that touch the match window (a zero-length one inside counts). */
+  stamps: number;
+  /** Their union inside the window, in seconds. */
+  seconds: number;
+  intervals: { from: string; to: string }[];
+  /** Past either threshold: the organiser is told (never camera_lost). */
+  flag: boolean;
+};
+
+/** Our safeguard's stamps over ONE match window, and whether they are many
+ *  or long enough that the organiser must be told (ruling 1, fix round 5). */
+export function stampedInMatch(
+  window: { from: Date; to: Date },
+  guardFaults: readonly { from: Date; to: Date }[],
+): StampedInMatch {
+  const [w0, w1] = windowSpan(window);
+  const inside = guardFaults.map(faultSpan).filter(([a, b]) => a <= w1 && b >= w0);
+  const union = clippedUnion(inside, w0, w1);
+  const seconds = union.reduce((n, [a, b]) => n + (b - a), 0) / 1000;
+  return {
+    stamps: inside.length,
+    seconds,
+    intervals: union.map(([a, b]) => ({ from: new Date(a).toISOString(), to: new Date(b).toISOString() })),
+    flag: seconds > GUARD_FAULT_FLAG_SECONDS || inside.length > GUARD_FAULT_FLAG_STAMPS,
+  };
+}
+
 export function matchCameraOff(
   window: { from: Date; to: Date },
   reports: readonly CompleteCoverage[],
   /** Intervals our D7 safeguard held the camera out of the meeting. */
   guardFaults: readonly { from: Date; to: Date }[] = [],
 ): CameraOffInMatch {
-  const w0 = window.from.getTime();
-  const w1 = window.to.getTime();
-  if (!Number.isFinite(w0) || !Number.isFinite(w1) || w1 < w0) {
-    throw new Error("matchCameraOff: the match window must be two dates, from <= to");
-  }
+  const [w0, w1] = windowSpan(window);
 
-  const on: Span[] = [];
-  for (const g of guardFaults) {
-    const a = g.from.getTime();
-    const b = g.to.getTime();
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) {
-      throw new Error("matchCameraOff: a guard fault must be two dates, from <= to");
-    }
-    on.push([a, b]);
-  }
+  const on: Span[] = guardFaults.map(faultSpan);
   const confirmedOff: Span[] = [];
   for (const r of reports) {
     let cursor = Date.parse(r.joinedAt);
@@ -78,16 +138,7 @@ export function matchCameraOff(
   }
 
   // The union of every connection's on-spans, clipped to the window.
-  const clipped = on
-    .map(([a, b]): Span => [Math.max(a, w0), Math.min(b, w1)])
-    .filter(([a, b]) => b > a)
-    .sort((a, b) => a[0] - b[0]);
-  const union: Span[] = [];
-  for (const s of clipped) {
-    const last = union[union.length - 1];
-    if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
-    else union.push([s[0], s[1]]);
-  }
+  const union = clippedUnion(on, w0, w1);
 
   // The window minus the union.
   const off: Span[] = [];

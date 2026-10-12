@@ -280,12 +280,16 @@ create index fixture_video_participants_person_idx
 -- play are LOGGED, never automatic sanctions — the organiser decides. The
 -- board never freezes, so a flag is a record with two timestamps and an actor,
 -- not a state the engine reads.
+-- `camera_connection_problems` (T14 fix round 5) is NEUTRAL: OUR safeguard
+-- took the player's camera out of the meeting and re-joined it often or long
+-- enough in one match that the organiser is told — never an accusation, and
+-- never a camera_lost for the stamped time (job 5, sweep.ts).
 -- =============================================================================
 create table fixture_play_flags (
   id          uuid primary key default gen_random_uuid(),
   fixture_id  uuid not null references fixtures(id) on delete cascade,
   org_id      uuid not null references organizations(id) on delete cascade,
-  kind        text not null check (kind in ('camera_lost', 'out_of_band_play')),
+  kind        text not null check (kind in ('camera_lost', 'out_of_band_play', 'camera_connection_problems')),
   person_id   uuid null references persons(id) on delete set null,
   opened_at   timestamptz not null default now(),
   closed_at   timestamptz null,

@@ -47,6 +47,7 @@ import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
+import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS } from "@/server/external-play/video/match-camera-off";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS, isBoardApiPlayable, type TimeControl } from "@/server/external-play/time-controls";
 import { getFixtureState } from "../fixtures";
@@ -1921,7 +1922,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
       skipped: true, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, scanned: 0, failures: [],
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, scanned: 0, failures: [],
     });
     release();
     const done = await first;
@@ -2951,18 +2952,122 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       expect(f!.note).toContain(`${iso(leave + 20_000)} to ${iso(back)}`);
     });
 
-    it("a fault still OPEN (the re-join never landed) excuses to the match's end; the OTHER player's stamp excuses nobody else", async () => {
+    it("a fault still OPEN (the re-join never landed) excuses to the match's end — and, that long, is TOLD; the OTHER player's stamp excuses nobody else", async () => {
       // home's camera never came back: the stamp is open.
       const m = await playedMatch();
       const leave = m.startedAt + 300_000;
+      expect(m.overAt - leave, "premise: the open stamp runs past the told threshold").toBeGreaterThan(GUARD_FAULT_FLAG_SECONDS * 1000);
       const x = session(m, m.startedAt - 120_000, m.endedAt);
       connect(m, x, "home", { joined: m.startedAt - 90_000, left: leave });
       connect(m, x, "away", { joined: m.startedAt - 90_000, left: leave });
       await openGuardFault(sql, { ...seat(m, "home"), at: new Date(leave) });
       const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
-      expect(r.cameraFlags, "away left too, with no stamp of their own").toBe(1);
+      expect([r.cameraFlags, r.connectionFlags], "away left too, with no stamp of their own; home's stamp is told").toEqual([1, 1]);
       const flags = await flagsOf(m.b.fixtureId);
-      expect(flags.map((f) => f.person_id)).toEqual([m.b.away.personId]);
+      expect(flags.map((f) => [f.kind, f.person_id]).sort()).toEqual(
+        [["camera_connection_problems", m.b.home.personId], ["camera_lost", m.b.away.personId]].sort(),
+      );
+    });
+
+    // T14 fix round 5, ruling 1: a stamp excuses, it never HIDES. Every case
+    // is built from the thresholds' own constants.
+    describe("a stamp never hides: past a threshold the organiser is told, neutrally (fix round 5)", () => {
+      /** home leaves and re-joins at each `[offsetMs, lenMs]` (from the first
+       *  move); away on throughout. `stamped` puts OUR stamp on each gap. */
+      async function gapsMatch(gaps: readonly [number, number][], stamped: boolean) {
+        const m = await playedMatch();
+        const x = session(m, m.startedAt - 120_000, m.endedAt);
+        let joined = m.startedAt - 90_000;
+        for (const [off, len] of gaps) {
+          connect(m, x, "home", { joined, left: m.startedAt + off });
+          joined = m.startedAt + off + len;
+        }
+        connect(m, x, "home", { joined, left: m.endedAt });
+        connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+        if (stamped) {
+          for (const [off, len] of gaps) {
+            expect(await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off) }), "premise: opened").toBe(true);
+            expect(await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off + len) }), "premise: closed").toBe(true);
+          }
+        }
+        const last = gaps.at(-1);
+        if (last) expect(m.startedAt + last[0] + last[1], "premise: every gap inside the match").toBeLessThan(m.overAt);
+        return m;
+      }
+      const kinds = async (m: Match) => (await flagsOf(m.b.fixtureId)).map((f) => [f.kind, f.person_id]);
+
+      it("AT both thresholds (the limit of stamps, the limit of seconds between them): excused and NOT told — the pair: unstamped, the same gaps are camera_lost", async () => {
+        const each = (GUARD_FAULT_FLAG_SECONDS / GUARD_FAULT_FLAG_STAMPS) * 1000;
+        expect(each, "premise: each gap alone is past the 15 s camera-off threshold").toBeGreaterThan(15_000);
+        const gaps = Array.from({ length: GUARD_FAULT_FLAG_STAMPS }, (_, i): [number, number] => [60_000 + i * 90_000, each]);
+        const ours = await gapsMatch(gaps, true);
+        const r = await pass(ours, after(ours, CAMERA_EVIDENCE_AFTER_MS));
+        expect(cameraFailures(r)).toEqual([]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 0]);
+        expect(await kinds(ours)).toEqual([]);
+
+        const plain = await gapsMatch(gaps, false);
+        const r0 = await pass(plain, after(plain, CAMERA_EVIDENCE_AFTER_MS));
+        expect([r0.cameraFlags, r0.connectionFlags], "no stamp: the player's").toEqual([1, 0]);
+        expect(await kinds(plain)).toEqual([["camera_lost", plain.b.home.personId]]);
+      });
+
+      it("past the SECONDS (one stamped gap, one second over): the neutral flag with its total, and never camera_lost", async () => {
+        const len = (GUARD_FAULT_FLAG_SECONDS + 1) * 1000;
+        const m = await gapsMatch([[120_000, len]], true);
+        const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+        expect(cameraFailures(r)).toEqual([]);
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 1]);
+        const flags = await flagsOf(m.b.fixtureId);
+        expect(flags.map((f) => [f.kind, f.person_id, f.closed_at])).toEqual([["camera_connection_problems", m.b.home.personId, null]]);
+        expect(flags[0]!.note, "the stamped total leads the note (T16 renders it as {duration})").toMatch(
+          new RegExp(`^${GUARD_FAULT_FLAG_SECONDS + 1} s `),
+        );
+        expect(flags[0]!.note).toContain(`1 stamp`);
+        expect(flags[0]!.note).toContain(`${iso(m.startedAt + 120_000)} to ${iso(m.startedAt + 120_000 + len)}`);
+        expect(flags[0]!.note, "neutral: never the camera-off wording").not.toMatch(/camera off/);
+      });
+
+      it("past the COUNT (one stamp more than the limit, each short): the neutral flag, never camera_lost", async () => {
+        const gaps = Array.from({ length: GUARD_FAULT_FLAG_STAMPS + 1 }, (_, i): [number, number] => [60_000 + i * 60_000, 16_000]);
+        expect(16 * gaps.length, "premise: under the seconds limit — only the count tells").toBeLessThanOrEqual(GUARD_FAULT_FLAG_SECONDS + 10);
+        const m = await gapsMatch(gaps, true);
+        const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+        expect([r.cameraFlags, r.connectionFlags]).toEqual([0, 1]);
+        expect(await kinds(m)).toEqual([["camera_connection_problems", m.b.home.personId]]);
+        expect((await flagsOf(m.b.fixtureId))[0]!.note).toContain(`${GUARD_FAULT_FLAG_STAMPS + 1} stamps`);
+      });
+
+      it("told AND accused are independent: many stamps plus an UNSTAMPED gap is both flags; a re-run writes neither again", async () => {
+        const gaps = Array.from({ length: GUARD_FAULT_FLAG_STAMPS + 1 }, (_, i): [number, number] => [60_000 + i * 60_000, 16_000]);
+        const m = await gapsMatch([...gaps, [400_000, 30_000]], false);
+        for (const [off, len] of gaps) {
+          await openGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off) });
+          await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(m.startedAt + off + len) });
+        }
+        const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+        expect([r.cameraFlags, r.connectionFlags]).toEqual([1, 1]);
+        const flags = await flagsOf(m.b.fixtureId);
+        const lost = flags.find((f) => f.kind === "camera_lost");
+        expect(lost?.note, "only the unstamped gap is the player's").toContain(`camera off 30 s`);
+        expect(flags.map((f) => f.kind).sort()).toEqual(["camera_connection_problems", "camera_lost"]);
+        const again = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS));
+        expect([again.cameraSettled, again.cameraFlags, again.connectionFlags]).toEqual([0, 0, 0]);
+        expect(await flagsOf(m.b.fixtureId)).toHaveLength(2);
+      });
+
+      it("stamps OUTSIDE the match are not counted: four after the game's end tell nobody", async () => {
+        const m = await playedMatch();
+        bothOnThroughout(m);
+        expect(m.endedAt - m.overAt, "premise: room outlives the game by enough for four stamps").toBeGreaterThan(40_000);
+        for (let i = 0; i <= GUARD_FAULT_FLAG_STAMPS; i += 1) {
+          const at0 = m.overAt + 5_000 + i * 8_000;
+          await openGuardFault(sql, { ...seat(m, "home"), at: new Date(at0) });
+          await closeGuardFault(sql, { ...seat(m, "home"), at: new Date(at0 + 2_000) });
+        }
+        const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+        expect([r.cameraSettled, r.cameraFlags, r.connectionFlags]).toEqual([1, 0, 0]);
+      });
     });
 
     it("a fault opened AFTER the game's end and never closed is outside the match: settled as before, nothing thrown", async () => {

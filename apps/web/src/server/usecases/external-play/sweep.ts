@@ -29,7 +29,7 @@ import type { CameraPolicy } from "@/lib/camera-policy";
 import { fixtureCameraPolicyAt } from "@/server/external-play/camera-policy";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { assertTimeControl, estimatedSeconds, type TimeControl } from "@/server/external-play/time-controls";
-import { matchCameraOff, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
+import { matchCameraOff, stampedInMatch, type CompleteCoverage } from "@/server/external-play/video/match-camera-off";
 import { guardFaultSpans } from "@/server/external-play/video/guard-faults";
 import {
   endMeeting,
@@ -65,6 +65,10 @@ export type SweepReport = {
   cameraSettled: number;
   /** camera_lost flags written this pass (job 5). */
   cameraFlags: number;
+  /** camera_connection_problems flags written this pass (job 5): OUR
+   *  safeguard's stamps past a threshold in one match — told, never an
+   *  accusation (T14 fix round 5). */
+  connectionFlags: number;
   /** Candidates examined across every job — a pass that looked at nothing
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
@@ -727,7 +731,7 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
      order by m.ended_at, m.fixture_id`;
 }
 
-type CameraFlag = { personId: string; note: string };
+type CameraFlag = { kind: "camera_lost" | "camera_connection_problems"; personId: string; note: string };
 
 /** The GAME's end (ruling I1), in the order of the evidence: the bridge's
  *  close, the first read that saw the game over, the latest the clock let it
@@ -807,6 +811,21 @@ async function readCameraEvidence(
       from: f.from,
       to: f.to ?? new Date(Math.max(f.from.getTime(), window.to.getTime())),
     }));
+    // …but a stamp is the player's browser's own claim, so it excuses and
+    // never HIDES (fix round 5, ruling 1): many or long stamps in one match
+    // are TOLD to the organiser — a neutral flag, never camera_lost. Its note
+    // leads with the stamped total in whole seconds (T16's {duration}).
+    const stamped = stampedInMatch(window, faults);
+    if (stamped.flag) {
+      flags.push({
+        kind: "camera_connection_problems",
+        personId,
+        note:
+          `${Math.round(stamped.seconds)} s stamped as our side's camera connection problems, ` +
+          `${stamped.stamps} stamp${stamped.stamps === 1 ? "" : "s"} in the match: ` +
+          `${stamped.intervals.map((iv) => `${iv.from} to ${iv.to}`).join("; ") || "no time inside it"}; camera required`,
+      });
+    }
     const off = matchCameraOff(window, reports, faults);
     if (off.offIntervals.length === 0) continue;
     const intervals = off.offIntervals
@@ -814,6 +833,7 @@ async function readCameraEvidence(
       .join("; ");
     const connections = `${off.connections} camera connection${off.connections === 1 ? "" : "s"}`;
     flags.push({
+      kind: "camera_lost",
       personId,
       note:
         `camera off ${Math.round(off.offSeconds)} s of ${Math.round(off.windowSeconds)} s in the match: ${intervals}; ` +
@@ -833,13 +853,14 @@ async function settleCamera(pass: Pass, c: CameraCandidate, flags: readonly Came
     for (const f of flags) {
       await tx`
         insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note)
-        values (${c.fixtureId}, ${c.orgId}, 'camera_lost', ${f.personId}, ${f.note})`;
+        values (${c.fixtureId}, ${c.orgId}, ${f.kind}, ${f.personId}, ${f.note})`;
     }
-    return flags.length;
+    return flags;
   });
   if (written === null) return;
   pass.report.cameraSettled++;
-  pass.report.cameraFlags += written;
+  pass.report.cameraFlags += written.filter((f) => f.kind === "camera_lost").length;
+  pass.report.connectionFlags += written.filter((f) => f.kind === "camera_connection_problems").length;
 }
 
 async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDeps): Promise<void> {
@@ -931,6 +952,7 @@ function emptyReport(skipped: boolean): SweepReport {
     heldForOrganiser: 0,
     cameraSettled: 0,
     cameraFlags: 0,
+    connectionFlags: 0,
     scanned: 0,
     failures: [],
   };
