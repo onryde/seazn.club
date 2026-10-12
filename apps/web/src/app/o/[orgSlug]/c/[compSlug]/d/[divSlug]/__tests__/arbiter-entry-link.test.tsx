@@ -10,7 +10,11 @@ const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const division = vi.hoisted(() => ({ sport_key: "boardgame", config: { variant: "classical", onlinePlay: "lichess" } as Record<string, unknown> }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
-const queue = vi.hoisted(() => ({ listNeedsOrganiserExternalPlay: vi.fn() }));
+const queue = vi.hoisted(() => ({
+  listNeedsOrganiserExternalPlay: vi.fn(),
+  listFlaggedExternalPlay: vi.fn(),
+  listRunSheetOnlinePlay: vi.fn(),
+}));
 
 vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => ({
@@ -85,10 +89,10 @@ vi.mock("@/server/external-play/camera-policy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/external-play/camera-policy")>();
   return { ...actual, competitionCameraPolicy: vi.fn(async () => "off") };
 });
-// The queue's rows are a database read; the flag helper beside it in the same module stays REAL.
+// The queue's and the run sheet's reads are database reads; the flag helper beside them stays REAL.
 vi.mock("@/server/usecases/external-play", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/usecases/external-play")>();
-  return { ...actual, listNeedsOrganiserExternalPlay: queue.listNeedsOrganiserExternalPlay };
+  return { ...actual, ...queue };
 });
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/posthog-server")>();
@@ -144,6 +148,8 @@ beforeEach(() => {
   fx.rows = [FIXTURE];
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
+  queue.listFlaggedExternalPlay.mockReset().mockResolvedValue({ boards: [], ownBoards: 0 });
+  queue.listRunSheetOnlinePlay.mockReset().mockResolvedValue({});
   vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
 });
 

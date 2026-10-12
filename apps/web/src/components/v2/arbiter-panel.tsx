@@ -18,19 +18,10 @@
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
-import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import {
-  fullMoveOf,
-  timelineSegments,
-  type ArbiterBoard,
-  type ArbiterFlag,
-  type ArbiterRound,
-  type CameraOffReport,
-} from "@/lib/arbiter-view";
+import { type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
-import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
 import {
   arbiterDecision,
@@ -38,10 +29,23 @@ import {
   initialArbiterDecision,
   type ArbiterDecisionAction,
   type ArbiterDecisionState,
-  type ArbiterNotice,
   type SettleChoice,
 } from "./arbiter-decision";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
+import {
+  boardStateWord,
+  BUTTON_QUIET,
+  CameraReportCard,
+  CARD,
+  CHIP_NEUTRAL,
+  FlagCard,
+  MUTED,
+  noticeSentence,
+  settleChoices,
+  SOFT,
+  useFmt,
+  type Fmt,
+} from "./arbiter-flag-cards";
 
 // ── the view the screen paints ─────────────────────────────────────────────
 
@@ -165,69 +169,7 @@ export function nextOffSince(prev: number | null, tile: Pick<ArbiterTileView, "p
 // ── the screen ─────────────────────────────────────────────────────────────
 
 const INK = "text-[#2e1065]";
-const MUTED = "text-[#6b5b8a]";
-const SOFT = "text-[#4a3a6b]";
 const CLOCK_FACE = "[font-family:var(--font-barlow,var(--font-geist-sans))] font-semibold tabular-nums";
-const BUTTON_QUIET =
-  "min-h-11 rounded-[10px] border border-[#c9bdf0] bg-white px-3 text-[15px] font-semibold text-[#2e1065] disabled:cursor-not-allowed disabled:opacity-60";
-const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
-const CHIP_AMBER = `${CHIP} bg-[#fef3c7] text-[#713f12]`;
-const CHIP_NEUTRAL = `${CHIP} bg-[#f3effc] text-[#4a3a6b]`;
-const CARD = "flex flex-col gap-1.5 rounded-xl border bg-white p-3";
-
-type Fmt = {
-  t: ReturnType<typeof useT>;
-  plural: ReturnType<typeof usePlural>;
-  locale: string;
-  mounted: boolean;
-  /** "19:42", or null before mount. */
-  hm(iso: string): string | null;
-  /** "19:31:05", or null before mount. */
-  hms(iso: string): string | null;
-  duration(seconds: number): string;
-  list(items: string[]): string;
-};
-
-function useFmt(nowMs: number | null): Fmt {
-  const t = useT();
-  const plural = usePlural();
-  const locale = useLocale();
-  const mounted = nowMs !== null;
-  return useMemo<Fmt>(() => {
-    const hmsFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-    return {
-      t,
-      plural,
-      locale,
-      mounted,
-      hm: (iso) => (mounted ? formatTimeOfDay(iso, locale) : null),
-      hms: (iso) => (mounted ? hmsFmt.format(new Date(iso)) : null),
-      duration: (raw) => {
-        const s = Math.max(0, Math.round(raw));
-        if (s < 60) return t("arbiter.duration.sec", { sec: s });
-        const min = Math.floor(s / 60);
-        const sec = s % 60;
-        return sec === 0 ? t("arbiter.duration.min", { min }) : t("arbiter.duration.minSec", { min, sec });
-      },
-      list: (items) => new Intl.ListFormat(locale, { type: "conjunction" }).format(items),
-    };
-  }, [t, plural, locale, mounted]);
-}
-
-function boardStateWord(b: ArbiterBoard, f: Fmt): string {
-  switch (b.state.kind) {
-    case "live":
-      return f.t("arbiter.state.live");
-    case "checking_in":
-      return f.t("arbiter.state.checkingIn");
-    case "starting":
-      return f.t("arbiter.state.starting");
-    case "on_hold":
-      return f.t("arbiter.state.onHold");
-    case "result":
-      return b.state.score ?? f.t("arbiter.state.over");
-  }
-}
 
 function names(b: ArbiterBoard, f: Fmt): string {
   return `${b.white.name} ${f.t("arbiter.vs")} ${b.black.name}`;
@@ -287,7 +229,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
             </h2>
             {p.round.boards.map((b) => {
               const pressed = b.fixtureId === board.fixtureId;
-              const label = [f.t("arbiter.boardNo", { n: b.boardNo }), boardStateWord(b, f), flagCount(b, f)].filter(Boolean).join(" · ");
+              const label = [f.t("arbiter.boardNo", { n: b.boardNo }), boardStateWord(b.state, f), flagCount(b, f)].filter(Boolean).join(" · ");
               return (
                 <button
                   key={b.fixtureId}
@@ -583,103 +525,6 @@ function SeatVideo({ track, label }: { track: MediaStreamTrack | null; label: st
   return <video ref={ref} autoPlay muted playsInline aria-label={label} className="absolute inset-0 h-full w-full object-cover" />;
 }
 
-function FlagCard({ flag, f }: { flag: ArbiterFlag; f: Fmt }) {
-  const someone = (n: string | null) => n ?? f.t("arbiter.flag.aPlayer");
-  switch (flag.kind) {
-    case "out_of_band_play": {
-      const found = f.hm(flag.at);
-      let sentence: string;
-      if (flag.plies === null) sentence = f.t("arbiter.flag.outOfBand.unread");
-      else {
-        const count = flag.plies.to - flag.plies.from + 1;
-        const from = fullMoveOf(flag.plies.from);
-        const to = fullMoveOf(flag.plies.to);
-        sentence =
-          from === to
-            ? f.plural("arbiter.flag.outOfBand.single", count, { move: from })
-            : f.plural("arbiter.flag.outOfBand.range", count, { from, to });
-      }
-      return (
-        <article className={`${CARD} border-[#f5d27a]`}>
-          <span className={CHIP_AMBER}>{f.t("arbiter.flag.outOfBand.chip")}</span>
-          <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{sentence}</p>
-          {found && <span className={`text-xs ${MUTED}`}>{f.t("arbiter.flag.foundAt", { time: found })}</span>}
-        </article>
-      );
-    }
-    case "camera_lost":
-      return <CameraReportCard flag={flag} f={f} />;
-    case "camera_connection_problems":
-      return (
-        <article className={`${CARD} border-[#e7e3f3]`}>
-          <span className={CHIP_NEUTRAL}>
-            {flag.seconds === null
-              ? f.t("arbiter.flag.connection.chipPlain")
-              : f.t("externalPlay.flag.cameraConnectionProblems", { duration: f.duration(flag.seconds) })}
-          </span>
-          <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">
-            {flag.stamps === null
-              ? f.t("arbiter.flag.connection.unread", { name: someone(flag.personName) })
-              : f.plural("arbiter.flag.connection.body", flag.stamps, { name: someone(flag.personName) })}
-          </p>
-        </article>
-      );
-  }
-}
-
-function CameraReportCard({ flag, f }: { flag: Extract<ArbiterFlag, { kind: "camera_lost" }>; f: Fmt }) {
-  const name = flag.personName ?? f.t("arbiter.flag.aPlayer");
-  const r: CameraOffReport | null = flag.report;
-  if (r === null) {
-    return (
-      <article className={`${CARD} border-[#f5d27a]`}>
-        <span className={CHIP_AMBER}>{f.t("arbiter.flag.cameraOff.chipPlain")}</span>
-        <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.cameraOff.unread", { name })}</p>
-      </article>
-    );
-  }
-  const spans = r.intervals.map((iv) => {
-    const from = f.hms(iv.from);
-    const to = f.hms(iv.to);
-    return from && to ? f.t("arbiter.flag.cameraOff.span", { from, to }) : null;
-  });
-  const allTimed = spans.every((s): s is string => s !== null);
-  const agree = r.intervals.every((iv) => iv.confirmedByEvents);
-  const segments = timelineSegments({ windowFrom: flag.windowFrom, windowSeconds: r.windowSeconds, intervals: r.intervals });
-  const start = flag.windowFrom ? f.hm(flag.windowFrom) : null;
-  const end = flag.windowFrom ? f.hm(new Date(Date.parse(flag.windowFrom) + r.windowSeconds * 1000).toISOString()) : null;
-  const sessions = f.plural("arbiter.flag.cameraOff.sessions", r.sessions);
-  return (
-    <article className={`${CARD} gap-2 border-[#f5d27a] p-3 lg:p-3.5`}>
-      <span className={CHIP_AMBER}>{f.t("arbiter.flag.cameraOff.chip", { off: f.duration(r.offSeconds), window: f.duration(r.windowSeconds) })}</span>
-      <p className="m-0 text-[13px] leading-[1.5] lg:text-sm">
-        {allTimed && <>{f.t("arbiter.flag.cameraOff.spans", { name, spans: f.list(spans as string[]) })} </>}
-        {agree && <>{f.t("arbiter.flag.cameraOff.agree")} </>}
-        {f.plural("arbiter.flag.cameraOff.connections", r.connections, { sessions })}
-      </p>
-      {segments.length > 0 && (
-        <div aria-hidden="true" className="relative h-2.5 overflow-hidden rounded-[5px] bg-[#dcfce7] lg:h-3 lg:rounded-md">
-          {segments.map((s, i) => (
-            <span key={i} className="absolute top-0 bottom-0 bg-[#b45309]" style={{ left: `${s.leftPct}%`, width: `${s.widthPct}%` }} />
-          ))}
-        </div>
-      )}
-      {start && end && (
-        <div className={`flex justify-between text-[11px] lg:text-xs ${MUTED}`}>
-          <span>
-            <span className="lg:hidden">{f.t("arbiter.flag.timeline.start", { time: start })}</span>
-            <span className="max-lg:hidden">{f.t("arbiter.flag.timeline.firstMove", { time: start })}</span>
-          </span>
-          <span>
-            <span className="lg:hidden">{f.t("arbiter.flag.timeline.end", { time: end })}</span>
-            <span className="max-lg:hidden">{f.t("arbiter.flag.timeline.gameOver", { time: end })}</span>
-          </span>
-        </div>
-      )}
-    </article>
-  );
-}
-
 /** The canvas's "Board 2 · camera report": another board's camera report,
  *  so the arbiter sees it without leaving the board on screen. */
 function OtherReports({ round, board, f }: { round: ArbiterRound; board: ArbiterBoard; f: Fmt }) {
@@ -700,60 +545,6 @@ function OtherReports({ round, board, f }: { round: ArbiterRound; board: Arbiter
       ))}
     </div>
   );
-}
-
-function noticeSentence(n: ArbiterNotice, f: Fmt): string {
-  switch (n.kind) {
-    case "resynced":
-      return n.adopted === 0 ? f.t("arbiter.notice.resyncedNone") : f.plural("arbiter.notice.resynced", n.adopted);
-    case "resync_nothing":
-      return f.t("arbiter.notice.resyncNothing");
-    case "resync_failed":
-      return f.t("arbiter.notice.resyncFailed");
-    case "went_on":
-      return n.stillOpen === 0 ? f.t("arbiter.notice.wentOn") : f.plural("arbiter.notice.wentOnNew", n.stillOpen);
-    case "go_on_failed":
-      return n.code === "ARBITER_PLAYS_THIS_BOARD" ? f.t("arbiter.notice.goOnOwnBoard") : f.t("arbiter.notice.failed");
-    case "settled":
-      return n.status === "tiebreak_owed" ? f.t("arbiter.notice.settledTiebreak") : f.t("arbiter.notice.settled");
-    case "settle_failed":
-      return n.code === "ALREADY_RESOLVED"
-        ? f.t("arbiter.notice.alreadyResolved")
-        : n.code === "TIEBREAK_NEEDS_WINNER"
-          ? f.t("arbiter.notice.needsWinner")
-          : n.code === "ARBITER_PLAYS_THIS_BOARD"
-            ? f.t("arbiter.notice.settleOwnBoard")
-            : f.t("arbiter.notice.failed");
-    case "overridden":
-      return f.t("arbiter.notice.overridden");
-    case "override_failed":
-      return n.code === "FIXTURE_NOT_PLAYABLE"
-        ? f.t("arbiter.notice.notPlayable")
-        : n.code === "VIDEO_NOT_REQUIRED"
-          ? f.t("arbiter.notice.notRequired")
-          : n.code === "ARBITER_PLAYS_THIS_BOARD"
-            ? f.t("arbiter.notice.ownBoard")
-            : f.t("arbiter.notice.failed");
-  }
-}
-
-/** The settle buttons, by colour as the panel names the players; the server
- *  settles by side. A drawn knockout game takes a winner only (spec §3.6). */
-function settleChoices(board: ArbiterBoard, f: Fmt): { choice: SettleChoice; label: string }[] {
-  const white: SettleChoice = board.whiteSide === "home" ? "home_wins" : "away_wins";
-  const black: SettleChoice = board.whiteSide === "home" ? "away_wins" : "home_wins";
-  if (board.tiebreakOwed) {
-    return [
-      { choice: white, label: f.t("externalPlay.settle.goesThrough", { name: board.white.name }) },
-      { choice: black, label: f.t("externalPlay.settle.goesThrough", { name: board.black.name }) },
-    ];
-  }
-  return [
-    { choice: white, label: f.t("externalPlay.settle.wins", { name: board.white.name }) },
-    { choice: black, label: f.t("externalPlay.settle.wins", { name: board.black.name }) },
-    { choice: "draw", label: f.t("externalPlay.resolve.draw") },
-    { choice: "no_result", label: f.t("externalPlay.resolve.noResult") },
-  ];
 }
 
 function Decision({
@@ -837,7 +628,7 @@ function Decision({
                 {board.tiebreakOwed ? f.t("arbiter.decide.tiebreakBody") : f.t("arbiter.decide.settleBody")}
               </p>
               <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
-                {settleChoices(board, f).map((c) => (
+                {settleChoices({ whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed }, f).map((c) => (
                   <button
                     key={c.choice}
                     type="button"

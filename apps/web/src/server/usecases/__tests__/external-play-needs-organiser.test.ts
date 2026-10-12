@@ -48,9 +48,12 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     expect(await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).toEqual([]);
   });
 
-  it("one needs_organiser row is listed, with its reason and its last error", async () => {
+  it("one needs_organiser row is listed, with its reason and its last error — and where it sits (T16)", async () => {
     const s = await seeded();
     await bridge(s.fixtureId, s.orgId, "needs_organiser", "not_started", "lichess answered 503");
+    // The board's place, read from the database itself.
+    const [at] = await sql<{ round_no: number; seq_in_round: number; name: string }[]>`
+      select f.round_no, f.seq_in_round, s.name from fixtures f join stages s on s.id = f.stage_id where f.id = ${s.fixtureId}`;
     expect(await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).toEqual([
       {
         fixtureId: s.fixtureId,
@@ -60,8 +63,42 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
         scheduledAt: T.toISOString(),
         reason: "not_started",
         lastError: "lichess answered 503",
+        // No pairing card and no game: home plays White (FIDE pairing default, guard.ts).
+        whiteSide: "home",
+        revokedSeat: null,
+        roundNo: at!.round_no,
+        boardNo: at!.seq_in_round,
+        stageName: at!.name,
+        canResync: false,
+        seated: false,
       },
     ]);
+  });
+
+  it("T16: White is the colour ON FILE (the bridge's white_side), a game on file can be resynced, and the revoked seat is named", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "token_revoked", null);
+    await sql`update fixture_external_play set white_side = 'away', challenge_id = ${`gm-${s.fixtureId.slice(0, 12)}`}, revoked_seat = 'black' where fixture_id = ${s.fixtureId}`;
+    const [row] = await listNeedsOrganiserExternalPlay(s.auth, s.divisionId);
+    expect([row!.whiteSide, row!.canResync, row!.revokedSeat]).toEqual(["away", true, "black"]);
+    // Every seat V436 admits reads as itself — counted.
+    let checked = 0;
+    for (const seat of ["white", "black", "both"] as const) {
+      await sql`update fixture_external_play set revoked_seat = ${seat} where fixture_id = ${s.fixtureId}`;
+      expect((await listNeedsOrganiserExternalPlay(s.auth, s.divisionId))[0]!.revokedSeat, seat).toBe(seat);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("T16 (guard C): the organiser who PLAYS on a held board sees it marked seated; another organiser does not", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "aborted", null);
+    // The home player is made an admin of the club: they play on this board.
+    await sql`insert into org_members (org_id, user_id, role) values (${s.orgId}, ${s.home.userId}, 'admin')`;
+    const player = { orgId: s.orgId, via: "session", userId: s.home.userId, role: "admin", keyId: null } as AuthCtx;
+    expect((await listNeedsOrganiserExternalPlay(player, s.divisionId)).map((r) => r.seated)).toEqual([true]);
+    expect((await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).map((r) => r.seated), "the positive pair").toEqual([false]);
   });
 
   it("the SEQUENCE through every other status: listed only while needs_organiser", async () => {
@@ -233,8 +270,8 @@ describe.skipIf(!HAS_DB)("a fair-play verdict reaches the organiser under its OW
 
 describe("the fair-play reason has organiser copy in all four locales", () => {
   // T16 maps reasons to labels; the copy itself ships with the reason, so the
-  // queue can never meet a fair_play row with only the generic label to show.
-  it("each locale carries its own sentence, distinct from the generic label — counted", () => {
+  // queue can never meet a fair_play row with nothing of its own to show.
+  it("each locale carries its own sentence, distinct from the provider-error sentence — counted", () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../dictionaries");
     const LOCALES = ["en", "es", "fr", "nl"] as const;
     const read = (l: string) => JSON.parse(readFileSync(join(dir, l, "ui.json"), "utf8")) as Record<string, string>;
@@ -244,7 +281,10 @@ describe("the fair-play reason has organiser copy in all four locales", () => {
       const d = read(l);
       const text = d["externalPlay.reason.fairPlay"];
       expect(text, `${l}: present`).toBeTruthy();
-      expect(text, `${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
+      // T12 fix I2: a fair-play verdict is never folded into provider_error — nor may its copy read as one. (The
+      // generic label is retired: external-play-reason-map.test.ts.)
+      expect(d["externalPlay.reason.providerError"], `${l}: premise — present`).toBeTruthy();
+      expect(text, `${l}: not the provider-error sentence`).not.toBe(d["externalPlay.reason.providerError"]);
       if (l !== "en") expect(text, `${l}: translated, not English`).not.toBe(en["externalPlay.reason.fairPlay"]);
       checked++;
     }

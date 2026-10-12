@@ -93,7 +93,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
-import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -348,6 +348,9 @@ interface Props {
   /** W2a fix round 1 (M10) — the recorded abandons awaiting their settle (ids; the division page's
    *  `listFixturesAwaitingSettle`), threaded to the run sheet so each row reads held. Optional: none by default. */
   awaitingSettle?: readonly string[];
+  /** T16 — each online chess board's camera, flags and hold (`listRunSheetOnlinePlay`, read by the division page for
+   *  an organiser), threaded to the run sheet's chips. Optional: none by default. */
+  onlinePlay?: Record<string, RunSheetOnlinePlay>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -457,7 +460,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1453,6 +1456,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         }}
         streamStates={streamStates}
         awaitingSettle={awaitingSettle}
+        onlinePlay={onlinePlay}
+        arbiterHrefFor={(fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
         /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
            not "TBD" — the same `feedLabels()` builder and the same
            `slot.winner_match`/`slot.loser_match` vocabulary the schedule board

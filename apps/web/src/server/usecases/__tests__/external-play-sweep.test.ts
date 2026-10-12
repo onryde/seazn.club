@@ -57,8 +57,11 @@ import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { patchDivision } from "../divisions";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { joinAsArbiter, loadArbiterRound, type ArbiterVideo } from "../external-play/arbiter";
+import { joinAsArbiter, listFlaggedExternalPlay, loadArbiterRound, type ArbiterVideo } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
+import { listNeedsOrganiserExternalPlay, type NeedsOrganiserExternalPlayRow } from "../external-play/queue";
+import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
+import type { NeedsReason } from "@/server/external-play/types";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
@@ -381,6 +384,22 @@ type Board = SeedOnlineChessFixtureResult & {
   at: (min: number) => Date;
 };
 
+/** T16 — the hold reaches what the organiser is SHOWN: the queue lists it
+ *  under the producer's reason, and the run sheet's row carries the held
+ *  chip. Read through the real readers the division page calls. */
+async function expectQueued(
+  b: SeedOnlineChessFixtureResult,
+  reason: NeedsReason,
+  extra: Partial<Pick<NeedsOrganiserExternalPlayRow, "revokedSeat">> = {},
+): Promise<void> {
+  const auth = await mintOrgOwnerAuth(b.orgId);
+  const queued = (await listNeedsOrganiserExternalPlay(auth, b.divisionId)).filter((q) => q.fixtureId === b.fixtureId);
+  expect(queued.map((q) => q.reason), `the queue lists the ${reason} hold`).toEqual([reason]);
+  expect(queued[0], "the queue's row").toMatchObject({ revokedSeat: null, ...extra });
+  const sheet = await listRunSheetOnlinePlay(auth, b.divisionId);
+  expect(sheet[b.fixtureId]?.held, "the run sheet's held chip").toBe(reason);
+}
+
 /** A round-1 league board whose round the organiser opened a minute ago
  *  through T19's REAL action. The TIMETABLE says three hours from now, so a
  *  sweep that anchored on `scheduled_at` would see a different window. */
@@ -592,6 +611,7 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     expect(report.heldForOrganiser).toBe(1);
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+    await expectQueued(b, "not_started");
     expect((await fixtureRow(b.fixtureId)).status, "the board is the organiser's, not settled").toBe("scheduled");
     // The second pass: the organiser's already — nothing re-held, nothing forfeited.
     const again = await sweep(b, { now: b.at(50) });
@@ -697,6 +717,7 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     await sweep(b, { now: b.at(45) });
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
+    await expectQueued(b, "create_outcome_unknown");
   });
 
   it("a create IN FLIGHT (a live mint claim) is left to T9; a STALE claim is not a game", async () => {
@@ -798,6 +819,7 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
       expect(fx.status, `${shape.label} stays open`).toBe("scheduled");
       expect(fx.outcome).toBeNull();
       expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+      await expectQueued(b, "double_walkover_blocked");
       checked++;
     }
     expect(checked, "no-next-match shapes checked").toBe(W2B ? SHAPES.length : 1);
@@ -920,6 +942,7 @@ describe.runIf(HAS_DB)("M3 — a refused no-show reaches the organiser; a writte
     expect(p3!.failures, "the third is handled").toEqual([]);
     expect([p3!.heldForOrganiser, p3!.noShows]).toEqual([1, 0]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "no_show_black" });
+    await expectQueued(b, "no_show_black");
     expect((await fixtureRow(b.fixtureId)).status, "the board stays open for the organiser").toBe("scheduled");
     const attempted = forfeitsAttempted(b.fixtureId).length;
     expect(attempted).toBe(3);
@@ -933,6 +956,7 @@ describe.runIf(HAS_DB)("M3 — a refused no-show reaches the organiser; a writte
     refuseWith(both, () => "INVALID_EVENT");
     await passes(both, 3);
     expect(await bridgeOf(both.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "no_show_both" });
+    await expectQueued(both, "no_show_both");
     const b = await openedBoard({ checkedIn: ["home"] });
     const auth = await mintOrgOwnerAuth(b.orgId);
     const st = await getFixtureState(auth, b.fixtureId);
@@ -940,6 +964,7 @@ describe.runIf(HAS_DB)("M3 — a refused no-show reaches the organiser; a writte
     refuseWith(b, () => "INVALID_EVENT");
     await passes(b, 3);
     expect(await bridgeOf(b.fixtureId), "away is White and away stayed away").toEqual({ status: "needs_organiser", needs_reason: "no_show_white" });
+    await expectQueued(b, "no_show_white");
   });
 
   it("a DIFFERENT refusal restarts the count: X, Y, X, X is not held; the fifth X is", async () => {
@@ -1604,6 +1629,7 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
     expect(r.noShows).toBe(0);
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
     expect(await bridge(b)).toMatchObject({ status: "needs_organiser", needs_reason: "aborted" });
+    await expectQueued(b, "aborted");
     expect(r.heldForOrganiser, "the hold this pass placed").toBe(1);
   });
 
@@ -1709,6 +1735,7 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
     expect(skipped, "the back-off skipped at least one tick").toBeGreaterThan(0);
     const row = await bridge(b);
     expect(row).toMatchObject({ status: "needs_organiser", needs_reason: "provider_error" });
+    await expectQueued(b, "provider_error");
     expect(row.last_error).toContain(gameId);
     expect(forfeitsAttempted(b.fixtureId), "never a no-show").toEqual([]);
   });
@@ -2024,6 +2051,8 @@ describe.runIf(HAS_DB)("M6 — the report counts the holds a sweep read placed",
         submitMove: async () => ({ ok: false, code: "unauthorized", raw: "401 Unauthorized" }) },
     )).toMatchObject({ ok: false });
     expect(await bridgeOf(b.fixtureId), "premise: held mid-game").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
+    // T16: the queue names the seat whose token was refused — Black made the move.
+    await expectQueued(b, "token_revoked", { revokedSeat: "black" });
     // Still running at Lichess: the held row is read, nothing changes.
     serveStream(gameFull(b, gameId, MID, { moves: ["e2e4"], status: "started" }));
     const quiet = await sweep(b, { now: b.at(8) });
@@ -2033,6 +2062,7 @@ describe.runIf(HAS_DB)("M6 — the report counts the holds a sweep read placed",
     const ended = await sweep(b, { now: b.at(8 + SWEEP_CADENCE_MS / 60_000) });
     expect(ended.reconciled).toBe(1);
     expect(await bridgeOf(b.fixtureId), "premise: replaced").toEqual({ status: "needs_organiser", needs_reason: "tiebreak_owed" });
+    await expectQueued(b, "tiebreak_owed");
     expect(ended.heldForOrganiser).toBe(1);
   });
 });
@@ -2919,8 +2949,20 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(r.cameraFlags, "NEW evidence after a close is raised").toBe(1);
     const shown = (await loadArbiterRound(owner, m.b.divisionId))!.boards.find((x) => x.fixtureId === m.b.fixtureId)!.flags;
     expect(shown.map((f) => f.kind), "the panel shows the new camera flag only").toEqual(["camera_lost"]);
+    // T16: the same judgment on the fixtures tab — the queue's Flagged list (the game is over: a finished board is the
+    // usual case for a camera flag) and the run sheet's camera chip.
+    const flagged = async () => (await listFlaggedExternalPlay(owner, m.b.divisionId)).boards.filter((b) => b.fixtureId === m.b.fixtureId);
+    const cameraChip = async () => (await listRunSheetOnlinePlay(owner, m.b.divisionId))[m.b.fixtureId]?.cameraFlagCount;
+    const listed = await flagged();
+    expect(listed.map((b) => [b.state.kind, b.flags.map((f) => f.id)]), "the queue's Flagged list").toEqual([["result", shown.map((f) => f.id)]]);
+    expect(await cameraChip(), "the run sheet's camera chip").toBe(1);
 
     expect(await closeExternalPlayFlags(owner, m.b.fixtureId, shown.map((f) => f.id))).toEqual({ closed: 1, stillOpen: 0 });
+    expect(await flagged(), "reviewed: off the Flagged list").toEqual([]);
+    expect(await cameraChip(), "reviewed: no camera chip").toBe(0);
+    const [audit] = await sql<{ resolved_by: string | null; closed_at: Date | null }[]>`
+      select resolved_by, closed_at from fixture_play_flags where id = ${shown[0]!.id}`;
+    expect(audit, "the audit: who reviewed it, and when").toMatchObject({ resolved_by: owner.userId, closed_at: expect.any(Date) });
     const again = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + 10 * 60_000));
     expect(cameraFailures(again)).toEqual([]);
     expect([again.cameraSettled, again.cameraFlags], "already judged: nothing re-raised").toEqual([0, 0]);
@@ -3946,7 +3988,7 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
 });
 
 describe("the sweep's own hold reasons have organiser copy in all four locales (C2, I3)", () => {
-  it("each locale carries its own sentence per reason, distinct from the generic and no-show labels — counted", () => {
+  it("each locale carries its own sentence per reason, distinct from the no-show sentences — counted", () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../dictionaries");
     const LOCALES = ["en", "es", "fr", "nl"] as const;
     const KEYS = ["externalPlay.reason.notStarted", "externalPlay.reason.createOutcomeUnknown"] as const;
@@ -3958,8 +4000,12 @@ describe("the sweep's own hold reasons have organiser copy in all four locales (
         const d = read(l);
         const text = d[key];
         expect(text, `${key} ${l}: present`).toBeTruthy();
-        expect(text, `${key} ${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
-        expect(text, `${key} ${l}: not the no-show label (both players came)`).not.toBe(d["externalPlay.reason.noShow"]);
+        // T16: the generic label is retired (no fallback exists — external-play-reason-map.test.ts); the no-show
+        // sentences are now per colour. Both players came, so neither may read as one.
+        for (const noShow of ["externalPlay.reason.noShowWhite", "externalPlay.reason.noShowBlack", "externalPlay.reason.noShowBoth"]) {
+          expect(d[noShow], `${noShow} ${l}: premise — present`).toBeTruthy();
+          expect(text, `${key} ${l}: not ${noShow} (both players came)`).not.toBe(d[noShow]);
+        }
         for (const other of KEYS) if (other !== key) expect(text, `${key} ${l}: not ${other}`).not.toBe(d[other]);
         if (l !== "en") expect(text, `${key} ${l}: translated, not English`).not.toBe(en[key]);
         checked++;

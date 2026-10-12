@@ -33,8 +33,9 @@ import { exportGame as wiredExportGame, readGameStream as wiredReadGameStream } 
 import { NEEDS_REASONS, type BoardCall } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { loadArbiterRound, resyncExternalPlay } from "../external-play/arbiter";
+import { listFlaggedExternalPlay, loadArbiterRound, resyncExternalPlay } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
+import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import {
@@ -1671,7 +1672,19 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
     const owner = await mintOrgOwnerAuth(g.orgId);
     const shown = (await loadArbiterRound(owner, g.divisionId))!.boards.find((b) => b.fixtureId === g.fixtureId)!.flags;
     expect(shown.map((f) => f.kind), "premise: the producer's flag, as the panel shows it").toEqual(["out_of_band_play"]);
+    // T16: the same flag on the division's fixtures tab — the queue's Flagged list and the run sheet's chip.
+    const flaggedIds = async () =>
+      (await listFlaggedExternalPlay(owner, g.divisionId)).boards.filter((b) => b.fixtureId === g.fixtureId).flatMap((b) => b.flags.map((f) => f.id));
+    const offSeazn = async () => (await listRunSheetOnlinePlay(owner, g.divisionId))[g.fixtureId]?.offSeaznFlagCount;
+    expect(await flaggedIds(), "the queue's Flagged list").toEqual(shown.map((f) => f.id));
+    expect(await offSeazn(), "the run sheet's off-Seazn chip").toBe(1);
     expect(await closeExternalPlayFlags(owner, g.fixtureId, shown.map((f) => f.id))).toEqual({ closed: 1, stillOpen: 0 });
+    expect(await flaggedIds(), "closed: off the Flagged list").toEqual([]);
+    expect(await offSeazn(), "closed: no chip").toBe(0);
+    expect((await flagsOf(g.fixtureId))[0], "the audit: who closed it, and when").toMatchObject({
+      resolved_by: owner.userId,
+      closed_at: expect.any(Date),
+    });
 
     // The judged evidence, read again — twice: nothing new is raised.
     for (const at of [later(1_000), later(30_000)]) {
@@ -1690,6 +1703,8 @@ describe.runIf(HAS_DB)("reconcile — I5: adopted plies raise ONE out_of_band_pl
       select id from fixture_play_flags where fixture_id = ${g.fixtureId} and closed_at is null`;
     const after = (await loadArbiterRound(owner, g.divisionId))!.boards.find((b) => b.fixtureId === g.fixtureId)!.flags;
     expect(after.map((f) => f.id), "the panel shows the new evidence only").toEqual([newest!.id]);
+    expect(await flaggedIds(), "and the Flagged list shows it again").toEqual([newest!.id]);
+    expect(await offSeazn(), "and the chip is back").toBe(1);
   });
 
   it("each LATER adoption is its own flag, naming only its own plies", async () => {

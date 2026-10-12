@@ -12,6 +12,7 @@ import "server-only";
 // fixture_video_participants, fixture_video_guard_faults. They are read with
 // the privileged `sql`, and only after the caller's organisation has been
 // proven to own the division or fixture.
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
@@ -26,6 +27,7 @@ import {
 } from "@/lib/arbiter-view";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { type BoardgameClockInput } from "@/server/external-play/clock";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { cameraMatchWindow, matchGuardFaults, type MatchTimes } from "@/server/external-play/video/match-window";
@@ -53,6 +55,8 @@ type BoardRow = {
   fixtureId: string;
   fixtureNo: number | null;
   seq: number | null;
+  roundNo: number | null;
+  stageName: string;
   fixtureStatus: string;
   homeEntrantId: string;
   awayEntrantId: string;
@@ -141,24 +145,7 @@ export async function loadArbiterRound(
   // one — the module's contract above — so the panel can say otherwise.
   const current = latest !== undefined && latest.stageId === round.stageId && latest.roundNo === round.roundNo;
 
-  const rows = await sql<BoardRow[]>`
-    select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
-           f.status as "fixtureStatus",
-           f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
-           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
-           ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
-           ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
-           ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
-           m.fixture_id is not null as "hasMeeting", m.ended_at as "meetingEndedAt",
-           m.camera_evidence_at as "evidenceAt"
-      from fixtures f
-      left join fixture_external_play ep on ep.fixture_id = f.id
-      left join fixture_video_meetings m on m.fixture_id = f.id
-     where f.stage_id = ${round.stageId} and f.round_no = ${round.roundNo}
-       and f.org_id = ${auth.orgId}
-       and f.home_entrant_id is not null and f.away_entrant_id is not null
-       and f.status <> 'cancelled'
-     order by f.seq_in_round nulls last, f.id`;
+  const rows = await boardRows(auth, sql`f.stage_id = ${round.stageId} and f.round_no = ${round.roundNo}`);
 
   const clock = division.config?.clock;
   const timeControl =
@@ -171,17 +158,7 @@ export async function loadArbiterRound(
   // the round shares it.
   const policy = rows.length > 0 ? await fixtureCameraPolicy(rows[0]!.fixtureId) : "off";
 
-  const flagRows =
-    rows.length === 0
-      ? []
-      : await sql<FlagRow[]>`
-          select id, fixture_id as "fixtureId", kind, person_id as "personId", opened_at as "openedAt", note
-            from fixture_play_flags
-           where fixture_id in ${sql(rows.map((r) => r.fixtureId))} and org_id = ${auth.orgId}
-             -- T16: a flag the organiser closed ("Let the game go on") has
-             -- had its review; the row stays on file as the record.
-             and closed_at is null
-           order by opened_at, id`;
+  const flagRows = await openFlagRows(auth, rows.map((r) => r.fixtureId));
 
   // C1 (D7): a board the viewer plays on is never listed — not watchable,
   // not offered, not joined. Counted, so the panel can say why it is missing.
@@ -190,81 +167,173 @@ export async function loadArbiterRound(
   // M4: every board is read at once (its sides, its colours, its result, its
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
-  const boards: ArbiterBoard[] = await Promise.all(listed.map(async ([i, r]): Promise<ArbiterBoard> => {
-    const [sides, whiteSide] = await Promise.all([
-      loadSides(r),
-      r.whiteSide ?? whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }),
-    ] as const);
-    const white = whiteSide === "home" ? sides.home : sides.away;
-    const black = whiteSide === "home" ? sides.away : sides.home;
-    const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;
-    const playable = isPlayableFixtureStatus(r.fixtureStatus) && r.bridgeStatus !== "finished";
-    const gameOnFile = r.challengeId !== null;
-
-    let state: ArbiterBoardState;
-    if (!isPlayableFixtureStatus(r.fixtureStatus) || r.bridgeStatus === "finished") {
-      state = { kind: "result", score: await scoreOf(r, white.entrantId, black.entrantId) };
-    } else if (r.bridgeStatus === "needs_organiser") {
-      state = { kind: "on_hold" };
-    } else if (!gameOnFile) {
-      state = { kind: "checking_in" };
-    } else if ((r.moveCount ?? 0) === 0) {
-      state = { kind: "starting" };
-    } else {
-      state = { kind: "live", moveNo: boardMoveNo(r.moveCount ?? 0) };
-    }
-
-    const clocks = gameOnFile
-      ? gameClocks({
-          limitMs,
-          whiteMs: r.whiteMs,
-          blackMs: r.blackMs,
-          lastMoveAt: r.lastMoveAt,
-          moveCount: r.moveCount ?? 0,
-          over,
-        })
-      : null;
-
-    const nameOf = (personId: string | null): string | null =>
-      personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
-    const flags: ArbiterFlag[] = await Promise.all(
-      flagRows.filter((x) => x.fixtureId === r.fixtureId).map((f) => flagView(f, { nameOf, times: r })),
-    );
-
-    return {
-      fixtureId: r.fixtureId,
-      fixtureNo: r.fixtureNo,
-      boardNo: r.seq ?? i + 1,
-      white: { name: white.displayName, personId: white.personId },
-      black: { name: black.displayName, personId: black.personId },
-      state,
-      clock:
-        clocks === null
-          ? null
-          : {
-              whiteMs: clocks.whiteMs,
-              blackMs: clocks.blackMs,
-              asOf: clocks.clockAsOf,
-              running: clocks.clockRunning,
-              turn: turnAfter(r.moveCount ?? 0),
-            },
-      cameraPolicy: policy,
-      videoOverridden: r.overrideAt !== null,
-      cameraReport:
-        policy === "required" && r.startedAt !== null && r.overrideAt === null
-          ? r.evidenceAt !== null
-            ? "settled"
-            : "pending"
-          : null,
-      canResync: gameOnFile && playable && r.bridgeStatus !== null && ["ready", "live", "needs_organiser"].includes(r.bridgeStatus),
-      playable,
-      canSettle: playable && r.bridgeStatus !== null,
-      whiteSide,
-      tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
-      flags,
-    };
-  }));
+  const boards: ArbiterBoard[] = await Promise.all(
+    listed.map(([i, r]) => boardOf(auth, r, { limitMs, policy, flagRows, fallbackNo: i + 1 })),
+  );
   return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size, current };
+}
+
+/** A board with open flags, wherever it sits in the division (T16's
+ *  organiser queue, "Flagged · the game carried on"). */
+export type FlaggedBoard = ArbiterBoard & { roundNo: number | null; stageName: string };
+
+/**
+ * The division's boards with OPEN flags — any round, any state: a camera
+ * report lands after the game, so a finished board is the usual case. Never
+ * a board the viewer plays on (C1, D7: the panel's own rule); those are
+ * counted, so the queue can say why one is missing. Evidence only — nothing
+ * here decides anything (D10).
+ */
+export async function listFlaggedExternalPlay(
+  auth: AuthCtx,
+  divisionId: string,
+): Promise<{ boards: FlaggedBoard[]; ownBoards: number }> {
+  const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
+    select d.config from divisions d
+      join competitions c on c.id = d.competition_id
+     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
+  if (!division) throw new HttpError(404, "division not found", "NOT_FOUND");
+
+  const [flagged] = await sql<{ ids: string[] }[]>`
+    select coalesce(array_agg(distinct fl.fixture_id), '{}') as ids
+      from fixture_play_flags fl
+      join fixtures f on f.id = fl.fixture_id
+     where f.division_id = ${divisionId} and fl.org_id = ${auth.orgId} and fl.closed_at is null`;
+  const ids = flagged?.ids ?? [];
+  if (ids.length === 0) return { boards: [], ownBoards: 0 };
+
+  const rows = await boardRows(auth, sql`f.id in ${sql(ids)}`);
+  const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
+  const listed = rows.filter((r) => !own.has(r.fixtureId));
+  const flagRows = await openFlagRows(auth, listed.map((r) => r.fixtureId));
+  const limitMs = (division.config?.clock?.base ?? 0) * 1_000;
+  const boards = await Promise.all(
+    listed.map(async (r, i): Promise<FlaggedBoard> => {
+      const policy = await fixtureCameraPolicy(r.fixtureId);
+      const board = await boardOf(auth, r, { limitMs, policy, flagRows, fallbackNo: i + 1 });
+      return { ...board, roundNo: r.roundNo, stageName: r.stageName };
+    }),
+  );
+  return { boards, ownBoards: rows.length - listed.length };
+}
+
+/** The board columns both readers paint from — the round in view and the
+ *  division's flagged boards (T16) — so a board reads the same in both. */
+function boardRows(auth: AuthCtx, where: postgres.Fragment) {
+  return sql<BoardRow[]>`
+    select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
+           f.round_no as "roundNo", s.name as "stageName",
+           f.status as "fixtureStatus",
+           f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
+           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
+           ep.move_count as "moveCount", ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
+           ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
+           ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
+           m.fixture_id is not null as "hasMeeting", m.ended_at as "meetingEndedAt",
+           m.camera_evidence_at as "evidenceAt"
+      from fixtures f
+      join stages s on s.id = f.stage_id
+      left join fixture_external_play ep on ep.fixture_id = f.id
+      left join fixture_video_meetings m on m.fixture_id = f.id
+     where ${where}
+       and f.org_id = ${auth.orgId}
+       and f.home_entrant_id is not null and f.away_entrant_id is not null
+       and f.status <> 'cancelled'
+     order by f.round_no nulls last, f.seq_in_round nulls last, f.id`;
+}
+
+/** The boards' OPEN flags: a flag the organiser closed ("Let the game go
+ *  on", T16) has had its review; the row stays on file as the record. */
+function openFlagRows(auth: AuthCtx, fixtureIds: readonly string[]): Promise<FlagRow[]> {
+  if (fixtureIds.length === 0) return Promise.resolve([]);
+  return sql<FlagRow[]>`
+    select id, fixture_id as "fixtureId", kind, person_id as "personId", opened_at as "openedAt", note
+      from fixture_play_flags
+     where fixture_id in ${sql([...fixtureIds])} and org_id = ${auth.orgId}
+       and closed_at is null
+     order by opened_at, id`;
+}
+
+/** One board as the panel paints it: its sides, its colours, its state, its
+ *  clocks and its open flags. */
+async function boardOf(
+  auth: AuthCtx,
+  r: BoardRow,
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; fallbackNo: number },
+): Promise<ArbiterBoard> {
+  const { limitMs, policy, flagRows } = ctx;
+  const [sides, whiteSide] = await Promise.all([
+    loadSides(r),
+    r.whiteSide ?? whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }),
+  ] as const);
+  const white = whiteSide === "home" ? sides.home : sides.away;
+  const black = whiteSide === "home" ? sides.away : sides.home;
+  const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;
+  const playable = isPlayableFixtureStatus(r.fixtureStatus) && r.bridgeStatus !== "finished";
+  const gameOnFile = r.challengeId !== null;
+
+  let state: ArbiterBoardState;
+  if (!isPlayableFixtureStatus(r.fixtureStatus) || r.bridgeStatus === "finished") {
+    state = { kind: "result", score: await scoreOf(r, white.entrantId, black.entrantId) };
+  } else if (r.bridgeStatus === "needs_organiser") {
+    state = { kind: "on_hold" };
+  } else if (!gameOnFile) {
+    state = { kind: "checking_in" };
+  } else if ((r.moveCount ?? 0) === 0) {
+    state = { kind: "starting" };
+  } else {
+    state = { kind: "live", moveNo: boardMoveNo(r.moveCount ?? 0) };
+  }
+
+  const clocks = gameOnFile
+    ? gameClocks({
+        limitMs,
+        whiteMs: r.whiteMs,
+        blackMs: r.blackMs,
+        lastMoveAt: r.lastMoveAt,
+        moveCount: r.moveCount ?? 0,
+        over,
+      })
+    : null;
+
+  const nameOf = (personId: string | null): string | null =>
+    personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
+  const flags: ArbiterFlag[] = await Promise.all(
+    flagRows.filter((x) => x.fixtureId === r.fixtureId).map((f) => flagView(f, { nameOf, times: r })),
+  );
+
+  return {
+    fixtureId: r.fixtureId,
+    fixtureNo: r.fixtureNo,
+    boardNo: r.seq ?? ctx.fallbackNo,
+    white: { name: white.displayName, personId: white.personId },
+    black: { name: black.displayName, personId: black.personId },
+    state,
+    clock:
+      clocks === null
+        ? null
+        : {
+            whiteMs: clocks.whiteMs,
+            blackMs: clocks.blackMs,
+            asOf: clocks.clockAsOf,
+            running: clocks.clockRunning,
+            turn: turnAfter(r.moveCount ?? 0),
+          },
+    cameraPolicy: policy,
+    videoOverridden: r.overrideAt !== null,
+    cameraReport:
+      policy === "required" && r.startedAt !== null && r.overrideAt === null
+        ? r.evidenceAt !== null
+          ? "settled"
+          : "pending"
+        : null,
+    canResync: gameOnFile && playable && r.bridgeStatus !== null && ["ready", "live", "needs_organiser"].includes(r.bridgeStatus),
+    playable,
+    canSettle: playable && r.bridgeStatus !== null,
+    whiteSide,
+    tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
+    flags,
+  };
 }
 
 async function flagView(
