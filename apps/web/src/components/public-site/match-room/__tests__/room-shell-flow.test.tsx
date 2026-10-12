@@ -18,6 +18,7 @@ import { RoomShell } from "../room-shell";
 import type { RoomSnapshot } from "../room-snapshot";
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
+import { useOpponentPresence } from "../use-own-camera";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
 let tick = 0;
@@ -369,6 +370,26 @@ describe("I8: the opponent pill comes from the player's own meeting join — nev
 
     expect(calls.length, "anti-vacuity: the room did talk to the server").toBeGreaterThan(1);
     expect(roomApiOnly(), "no call left our own room API").toBe(true);
+    island.unmount();
+  });
+
+  it("the server dropping the pill (the game ends) hides it on that very render — never one stale frame of the old answer", async () => {
+    const live: MeetingLink = { joinedAt: Date.now() - PRESENCE_SETTLE_MS, peers: [{ userId: "rtk-opp", videoLive: true }] };
+    const camera = { link: () => live, onLinkChange: () => () => {} };
+    const seen: (boolean | null)[] = [];
+    function Probe({ opponent }: { opponent: RoomSnapshot["opponentPresence"] }) {
+      seen.push(useOpponentPresence(camera, opponent));
+      return null;
+    }
+    const island = renderIsland(Probe, { opponent: { participantId: "rtk-opp" } });
+    await settle();
+    expect(seen.at(-1), "premise: the pill is up").toBe(true);
+    const from = seen.length;
+    island.rerender({ opponent: null });
+    await settle();
+    const after = seen.slice(from);
+    expect(after.length, "anti-vacuity: renders after the drop").toBeGreaterThan(0);
+    expect(after, "every render after the drop").toEqual(after.map(() => null));
     island.unmount();
   });
 
