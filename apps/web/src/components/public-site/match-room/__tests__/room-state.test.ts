@@ -56,6 +56,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     cameraPolicy: "off",
     opponentCameraLive: null,
     frozen: null,
+    canAct: true,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -277,12 +278,18 @@ describe("act round trip", () => {
     expect([grant.error, grant.syncKey]).toEqual(["relink", 1]);
   });
 
-  it("transport failure ⇒ the board is put back; 0 is network, 404 is not-found and stops polling", () => {
+  it("transport failure ⇒ the board is put back; 0 is network; anything else is invalid — and NONE of them stops the room", () => {
+    // Review I2: play's 404 is T10 refusing a board it will not accept (a
+    // hold, a finished game, a frozen seat) — not the room vanishing. The
+    // room re-reads and carries on; only GET room's own 404 is "gone".
     const sent = roomReducer(live(), { type: "act_sent", action: { kind: "resign" } });
-    const net = roomReducer(sent, { type: "act_failed", status: 0 });
-    expect([net.error, net.syncKey, net.polling]).toEqual(["network", 1, true]);
-    const gone = roomReducer(sent, { type: "act_failed", status: 404 });
-    expect([gone.notFound, gone.polling, gone.syncKey]).toEqual([true, false, 1]);
+    let checked = 0;
+    for (const [status, error] of [[0, "network"], [404, "invalid"], [409, "invalid"], [500, "invalid"]] as const) {
+      const after = roomReducer(sent, { type: "act_failed", status });
+      expect([after.error, after.syncKey, after.pending, after.polling, after.notFound], String(status)).toEqual([error, 1, null, true, false]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: statuses").toBe(4);
   });
 });
 
@@ -305,12 +312,15 @@ describe("canMove", () => {
       ["over", initialRoomState(snap({ game: game(2, true) }), T0), false],
       ["result written", initialRoomState(snap({ game: game(2), result: { outcome: "won", method: null, score: "1–0" } }), T0), false],
       ["pending", roomReducer(base, { type: "act_sent", action: { kind: "resign" } }), false],
-      ["frozen you", initialRoomState(snap({ game: game(2), frozen: "you" }), T0), false],
-      ["frozen both", initialRoomState(snap({ game: game(2), frozen: "both" }), T0), false],
-      ["frozen opponent", initialRoomState(snap({ game: game(2), frozen: "opponent" }), T0), true],
+      // The server's word on who may act (play.ts's predicate, review I2):
+      // a frozen seat and every other hold come through as canAct false.
+      ["frozen you", initialRoomState(snap({ game: game(2), frozen: "you", canAct: false }), T0), false],
+      ["frozen both", initialRoomState(snap({ game: game(2), frozen: "both", canAct: false }), T0), false],
+      ["frozen opponent", initialRoomState(snap({ game: game(2), frozen: "opponent", canAct: true }), T0), true],
+      ["held (provider_error mid-game)", initialRoomState(snap({ game: game(2), canAct: false }), T0), false],
     ];
     for (const [name, s, want] of cases) expect(canMove(s), name).toBe(want);
-    expect(cases.length, "anti-vacuity: cases").toBe(9);
+    expect(cases.length, "anti-vacuity: cases").toBe(10);
   });
 });
 
@@ -327,6 +337,7 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     | { k: "act" }
     | { k: "answer"; ok: boolean }
     | { k: "fail"; status: number }
+    | { k: "actFail"; status: number }
     | { k: "off" };
   const step: fc.Arbitrary<Step> = fc.oneof(
     { weight: 4, arbitrary: fc.constant({ k: "advance" as const }) },
@@ -336,17 +347,19 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     { weight: 2, arbitrary: fc.constant({ k: "act" as const }) },
     { weight: 2, arbitrary: fc.boolean().map((ok) => ({ k: "answer" as const, ok })) },
     { weight: 1, arbitrary: fc.constantFrom(0, 404, 500).map((status) => ({ k: "fail" as const, status })) },
+    { weight: 2, arbitrary: fc.constantFrom(0, 404, 500).map((status) => ({ k: "actFail" as const, status })) },
     { weight: 1, arbitrary: fc.constant({ k: "off" as const }) },
   );
 
   it("ply never falls, over never un-ends, polling never restarts, syncKey never falls, at most one request in flight — and the latest read wins", () => {
-    const seen = { steps: 0, staleDropped: 0, plyRose: 0, overSeen: 0, pollingStopped: 0, doubleSendBlocked: 0 };
+    const seen = { steps: 0, staleDropped: 0, plyRose: 0, overSeen: 0, pollingStopped: 0, doubleSendBlocked: 0, act404Survived: 0, endedPolling: 0, endedStopped: 0 };
     fc.assert(
       fc.property(fc.array(step, { minLength: 12, maxLength: 40 }), (steps) => {
         // The server's history: index = server tick; each entry a snapshot.
         let serverPly = 0;
         let serverOver = false;
         let off = false;
+        let sawGet404 = false;
         const history: RoomSnapshot[] = [snap({ serverNow: iso(T0), game: game(0) })];
         let s = initialRoomState(history[0]!, T0);
         const tick = () => {
@@ -403,6 +416,14 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
               break;
             case "fail":
               s = roomReducer(s, { type: "fetch_failed", status: st.status });
+              if (st.status === 404) sawGet404 = true;
+              break;
+            case "actFail":
+              s = roomReducer(s, { type: "act_failed", status: st.status });
+              if (st.status === 404 && before.pending?.kind === "act") {
+                expect(s.polling, "play's 404 never stops the room").toBe(before.polling);
+                seen.act404Survived += 1;
+              }
               break;
           }
           // Invariants, every step.
@@ -421,7 +442,9 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
         s = roomReducer(s, { type: "snapshot", snap: last, receivedAt: T0 });
         expect(ply(s), "converges on the server's ply").toBe(serverPly);
         expect(s.snap.game?.over ?? false, "converges on over").toBe(serverOver);
-        expect(s.polling, "polling stopped iff online chess went off or a read 404'd").toBe(s.polling && !off);
+        expect(s.polling, "polling stopped iff online chess went off or a read 404'd").toBe(!(off || sawGet404));
+        if (s.polling) seen.endedPolling += 1;
+        else seen.endedStopped += 1;
       }),
       { numRuns: 300, seed: 20261012 },
     );
@@ -432,6 +455,9 @@ describe("sequence property (rule 10): moves, offers, resign, reconnect reads, o
     expect(seen.overSeen, "steps with the game over").toBeGreaterThan(100);
     expect(seen.pollingStopped, "polling stops").toBeGreaterThan(50);
     expect(seen.doubleSendBlocked, "double sends blocked").toBeGreaterThan(50);
+    expect(seen.act404Survived, "play 404s delivered while an act was pending").toBeGreaterThan(20);
+    expect(seen.endedPolling, "runs ending still polling").toBeGreaterThan(20);
+    expect(seen.endedStopped, "runs ending stopped").toBeGreaterThan(20);
   });
 });
 

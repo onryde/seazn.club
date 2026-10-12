@@ -20,6 +20,8 @@ import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
 import { fenAfter, type PlayResult } from "../external-play/play";
+import { writeResultFrom } from "../external-play/result";
+import type { GameSnapshot } from "@/server/external-play/types";
 import {
   CLOCK_ZERO_TOLERANCE_MS,
   actInRoom,
@@ -384,6 +386,78 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     await gameOnFile(s, { status: "needs_organiser", needsReason: "token_revoked", moves: ["e2e4"] });
     const v = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
     expect(v.frozen).toBe("both");
+  });
+
+  it("I1: a token_revoked hold that T12 then settles — the frozen player reads the RESULT, and is frozen no longer", async () => {
+    const s = await seed();
+    const gameId = await gameOnFile(s, { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves: ["e2e4", "e7e5"] });
+    const before = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    expect([before.frozen, before.result], "premise: White frozen, nothing written").toEqual(["you", null]);
+    // T12's real result writer, as reconcile calls it while the row is held
+    // (RECONCILED_WHILE_HELD): Black wins on time.
+    const wrote = await writeResultFrom(
+      { gameId, status: "outoftime", winner: "black", movesSan: ["e4", "e5"], whiteMs: 0, blackMs: 1_000, increment: 0 } as GameSnapshot,
+      s.fixtureId,
+    );
+    expect(wrote, "premise: the result was written").toEqual({ wrote: "decided" });
+    const [bridge] = await sql<{ status: string }[]>`select status from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(bridge!.status, "premise: the hold is still on the row (finish() closes only ready/live)").toBe("needs_organiser");
+    const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+    const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+    expect(white.result).toMatchObject({ outcome: "lost", score: "0–1", method: "time" });
+    expect(white.frozen, "a written result outranks the frozen seat").toBeNull();
+    expect(white.canAct).toBe(false);
+    expect(black.result).toMatchObject({ outcome: "won", score: "0–1" });
+  });
+
+  it("I2: who may act is play.ts's own predicate — and every board the room says nobody may act on, T10 refuses (404)", async () => {
+    type Case = {
+      label: string;
+      bridge: Parameters<typeof gameOnFile>[1];
+      // Ruling M7 (T11): a token_revoked hold freezes only the revoked seat;
+      // every other hold and a finished board accept nothing (T10 play.ts).
+      white: boolean;
+      black: boolean;
+      held: boolean;
+      clockRunning: boolean;
+    };
+    const moves = ["e2e4", "e7e5"];
+    const cases: Case[] = [
+      { label: "live", bridge: { status: "live", moves }, white: true, black: true, held: false, clockRunning: true },
+      { label: "token_revoked, White's seat", bridge: { status: "needs_organiser", needsReason: "token_revoked", revokedSeat: "white", moves }, white: false, black: true, held: false, clockRunning: true },
+      { label: "token_revoked, no seat recorded", bridge: { status: "needs_organiser", needsReason: "token_revoked", moves }, white: false, black: false, held: false, clockRunning: true },
+      // A mid-game diagnosis is not an organiser hold of a game still being
+      // played (`held` false) — but play.ts refuses every act on it.
+      // Clocks are Lichess's: a hold of OURS does not stop them there.
+      { label: "provider_error mid-game", bridge: { status: "needs_organiser", needsReason: "provider_error", moves }, white: false, black: false, held: false, clockRunning: true },
+      // T13's deadline hold of a created game: held for the organiser.
+      { label: "not_started with a game on file", bridge: { status: "needs_organiser", needsReason: "not_started", moves: [] }, white: false, black: false, held: true, clockRunning: false },
+      { label: "finished", bridge: { status: "finished", moves }, white: false, black: false, held: false, clockRunning: false },
+    ];
+    let checked = 0;
+    let refusedByPlay = 0;
+    for (const c of cases) {
+      const s = await seed();
+      await gameOnFile(s, c.bridge);
+      const white = await readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps());
+      const black = await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps());
+      expect([white.canAct, black.canAct], c.label).toEqual([c.white, c.black]);
+      expect(white.held, `${c.label}: held`).toBe(c.held);
+      expect(white.game?.clockRunning, `${c.label}: clocks`).toBe(c.clockRunning);
+      // The other authority agrees: where the room says no, T10's real act
+      // refuses before any grant, token or Lichess call.
+      for (const [who, v] of [[s.home, white], [s.away, black]] as const) {
+        if (v.canAct) continue;
+        await expect(
+          actInRoom({ kind: "session", userId: who.userId }, s.fixtureId, { kind: "draw", accept: false }, deps({ reconcile: vi.fn() })),
+          `${c.label}: T10 refuses`,
+        ).rejects.toMatchObject({ status: 404 });
+        refusedByPlay += 1;
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every bridge state").toBe(cases.length);
+    expect(refusedByPlay, "anti-vacuity: refusals paired with T10").toBe(9);
   });
 
   it("a hold the game is not playing through (a no-show) is `held`, and no seat is frozen", async () => {

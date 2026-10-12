@@ -38,6 +38,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     cameraPolicy: "off",
     opponentCameraLive: null,
     frozen: null,
+    canAct: true,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -111,22 +112,49 @@ describe("roomScreen", () => {
     expect(roomScreen(st({ result: { outcome: "won", method: null, score: "1–0" } })).kind).toBe("over");
   });
 
-  it("precedence: not found > online chess off > your seat frozen > relink > over > live", () => {
+  it("precedence: not found > online chess off > over > your seat frozen > relink > held > live", () => {
+    // Review I1 (controller ruling): a written result outranks the frozen
+    // seat — the frozen player sees how the game ended, never A again.
     const all = st(
-      { onlineChessOff: true, frozen: "you", game: { ...GAME, over: true } },
+      { onlineChessOff: true, frozen: "you", canAct: false, game: GAME, result: { outcome: "lost", method: "time", score: "0–1" } },
       { notFound: true, error: "relink" },
     );
+    const off = { ...all.snap, onlineChessOff: false };
     expect(roomScreen(all).kind).toBe("unavailable");
     expect(roomScreen({ ...all, notFound: false }).kind).toBe("offForClub");
-    expect(roomScreen({ ...all, notFound: false, snap: { ...all.snap, onlineChessOff: false } }).kind).toBe("revoked");
-    expect(roomScreen({ ...all, notFound: false, snap: { ...all.snap, onlineChessOff: false, frozen: null } }).kind).toBe("relink");
-    expect(roomScreen({ ...all, notFound: false, error: null, snap: { ...all.snap, onlineChessOff: false, frozen: null } }).kind).toBe("over");
+    expect(roomScreen({ ...all, notFound: false, snap: off }).kind).toBe("over");
+    expect(roomScreen({ ...all, notFound: false, snap: { ...off, result: null } }).kind).toBe("revoked");
+    expect(roomScreen({ ...all, notFound: false, snap: { ...off, result: null, frozen: null } }).kind).toBe("relink");
+    expect(roomScreen({ ...all, notFound: false, error: null, snap: { ...off, result: null, frozen: null } }).kind).toBe("held");
+    expect(roomScreen({ ...all, notFound: false, error: null, snap: { ...off, result: null, frozen: null, canAct: true } }).kind).toBe("live");
+  });
+
+  it("I1: a frozen seat whose game is over — written or seen over — is the game-over screen, for both freezes", () => {
+    let checked = 0;
+    for (const frozen of ["you", "both"] as const) {
+      expect(roomScreen(st({ game: GAME, frozen, canAct: false, result: { outcome: "won", method: "resign", score: "1–0" } })).kind, frozen).toBe("over");
+      expect(roomScreen(st({ game: { ...GAME, over: true }, frozen, canAct: false })).kind, frozen).toBe("over");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a freeze: yours or both ⇒ A (revoked); the opponent's ⇒ your board plays on", () => {
-    expect(roomScreen(st({ game: GAME, frozen: "you" })).kind).toBe("revoked");
-    expect(roomScreen(st({ game: GAME, frozen: "both" })).kind).toBe("revoked");
-    expect(roomScreen(st({ game: GAME, frozen: "opponent" })).kind).toBe("live");
+    expect(roomScreen(st({ game: GAME, frozen: "you", canAct: false })).kind).toBe("revoked");
+    expect(roomScreen(st({ game: GAME, frozen: "both", canAct: false })).kind).toBe("revoked");
+    expect(roomScreen(st({ game: GAME, frozen: "opponent", canAct: true })).kind).toBe("live");
+  });
+
+  it("I2: a game on file the server will not take a move on is HELD — never the live, movable room", () => {
+    // A provider_error mid-game, T13's deadline hold of a created game, a
+    // withdrawn board: play.ts refuses each, so the room must too.
+    expect(roomScreen(st({ game: GAME, canAct: false })).kind).toBe("held");
+    expect(roomScreen(st({ game: GAME, canAct: false, held: true })).kind).toBe("held");
+    expect(roomScreen(st({ game: GAME, canAct: false, phase: "closed" })).kind).toBe("held");
+    // The pair: the same board the server takes moves on is live.
+    expect(roomScreen(st({ game: GAME, canAct: true })).kind).toBe("live");
+    // No game: a hold is still card 6.
+    expect(roomScreen(st({ game: null, canAct: false, held: true })).kind).toBe("closed");
   });
 
   it("through the reducer (a sequence): check-in → seat refused for camera → seated → game arrives → over", () => {

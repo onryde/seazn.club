@@ -205,7 +205,9 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
       <div
         data-testid="room-board-surface"
         data-fen={fen}
-        role="img"
+        data-movable={movable ? "true" : "false"}
+        // A group, not an image: its squares take clicks and drags (review m8).
+        role="group"
         aria-label={label}
         className="seazn-board relative aspect-square w-full"
       >

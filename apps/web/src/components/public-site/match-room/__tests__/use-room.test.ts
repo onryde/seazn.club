@@ -2,7 +2,7 @@
 // when a clock that reached zero is reported. The hook's wiring (the poll
 // effect, the realtime channel, the calls) is the room e2e's.
 import { describe, expect, it } from "vitest";
-import { CLOCK_ZERO_ATTEMPTS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, nextClockZeroReport, pollIntervalMs } from "../use-room";
+import { CLOCK_ZERO_ATTEMPTS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
 
 describe("pollIntervalMs", () => {
   it("a live game with no realtime channel polls fast; everything else slow", () => {
@@ -46,5 +46,28 @@ describe("nextClockZeroReport", () => {
     for (let i = 0; i < 10; i += 1) r = nextClockZeroReport(r, K, (i + 1) * CLOCK_ZERO_SPACING_MS) ?? r;
     expect(r.attempts).toBe(CLOCK_ZERO_ATTEMPTS);
     expect(nextClockZeroReport(r, "g1:13", r.at + 1)).toEqual({ key: "g1:13", attempts: 1, at: r.at + 1 });
+  });
+});
+
+describe("reReadDelayMs (review I2: a refused act re-reads and carries on, backing off when it repeats)", () => {
+  it("the empty case: no failure yet, or the first, re-reads at once", () => {
+    expect(reReadDelayMs(0)).toBe(0);
+    expect(reReadDelayMs(1)).toBe(0);
+  });
+
+  it("repeats back off — doubling from 1s — and never wait longer than the idle poll, which re-reads anyway", () => {
+    expect([2, 3, 4, 5].map(reReadDelayMs)).toEqual([1_000, 2_000, 4_000, 8_000]);
+    let checked = 0;
+    let prev = 0;
+    for (let streak = 0; streak <= 60; streak += 1) {
+      const d = reReadDelayMs(streak);
+      expect(d, `streak ${streak}`).toBeGreaterThanOrEqual(prev);
+      expect(d, `streak ${streak}`).toBeLessThanOrEqual(IDLE_POLL_MS);
+      expect(Number.isFinite(d), `streak ${streak}`).toBe(true);
+      prev = d;
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: streaks").toBe(61);
+    expect(reReadDelayMs(60), "a long run sits at the cap").toBe(IDLE_POLL_MS);
   });
 });

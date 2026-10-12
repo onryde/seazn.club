@@ -46,6 +46,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     cameraPolicy: "off",
     opponentCameraLive: null,
     frozen: null,
+    canAct: true,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -105,6 +106,22 @@ describe("the room's first paint", () => {
     expect(html, "no game actions once it is over").not.toContain('data-testid="room-resign"');
   });
 
+  it("I2: a held board paints as it truly is — the clocks, the board, the held seam, no game actions, no \"your move\"; the board the server takes moves on says it is", () => {
+    // The board itself is client-only (ssr:false); its movable flag is the
+    // e2e's (match-room.spec.ts, the held board) and board-wrapper.test's.
+    const you = { colour: "white" as const, name: "Bo Lind", checkedIn: true };
+    const held = paint(snap({ game: GAME, you, canAct: false }));
+    expect(screenOf(held)).toBe("held");
+    const order = ids(held).filter((i) => ["room-clock-opponent", "room-clock-you", "room-board", "room-seam-held", "room-controls", "room-resign"].includes(i));
+    expect(order).toEqual(["room-clock-opponent", "room-clock-you", "room-board", "room-seam-held"]);
+    expect(held, "no \"your move\" on a board nobody may move").not.toContain(en["externalPlay.room.yourMove" as keyof typeof en]);
+    expect(held).toContain(en["externalPlay.room.state.held.title" as keyof typeof en]);
+    // The pair: White to move, White's seat, the server takes it ⇒ movable.
+    const live = paint(snap({ game: GAME, you, canAct: true }));
+    expect(screenOf(live)).toBe("live");
+    expect(live).toContain(en["externalPlay.room.yourMove" as keyof typeof en]);
+  });
+
   it("every state card paints for its snapshot (cards 1, 5, 6; seams A and B)", () => {
     const cases: [Partial<RoomSnapshot>, string, string][] = [
       [{ phase: "not_opened" }, "notOpened", "room-state-not-opened"],
@@ -132,6 +149,7 @@ describe("the room's first paint", () => {
       { phase: "closed" },
       { frozen: "you", game: GAME },
       { onlineChessOff: true },
+      { game: GAME, canAct: false },
     ];
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
@@ -141,7 +159,7 @@ describe("the room's first paint", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: locale × screen").toBe(36);
+    expect(checked, "anti-vacuity: locale × screen").toBe(40);
     expect(paint(snap(), "nl"), "nl is not English").not.toContain("Your board is open");
   });
 });

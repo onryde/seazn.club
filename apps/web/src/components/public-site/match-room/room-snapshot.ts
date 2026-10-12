@@ -76,8 +76,14 @@ export type RoomSnapshot = {
   cameraPolicy: CameraPolicyWire;
   /** null ⇒ not asked (policy off, no meeting, or the vendor did not answer). */
   opponentCameraLive: boolean | null;
-  /** Which seat a token_revoked hold froze, from the VIEWER's side. */
+  /** Which seat a token_revoked hold froze, from the VIEWER's side. null
+   *  once a result is written (the result outranks the freeze — review I1). */
   frozen: "you" | "opponent" | "both" | null;
+  /** The server would accept an act from YOU on the game on file — T10's
+   *  own predicate (play.ts `playableGame` and its frozen seats), not a
+   *  second reading. false with no game. A game on file you may not act on
+   *  is a held board: never rendered live and movable (review I2). */
+  canAct: boolean;
   /** No game on file and the club is not offered online chess (T20). The
    *  client renders a plain state and STOPS polling. */
   onlineChessOff: boolean;

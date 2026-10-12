@@ -5978,6 +5978,8 @@
   "externalPlay.room.state.cameraOff.cta": "Encender la cámara",
   "externalPlay.room.state.revoked.title": "Se ha revocado tu vínculo con Lichess",
   "externalPlay.room.state.revoked.body": "Tu organizador ha sido avisado.",
+  "externalPlay.room.state.held.title": "Esta partida está en espera",
+  "externalPlay.room.state.held.body": "Tu organizador está revisando este tablero. No se pueden hacer jugadas aquí hasta que lo resuelva.",
   "externalPlay.room.state.offForClub.title": "El ajedrez en línea está desactivado para este club",
   "externalPlay.room.pieceCredit": "Piezas de ajedrez de Colin M.L. Burnett (GPLv2+).",
   "externalPlay.room.meta.title": "Tu tablero",

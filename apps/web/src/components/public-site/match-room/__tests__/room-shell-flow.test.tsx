@@ -38,6 +38,7 @@ function snap(over: Partial<RoomSnapshot> = {}): RoomSnapshot {
     cameraPolicy: "required",
     opponentCameraLive: true,
     frozen: null,
+    canAct: true,
     onlineChessOff: false,
     creation: null,
     game: null,
@@ -162,6 +163,33 @@ describe("camera required: check in → refused for camera → the camera joins 
     island.unmount();
   });
 
+  it("m7: re-entry on a game already over claims nothing — there is no camera to rejoin for a finished board", async () => {
+    join.fn.mockResolvedValue(liveCamera());
+    const over = {
+      gameId: "g1",
+      moves: ["f2f3", "e7e5", "g2g4", "d8h4"],
+      fen: "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3",
+      lastMove: ["d8", "h4"] as [string, string],
+      turn: "white" as const,
+      whiteMs: 590_000,
+      blackMs: 592_000,
+      clockAsOf: new Date(T0).toISOString(),
+      clockRunning: false,
+      drawOfferBy: null,
+      over: true,
+    };
+    const island = renderIsland(RoomShell, {
+      initial: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true }, game: over, canAct: false }),
+      token: "tok",
+      selfPath: "/x",
+    });
+    await settle(1_000);
+    expect(screenOf(island)).toBe("over");
+    expect(seatPosts(), "no seat claim for a finished game").toBe(0);
+    expect(join.fn).not.toHaveBeenCalled();
+    island.unmount();
+  });
+
   it("re-entry with cameras on (already checked in): the room claims once on mount to rejoin the camera", async () => {
     seatAnswers = [() => ({ snapshot: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true } }), seat: { seated: true, participant: PARTICIPANT } })];
     join.fn.mockResolvedValue(liveCamera());
@@ -176,6 +204,72 @@ describe("camera required: check in → refused for camera → the camera joins 
     island.rerender({ initial: snap({ you: { colour: "white", name: "Bo Lind", checkedIn: true } }), token: "tok", selfPath: "/x" });
     await settle();
     expect(seatPosts(), "once, not per render").toBe(1);
+    island.unmount();
+  });
+});
+
+describe("I2: a refused act never stops the room — it re-reads, backing off when refusals repeat", () => {
+  it("play's 404 and a Lichess refusal each re-read; the second in a row waits 1s; an accepted act resets; the poll carries on", async () => {
+    const live = {
+      gameId: "g1",
+      moves: ["e2e4", "e7e5"],
+      fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+      lastMove: ["e7", "e5"] as [string, string],
+      turn: "white" as const,
+      whiteMs: 590_000,
+      blackMs: 592_000,
+      clockAsOf: new Date(T0).toISOString(),
+      clockRunning: false,
+      drawOfferBy: null,
+      over: false,
+    };
+    const base = { cameraPolicy: "off" as const, opponentCameraLive: null, you: { colour: "white" as const, name: "Bo Lind", checkedIn: true }, game: live };
+    const actAnswers: (() => Response)[] = [
+      () => new Response(JSON.stringify({ ok: false, error: { code: "not_found" } }), { status: 404 }),
+      () => ok({ ok: false, reconcile: true, reason: "rejected" }),
+      () => ok({ ok: true, applied: true }),
+      () => new Response(JSON.stringify({ ok: false, error: { code: "not_found" } }), { status: 404 }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ method: String(init.method), url });
+        if (init.method === "POST" && url.includes("/external-play/room/act?")) return actAnswers.shift()!();
+        if (init.method === "GET") return ok(snap(base));
+        return new Response("{}", { status: 500 });
+      }),
+    );
+    const island = renderIsland(RoomShell, { initial: snap(base), token: "tok", selfPath: "/x" });
+    await settle();
+    const gets = () => calls.filter((c) => c.method === "GET").length;
+    const act = () => (roomOf(island) as unknown as { act: (a: { kind: "resign" }) => Promise<void> }).act({ kind: "resign" });
+    const g0 = gets();
+
+    void act(); // 1st failure in a row (play's 404): re-read at once
+    await settle();
+    expect(gets(), "the first refusal re-reads at once").toBe(g0 + 1);
+    expect(screenOf(island), "a 404 from play is not the room vanishing").toBe("live");
+
+    void act(); // 2nd in a row (Lichess refused): back off 1s
+    await settle();
+    expect(gets(), "the second waits").toBe(g0 + 1);
+    await settle(999);
+    expect(gets()).toBe(g0 + 1);
+    await settle(1);
+    expect(gets(), "…and re-reads after 1s").toBe(g0 + 2);
+
+    void act(); // accepted: the streak resets, re-read at once
+    await settle();
+    expect(gets()).toBe(g0 + 3);
+    void act(); // a fresh first failure: at once again
+    await settle();
+    expect(gets(), "an accepted act resets the back-off").toBe(g0 + 4);
+    expect(actAnswers.length, "anti-vacuity: every answer was served").toBe(0);
+
+    // The poll is still alive (a live game, no realtime ⇒ LIVE_POLL_MS).
+    await settle(3_000);
+    expect(gets(), "polling never stopped").toBeGreaterThan(g0 + 4);
+    expect(screenOf(island)).toBe("live");
     island.unmount();
   });
 });

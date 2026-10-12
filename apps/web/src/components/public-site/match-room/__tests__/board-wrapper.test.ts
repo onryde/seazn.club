@@ -5,11 +5,40 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { legalDests } from "../board";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import Board, { legalDests } from "../board";
 
 const DIR = join(__dirname, "..");
 
 describe("the board wrapper", () => {
+  it("m8: the surface is a labelled group (its squares take clicks), never an image; it says whether it is movable", () => {
+    // Its first paint, before chessground mounts (effects do not run here).
+    const paint = (movable: boolean) =>
+      renderToStaticMarkup(
+        createElement(Board, {
+          fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+          orientation: "white",
+          lastMove: null,
+          movable,
+          syncKey: 0,
+          onMove: () => {},
+          label: "White to move",
+          t: (k: string) => k,
+        }),
+      );
+    let checked = 0;
+    for (const movable of [true, false]) {
+      const html = paint(movable);
+      expect(html).toMatch(/data-testid="room-board-surface"[^>]*role="group"/);
+      expect(html).toMatch(/aria-label="White to move"/);
+      expect(html).not.toContain('role="img"');
+      expect(html).toContain(`data-movable="${movable}"`);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("room-shell mounts the board through next/dynamic with ssr:false — chessground touches document", () => {
     const src = readFileSync(join(DIR, "room-shell.tsx"), "utf8");
     expect(src).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\("\.\/board"\),\s*\{\s*ssr:\s*false\s*\}\s*\)/);
