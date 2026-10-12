@@ -62,6 +62,10 @@ export type ArbiterVideoView =
   | { kind: "unavailable" }
   /** This browser left: remote sound could not be refused. */
   | { kind: "fault" }
+  /** The viewer plays on this board (C1, D7): never watched by them. The
+   *  loader already hides such a board; this is the join route's answer when
+   *  a re-seat lands between the two. */
+  | { kind: "own" }
   | { kind: "error" };
 
 export type ArbiterScreenProps = {
@@ -107,6 +111,8 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
         return { kind: "overridden" };
       case "VIDEO_MEETING_ENDED":
         return { kind: "ended" };
+      case "ARBITER_PLAYS_THIS_BOARD":
+        return { kind: "own" };
     }
   }
   return { kind: "error" };
@@ -224,6 +230,9 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
 
       {p.round === null ? (
         <EmptyNotice title={f.t("arbiter.empty.title")} body={f.t("arbiter.empty.body")} />
+      ) : p.round.boards.length === 0 && p.round.ownBoards > 0 ? (
+        // C1 (D7): every board of the round is one the viewer plays on.
+        <EmptyNotice title={null} body={f.t("arbiter.ownRound")} />
       ) : p.round.boards.length === 0 || board === null ? (
         <EmptyNotice title={null} body={f.t("arbiter.emptyBoards")} />
       ) : (
@@ -460,6 +469,8 @@ function tileSentenceKey(video: Exclude<ArbiterVideoView, { kind: "watching" }>)
       return "arbiter.tile.fault";
     case "error":
       return "arbiter.tile.error";
+    case "own":
+      return "arbiter.tile.own";
   }
 }
 

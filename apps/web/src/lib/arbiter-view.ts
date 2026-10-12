@@ -108,7 +108,11 @@ export type ArbiterRound = {
   roundNo: number;
   /** "10+5" — the division's clock. */
   timeControl: string | null;
+  /** Never a board the viewer plays on (C1, D7). */
   boards: ArbiterBoard[];
+  /** How many of the round's boards were left out because the viewer plays
+   *  on them: every board left out ⇒ the panel says "you're playing". */
+  ownBoards: number;
 };
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;

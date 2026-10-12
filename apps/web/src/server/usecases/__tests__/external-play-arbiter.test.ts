@@ -17,11 +17,13 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
+import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { joinAsArbiter, loadArbiterRound, overrideVideoAsOrganiser, resyncExternalPlay, type ArbiterVideo } from "../external-play/arbiter";
-import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "./_external-play-seed";
+import { seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -115,6 +117,20 @@ async function codeOf(p: Promise<unknown>): Promise<[number, string]> {
   throw new Error("expected a refusal");
 }
 
+/** C1: a PLAYER of `board` who is also an admin of the club — the
+ *  organiser who plays. Their session is a full organiser's. */
+async function seatedAdmin(r: SeedOnlineChessRoundResult, userId: string): Promise<AuthCtx> {
+  await sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${userId}, 'admin')`;
+  return { ...r.owner, userId, role: "admin" } as AuthCtx;
+}
+
+/** The roster edit a re-seat is: the entrant's member person replaced. */
+async function replaceMember(entrantId: string, orgId: string): Promise<void> {
+  const stand = await seedPlayer(orgId, "Stand-in", `s-${randomUUID().slice(0, 8)}`, false);
+  await sql`delete from entrant_members where entrant_id = ${entrantId}`;
+  await sql`insert into entrant_members (entrant_id, person_id, is_captain, roles) values (${entrantId}, ${stand.personId}, false, '{}')`;
+}
+
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("loadArbiterRound — the empty case first", () => {
   it("a division whose round was never opened has nothing to watch: null, and nothing blocks (D8)", async () => {
@@ -181,6 +197,29 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
     // Resync reads a game on file that is not over; nothing else.
     expect(view.boards.map((x) => x.canResync)).toEqual([false, true, true, true, false]);
     expect(view.boards.map((x) => x.playable)).toEqual([true, true, true, true, false]);
+  });
+
+  it("C1: the viewer's OWN board is never listed — counted, so the panel can say why; another organiser still sees it", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    await openRound(r);
+    const [one, two] = r.boards;
+    const admin = await seatedAdmin(r, one!.home.userId);
+    const mine = (await loadArbiterRound(admin, r.divisionId))!;
+    expect(mine.boards.map((b) => b.fixtureId)).toEqual([two!.fixtureId]);
+    expect(mine.ownBoards).toBe(1);
+    // The positive pair: the organiser who plays nowhere sees both.
+    const theirs = (await loadArbiterRound(r.owner, r.divisionId))!;
+    expect(theirs.boards.map((b) => b.fixtureId)).toEqual([one!.fixtureId, two!.fixtureId]);
+    expect(theirs.ownBoards).toBe(0);
+  });
+
+  it("C1: every board the viewer's own — no board at all, and the count says so (the panel's plain state)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(r);
+    const admin = await seatedAdmin(r, r.boards[0]!.away.userId);
+    const view = (await loadArbiterRound(admin, r.divisionId))!;
+    expect(view.boards).toEqual([]);
+    expect(view.ownBoards).toBe(1);
   });
 
   it("a second opened round replaces the first in view; a later-opened EARLIER round number does not win by number", async () => {
@@ -401,6 +440,63 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect(checked).toBe(6);
     expect(calls.filter((c) => c.startsWith("add:")), "no participant was minted").toEqual([]);
     expect(await arbiterRows(board.fixtureId)).toEqual([]);
+  });
+
+  it("C1: an admin seated on board 1 is refused board 1 — before any meeting or participant — but may watch board 2", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const [one, two] = r.boards;
+    for (const b of [one!, two!]) {
+      await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+      await meeting(b.fixtureId, r.orgId);
+      await playerParticipant(b.fixtureId, b.home.personId);
+      await playerParticipant(b.fixtureId, b.away.personId);
+    }
+    const admin = await seatedAdmin(r, one!.home.userId);
+    const { video, calls } = fakeVideo();
+    expect(await codeOf(joinAsArbiter(admin, one!.fixtureId, { video }))).toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+    expect(calls, "refused before ensureMeeting: nothing made, nothing minted").toEqual([]);
+    expect(await arbiterRows(one!.fixtureId)).toEqual([]);
+    const out = await joinAsArbiter(admin, two!.fixtureId, { video });
+    expect(out.authToken).toBe("tok-add-1");
+    expect((await arbiterRows(two!.fixtureId)).map((x) => x.user_id)).toEqual([one!.home.userId]);
+  });
+
+  it("C1: the refusal holds across both colours and after re-seating — off the roster but still in the meeting, or checked in", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const [one, two] = r.boards;
+    for (const b of [one!, two!]) {
+      await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+      await meeting(b.fixtureId, r.orgId);
+    }
+    const whitePlayer = await seatedAdmin(r, one!.home.userId);
+    const blackPlayer = await seatedAdmin(r, one!.away.userId);
+    const { video, calls } = fakeVideo();
+    let checked = 0;
+    const refused = async (auth: AuthCtx, fixtureId: string, why: string) => {
+      expect(await codeOf(joinAsArbiter(auth, fixtureId, { video })), why).toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+      checked++;
+    };
+    // The bridge seats home as White.
+    await refused(whitePlayer, one!.fixtureId, "home, White");
+    await refused(blackPlayer, one!.fixtureId, "away, Black");
+    // Colours swapped (a re-paired board: away is White now).
+    await sql`update fixture_external_play set white_side = 'away' where fixture_id = ${one!.fixtureId}`;
+    await refused(whitePlayer, one!.fixtureId, "home, now Black");
+    await refused(blackPlayer, one!.fixtureId, "away, now White");
+    // Re-seated off the roster after T8 seated them in the meeting.
+    await playerParticipant(one!.fixtureId, one!.home.personId);
+    await replaceMember(one!.home.entrantId, r.orgId);
+    await refused(whitePlayer, one!.fixtureId, "off the roster, still a player participant");
+    // Re-seated off the roster after checking in (no camera participant yet).
+    const checkedIn = await seatedAdmin(r, two!.away.userId);
+    await stampFixtureCheckIn(two!.away.personId, two!.fixtureId, r.orgId);
+    await replaceMember(two!.away.entrantId, r.orgId);
+    await refused(checkedIn, two!.fixtureId, "off the roster, checked in");
+    expect(checked).toBe(6);
+    expect(calls, "no meeting made, no participant minted").toEqual([]);
+    expect([...(await arbiterRows(one!.fixtureId)), ...(await arbiterRows(two!.fixtureId))]).toEqual([]);
   });
 
   it("an ended meeting is the vendor adapter's 409, passed through — the arbiter never makes another", async () => {

@@ -6001,6 +6001,8 @@
   "externalPlay.room.state.cameraGaveUp.body": "We couldn't reconnect your camera. Reload the page — if it keeps happening, tell your organiser.",
   "externalPlay.room.state.cameraGaveUp.reload": "Reload",
   "externalPlay.flag.cameraConnectionProblems": "Camera connection problems (our side) — {duration}",
+  "arbiter.ownRound": "You're playing in this round — another organiser must review it.",
+  "arbiter.tile.own": "You play on this board — another organiser must watch it",
   "arbiter.title": "Arbiter",
   "arbiter.back": "Back to run sheet",
   "arbiter.roundLine": "{stage} · Round {round}",
