@@ -1251,8 +1251,9 @@ Elsewhere the text is the controller's record.
      whether a disqualification recorded before anything is played counts as a match played in player stats. Option A,
      as put to the owner: "doesn't count — treated like a walkover. It also scores like a walkover, which is how it's
      built now."
-     - **Covers** a disqualification before `core.start`, and one after a Start with nothing played (ruling 112's test,
-       widened by ruling 114).
+     - **Covers** a disqualification after a Start with nothing played (ruling 112's test, widened by ruling 114).
+       Correction (2026-10-12, controller): X-RS-1 already refuses a disqualification before `core.start`. The first
+       version of this ruling also named that case, which cannot arise.
      - **Credit:** the sport's walkover credit.
      - **Stats:** it does not count as a match played for either side's players, and it credits no personal W/L.
        This is the same as X-PS-1.
@@ -1262,6 +1263,22 @@ Elsewhere the text is the controller's record.
        a match nobody played, and the stats do not depend on whether the organiser pressed Start before recording
        the no-show.
      - **Amends** X-PS-1, X-PS-2 and X-RT-1, and closes the "pending owner ruling (DQ with nothing played)" clauses.
+116. **A withdrawn knockout winner's next tie reads as a walkover, naming who withdrew** (2026-10-12, owner "A",
+     given after my recommendation A). Found in the Task 16 truth run (R16-5 Q1).
+     - **What happened before:** the tie was stored as `{award, reason:"bye"}` with no loser. Every surface read
+       "Bye":
+       - schedule: "Ended · Bye · Team 4";
+       - bracket: "Bye · Team 4 · TBD";
+       - match page: "Bye vs Team 4 — (Forfeited)".
+       
+       That contradicts X-WD-3 ("advances by walkover"), and no surface said that a side had withdrawn.
+     - **The rule:** that tie reads "w/o" and names the withdrawn side, like any other walkover, on the schedule,
+       the bracket and the match page.
+     - **Still holds:** the withdrawn side is still never seated in the next round, so the seat stays dead
+       (X-WD-3/X-WD-5).
+     - **Scope:** only this case, in W2b. The bracket's "TBD" on finished bye tiles stays with W4, with the rest of the
+       bye and vacant copy family. So does the SF2 void copy (R16-5 Q2), which follows owner ruling C2 of
+       2026-09-21.
 
 ## Recommendations (mine — not rulings)
 
