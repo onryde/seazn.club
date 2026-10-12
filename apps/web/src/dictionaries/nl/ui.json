@@ -6221,5 +6221,8 @@
   "externalPlay.room.meta.title": "Jouw bord",
   "externalPlay.room.meta.description": "Speel je online schaakpartij voor deze wedstrijd.",
   "register.lichessLinkRequired": "Deze divisie vereist een gekoppeld Lichess-account voordat je je inschrijft.",
-  "register.lichessLinkCta": "Lichess koppelen"
+  "register.lichessLinkCta": "Lichess koppelen",
+  "register.online.lichess": "Wordt online gespeeld op Seazn. Om je in te schrijven heb je een gekoppeld Lichess-account nodig.",
+  "register.camera.required": "Je camera moet aan staan tijdens je partijen.",
+  "register.camera.optional": "Je camera is optioneel tijdens je partijen."
 }

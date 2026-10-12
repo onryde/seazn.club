@@ -66,6 +66,9 @@ import {
 } from "@/lib/credits";
 import { ageAt, isMinor, requiresDob, requiresGender } from "./registration-eligibility";
 import { audit } from "./audit";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
+import { onlineChessOffered } from "./external-play/online-chess-flag";
 
 type Tx = postgres.TransactionSql;
 
@@ -1993,6 +1996,12 @@ export interface PublicDivisionInfo {
    *  register/division-card.tsx). Organiser-authored free text: render as
    *  TEXT, never as HTML/markdown. */
   eligibility_note: string | null;
+  /** T16 (spec §5.4): the division plays online on Lichess — stated before signup, and only while the club is offered
+   *  online chess (the same condition under which submit demands the Lichess link). */
+  online_play: boolean;
+  /** T16: the camera requirement a player signs up to — the division's own setting, else the competition's; `off`
+   *  whenever `online_play` is false (no online play ⇒ no camera to require). A stage may still set its own. */
+  camera_policy: CameraPolicy;
 }
 
 export interface PublicRegistrationInfoResult {
@@ -2048,11 +2057,15 @@ export async function publicRegistrationInfo(
       active: number;
       waitlisted: number;
       eligibility_note: string | null;
+      config: unknown;
+      division_camera_policy: unknown;
+      competition_camera_policy: unknown;
     })[]
   >`
     select rs.*, d.name, d.slug, d.sport_key, d.category, d.age_min, d.age_max, d.youth,
            d.age_cutoff_month, d.age_cutoff_day,
            d.eligibility_note,
+           d.config, d.camera_policy as division_camera_policy, c.camera_policy as competition_camera_policy,
            -- RS012 ruling 1: capacity/active counts TEAM entries only — a
            -- solo sign-up ("free agent") never occupies a team slot, here or
            -- at the submit-time gate this display must agree with
@@ -2066,6 +2079,7 @@ export async function publicRegistrationInfo(
                and r.status = 'waitlisted') as waitlisted
     from registration_settings rs
     join divisions d on d.id = rs.division_id
+    join competitions c on c.id = d.competition_id
     where d.competition_id = ${comp.id} and rs.enabled
     order by d.name`;
 
@@ -2075,6 +2089,13 @@ export async function publicRegistrationInfo(
   // Stripe-fee divisions with Connect live. Scope by competition so an Event
   // Pass keeps THAT comp's paid intake open.
   const paidEntitled = await hasFeature(comp.org_id, "registration.paid", comp.id);
+
+  // T16: online play is stated only while the club is offered online chess — asked once, and only when a division
+  // could play online at all (a club with no online division asks PostHog nothing).
+  const couldPlayOnline = rows.some((r) => supportsOnlinePlay(r.sport_key) && readOnlinePlay(r.config) === "lichess");
+  const offered = couldPlayOnline && (await onlineChessOffered({ orgId: comp.org_id, userId: null }));
+  const onlinePlay = (r: (typeof rows)[number]) =>
+    offered && supportsOnlinePlay(r.sport_key) && readOnlinePlay(r.config) === "lichess";
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
@@ -2140,6 +2161,14 @@ export async function publicRegistrationInfo(
       waitlisted: r.waitlisted,
       form_fields: r.form_fields ?? [],
       eligibility_note: r.eligibility_note,
+      online_play: onlinePlay(r),
+      camera_policy: onlinePlay(r)
+        ? effectivePolicy({
+            stage: null,
+            division: readCameraPolicy(r.division_camera_policy),
+            competition: readCameraPolicy(r.competition_camera_policy),
+          })
+        : "off",
     };
   });
   return {

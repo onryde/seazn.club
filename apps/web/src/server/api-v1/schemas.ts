@@ -3759,6 +3759,12 @@ export const PublicRegistrationDivision = z.object({
    *  column the ENTRIES step renders as an organiser notice. Organiser-
    *  authored free text: render as TEXT, never as HTML/markdown. */
   eligibility_note: z.string().nullable(),
+  /** T16 (spec §5.4) — the division plays online on Lichess (and the club is offered online chess): stated on the
+   *  ENTRIES step, before signup. */
+  online_play: z.boolean(),
+  /** T16 — the camera requirement a player signs up to (the division's own setting, else the competition's); `off`
+   *  whenever `online_play` is false. */
+  camera_policy: CameraPolicyS,
 });
 
 export const PublicRegistrationInfo = z.object({

@@ -57,6 +57,11 @@ export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_conse
  *  registration-eligibility.ts's `EligibilityDivision` is narrow: callers
  *  (including tests) can pass a hand-built object with no cast. */
 export interface DivisionLike {
+  /** T16 (spec §5.4) — the division plays online on Lichess, and the camera requirement a player signs up to
+   *  (`publicRegistrationInfo`). Optional on this narrow type, like `eligibility_note`: every older fixture across the
+   *  stepper's suites stays compiling, and `undefined` reads as "not online". */
+  online_play?: boolean;
+  camera_policy?: "off" | "optional" | "required";
   division_id: string;
   name: string;
   entrant_kind: "team" | "individual" | "pair";

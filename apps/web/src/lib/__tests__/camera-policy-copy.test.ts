@@ -157,7 +157,13 @@ describe("camera policy copy", () => {
     let checked = 0;
     for (const loc of LOCALES) {
       const camera = Object.entries(DICTS[loc]).filter(
-        ([k]) => k.startsWith("divset.camera.") || k.startsWith("onlineChess.camera.") || k === "divset.err.cameraPolicyLocked",
+        ([k]) =>
+          k.startsWith("divset.camera.") ||
+          k.startsWith("onlineChess.camera.") ||
+          k === "divset.err.cameraPolicyLocked" ||
+          // T16: what registration states before signup.
+          k.startsWith("register.camera.") ||
+          k === "register.online.lichess",
       );
       for (const [k, text] of camera) {
         expect(text, `${loc} ${k}`).not.toMatch(MONITORED);
@@ -166,8 +172,9 @@ describe("camera policy copy", () => {
     }
     // 4 locales × (label, help, playerNoticeLabel, save, saved, inherited,
     // inheritOption, inheritSummary, inheritPending, needsOnlinePlay,
-    // 3 options, the lock error, the notice) = 4 × 15.
-    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(60);
+    // 3 options, the lock error, the notice) = 4 × 15; plus registration's online line and its two camera
+    // sentences (T16) = 4 × 18.
+    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(72);
   });
 
   it("the online-play help no longer promises games played on Lichess (D3 deleted that mode)", () => {

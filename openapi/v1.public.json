@@ -52460,6 +52460,17 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "online_play": {
+                                "type": "boolean"
+                              },
+                              "camera_policy": {
+                                "type": "string",
+                                "enum": [
+                                  "off",
+                                  "optional",
+                                  "required"
+                                ]
                               }
                             },
                             "required": [
@@ -52489,7 +52500,9 @@
                               "requires_gender",
                               "youth",
                               "form_fields",
-                              "eligibility_note"
+                              "eligibility_note",
+                              "online_play",
+                              "camera_policy"
                             ],
                             "additionalProperties": false
                           }
@@ -52561,7 +52574,9 @@
                             "required": true
                           }
                         ],
-                        "eligibility_note": "example"
+                        "eligibility_note": "example",
+                        "online_play": true,
+                        "camera_policy": "off"
                       }
                     ]
                   },

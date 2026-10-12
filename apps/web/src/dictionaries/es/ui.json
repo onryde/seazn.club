@@ -6221,5 +6221,8 @@
   "externalPlay.room.meta.title": "Tu tablero",
   "externalPlay.room.meta.description": "Juega tu partida de ajedrez en línea de este encuentro.",
   "register.lichessLinkRequired": "Esta división exige una cuenta de Lichess vinculada antes de inscribirte.",
-  "register.lichessLinkCta": "Vincular Lichess"
+  "register.lichessLinkCta": "Vincular Lichess",
+  "register.online.lichess": "Se juega en línea en Seazn. Para inscribirte necesitas una cuenta de Lichess vinculada.",
+  "register.camera.required": "Tu cámara debe estar encendida durante tus partidas.",
+  "register.camera.optional": "La cámara es opcional durante tus partidas."
 }

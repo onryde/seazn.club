@@ -6221,5 +6221,8 @@
   "externalPlay.room.meta.title": "Votre échiquier",
   "externalPlay.room.meta.description": "Jouez votre partie d'échecs en ligne de cette rencontre.",
   "register.lichessLinkRequired": "Cette division exige un compte Lichess lié avant l'inscription.",
-  "register.lichessLinkCta": "Lier Lichess"
+  "register.lichessLinkCta": "Lier Lichess",
+  "register.online.lichess": "Se joue en ligne sur Seazn. Pour vous inscrire, il faut un compte Lichess relié.",
+  "register.camera.required": "Votre caméra doit être allumée pendant vos parties.",
+  "register.camera.optional": "La caméra est facultative pendant vos parties."
 }

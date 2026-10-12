@@ -6221,5 +6221,8 @@
   "externalPlay.room.meta.title": "Your board",
   "externalPlay.room.meta.description": "Play your online chess game for this fixture.",
   "register.lichessLinkRequired": "This division needs a linked Lichess account before you can enter.",
-  "register.lichessLinkCta": "Link Lichess"
+  "register.lichessLinkCta": "Link Lichess",
+  "register.online.lichess": "Played online on Seazn. Entering needs a linked Lichess account.",
+  "register.camera.required": "Your camera must be on during your games.",
+  "register.camera.optional": "Your camera is optional during your games."
 }
