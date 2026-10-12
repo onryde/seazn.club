@@ -116,9 +116,39 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
         return { kind: "ended" };
       case "ARBITER_PLAYS_THIS_BOARD":
         return { kind: "own" };
+      case "FIXTURE_NOT_PLAYABLE":
+        return { kind: "over" };
     }
   }
   return { kind: "error" };
+}
+
+/** I2: the participant one open of a board minted on the server. The panel
+ *  hands it back when the board closes — a switch, the panel going away —
+ *  and when the tab goes away (`release`, on pagehide: `keepalive`, so the
+ *  request outlives the page), ONCE. A mint that lands after the board closed
+ *  (the POST raced the switch) is handed back at once. A send that fails is
+ *  dropped: the sweep removes whatever the browser could not. */
+export function arbiterWatchRelease(fixtureId: string, send: (url: string, init: RequestInit) => Promise<unknown>) {
+  let participantId: string | null = null;
+  let closed = false;
+  const release = () => {
+    if (participantId === null) return;
+    const url = `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter/${encodeURIComponent(participantId)}`;
+    participantId = null;
+    void send(url, { method: "DELETE", keepalive: true }).catch(() => undefined);
+  };
+  return {
+    minted(id: string) {
+      participantId = id;
+      if (closed) release();
+    },
+    close() {
+      closed = true;
+      release();
+    },
+    release,
+  };
 }
 
 /** "Camera off since HH:MM": the instant THIS browser first saw a present
@@ -783,6 +813,10 @@ export function ArbiterPanel({
     const fixtureId = joinKey.slice(0, joinKey.indexOf("#"));
     let cancelled = false;
     let mine: ArbiterCameras | null = null;
+    // I2: whatever happens to the meeting below, the participant the POST
+    // minted is handed back when this board closes or the tab goes away.
+    const watch = arbiterWatchRelease(fixtureId, (url, init) => apiV1(url, init));
+    window.addEventListener("pagehide", watch.release);
     const answer = (view: ArbiterVideoView) => {
       if (!cancelled) setJoin({ key: joinKey, view });
     };
@@ -803,10 +837,11 @@ export function ArbiterPanel({
     };
     void (async () => {
       try {
-        const seats = await apiV1<{ authToken: string; white: string[]; black: string[] }>(
+        const seats = await apiV1<{ authToken: string; participantId: string; white: string[]; black: string[] }>(
           `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`,
           { method: "POST" },
         );
+        watch.minted(seats.participantId);
         if (cancelled) return;
         const joined = await joinArbiter(seats);
         if (cancelled) {
@@ -824,6 +859,8 @@ export function ArbiterPanel({
     return () => {
       cancelled = true;
       if (mine !== null) void mine.leave().catch(() => undefined);
+      window.removeEventListener("pagehide", watch.release);
+      watch.close();
     };
   }, [joinKey]);
 

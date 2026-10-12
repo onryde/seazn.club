@@ -1,5 +1,6 @@
-// T15 — the arbiter panel's three organiser routes over HTTP:
+// T15 — the arbiter panel's organiser routes over HTTP:
 //   POST /fixtures/{id}/external-play/arbiter         the receive-only join
+//   DELETE …/arbiter/{participantId}                  the panel closed (fix round 1, I2)
 //   POST /fixtures/{id}/external-play/resync          reconcile, trigger `organiser`
 //   POST /fixtures/{id}/external-play/video-override  D11, Task 8's usecase
 // Who may call each, and that a refused caller writes nothing. The usecases'
@@ -36,7 +37,7 @@ vi.mock("@/server/api-v1/auth", async (importOriginal) => {
 });
 // RealtimeKit at its module boundary: the meeting is the seeded row, a new
 // participant is minted locally. Nothing reaches Cloudflare.
-const rtk = vi.hoisted(() => ({ minted: [] as string[] }));
+const rtk = vi.hoisted(() => ({ minted: [] as string[], removed: [] as string[] }));
 vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/external-play/video/realtimekit")>();
   const { sql: db } = await import("@/lib/db");
@@ -52,17 +53,20 @@ vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
       rtk.minted.push(`${a.preset}:${id}`);
       return { participantId: id, authToken: `tok-${id}` };
     }),
-    refreshParticipantToken: vi.fn(async (a: { participantId: string }) => ({
-      participantId: a.participantId,
-      authToken: `tok-refresh-${a.participantId}`,
-    })),
+    removeParticipant: vi.fn(async (a: { participantId: string }) => {
+      rtk.removed.push(a.participantId);
+    }),
   };
 });
+// The resync throttle's counter (M3): deterministic, per key, reset per test.
+const limiter = vi.hoisted(() => ({ counts: new Map<string, number>() }));
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { POST as arbiterRoute } from "@/app/api/v1/fixtures/[id]/external-play/arbiter/route";
+import { DELETE as leaveRoute } from "@/app/api/v1/fixtures/[id]/external-play/arbiter/[participantId]/route";
+import { ARBITER_RESYNC_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { POST as resyncRoute } from "@/app/api/v1/fixtures/[id]/external-play/resync/route";
 import { POST as overrideRoute } from "@/app/api/v1/fixtures/[id]/external-play/video-override/route";
 import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "@/server/usecases/__tests__/_external-play-seed";
@@ -131,8 +135,16 @@ beforeEach(() => {
   authState.userId = "";
   door.userless = false;
   rtk.minted.length = 0;
+  rtk.removed.length = 0;
+  limiter.counts = new Map();
+  __setRateLimitCounterForTests(async (key, windowSeconds) => {
+    const n = (limiter.counts.get(key) ?? 0) + 1;
+    limiter.counts.set(key, n);
+    return { count: n, ttlMs: windowSeconds * 1000 };
+  });
 });
 afterAll(async () => {
+  __setRateLimitCounterForTests(null);
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
 });
 
@@ -220,12 +232,90 @@ describe.skipIf(!HAS_DB)("POST …/external-play/arbiter", () => {
     authState.userId = r.ownerUserId;
     const res = await read(await CALLS[0]!.send(r, b.fixtureId));
     expect(res.status).toBe(200);
-    const data = res.body.data as { authToken: string; white: string[]; black: string[] };
+    const data = res.body.data as { authToken: string; participantId: string; white: string[]; black: string[] };
     expect(data.white).toEqual([`pw-${b.fixtureId.slice(0, 6)}`]);
     expect(data.black).toEqual([`pb-${b.fixtureId.slice(0, 6)}`]);
     expect(rtk.minted.map((m) => m.split(":")[0])).toEqual(["arbiter"]);
-    expect(data.authToken).toBe(`tok-${rtk.minted[0]!.split(":")[1]}`);
-    expect(Object.keys(data).sort()).toEqual(["authToken", "black", "white"]);
+    expect(data.participantId).toBe(rtk.minted[0]!.split(":")[1]);
+    expect(data.authToken).toBe(`tok-${data.participantId}`);
+    expect(Object.keys(data).sort()).toEqual(["authToken", "black", "participantId", "white"]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("DELETE …/external-play/arbiter/{participantId} (I2)", () => {
+  const del = (fixtureId: string, participantId: string, headers: Record<string, string> = {}) =>
+    leaveRoute(
+      new Request(`https://test.local/api/v1/fixtures/${fixtureId}/external-play/arbiter/${participantId}`, { method: "DELETE", headers }),
+      { params: Promise.resolve({ id: fixtureId, participantId }) },
+    );
+  const removedAt = async (participantId: string) => {
+    const [row] = await sql<{ removed_at: Date | null }[]>`
+      select removed_at from fixture_video_participants where participant_id = ${participantId}`;
+    return row?.removed_at ?? null;
+  };
+  async function joined(r: SeedOnlineChessRoundResult, fixtureId: string, userId: string): Promise<string> {
+    authState.userId = userId;
+    const res = await read(await CALLS[0]!.send(r, fixtureId));
+    expect(res.status, "premise: the join succeeded").toBe(200);
+    return (res.body.data as { participantId: string }).participantId;
+  }
+
+  it("the organiser who joined removes their own watch; a repeat answers removed:false; the vendor is called once", async () => {
+    const { r, b } = await liveBoard();
+    const pid = await joined(r, b.fixtureId, r.ownerUserId);
+    const first = await read(await del(b.fixtureId, pid));
+    expect([first.status, first.body.data]).toEqual([200, { removed: true }]);
+    expect(rtk.removed).toEqual([pid]);
+    expect(await removedAt(pid)).not.toBeNull();
+    const again = await read(await del(b.fixtureId, pid));
+    expect([again.status, again.body.data]).toEqual([200, { removed: false }]);
+    expect(rtk.removed).toEqual([pid]);
+  });
+
+  it("an organiser demoted to viewer mid-watch may still end their OWN watch (read scope); nobody ends another's", async () => {
+    const { r, b } = await liveBoard();
+    const admin = await member(r.orgId, "admin");
+    const mine = await joined(r, b.fixtureId, admin);
+    const theirs = await joined(r, b.fixtureId, r.ownerUserId);
+    await sql`update org_members set role = 'viewer' where org_id = ${r.orgId} and user_id = ${admin}`;
+    authState.userId = admin;
+    const cases: [string, () => Promise<Response>, number][] = [
+      ["another organiser's watch", () => del(b.fixtureId, theirs), 404],
+      ["my watch, on another board id", () => del(randomUUID(), mine), 404],
+      ["a stranger", async () => {
+        authState.userId = (await seedOwner()).userId!;
+        return del(b.fixtureId, mine);
+      }, 401],
+    ];
+    let checked = 0;
+    for (const [why, call, status] of cases) {
+      expect((await call()).status, why).toBe(status);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(rtk.removed).toEqual([]);
+    // The positive pair: the demoted viewer, their own watch.
+    authState.userId = admin;
+    const own = await read(await del(b.fixtureId, mine));
+    expect([own.status, own.body.data]).toEqual([200, { removed: true }]);
+    expect(rtk.removed).toEqual([mine]);
+    expect(await removedAt(theirs)).toBeNull();
+  });
+
+  it("an API key is refused at the door (NEVER_KEY_ROUTES); nothing removed", async () => {
+    const { r, b } = await liveBoard();
+    const pid = await joined(r, b.fixtureId, r.ownerUserId);
+    for (const key of ["api.access", "api.write"]) {
+      await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+                values (${r.orgId}, ${key}, true, 'arbiter routes') on conflict (org_id, feature_key) do update set bool_value = true`;
+    }
+    await invalidateOrgEntitlements(r.orgId);
+    const { secret } = await createApiKey(r.owner, { name: `arb-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
+    const res = await read(await del(b.fixtureId, pid, { authorization: `Bearer ${secret}` }));
+    expect(res.status).toBe(403);
+    expect(res.body.error?.message).toMatch(/cannot access this endpoint/);
+    expect(rtk.removed).toEqual([]);
+    expect(await removedAt(pid)).toBeNull();
   });
 });
 
@@ -236,6 +326,28 @@ describe.skipIf(!HAS_DB)("POST …/external-play/resync", () => {
     const res = await read(await CALLS[1]!.send(r, r.boards[0]!.fixtureId));
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ read: false, adopted: 0, finished: false });
+  });
+
+  it("M3: an over-the-board fixture is a 404, never a 'nothing read' — the positive pair is the same club's online board", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    authState.userId = r.ownerUserId;
+    await sql`update divisions set config = config - 'onlinePlay' where id = (select division_id from fixtures where id = ${r.boards[0]!.fixtureId})`;
+    const otb = await read(await CALLS[1]!.send(r, r.boards[0]!.fixtureId));
+    expect([otb.status, otb.body.error?.code]).toEqual([404, "NOT_FOUND"]);
+    expect(limiter.counts.size, "refused before the throttle counts").toBe(0);
+    const online = await seedOnlineChessRound({ fixtures: 1 });
+    authState.userId = online.ownerUserId;
+    expect((await CALLS[1]!.send(online, online.boards[0]!.fixtureId)).status).toBe(200);
+  });
+
+  it(`M3: past ${ARBITER_RESYNC_LIMIT.max} resyncs of ONE board in a window the next is 429 — another board is not throttled`, async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    authState.userId = r.ownerUserId;
+    const [one, two] = r.boards;
+    const statuses: number[] = [];
+    for (let i = 0; i <= ARBITER_RESYNC_LIMIT.max; i++) statuses.push((await CALLS[1]!.send(r, one!.fixtureId)).status);
+    expect(statuses).toEqual([...Array(ARBITER_RESYNC_LIMIT.max).fill(200), 429]);
+    expect((await CALLS[1]!.send(r, two!.fixtureId)).status, "per fixture").toBe(200);
   });
 });
 

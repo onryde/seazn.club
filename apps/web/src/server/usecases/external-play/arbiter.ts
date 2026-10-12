@@ -33,9 +33,12 @@ import {
   addParticipant,
   ensureMeeting,
   RealtimeKitError,
-  refreshParticipantToken,
+  removeParticipant,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
+import { roundOpenAt } from "@/server/external-play/round-open";
+import { EDITOR_ROLES } from "@/lib/types";
+import { ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { gameClocks, resultFor, turnAfter } from "@/components/public-site/match-room/room-snapshot";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
@@ -175,11 +178,14 @@ export async function loadArbiterRound(
   // not offered, not joined. Counted, so the panel can say why it is missing.
   const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
 
-  const boards: ArbiterBoard[] = [];
-  for (const [i, r] of rows.entries()) {
-    if (own.has(r.fixtureId)) continue;
-    const sides = await loadSides(r);
-    const whiteSide: Side = r.whiteSide ?? (await whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }));
+  // M4: every board is read at once (its sides, its colours, its result, its
+  // flags) — never one board after another. Promise.all keeps board order.
+  const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
+  const boards: ArbiterBoard[] = await Promise.all(listed.map(async ([i, r]): Promise<ArbiterBoard> => {
+    const [sides, whiteSide] = await Promise.all([
+      loadSides(r),
+      r.whiteSide ?? whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }),
+    ] as const);
     const white = whiteSide === "home" ? sides.home : sides.away;
     const black = whiteSide === "home" ? sides.away : sides.home;
     const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;
@@ -212,12 +218,11 @@ export async function loadArbiterRound(
 
     const nameOf = (personId: string | null): string | null =>
       personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
-    const flags: ArbiterFlag[] = [];
-    for (const f of flagRows.filter((x) => x.fixtureId === r.fixtureId)) {
-      flags.push(await flagView(f, { nameOf, times: r }));
-    }
+    const flags: ArbiterFlag[] = await Promise.all(
+      flagRows.filter((x) => x.fixtureId === r.fixtureId).map((f) => flagView(f, { nameOf, times: r })),
+    );
 
-    boards.push({
+    return {
       fixtureId: r.fixtureId,
       fixtureNo: r.fixtureNo,
       boardNo: r.seq ?? i + 1,
@@ -245,8 +250,8 @@ export async function loadArbiterRound(
       canResync: gameOnFile && playable && r.bridgeStatus !== null && ["ready", "live", "needs_organiser"].includes(r.bridgeStatus),
       playable,
       flags,
-    });
-  }
+    };
+  }));
   return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size };
 }
 
@@ -321,19 +326,39 @@ async function scoreOf(r: BoardRow, whiteEntrantId: string, blackEntrantId: stri
 export type ArbiterVideo = {
   ensureMeeting: (fixtureId: string) => Promise<{ meetingId: string }>;
   addParticipant: (a: { meetingId: string; subject: string; preset: "player" | "arbiter" }) => Promise<ParticipantToken>;
-  refreshParticipantToken: (a: { meetingId: string; participantId: string }) => Promise<ParticipantToken>;
+  removeParticipant: (a: { meetingId: string; participantId: string }) => Promise<void>;
 };
 
-const REAL_VIDEO: ArbiterVideo = {
+export const REAL_ARBITER_VIDEO: ArbiterVideo = {
   ensureMeeting: (fixtureId) => ensureMeeting(fixtureId),
   addParticipant: (a) => addParticipant(a),
-  refreshParticipantToken: (a) => refreshParticipantToken(a),
+  removeParticipant: (a) => removeParticipant(a),
 };
 
-/** What the arbiter's browser gets: ITS OWN token, and which player
- *  participants are White and Black (their peers' `userId`). Never a player's
- *  token (spec §10). */
-export type ArbiterJoin = { authToken: string; white: string[]; black: string[] };
+/** What the arbiter's browser gets: ITS OWN token for a participant made for
+ *  this open alone (`participantId`, which it hands back on leaving), and
+ *  which player participants are White and Black (their peers' `userId`).
+ *  Never a player's token (spec §10). */
+export type ArbiterJoin = { authToken: string; participantId: string; white: string[]; black: string[] };
+
+/** The roles that may watch a board — the route's `write` (requireOrgAuth:
+ *  owner or admin), and the role the sweep's arbiter removal keeps. One list,
+ *  so a join never mints what the next pass would remove. */
+export function mayWatchBoards(role: string | null): boolean {
+  return role !== null && (EDITOR_ROLES as readonly string[]).includes(role);
+}
+
+function requireWatcher(auth: AuthCtx): string {
+  if (auth.via !== "session" || auth.userId === null) {
+    throw new HttpError(403, "Watching a board needs a signed-in organiser", "ARBITER_NEEDS_SESSION");
+  }
+  // The route already asks for an owner or admin; this is the assumption as a
+  // guard, so the usecase cannot be reached by a weaker door.
+  if (!mayWatchBoards(auth.role)) {
+    throw new HttpError(403, "Only a club owner or admin watches a board", "ARBITER_NOT_ORGANISER");
+  }
+  return auth.userId;
+}
 
 /**
  * One organiser joins one board's meeting receive-only (preset `arbiter`:
@@ -341,19 +366,23 @@ export type ArbiterJoin = { authToken: string; white: string[]; black: string[] 
  * players' own — ensureMeeting is idempotent per fixture, so an arbiter who
  * arrives first creates the one both players will join, and an ended meeting
  * is never re-made (its 409 passes through). Authorisation is the route's
- * (requireResourceAuth on the fixture, write); this adds that the caller is a
- * signed-in person — a key or a scoring device has no business watching a
- * player's camera.
+ * (requireResourceAuth on the fixture, write: owner or admin); this adds that
+ * the caller is a signed-in person — a key or a scoring device has no
+ * business watching a player's camera — who does not play on the board (C1),
+ * on a board still being played in an opened round (M2).
+ *
+ * Every open mints a FRESH participant (I2): a RealtimeKit token lasts 100
+ * days and a token refresh does not revoke the old one, so a reused
+ * participant would keep every token ever handed out alive. The server
+ * removes it — leaveAsArbiter when the panel closes, the sweep when the role
+ * is gone or ARBITER_PARTICIPANT_TTL_MS has passed, endMeeting at teardown.
  */
 export async function joinAsArbiter(
   auth: AuthCtx,
   fixtureId: string,
   deps: { video?: ArbiterVideo } = {},
 ): Promise<ArbiterJoin> {
-  if (auth.via !== "session" || auth.userId === null) {
-    throw new HttpError(403, "Watching a board needs a signed-in organiser", "ARBITER_NEEDS_SESSION");
-  }
-  const userId = auth.userId;
+  const userId = requireWatcher(auth);
   const f = await loadOnlinePlayFixture(fixtureId);
   if (f === null || f.orgId !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
   // C1 (D7 safeguarding): a player never watches their opponent's camera,
@@ -361,6 +390,16 @@ export async function joinAsArbiter(
   // any meeting is made or participant minted.
   if (await isSeatedOn(userId, fixtureId)) {
     throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
+  }
+  // M2: a board that is over, or whose round was never opened, has no
+  // match to watch — and ensureMeeting would make a room for it.
+  if (!isPlayableFixtureStatus(f.fixtureStatus) || f.bridge?.status === "finished") {
+    throw new HttpError(409, "this board can no longer be played", "FIXTURE_NOT_PLAYABLE");
+  }
+  const [pos] = await sql<{ stageId: string; roundNo: number }[]>`
+    select stage_id as "stageId", round_no as "roundNo" from fixtures where id = ${fixtureId}`;
+  if (!pos || !(await roundOpenAt(sql, pos.stageId, pos.roundNo))) {
+    throw new HttpError(409, "this board's round is not open yet", "ROUND_NOT_OPEN");
   }
   if ((await fixtureCameraPolicy(fixtureId)) === "off") {
     throw new HttpError(409, "this board plays without cameras", "VIDEO_NOT_IN_USE");
@@ -373,11 +412,11 @@ export async function joinAsArbiter(
     throw new HttpError(409, "this board was let play without video", "VIDEO_OVERRIDDEN");
   }
 
-  const video = deps.video ?? REAL_VIDEO;
+  const video = deps.video ?? REAL_ARBITER_VIDEO;
   let token: ParticipantToken;
   try {
     const { meetingId } = await video.ensureMeeting(fixtureId);
-    token = await arbiterToken({ fixtureId, userId, meetingId }, video);
+    token = await mintArbiter({ fixtureId, userId, meetingId }, video);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
     captureError(err, {
@@ -403,40 +442,78 @@ export async function joinAsArbiter(
            order by created_at, id`;
   return {
     authToken: token.authToken,
+    participantId: token.participantId,
     white: players.filter((p) => p.personId === white.personId).map((p) => p.participantId),
     black: players.filter((p) => p.personId === black.personId).map((p) => p.participantId),
   };
 }
 
-/** The organiser's ONE arbiter participant on this fixture: refreshed when on
- *  file, else minted and kept — the player path's shape (preflight.ts
- *  issuePlayerToken), with V436's partial unique index as the race's judge. */
-async function arbiterToken(
+/** A fresh arbiter participant for this open, on file before its token is
+ *  handed out. A record that cannot be written leaves no participant behind:
+ *  it is removed at the vendor at once, so nothing watches untracked. */
+async function mintArbiter(
   a: { fixtureId: string; userId: string; meetingId: string },
   video: ArbiterVideo,
 ): Promise<ParticipantToken> {
-  const stored = await storedArbiter(a);
-  if (stored) return video.refreshParticipantToken({ meetingId: a.meetingId, participantId: stored });
   // `subject` is RealtimeKit's custom_participant_id: an internal id, never
   // an email or a name (realtimekit.ts addParticipant).
   const minted = await video.addParticipant({ meetingId: a.meetingId, subject: a.userId, preset: "arbiter" });
-  const inserted = await sql<{ participant_id: string }[]>`
-    insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, user_id)
-    values (${a.fixtureId}, null, 'arbiter', ${minted.participantId}, ${a.userId})
-    on conflict (fixture_id, user_id) where preset = 'arbiter' and user_id is not null do nothing
-    returning participant_id`;
-  if (inserted.length > 0) return minted;
-  const winner = await storedArbiter(a);
-  if (!winner) throw new HttpError(500, "arbiter participant vanished mid-race", "ARBITER_PARTICIPANT_LOST");
-  return video.refreshParticipantToken({ meetingId: a.meetingId, participantId: winner });
+  try {
+    await sql`
+      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, user_id)
+      values (${a.fixtureId}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
+  } catch (err) {
+    await video.removeParticipant({ meetingId: a.meetingId, participantId: minted.participantId }).catch(() => undefined);
+    throw err;
+  }
+  return minted;
 }
 
-async function storedArbiter(a: { fixtureId: string; userId: string }): Promise<string | null> {
-  const [row] = await sql<{ participant_id: string }[]>`
-    select participant_id from fixture_video_participants
-     where fixture_id = ${a.fixtureId} and preset = 'arbiter' and user_id = ${a.userId}
-     limit 1`;
-  return row?.participant_id ?? null;
+/**
+ * The panel closed (I2): the caller's OWN arbiter participant on this board
+ * is removed at the vendor — kicked from the live session, then deleted, so
+ * its token can no longer watch — and the watch's end is stamped. Only the
+ * caller's: anything else on this board, or this participant named on
+ * another board or club, is the same 404. Already removed (a repeat, the
+ * sweep, the teardown) answers `removed: false` without calling the vendor.
+ * A vendor failure is a 503 and leaves the watch open for the sweep. A room
+ * already torn down is INACTIVE (endMeeting), so nothing can join it: the
+ * stamp is all that is left to do.
+ */
+export async function leaveAsArbiter(
+  auth: AuthCtx,
+  fixtureId: string,
+  participantId: string,
+  deps: { video?: ArbiterVideo } = {},
+): Promise<{ removed: boolean }> {
+  if (auth.via !== "session" || auth.userId === null) {
+    throw new HttpError(403, "Watching a board needs a signed-in organiser", "ARBITER_NEEDS_SESSION");
+  }
+  const [row] = await sql<{ id: string; removedAt: Date | null; meetingId: string; meetingEndedAt: Date | null }[]>`
+    select vp.id, vp.removed_at as "removedAt", m.meeting_id as "meetingId", m.ended_at as "meetingEndedAt"
+      from fixture_video_participants vp
+      join fixtures f on f.id = vp.fixture_id
+      join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+     where vp.fixture_id = ${fixtureId} and vp.participant_id = ${participantId}
+       and vp.preset = 'arbiter' and vp.user_id = ${auth.userId} and f.org_id = ${auth.orgId}`;
+  if (!row) throw new HttpError(404, "no such arbiter participant", "NOT_FOUND");
+  if (row.removedAt !== null) return { removed: false };
+  if (row.meetingEndedAt === null) {
+    try {
+      await (deps.video ?? REAL_ARBITER_VIDEO).removeParticipant({ meetingId: row.meetingId, participantId });
+    } catch (err) {
+      if (!(err instanceof RealtimeKitError)) throw err;
+      captureError(err, {
+        orgId: auth.orgId,
+        route: "external-play/arbiter/leave",
+        extra: { fixtureId, status: err.status, code: err.code },
+      });
+      throw new HttpError(503, "video is unavailable right now", "VIDEO_UNAVAILABLE");
+    }
+  }
+  const stamped = await sql`
+    update fixture_video_participants set removed_at = now() where id = ${row.id} and removed_at is null`;
+  return { removed: stamped.count > 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -457,14 +534,28 @@ async function requireOwnFixture(auth: AuthCtx, fixtureId: string): Promise<void
   if (!row || row.org_id !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
 }
 
-/** "Resync from Lichess": reconcile's `organiser` trigger (design §3.5). */
+/** "Resync from Lichess": reconcile's `organiser` trigger (design §3.5).
+ *  M3: a board that is not played online — over the board, or not this
+ *  club's — is the same 404, never a "nothing read". A FINISHED online board
+ *  stays resyncable: reconcile closes the bridge of a fixture settled
+ *  elsewhere. Throttled per fixture (ARBITER_RESYNC_LIMIT, 429): each read
+ *  spends a player's Lichess token. A token that cannot be opened is
+ *  reconcile's 503 LICHESS_TOKEN_UNAVAILABLE, passed through. */
 export async function resyncExternalPlay(
   auth: AuthCtx,
   fixtureId: string,
   deps: ReconcileDeps = {},
 ): Promise<{ read: boolean; adopted: number; finished: boolean }> {
   requireSession(auth, "A resync");
-  await requireOwnFixture(auth, fixtureId);
+  const [row] = await sql<{ orgId: string; online: boolean }[]>`
+    select f.org_id as "orgId",
+           (d.sport_key = 'boardgame' and coalesce(d.config->>'onlinePlay', 'off') = 'lichess') as online
+      from fixtures f join divisions d on d.id = f.division_id
+     where f.id = ${fixtureId}`;
+  if (!row || row.orgId !== auth.orgId || !row.online) {
+    throw new HttpError(404, "no online board here", "NOT_FOUND");
+  }
+  await rateLimit(`arbiter-resync:${fixtureId}`, ARBITER_RESYNC_LIMIT);
   const out = await reconcile(fixtureId, "organiser", deps);
   return { read: out !== null, adopted: out?.adopted ?? 0, finished: out?.finished ?? false };
 }

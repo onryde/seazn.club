@@ -175,18 +175,27 @@ create unique index fixture_video_guard_faults_open_idx
 alter table fixture_video_guard_faults enable row level security;
 alter table fixture_video_guard_faults force  row level security;
 
--- fixture_video_participants.user_id — WHO watched (T15, design §5.3): an
---   arbiter participant is the organiser whose signed-in session joined the
---   fixture's meeting receive-only, so the record says which user saw the
---   players' cameras. A player row never carries one (its person is the
---   record). One arbiter participant per user per fixture: a reload refreshes
---   that participant's token rather than adding another, and the partial
---   unique index is what a racing second join loses to. ON DELETE SET NULL
---   keeps the record that someone watched after the account is deleted.
+-- fixture_video_participants.user_id, removed_at — WHO watched, and WHEN
+--   (T15, design §5.3; fix round 1, I2 + M5): an arbiter participant is the
+--   organiser whose signed-in session joined the fixture's meeting
+--   receive-only, so the record says which user saw the players' cameras. A
+--   player row never carries one (its person is the record). One row per
+--   WATCH: the panel mints a fresh participant each time it opens a board,
+--   never reusing one (a RealtimeKit token lasts 100 days and a refresh does
+--   not revoke the old one), and the server REMOVES it — the panel closed,
+--   the organiser's role gone, the participant past its TTL, the room torn
+--   down — stamping `removed_at`. created_at → removed_at is that watch.
+--   ON DELETE SET NULL keeps the record that someone watched after the
+--   account is deleted (the CHECK allows a null user on an arbiter row), and
+--   the sweep then removes a participant whose user is gone.
 alter table fixture_video_participants
   add column user_id uuid null references users(id) on delete set null,
+  add column removed_at timestamptz null,
   add constraint fixture_video_participants_user_check
-    check (user_id is null or preset = 'arbiter');
-create unique index fixture_video_participants_arbiter_idx
-  on fixture_video_participants (fixture_id, user_id)
-  where preset = 'arbiter' and user_id is not null;
+    check (user_id is null or preset = 'arbiter'),
+  add constraint fixture_video_participants_removed_check
+    check (removed_at is null or preset = 'arbiter');
+-- The sweep's look-up: arbiter participants not yet removed.
+create index fixture_video_participants_arbiter_open_idx
+  on fixture_video_participants (fixture_id)
+  where preset = 'arbiter' and removed_at is null;

@@ -372,6 +372,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // players' cameras — a person's act, never a key's; the override's audit
   // record names the signed-in user; the resync sits beside them.
   "POST /fixtures/:id/external-play/arbiter",
+  "DELETE /fixtures/:id/external-play/arbiter/:participantId",
   "POST /fixtures/:id/external-play/resync",
   "POST /fixtures/:id/external-play/video-override",
   "GET /orgs/:id/stream-targets",

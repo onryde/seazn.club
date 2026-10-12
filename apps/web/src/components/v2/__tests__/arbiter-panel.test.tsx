@@ -23,6 +23,7 @@ import {
   ArbiterPanel,
   ArbiterScreen,
   arbiterJoinStateFromError,
+  arbiterWatchRelease,
   nextOffSince,
   shouldJoinVideo,
   showsOutageCard,
@@ -611,8 +612,12 @@ describe("the camera join, as pure decisions", () => {
       [new ApiV1Error("x", 409, "VIDEO_OVERRIDDEN"), "overridden"],
       [new ApiV1Error("x", 409, "VIDEO_MEETING_ENDED"), "ended"],
       [new ApiV1Error("x", 403, "ARBITER_PLAYS_THIS_BOARD"), "own"],
+      // M2: the board ended between the loader's read and the join.
+      [new ApiV1Error("x", 409, "FIXTURE_NOT_PLAYABLE"), "over"],
       [new ArbiterGuardError(new Error("audio")), "fault"],
       [new ApiV1Error("x", 404, "NOT_FOUND"), "error"],
+      // The panel only lists opened rounds: unreachable but by a race, so no copy of its own.
+      [new ApiV1Error("x", 409, "ROUND_NOT_OPEN"), "error"],
       [new Error("network"), "error"],
     ];
     let checked = 0;
@@ -620,7 +625,64 @@ describe("the camera join, as pure decisions", () => {
       expect(arbiterJoinStateFromError(err).kind).toBe(kind);
       checked++;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(10);
+  });
+
+  describe("I2: the watch is handed back — once, whenever the board closes", () => {
+    const recorder = () => {
+      const sent: { url: string; init: RequestInit }[] = [];
+      return { sent, send: async (url: string, init: RequestInit) => void sent.push({ url, init }) };
+    };
+    const URL_OF = (f: string, p: string) => `/api/v1/fixtures/${f}/external-play/arbiter/${p}`;
+
+    it("the empty case first: closed (or the tab hidden) before any mint — nothing sent", () => {
+      const r = recorder();
+      const w = arbiterWatchRelease("fx-1", r.send);
+      w.release();
+      w.close();
+      expect(r.sent).toEqual([]);
+    });
+
+    it("minted then closed: ONE DELETE that outlives the page (keepalive); a second close sends nothing", () => {
+      const r = recorder();
+      const w = arbiterWatchRelease("fx-1", r.send);
+      w.minted("pid-1");
+      w.close();
+      w.close();
+      expect(r.sent).toEqual([{ url: URL_OF("fx-1", "pid-1"), init: { method: "DELETE", keepalive: true } }]);
+    });
+
+    it("the tab going away (pagehide) hands it back; the board closing after sends nothing more", () => {
+      const r = recorder();
+      const w = arbiterWatchRelease("fx-1", r.send);
+      w.minted("pid-1");
+      w.release();
+      w.close();
+      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx-1", "pid-1")]);
+    });
+
+    it("a mint that lands AFTER the board closed is handed back at once — the POST raced the switch", () => {
+      const r = recorder();
+      const w = arbiterWatchRelease("fx-1", r.send);
+      w.close();
+      expect(r.sent, "premise: nothing to send yet").toEqual([]);
+      w.minted("pid-late");
+      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx-1", "pid-late")]);
+    });
+
+    it("ids are path-encoded, and a failed send is swallowed — the sweep removes what the browser could not", async () => {
+      const w = arbiterWatchRelease("fx/1", async () => {
+        throw new Error("offline");
+      });
+      w.minted("p d");
+      expect(() => w.close()).not.toThrow();
+      await new Promise((res) => setTimeout(res, 0));
+      const r = recorder();
+      const enc = arbiterWatchRelease("fx/1", r.send);
+      enc.minted("p d");
+      enc.close();
+      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx%2F1", "p%20d")]);
+    });
   });
 
   it("'camera off since' starts when this browser first sees a present player's camera off, holds, and clears when it is back", () => {

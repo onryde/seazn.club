@@ -340,6 +340,39 @@ export async function refreshParticipantToken(
   return { participantId: a.participantId, authToken: data.token };
 }
 
+/** Removes one participant from a meeting (T15 fix round 1, I2): what ends
+ *  an arbiter's access, because nothing else does — a token lasts 100 days
+ *  and a refresh leaves the old one working (measured 2026-10-09). Two calls:
+ *  - POST active-session/kick `{participant_ids: [id]}` takes it out of the
+ *    live session. `id` is addParticipant's, which a session row carries as
+ *    `user_id`. OpenAPI documents a 404 for "no participant found", and a
+ *    room with nobody in it has no active session: ANY 404 is nothing to
+ *    kick, as for endMeeting's kick-all — the DELETE that follows travels the
+ *    same path prefix and is the proof;
+ *  - DELETE participants/{id} retires it, so its token can never re-join.
+ *    RealtimeKit's OWN not-found body is "already gone" (a repeat, or a race
+ *    with another remover); any other failure throws, and the caller keeps
+ *    its record to try again.
+ *  Whether the kick disconnects a client already joined is the real SDK's to
+ *  show (T17), never assumed here. */
+export async function removeParticipant(
+  a: { meetingId: string; participantId: string },
+  deps: RealtimeKitDeps = {},
+): Promise<void> {
+  const cfg = requireConfig();
+  const meeting = `/meetings/${encodeURIComponent(a.meetingId)}`;
+  try {
+    await cf(cfg, `${meeting}/active-session/kick`, { method: "POST", body: { participant_ids: [a.participantId] } }, deps);
+  } catch (err) {
+    if (!(err instanceof RealtimeKitError) || err.status !== 404) throw err;
+  }
+  try {
+    await cf(cfg, `${meeting}/participants/${encodeURIComponent(a.participantId)}`, { method: "DELETE" }, deps);
+  } catch (err) {
+    if (!(err instanceof RealtimeKitError) || err.code !== "not_found") throw err;
+  }
+}
+
 /** The largest page GET /sessions/{id}/participants serves (OpenAPI: default
  *  25, maximum 200). Every reload adds a row for the same participant, so the
  *  default page is the one most likely to run out. */
@@ -428,7 +461,8 @@ export async function hasLiveVideoPublisher(
  *  success is the proof of teardown. The row is stamped only AFTER the deactivate
  *  succeeds — a failed PATCH leaves a joinable meeting upstream, so the row
  *  must stay unended for the next sweep to retry — and only once: a repeat
- *  call keeps the first teardown time. */
+ *  call keeps the first teardown time. The room's arbiter watches are
+ *  stamped removed with it (T15 fix round 1, I2). */
 export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}): Promise<void> {
   const cfg = requireConfig();
   const id = encodeURIComponent(meetingId);
@@ -438,9 +472,19 @@ export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}):
     if (!(err instanceof RealtimeKitError) || err.status !== 404) throw err;
   }
   await cf(cfg, `/meetings/${id}`, { method: "PATCH", body: { status: "INACTIVE" } }, deps);
+  // T15 fix round 1, I2: every arbiter watch of this room ends with it, at
+  // the same instant (one statement) — the kick-all took them out and
+  // INACTIVE keeps every token out, so nothing is left to remove one by one
+  // at the vendor. A watch whose room already ended is the sweep's to stamp.
   await sql`
-    update fixture_video_meetings set ended_at = now()
-     where meeting_id = ${meetingId} and ended_at is null`;
+    with ended as (
+      update fixture_video_meetings set ended_at = now()
+       where meeting_id = ${meetingId} and ended_at is null
+      returning fixture_id
+    )
+    update fixture_video_participants vp set removed_at = now()
+      from ended
+     where vp.fixture_id = ended.fixture_id and vp.preset = 'arbiter' and vp.removed_at is null`;
 }
 
 // ─── Camera evidence after the match: the peer report ──────────────────────

@@ -21687,10 +21687,10 @@ async function matchRoomSuite(): Promise<void> {
 
 /**
  * Chess in-page board T15 — the arbiter panel, keyless (no Lichess, no
- * RealtimeKit). The organiser's panel and its three routes answer only an
+ * RealtimeKit). The organiser's panel and its four routes answer only an
  * organiser of an ONLINE chess board: on an over-the-board chess fixture the
- * join and the video override are NOT FOUND (there is no online game) and the
- * resync reads nothing; with no identity every route is 401, and so with a
+ * join, the leave, the video override and the resync are NOT FOUND (there is
+ * no online game; T15 fix round 1, M3); with no identity every route is 401, and so with a
  * signed-in stranger (not a member of the fixture's org); the panel page 404s on the
  * over-the-board division, with a signed-out visitor sent to sign in. The real
  * panel (boards, flags, the outage and its audit record) is
@@ -21738,6 +21738,7 @@ async function arbiterSuite(): Promise<void> {
     ["override, a signed-in stranger", stranger, `${base}/video-override`, note, 401, "UNAUTHENTICATED"],
     ["join, the organiser, over the board", owner, `${base}/arbiter`, undefined, 404, "NOT_FOUND"],
     ["override, the organiser, over the board", owner, `${base}/video-override`, note, 404, "NOT_FOUND"],
+    ["resync, the organiser, over the board", owner, `${base}/resync`, undefined, 404, "NOT_FOUND"],
   ];
   let answered = 0;
   for (const [what, session, path, body, want, code] of calls) {
@@ -21746,13 +21747,20 @@ async function arbiterSuite(): Promise<void> {
     check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
     answered += 1;
   }
-  check("arbiter API: anti-vacuity, eight calls", answered === calls.length && answered === 8);
-  const resync = await v1(owner, `${base}/resync`, "POST");
-  const read = resync.json.data as { read?: boolean; adopted?: number } | undefined;
-  check(
-    `arbiter API, resync, the organiser, over the board: nothing to read (got ${resync.status} ${JSON.stringify(read)})`,
-    resync.status === 200 && read?.read === false && read?.adopted === 0,
-  );
+  // The panel closing (I2): DELETE …/arbiter/{participantId} — nobody's watch here.
+  const leave = `${base}/arbiter/smoke-${tag}`;
+  const leaves: [string, Session, number, string | null][] = [
+    ["leave, no identity", anon, 401, null],
+    ["leave, a signed-in stranger", stranger, 401, "UNAUTHENTICATED"],
+    ["leave, the organiser, a watch that is not theirs", owner, 404, "NOT_FOUND"],
+  ];
+  for (const [what, session, want, code] of leaves) {
+    const r = await v1(session, leave, "DELETE");
+    const got = r.json.error?.code;
+    check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
+    answered += 1;
+  }
+  check("arbiter API: anti-vacuity, twelve calls", answered === calls.length + leaves.length && answered === 12);
 
   // The page: the division's slugs from the organiser's own links.
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };

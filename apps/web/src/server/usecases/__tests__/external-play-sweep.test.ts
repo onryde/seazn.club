@@ -45,7 +45,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
-import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
@@ -57,7 +57,7 @@ import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { patchDivision } from "../divisions";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { loadArbiterRound } from "../external-play/arbiter";
+import { joinAsArbiter, loadArbiterRound, type ArbiterVideo } from "../external-play/arbiter";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
 import { openRound } from "../external-play/open-round";
@@ -66,6 +66,7 @@ import { reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import { organiserOverrideVideo } from "../external-play/preflight";
 import {
+  ARBITER_PARTICIPANT_TTL_MS,
   CAMERA_EVIDENCE_AFTER_MS,
   CAMERA_EVIDENCE_GIVE_UP_MS,
   SWEEP_CADENCE_MS,
@@ -173,6 +174,8 @@ const rtk = vi.hoisted(() => {
     calls: [] as { method: string; path: string }[],
     patchFails: 0,
     sessionsFail: 0,
+    /** Answer the arbiter removal's DELETE with a 503 that many times. */
+    removeFails: 0,
     participants: new Map<string, string[]>(),
     sessions: [] as FakeSession[],
     reports: new Map<string, () => unknown>(),
@@ -180,6 +183,7 @@ const rtk = vi.hoisted(() => {
       state.calls = [];
       state.patchFails = 0;
       state.sessionsFail = 0;
+      state.removeFails = 0;
       state.participants = new Map();
       state.sessions = [];
       state.reports = new Map();
@@ -239,6 +243,22 @@ const rtk = vi.hoisted(() => {
         const x = state.sessions.find((y) => y.id === decodeURIComponent(rows[1]!));
         if (!x) return json(404, { success: false, error: { code: 404, message: "no such session" } });
         return ok({ participants: x.rows });
+      }
+      // The arbiter's removal (I2): kick the one participant, then DELETE it.
+      if (method === "POST" && path.endsWith("/active-session/kick")) {
+        return ok({ action: "kick", kicked_participants_count: 1 });
+      }
+      const gone = /^\/meetings\/([^/]+)\/participants\/([^/]+)$/.exec(path);
+      if (method === "DELETE" && gone) {
+        if (state.removeFails > 0) {
+          state.removeFails--;
+          return json(503, { success: false });
+        }
+        const list = state.participants.get(decodeURIComponent(gone[1]!)) ?? [];
+        const id = decodeURIComponent(gone[2]!);
+        if (!list.includes(id)) return json(404, { success: false, error: { code: 404, message: "Participant not found" } });
+        state.participants.set(decodeURIComponent(gone[1]!), list.filter((x) => x !== id));
+        return ok({ id });
       }
       if (method === "POST" && path.endsWith("/active-session/kick-all")) {
         // Nobody in the room: RealtimeKit's not-found envelope (adapter tests).
@@ -1924,7 +1944,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
       skipped: true, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, scanned: 0, failures: [],
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, failures: [],
     });
     release();
     const done = await first;
@@ -3746,6 +3766,146 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     rtk.calls = [];
     await pass(m, after(m, CAMERA_EVIDENCE_GIVE_UP_MS + SWEEP_CADENCE_MS));
     expect(rtkReads(), "settled: never read again").toEqual([]);
+  });
+});
+
+describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", () => {
+  /** The panel's REAL join, its RealtimeKit calls through the adapter over
+   *  this file's fake fetch. */
+  const VIDEO: ArbiterVideo = {
+    ensureMeeting: (fixtureId) => ensureMeeting(fixtureId, RTK),
+    addParticipant: (a) => addParticipant(a, RTK),
+    removeParticipant: (a) => removeParticipant(a, RTK),
+  };
+  /** A live game (T9 + T10, so the room is kept by teardown) watched by a
+   *  second admin of the club through the real join. */
+  async function watched(): Promise<{ b: Board; userId: string; participantId: string; meetingId: string; createdAt: number }> {
+    const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    await liveGame(b);
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
+    const out = await joinAsArbiter(
+      { orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null },
+      b.fixtureId,
+      { video: VIDEO },
+    );
+    const [row] = await sql<{ created_at: Date; meeting_id: string }[]>`
+      select vp.created_at, m.meeting_id from fixture_video_participants vp
+        join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+       where vp.participant_id = ${out.participantId}`;
+    rtk.calls = [];
+    return { b, userId: u!.id, participantId: out.participantId, meetingId: row!.meeting_id, createdAt: row!.created_at.getTime() };
+  }
+  /** No Lichess read (the game stays live, so the room stays up); RealtimeKit is the fake. */
+  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit"> = { reconcile: async () => null, realtimeKit: RTK };
+  const removedAt = async (participantId: string) => {
+    const [r] = await sql<{ removed_at: Date | null }[]>`
+      select removed_at from fixture_video_participants where participant_id = ${participantId}`;
+    return r!.removed_at;
+  };
+  const removals = () => rtk.calls.filter((c) => c.path.endsWith("/active-session/kick") || c.method === "DELETE");
+
+  it("the empty case first: no watch — nothing removed, nothing called; a watch in use by an organiser is kept", async () => {
+    const bare = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    await liveGame(bare);
+    rtk.calls = [];
+    const none = await sweep(bare, { now: bare.at(8), ...quiet });
+    expect([none.arbitersRemoved, removals()]).toEqual([0, []]);
+    const w = await watched();
+    const kept = await sweep(w.b, { now: new Date(w.createdAt + 60_000), ...quiet });
+    expect(kept.arbitersRemoved).toBe(0);
+    expect(kept.failures).toEqual([]);
+    expect(removals()).toEqual([]);
+    expect(await removedAt(w.participantId)).toBeNull();
+  });
+
+  it("every reason the watch must end is removed at the vendor and stamped — one board each, counted; a second pass changes nothing", async () => {
+    const REASONS: [string, (w: Awaited<ReturnType<typeof watched>>) => Promise<void>][] = [
+      ["demoted to viewer", async (w) => void (await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`)],
+      ["left the club", async (w) => void (await sql`delete from org_members where org_id = ${w.b.orgId} and user_id = ${w.userId}`)],
+      ["account deleted (M5: the watch keeps no user)", async (w) => void (await sql`delete from users where id = ${w.userId}`)],
+      [
+        "now plays on the board (a check-in under a person linked to them)",
+        async (w) => {
+          const [p] = await sql<{ id: string }[]>`
+            insert into persons (org_id, full_name, user_id) values (${w.b.orgId}, 'Late sub', ${w.userId}) returning id`;
+          await stampFixtureCheckIn(p!.id, w.b.fixtureId, w.b.orgId);
+        },
+      ],
+    ];
+    let checked = 0;
+    for (const [why, change] of REASONS) {
+      const w = await watched();
+      await change(w);
+      const pass = new Date(w.createdAt + 60_000);
+      const r = await sweep(w.b, { now: pass, ...quiet });
+      expect([r.arbitersRemoved, r.failures], why).toEqual([1, []]);
+      expect(removals(), why).toEqual([
+        { method: "POST", path: `/meetings/${w.meetingId}/active-session/kick` },
+        { method: "DELETE", path: `/meetings/${w.meetingId}/participants/${w.participantId}` },
+      ]);
+      expect((await removedAt(w.participantId))?.getTime(), why).toBe(pass.getTime());
+      rtk.calls = [];
+      const again = await sweep(w.b, { now: new Date(pass.getTime() + 5 * 60_000), ...quiet });
+      expect([again.arbitersRemoved, removals()], `${why}: again`).toEqual([0, []]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every reason").toBe(REASONS.length);
+  });
+
+  it("the TTL: kept one millisecond before ARBITER_PARTICIPANT_TTL_MS, removed at it", async () => {
+    expect(ARBITER_PARTICIPANT_TTL_MS, "the brief's 3 hours").toBe(3 * 60 * 60 * 1000);
+    const w = await watched();
+    const before = await sweep(w.b, { now: new Date(w.createdAt + ARBITER_PARTICIPANT_TTL_MS - 1), ...quiet });
+    expect([before.arbitersRemoved, removals()]).toEqual([0, []]);
+    const at = await sweep(w.b, { now: new Date(w.createdAt + ARBITER_PARTICIPANT_TTL_MS), ...quiet });
+    expect(at.arbitersRemoved).toBe(1);
+    expect(removals().map((c) => c.method)).toEqual(["POST", "DELETE"]);
+    expect(await removedAt(w.participantId)).not.toBeNull();
+  });
+
+  it("a vendor failure is reported by code and the watch stays OPEN; the next pass removes it", async () => {
+    const w = await watched();
+    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+    rtk.removeFails = 1;
+    const failed = await sweep(w.b, { now: new Date(w.createdAt + 60_000), ...quiet });
+    expect(failed.arbitersRemoved).toBe(0);
+    expect(failed.failures).toEqual([{ job: "arbiter_revoke", fixtureId: w.b.fixtureId, code: "unavailable" }]);
+    expect(await removedAt(w.participantId)).toBeNull();
+    const retried = await sweep(w.b, { now: new Date(w.createdAt + 6 * 60_000), ...quiet });
+    expect([retried.arbitersRemoved, retried.failures]).toEqual([1, []]);
+    expect(await removedAt(w.participantId)).not.toBeNull();
+  });
+
+  it("a watch whose room already ended (no stamp on file) is stamped with no vendor call — INACTIVE keeps every token out", async () => {
+    const w = await watched();
+    await sql`update fixture_video_meetings set ended_at = now() where meeting_id = ${w.meetingId}`;
+    await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+    const r = await sweep(w.b, { now: new Date(w.createdAt + 60_000), ...quiet });
+    expect([r.arbitersRemoved, removals()]).toEqual([1, []]);
+    expect(await removedAt(w.participantId)).not.toBeNull();
+  });
+
+  it("SEQUENCE: a teardown in the same pass ends the watch with the room — the job then has nothing to remove", async () => {
+    // No game on file: past T+20 the room comes down (job 3) before job 6 runs.
+    const b = await openedBoard({ checkedIn: ["home"], cameraPolicy: "optional" });
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
+    const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, { video: VIDEO });
+    await sql`update org_members set role = 'viewer' where org_id = ${b.orgId} and user_id = ${u!.id}`;
+    rtk.calls = [];
+    const r = await sweep(b, { now: b.at(45), endMeeting: (m) => endMeeting(m, RTK), ...quiet });
+    expect(r.meetingsEnded, "premise: the room came down in this pass").toBe(1);
+    expect([r.arbitersRemoved, removals()]).toEqual([0, []]);
+    const [row] = await sql<{ removed_at: Date | null; ended_at: Date | null }[]>`
+      select vp.removed_at, m.ended_at from fixture_video_participants vp
+        join fixture_video_meetings m on m.fixture_id = vp.fixture_id
+       where vp.participant_id = ${out.participantId}`;
+    expect(row!.removed_at?.getTime(), "the watch ended with the room").toBe(row!.ended_at?.getTime());
   });
 });
 

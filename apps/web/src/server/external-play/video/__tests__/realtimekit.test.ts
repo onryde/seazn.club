@@ -15,6 +15,7 @@ import {
   listPeerIds,
   realtimeKitConfigured,
   refreshParticipantToken,
+  removeParticipant,
 } from "../realtimekit";
 
 const ENV_KEYS = [
@@ -940,6 +941,59 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     expect((await endedAt(id))?.getTime(), "teardown time is when it FIRST ended").toBe(first?.getTime());
   });
 
+  it("I2: the room's arbiter watches end with it — a player row, a watch already ended and another room's watch untouched; a second call moves nothing", async () => {
+    configure();
+    const s = await seedFixture();
+    const other = await seedFixture();
+    const id = mtg("arb");
+    const otherId = mtg("arb-other");
+    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await ensureMeeting(other.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id: otherId } } }]).fetch });
+    const earlier = new Date(Date.now() - 60 * 60_000);
+    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id, removed_at) values
+      (${s.fixtureId}, null, 'arbiter', 'a-open-1', null),
+      (${s.fixtureId}, null, 'arbiter', 'a-open-2', null),
+      (${s.fixtureId}, null, 'arbiter', 'a-done', ${earlier}),
+      (${other.fixtureId}, null, 'arbiter', 'a-elsewhere', null)`;
+    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+              values (${s.fixtureId}, ${s.home.personId}, 'player', 'p-home')`;
+    const removedAt = async () =>
+      Object.fromEntries(
+        (
+          await sql<{ participant_id: string; removed_at: Date | null }[]>`
+            select participant_id, removed_at from fixture_video_participants
+             where fixture_id in (${s.fixtureId}, ${other.fixtureId})`
+        ).map((r) => [r.participant_id, r.removed_at?.getTime() ?? null]),
+      );
+    await endMeeting(id, { fetch: stubFetch([kicked, inactive]).fetch });
+    const after = await removedAt();
+    const ended = (await endedAt(id))!.getTime();
+    expect(after).toEqual({
+      "a-open-1": ended,
+      "a-open-2": ended,
+      "a-done": earlier.getTime(),
+      "a-elsewhere": null,
+      "p-home": null,
+    });
+    await endMeeting(id, { fetch: stubFetch([noActive, inactive]).fetch });
+    expect(await removedAt(), "a repeat keeps the first stamps").toEqual(after);
+  });
+
+  it("I2: a failed deactivate stamps no arbiter watch removed — the meeting is still joinable", async () => {
+    configure();
+    const s = await seedFixture();
+    const id = mtg("arb-patch-fails");
+    await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+    await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+              values (${s.fixtureId}, null, 'arbiter', 'a-still')`;
+    await expect(endMeeting(id, { fetch: stubFetch([kicked, { status: 500, body: { success: false } }]).fetch })).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    const [row] = await sql<{ removed_at: Date | null }[]>`
+      select removed_at from fixture_video_participants where fixture_id = ${s.fixtureId} and participant_id = 'a-still'`;
+    expect(row!.removed_at).toBeNull();
+  });
+
   it("a failed deactivate leaves the row UNSTAMPED, so the next sweep tries again", async () => {
     configure();
     const s = await seedFixture();
@@ -968,6 +1022,92 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     await expect(endMeeting(mtg("unconfigured"), { fetch: stub.fetch })).rejects.toMatchObject({
       code: "unconfigured",
     });
+    expect(stub.calls.length).toBe(0);
+  });
+});
+
+// T15 fix round 1, I2: an arbiter's access must not outlive the panel or the
+// organiser's role. RealtimeKit tokens last 100 days and a refresh does not
+// revoke the old one (measured 2026-10-09), so the SERVER removes the
+// participant: kicked from the live session, then deleted, so its token can
+// never re-join. Whether the kick disconnects a joined client is T17's to
+// measure against the real SDK; here, the calls and their failure handling.
+describe("removeParticipant", () => {
+  const kicked = { status: 200, body: { success: true, data: { action: "kick", participants: [] } } };
+  const deleted = { status: 200, body: { success: true, data: { created_at: "2026-10-12T19:00:00Z", custom_participant_id: "u-1", preset_id: "p-1", updated_at: "2026-10-12T19:00:00Z" } } };
+  const rtkNotFound = { status: 404, body: { success: false, error: { code: 404, message: "No user found with id x" } } };
+  const gateway404 = { status: 404, body: { success: false, errors: [{ code: 7003, message: "Could not route" }], messages: [], result: null } };
+  const route = (url: string) => url.split("/realtime/kit/app-1")[1];
+  const PID = "813432c7-3c5a-45e2-9acf-eef7061c7584";
+
+  it("kicks THAT participant from the live session, then deletes it — in that order, by its id", async () => {
+    configure();
+    const stub = stubFetch([kicked, deleted]);
+    await removeParticipant({ meetingId: "m-1", participantId: PID }, { fetch: stub.fetch });
+    expect(stub.calls.map((c) => `${c.method} ${route(c.url)}`)).toEqual([
+      `POST /meetings/m-1/active-session/kick`,
+      `DELETE /meetings/m-1/participants/${PID}`,
+    ]);
+    // participant_ids is the add-participant id (a session row's user_id).
+    expect(stub.calls[0]?.body).toEqual({ participant_ids: [PID] });
+    expect(stub.calls[1]?.body).toBeUndefined();
+  });
+
+  it("a kick 404 in ANY shape is nothing to kick (no live session, or not in it): the delete still happens", async () => {
+    configure();
+    const cases: { name: string; kick: { status: number; body?: unknown; text?: string } }[] = [
+      { name: "the documented 404 (no participant found)", kick: rtkNotFound },
+      { name: "the gateway envelope", kick: gateway404 },
+      { name: "an HTML 404", kick: { status: 404, text: "<html>Not Found</html>" } },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const stub = stubFetch([c.kick, deleted]);
+      await removeParticipant({ meetingId: "m-2", participantId: PID }, { fetch: stub.fetch });
+      expect(stub.calls.map((x) => x.method), c.name).toEqual(["POST", "DELETE"]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+
+  it("a participant already deleted (RealtimeKit's own not-found) is removed: resolves", async () => {
+    configure();
+    const stub = stubFetch([rtkNotFound, rtkNotFound]);
+    await expect(removeParticipant({ meetingId: "m-3", participantId: PID }, { fetch: stub.fetch })).resolves.toBeUndefined();
+    expect(stub.calls.length).toBe(2);
+  });
+
+  it("the delete is the proof: any other delete failure THROWS — the caller keeps the row and retries", async () => {
+    configure();
+    const cases: { name: string; del: { status: number; body?: unknown; text?: string }; code: string }[] = [
+      { name: "a gateway 404 on the delete", del: gateway404, code: "unavailable" },
+      { name: "a 500", del: { status: 500, body: { success: false, error: { code: 500, message: "x" } } }, code: "unavailable" },
+      { name: "an HTML 200", del: { status: 200, text: "<html>ok</html>" }, code: "unavailable" },
+      { name: "our credentials refused", del: { status: 401, body: { success: false } }, code: "unauthorized" },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const stub = stubFetch([kicked, c.del]);
+      await expect(removeParticipant({ meetingId: "m-4", participantId: PID }, { fetch: stub.fetch }), c.name).rejects.toMatchObject({
+        name: "RealtimeKitError",
+        code: c.code,
+      });
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+  });
+
+  it("a kick that fails for any reason other than 404 throws BEFORE the delete", async () => {
+    configure();
+    const stub = stubFetch([{ status: 500, body: { success: false } }, deleted]);
+    await expect(removeParticipant({ meetingId: "m-5", participantId: PID }, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unavailable" });
+    expect(stub.calls.length).toBe(1);
+  });
+
+  it("an unconfigured process refuses before any call", async () => {
+    configure({ REALTIMEKIT_API_TOKEN: "" });
+    const stub = stubFetch([]);
+    await expect(removeParticipant({ meetingId: "m-6", participantId: PID }, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unconfigured" });
     expect(stub.calls.length).toBe(0);
   });
 });
