@@ -55,6 +55,14 @@
 //   - subscribe/unsubscribe refuse outside MANUAL (l.18105, l.18128).
 //   - NEW_PRODUCER / PRODUCER_TOGGLE / PRODUCER_CLOSED mutate
 //     `participant.producers` and emit no participant event (l.18445-18500).
+//   - (T15, the arbiter's receive side) A consumed CAMERA consumer sets the
+//     peer's `videoTrack` and `setVideoEnabled(true)`, which emits
+//     `videoUpdate {videoEnabled, videoTrack}` on the participant (l.19153,
+//     l.19255, setVideoEnabled l.17490); closing it (an unsubscribe, the peer
+//     leaving, a socket reset) sets it false and drops the track (l.19102);
+//     a remote pause of a consumed camera sets it false and a resume true
+//     (processConsumerPaused / Resumed). Nothing in the player's guard reads
+//     these — the arbiter's tiles do.
 //
 // MODELLED_SDK_VERSION is pinned against package.json by camera-loader.test,
 // so an SDK upgrade fails until this port is re-read against the new build.
@@ -97,11 +105,20 @@ export class FakePeer extends Emitter {
     screenshareAudio: true,
     screenshareVideo: true,
   };
+  /** The consumed camera, as the SDK sets it on a consumer (see header). */
+  videoEnabled = false;
+  videoTrack: MediaStreamTrack | undefined = undefined;
   constructor(
     public id: string,
     public userId: string,
   ) {
     super();
+  }
+  /** setVideoEnabled (l.17490): emits videoUpdate. */
+  setVideo(enabled: boolean, track: MediaStreamTrack | undefined): void {
+    this.videoEnabled = enabled;
+    this.videoTrack = track;
+    this.emit("videoUpdate", { videoEnabled: enabled, videoTrack: track });
   }
 }
 
@@ -220,6 +237,8 @@ class FakeParticipants extends Emitter {
       if (kinds.includes("video")) {
         n.manualProducerConfig = { ...n.manualProducerConfig, video: false };
         if (!n.manualProducerConfig.screenshareVideo) this.videoSubscribed.delete(n.id);
+        // The camera consumer closes (l.19102).
+        if (n.videoEnabled || n.videoTrack) n.setVideo(false, undefined);
       }
       if (kinds.includes("screenshareVideo")) {
         n.manualProducerConfig = { ...n.manualProducerConfig, screenshareVideo: false };
@@ -312,6 +331,8 @@ export class FakeMeeting {
     p.pinned.clear();
     p.joined.clear();
     p.viewMode = "ACTIVE_GRID";
+    // Every consumer is gone with the old socket's media.
+    for (const peer of this.roster) if (peer.videoEnabled || peer.videoTrack) peer.setVideo(false, undefined);
     this.socketJoined = true;
     for (const peer of this.roster) p.joined.add(peer);
   }
@@ -370,6 +391,10 @@ export class FakeMeeting {
         if ((cam || share) && !x.pause && !this.consumedVideo.some((c) => c.producerId === x.producerId)) {
           this.consumedVideo.push({ peerId: sub.id, producerId: x.producerId });
         }
+        // A camera consumer hands the peer its track (l.19153).
+        if (cam && !x.pause && !j.videoEnabled) {
+          j.setVideo(true, { id: `remote-${x.producerId}`, kind: "video" } as unknown as MediaStreamTrack);
+        }
       }
     }
     for (const sub of p.audioSubscribed.values()) {
@@ -397,6 +422,8 @@ export class FakeMeeting {
     return peer;
   }
   peerLeaves(peerId: string): void {
+    const gone = this.roster.find((x) => x.id === peerId);
+    if (gone && (gone.videoEnabled || gone.videoTrack)) gone.setVideo(false, undefined);
     this.roster = this.roster.filter((x) => x.id !== peerId);
     if (!this.socketJoined) return;
     this.participants.joined.delete(peerId);
@@ -416,8 +443,14 @@ export class FakeMeeting {
   }
   /** PRODUCER_TOGGLE (l.18489): flips `pause`, nothing else. */
   toggle(peerId: string, producerId: string, pause: boolean): void {
-    const x = this.roster.find((r) => r.id === peerId)?.producers.find((q) => q.producerId === producerId);
+    const peer = this.roster.find((r) => r.id === peerId);
+    const x = peer?.producers.find((q) => q.producerId === producerId);
     if (x) x.pause = pause;
+    // A consumed camera follows its producer (processConsumerPaused/Resumed).
+    if (peer && x && x.kind === "video" && !x.screenShare && this.participants.videoSubscribed.has(peerId)) {
+      if (pause && peer.videoEnabled) peer.setVideo(false, peer.videoTrack);
+      if (!pause) setTimeout(() => this.syncConsumers(), 0);
+    }
   }
   /** PRODUCER_CLOSED: drops it from the list. */
   closeProducer(peerId: string, producerId: string): void {

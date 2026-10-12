@@ -115,7 +115,10 @@ const realLater = (fn: () => void, ms: number) => {
 };
 
 type Meeting = RealtimeKitClient;
-type SdkModule = { default: { init(o: { authToken: string; defaults: { audio: boolean; video: boolean } }): Promise<Meeting> } };
+/** The SDK module as both loaders use it (this one and the arbiter's,
+ *  components/v2/arbiter-camera.ts). */
+export type RealtimeKitSdk = { default: { init(o: { authToken: string; defaults: { audio: boolean; video: boolean } }): Promise<Meeting> } };
+type SdkModule = RealtimeKitSdk;
 
 /** Built over the SDK module so the join can be driven in node over a port
  *  of the SDK's subscription rules (camera-loader.test.ts). */
@@ -310,4 +313,8 @@ export function makeJoinOwnCamera(
   };
 }
 
-export const joinOwnCamera: JoinOwnCamera = makeJoinOwnCamera(() => import("@cloudflare/realtimekit") as Promise<SdkModule>);
+/** The ONE import site (see the header): the arbiter's loader loads the SDK
+ *  through this too. */
+export const loadRealtimeKitSdk = () => import("@cloudflare/realtimekit") as Promise<RealtimeKitSdk>;
+
+export const joinOwnCamera: JoinOwnCamera = makeJoinOwnCamera(loadRealtimeKitSdk);
