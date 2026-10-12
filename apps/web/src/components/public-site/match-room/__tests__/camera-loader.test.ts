@@ -490,6 +490,28 @@ describe("the watchdog when the SDK misbehaves (review re-2 M3)", () => {
     expect(fault.n).toBe(0);
   });
 
+  it("a run the SDK triggers while a quiet retry waits (a socket rejoin) goes at once and cancels that wait; the owner's leave cancels it too — no retry into a left meeting", async () => {
+    const timer = manualLater();
+    const rtk = fakeRealtimeKit({ setup: (m) => (m.failNext.setViewMode = D7_MAX_ATTEMPTS) });
+    const cam = await makeJoinOwnCamera(rtk.load, () => {}, { later: timer.later })("own-token");
+    const m = rtk.meetings[0]!;
+    await settle();
+    expect(timer.pending(), "premise: a quiet retry waits").toBe(1);
+    await m.reconnect(); // roomJoined re-asserts — and the SDK lets it now
+    await settle();
+    expect(m.participants.viewMode).toBe("MANUAL");
+    expect(timer.pending(), "the waiting retry was cancelled by the run").toBe(0);
+
+    const timer2 = manualLater();
+    const rtk2 = fakeRealtimeKit({ setup: (x) => (x.failNext.setViewMode = 1_000) });
+    const cam2 = await makeJoinOwnCamera(rtk2.load, () => {}, { later: timer2.later })("own-token");
+    await settle();
+    expect(timer2.pending(), "premise: a quiet retry waits").toBe(1);
+    await cam2.leave();
+    expect(timer2.pending(), "left: nothing waits to call into the left meeting").toBe(0);
+    await cam.leave();
+  });
+
   it("the quiet retries wait on the declared ladder, the last wait repeating — never a hot loop", async () => {
     const timer = manualLater();
     const rtk = fakeRealtimeKit({ setup: (m) => (m.failNext.setViewMode = 1_000) });
