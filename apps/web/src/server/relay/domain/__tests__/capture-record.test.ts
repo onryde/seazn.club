@@ -140,7 +140,7 @@ describe("validateRecordLines (§5): the allow-list, then S1–S5, whole body or
     expect(r.ok ? "" : r.message).not.toContain("FAKE-STREAM-KEY");
     // Shape before secrets: a body with a shape error on line 4 and a secret on line 2 answers the shape error.
     const both = validateRecordLines([good, JSON.stringify(bad), good, JSON.stringify({ ...fixture("line-valid"), cred: "x" })], OTHER_TOK);
-    expect(both).toEqual({ ok: false, message: "line 4: cred is not on the allow-list" });
+    expect(both).toEqual({ ok: false, message: "line 4: key cred is not on the allow-list" });
   });
 
   it("a line that is not JSON, or JSON that is not an object, is refused by line number; a value is never quoted", () => {
@@ -159,15 +159,26 @@ describe("validateRecordLines (§5): the allow-list, then S1–S5, whole body or
     expect(checked).toBe(4);
     // Off-class and missing keys name the key only.
     expect(validateRecordLines([JSON.stringify({ ...fixture("line-valid"), transport: "two words FAKE" })], OTHER_TOK))
-      .toEqual({ ok: false, message: "line 1: transport is off its class" });
+      .toEqual({ ok: false, message: "line 1: key transport is off its class" });
     expect(validateRecordLines([JSON.stringify({ at: "2026-10-11T21:19:03.123Z" })], OTHER_TOK))
-      .toEqual({ ok: false, message: "line 1: kind is missing" });
+      .toEqual({ ok: false, message: "line 1: key kind is missing" });
+  });
+
+  it("the contract's own 422 example (`valid-invalid`: an unlisted `battery` on line 3) is the message the server writes", () => {
+    const want = fixture("valid-invalid");
+    const good = JSON.stringify(fixture("line-valid"));
+    const r = validateRecordLines([good, good, JSON.stringify(fixture("line-invalid-unlisted-scalar"))], OTHER_TOK);
+    expect(want.code).toBe("invalid");
+    expect(r).toEqual({ ok: false, message: want.message });
+    // A key that does not look like a key is not echoed either: the refusal says only that a key is unlisted.
+    const odd = validateRecordLines([JSON.stringify({ ...fixture("line-valid"), "Bearer FAKE-0123456789abcdef": 1 })], OTHER_TOK);
+    expect(odd).toEqual({ ok: false, message: "line 1: a key is not on the allow-list" });
   });
 
   it("§0.1's premise, as capture's writers write: an ISO `at` with ms, no `level` for info, field_kind, a masked plain value — admitted; an epoch `at` refused", () => {
     const line = { at: "2026-10-11T21:19:03.123Z", kind: "code.error", field_kind: "surface.unavailable", failure: "***", status: 503 };
     expect(validateRecordLines([JSON.stringify(line)], OTHER_TOK).ok).toBe(true);
-    expect(validateRecordLines([JSON.stringify({ ...line, at: 1791797943123 })], OTHER_TOK)).toEqual({ ok: false, message: "line 1: at is off its class" });
+    expect(validateRecordLines([JSON.stringify({ ...line, at: 1791797943123 })], OTHER_TOK)).toEqual({ ok: false, message: "line 1: key at is off its class" });
   });
 });
 

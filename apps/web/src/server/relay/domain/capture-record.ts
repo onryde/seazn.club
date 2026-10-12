@@ -55,7 +55,7 @@ const KNOWN_KEYS = new Set(Object.keys(CaptureRecordLine.shape));
 /** A key is named in a refusal only when it looks like a key: an unknown key's NAME is still something the phone sent,
  *  and a 422 never echoes what it cannot vouch for. */
 const NAMEABLE_KEY = /^[A-Za-z0-9_]{1,64}$/;
-const nameOf = (key: string): string => (NAMEABLE_KEY.test(key) ? key : "a key");
+const unlisted = (key: string): string => (NAMEABLE_KEY.test(key) ? `key ${key} is not on the allow-list` : "a key is not on the allow-list");
 
 /** The shape of ONE line (§5), or the refusal's text after `line N: `. */
 function shapeOf(text: string): { ok: true; line: CaptureRecordLine } | { ok: false; why: string } {
@@ -68,15 +68,15 @@ function shapeOf(text: string): { ok: true; line: CaptureRecordLine } | { ok: fa
   if (value === null || typeof value !== "object" || Array.isArray(value)) return { ok: false, why: "not a JSON object" };
   const keys = Object.keys(value);
   const unknown = keys.find((k) => !KNOWN_KEYS.has(k));
-  if (unknown !== undefined) return { ok: false, why: `${nameOf(unknown)} is not on the allow-list` };
+  if (unknown !== undefined) return { ok: false, why: unlisted(unknown) };
   const missing = REQUIRED.find((k) => !(k in value));
-  if (missing !== undefined) return { ok: false, why: `${missing} is missing` };
+  if (missing !== undefined) return { ok: false, why: `key ${missing} is missing` };
   const parsed = CaptureRecordLine.safeParse(value);
   if (parsed.success) return { ok: true, line: parsed.data };
   const key = parsed.error.issues[0]?.path[0];
   // Every key is known and both required ones are present, so the issue sits under a key of the line.
   if (typeof key !== "string") throw new RangeError("shapeOf: a line refused with no key on its first issue");
-  return { ok: false, why: `${key} is off its class` };
+  return { ok: false, why: `key ${key} is off its class` };
 }
 
 /**
