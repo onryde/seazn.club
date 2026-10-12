@@ -18,11 +18,17 @@ import { LOCALES } from "@/lib/i18n-constants";
 
 const DICTS: Record<(typeof LOCALES)[number], Record<string, string>> = { en, es, fr, nl };
 
+// Superseded 2026-10-11: the owner-approved match-room canvas (T14 design of
+// record) words the notice "Keep your camera on for the whole game. If your
+// video drops, we note when for your organiser, who decides what happens." —
+// it also drops "or you leave the frame", which nothing detects (the server
+// sees only whether a video publisher is live). en is typed from the canvas;
+// es/fr/nl are T14's translations of it, pending the controller's sign-off.
 const APPROVED_PLAYER_NOTICE: Record<(typeof LOCALES)[number], string> = {
-  en: "Your camera must stay on for the whole game. If it turns off, or you leave the frame, we record it for the organiser, who decides what happens. Nothing is decided automatically.",
-  es: "Tu cámara debe permanecer encendida durante toda la partida. Si se apaga, o si te sales del encuadre, lo registramos para el organizador, que decide qué ocurre. Nada se decide automáticamente.",
-  fr: "Votre caméra doit rester allumée pendant toute la partie. Si elle s'éteint, ou si vous sortez du cadre, nous l'enregistrons pour l'organisateur, qui décide de la suite. Rien n'est décidé automatiquement.",
-  nl: "Je camera moet de hele partij aan blijven. Gaat hij uit, of ga je uit beeld, dan leggen we dat vast voor de organisator, die beslist wat er gebeurt. Er wordt niets automatisch beslist.",
+  en: "Keep your camera on for the whole game. If your video drops, we note when for your organiser, who decides what happens.",
+  es: "Mantén la cámara encendida toda la partida. Si tu vídeo se corta, anotamos cuándo para tu organizador, que decide qué pasa.",
+  fr: "Gardez votre caméra allumée pendant toute la partie. Si votre vidéo se coupe, nous notons quand pour votre organisateur, qui décide de la suite.",
+  nl: "Houd je camera de hele partij aan. Valt je video weg, dan noteren we wanneer voor je organisator, die beslist wat er gebeurt.",
 };
 
 // Fix round (controller, 2026-10-09): the option labels are SHORT — at 320px
