@@ -654,6 +654,9 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "resynced", adopted: 0 }, EN["arbiter.notice.resyncedNone"]!],
       [{ boardId: "f3", kind: "resync_nothing" }, EN["arbiter.notice.resyncNothing"]!],
       [{ boardId: "f3", kind: "resync_failed", code: "NOT_FOUND" }, EN["arbiter.notice.resyncFailed"]!],
+      // T16 (brief addendum 5): a player's stored Lichess access that cannot be opened is an operator fault on our
+      // side (resyncExternalPlay passes reconcile's 503 through) — "try again" would not help.
+      [{ boardId: "f3", kind: "resync_failed", code: "LICHESS_TOKEN_UNAVAILABLE" }, EN["arbiter.notice.resyncTokenUnavailable"]!],
       [{ boardId: "f3", kind: "went_on", stillOpen: 0 }, EN["arbiter.notice.wentOn"]!],
       [{ boardId: "f3", kind: "went_on", stillOpen: 1 }, EN["arbiter.notice.wentOnNew.one"]!.replace("{count}", "1")],
       [{ boardId: "f3", kind: "went_on", stillOpen: 2 }, EN["arbiter.notice.wentOnNew.other"]!.replace("{count}", "2")],
@@ -678,9 +681,9 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    // 20 notices; "failed" is the shared fallback sentence (2 rows), so 19.
-    expect(notices.length).toBe(20);
-    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(19);
+    // 21 notices; "failed" is the shared fallback sentence (2 rows), so 20.
+    expect(notices.length).toBe(21);
+    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(20);
   });
 });
 

@@ -93,11 +93,19 @@ export const OPEN_ROUND_SKIP_KEYS: Readonly<Record<OpenRoundSkipReason, Dictiona
   send_failed: "externalPlay.openRound.skipped.sendFailed",
 };
 
-/** A re-pair (Swiss unpair, or the pre-Start delete-entrant that unpairs) is
+/** A re-pair (Swiss unpair, Rebuild, or the delete-entrant that unpairs) is
  *  refused while a game stands — or may stand — behind any board it would
- *  clear (controller ruling, 2026-10-10). The organiser voids the game first. */
+ *  clear (controller ruling, 2026-10-10). There is no "void" that unblocks it:
+ *  the organiser's way out is settling the board in the arbiter panel (T16),
+ *  which decides it, and a round with a decided board stays paired. */
 export const ONLINE_GAME_EXISTS_CODE = "ONLINE_GAME_EXISTS";
 export const ONLINE_GAME_EXISTS_KEY: DictionaryKey = "externalPlay.onlineGameExists";
+
+/** Whether an organiser action's refusal is that one (T16): the panels show
+ *  `OnlineGameExistsNotice` for it instead of the server's English. */
+export function isOnlineGameExists(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === ONLINE_GAME_EXISTS_CODE;
+}
 
 /** The resend's refusals beyond the board's own (review M6, fix round 1): the
  *  round's window closed (T+20), or the board is held for the organiser. A

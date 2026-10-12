@@ -856,6 +856,7 @@ export default async function DivisionPage({
               awaitingSettle={[...awaitingSettle]}
               onlinePlay={runSheetOnlinePlay}
               openRounds={openRounds}
+              arbiterHref={arbiterHref}
             />
           </>
         )}
