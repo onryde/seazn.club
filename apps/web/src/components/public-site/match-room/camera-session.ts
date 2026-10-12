@@ -18,9 +18,14 @@
 // it is back. The player sees "reconnecting", never "camera off".
 //
 // Giving up (T14 fix round 5, ruling 2): after RECOVER_MAX_ATTEMPTS failed
-// re-joins — for any reason — the session stops, stamps the end (the gap
-// still counts toward job 5's neutral flag), and reads `gave_up`: the player
-// is told to reload, never left on "reconnecting" for ever.
+// re-joins — for any reason — the session stops trying and reads `gave_up`:
+// the player is told to reload, never left on "reconnecting" for ever. The
+// stamp stays OPEN (fix round 6, I-2): the reload is our gap too, and the
+// reload's re-seat (claimRoomSeat) closes it on the server — the closer that
+// lands nearest the camera's return. A stop after the give-up leaves it open
+// for the same reason: an unload's POST may never arrive, and an end sent at
+// the unload would leave the page load and the join uncovered. Every other
+// stop closes it. The open time still counts toward job 5's neutral flag.
 import { D7GuardError, type JoinOwnCamera, type MeetingLink, type OwnCamera } from "./camera-loader";
 
 export type CameraStatus = "idle" | "joining" | "live" | "off" | "failed" | "recovering" | "gave_up";
@@ -57,6 +62,7 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
   let busy = false;
   let stopped = false;
   let faultOpen = false;
+  let gaveUp = false;
 
   const stamp = (state: "start" | "end") => {
     if ((state === "start") === faultOpen) return;
@@ -81,6 +87,7 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
       unfault();
     };
     linkChanged();
+    gaveUp = false;
     stamp("end");
     const track = joined.track();
     emit({ status: track ? "live" : "off", track });
@@ -125,9 +132,9 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
     }
     busy = false;
     if (stopped) return;
-    // Out of attempts. OUR window ends here — it still counts (ruling 1) —
-    // and the player is told to reload: the page's own way back.
-    stamp("end");
+    // Out of attempts: the player is told to reload, the page's own way back.
+    // OUR window stays open until the reload's re-seat closes it (I-2).
+    gaveUp = true;
     emit({ status: "gave_up", track: null });
   }
 
@@ -169,8 +176,9 @@ export function cameraSession(join: JoinOwnCamera, emit: (v: CameraView) => void
       if (stopped) return;
       stopped = true;
       const c = detach();
-      // The page is gone: our interval, if one is open, ends with it.
-      stamp("end");
+      // The page is gone: our interval, if one is open, ends with it — unless
+      // we gave up, when the re-seat after the reload is its closer (I-2).
+      if (!gaveUp) stamp("end");
       await c?.leave().catch(() => undefined);
     },
     /** The meeting as the camera's join sees it; null without one. */

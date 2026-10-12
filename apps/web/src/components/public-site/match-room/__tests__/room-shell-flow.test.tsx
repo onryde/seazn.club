@@ -539,9 +539,10 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     island.unmount();
   });
   // T14 fix round 5, ruling 2: the re-join keeps failing (a network error,
-  // not our guard) → after RECOVER_MAX_ATTEMPTS the camera gives up: the
-  // stamp closes, the player is told to reload — and the Reload reloads.
-  it("re-joins that keep failing GIVE UP: the stamp opens then closes, the status is gave_up (never off or failed), nothing joins after", async () => {
+  // not our guard) → after RECOVER_MAX_ATTEMPTS the camera gives up and the
+  // player is told to reload — and the Reload reloads. Fix round 6, I-2: the
+  // stamp stays open through the give-up; the reload's re-seat closes it.
+  it("re-joins that keep failing GIVE UP: the stamp opens and STAYS open (fix round 6, I-2), the status is gave_up (never off or failed), nothing joins after", async () => {
     stubFetch();
     const live = snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
     getAnswer = () => snap({ you, game: LIVE_GAME, cameraPolicy: "required", opponentPresence: { participantId: "rtk-opp" } });
@@ -560,12 +561,14 @@ describe("I-1: our guard's fault, through the real shell — stamped, re-joined,
     await settle(1_000);
     expect(cameraStatus(island), "out of attempts: told to reload").toBe("gave_up");
     expect(join.fn, "the first join, then exactly N re-joins").toHaveBeenCalledTimes(1 + RECOVER_MAX_ATTEMPTS);
-    expect(stamps.map((x) => (x.body as { state: string }).state), "our window, closed by the give-up").toEqual(["start", "end"]);
-    expect(stamps.map((x) => (x.body as { participantId: string }).participantId)).toEqual(["p-own", "p-own"]);
+    expect(stamps.map((x) => (x.body as { state: string }).state), "our window, left open: the reload's re-seat closes it").toEqual(["start"]);
+    expect(stamps.map((x) => (x.body as { participantId: string }).participantId)).toEqual(["p-own"]);
     await settle(60_000);
     expect(join.fn, "given up: nothing joins by itself").toHaveBeenCalledTimes(1 + RECOVER_MAX_ATTEMPTS);
     expect(screenOf(island)).toBe("live");
     island.unmount();
+    await settle();
+    expect(stamps.map((x) => (x.body as { state: string }).state), "the unmount sends no end either").toEqual(["start"]);
   });
 
   it("on a refused check-in, a camera that gave up keeps the player on the check-in — never the camera-required card", async () => {
