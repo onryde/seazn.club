@@ -782,6 +782,15 @@ export function ArbiterPanel({
   // says so rather than opening another. With nothing asked for, the first.
   const firstBoard = initialFixtureId ?? round?.boards[0]?.fixtureId ?? null;
   const [decision, dispatch] = useReducer(arbiterDecision, firstBoard, initialArbiterDecision);
+  // A navigation that lands on this same panel (the notice's "current round"
+  // link, back/forward) brings a new target with the SAME instance: follow
+  // it, adjusting during render (React's "previous props" pattern). A board
+  // picked here already matches its own URL, so a refresh moves nothing.
+  const [target, setTarget] = useState(firstBoard);
+  if (target !== firstBoard) {
+    setTarget(firstBoard);
+    if (firstBoard !== null && firstBoard !== decision.boardId) dispatch({ type: "select", boardId: firstBoard });
+  }
   const board = round?.boards.find((b) => b.fixtureId === decision.boardId) ?? null;
 
   // The viewer's clock: null on the server and the first client render.
