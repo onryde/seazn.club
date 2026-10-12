@@ -68,19 +68,19 @@
       "reason": "twoSidedBracket puts the first half of every pre-final round on L and the second half on R, so col 0 holds as many R nodes as L; a centre node sits at col 0 only in a one-round (2-entrant) field, where L counts 0, the mutant 1, and Math.max(1, ·) makes both 1."
     },
     {
-      "mutant": "src/history/history.ts:312:41 ConditionalExpression → false",
+      "mutant": "src/history/history.ts:316:41 ConditionalExpression → false",
       "original": "f.poolId === null",
       "line": "if (scope.poolIds !== undefined && (f.poolId === null || !scope.poolIds.includes(f.poolId))) continue;",
       "reason": "Dropping the null short-circuit leaves `!scope.poolIds.includes(f.poolId)`. poolIds is a string[] (ClearScope: z.array(z.string()); the same type on every caller), which never holds null, so a pool-less fixture still reads includes(null) = false and is skipped exactly as `f.poolId === null` skipped it; for a pooled fixture the operand was false already."
     },
     {
-      "mutant": "src/history/history.ts:313:40 ConditionalExpression → false",
+      "mutant": "src/history/history.ts:317:40 ConditionalExpression → false",
       "original": "f.roundNo === null",
       "line": "if (scope.rounds !== undefined && (f.roundNo === null || !scope.rounds.includes(f.roundNo))) continue;",
       "reason": "Dropping the null short-circuit leaves `!scope.rounds.includes(f.roundNo)`. rounds is a number[] (ClearScope: z.array(z.number().int())), which never holds null, so a round-less fixture still reads includes(null) = false and is skipped exactly as `f.roundNo === null` skipped it; for a fixture with a round the operand was false already."
     },
     {
-      "mutant": "src/history/history.ts:314:40 ConditionalExpression → false",
+      "mutant": "src/history/history.ts:318:40 ConditionalExpression → false",
       "original": "f.court === null",
       "line": "if (scope.courts !== undefined && (f.court === null || !scope.courts.includes(f.court))) continue;",
       "reason": "Dropping the null short-circuit leaves `!scope.courts.includes(f.court)`. courts is a string[] (ClearScope: z.array(z.string())), which never holds null, so a court-less fixture still reads includes(null) = false and is skipped exactly as `f.court === null` skipped it; for a fixture on a court the operand was false already."

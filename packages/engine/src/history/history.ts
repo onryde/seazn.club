@@ -264,11 +264,18 @@ export function undo(
 }
 
 /**
- * redo (Jul3/03 §3): moves the watermark forward to the next ORIGINAL edit
- * (skipping inverse events and redo copies) and returns an audit copy to
- * append. Making a fresh edit after an undo bumps the watermark to head,
- * which leaves no original edits beyond it — the redo branch dies naturally
- * (linear, Word-like history; Jul3/03 §8).
+ * redo (Jul3/03 §3): moves the watermark forward one step along the registry
+ * timeline — to the next registry event after it, up to the LAST FRESH EDIT
+ * (the newest event that is neither an inverse nor a redo copy) — and returns
+ * a copy of that event to append. It is the exact mirror of `undo`, which
+ * walks back one registry event at a time, inverses and copies included.
+ *
+ * The timeline is linear (owner ruling 2026-10-11): a fresh edit made after
+ * an undo keeps that undo as a step of its own — everything up to the fresh
+ * edit is history — so a later undo walks back through it (the undone edit
+ * comes back) and a save point taken before it stays reachable. Rows appended
+ * after the last fresh edit are undo/redo bookkeeping, never redo targets,
+ * so a fresh edit leaves nothing to redo.
  */
 export function redo(
   events: readonly LedgerEvent[],
@@ -276,13 +283,10 @@ export function redo(
   decidedFixtureIds: ReadonlySet<string>,
 ): HistoryStep {
   const wm = effectiveWatermark(events, watermark);
-  const next = events.find(
-    (e) =>
-      e.seq > wm &&
-      isReversible(e.type) &&
-      e.payload.__undo_of === undefined &&
-      e.payload.__redo_of === undefined,
-  );
+  const fresh = (e: LedgerEvent) =>
+    isReversible(e.type) && e.payload.__undo_of === undefined && e.payload.__redo_of === undefined;
+  const lastFresh = events.findLast(fresh)?.seq ?? 0;
+  const next = events.find((e) => e.seq > wm && e.seq <= lastFresh && isReversible(e.type));
   if (!next) throw new HistoryError("NOTHING_TO_REDO", "already at the newest edit");
   const op = REVERSIBLE[next.type]!;
   guard(op, next.payload, decidedFixtureIds);
