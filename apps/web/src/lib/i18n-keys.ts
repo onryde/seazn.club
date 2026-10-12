@@ -2315,6 +2315,7 @@ export type DictionaryKey =
   | "forfeitDialog.preview.none"
   | "forfeitDialog.reason.disqualified"
   | "forfeitDialog.reason.retired"
+  | "forfeitDialog.reason.retired.boardgame"
   | "forfeitDialog.reason.walkover"
   | "forfeitDialog.title"
   | "forfeitDialog.who"

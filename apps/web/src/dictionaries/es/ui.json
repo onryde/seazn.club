@@ -3959,6 +3959,7 @@
   "forfeitDialog.why": "¿Por qué?",
   "forfeitDialog.reason.walkover": "Incomparecencia: no se presentó",
   "forfeitDialog.reason.retired": "Retirada: dejó de jugar durante el partido",
+  "forfeitDialog.reason.retired.boardgame": "Retirada: dejó la partida y no volvió",
   "forfeitDialog.reason.disqualified": "Descalificación: expulsión por incumplir el reglamento",
   "forfeitDialog.preview": "Resultado acreditado: {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "No se acredita ningún resultado.",

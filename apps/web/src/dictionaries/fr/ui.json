@@ -3959,6 +3959,7 @@
   "forfeitDialog.why": "Pourquoi ?",
   "forfeitDialog.reason.walkover": "Forfait : ne s'est pas présenté",
   "forfeitDialog.reason.retired": "Abandon : arrêt en cours de match",
+  "forfeitDialog.reason.retired.boardgame": "Abandon : a quitté la partie et n'est pas revenu",
   "forfeitDialog.reason.disqualified": "Disqualification : exclusion pour infraction au règlement",
   "forfeitDialog.preview": "Score crédité : {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "Aucun score n'est crédité.",

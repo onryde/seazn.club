@@ -39,12 +39,27 @@ export interface ForfeitDialogModel {
   /** The table's credited headline score (the module's first metric), or null when nothing is credited on it. */
   preview: (who: ForfeitWho, reason: ForfeitReason) => { home: string; away: string } | null;
   confirmKey: (who: ForfeitWho, reason: ForfeitReason) => ForfeitConfirmKey;
+  /** The reason radio's label, in the sport's own terms where the house word would read as one of its results. */
+  reasonKey: (reason: WriterForfeitReason) => MessageKey;
   /** X-DW-3: shown instead of "Neither" on a fixture with no next match (§7 row 3's sentence). */
   guidance: "noNextMatch" | null;
 }
 
 /** What the model reads off a sport module: its phase guard, its credit and its table's metric order. */
-export type ForfeitModule = Pick<AnySportModule, "forfeitPhase" | "walkoverPhases" | "startIsPlay" | "forfeitCredit" | "metrics">;
+export type ForfeitModule = Pick<AnySportModule, "key" | "forfeitPhase" | "walkoverPhases" | "startIsPlay" | "forfeitCredit" | "metrics">;
+
+const REASON_KEY: Record<WriterForfeitReason, MessageKey> = {
+  walkover: "forfeitDialog.reason.walkover",
+  retired: "forfeitDialog.reason.retired",
+  disqualified: "forfeitDialog.reason.disqualified",
+};
+
+/** Design audit 1.3: a reason worded in a sport's own terms, where the house gloss sits beside one of the sport's own
+ *  results. Chess's dock records "Resignation" (`method.resign`, a board result); a chess retirement is the player
+ *  leaving the game — a different fact, so its gloss says so. Same noun, so Confirm still records a retirement. */
+const SPORT_REASON_KEY: Readonly<Record<string, Partial<Record<WriterForfeitReason, MessageKey>>>> = {
+  boardgame: { retired: "forfeitDialog.reason.retired.boardgame" },
+};
 
 const CONFIRM_KEY: Record<ForfeitReason, ForfeitConfirmKey> = {
   walkover: "forfeitDialog.confirm.walkover",
@@ -116,6 +131,7 @@ export function forfeitDialogModel(
     why,
     preview,
     confirmKey: (w, reason) => (w === "both" ? "forfeitDialog.confirm.doubleWalkover" : CONFIRM_KEY[reason]),
+    reasonKey: (reason) => SPORT_REASON_KEY[module.key]?.[reason] ?? REASON_KEY[reason],
     guidance: admission.both && f.noNextMatch ? "noNextMatch" : null,
   };
 }
@@ -175,12 +191,6 @@ export function forfeitPayload(sel: ForfeitSelection, entrants: { home: string; 
   if (sel.who === null || sel.reason === null) throw new Error("forfeitPayload: nothing chosen — Confirm is blocked");
   return { by: sel.who === "both" ? "both" : entrants[sel.who], reason: sel.reason };
 }
-
-const REASON_KEY: Record<WriterForfeitReason, MessageKey> = {
-  walkover: "forfeitDialog.reason.walkover",
-  retired: "forfeitDialog.reason.retired",
-  disqualified: "forfeitDialog.reason.disqualified",
-};
 
 export type ForfeitResult = { ok: true } | { ok: false; message: string };
 
@@ -330,7 +340,7 @@ export function ForfeitDialog(props: DialogProps) {
                     onChange={() => setSel((s) => pickForfeit(model, s, { kind: "why", reason: r }))}
                     className="h-4 w-4 shrink-0 accent-purple-600"
                   />
-                  <span className="min-w-0 text-sm text-slate-800">{msg(REASON_KEY[r])}</span>
+                  <span className="min-w-0 text-sm text-slate-800">{msg(model.reasonKey(r))}</span>
                 </label>
               ))}
             </div>

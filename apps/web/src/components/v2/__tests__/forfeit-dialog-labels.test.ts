@@ -106,3 +106,31 @@ describe("the reason radios share one form, and name what Confirm records (audit
     expect(checked, `reason labels checked: ${checked}`).toBe(LOCALES.length * REASONS.length);
   });
 });
+
+// Design audit 1.3: in chess the retirement radio sits beside a dock whose in-game stop is "Resignation"
+// (`method.resign`). Chess's radio keeps the house form and noun (audit 1.2 — Confirm still records a retirement) with
+// a gloss in the board's own terms, different from the match sports' gloss in every locale. Its noun must differ from
+// the dock's resignation word — except where the house retirement noun IS the chess word for resigning (fr "Abandon",
+// nl "Opgave"): that is a vocabulary question routed to the owner, listed here and asserted to still collide, so the
+// decision has to move this test.
+describe("chess's retirement radio cannot be read as a resignation (audit 1.3)", () => {
+  const ROUTED_NOUN_COLLISIONS = new Set(["fr", "nl"]);
+  it("in every locale: the board's own gloss, the house noun, and a noun apart from the dock's Resignation", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      const chess = d["forfeitDialog.reason.retired.boardgame"];
+      expect(chess, `${locale}: chess's retirement label`).toBeTruthy();
+      const m = /^(\S[^:]*?)\s?:\s+(\S.*)$/u.exec(chess!);
+      expect(m, `${locale}: "${chess}" is "Noun: gloss"`).not.toBeNull();
+      const house = /^(\S[^:]*?)\s?:\s+(\S.*)$/u.exec(d["forfeitDialog.reason.retired"]!)!;
+      expect(m![1], `${locale}: the house noun (Confirm records a retirement)`).toBe(house[1]);
+      expect(m![2], `${locale}: the board's gloss, not the match sports'`).not.toBe(house[2]);
+      const resign = d["method.resign"]!.toLocaleLowerCase(locale);
+      const collides = m![1]!.toLocaleLowerCase(locale) === resign;
+      expect(collides, `${locale}: noun "${m![1]}" vs the dock's "${d["method.resign"]}"${ROUTED_NOUN_COLLISIONS.has(locale) ? " (routed: still collides)" : ""}`).toBe(ROUTED_NOUN_COLLISIONS.has(locale));
+      checked++;
+    }
+    expect(checked, `locales checked: ${checked}`).toBe(LOCALES.length);
+  });
+});

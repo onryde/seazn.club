@@ -3959,6 +3959,7 @@
   "forfeitDialog.why": "Waarom?",
   "forfeitDialog.reason.walkover": "Walk-over: niet komen opdagen",
   "forfeitDialog.reason.retired": "Opgave: tijdens de wedstrijd gestopt",
+  "forfeitDialog.reason.retired.boardgame": "Opgave: verliet de partij en kwam niet terug",
   "forfeitDialog.reason.disqualified": "Diskwalificatie: verwijderd wegens overtreding van de regels",
   "forfeitDialog.preview": "Toegekende uitslag: {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "Er wordt geen uitslag toegekend.",

@@ -262,6 +262,25 @@ describe("UI-1 forfeit dialog model (spec §5.5)", () => {
     expect(keys.size, "four reasons, four different Confirms").toBe(FORFEIT_REASONS.length);
   });
 
+  // Design audit 1.3: chess's dock calls the in-game stop "Resignation" (`method.resign`, a board result the dock
+  // records); the forfeit dialog then offered "Retired: stopped during the match" beside it — a different fact the
+  // organiser had to tell apart. Chess's retirement radio reads in the board's terms; every other sport keeps the
+  // house label. The premise is asserted: chess OFFERS the retirement once started (its Start is play, ruling 118).
+  it("audit 1.3: chess words its retirement radio in the board's terms; every other sport keeps the house labels", () => {
+    const chess = model(fixtureOf("boardgame", STARTED));
+    expect(chess.why("home"), "premise: a started chess game offers the retirement").toContain("retired");
+    let checked = 0;
+    for (const m of builtinModules) {
+      const d = model(fixtureOf(m.key, STARTED));
+      for (const r of ["walkover", "retired", "disqualified"] as const) {
+        const want = m.key === "boardgame" && r === "retired" ? "forfeitDialog.reason.retired.boardgame" : `forfeitDialog.reason.${r}`;
+        expect(d.reasonKey(r), `${m.key} ${r}`).toBe(want);
+        checked++;
+      }
+    }
+    expect(checked, `sport × reason labels checked: ${checked}`).toBe(builtinModules.length * 3);
+  });
+
   it("the scheduled shape: the page serves state null before kickoff, read as the module's own init — before play for every sport", () => {
     let checked = 0;
     for (const m of builtinModules) {

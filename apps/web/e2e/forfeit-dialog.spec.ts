@@ -301,6 +301,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     expect(await sidesShown(d), "after play: no Neither").toEqual(["home", "away"]);
     await d.getByTestId("forfeit-who-home").click();
     expect(await reasonsShown(d)).toEqual(["retired", "disqualified"]);
+    // Audit 1.3's pair: a match sport keeps the house label.
+    await expect(d.locator("label", { has: d.getByTestId("forfeit-why-retired") })).toHaveText(ui("forfeitDialog.reason.retired"));
     await d.getByTestId("forfeit-why-retired").check();
     // The home side retired: the away side is credited the match (2-0 in games).
     await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview", { home, homeScore: 0, away, awayScore: 2 }));
@@ -484,6 +486,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       expect(await sidesShown(d), `${w}: Neither stays (a double walkover in play, FIDE 6.7.1)`).toEqual(["home", "away", "both"]);
       await d.getByTestId("forfeit-who-away").click();
       expect(await reasonsShown(d), `${w}: walkover (FIDE 6.7.1), retired and disqualified (ruling 118); withdrew is the cascade's`).toEqual(["walkover", "retired", "disqualified"]);
+      // Design audit 1.3: beside a dock that records "Resignation", chess's retirement reads in the board's terms.
+      await expect(d.locator("label", { has: d.getByTestId("forfeit-why-retired") }), `${w}: chess's retirement label`).toHaveText(ui("forfeitDialog.reason.retired.boardgame"));
       await expectNoHorizontalScroll(page);
       await crop(d, "console-forfeit-dialog-chess-after-start", w);
       await page.keyboard.press("Escape");

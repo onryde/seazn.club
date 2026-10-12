@@ -3959,6 +3959,7 @@
   "forfeitDialog.why": "Why?",
   "forfeitDialog.reason.walkover": "Walkover: didn't turn up",
   "forfeitDialog.reason.retired": "Retirement: stopped during the match",
+  "forfeitDialog.reason.retired.boardgame": "Retirement: left the game and didn't come back",
   "forfeitDialog.reason.disqualified": "Disqualification: removed for breaking the rules",
   "forfeitDialog.preview": "Credited score: {home} {homeScore}–{awayScore} {away}",
   "forfeitDialog.preview.none": "No score is credited.",
