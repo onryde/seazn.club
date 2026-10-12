@@ -1358,6 +1358,21 @@ Elsewhere the text is the controller's record.
      - **Sequencing:** after W2 merges. It may run in parallel with W3, because it mostly writes docs and tests, not
        product code. It also underpins the single-reader build guards the owner approved on 2026-10-12.
      - **W2b:** adds no backfill rows.
+122. **A team match counts on a person's career record only for players: the recorded lineup, or the roster when no
+     lineup was recorded** (2026-10-12, owner "B", given after my recommendation B).
+     - **How it was found:** the reviewer of 30284f140 found that the career count credits every `entrant_members` row,
+       so a volleyball coach, and a member added after the fixture, were each listed with 1 match. The count had
+       always done this; 30284f140 made the listing agree with it, so the defect became visible. `entrant_members`
+       has no join date. It does have `roles` (player / coach / staff).
+     - **The rule:**
+       - A person gets a match only with the player role. Coach and staff never get one.
+       - If the fixture has a recorded lineup, only people in it get the match.
+       - If no lineup was recorded, the roster's players get it.
+       - Individual-entrant sports are unchanged.
+     - **Known residue, accepted:** a player added to the roster after a fixture with no lineup is still credited,
+       because no join date is stored. A full appearance rule per sport (starters and the substitutes who came on)
+       and join dates belong to the ruling-121 backfill wave or later.
+     - **Implementation:** one reader, shared by the career count and the listing. It follows `careerMatchesByDivision`.
 
 ## Recommendations (mine — not rulings)
 
