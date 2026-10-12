@@ -381,7 +381,7 @@ describe("I8: the opponent pill comes from the player's own meeting join — nev
       seen.push(useOpponentPresence(camera, opponent));
       return null;
     }
-    const island = renderIsland(Probe, { opponent: { participantId: "rtk-opp" } });
+    const island = renderIsland<{ opponent: RoomSnapshot["opponentPresence"] }>(Probe, { opponent: { participantId: "rtk-opp" } });
     await settle();
     expect(seen.at(-1), "premise: the pill is up").toBe(true);
     const from = seen.length;
