@@ -76,9 +76,13 @@ export function outcomeTextParts(
 
 /**
  * A line that ENDS with a result's `tail`, cut in two: the part that may truncate and the tail that may not. Anything
- * else — no tail, or a line that does not end with it — is all `lead`, exactly as it read before.
+ * else — no tail, or a line that does not end with it — is all `lead`, exactly as it read before. The whitespace
+ * before the tail travels WITH it: the lead renders `white-space: nowrap`, which drops a space that ends its box (a
+ * result naming nobody read "forfeited ·2× w/o"); the tail renders `whitespace-pre`, which keeps it.
  */
 export function splitResultTail(line: string, tail: string | null | undefined): { lead: string; tail: string } {
   if (!tail || !line.endsWith(tail)) return { lead: line, tail: "" };
-  return { lead: line.slice(0, line.length - tail.length), tail };
+  const before = line.slice(0, line.length - tail.length);
+  const lead = before.trimEnd();
+  return { lead, tail: before.slice(lead.length) + tail };
 }

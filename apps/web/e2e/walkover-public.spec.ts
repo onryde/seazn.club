@@ -734,10 +734,11 @@ async function longNameDivision(r: APIRequestContext, kind: "league" | "knockout
 
 /** Every RENDERED copy of `tail` inside `row`, measured against each clipping ancestor up to the row. `crowded`: the line
  *  holding it really was short of room (its lead, or the line itself, overflows) — the precondition that makes a 320
- *  pass mean something. */
+ *  pass mean something. `broken`: a copy whose glyphs sit on more than one line (a tag wrapped is a tag broken).
+ *  `glued`: a copy that starts its own box with no visible space after the box before it ("forfeited ·2× w/o"). */
 async function measureTail(row: Locator, tail: string) {
   return row.evaluate((rowEl, t) => {
-    const out = { measured: 0, clipped: [] as string[], crowded: false };
+    const out = { measured: 0, clipped: [] as string[], crowded: false, broken: 0, glued: [] as number[] };
     const walker = document.createTreeWalker(rowEl, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const text = n.textContent ?? "";
@@ -749,8 +750,13 @@ async function measureTail(row: Locator, tail: string) {
       if ([...range.getClientRects()].every((x) => x.width === 0)) continue; // the other breakpoint's copy (display:none)
       const box = range.getBoundingClientRect();
       out.measured++;
+      if (new Set([...range.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top))).size > 1) out.broken++;
       const holder = n.parentElement!;
       const lead = holder.previousElementSibling;
+      if (text.slice(0, at).trim() === "" && lead !== null) {
+        const gap = box.left - lead.getBoundingClientRect().right;
+        if (gap < 2) out.glued.push(Math.round(gap * 10) / 10);
+      }
       out.crowded ||= holder.scrollWidth > holder.clientWidth + 1 || (lead !== null && lead.scrollWidth > lead.clientWidth + 1);
       for (let el: HTMLElement | null = holder; el !== null && el !== rowEl.parentElement; el = el.parentElement) {
         if (getComputedStyle(el).overflowX === "visible") continue;
@@ -828,6 +834,8 @@ test.describe("W2b loop H F1 — the run sheet keeps the result's tag whole", ()
           console.log(`loop H F1 ${width} ${r.name}: ${(await row.innerText()).replace(/\s+/g, " ").trim()} :: ${JSON.stringify(m)}`);
           expect(m.measured, `${width} ${r.name}: the tail "${tailOf(r)}" is rendered once at this width`).toBe(1);
           expect(m.clipped, `${width} ${r.name}: the tail is never clipped`).toEqual([]);
+          expect(m.broken, `${width} ${r.name}: the tail sits on one line`).toBe(0);
+          expect(m.glued, `${width} ${r.name}: a space separates the tail from what precedes it (px)`).toEqual([]);
           // At 320 a 43-character name cannot fit beside the tag: the name is what gave way (the precondition).
           if (width === 320 && r.winner !== null) expect(m.crowded, `${width} ${r.name}: the line really was short of room`).toBe(true);
           await shot(row, `f1-run-sheet-${r.name}-${width}`);

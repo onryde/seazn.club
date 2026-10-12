@@ -146,6 +146,16 @@ describe("outcomeTextParts — the result cut where the winner's name ends", () 
     expect(splitResultTail("Round 2", "")).toEqual({ lead: "Round 2", tail: "" });
     expect(splitResultTail("Round 2", null)).toEqual({ lead: "Round 2", tail: "" });
   });
+
+  it("the gap before a tail travels WITH the tail: a truncating span's trailing space collapses ('·2× w/o')", () => {
+    // A result that names nobody is all tail, so the separator's space ended the lead — and white-space:nowrap drops a
+    // space that ends its box. The tail is whitespace-pre: the space survives there.
+    expect(splitResultTail("Round 1 · forfeited · 2× w/o", "2× w/o")).toEqual({ lead: "Round 1 · forfeited ·", tail: " 2× w/o" });
+    expect(splitResultTail("Round 1 ·  \t2× w/o", "2× w/o")).toEqual({ lead: "Round 1 ·", tail: "  \t2× w/o" });
+    // A tail with its own leading space is unchanged; a line that IS the tail has no lead to give up a gap.
+    expect(splitResultTail("Round 2 · Alpha won (w/o)", " won (w/o)")).toEqual({ lead: "Round 2 · Alpha", tail: " won (w/o)" });
+    expect(splitResultTail("2× w/o", "2× w/o")).toEqual({ lead: "", tail: "2× w/o" });
+  });
 });
 
 function fx(o: Partial<RunSheetFixture>): RunSheetFixture {
@@ -215,7 +225,9 @@ describe("the run sheet's phone line never truncates the result's tail (loop H F
       expect(lead.cls, c.name).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
       expect(tail.cls, c.name).toEqual(expect.arrayContaining(["shrink-0", "whitespace-pre"]));
       expect(tail.cls, `${c.name}: the tail never truncates`).not.toContain("truncate");
-      expect(tail.text, `${c.name}: the tail is the template's words`).toBe(c.tail(en));
+      expect(tail.text.endsWith(c.tail(en)), `${c.name}: the tail is the template's words`).toBe(true);
+      expect(tail.text.trim(), `${c.name}: and only them, with the gap before them`).toBe(c.tail(en).trim());
+      expect(lead.text, `${c.name}: the truncating lead never ENDS in a space (it would collapse, gluing '·2× w/o')`).toBe(lead.text.trimEnd());
       // The visible text is unchanged: round meta, the void status where there is one, then the result.
       const meta = msg("schedule.round", { n: 2 });
       const status = VOID_STATUSES.has(c.status) ? `${fixtureStatusLabel(msg, c.status)} · ` : "";
