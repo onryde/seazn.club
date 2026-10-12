@@ -120,6 +120,36 @@ async function noSidewaysScroll(page: Page, widths: number[]): Promise<number> {
   return checked;
 }
 
+/** An element's painted box, by test id (the first, attached). */
+async function boxOf(page: Page, testId: string): Promise<{ x: number; y: number; width: number; height: number }> {
+  const box = await page.getByTestId(testId).first().boundingBox();
+  if (!box) throw new Error(`${testId} has no box`);
+  return box;
+}
+
+/** The drawn order of a phone column: each box wholly below the one before. */
+async function stackedTopDown(page: Page, ids: string[]): Promise<number> {
+  let checked = 0;
+  for (let i = 1; i < ids.length; i += 1) {
+    const above = await boxOf(page, ids[i - 1]!);
+    const below = await boxOf(page, ids[i]!);
+    expect(above.y + above.height, `${ids[i - 1]} sits above ${ids[i]}`).toBeLessThanOrEqual(below.y + 1);
+    checked += 1;
+  }
+  return checked;
+}
+
+/** The desktop composition: `id` sits in the aside, right of the board. */
+async function inAside(page: Page, id: string): Promise<void> {
+  const board = await boxOf(page, "room-board");
+  const box = await boxOf(page, id);
+  expect(box.x, `${id} is in the aside, right of the board`).toBeGreaterThanOrEqual(board.x + board.width);
+  expect(box.y, `${id} starts level with the board, not under it`).toBeLessThan(board.y + board.height / 2);
+}
+
+/** Chrome's own line for a request the test cut off at the browser's edge. */
+const CUT_OFF = /net::ERR_INTERNET_DISCONNECTED/;
+
 // ------------------------------------------------------------- the board
 
 type Square = string;
@@ -451,6 +481,20 @@ test("the board: legal dots from the rules, a move sent as UCI with the personal
   // The refusal puts the knight back where the ledger has it.
   await expect.poll(() => piecesOnBoard(p)).toEqual(piecesOf(fen));
   expect((await bridgeRow(room.fixtureId))?.move_count, "nothing was played").toBe(2);
+  // Seam C2 (canvas MoveRefusedPhone): Lichess refused it — the amber
+  // notice says so, and the re-read that follows every act keeps it.
+  const notice = p.getByTestId("room-move-notice");
+  await expect(notice).toHaveAttribute("data-kind", "refused");
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.refused.title"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.refused.body"]!);
+  await p.waitForResponse((r) => r.request().method() === "GET" && /\/external-play\/room$/.test(new URL(r.url()).pathname), { timeout: 15_000 });
+  await p.waitForTimeout(200);
+  await expect(notice, "the re-read of the same board keeps it").toHaveAttribute("data-kind", "refused");
+  await inAside(p, "room-move-notice");
+  await p.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "c2-refused");
   await ctx.close();
 });
 
@@ -554,6 +598,168 @@ test("a held board (review I2): a game nobody may act on reads as held — the b
   await ctx.close();
 });
 
+test("Seam A, the Lichess link revoked: the frozen player's board dimmed and read-only, Seat on hold, Link Lichess again, Back to fixture — the opponent plays on; both frozen, each sees A — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, longName()] });
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  // The pair first: the live board, White to move.
+  expect(await screenOf(p)).toBe("live");
+  await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+
+  // T12's mid-game diagnosis: White's grant was revoked on Lichess. The
+  // hold freezes White's seat (V436 revoked_seat); the next poll reads it.
+  const freeze = (seat: "white" | "both") =>
+    withDb(
+      (sql) => sql`
+        update fixture_external_play
+           set status = 'needs_organiser', needs_reason = 'token_revoked', revoked_seat = ${seat}, updated_at = now()
+         where fixture_id = ${room.fixtureId}`,
+    );
+  await freeze("white");
+  await expect.poll(() => screenOf(p), { timeout: 20_000, message: "a poll reads the freeze" }).toBe("revoked");
+  const notice = p.getByTestId("room-revoked-notice");
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.title"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.state.revoked.body"]!);
+  const relink = p.getByTestId("room-revoked-relink");
+  await expect(relink).toHaveText(uiEn["externalPlay.room.state.revoked.relink"]!);
+  const href = new URL((await relink.getAttribute("href"))!, "http://x");
+  expect(href.pathname, "Link Lichess again starts the Lichess link flow").toBe("/api/auth/lichess");
+  expect(href.searchParams.get("org")).toBe(room.fixturePath.split("/")[2]);
+  expect(href.searchParams.get("next"), "and comes back to this room, with its link").toBe(`${room.roomPath}?t=${encodeURIComponent(room.white.token)}`);
+  // Owner tweak 1: the room's own words for the way back.
+  const back = p.getByTestId("room-back-to-fixture");
+  await expect(back).toHaveText(uiEn["externalPlay.room.backToFixture"]!);
+  await expect(back).toHaveAttribute("href", room.fixturePath);
+  // The board: the ledger's, dimmed (canvas: opacity .5, grayscale .35), read-only, and says why.
+  await boardReady(p);
+  expect(await piecesOnBoard(p), "the board is still the ledger's").toEqual(piecesOf(fen));
+  const surface = p.getByTestId("room-board-surface");
+  await expect(surface).toHaveAttribute("data-movable", "false");
+  await expect(surface).toHaveAttribute("aria-label", uiEn["externalPlay.room.board.seatOnHold"]!);
+  const look = await p.getByTestId("room-board").evaluate((el) => ({ opacity: getComputedStyle(el).opacity, filter: getComputedStyle(el).filter }));
+  expect(look).toEqual({ opacity: "0.5", filter: "grayscale(0.35)" });
+  expect(await pieceUnder(p, "g1", "white")).toBe("g1");
+  await tap(p, "g1", "white");
+  await p.waitForTimeout(300); // two frames: a dot, if one were coming, is painted
+  expect(await squaresWith(p, "move-dest"), "no destinations on a seat on hold").toEqual([]);
+  // The clocks: yours reads Seat on hold, never "your move"; no game actions.
+  const you = p.getByTestId("room-clock-you");
+  await expect(you).toHaveAttribute("data-active", "false");
+  await expect(you).toContainText(fill("externalPlay.room.colourSeatOnHold", { colour: uiEn["externalPlay.room.colour.white"]! }));
+  await expect(p.getByText(uiEn["externalPlay.room.yourMove"]!, { exact: true })).toHaveCount(0);
+  for (const id of ["room-resign", "room-draw", "room-abort", "room-controls"]) await expect(p.getByTestId(id), id).toHaveCount(0);
+  // Desktop: the notice and the way back in the aside. Phone: the drawn column.
+  await inAside(p, "room-revoked-notice");
+  await p.setViewportSize({ width: 320, height: 800 });
+  await expect(you).toContainText(uiEn["externalPlay.room.seatOnHold"]!);
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-revoked-notice", "room-board", "room-back-to-fixture"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "a-revoked");
+
+  // The opponent's seat is not frozen: Black's board plays on.
+  const bctx = await cold(browser);
+  const b = await openRoom(bctx, room, room.black.token);
+  expect(await screenOf(b), "the opponent's freeze leaves this board live").toBe("live");
+  await expect(b.getByTestId("room-revoked-notice")).toHaveCount(0);
+  // Both frozen: each player sees A.
+  await freeze("both");
+  await expect.poll(() => screenOf(b), { timeout: 20_000, message: "Black's poll reads both frozen" }).toBe("revoked");
+  await expect(b.getByTestId("room-clock-you")).toContainText(fill("externalPlay.room.colourSeatOnHold", { colour: uiEn["externalPlay.room.colour.black"]! }));
+  await p.waitForTimeout(3_500); // White's next poll
+  expect(await screenOf(p), "White still sees A").toBe("revoked");
+  await bctx.close();
+  await ctx.close();
+});
+
+test("Seam B, online chess off: one calm card — no board, clocks or camera — and Back to fixture, at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  expect(await screenOf(p), "the pair: online chess offered, the check-in").toBe("checkin");
+  // Every e2e server runs ONLINE_CHESS_ALWAYS=1, so the flag cannot be off
+  // here; when it is, the server answers `onlineChessOff` for a board with no
+  // game (external-play-room.test.ts). That one field is set at the
+  // browser's edge on the server's own read; everything else is the server's.
+  let edited = 0;
+  await p.route(
+    (u) => /\/external-play\/room$/.test(u.pathname),
+    async (route: Route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      const body = (await res.json()) as { ok: boolean; data: Record<string, unknown> };
+      expect(body.ok, "the server read the room").toBe(true);
+      body.data.onlineChessOff = true;
+      edited += 1;
+      await route.fulfill({ response: res, json: body });
+    },
+  );
+  await expect.poll(() => screenOf(p), { timeout: 25_000, message: "the next poll (IDLE_POLL_MS) reads it" }).toBe("offForClub");
+  expect(edited, "anti-vacuity: reads answered").toBeGreaterThanOrEqual(1);
+  const card = p.getByTestId("room-off-for-club");
+  await expect(card.getByRole("heading", { name: uiEn["externalPlay.room.state.offForClub.title"]! })).toBeVisible();
+  await expect(card).toContainText(uiEn["externalPlay.room.state.offForClub.body"]!);
+  const back = card.getByTestId("room-back-to-fixture");
+  await expect(back).toHaveText(uiEn["externalPlay.room.backToFixture"]!);
+  await expect(back).toHaveAttribute("href", room.fixturePath);
+  for (const id of ["room-board", "room-clocks-strip", "room-own-tile", "room-tile-strip", "room-checkin-cta", "room-controls"]) {
+    await expect(p.getByTestId(id), id).toHaveCount(0);
+  }
+  expect(await card.evaluate((el) => getComputedStyle(el).backgroundColor), "a white card (canvas)").toBe("rgb(255, 255, 255)");
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "b-off");
+  await ctx.close();
+});
+
+test("Seam C1, offline: a read with no answer shows You're offline — reconnecting… between the clocks and the board; the next answered read ends it", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const room = await seedMatchRoom(page.request, { names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`] });
+  await seedGameSql(room, { moves: ["e2e4", "e7e5"] });
+  const ctx = await cold(browser);
+  const p = await openRoom(ctx, room, room.white.token);
+  await boardReady(p);
+  await expect(p.getByTestId("room-move-notice"), "the empty case: no notice on a clean board").toHaveCount(0);
+  // The connection drops: the room's reads get no answer at all.
+  let cut = 0;
+  const offline = async (route: Route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    cut += 1;
+    await route.abort("internetdisconnected");
+  };
+  const isRead = (u: URL) => /\/external-play\/room$/.test(u.pathname);
+  await p.route(isRead, offline);
+  const notice = p.getByTestId("room-move-notice");
+  await expect(notice).toHaveAttribute("data-kind", "offline", { timeout: 15_000 });
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.offline.title"]!);
+  await expect(notice).toContainText(uiEn["externalPlay.room.notice.offline.body"]!);
+  expect(cut, "anti-vacuity: reads cut off").toBeGreaterThanOrEqual(1);
+  await expect(p.getByTestId("room-board-surface"), "the board plays on").toHaveAttribute("data-movable", "true");
+  await inAside(p, "room-move-notice");
+  await p.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-move-notice", "room-board", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "c1-offline");
+  // Back online: the next read that gets an answer ends it.
+  await p.unroute(isRead, offline);
+  await expect(notice, "an answered read ends C1").toHaveCount(0, { timeout: 15_000 });
+  expect(await screenOf(p)).toBe("live");
+  // The browser's own lines for the reads this test cut off, and nothing else.
+  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !CUT_OFF.test(e)));
+  await ctx.close();
+});
+
 test("a move refused with a 404 (review I2): the room is not gone — it re-reads at once, keeps polling, and puts the board back", async ({
   page,
   browser,
@@ -589,6 +795,16 @@ test("a move refused with a 404 (review I2): the room is not gone — it re-read
   expect(await screenOf(p), "still the live board, never the gone card").toBe("live");
   await expect.poll(() => piecesOnBoard(p), { message: "the knight is back where the ledger has it" }).toEqual(piecesOf(fen));
   await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
+  // Seam C3 (canvas MoveInvalidPhone): our server refused it — the purple
+  // line under the board, kept through every read since.
+  const notice = p.getByTestId("room-move-notice");
+  await expect(notice).toHaveAttribute("data-kind", "invalid");
+  await expect(notice).toHaveText(uiEn["externalPlay.room.notice.invalid"]!);
+  await inAside(p, "room-move-notice");
+  await p.setViewportSize({ width: 320, height: 800 });
+  expect(await stackedTopDown(p, ["room-clocks-strip", "room-board", "room-move-notice", "room-controls"]), "anti-vacuity: pairs").toBe(3);
+  expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+  await shoot(p, "c3-invalid");
   // The browser's own notice of the 404 it was handed (Chrome logs every
   // failed fetch): this test's refusal and nothing else.
   const own = consoleErrors.filter((e) => /status of 404/.test(e));
