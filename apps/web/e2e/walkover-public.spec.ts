@@ -321,7 +321,7 @@ test.describe("W2b — a credited result says which one, on every public surface
 
       // The knockout draw (drawn from 1024 up; the phone reads the cards above): its node reads no 0 / 0 either.
       if (w >= 1024) {
-        await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout`);
+        await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout&view=draw`);
         await dismissCookieBanner(page);
         const node = page.getByTestId(`mh-knockout-node-${dw!.id}`);
         await expect(node, `${w}: the double walkover's draw node`).toBeVisible({ timeout: STEP_MS });
@@ -423,7 +423,6 @@ test.describe("W2b — a credited result says which one, on every public surface
     const want = final.home_entrant_id === arriving ? [String(CREDIT), "0"] : ["0", String(CREDIT)];
     expect(CREDIT, "premise: the walkover credits goals, so the credit differs from her 0").toBeGreaterThan(0);
     const headline = new RegExp(`^${want[0]}\\s*[–—-]\\s*${want[1]}$`);
-    const endsWith = (line: string) => new RegExp(`(^|\\D)${line}$`);
     const hubScores = async (card: ReturnType<typeof page.getByTestId>, where: string) => {
       for (const i of [0, 1]) {
         await expect(card.getByTestId(`mh-match-side-${i}`).locator("span.tabular-nums"), `${where}: side ${i}'s score`).toHaveText(want[i]!);
@@ -457,7 +456,12 @@ test.describe("W2b — a credited result says which one, on every public surface
       // Stacked by seat as any walkover's row (the tag rides the winner's line), never the no-lines headline chip.
       const lines = row.locator("span.pl-2.text-right");
       await expect(lines, `${w}: the schedule row stacks two score lines`).toHaveCount(2);
-      for (const i of [0, 1]) await expect(lines.nth(i), `${w}: the schedule row's line ${i}`).toHaveText(endsWith(want[i]!));
+      // Design audit 3.9: the tag FOLLOWS the winner's credit ("3" then "w/o"), as on the other hosts; her line ends 0.
+      const winLine = final.home_entrant_id === arriving ? 0 : 1;
+      const tagRe = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      for (const i of [0, 1]) {
+        await expect(lines.nth(i), `${w}: the schedule row's line ${i}`).toHaveText(new RegExp(`(^|\\D)${want[i]!}${i === winLine ? tagRe : ""}$`));
+      }
       await expectNoHorizontalScroll(page);
       await crop(row, `schedule-withdrew-final-${w}`);
       screens++;

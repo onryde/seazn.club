@@ -196,6 +196,9 @@ async function openDialog(page: Page): Promise<Locator> {
   return d;
 }
 /** The reasons the open dialog offers, in its own order. */
+/** The radio's own label (the input sits inside it). `has:` would scope its inner locator from the dialog again and
+ *  match nothing, so the label is the radio's nearest label ancestor. */
+const labelOfReason = (d: Locator, reason: string) => d.getByTestId(`forfeit-why-${reason}`).locator("xpath=ancestor::label[1]");
 const reasonsShown = async (d: Locator) => d.locator('[data-testid^="forfeit-why-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("forfeit-why-".length)));
 const sidesShown = async (d: Locator) => d.locator('[data-testid^="forfeit-who-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.slice("forfeit-who-".length)));
 
@@ -302,7 +305,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
     await d.getByTestId("forfeit-who-home").click();
     expect(await reasonsShown(d)).toEqual(["retired", "disqualified"]);
     // Audit 1.3's pair: a match sport keeps the house label.
-    await expect(d.locator("label", { has: d.getByTestId("forfeit-why-retired") })).toHaveText(ui("forfeitDialog.reason.retired"));
+    await expect(labelOfReason(d, "retired")).toHaveText(ui("forfeitDialog.reason.retired"));
     await d.getByTestId("forfeit-why-retired").check();
     // The home side retired: the away side is credited the match (2-0 in games).
     await expect(d.getByTestId("forfeit-preview")).toHaveText(ui("forfeitDialog.preview", { home, homeScore: 0, away, awayScore: 2 }));
@@ -487,7 +490,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       await d.getByTestId("forfeit-who-away").click();
       expect(await reasonsShown(d), `${w}: walkover (FIDE 6.7.1), retired and disqualified (ruling 118); withdrew is the cascade's`).toEqual(["walkover", "retired", "disqualified"]);
       // Design audit 1.3: beside a dock that records "Resignation", chess's retirement reads in the board's terms.
-      await expect(d.locator("label", { has: d.getByTestId("forfeit-why-retired") }), `${w}: chess's retirement label`).toHaveText(ui("forfeitDialog.reason.retired.boardgame"));
+      await expect(labelOfReason(d, "retired"), `${w}: chess's retirement label`).toHaveText(ui("forfeitDialog.reason.retired.boardgame"));
       await expectNoHorizontalScroll(page);
       await crop(d, "console-forfeit-dialog-chess-after-start", w);
       await page.keyboard.press("Escape");
