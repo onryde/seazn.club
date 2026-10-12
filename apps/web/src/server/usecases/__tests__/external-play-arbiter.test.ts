@@ -20,7 +20,7 @@ import { HttpError } from "@/lib/errors";
 import { RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
-import { joinAsArbiter, loadArbiterRound, type ArbiterVideo } from "../external-play/arbiter";
+import { joinAsArbiter, loadArbiterRound, overrideVideoAsOrganiser, resyncExternalPlay, type ArbiterVideo } from "../external-play/arbiter";
 import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -411,6 +411,40 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
       }),
     });
     expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, { video: ended.video }))).toEqual([409, "VIDEO_MEETING_ENDED"]);
+  });
+});
+
+describe.runIf(HAS_DB)("the decision actions' usecases — who may press them", () => {
+  const audits = (fixtureId: string) =>
+    sql`select 1 from online_chess_audit where fixture_id = ${fixtureId} and kind = 'video_override'`;
+
+  it("a key (no user), a device link, another club: refused before reconcile or the audit write; the organiser's press is recorded under their user", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const board = r.boards[0]!;
+    await bridge(board.fixtureId, r.orgId, { status: "live", moves: 10 });
+    const stranger = await seedOwner();
+    const callers: [string, Parameters<typeof resyncExternalPlay>[0], [number, string]][] = [
+      ["no user", { ...r.owner, userId: null }, [403, "ORGANISER_SESSION_REQUIRED"]],
+      ["device link", { ...r.owner, via: "device_link", deviceLinkId: "dl-test" }, [403, "ORGANISER_SESSION_REQUIRED"]],
+      ["another club", stranger, [404, "NOT_FOUND"]],
+    ];
+    let checked = 0;
+    for (const [who, auth, refusal] of callers) {
+      const reads: string[] = [];
+      const deps = { exportGame: async (id: string) => (reads.push(id), null) };
+      expect(await codeOf(resyncExternalPlay(auth, board.fixtureId, deps)), `resync, ${who}`).toEqual(refusal);
+      expect(reads, `resync, ${who}: Lichess never read`).toEqual([]);
+      expect(await codeOf(overrideVideoAsOrganiser(auth, board.fixtureId, "down")), `override, ${who}`).toEqual(refusal);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(await audits(board.fixtureId)).toHaveLength(0);
+    // The positive pair: the organiser's own press writes the one record.
+    expect(await overrideVideoAsOrganiser(r.owner, board.fixtureId, "video down")).toEqual({ overridden: true });
+    expect(
+      await sql`select actor_user_id, note from online_chess_audit where fixture_id = ${board.fixtureId} and kind = 'video_override'`,
+    ).toEqual([{ actor_user_id: r.ownerUserId, note: "video down" }]);
   });
 });
 
