@@ -83,7 +83,8 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     expect(allowedSeen).toEqual(Object.fromEntries(Object.entries(ALLOWED).map(([rel, { calls }]) => [rel, calls])));
     expect(scanned).toBeGreaterThan(0);
     // Exactly the six fold readers Step 8 moves (preflight C8), plus the two module player-stat folds
-    // (ruling D-C3). A later task that adds a reader adds it here by name.
+    // (ruling D-C3). A later task that adds a reader adds it here by name. W2b ruling 112: the testkit's
+    // `onePlayEvent` refuses a drawn event that decides the match, through outcomeOf (settle-aware like every reader).
     expect(readers.sort()).toEqual([
       "apps/web/src/server/engine-db/append-event.ts",
       "apps/web/src/server/engine-db/fold.ts",
@@ -91,6 +92,7 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       "packages/engine/src/sports/carrom/carrom.ts",
       "packages/engine/src/sports/cricket/scorecard.ts",
       "packages/engine/src/sports/generic/generic.ts",
+      "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
     ]);
