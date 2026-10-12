@@ -5970,6 +5970,7 @@
   "externalPlay.room.over.won": "Vous avez gagné",
   "externalPlay.room.over.lost": "Vous avez perdu",
   "externalPlay.room.over.draw": "Nulle",
+  "externalPlay.room.over.noResult": "Aucun résultat",
   "externalPlay.room.over.onFixture": "Le résultat figure sur le match.",
   "externalPlay.room.over.title": "Partie terminée",
   "externalPlay.room.over.pending": "Le résultat figurera sur le match une fois enregistré.",

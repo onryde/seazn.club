@@ -21,6 +21,7 @@ import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
 import { fenAfter, type PlayResult } from "../external-play/play";
 import { writeResultFrom } from "../external-play/result";
+import { appendEvent } from "@/server/engine-db";
 import type { GameSnapshot } from "@/server/external-play/types";
 import {
   CLOCK_ZERO_TOLERANCE_MS,
@@ -410,6 +411,22 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(white.frozen, "a written result outranks the frozen seat").toBeNull();
     expect(white.canAct).toBe(false);
     expect(black.result).toMatchObject({ outcome: "won", score: "0–1" });
+  });
+
+  it("I7: a double forfeit on the ledger reads as NO RESULT, 0–0, for both players — never a draw", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.orgId, s.fixtureId, 1, { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } });
+    const [fx] = await sql<{ status: string; outcome: { kind: string } | null }[]>`select status, outcome from fixtures where id = ${s.fixtureId}`;
+    expect(fx!.outcome, "premise: the engine folded it to no_result").toEqual({ kind: "no_result" });
+    let checked = 0;
+    for (const who of [s.home, s.away]) {
+      const snap = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
+      expect(snap.result).toEqual({ outcome: "no_result", method: "double_forfeit", score: "0–0" });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("I2: who may act is play.ts's own predicate — and every board the room says nobody may act on, T10 refuses (404)", async () => {

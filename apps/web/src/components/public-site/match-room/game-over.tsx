@@ -16,6 +16,8 @@ export function resultHeadline(result: RoomResult | null, t: RoomT): string {
   if (result === null) return t("externalPlay.room.over.title");
   if (result.outcome === "won") return t("externalPlay.room.over.won");
   if (result.outcome === "lost") return t("externalPlay.room.over.lost");
+  // A double forfeit is the engine's no_result: nobody played (review I7).
+  if (result.outcome === "no_result") return t("externalPlay.room.over.noResult");
   return t("externalPlay.room.over.draw");
 }
 
