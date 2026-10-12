@@ -300,9 +300,9 @@ const sidLine = (sid: string | null): AttributableLine => ({ kind: "live", sid }
 const unpaired = (): AttributableLine => ({ kind: "unpaired" });
 const ended = (): AttributableLine => ({ kind: "ended" });
 /** Q7, as capture answered it and then corrected it (2026-10-12): the four kinds that end a pairing window. Typed here,
- *  never read off the module. `engine-error` is not one: native also writes it on three non-fatal paths where the
- *  pairing goes on (Engine.kt:135, :137; BridgeCore.kt:608), and both fatal paths write `ended {reason:
- *  "fatal-error", wasLive}`, which closes the window as `ended`. */
+ *  never read off the module. `engine-error` is not one: native also writes it on non-fatal paths (Engine.kt:136;
+ *  BridgeCore.kt:608) plus an error raised while already Ended (Engine.kt:138; capture's feat/s1-d3-fixes), and both
+ *  fatal paths write `ended {reason: "fatal-error", wasLive}`, which closes the window as `ended`. */
 const CLOSING_KINDS = ["unpaired", "ended", "pair-refused", "reset"] as const;
 /** Q7 corrected: a kind native writes INSIDE a pairing that goes on. It closes nothing. */
 const ENGINE_ERROR = "engine-error";
@@ -387,7 +387,7 @@ describe("attributeLines (§6: A1 by session, A2 by pairing window)", () => {
 
   it("Q7 CORRECTED by capture (2026-10-12): a non-fatal `engine-error` closes nothing — a no-sid line after it is KEPT; after `engine-error` then the fatal path's `ended` it is DROPPED", () => {
     // Non-fatal: the pairing goes on, so the sender's no-sid lines after it are the sender's — once, and on a second
-    // and third error in a row (each of native's three non-fatal paths can write one).
+    // and third error in a row (each of native's non-fatal paths can write one, and a path can write one again).
     expect(attributeLines([pair(TAG_Y), device(), { kind: ENGINE_ERROR }, device("network")], asY)).toEqual([true, true, true, true]);
     expect(attributeLines([pair(TAG_Y), { kind: ENGINE_ERROR }, sidLine(null)], asY), "then a null sid").toEqual([true, true, true]);
     expect(attributeLines([pair(TAG_Y), { kind: ENGINE_ERROR }, { kind: ENGINE_ERROR }, { kind: ENGINE_ERROR }, device()], asY), "three in a row")

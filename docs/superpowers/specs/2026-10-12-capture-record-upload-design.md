@@ -400,8 +400,9 @@ each call `requireStaff()` themselves (review fix 3).
   the only kinds that end a pairing: `pair-refused` and `reset` end it too. All four close a window through
   themselves (§6); the contract's prose and `WINDOW_CLOSING_KINDS` (`domain/capture-record.ts`) say so.
   - **Capture's correction (2026-10-12).** The first answer also named `engine-error`. That was wrong: `engine-error`
-    is not fatal-only. Native also writes it on three non-fatal paths where the pairing goes on (`Engine.kt:135`,
-    `:137`; `BridgeCore.kt:608`, line numbers as capture cited them). So `engine-error` no longer closes a window; a
+    is not fatal-only. Native also writes it on non-fatal paths (`Engine.kt:136`; `BridgeCore.kt:608`) plus an error
+    raised while already Ended (`Engine.kt:138`), line numbers on capture's `feat/s1-d3-fixes`. So `engine-error` no
+    longer closes a window; a
     no-sid line after a non-fatal one is kept. On both fatal paths native writes `ended {reason: "fatal-error",
     wasLive}`, and `ended` already closes the window. `pair-refused` (always fatal) and `reset` (the backstop) still
     close. The contract admits that `ended` line as it is: `reason` is a plain key (a short word, `fatal-error`
