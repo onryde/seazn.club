@@ -276,4 +276,124 @@ test.describe("W2b — a credited result says which one, on every public surface
     }
     expect(screens).toBe(WIDTHS.length * 3);
   });
+
+  // Owner ruling 116 and R116-1 (W2b Task 16): a semi-final winner withdraws while the final's other seat is TBD, so her
+  // final seat dies; the other semi's winner then arrives and walks over HER. The final reads as a walkover — her name
+  // in her seat, the w/o tag named by "<her> withdrew — walkover." — and never the bye word, which before this read
+  // beside the tag. The probe's positive pair is the SAME locator on the SAME page before the arrival, where her dead
+  // seat still reads the bye word (a probe that cannot see "Bye" would pass the absence vacuously).
+  test("ruling 116 / R116-1: a withdrawn winner's walked-over final names her with w/o on every surface, never Bye, at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(4 * 60_000);
+    const org = await activeOrg(page);
+    const ko = await publicKnockout(request);
+    const [sf1, sf2] = ko.semis;
+    const UI = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const bye = UI["bracket.slot.bye"]!;
+    expect(bye, "ui.json's bye word").toBeTruthy();
+    // Read through innerText (cell breaks kept, and the match centre's CSS-uppercased "BYE" seen as rendered):
+    // textContent glues a row's time cell to its seat ("TBDBye"), where a word boundary never matches.
+    const BYE = new RegExp(`\\b${bye}\\b`, "i");
+    // SF1 is walked over to its home side, who reaches the final — and then withdraws, with the final's other seat TBD.
+    const her = sf1!.home_entrant_id!;
+    await post(request, sf1!.id, "core.forfeit", { by: sf1!.away_entrant_id, reason: "walkover" });
+    await expect.poll(async () => { const f = await read(request, ko.final.id); return [f.home_entrant_id, f.away_entrant_id].includes(her); }, { timeout: STEP_MS }).toBe(true);
+    const withdrew = await apiJson(request, `/api/v1/entrants/${her}/withdraw`, "POST");
+    expect(withdrew.status, JSON.stringify(withdrew.error)).toBeLessThan(300);
+    const waiting = await read(request, ko.final.id);
+    expect([waiting.home_entrant_id, waiting.away_entrant_id, waiting.status], "her final seat is emptied; the final waits").toEqual([null, null, "scheduled"]);
+    const base = `/shared/${org.slug}/${ko.compSlug}`;
+    const finalRow = (panel: string) => page.locator(`#panel-${panel} a[href$="/fixtures/${ko.final.id}"]`);
+
+    // The positive pair: before the arrival, her dead seat reads the bye word — on the schedule row and the tile.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${base}/${ko.divSlug}`);
+    await dismissCookieBanner(page);
+    await expect(finalRow("schedule"), "before: the schedule row's dead seat reads the bye word").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
+    await page.goto(`${base}/${ko.divSlug}?tab=standings`);
+    await expect(finalRow("standings"), "before: the tile's dead seat reads the bye word").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
+    // …and the hub's knockout card draws its still-pending seat with the waiting-slot "?" crest (the crest probe's pair).
+    const koCard = () => page.getByTestId("mh-tab-panel-knockout").getByTestId(`mh-match-${ko.final.id}`);
+    await page.goto(`${base}?tab=knockout`);
+    await dismissCookieBanner(page);
+    // The Rounds list shows one round: the semis while one is still to play, so press the Final (the rail's last chip).
+    const finalChip = page.getByTestId("mh-tab-panel-knockout").locator('[data-testid^="mh-knockout-round-"]').last();
+    await expect(finalChip).toBeVisible({ timeout: STEP_MS });
+    await finalChip.click();
+    await expect(koCard(), "before: the pending seat's crest is the waiting slot's").toContainText("?", { timeout: STEP_MS });
+
+    // SF2 is walked over to its home side, who arrives and walks over her (awardSeededByes, ruling 116).
+    const arriving = sf2!.home_entrant_id!;
+    await post(request, sf2!.id, "core.forfeit", { by: sf2!.away_entrant_id, reason: "walkover" });
+    await expect.poll(async () => (await read(request, ko.final.id)).status, { timeout: STEP_MS }).toBe("forfeited");
+    const final = await read(request, ko.final.id);
+    expect(final.outcome, "a walkover naming who withdrew").toEqual({ kind: "award", winner: arriving, loser: her, reason: "withdrew" });
+    expect([final.home_entrant_id, final.away_entrant_id].filter(Boolean), "she is never seated").toEqual([arriving]);
+    const herName = ko.nameOf.get(her)!;
+    const sentence = say("forfeit.sentence.withdrew", { loser: herName });
+    const tag = say("forfeit.tag.walkover");
+
+    let screens = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+
+      // The match centre: her name in her seat, the withdrew sentence, and no bye word anywhere on the page or its title.
+      await page.goto(`${base}/${ko.divSlug}/fixtures/${ko.final.id}`);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("mc-status-line"), `${w}: the match centre's sentence`).toHaveText(sentence, { timeout: STEP_MS });
+      await expect(page.locator("main"), `${w}: the match centre names her`).toContainText(herName);
+      await expect(page.locator("main"), `${w}: the match centre prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      expect(await page.title(), `${w}: the title names her`).toContain(herName);
+      expect(await page.title(), `${w}: the title prints no bye word`).not.toMatch(BYE);
+      await expectNoHorizontalScroll(page);
+      await crop(page.locator("main"), `match-centre-withdrew-final-${w}`);
+      screens++;
+
+      // The schedule row: her name, the w/o tag named by the sentence, no bye word.
+      await page.goto(`${base}/${ko.divSlug}`);
+      await dismissCookieBanner(page);
+      const row = finalRow("schedule");
+      await expect(row.getByRole("img", { name: sentence }), `${w}: the schedule row's tag`).toHaveText(tag, { timeout: STEP_MS });
+      await expect(row, `${w}: the schedule row names her`).toContainText(herName);
+      await expect(row, `${w}: the schedule row prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      await expectNoHorizontalScroll(page);
+      await crop(row, `schedule-withdrew-final-${w}`);
+      screens++;
+
+      // The bracket tile: the same.
+      await page.goto(`${base}/${ko.divSlug}?tab=standings`);
+      await dismissCookieBanner(page);
+      const tile = finalRow("standings");
+      await expect(tile.getByRole("img", { name: sentence }), `${w}: the tile's tag`).toHaveText(tag, { timeout: STEP_MS });
+      await expect(tile, `${w}: the tile names her`).toContainText(herName);
+      await expect(tile, `${w}: the tile prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      await expectNoHorizontalScroll(page);
+      await crop(tile, `bracket-tile-withdrew-final-${w}`);
+      screens++;
+
+      // The hub's results card: her name, the tag, no bye word.
+      await hubResults(page, `${base}?tab=matches`);
+      const card = page.getByTestId(`mh-match-${ko.final.id}`);
+      await expect(card, `${w}: the results card`).toBeVisible({ timeout: STEP_MS });
+      await expect(card.getByRole("img", { name: sentence }), `${w}: the results card's tag`).toHaveText(tag);
+      await expect(card, `${w}: the results card names her`).toContainText(herName);
+      await expect(card, `${w}: the results card prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      await expect(card, `${w}: her side is drawn as a side, never the waiting slot's "?" crest`).not.toContainText("?");
+      await expectNoHorizontalScroll(page);
+      await crop(card, `results-card-withdrew-final-${w}`);
+      screens++;
+
+      // The hub's knockout card (Rounds, every width): the same card the positive pair read, now her side. A finished draw
+      // opens on its Final, so no chip is pressed.
+      await page.goto(`${base}?tab=knockout`);
+      await dismissCookieBanner(page);
+      await expect(koCard().getByRole("img", { name: sentence }), `${w}: the knockout card's tag`).toHaveText(tag, { timeout: STEP_MS });
+      await expect(koCard(), `${w}: the knockout card names her`).toContainText(herName);
+      await expect(koCard(), `${w}: the knockout card prints no bye word`).not.toContainText(BYE, { useInnerText: true });
+      await expect(koCard(), `${w}: the knockout card draws her as a side`).not.toContainText("?");
+      await expectNoHorizontalScroll(page);
+      await crop(koCard(), `knockout-card-withdrew-final-${w}`);
+      screens++;
+    }
+    expect(screens).toBe(WIDTHS.length * 5);
+  });
 });
