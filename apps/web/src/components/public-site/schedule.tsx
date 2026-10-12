@@ -13,7 +13,7 @@ import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
-import type { ForfeitCopy, ForfeitWords } from "@/lib/forfeit-tag";
+import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib/forfeit-tag";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
@@ -216,12 +216,13 @@ function ScorebugRow({
       <ForfeitTagChip tag={forfeit.tag} sentence={forfeit.sentence} testId="schedule-forfeit-tag" />
     );
   const chipOn = (id: string | null, first: boolean) => chip !== null && (winner === null ? first : id === winner);
-  const homeName = f.home_entrant_id
-    ? (entrantNames[f.home_entrant_id] ?? "?")
-    : (slotLabels[`${f.id}:home`] ?? msg("schedule.tbd"));
-  const awayName = f.away_entrant_id
-    ? (entrantNames[f.away_entrant_id] ?? "?")
-    : (slotLabels[`${f.id}:away`] ?? msg("schedule.tbd"));
+  // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
+  const sideName = (id: string | null, seat: "home" | "away") => {
+    const named = id ?? unseatedForfeitLoser(f, seat);
+    return named !== null ? (entrantNames[named] ?? "?") : (slotLabels[`${f.id}:${seat}`] ?? msg("schedule.tbd"));
+  };
+  const homeName = sideName(f.home_entrant_id, "home");
+  const awayName = sideName(f.away_entrant_id, "away");
 
   const nameCls = (id: string | null) =>
     winner && id === winner

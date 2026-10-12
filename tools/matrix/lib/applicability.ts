@@ -165,7 +165,7 @@ const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k
  *  F5-F7/C5 ask what lands in a points table. The product has 8 such literals
  *  and they disagree on americano: with it, competition.ts:39 and
  *  schedule-health.ts:67; without it, withdrawal.ts:37, scoring.ts:101,
- *  slideshow-data.ts:25, org-posts.ts:108 and d/[divSlug]/page.tsx:83. Do not
+ *  slideshow-data.ts:27, org-posts.ts:108 and d/[divSlug]/page.tsx:83. Do not
  *  "sync" this to withdrawal.ts: R4b asks the engine (withdrawTableEntrant). */
 export const TABLE_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "americano"]);
 const table = hasKind(...TABLE_KINDS);

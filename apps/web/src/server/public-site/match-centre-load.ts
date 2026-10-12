@@ -26,7 +26,7 @@ import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { getDictionary, toLocale } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
-import { doubleWalkoverNextWinner, forfeitLedgerOf } from "@/lib/forfeit-tag";
+import { doubleWalkoverNextWinner, forfeitLedgerOf, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
@@ -241,22 +241,23 @@ async function readDoubleWalkoverNext(
 /**
  * Owner ruling 116 (W2b Task 16; X-WD-3) — the forfeit's loser when she holds no seat in this fixture, or null: a
  * winner who withdrew before this tie, whose dead seat the arriving side walked over (`awardSeededByes` names her as
- * the award's loser, reason "withdrew"). The sides read only who is seated, so her name is read here — through
- * `public_entrants_v`, masked the way this page masks a side (`readSides`). Read only for such an award: any other
- * fixture, a seated loser's included, makes no read.
+ * the award's loser, reason "withdrew"). Which seat is hers is `unseatedForfeitLoser`'s answer (`forfeitTag`, the one
+ * reader — R116-1). The sides read only who is seated, so her name is read here — through `public_entrants_v`, masked
+ * the way this page masks a side (`readSides`). Read only for such an award: any other fixture, a seated loser's
+ * included, makes no read.
  */
 async function readUnseatedForfeitLoser(
   sql: Sql,
   fixture: Pick<PublicFixture, "outcome" | "home_entrant_id" | "away_entrant_id">,
   division: { youth: boolean; playerNameDisplay: string | null },
-): Promise<{ id: string; name: string } | null> {
-  const o = fixture.outcome as { kind?: unknown; loser?: unknown } | null;
-  if (o?.kind !== "award" || typeof o.loser !== "string") return null;
-  const loser = o.loser;
-  if (loser === fixture.home_entrant_id || loser === fixture.away_entrant_id) return null;
+): Promise<{ id: string; name: string; seat: "home" | "away" } | null> {
+  const home = unseatedForfeitLoser(fixture, "home");
+  const seat = home !== null ? "home" : "away";
+  const loser = home ?? unseatedForfeitLoser(fixture, "away");
+  if (loser === null) return null;
   const { rows, maskedNames } = await readSides(sql, { home_entrant_id: loser, away_entrant_id: null }, division);
   const row = rows.find((r) => r.id === loser);
-  return row ? { id: loser, name: maskedNames.get(loser) ?? row.display_name } : null;
+  return row ? { id: loser, name: maskedNames.get(loser) ?? row.display_name, seat } : null;
 }
 
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
@@ -269,6 +270,7 @@ function buildSides(
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   { rows, maskedNames }: { rows: SideRow[]; maskedNames: Map<string, string> },
   slot: (label: SlotLabel | null, seat: "home" | "away") => string,
+  unseated: { readonly name: string; readonly seat: "home" | "away" } | null,
 ): [SideT, SideT] {
   const byId = new Map(rows.map((r) => [r.id, r]));
 
@@ -278,7 +280,9 @@ function buildSides(
     seat: "home" | "away",
   ): SidePre => {
     if (entrantId === null) {
-      const name = slot(slotLabel, seat);
+      // R116-1: the seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label — the
+      // title and the hero read her name. She is not seated, so the side keeps `entrantId: ""`, no crest, no colour.
+      const name = unseated !== null && unseated.seat === seat ? unseated.name : slot(slotLabel, seat);
       return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
@@ -543,7 +547,8 @@ export async function loadMatchCentre(
     // "TBD" here is the most visible copy of this defect.
     slot = (label, seat) => namer.seat(fixture.id, seat, label);
   }
-  const sides = buildSides(fixture, sideRead, slot);
+  const unseated = await readUnseatedForfeitLoser(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay });
+  const sides = buildSides(fixture, sideRead, slot, unseated);
   const venueTz = resolveVenueTz(ctx.division.tz, ctx.orgTz);
   // W2b Task 13: the forfeit sentence's two outside words — an abandon's result in words (the ORG's locale, like the
   // format label above), and a double walkover's next-round side. Each is read only for the fixture that needs it: the
@@ -554,7 +559,6 @@ export async function loadMatchCentre(
     (fixture.outcome as { kind?: string } | null)?.kind === "double_walkover"
       ? await readDoubleWalkoverNext(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay })
       : null;
-  const unseatedForfeitLoser = await readUnseatedForfeitLoser(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay });
 
   const input: MatchCentreInput = {
     fixture,
@@ -572,7 +576,7 @@ export async function loadMatchCentre(
     formatLabel,
     resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
     doubleWalkoverNext,
-    unseatedForfeitLoser,
+    unseatedForfeitLoser: unseated,
   };
   return buildMatchCentre(input);
 }

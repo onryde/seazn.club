@@ -13,6 +13,7 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
@@ -335,13 +336,20 @@ export async function buildDivisionSlides(
   // regardless of the org's own locale, even though the RSC callers
   // (slideshow/competitions/[id]/page.tsx, slideshow/divisions/[id]/page.tsx)
   // hold `org` and could always pass it through.
+  // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+  const unseatedName = (f: (typeof fixtures)[number], which: "home" | "away"): string | null => {
+    const id = unseatedForfeitLoser(f, which);
+    return id === null ? null : (names[id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"));
+  };
+  const seatText = (f: (typeof fixtures)[number], which: "home" | "away"): string =>
+    unseatedName(f, which) ?? resolveSlotLabel(which === "home" ? f.home_slot_label : f.away_slot_label, lookup, "schedule.tbd");
   const item = (f: (typeof fixtures)[number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+      : seatText(f, "home"),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
+      : seatText(f, "away"),
     homeLogo: logos[f.home_entrant_id ?? ""] ?? null,
     awayLogo: logos[f.away_entrant_id ?? ""] ?? null,
     line: lineOf.get(f.id) ?? null,
@@ -389,10 +397,10 @@ export async function buildDivisionSlides(
           seq_in_round: f.seq_in_round,
           home: f.home_entrant_id
             ? (names[f.home_entrant_id] ?? null)
-            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd")),
           away: f.away_entrant_id
             ? (names[f.away_entrant_id] ?? null)
-            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
+            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd")),
           home_slot_label: f.home_slot_label,
           away_slot_label: f.away_slot_label,
           line: lineOf.get(f.id) ?? null,
@@ -475,6 +483,10 @@ export interface PublicSlideInput {
     winner_to_slot?: number | null;
     loser_to_fixture?: string | null;
     loser_to_slot?: number | null;
+    /** R116-1 — the stored outcome, from which `unseatedForfeitLoser` reads whom an empty seat names (ruling 116's
+     *  withdrawn winner, never "Bye"). Optional for the reason the feed edges are; both /present pages spread
+     *  `getPublicDivision`'s fixtures, which carry it. */
+    outcome?: unknown;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: {
@@ -570,7 +582,14 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   // seat this exists for: a `timing: "setup"` bracket leaves a sibling-fed
   // seat's stored label NULL, so the namer was never reached and the kiosk
   // kept printing "TBD".
+  // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+  const standIn = (f: PublicSlideInput["fixtures"][number], which: "home" | "away"): string | null => {
+    const id = unseatedForfeitLoser({ ...f, outcome: f.outcome ?? null }, which);
+    return id === null ? null : (names[id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"));
+  };
   const bracketSeat = (f: PublicSlideInput["fixtures"][number], which: "home" | "away"): string => {
+    const named = standIn(f, which);
+    if (named !== null) return named;
     const stored = (which === "home" ? f.home_slot_label : f.away_slot_label) ?? null;
     const label = namer.seatLabelOf(f.id, which, stored);
     return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
@@ -581,10 +600,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
       // `seat`, not `slot` — a setup bracket's sibling-fed seat has no stored
       // label, so the kiosk showed "TBD" on a match with a known feeder.
-      : namer.seat(f.id, "home", f.home_slot_label ?? null),
+      : (standIn(f, "home") ?? namer.seat(f.id, "home", f.home_slot_label ?? null)),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : namer.seat(f.id, "away", f.away_slot_label ?? null),
+      : (standIn(f, "away") ?? namer.seat(f.id, "away", f.away_slot_label ?? null)),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,

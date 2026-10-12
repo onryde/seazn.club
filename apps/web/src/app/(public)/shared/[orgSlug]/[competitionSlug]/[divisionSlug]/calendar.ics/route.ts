@@ -7,6 +7,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 
 export async function GET(
   req: Request,
@@ -99,7 +100,8 @@ export async function GET(
       const description = `${data.competition.name} · https://seazn.club/shared/${data.org.slug}/${data.competition.slug}/${data.division.slug}/fixtures/${f.id}`;
       const common = {
         uid: f.id,
-        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label, f.id, "home")} ${lookup("schedule.vs")} ${nameOrLabel(f.away_entrant_id, f.away_slot_label, f.id, "away")} — ${data.division.name}`,
+        // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+        summary: `${nameOrLabel(f.home_entrant_id ?? unseatedForfeitLoser(f, "home"), f.home_slot_label, f.id, "home")} ${lookup("schedule.vs")} ${nameOrLabel(f.away_entrant_id ?? unseatedForfeitLoser(f, "away"), f.away_slot_label, f.id, "away")} — ${data.division.name}`,
         // P9 cutover: venue_name/court_name are DERIVED (fixtures.venue_id/
         // court_id via data.ts's withCourtVenueNames) -- venue/court_label
         // are frozen, no writer touches them any more.

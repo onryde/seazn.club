@@ -27,7 +27,7 @@ import { fmtPublicDateTime } from "@/lib/format";
 import { BRACKET_CREST_CLASS } from "./matches-hub/bracket-crest";
 import type { ScheduleCopy } from "./schedule";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
-import type { ForfeitCopy, ForfeitWords } from "@/lib/forfeit-tag";
+import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib/forfeit-tag";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
 
 interface Props {
@@ -131,8 +131,11 @@ function FixtureCard({
   // nobody is ALSO held, but it is stored `abandoned` — this status test does not see it, and its card reads abandoned.)
   const held = fixture.status === "needs_decision";
   const winner = held ? undefined : fixture.outcome?.winner;
-  const side = (id: string | null, slotLabel: SlotLabel | null) => {
-    const badge = id ? entrantLogos?.[id] : null;
+  const side = (seated: string | null, slotLabel: SlotLabel | null, seat: "home" | "away") => {
+    // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
+    // `id` is who the seat NAMES; `seated` who sits in it (a badge, and the winner's weight, belong to a seated side).
+    const id = seated ?? unseatedForfeitLoser(fixture, seat);
+    const badge = seated ? entrantLogos?.[seated] : null;
     const label = sideLabel(id, entrantNames, fixture.stage_id, slotLabel, lookup, slotText);
     return (
       <span className="flex min-w-0 items-center gap-1.5">
@@ -168,8 +171,8 @@ function FixtureCard({
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
       {held ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-amber-400" /> : null}
       <div className="flex flex-col gap-0.5">
-        {side(fixture.home_entrant_id, fixture.home_slot_label)}
-        {side(fixture.away_entrant_id, fixture.away_slot_label)}
+        {side(fixture.home_entrant_id, fixture.home_slot_label, "home")}
+        {side(fixture.away_entrant_id, fixture.away_slot_label, "away")}
       </div>
       <div className="mt-1.5 text-xs text-ink-muted">
         {live ? (

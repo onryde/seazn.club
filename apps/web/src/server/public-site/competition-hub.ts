@@ -41,7 +41,7 @@ import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
-import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, type ForfeitWords } from "@/lib/forfeit-tag";
+import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, unseatedForfeitLoser, type ForfeitWords } from "@/lib/forfeit-tag";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import {
   bucketFixture,
@@ -234,15 +234,18 @@ type SidePre = SideT & { isPerson: boolean };
 export function hubSides(
   fixture: Pick<
     PublicFixture,
-    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label" | "outcome"
   >,
   ctx: HubSideCtx,
 ): [SideT, SideT] {
   const pre = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
     if (entrantId === null) {
+      // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
+      // She is not seated, so the side stays `entrantId: ""` with no crest or colour — only its name is hers.
+      const named = unseatedForfeitLoser(fixture, seat);
       return {
         entrantId: "",
-        name: ctx.slot(label, seat),
+        name: named !== null ? (ctx.names[named] ?? "?") : ctx.slot(label, seat),
         short: "",
         colour: null,
         badgeUrl: null,
@@ -289,14 +292,16 @@ const BYE_SLOT_KEY = "bracket.slot.bye";
 export function hubByeSides(
   fixture: Pick<
     PublicFixture,
-    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label" | "outcome"
   >,
 ): [boolean, boolean] {
-  const bye = (entrantId: string | null, label: SlotLabel | null) =>
-    entrantId === null && label?.key === BYE_SLOT_KEY;
+  // R116-1: a seat a walkover was won over (ruling 116's withdrawn winner) keeps the bye label it was stamped with when
+  // it died, but it is no bye — the tie reads as a walkover naming her (`hubSides`).
+  const bye = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away") =>
+    entrantId === null && label?.key === BYE_SLOT_KEY && unseatedForfeitLoser(fixture, seat) === null;
   return [
-    bye(fixture.home_entrant_id, fixture.home_slot_label),
-    bye(fixture.away_entrant_id, fixture.away_slot_label),
+    bye(fixture.home_entrant_id, fixture.home_slot_label, "home"),
+    bye(fixture.away_entrant_id, fixture.away_slot_label, "away"),
   ];
 }
 

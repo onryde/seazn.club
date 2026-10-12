@@ -164,6 +164,30 @@ export function forfeitTag(outcome: unknown, ledger: ForfeitLedger): ForfeitTag 
   return kind === null ? null : tagOf(kind, { ...ids, reason: ledger.abandon.reason });
 }
 
+/**
+ * Owner ruling 116 / R116-1 — the entrant an EMPTY seat names, or null. A knockout winner who withdrew while her next
+ * tie's opponent was TBD left that seat dead, and the side that arrived walked over HER: the award names her as its
+ * loser (`awardSeededByes`, reason "withdrew") while she is never seated. Such a tie reads as a walkover, never a bye,
+ * so every public surface prints HER name in the empty seat — as any walkover names the side that did not play —
+ * where it would print the seat's stored bye label. Read through `forfeitTag`, the one reader: only a forfeit it tags
+ * names a loser, so a genuine bye (no loser), a disqualified winner's dead seat (a bye: nobody is named) and a seated
+ * loser all answer null, and the seat keeps the text it always had.
+ *
+ * The seat must be the empty one facing the award's seated winner; anything else (both seats empty, the loser seated)
+ * is not this shape and names nobody.
+ */
+export function unseatedForfeitLoser(
+  fixture: { readonly outcome: unknown; readonly home_entrant_id: string | null; readonly away_entrant_id: string | null },
+  seat: "home" | "away",
+): string | null {
+  const tag = forfeitTag(fixture.outcome, NO_LEDGER);
+  const { winner, loser } = tag?.params ?? {};
+  if (winner === undefined || loser === undefined) return null;
+  const [mine, theirs] =
+    seat === "home" ? [fixture.home_entrant_id, fixture.away_entrant_id] : [fixture.away_entrant_id, fixture.home_entrant_id];
+  return mine === null && theirs === winner && loser !== winner ? loser : null;
+}
+
 /** A sentence as a dictionary key and EXACTLY the params its template names (the match centre ships it as a `Msg`,
  *  and `match-centre-msg-params.test.ts` fails a param the template drops). Names are resolved by the caller's
  *  `nameOf` — each surface masks names its own way. `result` is the surface's own result sentence for an abandon

@@ -10,8 +10,16 @@
 // Two sports (badminton's games, football's goals); the positive pairs are a genuine bye of an odd draw and a dead seat
 // that no departure made (a double walkover's), each still a bye that reads no forfeit.
 //
+// R116-1 (coordinator ruling on ruling 116): "w/o" beside "Bye" told a viewer two contradictory things. No public
+// surface prints the bye word for this tie: each names the withdrawn side in her dead seat, as any walkover names the
+// side that did not play — the division page's schedule and bracket (rendered from the page's own tree), the hub card,
+// the match page, both kiosk builders (results and bracket), the calendar feed and the poster's draw. A genuine bye,
+// and a dead seat nobody withdrew from, still read the bye word on every one of them (the positive pairs).
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import enPublic from "@/dictionaries/en/public.json";
 import { sql } from "@/lib/db";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
@@ -28,6 +36,15 @@ import { getPublicDivision, type PublicFixture } from "@/server/public-site/data
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { completeStage } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { Bracket } from "@/components/public-site/bracket";
+import { Schedule } from "@/components/public-site/schedule";
+import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
+import { GET as calendarFeed } from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/calendar.ics/route";
+import { getDictionary } from "@/lib/i18n";
+import { buildDrawModel } from "@/lib/poster-draw";
+import { poolLabel } from "@/lib/pool-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { buildDivisionSlides, buildPublicDivisionSlides } from "@/server/slideshow-data";
 
 // The public reads go through `unstable_cache`, which has no incrementalCache outside a real request: a passthrough,
 // never a memoising double (competition-hub-db.test.ts's own reason).
@@ -41,6 +58,10 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const EN = enPublic as unknown as Dict;
 const en = (key: string, vars?: Record<string, string>) => t(EN, key, vars);
 const BYE_KEY = "bracket.slot.bye";
+/** The bye word as the org's (en) dictionary prints it — the copy, never a literal typed here. */
+const BYE = msgFor("en", BYE_KEY);
+const BYE_WORD = new RegExp(`\\b${BYE}\\b`, "i");
+const WO = en("forfeit.tag.walkover");
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -98,7 +119,8 @@ const activeEvents = async (id: string) =>
 
 /** Publish the seeded competition and read the public's own documents of it. */
 async function publicOf(s: { competitionId: string; divisionId: string }) {
-  await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+  // An end date, so the calendar feed carries an untimed fixture (it anchors one to the competition's last day).
+  await sql`update competitions set visibility = 'public', ends_on = coalesce(ends_on, '2026-12-31') where id = ${s.competitionId}`;
   const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
     select o.slug as org, c.slug as comp, d.slug as div from divisions d
     join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id where d.id = ${s.divisionId}`;
@@ -106,7 +128,105 @@ async function publicOf(s: { competitionId: string; divisionId: string }) {
   const names = Object.fromEntries(detail.entrants.map((e) => [e.id, e.display_name]));
   const words = bracketForfeitWords(detail.fixtures, names, forfeitCopyOf((k) => en(k)));
   const hub = (await loadCompetitionHub(slugs!.org, slugs!.comp))!;
-  return { detail, words, hub };
+  return { detail, words, hub, slugs: slugs!, names };
+}
+
+/** Every element of `type` anywhere in a server component's returned tree (page-bracket-slot-labels.test.ts). */
+function findElements(node: unknown, type: unknown, out: ReactElement[] = []): ReactElement[] {
+  if (Array.isArray(node)) {
+    for (const child of node) findElements(child, type, out);
+  } else if (isValidElement(node)) {
+    if (node.type === type) out.push(node);
+    for (const value of Object.values((node.props ?? {}) as Record<string, unknown>)) findElements(value, type, out);
+  }
+  return out;
+}
+const decode = (html: string) =>
+  html.replace(/&amp;/g, "&").replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+/** The visible text of the ONE link to a fixture in rendered markup (a schedule row, a bracket card), and its markup. */
+function linkTo(html: string, fixtureId: string, where: string): { text: string; markup: string } {
+  const all = [...html.matchAll(new RegExp(`<a[^>]*href="[^"]*/fixtures/${fixtureId}"[^>]*>([\\s\\S]*?)</a>`, "g"))];
+  if (all.length !== 1) throw new Error(`${where}: ${all.length} links to ${fixtureId}, wanted exactly one`);
+  const markup = all[0]![0];
+  return { markup, text: decode(markup.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim() };
+}
+
+/** One fixture as every public surface prints it, each through its own builder over the real rows: the visible text
+ *  per surface, plus the hub's bye flags. The division page is the page's own tree (its Schedule and Bracket elements,
+ *  rendered); the kiosk is both builders; the calendar is the feed's own route; the poster's draw is `buildDrawModel`
+ *  with the namer the poster route hands it. */
+async function surfacesOf(
+  s: { auth: AuthCtx; competitionId: string; divisionId: string },
+  fixtureId: string,
+): Promise<{ text: Record<string, string>; hubByeSides: readonly boolean[] | undefined }> {
+  const pub = await publicOf(s);
+  const tie = pub.detail.fixtures.find((f) => f.id === fixtureId);
+  if (!tie) throw new Error(`rig: ${fixtureId} is not in the public division read`);
+  const root = await DivisionHomePage({
+    params: Promise.resolve({ orgSlug: pub.slugs.org, competitionSlug: pub.slugs.comp, divisionSlug: pub.slugs.div }),
+  });
+  const [schedule] = findElements(root, Schedule);
+  const [bracket] = findElements(root, Bracket);
+  if (!schedule || !bracket) throw new Error("rig: the division page built no Schedule or no Bracket");
+  const hub = pub.hub.matches.find((m) => m.fixtureId === fixtureId);
+  if (!hub) throw new Error(`rig: the hub carries no card for ${fixtureId}`);
+  const doc = await loadMatchCentre(sql, await publicRow(fixtureId), await matchCentreCtx(s.divisionId));
+  // The kiosk: a results row has no fixture id, so it is found by its round, its status and the side that is seated.
+  const seated = tie.home_entrant_id ?? tie.away_entrant_id;
+  const seatedName = seated === null ? null : pub.names[seated];
+  const kioskRow = (slides: Awaited<ReturnType<typeof buildPublicDivisionSlides>>, where: string) => {
+    const rows = slides.flatMap((sl) => (sl.kind === "fixtures" ? sl.items : []))
+      .filter((i) => i.round === tie.round_no && i.status === tie.status && (i.home === seatedName || i.away === seatedName));
+    if (rows.length !== 1) throw new Error(`${where}: ${rows.length} rows for ${fixtureId}, wanted one`);
+    return `${rows[0]!.home} ${rows[0]!.away}`;
+  };
+  const kioskNode = (slides: Awaited<ReturnType<typeof buildPublicDivisionSlides>>, where: string) => {
+    const node = slides.flatMap((sl) => (sl.kind === "bracket" ? sl.fixtures : [])).find((f) => f.id === fixtureId);
+    if (!node) throw new Error(`${where}: no bracket node for ${fixtureId}`);
+    return `${node.home ?? ""} ${node.away ?? ""}`;
+  };
+  const kiosk = await buildPublicDivisionSlides({ ...pub.detail, orgLocale: "en" });
+  const orgKiosk = await buildDivisionSlides(s.auth, s.divisionId, pub.detail.division.name);
+  // The calendar feed: the fixture's VEVENT, its folded lines unfolded (RFC 5545 §3.1).
+  const ics = (await (await calendarFeed(new Request("http://localhost/calendar.ics"), {
+    params: Promise.resolve({ orgSlug: pub.slugs.org, competitionSlug: pub.slugs.comp, divisionSlug: pub.slugs.div }),
+  })).text()).replace(/\r?\n[ \t]/g, "");
+  const event = ics.split("BEGIN:VEVENT").find((e) => e.includes(`UID:${fixtureId}`));
+  const summary = event?.split(/\r?\n/).find((l) => l.startsWith("SUMMARY:"));
+  if (summary === undefined) throw new Error(`calendar: no SUMMARY for ${fixtureId}`);
+  // The poster's draw, with the seat namer the poster route hands `buildDrawModel`.
+  const lookup = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
+  const kindById = new Map(pub.detail.stages.map((st) => [st.id, st.kind]));
+  const dict = await getDictionary("en", "public");
+  const namer = publicRoundNamer({ ui: lookup, dict, fixtures: pub.detail.fixtures, stageKind: (id) => kindById.get(id) });
+  const draw = buildDrawModel(
+    {
+      stages: pub.detail.stages,
+      pools: pub.detail.pools,
+      fixtures: pub.detail.fixtures,
+      entrantNames: pub.names,
+      seatText: (id, seat, label) => namer.seat(id, seat, label),
+      poolText: (key) => poolLabel(dict, key),
+    },
+    lookup,
+  );
+  const drawRow = JSON.stringify(draw).match(new RegExp(`\\{"id":"${fixtureId}","home":("[^"]*"),"away":("[^"]*")\\}`));
+  if (!drawRow) throw new Error(`poster: no draw row for ${fixtureId}`);
+  return {
+    text: {
+      schedule: linkTo(renderToStaticMarkup(schedule), fixtureId, "schedule").text,
+      bracket: linkTo(renderToStaticMarkup(bracket), fixtureId, "bracket").text,
+      hub: hub.header.sides.map((x) => x.name).join(" "),
+      "match page": doc.header.sides.map((x) => x.name).join(" "),
+      "kiosk results": kioskRow(kiosk, "kiosk"),
+      "kiosk bracket": kioskNode(kiosk, "kiosk"),
+      "organiser kiosk results": kioskRow(orgKiosk, "organiser kiosk"),
+      "organiser kiosk bracket": kioskNode(orgKiosk, "organiser kiosk"),
+      calendar: summary,
+      "poster draw": `${JSON.parse(drawRow[1]!)} ${JSON.parse(drawRow[2]!)}`,
+    },
+    hubByeSides: hub.byeSides,
+  };
 }
 
 /** The page's own read of one fixture (`public_fixtures_v`, the columns `getPublicFixture` selects). */
@@ -136,6 +256,7 @@ async function matchCentreCtx(divisionId: string): Promise<MatchCentreLoadCtx> {
 describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is a walkover naming who withdrew", () => {
   it("every sport: the tie is stored {award, loser: her, reason withdrew}, she is never seated, and schedule, bracket, hub and match page read w/o naming her", async () => {
     let checked = 0;
+    let surfaces = 0;
     for (const { sport, variant, play } of SPORTS) {
       const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
       const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
@@ -168,10 +289,24 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       const doc = await loadMatchCentre(sql, await publicRow(parentId), await matchCentreCtx(s.divisionId));
       expect(doc.header.statusLine, `${sport}: the match page`).toEqual({ key: "forfeit.sentence.withdrew", params: { loser: await nameOf(w1) } });
       expect(t(EN, doc.header.statusLine!.key, doc.header.statusLine!.params), sport).toBe(want.sentence);
+
+      // R116-1: no surface prints the bye word for this tie — each names her in her dead seat, as any walkover names the
+      // side that did not play; the schedule row and the bracket card carry the w/o tag beside it.
+      const her = await nameOf(w1);
+      const seen = await surfacesOf(s, parentId);
+      for (const [where, text] of Object.entries(seen.text)) {
+        expect(text, `${sport}: ${where} names her`).toContain(her);
+        expect(text, `${sport}: ${where} prints no "${BYE}"`).not.toMatch(BYE_WORD);
+        surfaces++;
+      }
+      expect(seen.text.schedule, `${sport}: the schedule row's tag`).toContain(WO);
+      expect(seen.text.bracket, `${sport}: the bracket card's tag`).toContain(WO);
+      expect(seen.hubByeSides, `${sport}: the hub card flags no bye side`).toEqual([false, false]);
       checked++;
     }
     expect(checked).toBe(SPORTS.length);
     expect(checked).toBeGreaterThanOrEqual(2);
+    expect(surfaces, "every surface, every sport").toBe(SPORTS.length * 10);
   }, 240_000);
 
   it("the ranks do not move: she is no loser of a tie she never sat in, so she ranks where a departed entrant always has — below every field entrant", async () => {
@@ -209,6 +344,18 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     for (const r of byes) expect(r.outcome, r.ext_key ?? r.id).toEqual({ kind: "award", winner: r.home_entrant_id ?? r.away_entrant_id, loser: null, reason: "bye" });
     const oddPublic = await publicOf(odd);
     expect(byes.filter((r) => oddPublic.words.has(r.id)).map((r) => r.ext_key), "a bye reads no forfeit words").toEqual([]);
+    // R116-1's positive pair: a genuine bye still prints the bye word on every surface, and no w/o.
+    let byeSurfaces = 0;
+    const stillBye = async (seed: typeof odd, id: string, what: string) => {
+      const seen = await surfacesOf(seed, id);
+      for (const [where, text] of Object.entries(seen.text)) {
+        expect(text, `${what}: ${where} still reads "${BYE}"`).toMatch(BYE_WORD);
+        expect(text, `${what}: ${where} carries no w/o`).not.toContain(WO);
+        byeSurfaces++;
+      }
+      expect(seen.hubByeSides?.filter(Boolean).length, `${what}: the hub flags its bye side`).toBe(1);
+    };
+    await stillBye(odd, byes[0]!.id, "a genuine bye");
 
     // A dead seat no departure made: a double walkover's (X-DW-2). Its next tie walks the arriving side over by bye.
     const dw = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
@@ -219,5 +366,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const tie = await fixtureRow(parentId);
     expect([tie.status, tie.outcome], "a bye: nobody withdrew").toEqual(["forfeited", { kind: "award", winner: arriving, loser: null, reason: "bye" }]);
     expect((await publicOf(dw)).words.has(parentId), "and reads no forfeit words").toBe(false);
+    await stillBye(dw, parentId, "a double walkover's dead seat");
+    expect(byeSurfaces, "every surface, both byes").toBe(2 * 10);
   }, 240_000);
 });
