@@ -20,7 +20,7 @@ import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
+import { boardIsOver, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
 import {
@@ -98,7 +98,7 @@ export type ArbiterScreenProps = {
 /** A camera to watch: the policy asks for one, nobody let the board go
  *  without, and the game is not over. */
 export function shouldJoinVideo(b: ArbiterBoard): boolean {
-  return b.cameraPolicy !== "off" && !b.videoOverridden && b.state.kind !== "result";
+  return b.cameraPolicy !== "off" && !b.videoOverridden && !boardIsOver(b.state);
 }
 
 /** The canvas's outage card ("Only during a video outage"): video required,
@@ -403,7 +403,9 @@ function BoardStatus({ board, f }: { board: ArbiterBoard; f: Fmt }) {
         ? f.t("arbiter.status.starting")
         : board.state.kind === "on_hold"
           ? f.t("arbiter.status.onHold")
-          : board.state.score !== null
+          : board.state.kind === "cancelled"
+            ? f.t("arbiter.status.cancelled")
+            : board.state.score !== null
             ? f.t("arbiter.status.result", { score: board.state.score })
             : f.t("arbiter.status.over");
   return <span className={`shrink-0 text-[13px] font-semibold lg:text-sm ${SOFT}`}>{word}</span>;
@@ -563,9 +565,11 @@ function Decision({
   headingId: string;
 }) {
   const settlePanel = useId();
-  const over = board.state.kind === "result";
+  const over = boardIsOver(board.state);
   const canResync = board.canResync;
-  const canGoOn = !over && board.flags.length > 0;
+  // R4 (T16 fix round 1): an open flag is closable whether or not the game is over — job 5 raises camera flags AFTER
+  // the game, so a finished board is the usual home of one. Over, the words are the queue's: the game cannot go on.
+  const canGoOn = board.flags.length > 0;
   // Settled here when an online game is on file (a bridge row); a board
   // nobody reached has none, and keeps T15's way to its match page.
   const canSettle = !over && (board.canSettle || board.fixtureNo !== null);
@@ -593,7 +597,7 @@ function Decision({
           aria-busy={decision.busy?.kind === "goOn" || undefined}
           className={BUTTON_QUIET}
         >
-          {f.t("arbiter.decide.goOn")}
+          {over ? f.t("externalPlay.queue.markReviewed") : f.t("arbiter.decide.goOn")}
         </button>
       )}
       {canSettle && (
@@ -647,7 +651,7 @@ function Decision({
         </>
       )}
       <p role="status" className={`m-0 min-h-0 text-[13px] leading-[1.45] ${SOFT}`}>
-        {notice ? noticeSentence(notice, f) : null}
+        {notice ? noticeSentence(notice, f, over) : null}
       </p>
     </section>
   );
@@ -700,7 +704,7 @@ export function ArbiterPanel({
 
   // The round's boards move without us (moves, results, flags): the desk's
   // own poll, paused while the tab is hidden.
-  const live = round?.boards.some((b) => b.state.kind !== "result") ?? false;
+  const live = round?.boards.some((b) => !boardIsOver(b.state)) ?? false;
   useEffect(() => startBandPolling(live, () => router.refresh(), browserBandPollDeps()), [live, router]);
 
   // The camera join: one meeting at a time, for the board on screen. The
@@ -773,7 +777,7 @@ export function ArbiterPanel({
         ? { kind: "none" }
         : board.videoOverridden
           ? { kind: "overridden" }
-          : board.state.kind === "result"
+          : boardIsOver(board.state)
             ? { kind: "over" }
             : join !== null && join.key === joinKey
               ? join.view

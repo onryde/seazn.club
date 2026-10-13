@@ -165,11 +165,15 @@ export function boardStateWord(state: ArbiterBoard["state"], f: Fmt): string {
       return f.t("arbiter.state.onHold");
     case "result":
       return state.score ?? f.t("arbiter.state.over");
+    case "cancelled":
+      return f.t("arbiter.state.cancelled");
   }
 }
 
 /** What an answered decision request says, by its notice (arbiter-decision.ts). */
-export function noticeSentence(n: ArbiterNotice, f: Fmt): string {
+/** `over`: the board's game is over, so a close was a REVIEW, never a go-on (R4, T16 fix round 1) — the panel and the
+ *  queue both say so in the queue's words. */
+export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
   switch (n.kind) {
     case "resynced":
       return n.adopted === 0 ? f.t("arbiter.notice.resyncedNone") : f.plural("arbiter.notice.resynced", n.adopted);
@@ -180,6 +184,7 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt): string {
       // passed through by resyncExternalPlay): a retry does not fix it.
       return n.code === "LICHESS_TOKEN_UNAVAILABLE" ? f.t("arbiter.notice.resyncTokenUnavailable") : f.t("arbiter.notice.resyncFailed");
     case "went_on":
+      if (over) return n.stillOpen === 0 ? f.t("externalPlay.queue.reviewed") : f.plural("externalPlay.queue.reviewedNew", n.stillOpen);
       return n.stillOpen === 0 ? f.t("arbiter.notice.wentOn") : f.plural("arbiter.notice.wentOnNew", n.stillOpen);
     case "go_on_failed":
       return n.code === "ARBITER_PLAYS_THIS_BOARD" ? f.t("arbiter.notice.goOnOwnBoard") : f.t("arbiter.notice.failed");

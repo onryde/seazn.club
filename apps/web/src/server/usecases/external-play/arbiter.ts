@@ -145,7 +145,7 @@ export async function loadArbiterRound(
   // one — the module's contract above — so the panel can say otherwise.
   const current = latest !== undefined && latest.stageId === round.stageId && latest.roundNo === round.roundNo;
 
-  const rows = await boardRows(auth, sql`f.stage_id = ${round.stageId} and f.round_no = ${round.roundNo}`);
+  const rows = await boardRows(auth, sql`f.stage_id = ${round.stageId} and f.round_no = ${round.roundNo}`, { cancelled: false });
 
   const clock = division.config?.clock;
   const timeControl =
@@ -202,7 +202,8 @@ export async function listFlaggedExternalPlay(
   const ids = flagged?.ids ?? [];
   if (ids.length === 0) return { boards: [], ownBoards: 0 };
 
-  const rows = await boardRows(auth, sql`f.id in ${sql(ids)}`);
+  // R4: a cancelled board's open flags are listed too — still the organiser's to review and close.
+  const rows = await boardRows(auth, sql`f.id in ${sql(ids)}`, { cancelled: true });
   const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
   const listed = rows.filter((r) => !own.has(r.fixtureId));
   const flagRows = await openFlagRows(auth, listed.map((r) => r.fixtureId));
@@ -218,8 +219,10 @@ export async function listFlaggedExternalPlay(
 }
 
 /** The board columns both readers paint from — the round in view and the
- *  division's flagged boards (T16) — so a board reads the same in both. */
-function boardRows(auth: AuthCtx, where: postgres.Fragment) {
+ *  division's flagged boards (T16) — so a board reads the same in both.
+ *  `cancelled`: the Flagged list keeps a cancelled board (R4, its flags are
+ *  still to review); the round in view does not. */
+function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: boolean }) {
   return sql<BoardRow[]>`
     select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
            f.round_no as "roundNo", s.name as "stageName",
@@ -238,7 +241,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment) {
      where ${where}
        and f.org_id = ${auth.orgId}
        and f.home_entrant_id is not null and f.away_entrant_id is not null
-       and f.status <> 'cancelled'
+       ${opts.cancelled ? sql`` : sql`and f.status <> 'cancelled'`}
      order by f.round_no nulls last, f.seq_in_round nulls last, f.id`;
 }
 
@@ -273,7 +276,9 @@ async function boardOf(
   const gameOnFile = r.challengeId !== null;
 
   let state: ArbiterBoardState;
-  if (!isPlayableFixtureStatus(r.fixtureStatus) || r.bridgeStatus === "finished") {
+  if (r.fixtureStatus === "cancelled") {
+    state = { kind: "cancelled" };
+  } else if (!isPlayableFixtureStatus(r.fixtureStatus) || r.bridgeStatus === "finished") {
     state = { kind: "result", score: await scoreOf(r, white.entrantId, black.entrantId) };
   } else if (r.bridgeStatus === "needs_organiser") {
     state = { kind: "on_hold" };
