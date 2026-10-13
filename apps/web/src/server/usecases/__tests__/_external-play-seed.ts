@@ -171,8 +171,10 @@ export async function seedOnlineChessFixture(
     await sql`update competitions set camera_policy = ${opts.competitionCameraPolicy}
                where id = ${competition.id}`;
   }
-  const homeLichess = `w-${randomUUID().slice(0, 8)}`;
-  const awayLichess = `b-${randomUUID().slice(0, 8)}`;
+  // 12 hex characters: the accumulated test DB holds ~10^5 links, and 8 characters
+  // collided (LICHESS_ALREADY_LINKED) about once in thirty property runs.
+  const homeLichess = `w-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  const awayLichess = `b-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const white = await seedPlayer(owner.orgId, opts.homeFullName ?? "White", homeLichess, opts.linked);
   const black = await seedPlayer(owner.orgId, opts.awayFullName ?? "Black", awayLichess, opts.linked);
   const named = opts.homeFullName !== undefined || opts.awayFullName !== undefined;

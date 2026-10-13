@@ -77,6 +77,10 @@ const baseData = (
     // and the page names a WAITING side from it rather than resolving the slot
     // label a second time. See `docNaming` below.
     matchCentre: docNaming(locale, fixture),
+    // T16 — `getPublicFixture` always carries these two (null / false when the
+    // division does not play online): the watch panel reads them.
+    externalPlay: null,
+    roundOpened: false,
   };
 };
 
@@ -810,6 +814,11 @@ describe("FixturePage — the 'Your board' island (T16)", () => {
     const found = findAll(tree, YourBoard);
     expect(found).toHaveLength(1);
     expect(found[0]!.props.fixtureId).toBe("f1");
+    // Beside it, the spectators' watch panel — this fixture's, from the page's own doc.
+    const { WatchPanel } = await import("@/components/public-site/match-centre/watch-panel");
+    const watch = findAll(tree, WatchPanel);
+    expect(watch).toHaveLength(1);
+    expect(watch[0]!.props).toMatchObject({ fixtureId: "f1", initial: { roundOpened: false, externalPlay: null } });
     const html = renderToStaticMarkup(tree);
     expect(html).not.toMatch(/="[^"]*\/fixtures\/f1\/play/);
     expect(html).not.toContain("lichess.org");
