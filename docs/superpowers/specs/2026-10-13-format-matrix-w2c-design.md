@@ -5,7 +5,9 @@
 - **Status:** design approved section by section in chat (session f-w2c, 2026-10-12/13). Scope questions Q1–Q11 and
   UI screens S1–S5 were answered by the owner, either relayed verbatim by the coordinator session f-w2b (routing a–f, Q1–Q6)
   or given directly in f-w2c (Q7–Q11, §1 amendment, S1–S5). **Written spec approved by the owner 2026-10-13**
-  ("approve the spec, write the plan"). No product code until the owner approves the plan and its execution method.
+  ("approve the spec, write the plan"); §4.1 amended the same day by the owner (web `lib/match-rules` split per sport;
+  rule facts `ruleKeys` move to the engine, web keeps presentation). No product code until the owner approves the plan
+  and its execution method.
 - **Worktree / branch:** `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c`, `feat/format-matrix-w2c`
   (from `origin/main` `a6cc1f038`). **Rebase after W2b (PR #945) merges**: W2b changes `stage.ts`, award reasons
   (`awardReasonOf`), generic retirement credit (ruling 124), adds a `resolveFixtureCfg` caller
@@ -115,19 +117,39 @@ table is never re-ordered and a played match never re-scored by a settings chang
 
 ## 4. Architecture
 
-### 4.1 One declaration decides who can set what (owner amendment to §1)
+### 4.1 One declaration decides who can set what (owner amendments to §1, 2026-10-13)
 
-Every rule field in `lib/match-rules.ts` `SPORT_RULES` (41 keys today) gains:
+**Rule facts live in the engine; presentation lives in web** (owner "approve", asked in view of the planned engine →
+own-repo split after W2). Who may set a key, and where it applies, is a game rule (ruling 12), so it must travel with
+the engine; labels and controls stay with the screens.
 
-- `scope: "match" | "stage" | "points"` — Q5's groups 1, 2, 3.
-- `appliesTo?: { stageKinds?: StageKind[]; variants?: string[] }` — which stage kinds ("format") and which engine
-  variants (`SportModule.variants`, `sport/module.ts:753`: `t20`, `fih-shootout`, `blitz`…) show the field.
+- **Engine — each sport module declares `ruleKeys`** beside `variants` (`sport/module.ts:753`) and `stageDefaults`:
+  `ruleKeys: Readonly<Record<CfgKey, { scope: "match" | "stage" | "points"; appliesTo?: { stageKinds?: StageKind[];
+  variants?: string[] } }>>`. `scope` = Q5's groups 1, 2, 3; `appliesTo` = which stage kinds ("format") and which
+  engine variants (`t20`, `fih-shootout`, `blitz`…) the key applies to. Shared kernels declare their keys once and the
+  sport module re-exports or narrows them. Engine helpers derive, never hand-list:
+  `stageKeysFor(module, kind, variant)` and `fixtureKeysFor(module, kind, variant)` (`fixtureKeys ⊂ stageKeys`).
+- **Web — `apps/web/src/lib/match-rules/<sport>.ts`, one file per sport** (owner "Ok": the 1,062-line
+  `lib/match-rules.ts` is split per sport as a pure move first, with an `index.ts` registry keeping today's public API),
+  holds presentation only: label, control, options, `build()`, and the **engine key it edits**. No scope or
+  applicability is declared in web.
+- **One source both sides:** the server allowlists (`stage-rules.ts:196` `configKeysFor`, the fixture override
+  writer), the stage form, the match override and the public label all read the engine's `ruleKeys` through the
+  derived helpers. `STAGE_RULES_SPORTS` is deleted.
+- **Two contract tests, one per side of the future split.** Engine (moves with the engine): every key in a module's
+  cfg schema that is settable has a `ruleKeys` entry; `stageDefaults` and every variant parse the schema; the sweep
+  covers every stage kind × variant and reports its count (0 = fail). Web (stays): per sport,
+  `lib/match-rules/__tests__/<sport>.contract.test.ts` via a shared `runContract(sport)` — every web field names an
+  engine key, every settable engine key has a web field, and every field's `build()` output parses the engine schema;
+  `vitest related` then runs only the edited sport's tests.
+- **No engine restructure in W2c.** `packages/engine/src/sports` is already one folder per sport with shared kernels
+  on purpose; `ruleKeys` and `stageDefaults` go inside the existing module files. Splitting large files by concern
+  belongs to the engine-split programme.
+- After the split, a new rule field = engine release (the rule) + web bump (the label); the web contract test catches
+  a mismatch at the bump. A label/control-only change stays web-only.
 
-Derived, never hand-listed: `stageKeysFor(sport, kind, variant)` and `fixtureKeysFor(sport, kind, variant)`
-(`fixtureKeys ⊂ stageKeys`). `STAGE_RULES_SPORTS` is deleted; the API allowlist (`stage-rules.ts:196`
-`configKeysFor`), the stage form, the match override, and the public label all read the same declaration. Adding a
-rule = one entry; adding a sport = one table. New stage-only fields join it: `tiebreakRungs` (chess), `abandon`
-(Q10), plus the existing decider keys.
+Adding a rule = one engine `ruleKeys` entry + one web field; adding a sport = one module declaration + one web file.
+New stage-only keys: `tiebreakRungs` (chess), `abandon` (Q10), plus the existing decider keys.
 
 Q5 classification (pinned against each engine schema in the plan; any key that moves is flagged to the owner):
 
@@ -192,7 +214,8 @@ for finalized matches after a reopen, and is a `resolveFixtureCfg` caller, so it
 
 ### 5.1 Engine (`packages/engine/src/`)
 
-- `sport/module.ts` — optional `stageDefaults(kind, variant): Partial<Cfg>`.
+- `sport/module.ts` — `ruleKeys` declaration (§4.1) and optional `stageDefaults(kind, variant): Partial<Cfg>`;
+  `stageKeysFor` / `fixtureKeysFor` helpers exported from the engine's public API (web imports them).
 - Sport modules — `stageDefaults` for football, hockey, ice hockey, cricket; abandon options (Q10): extend
   `abandonPolicy` in football and the period kernel; add an abandon setting to carrom and generic ("share the points",
   opt-in); hockey "result stands from Q4, else replay", preset in `fih-shootout`, level Q4 in a no-draw cfg → no result
@@ -277,8 +300,9 @@ all-or-nothing and names the fixture that blocked it.
 Four test types and one mutation pass per task; scoped runs only (never the full gate/suite, locally, by anyone);
 expected values from rulebook rows or engine declarations; anti-vacuity counts.
 
-- **P1 extension contract sweep:** every sport × stage kind × variant — each field has a scope; `build()` output parses
-  the engine cfg schema; match ⊂ stage; `stageDefaults` parses. Reports its count; 0 = fail.
+- **P1 extension contract sweeps (two, §4.1):** engine — every sport × stage kind × variant: every settable cfg key has
+  a `ruleKeys` scope, match ⊂ stage, `stageDefaults` and variants parse; web — per sport, every field names an engine
+  key, every settable engine key has a field, `build()` output parses. Each reports its count; 0 = fail.
 - **P2 every caller:** one overridden fixture through every `resolveFixtureCfg` caller; the caller count is compared to
   a `grep -a` of the tree, so a new caller fails the test until covered.
 - **P3 order differential:** division, stage, bracket decider and override each give a different value.
