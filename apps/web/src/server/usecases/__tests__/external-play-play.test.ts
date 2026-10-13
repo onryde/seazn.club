@@ -213,7 +213,8 @@ const NOT_FOUND = { status: 404, code: "NOT_FOUND" };
 
 describe("fenAfter", () => {
   it("an EMPTY move list is the start position, replayed 0", () => {
-    expect(fenAfter([])).toEqual({ fen: START_FEN, replayed: 0 });
+    // T16 fix round 1, I4: and no moves to list (the spectators' move list is the replayed plies).
+    expect(fenAfter([])).toEqual({ fen: START_FEN, replayed: 0, san: [] });
   });
 
   it("replays a UCI list and reports how many it applied", () => {
@@ -223,6 +224,8 @@ describe("fenAfter", () => {
     // counters come from chess.js, not from us.
     expect(out.fen.split(" ")[1]).toBe("b");
     expect(out.fen.startsWith("rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R")).toBe(true);
+    // The same plies in standard algebraic notation (the move list's words), as the rules write them.
+    expect(out.san).toEqual(["e4", "e5", "Nf3"]);
   });
 
   it("carries a promotion suffix through (M7: e7e8q → e8=Q)", () => {
@@ -250,10 +253,11 @@ describe("fenAfter", () => {
     const out = fenAfter(["e2e4", "e2e4"]);
     expect(out.replayed, "the second e2e4 is illegal — replay stopped").toBe(1);
     expect(out.fen.split(" ")[1]).toBe("b");
+    expect(out.san, "only what was replayed is listed").toEqual(["e4"]);
   });
 
   it("a rejected FIRST move reports replayed 0 and the start position", () => {
-    expect(fenAfter(["e2e5"])).toEqual({ fen: START_FEN, replayed: 0 });
+    expect(fenAfter(["e2e5"])).toEqual({ fen: START_FEN, replayed: 0, san: [] });
   });
 });
 
