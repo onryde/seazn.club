@@ -24,7 +24,9 @@ import {
   setFixtureStatusSql,
   setStageStatusSql,
   overflowingIn,
+  matchRoomPathBySql,
 } from "./helpers";
+import { roundGameSql, seedOnlineRound } from "./match-room-kit";
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
@@ -5131,4 +5133,90 @@ test("2048 (first visit): empty storage deals the opening two tiles", async ({ p
     "an empty store never got its opening deal -- the board stays empty and unplayable",
   ).toHaveCount(2);
   await expect(page.getByText(/^Score: \d+/)).toHaveText(/^Score: 0 /);
+});
+
+// Online chess on OUR page (design 2026-10-09 §6, §8.6; Task 17): the live
+// match room at this project's REAL width. Below md the room is one column
+// in a fixed order — the clocks-and-names row, the board at the column's full
+// width, the player's own camera tile, then Draw/Resign; from md the board
+// takes the left column and the tile and controls the right. Asserted as the
+// order and membership of what is on screen, not as box sizes, so a groomed
+// shrink of the desktop layout cannot pass for the phone composition. The
+// presence pill needs a real meeting join and is owed to staging (Task 17
+// part B). Camera `optional` so the tile is on screen with no camera duty —
+// no banner competes for the top of the column.
+test("match room (online chess): a live board is clocks, full-width board, own tile, then Draw/Resign below md — two columns from md — no horizontal scroll", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const phone = vp!.width < 768;
+  const r = await seedOnlineRound(request, [`Mo Phone ${TAG}`, `Ny Width ${TAG}`], { camera: "optional" });
+  const board = r.boards[0]!;
+  // White is home on a ledger game (roundGameSql); two plies, so the rules
+  // offer a draw and a resign and no longer an abort.
+  await roundGameSql(board, { moves: ["e2e4", "e7e5"] });
+
+  const ctx = await browser.newContext({ viewport: vp!, storageState: await consentedAnonymousState() });
+  try {
+    const p = await ctx.newPage();
+    const res = await p.goto(await matchRoomPathBySql(board.fixtureId, board.home.personId));
+    expect(res?.status(), "the room renders").toBe(200);
+    await expect(p.getByTestId("match-room")).toHaveAttribute("data-screen", "live", { timeout: 20_000 });
+    await expect(p.locator("[data-testid=room-board-surface] cg-board piece").first()).toBeAttached({ timeout: 20_000 });
+
+    const order = ["room-clocks-strip", "room-board", "room-tile-strip", "room-controls"] as const;
+    const box = async (id: string) => {
+      const b = await p.getByTestId(id).first().boundingBox();
+      expect(b, `${id} is on screen at ${vp!.width}px`).not.toBeNull();
+      return b!;
+    };
+    await expect(p.getByTestId("room-clocks-strip")).toContainText(board.away.name);
+    let pairs = 0;
+    if (phone) {
+      for (let i = 1; i < order.length; i++) {
+        const above = await box(order[i - 1]!);
+        const below = await box(order[i]!);
+        expect(below.y, `${order[i]} sits below ${order[i - 1]} at ${vp!.width}px`).toBeGreaterThanOrEqual(above.y + above.height - 1);
+        pairs++;
+      }
+      const strip = await box("room-clocks-strip");
+      const b = await box("room-board");
+      expect(Math.abs(b.width - strip.width), "the board takes the column's full width").toBeLessThanOrEqual(2);
+    } else {
+      const strip = await box("room-clocks-strip");
+      const b = await box("room-board");
+      expect(b.y, "the clocks row spans the top").toBeGreaterThanOrEqual(strip.y + strip.height - 1);
+      for (const id of ["room-tile-strip", "room-controls"]) {
+        const side = await box(id);
+        expect(side.x, `${id} is right of the board from md`).toBeGreaterThanOrEqual(b.x + b.width);
+        pairs++;
+      }
+      const tile = await box("room-tile-strip");
+      const controls = await box("room-controls");
+      expect(controls.y, "the tile above the controls").toBeGreaterThanOrEqual(tile.y + tile.height - 1);
+      pairs++;
+    }
+    expect(pairs, "anti-vacuity: every relation checked").toBe(3);
+
+    // The control set, membership and order, read from the live DOM: the
+    // rules' answer at two plies is Offer draw then Resign — never Abort.
+    const controls = await p
+      .getByTestId("room-controls")
+      .locator("button:visible")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+    expect(controls).toEqual(["room-draw", "room-resign"]);
+    await expect(p.getByTestId("room-draw")).toBeEnabled();
+    await expect(p.getByTestId("room-resign")).toBeEnabled();
+    await expect(p.getByTestId("room-abort")).toHaveCount(0);
+
+    const { clipped, scrollable } = await overflowingIn(p, '[data-testid="match-room"]', "button,div,span", "the match room was not in the DOM");
+    expect(clipped, "nothing in the room is clipped at this width").toEqual([]);
+    for (const s of scrollable) expect(s, "a scrolling box in the room is keyboard-reachable").toMatch(/tabindex=0$/);
+    await expectNoHorizontalScroll(p);
+  } finally {
+    await ctx.close();
+  }
 });
