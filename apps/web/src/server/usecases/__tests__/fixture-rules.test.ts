@@ -9,15 +9,32 @@
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { afterAll, describe, expect, it } from "vitest";
-import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core";
-import { fixtureKeysFor, sportTopKeys, type AnySportModule } from "@seazn/engine/sport";
+import {
+  foldMatchWithStoppage,
+  isCoreEventType,
+  mulberry32,
+  outcomeOf,
+  summaryOf,
+  type EventEnvelope,
+  type LineupPair,
+  type StageKind,
+} from "@seazn/engine/core";
+import { checkFixtureOverride, deciderKeysFor, fixtureKeysFor, sportTopKeys, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { declaredCfgs, lineupFromCatalog, makeEnvelope } from "@seazn/engine/testkit";
 import { canonicalJson } from "@/lib/canonical-json";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
+import { awardedMatchState } from "@/server/engine-db/awarded-state";
 import { loadFoldInputs } from "@/server/engine-db/fold";
-import { seedBracket, type SeededBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { loadLineupPair } from "@/server/engine-db/lineups";
+import { declaredVariant, seedBracket, type SeededBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { fixtureRow, playBadminton, rowsOf, type FixtureRow } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { resnapshotFixtureConfig } from "../admin-fixture-config";
+import { createCompetition } from "../competitions";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { loadFixturePadCfg } from "../fixtures";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -255,15 +272,17 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
   it("period (ice hockey) M2/M3: the check reads the PARSED stage — a stage that inherits the schema's overtime accepts a shorter one, refuses a longer one", async () => {
     const ice = mod("icehockey");
     expect(Object.hasOwn(ice.variants.iihf as object, "overtime"), "the premise: the raw iihf preset has no overtime").toBe(false);
-    const ot = parsedVariant<{ overtime: { minutes: number } & Record<string, unknown> }>("icehockey", "iihf").overtime;
-    const b = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "knockout", entrants: 2 });
+    // A league stage: no bracket decider lays an overtime over it (a knockout's may — Task 6's preset on main).
+    const b = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "league", entrants: 2 });
     const id = b.fixtureIds[0]!;
     // `createDivision` stores the PARSED preset (defaults materialised), so a stage only inherits the schema's overtime
     // without carrying it when its stored division config predates the key — the shape the resolver and the fold read
     // raw. Made here, so the check below really meets a raw config with no `overtime` in it (mutation t14-parsed-stage).
     await sql`update divisions set config = config - 'overtime' where id = ${b.divisionId}`;
-    const raw = (await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${b.divisionId}`)[0]!.config;
-    expect(Object.hasOwn(raw, "overtime"), "the premise: the stored division config carries no overtime").toBe(false);
+    const raw = await padCfg(b, id); // the STAGE-resolved format (no override yet): what the match inherits
+    expect(Object.hasOwn(raw, "overtime"), "the premise: the stage's resolved format carries no overtime").toBe(false);
+    // The bound is the STAGE's overtime as the sport's schema reads it — never the variant's preset.
+    const ot = (ice.configSchema.parse(raw) as { overtime: { minutes: number } & Record<string, unknown> }).overtime;
     await expect(writeFixtureRulesOverride(b.auth, [id], { overtime: { ...ot, minutes: ot.minutes + 1 } })).rejects.toMatchObject({
       status: 400,
       code: "RULE_NOT_SETTABLE",
@@ -342,6 +361,28 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
       code: "RULE_NOT_SETTABLE",
     });
   });
+
+  it("a competition frozen by a downgrade refuses 402 and writes nothing; the same write went through before the freeze", async () => {
+    // stage-rules.test.ts's recipe: fill the smaller plan's cap while on the larger, then drop — `selectFrozen` retires
+    // the least recently active competition, this one. The cap is read from the plan, never typed.
+    const b = await badmintonLeague();
+    const id = b.fixtureIds[0]!;
+    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }); // writable BEFORE the freeze, or a 402 proves nothing
+    await setOrgPlan(b.auth.orgId, "community");
+    await invalidateOrgEntitlements(b.auth.orgId);
+    const cap = await getLimit(b.auth.orgId, "competitions.max_active");
+    expect(cap, "an unlimited community plan would make this vacuous").not.toBeNull();
+    await setOrgPlan(b.auth.orgId, "pro");
+    await invalidateOrgEntitlements(b.auth.orgId);
+    for (let i = 0; i < cap!; i++)
+      await createCompetition(b.auth, { ends_on: "2030-12-31", name: "Filler " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    await setOrgPlan(b.auth.orgId, "community");
+    await invalidateOrgEntitlements(b.auth.orgId);
+    expect((await frozenCompetitionIds(b.auth.orgId)).has(b.competitionId), "the premise: this competition is the one frozen").toBe(true);
+    await expect(writeFixtureRulesOverride(b.auth, [id], { bestOf: 3 })).rejects.toMatchObject({ status: 402 });
+    expect((await row(id)).rules_override, "the pre-freeze override is untouched").toEqual({ bestOf: 1 });
+    expect(await audit(id), "only the pre-freeze write was audited").toHaveLength(1);
+  }, 60_000);
 
   it("registry sweep: in every sport an empty override is accepted and an undeclared key is UNKNOWN_RULE_KEY", async () => {
     let checked = 0;
@@ -472,7 +513,7 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     expect(checked).toBe(2);
   });
 
-  it("after a void that empties the play, a correction still refolds (the ledger, not the score, decides)", async () => {
+  it("after a void takes back the rally that won the first set, best of 1 fits: the refold reads that set open again", async () => {
     // A void is resolved out of the stream before the fold (`resolveVoids`), so voiding the set's last rally leaves the
     // set one rally short of its target — the set kernel needs no void handling of its own for this.
     const b = await badmintonLeague();
@@ -547,6 +588,395 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     }
     expect(runs).toBe(5);
   }, budget(5));
+});
+
+// Fix round 1, I2 — spec §9 P5: "per-sport fits / does-not-fit table". Every sport the registry ships is swept: one
+// with a match key gets a SHORT PLAY drawn from its own generator (`arbitraryEvent`), then one correction the play fits
+// and one it does not, both through the real writer; one with no match key is listed N/A. Nothing here is a hand table:
+// the corrections are each match key's value in the sport's declared presets and its bound's own step, the deciders a
+// knockout stage switches on are the sport's declared ones, and the verdict is the engine's fold (`foldMatchWithStoppage`
+// → `outcomeOf`/`summaryOf`), never the writer's.
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const valueAt = (o: unknown, p: readonly string[]): unknown => p.reduce<unknown>((a, k) => (isRec(a) ? a[k] : undefined), o);
+function withLeaf(o: unknown, p: readonly string[], v: unknown): unknown {
+  if (p.length === 0) return v;
+  const c: Record<string, unknown> = isRec(o) ? { ...o } : {};
+  c[p[0]!] = withLeaf(c[p[0]!], p.slice(1), v);
+  return c;
+}
+interface Correction { label: string; top: string; whole: unknown }
+
+/** Every WHOLE decider (`deciderKeysFor`) a knockout stage of this sport carries, switched on with the sport's own
+ *  value: a `{enabled}` decider flipped on, a switch set, an absent one taken from the first declared preset that has it
+ *  on. So a level match goes INTO its decider rather than ending — the play a decider's match key can contradict. */
+function decidersOn(m: AnySportModule, kind: StageKind, variant: string): Record<string, unknown> {
+  const base = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
+  const presets = declaredCfgs(m).map((d) => d.cfg as Record<string, unknown>);
+  const on = (v: unknown) => v !== null && v !== undefined && v !== false && !(isRec(v) && v.enabled === false);
+  const out: Record<string, unknown> = {};
+  for (const key of deciderKeysFor(m, kind, variant)) {
+    if (key.includes(".")) continue; // a whole decider is a top-level key; a dotted one is a bound inside it
+    const cur = base[key];
+    if (on(cur)) continue;
+    const v = isRec(cur) && "enabled" in cur ? { ...cur, enabled: true } : typeof cur === "boolean" ? true : presets.map((c) => c[key]).find(on);
+    if (v !== undefined) out[key] = v;
+  }
+  return out;
+}
+
+/** The corrections one match may ask for, every one from the sport's declarations: each match key's value in every
+ *  declared preset, plus its bound's own step (`shorter` and any length: one less; `off_or_shorter`: off, or a half one
+ *  minute shorter; a switch: flipped). Kept only where the engine takes it as a match override of THIS stage
+ *  (`checkFixtureOverride`) and the schema parses it. A top-level null is no candidate: the writer reads it as inherit. */
+function correctionsFor(m: AnySportModule, kind: StageKind, variant: string, snapshot: unknown): Correction[] {
+  const S = m.configSchema.parse(snapshot) as Record<string, unknown>;
+  const out: Correction[] = [];
+  const seen = new Set<string>();
+  for (const key of fixtureKeysFor(m, kind, variant)) {
+    const p = key.split(".");
+    const cur = valueAt(S, p);
+    const values: unknown[] = declaredCfgs(m).map((d) => valueAt(d.cfg, p));
+    if (typeof cur === "number") values.push(cur - 1);
+    if (typeof cur === "boolean") values.push(!cur);
+    if (m.ruleKeys?.[key]?.matchBound === "off_or_shorter" && isRec(cur)) {
+      values.push({ ...cur, enabled: false });
+      if (typeof cur.halfMinutes === "number") values.push({ ...cur, halfMinutes: cur.halfMinutes - 1 });
+    }
+    for (const v of values) {
+      if (v === undefined || (p.length === 1 && v === null) || canonicalJson(v) === canonicalJson(cur)) continue;
+      const top = p[0]!;
+      const parsed = m.configSchema.safeParse({ ...S, [top]: (withLeaf(S, p, v) as Record<string, unknown>)[top] });
+      if (!parsed.success) continue;
+      const whole = (parsed.data as Record<string, unknown>)[top];
+      if (!checkFixtureOverride(m, kind, variant, S, { [top]: whole }).ok) continue;
+      const label = `${key} = ${JSON.stringify(v)}`;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      out.push({ label, top, whole });
+    }
+  }
+  return out;
+}
+
+/** The engine's verdict (X-SR-5, P-4): the recorded play refolded under the correction must fold, keep its outcome and
+ *  keep its score as shown. */
+function engineFit(m: AnySportModule, snapshot: Record<string, unknown>, lineups: LineupPair, evs: readonly EventEnvelope[], c: Correction): string {
+  const fold = (cfg: unknown) => {
+    const f = foldMatchWithStoppage(m, cfg, lineups, evs);
+    return { o: canonicalJson(outcomeOf(m, f)), h: summaryOf(m, f).headline };
+  };
+  const before = fold(snapshot);
+  let after;
+  try {
+    after = fold({ ...snapshot, [c.top]: c.whole });
+  } catch (e) {
+    return `the fold refuses it: ${(e as Error).message}`;
+  }
+  if (after.o !== before.o) return before.o === "null" ? "it would end the match" : "it would change the result";
+  if (after.h !== before.h) return "it would change the score";
+  return "fits";
+}
+
+/** The shortest play the sport's own generator walks to where one correction fits and one does not. Each step draws up
+ *  to 64 events (`arbitraryEvent`, seeded), keeps those the fold accepts STRICTLY as the next event and that leave the
+ *  match open (no `core.*`: a forfeit or an abandon is not play), and takes one that reaches both verdicts if any does;
+ *  else the one that keeps the score level while the match moves on (so a level match reaches its decider), else one
+ *  that moves the score. Deterministic: the seeds are fixed. */
+function shortPlay(m: AnySportModule, snapshot: Record<string, unknown>, lineups: LineupPair, prefix: readonly EventEnvelope[], cands: readonly Correction[]) {
+  const MAX_STEPS = 400;
+  const judge = (evs: readonly EventEnvelope[]) => {
+    let fit: Correction | undefined;
+    let nofit: { c: Correction; why: string } | undefined;
+    for (const c of cands) {
+      const v = engineFit(m, snapshot, lineups, evs, c);
+      if (v === "fits") fit ??= c;
+      else nofit ??= { c, why: v };
+    }
+    return fit && nofit ? { fit, nofit } : null;
+  };
+  const evs = [...prefix];
+  const lines = (s: unknown) => m.summary(s as never).perSide.map((x) => x.line);
+  const unit = (s: unknown) => JSON.stringify(m.position?.(s as never)?.segments?.[0] ?? null);
+  for (let step = 0; step <= MAX_STEPS; step++) {
+    const j = judge(evs);
+    if (j) return { play: evs.slice(prefix.length), ...j, headline: summaryOf(m, foldMatchWithStoppage(m, snapshot, lineups, evs)).headline };
+    const st = foldMatchWithStoppage(m, snapshot, lineups, evs).state;
+    let pick: EventEnvelope | null = null;
+    let rank = Infinity;
+    for (let k = 0; k < 64 && rank > -1; k++) {
+      const drawn = m.arbitraryEvent?.(st as never, mulberry32(step * 1009 + k * 7 + 1));
+      if (!drawn || isCoreEventType(drawn.type)) continue;
+      const e = makeEnvelope(evs.length + 1, drawn);
+      let f;
+      try {
+        f = foldMatchWithStoppage(m, snapshot, lineups, [...evs, e], { strictFromSeq: evs.length + 1 });
+      } catch {
+        continue;
+      }
+      if (outcomeOf(m, f) !== null) continue;
+      if (judge([...evs, e])) {
+        pick = e;
+        rank = -1;
+        break;
+      }
+      const [a, b] = lines(f.state);
+      const level = a !== undefined && a === b;
+      const moved = canonicalJson(lines(f.state)) !== canonicalJson(lines(st));
+      const advanced = unit(f.state) !== unit(st);
+      const r = level && advanced ? 0 : level && moved ? 1 : advanced ? 2 : moved ? 3 : 4;
+      if (r < rank) {
+        rank = r;
+        pick = e;
+      }
+    }
+    if (pick === null) return null;
+    evs.push(pick);
+  }
+  return null;
+}
+
+/** A catalog-valid starting lineup per side (`lineupFromCatalog`, the engine's own), each slot a real person — the
+ *  sports whose play names a player (a bowler, a scorer) draw them from it. */
+async function seedLineups(b: SeededBracket, id: string, m: AnySportModule, cfg: unknown): Promise<void> {
+  const catalog = m.positionsFor?.(cfg as never) ?? m.positions;
+  const { home, away } = await sides(id);
+  for (const entrantId of [home, away]) {
+    for (const s of lineupFromCatalog(catalog, entrantId).slots) {
+      const [{ id: personId }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name) values (${b.auth.orgId}, ${"P5 " + randomUUID().slice(0, 6)}) returning id`;
+      await sql`insert into lineups (fixture_id, entrant_id, person_id, slot, position_key, order_no, roles, role)
+                values (${id}, ${entrantId}, ${personId}, ${s.slot}, ${s.positionKey ?? null}, ${s.orderNo ?? null},
+                        ${sql.json((s.roles ?? []) as never)}, 'player')`;
+    }
+  }
+}
+
+describe.skipIf(!HAS_DB)("P5 per-sport fits / does-not-fit (spec §9 P5, X-SR-5)", () => {
+  it("every sport with a match key: after a short play from its own generator, one correction fits and one does not — the writer agrees with the engine; a sport with none is N/A", async () => {
+    const table: string[] = [];
+    let swept = 0;
+    let na = 0;
+    for (const m of builtinModules) {
+      const kind: StageKind = "knockout";
+      const variant = Object.keys(m.variants)[0]!;
+      if (fixtureKeysFor(m, kind, variant).length === 0) {
+        table.push(`${m.key}: N/A — no match key`);
+        na++;
+        continue;
+      }
+      const deciders = decidersOn(m, kind, variant);
+      expect(m.configSchema.safeParse({ ...(m.configSchema.parse(m.variants[variant]) as object), ...deciders }).success, `${m.key}: the deciders parse`).toBe(true);
+      const b = await seedBracket({ sport: m.key, variant, stageKind: kind, entrants: 2, stageRules: deciders });
+      const id = b.fixtureIds[0]!;
+      await seedLineups(b, id, m, await padCfg(b, id));
+      await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+      const snapshot = (await row(id)).config_snapshot!;
+      const inputs = (await withTenant(b.auth.orgId, (tx) => loadFoldInputs(tx, id)))!;
+      const cands = correctionsFor(m, kind, variant, snapshot);
+      expect(cands.length, `${m.key}: the sport declares corrections a match may ask for`).toBeGreaterThan(0);
+      const found = shortPlay(m, snapshot, inputs.lineups, inputs.envelopes, cands);
+      expect(found, `${m.key}: a short play reaches one correction that fits and one that does not (${cands.map((c) => c.label).join("; ")})`).not.toBeNull();
+      // The play, through the one append path, at the ledger's own tip.
+      let seq = inputs.envelopes.length;
+      for (const e of found!.play) await appendEvent(b.auth.orgId, id, seq++, { type: e.type, payload: e.payload });
+      const stored = (await sql<{ summary: { headline: string } }[]>`select summary from match_states where fixture_id = ${id}`)[0]!;
+      expect(stored.summary.headline, `${m.key}: the recorded play is the walked play`).toBe(found!.headline);
+      // Does not fit: refused, and nothing moved.
+      const before = await row(id);
+      const err = await writeFixtureRulesOverride(b.auth, [id], { [found!.nofit.c.top]: found!.nofit.c.whole }).catch((e: unknown) => e);
+      expect(err, `${m.key}: ${found!.nofit.c.label} — ${found!.nofit.why}`).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: id } });
+      expect(await row(id), `${m.key}: a refusal changes nothing`).toEqual(before);
+      // Fits: re-frozen under it, one bump, and the pad reads it.
+      const out = await writeFixtureRulesOverride(b.auth, [id], { [found!.fit.top]: found!.fit.whole });
+      expect(out.fixtures[0], `${m.key}: ${found!.fit.label} fits`).toEqual({ id, started: true, rules_version: before.rules_version + 1 });
+      const pad = m.configSchema.parse(await padCfg(b, id)) as Record<string, unknown>;
+      expect(canonicalJson(pad[found!.fit.top]), `${m.key}: the pad plays the corrected format`).toBe(canonicalJson(found!.fit.whole));
+      table.push(`${m.key} (${variant}, ${found!.play.length} events): fits ${found!.fit.label}; does not fit ${found!.nofit.c.label} (${found!.nofit.why})`);
+      swept++;
+    }
+    console.info(`P5 per-sport table:\n  ${table.join("\n  ")}`);
+    expect(swept, "anti-vacuity: sports swept").toBeGreaterThan(0);
+    expect(swept + na, table.join("\n")).toBe(builtinModules.length);
+    expect(table.filter((t) => t.includes("N/A")).length).toBe(na);
+  }, 900_000);
+});
+
+// Fix round 1, minor 1 — LOCK ORDER. A fed-seat release (`releaseFedSeats`, fed-seats.ts) holds a decided line's own
+// fixture lock and then takes every match it fed in bracket order, ascending (round_no, id). A batch writer that took
+// its fixtures in id order could hold a LATER round's lock while asking for an earlier one's — the cycle that order
+// exists to rule out. The writer now takes them in the same order (`bracketOrder`).
+describe.skipIf(!HAS_DB)("lock order: the batch writer takes its fixtures in bracket order", () => {
+  /** pg_locks' row for a waiter on `fixture:<id>` (an advisory lock on one bigint key: objid = its low 32 bits). */
+  const waitingOn = async (id: string) =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int n from pg_locks
+       where locktype = 'advisory' and not granted and objsubid = 1
+         and objid::text::bigint = (hashtext(${"fixture:" + id})::bigint & 4294967295)`)[0]!.n;
+
+  it("a release-shaped tx holding round 1 and then asking for round 2 never deadlocks with a batch over both", async () => {
+    // A later-round match whose id sorts BEFORE a first-round one: id order and bracket order disagree. Random ids, so
+    // re-seeded until they do (P(none) = 1/35 per draw); the premise is asserted, never assumed.
+    let pick: { b: SeededBracket; early: string; late: string } | null = null;
+    for (let tries = 0; tries < 6 && pick === null; tries++) {
+      const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "knockout", entrants: 8 });
+      const rows = await rowsOf(b.stageId);
+      const first = Math.min(...rows.map((r) => r.round_no));
+      for (const e of rows.filter((r) => r.round_no === first))
+        for (const l of rows.filter((r) => r.round_no > first)) if (pick === null && l.id < e.id) pick = { b, early: e.id, late: l.id };
+    }
+    expect(pick, "the premise: a later round's id sorts before a first-round one").not.toBeNull();
+    const { b, early, late } = pick!;
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
+    // The release's shape: the early line's lock, then (once the writer is queued) the later match's.
+    const holder = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + early}))`;
+      await go;
+      await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + late}))`;
+    });
+    await new Promise((r) => setTimeout(r, 50)); // the holder has its first lock
+    const writer = writeFixtureRulesOverride(b.auth, [late, early], { bestOf: 1 });
+    let queued = false;
+    for (let i = 0; i < 100 && !queued; i++) {
+      queued = (await waitingOn(early)) + (await waitingOn(late)) > 0;
+      if (!queued) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(queued, "the premise: the writer queued behind the holder").toBe(true);
+    release();
+    const [h, w] = await Promise.allSettled([holder, writer]);
+    expect(h.status === "rejected" ? String((h as PromiseRejectedResult).reason) : "ok", "the holder").toBe("ok");
+    expect(w.status === "rejected" ? String((w as PromiseRejectedResult).reason) : "ok", "the writer").toBe("ok");
+    expect((await row(early)).rules_override).toEqual({ bestOf: 1 });
+    expect((await row(late)).rules_override).toEqual({ bestOf: 1 });
+  }, 60_000);
+});
+
+// Fix round 1, I1 (ruling): a match with an OUTCOME is started whatever its snapshot says. `awardSeededByes`
+// (stages.ts) decides a tie with no event at all — a bye, or ruling 116's walkover over a withdrawn winner's dead seat
+// (`writeAwardedMatchState` writes its credited score) — and leaves `config_snapshot` null. Such a tie was read as
+// unstarted: an override landed with no fit check and no refold, so the walkover's credited score went stale under a
+// format it no longer matched. Now a change to it goes through the live-correction path, fitted by the award's own fold
+// (`awardedMatchState`), or is refused where no fit applies (a bye credits no score; nothing records it).
+const awardRow = async (id: string) =>
+  (await sql<{ status: string; outcome: unknown; summary: { headline: string } | null; state: unknown }[]>`
+    select f.status, f.outcome, m.summary, m.state from fixtures f left join match_states m on m.fixture_id = f.id
+     where f.id = ${id}`)[0]!;
+const BWF = parsedVariant<{ bestOf: number; setTo: number; finalSetTo: number; cap: number | null }>("badminton", "bwf");
+
+/** Two seated first-round lines feeding one later tie (the generated feed graph). */
+function siblingsInto(rows: readonly FixtureRow[]): { a: FixtureRow; b: FixtureRow; parentId: string } {
+  const first = Math.min(...rows.map((r) => r.round_no));
+  const r1 = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+  for (const a of r1) {
+    const b = r1.find((x) => x.id !== a.id && x.winner_to_fixture !== null && x.winner_to_fixture === a.winner_to_fixture);
+    if (b) return { a, b, parentId: a.winner_to_fixture! };
+  }
+  throw new Error("rig: no two seated first-round lines feed one fixture");
+}
+
+/** Ruling 116 through the real producers (W2b Task 16's chain): line `a` is played, its winner withdraws while her next
+ *  tie waits, line `b` is played, and the arriving side walks over her dead seat — an award no event records. */
+async function withdrawnWinnerWalkover() {
+  const b = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+  const { a, b: sib, parentId } = siblingsInto(await rowsOf(b.stageId));
+  const w1 = (await playBadminton(b.auth, a.id, true)).home_entrant_id!;
+  await withdrawEntrantCascade(b.auth, w1);
+  const arriving = (await playBadminton(b.auth, sib.id, true)).home_entrant_id!;
+  const tie = await fixtureRow(parentId);
+  expect([tie.status, tie.outcome], "the premise: a walkover naming who withdrew").toEqual([
+    "forfeited",
+    { kind: "award", winner: arriving, loser: w1, reason: "withdrew" },
+  ]);
+  expect(await events(parentId), "the premise: no event records it").toBe(0);
+  expect((await row(parentId)).config_snapshot, "the premise: nothing froze its cfg").toBeNull();
+  const slot = a.winner_to_slot!;
+  return { b, id: parentId, w1, arriving, home: slot === 1 ? w1 : arriving, away: slot === 1 ? arriving : w1 };
+}
+
+/** The award's own fold under `cfg` — the engine's walkover (`awardedMatchState`), never the writer's verdict. */
+async function awardFold(w: Awaited<ReturnType<typeof withdrawnWinnerWalkover>>, cfg: unknown) {
+  const lineups = await withTenant(w.b.auth.orgId, (tx) => loadLineupPair(tx, w.id, w.home, w.away));
+  const outcome = (await fixtureRow(w.id)).outcome as never;
+  return awardedMatchState(mod("badminton"), cfg, lineups, outcome, { fixtureId: w.id, recordedAt: new Date().toISOString() });
+}
+
+describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 1 ruling)", () => {
+  it("a bye (awardSeededByes, an odd draw) credits no score and records nothing: fitting does not apply — FIXTURE_FORMAT_LOCKED, nothing written", async () => {
+    const odd = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 6 });
+    const byes = (await rowsOf(odd.stageId)).filter((r) => r.outcome?.reason === "bye");
+    expect(byes.length, "the premise: the odd draw has byes").toBeGreaterThan(0);
+    let checked = 0;
+    for (const bye of byes) {
+      expect((await row(bye.id)).config_snapshot, "the premise: a bye freezes nothing").toBeNull();
+      await expect(writeFixtureRulesOverride(odd.auth, [bye.id], { bestOf: 1 })).rejects.toMatchObject({
+        status: 409,
+        code: "FIXTURE_FORMAT_LOCKED",
+        extra: { fixture_id: bye.id },
+      });
+      expect((await row(bye.id)).rules_override).toBeNull();
+      expect(await audit(bye.id)).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(byes.length);
+  });
+
+  it("a withdrawal's walkover over her dead seat (ruling 116): a correction that changes the credited score is refused; one that keeps it fits — the award stands, its score is re-written under the new format, no version bump", async () => {
+    const w = await withdrawnWinnerWalkover();
+    const before = await awardRow(w.id);
+    const current = await padCfg(w.b, w.id);
+    // Candidates from the preset's own values; the engine's walkover fold says which keep the credited score.
+    const frags: Record<string, unknown>[] = [{ bestOf: BWF.bestOf + 2 }, { setTo: BWF.setTo - 6, finalSetTo: BWF.finalSetTo - 6 }];
+    const verdicts = await Promise.all(frags.map(async (f) => (await awardFold(w, { ...current, ...f })).summary.headline === before.summary!.headline));
+    expect(new Set(verdicts).size, "the premise: one of each verdict").toBe(2);
+    let checked = 0;
+    for (const [i, frag] of frags.entries()) {
+      if (verdicts[i]) {
+        const out = await writeFixtureRulesOverride(w.b.auth, [w.id], frag);
+        expect(out.fixtures[0]).toEqual({ id: w.id, started: true, rules_version: 0 }); // no snapshot moved: no bump (P-1)
+        const after = await awardRow(w.id);
+        expect([after.status, after.outcome], "the award stands").toEqual([before.status, before.outcome]);
+        const want = await awardFold(w, { ...current, ...frag });
+        expect(after.summary, "its score is the award's own fold under the corrected format").toEqual(want.summary);
+        expect((await row(w.id)).rules_override).toEqual(frag);
+        expect((await audit(w.id)).at(-1)!.payload).toMatchObject({ started: true, after: frag });
+      } else {
+        const r0 = await row(w.id);
+        const err = await writeFixtureRulesOverride(w.b.auth, [w.id], frag).catch((e: unknown) => e);
+        expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY", extra: { fixture_id: w.id } });
+        expect(String((err as Error).message)).toBe("This format would change the score as it stands");
+        expect(await row(w.id)).toEqual(r0);
+        expect(await awardRow(w.id)).toEqual(before);
+      }
+      checked++;
+    }
+    expect(checked).toBe(frags.length);
+  }, 60_000);
+
+  it("the same award over a frozen snapshot and a ledger every void took back (raw seed, Loop R M-17's takeover): a fitting correction re-freezes and bumps — it never un-decides the award or releases a seat", async () => {
+    const w = await withdrawnWinnerWalkover();
+    const current = await padCfg(w.b, w.id);
+    // Raw seed: a Start every void took back, frozen under the current format — the ledger an award may take over.
+    const startId = randomUUID();
+    await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+              values (${startId}, ${w.id}, 1, 'core.start', ${sql.json({})}, now())`;
+    await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at, voids_event_id)
+              values (${randomUUID()}, ${w.id}, 2, 'core.void', ${sql.json({})}, now(), ${startId})`;
+    await sql`update fixtures set config_snapshot = ${sql.json(current as never)} where id = ${w.id}`;
+    const before = await awardRow(w.id);
+    const next = (await fixtureRow(w.id)).winner_to_fixture!;
+    const seatedNext = await fixtureRow(next);
+    const frag = { setTo: BWF.setTo - 6, finalSetTo: BWF.finalSetTo - 6 };
+    expect((await awardFold(w, { ...current, ...frag })).summary.headline, "the premise: it keeps the credited score").toBe(before.summary!.headline);
+    const out = await writeFixtureRulesOverride(w.b.auth, [w.id], frag);
+    expect(out.fixtures[0]).toEqual({ id: w.id, started: true, rules_version: 1 });
+    const after = await awardRow(w.id);
+    expect([after.status, after.outcome], "the award stands").toEqual([before.status, before.outcome]);
+    expect((await row(w.id)).config_snapshot).toMatchObject(frag);
+    expect(after.summary).toEqual((await awardFold(w, { ...current, ...frag })).summary);
+    expect(await fixtureRow(next), "the arriving side keeps her next seat").toEqual(seatedNext);
+    // …and one that changes the credited score is refused here too.
+    await expect(writeFixtureRulesOverride(w.b.auth, [w.id], { bestOf: BWF.bestOf + 2 })).rejects.toMatchObject({ code: "FORMAT_DOES_NOT_FIT_PLAY" });
+  }, 60_000);
 });
 
 /** Every leaf an object sets, as [dotted path, value] — the property's agreement invariant reads leaves, because the

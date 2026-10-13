@@ -1042,9 +1042,11 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
   const SPEC: Record<RuleErrorCode, number> = {
     STAGE_FORMAT_LOCKED: 409, DIVISION_TABLE_RULES_LOCKED: 409, DIVISION_FORMAT_LOCKED: 409,
     FIXTURE_FORMAT_LOCKED: 409, FORMAT_DOES_NOT_FIT_PLAY: 409, RULE_NOT_SETTABLE: 400, POINTS_RULE_INEXPRESSIBLE: 422,
+    // Task 14 (controller ruling, fix round 1): a delete that would take a match's own format with it.
+    FIXTURE_HAS_OWN_FORMAT: 409,
   };
-  it("declares exactly the seven codes, each with its status", () => {
-    expect(Object.keys(SPEC).length).toBe(7);
+  it("declares exactly the eight codes, each with its status", () => {
+    expect(Object.keys(SPEC).length).toBe(8);
     expect(RULE_ERROR_STATUS).toEqual(SPEC);
   });
   it("every code has an English sentence, and the stage codes name the stage", () => {
@@ -1065,5 +1067,8 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     expect(ruleErrorMessage("RULE_NOT_SETTABLE", { field: "points" })).toBe("points can't be set here.");
     expect(ruleErrorMessage("RULE_NOT_SETTABLE", { field: "points", reason: "table rules" })).toBe("points can't be set here — table rules.");
     expect(ruleErrorMessage("POINTS_RULE_INEXPRESSIBLE", { reason: "a bonus on a tie" })).toBe("These points can't be set per stage yet — a bonus on a tie.");
+    expect(ruleErrorMessage("FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" })).toBe(
+      "Match 3 has its own format, and this would delete it — set it back to its stage's format first.",
+    );
   });
 });
