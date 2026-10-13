@@ -1591,7 +1591,7 @@ const ENDINGS = [
 ] as const;
 
 describe.runIf(HAS_DB)("act — a move that ENDS the game (review I2)", () => {
-  it("checkmate, stalemate and insufficient material each answer ended:true — the row stays 'live', the move is broadcast, nothing is adjudicated", { timeout: 60_000 }, async () => {
+  it("checkmate, stalemate and insufficient material each answer ended:true — the row stays 'live', the move is broadcast, nothing is adjudicated", async () => {
     let checked = 0;
     for (const e of ENDINGS) {
       const ref = boardAfter(e.line);
@@ -1611,7 +1611,7 @@ describe.runIf(HAS_DB)("act — a move that ENDS the game (review I2)", () => {
     expect(checked, "anti-vacuity: three endings").toBe(3);
   });
 
-  it("the FIFTY-move rule ends the game on the 100th half-move without a pawn move or capture — ended:true; at 99 it is absent", { timeout: 60_000 }, async () => {
+  it("the FIFTY-move rule ends the game on the 100th half-move without a pawn move or capture — ended:true; at 99 it is absent", async () => {
     // scalachess @ 2ab0a403 variant/Variant.scala:146-147, 172-173: lila's
     // autoDraw includes `halfMoveClock >= 100`. Knights only — no pawn move,
     // no capture, no check, no position more than twice (so no fivefold) —
@@ -1925,7 +1925,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
   const totals: Record<string, number> = {};
   const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
 
-  it("the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'", { timeout: 600_000 }, async () => {
+  it("the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'", async () => {
     let runs = 0;
     for (const prefix of PREFIXES) await fc.assert(
       fc.asyncProperty(tailArb.map((tail) => [...prefix, ...tail]), async (ops) => {
@@ -2313,7 +2313,7 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
   const totals: Record<string, number> = {};
   const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
 
-  it("whatever string lila would play is recorded in lila's notation, replays, and is broadcast once; a suffix-less promotion is refused unsent; a retap in any form is absorbed", { timeout: 600_000 }, async () => {
+  it("whatever string lila would play is recorded in lila's notation, replays, and is broadcast once; a suffix-less promotion is refused unsent; a retap in any form is absorbed", async () => {
     let runs = 0;
     const tailArb = fc.array(rawOpArb, { minLength: 0, maxLength: 16, size: "max" });
     for (const prefix of RAW_PREFIXES) await fc.assert(

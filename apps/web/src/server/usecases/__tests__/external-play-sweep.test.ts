@@ -2533,8 +2533,13 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     }
   }
 
-  it("holds the model on every pass — counted per path, K runs each", { timeout: 600_000 }, async () => {
-    let run = 0;
+  // K rounds, each its own test under the repo-wide timeout (inline-timeout-truth.test.ts: no inline pin) — the
+  // K×paths runs in one test were the slowest test in the file. Every round runs every path exactly once (the run counter carries across rounds);
+  // the closing test checks, across the rounds, that each path's claim was reached K times.
+  let run = 0;
+  for (let round = 0; round < K; round++) {
+  it(`holds the model on every pass — counted per path, round ${round + 1} of ${K}`, async () => {
+    const before = run;
     await fc.assert(
       fc.asyncProperty(fc.array(actArb, { minLength: 0, maxLength: 8 }), async (suffix) => {
         const path = PATH_NAMES[run % PATH_NAMES.length]!;
@@ -2678,8 +2683,13 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
           }
         }
       }),
-      { numRuns: PATH_NAMES.length * K },
+      { numRuns: PATH_NAMES.length },
     );
+    expect(run - before, `anti-vacuity: round ${round + 1} ran every path once`).toBe(PATH_NAMES.length);
+  });
+  }
+
+  it("holds the model on every pass — across the K rounds, every path's claim reached K times", () => {
     // Anti-vacuity: every path's claim reached K times, and the model's
     // branches all exercised.
     expect(claims, "claims per path").toEqual(Object.fromEntries(PATH_NAMES.map((p) => [p, K])));
@@ -2933,7 +2943,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
 
   // Ruling I1: the window ends at the GAME's end — never at the room's, which
   // in every production ending below comes down minutes later.
-  it("players gone at the GAME's end, the room torn down minutes later: NO flag — every read-ended production ending (counted)", { timeout: 120_000 }, async () => {
+  it("players gone at the GAME's end, the room torn down minutes later: NO flag — every read-ended production ending (counted)", async () => {
     let checked = 0;
     for (const ending of ["tiebreak", "aborted", "finished", "held_then_ended"] as const) {
       const m = await playedMatch({ ending });
@@ -3866,7 +3876,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
   });
 
-  it("the sequence property: passes at any time, reports turning final, an outage — one settle, the flag the truth owes, never a read after it (model) — counted per path, K runs each", { timeout: 600_000 }, async () => {
+  it("the sequence property: passes at any time, reports turning final, an outage — one settle, the flag the truth owes, never a read after it (model) — counted per path, K runs each", async () => {
     type Act = { kind: "pass"; dtMs: number } | { kind: "ready"; side: Side } | { kind: "outage" };
     const HOUR = 3_600_000;
     const P = (dtMs: number): Act => ({ kind: "pass", dtMs });

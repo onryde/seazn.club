@@ -348,7 +348,7 @@ const staggered = <T>(s: number, call: () => Promise<T>) =>
   Promise.allSettled([0, 1, 2].map(async (i) => { await delay(i * s); return call(); }));
 
 describe.runIf(HAS_DB)("the staggered concurrent sweep — counted", () => {
-  it("a decided league game: three staggered writeResultFrom calls — no rejection, every answer `decided`, one result", { timeout: 240_000 }, async () => {
+  it("a decided league game: three staggered writeResultFrom calls — no rejection, every answer `decided`, one result", async () => {
     let runs = 0;
     for (const s of STAGGERS_MS) {
       for (let rep = 0; rep < REPS; rep++) {
@@ -364,7 +364,7 @@ describe.runIf(HAS_DB)("the staggered concurrent sweep — counted", () => {
     expect(runs, "anti-vacuity: every stagger ran").toBe(STAGGERS_MS.length * REPS);
   });
 
-  it("a bracket draw: three staggered reconciles — the bridge ends needs_organiser/tiebreak_owed on every run, never finished", { timeout: 240_000 }, async () => {
+  it("a bracket draw: three staggered reconciles — the bridge ends needs_organiser/tiebreak_owed on every run, never finished", async () => {
     let runs = 0;
     for (const s of STAGGERS_MS) {
       for (let rep = 0; rep < REPS; rep++) {

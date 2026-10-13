@@ -1574,10 +1574,17 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
     return g;
   }
 
-  it("answers per the rulebook; writes at most one result; never decides a bracket draw; a repeat or foreign call changes nothing", { timeout: 600_000 }, async () => {
+  // Five scenario groups, one per Lichess status class, each its own test under the repo-wide timeout
+  // (inline-timeout-truth.test.ts: no inline pin) — one test over all of them took 30 s under a 270-file load. Each
+  // group runs every pre-state × every cell exactly once and counts it; the closing test checks, across the groups,
+  // that every path was reached.
+  let checks = 0;
+  const ranByGroup: Partial<Record<keyof typeof CLASSES, number>> = {};
+  const GROUPS = Object.keys(CLASSES) as (keyof typeof CLASSES)[];
+  for (const group of GROUPS) {
+  it(`answers per the rulebook; writes at most one result; never decides a bracket draw; a repeat or foreign call changes nothing — ${group} statuses`, async () => {
     let runs = 0;
-    let checks = 0;
-    for (const { pre, cls } of PREFIXES) {
+    for (const { pre, cls } of PREFIXES.filter((p) => p.cls === group)) {
       let k = 0; // this prefix's run index → its cell
       await fc.assert(
         fc.asyncProperty(
@@ -1688,8 +1695,16 @@ describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state ×
         { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
       );
     }
-    expect(runs, "anti-vacuity: the property ran").toBe(RUNS_PER_PREFIX * PREFIXES.length);
-    console.info(`[T12 property] runs=${runs} checks=${checks} ${JSON.stringify(totals)}`);
+    expect(runs, `anti-vacuity: the ${group} group ran every pre-state × cell`).toBe(RUNS_PER_PREFIX * PRE_STATES.length);
+    ranByGroup[group] = runs;
+  });
+  }
+
+  it("across the five groups: every path the rulebook names was reached — counted, zero is a failure", () => {
+    expect(ranByGroup, "every group ran in full (a filtered or skipped group leaves this red)").toEqual(
+      Object.fromEntries(GROUPS.map((g) => [g, RUNS_PER_PREFIX * PRE_STATES.length])),
+    );
+    console.info(`[T12 property] runs=${RUNS_PER_PREFIX * PREFIXES.length} checks=${checks} ${JSON.stringify(totals)}`);
     let checked = 0;
     for (const path of [
       "decided",
