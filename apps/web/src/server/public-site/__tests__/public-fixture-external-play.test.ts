@@ -23,6 +23,7 @@ vi.mock("next/cache", () => ({
 import { sql } from "@/lib/db";
 import { getPublicFixture } from "../data";
 import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
+import { makeUser } from "@/server/usecases/__tests__/_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -80,8 +81,13 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     expect(data, "the seeded fixture must be publicly visible").not.toBeNull();
     expect(data!.fixture.id).toBe(s.fixtureId);
     expect(data!.externalPlay).toBeNull();
-    // Not an online division: no round-open read, never "opened".
-    expect(data!.roundOpened).toBe(false);
+    // Not an online division: no round-open read, never "opened" — even with a
+    // stamp on its stage (labelled SQL; only an online division is ever stamped).
+    const [{ stage_id: stageId }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${s.fixtureId}`;
+    const opener = await makeUser("pub-ep-opener");
+    await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_by) values (${stageId}, ${s.orgId}, 1, ${opener.id})`;
+    const again = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect(again!.roundOpened).toBe(false);
   });
 
   it("a fixture WITH a bridge row loads, and carries its status and nothing else", async () => {

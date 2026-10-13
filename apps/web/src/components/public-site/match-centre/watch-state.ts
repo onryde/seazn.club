@@ -78,3 +78,12 @@ export function watchView(m: WatchModel): WatchView {
 export function pollsAgain(m: WatchModel): boolean {
   return m.play?.status !== "finished";
 }
+
+const OPEN_FIXTURE: ReadonlySet<string> = new Set(["scheduled", "in_play", "needs_decision"]);
+
+/** Does the page show the panel? Always while the fixture is open; once it is
+ *  decided or cancelled, only when there is a game to show — a board settled
+ *  without one would otherwise read "not started" under its result. */
+export function showWatchPanel(fixtureStatus: string, doc: PublicWatchDoc): boolean {
+  return OPEN_FIXTURE.has(fixtureStatus) || (doc.externalPlay?.watch ?? null) !== null;
+}

@@ -53,11 +53,10 @@ export async function loadPublicExternalPlay(fixtureId: string): Promise<PublicE
   return { status: row.status, watch: watchFromLedger(row) };
 }
 
-/** Has this fixture's round been opened (D12)? Opening stamps
- *  `stage_round_opens`; a stamp in the future is not open yet. */
-export async function loadPublicRoundOpened(fixtureId: string, now: Date = new Date()): Promise<boolean> {
-  const open = await roundOpenFor(sql, fixtureId);
-  return open !== null && open.roundOpenedAt.getTime() <= now.getTime();
+/** Has this fixture's round been opened (D12)? Opening (T19's openRound)
+ *  stamps `stage_round_opens` with the moment it happened. */
+export async function loadPublicRoundOpened(fixtureId: string): Promise<boolean> {
+  return (await roundOpenFor(sql, fixtureId)) !== null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
