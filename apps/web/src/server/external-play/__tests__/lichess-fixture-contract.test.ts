@@ -17,7 +17,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Chess } from "chess.js";
 import fc from "fast-check";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LICHESS_FIXTURE_PORT,
   startLichessFixtureServer,
@@ -320,6 +320,82 @@ describe("lichess fixture server — the measured facts", () => {
     expect(await api.submitMove({ token: W.token, gameId: promo, uci: "b7a8" })).toEqual({ ok: true });
     const after = await api.readGameStream({ token: B.token, gameId: promo });
     expect(after.ok && after.game.movesUci.at(-1)).toBe("b7a8q");
+  });
+
+  it("GET /api/challenge serves the LIVE shape (T17 probe, challenge-list-{white,black}.json): every key at every depth with the recorded types, no createdAt, and the recorded values for a 10+0 create", async () => {
+    // The recording is a 600+0 create; the stub is driven the same way, so
+    // every value our create decides can be compared, not just the keys.
+    const made = await api.createChallengeToUser({ whiteToken: W.token, blackUsername: B.id, limitSeconds: 600, incrementSeconds: 0 });
+    if (!made.ok) throw new Error(`create refused: ${made.code}`);
+    const listOf = async (token: string) =>
+      (await (await fetch(`${fx.url}/api/challenge`, { headers: { Authorization: `Bearer ${token}` } })).json()) as
+        { in: Record<string, unknown>[]; out: Record<string, unknown>[] };
+    const recorded = {
+      white: JSON.parse(readFileSync(join(RECORDED, "challenge-list-white.json"), "utf8")) as Awaited<ReturnType<typeof listOf>>,
+      black: JSON.parse(readFileSync(join(RECORDED, "challenge-list-black.json"), "utf8")) as Awaited<ReturnType<typeof listOf>>,
+    };
+    const served = { white: await listOf(W.token), black: await listOf(B.token) };
+    /** Every key path with its JSON type — the shape, independent of values. */
+    const shape = (v: unknown, at = "$"): string[] =>
+      v !== null && typeof v === "object" && !Array.isArray(v)
+        ? Object.entries(v).flatMap(([k, x]) => [`${at}.${k}:${x === null ? "null" : typeof x}`, ...shape(x, `${at}.${k}`)]).sort()
+        : [];
+    // What a create decides, read from the RECORDED entry — never from the stub.
+    const decided = (e: Record<string, unknown>) => {
+      const { status, rated, variant, speed, timeControl, color, finalColor, perf, direction } = e as Record<string, Record<string, unknown>>;
+      return { status, rated, variant, speed, timeControl, color, finalColor, perfName: perf?.name, direction };
+    };
+    let checked = 0;
+    for (const [who, list, side, empty] of [
+      ["white", "white", "out", "in"], ["black", "black", "in", "out"],
+    ] as const) {
+      const rec = recorded[list][side];
+      const got = served[who][side];
+      expect(rec.length, `premise: the recording has one ${side} entry for ${who}`).toBe(1);
+      expect(got, `${who} ${side}[]`).toHaveLength(1);
+      expect(served[who][empty], `${who} ${empty}[]`).toEqual([]);
+      expect(got[0], `${who}: Lichess never sends createdAt`).not.toHaveProperty("createdAt");
+      expect(shape(got[0]), `${who}: the live key set and types`).toEqual(shape(rec[0]));
+      expect(decided(got[0]!), `${who}: the values a 10+0 create decides`).toEqual(decided(rec[0]!));
+      expect(got[0]).toMatchObject({ id: made.challengeId, challenger: { id: W.id }, destUser: { id: B.id } });
+      checked++;
+    }
+    expect(checked, "zero lists checked is a FAILURE").toBe(2);
+  });
+
+  it("an unaccepted challenge goes OFFLINE (T17 probe): listed at +2 s, gone from BOTH lists by +36 s — and still acceptable at +34 s, still cancellable after", async () => {
+    // Measured (t17-live-lichess.md §1; calls.log): created 08:42:56, listed
+    // 08:42:58, out[] empty 08:43:32, cancelled 08:43:40 → 200; a second read
+    // `offline` at +32 s and was accepted at +34 s → 200, the game started.
+    // Only Date is faked — the stub reads Date.now() per request.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const t0 = Date.now();
+      const listed = async () => {
+        const w = await api.listOutgoingChallenges(W.token);
+        const b = (await (await fetch(`${fx.url}/api/challenge`, { headers: { Authorization: `Bearer ${B.token}` } })).json()) as { in: unknown[] };
+        return { out: w.ok ? w.challenges.map((c) => c.id) : null, in: b.in.length };
+      };
+      const c1 = await api.createChallengeToUser({ whiteToken: W.token, blackUsername: B.id, limitSeconds: 600, incrementSeconds: 0 });
+      if (!c1.ok) throw new Error("create refused");
+      vi.setSystemTime(t0 + 2_000);
+      expect(await listed(), "+2 s: listed").toEqual({ out: [c1.challengeId], in: 1 });
+      vi.setSystemTime(t0 + 36_000);
+      expect(await listed(), "+36 s: gone from both lists").toEqual({ out: [], in: 0 });
+      expect(await api.cancelChallenge({ token: W.token, challengeId: c1.challengeId }), "+44 s cancel of an offline challenge").toEqual({ ok: true });
+      expect(fx.game(c1.challengeId)?.status).toBe("canceled");
+
+      const t1 = Date.now();
+      const c2 = await api.createChallengeToUser({ whiteToken: W.token, blackUsername: B.id, limitSeconds: 600, incrementSeconds: 0 });
+      if (!c2.ok) throw new Error("create refused");
+      vi.setSystemTime(t1 + 34_000);
+      expect((await listed()).out, "+34 s: not listed").toEqual([]);
+      expect(await api.acceptChallenge({ blackToken: B.token, challengeId: c2.challengeId }), "+34 s accept of an offline challenge").toEqual({ ok: true });
+      const playing = await api.listOngoingGames(W.token);
+      expect(playing.ok && playing.games).toEqual([{ gameId: c2.challengeId, color: "white", opponentId: B.id }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("abort before both have moved; cancel withdraws a pending challenge and aborts an accepted, unplayed game (T9 measured)", async () => {

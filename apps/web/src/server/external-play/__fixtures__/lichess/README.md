@@ -124,3 +124,34 @@ The timeline (record.log, game ids sanitised), one 3+0 game, unrated:
 - `export-expired.json` / `gamefull-expired-3.ndjson` — the export and a
   third stream read after it, both `outoftime`, the export now complete
   (8 plies).
+
+## `challenge-list-{white,black}.json` — GET /api/challenge, recorded live
+
+Recorded 2026-10-13 (08:42-08:49 UTC) by the T17 live probe with the two
+programme test accounts (`t17-live-lichess.md` §1; no token is in any file).
+White's token created a direct challenge exactly as `createChallengeToUser`
+does (`clock.limit=600`, `clock.increment=0`, `rated=false`, `color=white`,
+`variant=standard`); 2 s later each player read `GET /api/challenge`.
+
+**Sanitised** as the T11 recordings are: the player ids/names are replaced by
+`rec-white` / `rec-black`, the challenge id (and so the `url`) by `Rc17Chal`.
+Every other byte is as recorded, including `perf.icon` (a private-use glyph).
+
+What it pins:
+
+- **There is no `createdAt`**, and no expiry field, on a listed challenge. A
+  challenge cannot be bound to a time by its own body — recovery
+  (`create-game.ts`) matches it on its fields, inside a window measured below.
+- `timeControl.limit` / `.increment` are SECONDS; `challenger` and `destUser`
+  are objects with lower-case `id`s; `direction` is `out` in White's `out[]`
+  and `in` in Black's `in[]`, and the two entries are otherwise identical.
+- **The listing is short-lived (measured, not in these files).** The
+  unaccepted challenge was listed at +2 s and gone from `out[]` at +36 s;
+  `GET /api/challenge/{id}/show` then said `status: "offline"`. A second
+  challenge read `offline` at +32 s and was STILL ACCEPTED at +34 s (200
+  `{"ok":true}`, the game started), and the first was cancelled after going
+  offline (200 `{"ok":true}`). We never send `keepAliveStream`.
+
+`lichess-fixture-contract.test.ts` holds the fixture server's challenge list to
+these bodies key for key, and `board-api.test.ts` parses them through the real
+reader.

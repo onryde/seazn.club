@@ -28,13 +28,15 @@ const DEFAULT_BASE = "https://lichess.org";
 export type BoardApiDeps = { fetch?: typeof fetch; baseUrl?: string };
 
 /** One of the caller's outgoing challenges, as the recovery lookup needs it.
- *  Shape from the API spec; measurement owed (T17). The match fields (T9 N1)
- *  are null when unreadable — the matcher, not the parser, decides what an
- *  unreadable one means. There is no `createdAt`: ChallengeJson carries none
- *  (lichess-org/api ChallengeJson.yaml; lila modules/challenge/src/main/
- *  JsonView.scala at c91f1d09d, read 2026-10-10). */
+ *  MEASURED 2026-10-13 (T17 live probe; __fixtures__/lichess/challenge-list-
+ *  white.json): every field read here is present, with these types. The match
+ *  fields (T9 N1) are null when unreadable — the matcher, not the parser,
+ *  decides what an unreadable one means. There is no `createdAt` (measured
+ *  absent; also lila modules/challenge/src/main/JsonView.scala at c91f1d09d). */
 export type OutgoingChallenge = {
   id: string;
+  /** `challenger.id` — the token's own account for every entry of `out[]`. */
+  challengerId: string | null;
   destUserId: string | null;
   status: string;
   rated: boolean | null;
@@ -85,6 +87,7 @@ const strOrNull = (v: unknown): string | null => (nonEmpty(v) ? v : null);
 function challengeMatchFields(c: Record<string, unknown>): Omit<OutgoingChallenge, "id" | "destUserId" | "status"> {
   const tc = c.timeControl;
   return {
+    challengerId: isRecord(c.challenger) ? strOrNull(c.challenger.id) : null,
     rated: boolOrNull(c.rated),
     variantKey: isRecord(c.variant) ? strOrNull(c.variant.key) : null,
     timeControl: isRecord(tc) && nonEmpty(tc.type)
@@ -398,9 +401,10 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
      *  2026-10-10 with a board:play + challenge:write token: 403
      *  {"error":"Missing scope: challenge:read"}. PLAY_SCOPES carries it since
      *  spec §3.1's 2026-10-10 amendment; a link made before that re-consents.
-     *  Success body: shape from the API spec; measurement owed (T17)
-     *  (challengeList ⇒ {in, out}: ChallengeJson[], `destUser` a
-     *  ChallengeUser or null). */
+     *  Success body MEASURED 2026-10-13 (T17 live probe): {in, out} of
+     *  ChallengeJson, no `createdAt`; an unaccepted challenge leaves `out[]`
+     *  within ~30-36 s (status `offline`, still acceptable). `destUser` may be
+     *  null (an open challenge, spec). */
     async listOutgoingChallenges(token: string): Promise<Listed<{ challenges: OutgoingChallenge[] }>> {
       const out = await call("/api/challenge", { method: "GET", token });
       if (out.status < 200 || out.status >= 300) {

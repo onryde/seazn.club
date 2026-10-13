@@ -529,7 +529,7 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
     expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
       // N1 (fix round 2): the fields recovery matches on are kept, as the
       // spec declares them; the shape is the spec's — measurement owed (T17).
-      ok: true, challenges: [{ id: "C8fNpisS", destUserId: "mary", status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
+      ok: true, challenges: [{ id: "C8fNpisS", challengerId: "bobby", destUserId: "mary", status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
     });
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://li.test/api/challenge");
@@ -566,7 +566,7 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
   it("listOutgoingChallenges: an open challenge (destUser null, spec) is read, with no destination", async () => {
     const f = vi.fn(async () => res(JSON.stringify({ out: [{ ...OUT_CHALLENGE, destUser: null }] }), 200));
     expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("t")).toEqual({
-      ok: true, challenges: [{ id: "C8fNpisS", destUserId: null, status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
+      ok: true, challenges: [{ id: "C8fNpisS", challengerId: "bobby", destUserId: null, status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
     });
   });
 
@@ -585,6 +585,11 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
       ["clock with no limit", { timeControl: { type: "clock", increment: 3 } },
         { timeControl: { type: "clock", limit: null, increment: 3 } }],
       ["color absent", { color: undefined }, { color: null }],
+      // L1 (T17): the challenger is a match field too — White's id, as the
+      // controller's ruling names it.
+      ["challenger absent", { challenger: undefined }, { challengerId: null }],
+      ["challenger with no id", { challenger: { name: "Bobby" } }, { challengerId: null }],
+      ["challenger null", { challenger: null }, { challengerId: null }],
     ];
     let checked = 0;
     for (const [name, over, want] of cases) {
@@ -594,7 +599,34 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
       expect(got.ok && got.challenges[0], name).toMatchObject({ id: "C8fNpisS", ...want });
       checked += 1;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(11);
+  });
+
+  it("MEASURED (T17 live probe, 2026-10-13): the recorded GET /api/challenge bodies parse through the real reader — out[] read, in[] ignored, no createdAt", async () => {
+    // Expected values are read from the RECORDED body (challenge-list-white.json,
+    // sanitised ids), never from the reader: the entry's own fields.
+    const white = raw("challenge-list-white.json");
+    type LiveEntry = {
+      id: string; status: string; rated: boolean; color: string;
+      challenger: { id: string }; destUser: { id: string }; variant: { key: string };
+      timeControl: { type: string; limit: number; increment: number };
+    };
+    const entry = (JSON.parse(white) as { out: LiveEntry[] }).out[0]!;
+    expect(entry, "premise: the live entry carries no createdAt").not.toHaveProperty("createdAt");
+    const f = vi.fn(async () => res(white, 200));
+    expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
+      ok: true,
+      challenges: [{
+        id: entry.id, challengerId: entry.challenger.id, destUserId: entry.destUser.id, status: entry.status,
+        rated: entry.rated, variantKey: entry.variant.key,
+        timeControl: { type: entry.timeControl.type, limit: entry.timeControl.limit, increment: entry.timeControl.increment },
+        color: entry.color,
+      }],
+    });
+    // Black's list carries the same challenge in in[] only: it is not an
+    // outgoing challenge of Black's, so the reader returns nothing.
+    const g = vi.fn(async () => res(raw("challenge-list-black.json"), 200));
+    expect(await api(g as unknown as typeof fetch).listOutgoingChallenges("lio_b")).toEqual({ ok: true, challenges: [] });
   });
 
   it("listOngoingGames GETs /api/account/playing?nb=50 and reads the MEASURED entry", async () => {

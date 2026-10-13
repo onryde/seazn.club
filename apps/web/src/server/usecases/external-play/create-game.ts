@@ -45,12 +45,20 @@ import "server-only";
 // is adopted only when it is provably OUR create (fix round 2, N1): unrated,
 // standard, the fixture's clock, and created within [create_sent_at − 60 s,
 // now + 60 s] (symmetric since fix round 3, R2-1: a createdAt beyond it
-// holds, never re-creates) — an ongoing game is verified through its export,
-// a challenge on its own fields. Exactly one such game ⇒ adopt; none, with
-// every lookup read ⇒ re-create; two, or any candidate that cannot be verified, or any lookup
+// holds, never re-creates) — an ongoing game is verified through its export.
+// A listed challenge carries NO createdAt (MEASURED live, T17 L1), so it is
+// judged on its own fields — challenger, Black, clock, unrated, standard,
+// White — inside our create window, which for a challenge is the lookup's
+// own time: one we send leaves the list by +36 s (measured), so a match
+// listed after marker + LICHESS_TIMEOUT_MS + 36 s cannot be our send. Such a
+// match is a STRAY and is cancelled (controller ruling 2026-10-13: cancel a
+// matching stray before re-creating). Exactly one candidate ⇒ adopt (a
+// challenge is accepted with Black's token); none, with every lookup read ⇒
+// re-create; two, or any candidate that cannot be verified, or any lookup
 // failing ⇒ hold (`create_outcome_unknown`). The lookups run in parallel,
-// then the exports in parallel, and the marker write renews the claim, so no
-// stretch of a claim's life spans more than two Lichess call-times
+// then the exports and the stray cancels in parallel; the marker write — or,
+// for an adopted challenge, a renewal before its accept — renews the claim,
+// so no stretch of a claim's life spans more than two Lichess call-times
 // (2 × LICHESS_TIMEOUT_MS < MINT_CLAIM_STALE_MS).
 //
 // A GAME THIS CALL MADE BUT COULD NOT RECORD (its claim lost mid-flight) is
@@ -73,7 +81,7 @@ import {
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
-import { MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import {
@@ -405,6 +413,21 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
       gameId = found.id;
       accepted = true;
     }
+    if (found.kind === "challenge") {
+      // L1: an open challenge of ours, not yet a game — Black's token accepts
+      // it below. The lookups and the exports have spent two call-times of
+      // this claim and the accept is a third, so it is renewed first; a claim
+      // lost by now accepts nothing (whoever holds it will find the same one).
+      const renewAt = fixedNow ?? new Date();
+      const renewed = await sql<{ fixture_id: string }[]>`
+        update fixture_external_play set mint_claimed_at = ${renewAt}, updated_at = now()
+         where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
+           and mint_claimed_at = ${claim}
+         returning fixture_id`;
+      if (renewed.length === 0) return { stage: "lost" };
+      claim = renewAt;
+      gameId = found.id;
+    }
   }
 
   if (gameId === null && !plan.startOffered) {
@@ -494,12 +517,13 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   return { stage: "created", gameId };
 }
 
-/** What an earlier claimant's send left at Lichess, as far as can be shown.
- *  Only an ongoing GAME is ever adopted: a challenge cannot be bound to the
- *  marker in time (below), so at best it is unverified. */
+/** What an earlier claimant's send left at Lichess, as far as can be shown:
+ *  an ongoing game (already accepted), an open challenge (to accept), nothing,
+ *  or something that cannot be told apart from ours. */
 type SentGame =
   | { kind: "none" }
   | { kind: "game"; id: string }
+  | { kind: "challenge"; id: string }
   | { kind: "unknown"; why: string };
 
 /** Challenge statuses that are not a live invitation (ChallengeStatus,
@@ -514,6 +538,19 @@ const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
  *  LATER than it cannot be judged — a clock that far ahead could be hiding
  *  our own game — so it is unverified and holds, never re-creates. */
 const SENT_SKEW_MS = 60_000;
+
+/** MEASURED 2026-10-13 (T17 live probe, t17-live-lichess.md §1): an
+ *  unaccepted challenge sent without `keepAliveStream` (ours never carries
+ *  it) is listed at +2 s and gone from GET /api/challenge by +36 s — status
+ *  `offline`, and still acceptable. A listing is the only clock a challenge
+ *  has: ChallengeJson carries no createdAt (measured absent). */
+const CHALLENGE_LISTED_MS = 36_000;
+
+/** L1 (controller ruling 2026-10-13): the last instant at which a LISTED
+ *  challenge can still be our send — it lands at most LICHESS_TIMEOUT_MS after
+ *  the marker and stays listed at most CHALLENGE_LISTED_MS. A match listed
+ *  later is somebody's challenge kept alive elsewhere, never ours. Inclusive. */
+const challengeWindowEnd = (sentAt: Date): number => sentAt.getTime() + LICHESS_TIMEOUT_MS + CHALLENGE_LISTED_MS;
 
 type Verdict = "ours" | "not_ours" | "unverified";
 
@@ -541,23 +578,21 @@ function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): 
   ]);
 }
 
-/** A challenge not (yet) a game, judged on its own fields — the shape is the
- *  API spec's; measurement owed (T17). Our create sends rated=false,
- *  variant=standard, color=white and the fixture's clock. */
+/** A challenge not (yet) a game, judged on its own fields — MEASURED shape
+ *  (T17 live probe, 2026-10-13). Our create is White's token challenging
+ *  Black with rated=false, variant=standard, color=white and the fixture's
+ *  clock. There is no time fact: the window is the caller's (above). */
 function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
   const tc = c.timeControl;
   // A declared non-clock type (correspondence, unlimited) is not ours.
   const isClock = tc === null ? null : tc.type === "clock";
   return verdictOf([
+    fact(c.challengerId, (x) => x.toLowerCase() === plan.white.lichessId.toLowerCase()),
     fact(c.rated, (r) => r === false),
     fact(c.variantKey, (v) => v === "standard"),
     tc !== null && tc.type === "clock" ? fact(tc.limit, (x) => x === plan.tc.limitSeconds) : isClock,
     tc !== null && tc.type === "clock" ? fact(tc.increment, (x) => x === plan.tc.incrementSeconds) : isClock,
     fact(c.color, (x) => x === "white"),
-    // createdAt: ChallengeJson carries none (lichess-org/api ChallengeJson;
-    // lila modules/challenge/src/main/JsonView.scala at c91f1d09d), so the
-    // time bound can never be shown for a challenge.
-    null,
   ]);
 }
 
@@ -569,9 +604,11 @@ function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
  * Black that is still open, or White's ongoing game, as White, against Black;
  * one already recorded on any bridge row is another fixture's game, not ours.
  * Each surviving candidate is then VERIFIED (N1): a game through its export
- * (in parallel — one more call-time), a challenge on its own fields; an id in
- * both lists is the game. One verified game is adopted; two are "unknown"
- * (ambiguous); any candidate that cannot be verified is "unknown" too.
+ * (in parallel — one more call-time), a challenge on its own fields and only
+ * inside the window (L1); an id in both lists is the game. Exactly one
+ * verified candidate is adopted; two are "unknown" (ambiguous); any candidate
+ * that cannot be verified is "unknown" too. A challenge that MATCHES but is
+ * listed past the window is a stray, cancelled alongside the exports.
  */
 async function findSentGame(
   plan: CreationPlan,
@@ -606,26 +643,52 @@ async function findSentGame(
     }
   }
 
+  // L1: a listed challenge is a candidate only while it can still be our
+  // send; after that, one that matches ours is a stray.
+  const inWindow = clock().getTime() <= challengeWindowEnd(sentAt);
+  const open: Array<[string, Verdict]> = [];
+  const strays: string[] = [];
+  for (const [id, c] of challenges) {
+    if (games.has(id)) continue; // an id in both lists is the game
+    const v = challengeVerdict(c, plan);
+    if (inWindow) open.push([id, v]);
+    else if (v === "ours") strays.push(id);
+  }
+
   const gameIds = [...games];
-  const metas = await Promise.all(gameIds.map((id) => exportGameMeta(id)));
+  const [metas] = await Promise.all([
+    Promise.all(gameIds.map((id) => exportGameMeta(id))),
+    Promise.all(strays.map((id) => cancelStray(plan.fixtureId, id, whiteToken))),
+  ]);
   const now = clock();
-  const ours: string[] = [];
+  const ours: Array<{ id: string; kind: "game" | "challenge" }> = [];
   const unverified: string[] = [];
-  const tally = (id: string, v: Verdict) => {
-    if (v === "ours") ours.push(id);
+  const tally = (id: string, kind: "game" | "challenge", v: Verdict) => {
+    if (v === "ours") ours.push({ id, kind });
     else if (v === "unverified") unverified.push(id);
   };
   gameIds.forEach((id, i) => {
     const m = metas[i]!;
-    tally(id, m.ok ? gameVerdict(m.meta, plan, sentAt, now) : "unverified");
+    tally(id, "game", m.ok ? gameVerdict(m.meta, plan, sentAt, now) : "unverified");
   });
-  for (const [id, c] of challenges) {
-    if (!games.has(id)) tally(id, challengeVerdict(c, plan));
-  }
+  for (const [id, v] of open) tally(id, "challenge", v);
   if (unverified.length > 0) return { kind: "unknown", why: `unverified: ${unverified.join(",")}` };
-  if (ours.length > 1) return { kind: "unknown", why: `ambiguous: ${ours.join(",")}` };
-  if (ours.length === 1) return { kind: "game", id: ours[0]! };
+  if (ours.length > 1) return { kind: "unknown", why: `ambiguous: ${ours.map((o) => o.id).join(",")}` };
+  if (ours.length === 1) return { kind: ours[0]!.kind, id: ours[0]!.id };
   return { kind: "none" };
+}
+
+/** L1: a challenge that matches ours, listed past the window — not our send,
+ *  but one Black could still accept beside the game this call makes or keeps.
+ *  Cancelled with White's token (cancel works on an `offline` challenge too —
+ *  measured). Best-effort: never throws; logs the ids, never a token. */
+async function cancelStray(fixtureId: string, challengeId: string, whiteToken: string): Promise<void> {
+  const out = await cancelChallenge({ token: whiteToken, challengeId });
+  if (out.ok) {
+    log.warn({ fixtureId, challengeId }, "lichess: cancelled a stray challenge matching ours, listed past the create window");
+    return;
+  }
+  log.error({ fixtureId, challengeId, why: out.code }, "lichess: could not cancel a stray challenge matching ours");
 }
 
 /** Minor b: a game this call created and could not record. Cancel it with

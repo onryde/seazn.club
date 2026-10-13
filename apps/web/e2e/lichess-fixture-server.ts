@@ -27,10 +27,14 @@
 //   T11  A read SETTLES an expired clock, visible on the NEXT read: the first
 //        board-stream read after expiry still says `started` with the flagged
 //        side's time at 0 (gamefull-expired-1.ndjson, then -2).
+//   L1   GET /api/challenge (T17 live probe, 2026-10-13): the LIVE entry shape
+//        (challenge-list-{white,black}.json) — NO `createdAt` — and an
+//        unaccepted challenge leaves both lists ~30 s after creation (listed
+//        at +2 s, gone by +36 s, `offline` at +32 s), yet stays acceptable and
+//        cancellable. Modelled at CHALLENGE_LISTED_MS, inside that bracket.
 //
 // What is NOT measured, and is modelled from lila's source or left plain:
-// GET /api/challenge's success body (owed live, T17 part B — this serves the
-// shape the API spec documents and board-api.ts parses); illegal moves, aborts
+// illegal moves, aborts
 // after ply 2 and acts on a finished game answer named `fixture:` 400s rather
 // than an invented Lichess sentence; a stranger's token on someone else's game
 // is a named 404. Every unexpected route is a 404 that names itself.
@@ -125,6 +129,12 @@ const ROUTES = [
 /** M5: what Lichess keeps of a UCI string — its legal prefix. */
 const UCI_PREFIX = /^([a-h][1-8][a-h][1-8][qrbn]?)/;
 
+/** How long an unaccepted challenge stays in GET /api/challenge. Measured only
+ *  as a bracket (T17 live probe: listed at +2 s, gone by +36 s, `offline` by
+ *  +32 s); 30 s sits inside it. Past it the challenge is `offline`: unlisted,
+ *  but still acceptable and cancellable (both measured). */
+const CHALLENGE_LISTED_MS = 30_000;
+
 /** The board-stream connection stays open the way Lichess's does, until the
  *  reader cancels; this caps a reader that never does. */
 const STREAM_HOLD_MS = 30_000;
@@ -135,7 +145,10 @@ type Game = {
   black: string;
   limit: number;
   increment: number;
+  /** The GAME's createdAt (the export's): reset when the challenge is accepted. */
   createdAt: number;
+  /** When the challenge was made — what its listing ages from. */
+  challengedAt: number;
   status: string; // created | canceled | started | <terminal>
   winner: Colour | null;
   chess: Chess;
@@ -277,22 +290,30 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
     };
   }
 
-  function challengeJson(g: Game): Record<string, unknown> {
+  /** The LIVE ChallengeJson (challenge-list-white.json, key for key): no
+   *  createdAt; `direction` from the reader's side. `perf.icon` is the
+   *  recorded glyph — it is measured for rapid only, and nothing reads it. */
+  function challengeJson(g: Game, direction: "in" | "out"): Record<string, unknown> {
+    const sp = speed(g.limit, g.increment);
     return {
       id: g.id,
       url: `https://lichess.org/${g.id}`,
       status: g.status,
-      challenger: { id: g.white, name: g.white, rating: 1500, provisional: true },
-      destUser: { id: g.black, name: g.black, rating: 1500, provisional: true },
+      challenger: { name: g.white, id: g.white, rating: 1500, provisional: true, lag: 4 },
+      destUser: { name: g.black, id: g.black, rating: 1500, provisional: true, online: true, lag: 4 },
       variant: { key: "standard", name: "Standard", short: "Std" },
       rated: false,
-      speed: speed(g.limit, g.increment),
+      speed: sp,
       timeControl: { type: "clock", limit: g.limit, increment: g.increment, show: `${g.limit / 60}+${g.increment}` },
       color: "white",
       finalColor: "white",
-      perf: { name: speed(g.limit, g.increment) },
+      perf: { icon: "\ue002", name: sp.charAt(0).toUpperCase() + sp.slice(1) },
+      direction,
     };
   }
+
+  /** Still listed: an unaccepted challenge younger than CHALLENGE_LISTED_MS. */
+  const listed = (g: Game, now: number) => g.status === "created" && now - g.challengedAt < CHALLENGE_LISTED_MS;
 
   /** M5 + lila's move reading: truncate to the legal prefix, read a king
    *  onto its own rook as a castle, and queen a suffix-less promotion. */
@@ -352,10 +373,10 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
       const me = tokens.get(token)!;
 
       if (path === "/api/challenge" && method === "GET") {
-        const all = [...games.values()].filter((g) => g.status === "created");
+        const all = [...games.values()].filter((g) => listed(g, now));
         return send({
-          in: all.filter((g) => g.black === me).map(challengeJson),
-          out: all.filter((g) => g.white === me).map(challengeJson),
+          in: all.filter((g) => g.black === me).map((g) => challengeJson(g, "in")),
+          out: all.filter((g) => g.white === me).map((g) => challengeJson(g, "out")),
         });
       }
 
@@ -384,13 +405,14 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
         const dest = create[1]!.toLowerCase();
         if (![...tokens.values()].includes(dest)) return send({ error: `fixture: no Lichess account ${dest}` }, 404);
         const g: Game = {
-          id: gameId(), white: me, black: dest, limit, increment, createdAt: now, status: "created", winner: null,
+          id: gameId(), white: me, black: dest, limit, increment, createdAt: now, challengedAt: now, status: "created", winner: null,
           chess: new Chess(), uci: [], san: [], remaining: { white: limit * 1000, black: limit * 1000 },
           plyClocksCs: [], lastMoveAt: now, drawOffer: null,
         };
         games.set(g.id, g);
-        // T9 measured: the ChallengeJson at the TOP level (`id`), not wrapped.
-        return send(challengeJson(g));
+        // T9 measured: the ChallengeJson at the TOP level (`id`), not wrapped
+        // (T17: the same live entry, `direction: "out"`).
+        return send(challengeJson(g, "out"));
       }
 
       const ch = /^\/api\/challenge\/([A-Za-z0-9]+)\/(accept|cancel)$/.exec(path);
