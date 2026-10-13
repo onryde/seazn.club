@@ -766,13 +766,13 @@ describe("stryker-timeouts.json is the rule applied to what the full run measure
 
 describe("a failing timeouts file tells its author what to write (FINAL-FIX M3)", () => {
   it("a map with a timeout too high, one too low and one right names exactly the two, and the hint it prints is a file that passes", () => {
-    const names = ["competition-1", "modules-3", "sports-cricket-10", "sports-period-1", "sports-period-13", "probe"];
+    const names = ["competition-1", "modules-3", "sports-cricket-10", "sports-period-1", "sports-period-8", "probe"];
     const ok = regeneratedTimeouts(names);
     // by hand from the measurements: competition-1 took 45.5 min -> 69; modules-3 took 1 minute -> the floor, 10; the first half of
-    // sports-cricket-10 RAN, 6,430 s -> 9,645 s = 160.75 min -> 161; sports-period-1's first part RAN, 6,660 s -> 9,990 s = 166.5 min -> 167;
-    // sports-period-13 RAN (job 112668660780: 06:49:06 to 08:39:40, 6,634 s) -> 9,951 s = 165.85 min -> 166; the probe 96
-    // (a part that has not run is worked by hand in "the bootstrap of a NEW cut" above)
-    expect(ok).toEqual({ "competition-1": 69, "modules-3": 10, "sports-cricket-10": 161, "sports-period-1": 167, "sports-period-13": 166, probe: 96 });
+    // sports-cricket-10 RAN again cold after W2b (job 115452733659, 4,835 s) -> 7,252.5 s = 120.875 min -> 121; sports-period-1's first part RAN,
+    // 6,660 s -> 9,990 s = 166.5 min -> 167; sports-period-8 RAN again cold after W2b (job 115453024602, 5,272 s) -> 7,908 s = 131.8 min -> 132;
+    // the probe 96 (a part that has not run is worked by hand in "the bootstrap of a NEW cut" above)
+    expect(ok).toEqual({ "competition-1": 69, "modules-3": 10, "sports-cricket-10": 121, "sports-period-1": 167, "sports-period-8": 132, probe: 96 });
     const doctored = { ...ok, "competition-1": (ok["competition-1"] as number) + 120, "sports-cricket-10": (ok["sports-cricket-10"] as number) - 1 };
     const faults = Object.entries(doctored).flatMap(([g, t]) => timeoutFault(g, t, ok[g] as number) ?? []);
     expect(faults.map((f) => f.split(":")[0])).toEqual(["competition-1", "sports-cricket-10"]);
