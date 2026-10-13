@@ -1950,7 +1950,7 @@ jobs:
               - 'apps/web/src/server/**'
               - 'apps/web/src/lib/format-templates.ts'
               - 'apps/web/src/lib/bracket-next-match.ts'
-              - 'apps/web/src/lib/match-rules.ts'
+              - 'apps/web/src/lib/match-rules/**'
               - 'tools/matrix/**'
               - 'pnpm-lock.yaml'
       - uses: pnpm/action-setup@v4
