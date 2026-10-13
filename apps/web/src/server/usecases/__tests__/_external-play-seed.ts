@@ -38,7 +38,9 @@ export async function seedBoardgameSport(): Promise<void> {
 }
 
 export async function seedOwner(): Promise<AuthCtx> {
-  const suffix = randomUUID().slice(0, 8);
+  // 16 hex characters (T17 re-review N4): the accumulated test database holds ~10^5 of these owners, and 8 characters
+  // collided on users_email_key (external-play-seed.test.ts pins the odds against the live count).
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified, locale)
     values (${`ep7-${suffix}@test.local`}, 'Owner', true, 'en') returning id`;
