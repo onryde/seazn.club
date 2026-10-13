@@ -14,7 +14,9 @@
 // 1. THE ENGINE DERIVES THE SCORE, NOT THE PACK. A stream is `core.start`, one
 //    `generic.score` per set (or leg) won, then an EMPTY `generic.result` —
 //    except the walkover, which is a lone `core.forfeit` with no `core.start`
-//    (W2b refuses a walkover once play has started).
+//    (a match nobody played; ruling 112 also accepts a walkover after a bare
+//    `core.start` with nothing played, so leaving the Start out is a choice,
+//    not a requirement).
 //    `applyResult` (generic.ts:110-114) settles from the running tally when the
 //    card carries no scores. Putting p1Score/p2Score on that card would hand
 //    the engine the answer and make `expected.matches` compare the pack
@@ -362,8 +364,9 @@ function scoreEvents(
 
 /** Div A's event stream. Every match is `core.start` + one `generic.score` per
  *  set won + an empty `generic.result` — EXCEPT the walkover, which is a
- *  lone `core.forfeit` (no `core.start`: W2b refuses a walkover once play has
- *  started) and no result card at all.
+ *  lone `core.forfeit` (no `core.start`: a match nobody played — ruling 112
+ *  also accepts a walkover after a bare `core.start` with nothing played) and
+ *  no result card at all.
  *
  *  The first version of this pack encoded the walkover as an administrative
  *  1-0 and recorded "there is no route to forfeit an existing fixture" as a
@@ -382,11 +385,11 @@ function worldsEvents(m: WorldsMatch): NonNullable<PackInput["streams"]>[number]
   if (m.setScores === null) {
     const winner = worldsWinner(m);
     const loser = winner === m.p1 ? m.p2 : m.p1;
-    // NO `core.start` before the walkover. W2b's phase guard (D3) refuses a
-    // walkover once play has started — a `core.start` moves the generic module
-    // to its `live` phase, which reads as "play", and "walkover" is only
-    // recordable in "pre". A match nobody played is exactly a match that never
-    // started, so the stream is the forfeit alone.
+    // NO `core.start` before the walkover: a match nobody played, so the
+    // stream is the forfeit alone. Not a requirement — since ruling 112 the
+    // phase guard (D3) reads a bare `core.start` with nothing played as "pre",
+    // and accepts a walkover after it; it refuses one only once play is
+    // recorded (a `generic.score` here).
     return [
       // A PAYLOAD ref, so it carries the `@` sigil (header note 6). Without it
       // PackSchema reads the string as a literal and only stage 0 catches it.
