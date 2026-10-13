@@ -36,7 +36,8 @@ export interface Job {
 /** The hourly trigger. Daily and weekly rows hang off it, and it alone runs the inactive probe. */
 export const TRIGGER_CRON = "17 * * * *";
 
-/** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5. */
+/** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5.
+ *  The external-play sweep (chess in-page design §4) shares it: same cadence, no new trigger. */
 export const STREAM_TICK_CRON = "*/5 * * * *";
 
 export const JOBS: readonly Job[] = [
@@ -101,6 +102,20 @@ export const JOBS: readonly Job[] = [
     retry: false,
     manual: true,
     failureCounts: ["data.failed"],
+  },
+  // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
+  // T+20 no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
+  // and ending arbiter watches. Every one of them happens when no page is open, so without this row none of them runs.
+  // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
+  // re-send with `skipped`. No failureCounts: SweepReport carries its failures as a list, not a number (R3 needs a
+  // numeric field, drift.test.ts).
+  {
+    id: "external-play",
+    path: "/api/cron/external-play",
+    trigger: STREAM_TICK_CRON,
+    due: { kind: "every" },
+    retry: false,
+    manual: true,
   },
 ];
 
