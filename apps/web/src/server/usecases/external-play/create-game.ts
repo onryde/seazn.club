@@ -609,7 +609,10 @@ function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): 
 /** A challenge not (yet) a game, judged on its own fields — MEASURED shape
  *  (T17 live probe, 2026-10-13). Our create is White's token challenging
  *  Black with rated=false, variant=standard, color=white and the fixture's
- *  clock. There is no time fact: the window is the caller's (above). */
+ *  clock. There is no time fact: the window is the caller's (above).
+ *  N3 (T17 re-review): so a challenge a player sent BY HAND with every one of these fields cannot be told from ours —
+ *  adopted inside the window when ours never landed, and cancelled with White's token as a stray past it; that
+ *  follows from the controller's ruling (L1, 2026-10-13) and is accepted, not an oversight. */
 function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
   const tc = c.timeControl;
   // A declared non-clock type (correspondence, unlimited) is not ours.
