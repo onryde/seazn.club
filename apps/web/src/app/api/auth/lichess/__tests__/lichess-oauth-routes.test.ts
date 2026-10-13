@@ -65,6 +65,7 @@ import { HttpError } from "@/lib/errors";
 import { LICHESS_OAUTH_SCOPES } from "@/lib/oauth";
 import { pkceChallenge } from "@/server/external-play/pkce";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { registerReturnPath } from "@/components/public-site/register/register-lichess-card";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { GET } from "../route";
 import { GET as CALLBACK } from "../callback/route";
@@ -122,6 +123,24 @@ describe("GET /api/auth/lichess — start", () => {
     // design asks for"), which is also why this file reads the constant from
     // lib/oauth — it mocks the usecase module wholesale.
     expect(loc.searchParams.get("scope")).toBe(LICHESS_OAUTH_SCOPES);
+  });
+
+  // I5 (T16 fix round 1): the registration's consent step starts here with `next` = its own path (join code kept), so
+  // the player comes back to the form — and only a same-origin relative path is ever kept (safeNextPath's origin
+  // check, not a prefix check): each hostile shape in that slot is dropped and the start still goes ahead.
+  it("I5: a registration's own path is kept as next; an off-site one in its place is dropped", async () => {
+    const back = registerReturnPath("club", "autumn-rapid", "AB12");
+    await GET(start(back));
+    expect(cookieJar.get(NEXT_COOKIE)).toBe("/shared/club/autumn-rapid/register?join=AB12");
+    let checked = 0;
+    for (const hostile of ["https://evil.example/shared/club/autumn-rapid/register", "//evil.example/register", "/\\evil.example", "/\tevil", "javascript:alert(1)"]) {
+      cookieJar.clear();
+      const res = await GET(start(hostile));
+      expect(new URL(res.headers.get("location")!).origin, hostile).toBe("https://lichess.org");
+      expect(cookieJar.has(NEXT_COOKIE), hostile).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(5);
   });
 
   it("refuses a protocol-relative next", async () => {

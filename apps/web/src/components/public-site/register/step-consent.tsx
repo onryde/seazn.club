@@ -12,6 +12,7 @@ import { useT } from "@/components/i18n/dict-provider";
 import { cartHasOtherPlayers } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL } from "./styles";
 import { guardianRequired, type ConsentValidation } from "./validation";
+import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
 import type { CartState, ConsentState, ContactState } from "./types";
 
 /** validation.ts's error codes don't share a naming scheme with the
@@ -32,6 +33,7 @@ export function StepConsent({
   cart,
   orgName,
   errors,
+  lichess = null,
 }: {
   contact: ContactState;
   onContactChange: (patch: Partial<ContactState>) => void;
@@ -42,6 +44,8 @@ export function StepConsent({
    *  (register.consent.data) — RegisterInfo widened to carry it. */
   orgName: string;
   errors: ConsentValidation["errors"];
+  /** I5 (T16 fix round 1): the Lichess link, when a selected division plays online — the stepper decides; null ⇒ none. */
+  lichess?: { divisions: string[]; orgSlug: string; next: string; state: RegisterLichessState } | null;
 }) {
   const t = useT();
   // Same "now" convention as division-card.tsx's own live window checks —
@@ -59,6 +63,10 @@ export function StepConsent({
       <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
         {t("register.section.consent")}
       </h2>
+
+      {lichess !== null && (
+        <RegisterLichessCard divisions={lichess.divisions} orgSlug={lichess.orgSlug} next={lichess.next} state={lichess.state} />
+      )}
 
       {/* Owner ruling 5, stated plainly at the moment of consent — this IS
           the ruling's designated surface (RS006 dispatch §B), not a buried

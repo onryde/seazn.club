@@ -16,20 +16,43 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RegisterStepper } from "@/components/public-site/register/register-stepper";
+import type { RegisterLichessState } from "@/components/public-site/register/register-lichess-card";
+import { getCurrentUser } from "@/lib/auth";
+import { LICHESS_FLASH_CODES, type LichessFlashCode } from "@/lib/lichess-link";
+import { lichessConfigured } from "@/lib/oauth";
+import { getLichessLink } from "@/server/usecases/external-accounts";
 
 type Props = {
   params: Promise<{ orgSlug: string; competitionSlug: string }>;
   // RS007's join-link deep-link (`?join=<CODE>`, design §4) — read here so
   // the seam is real, not built: RegisterStepper accepts and ignores it
   // (see that file's header) until RS007 lands the join flow.
-  searchParams: Promise<{ join?: string }>;
+  searchParams: Promise<{ join?: string; lichess?: string }>;
 };
+
+/** I5 (T16 fix round 1): this viewer's Lichess link state for the consent step's card — read ONLY when a division
+ *  plays online (`online_play`, true only while the club is offered online chess), so no other registration reads the
+ *  session or a link. `lichess` is the outcome a return from the link start carried (lib/lichess-link.ts); anything
+ *  that is not one of ours is ignored. */
+async function lichessStateFor(
+  divisions: readonly { online_play?: boolean }[],
+  flash: string | undefined,
+): Promise<RegisterLichessState | null> {
+  if (!divisions.some((d) => d.online_play === true)) return null;
+  const user = await getCurrentUser();
+  const link = user ? await getLichessLink(user.id) : null;
+  return {
+    configured: lichessConfigured(),
+    linkedUsername: link?.username ?? null,
+    flash: (LICHESS_FLASH_CODES as readonly string[]).includes(flash ?? "") ? (flash as LichessFlashCode) : null,
+  };
+}
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default async function RegisterPage({ params, searchParams }: Props) {
   const { orgSlug, competitionSlug } = await params;
-  const { join } = await searchParams;
+  const { join, lichess } = await searchParams;
   // Existence/visibility check only — still the real gate a bad slug hit
   // before (competitions.visibility in public/unlisted, org active).
   let info;
@@ -94,6 +117,7 @@ export default async function RegisterPage({ params, searchParams }: Props) {
           info={info}
           locale={locale}
           joinCode={join ?? null}
+          lichess={await lichessStateFor(info.divisions, lichess)}
         />
       </div>
     </DictProvider>
