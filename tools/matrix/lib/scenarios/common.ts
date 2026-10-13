@@ -501,13 +501,22 @@ export function bracketPolicy(setup: DivisionSetup, f: FixtureRow, sport: string
   return hardPath(sport, cfg, Math.floor(ordinal / 3), higher);
 }
 
+/** The `n`th tie-break request: the rung rotates through the engine's own list, and successive Armageddons alternate how
+ *  they ended - Black won, then drawn (a drawn Armageddon advances Black all the same, BG-KO-2) - so a matrix run records
+ *  both results rather than only the plain one. `winner` advances either way. */
+export function tiebreakAt(n: number, winner: Side): RequestedOutcome {
+  const rung = TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length];
+  if (rung !== "armageddon") return { kind: "tiebreak", rung, winner };
+  return { kind: "tiebreak", rung, winner, result: Math.floor(n / TIEBREAK_RUNGS.length) % 2 === 0 ? "black" : "draw" };
+}
+
 /** The `n`th (0-based) HARD-path request a bracket stage makes, ending in a win by `winner`: chess takes its tie-break
  *  (BG-KO-1), and everything else a settle — after a level result where the sport's generator can build one under this
  *  (stage-overlaid) cfg, alternating with an abandon at score, and after an abandon alone where it cannot (generic,
  *  GN-KO-1). The method and rung rotate through the engine's own lists. Shared by the fixture policy and the ladder loop,
  *  so a ladder (a bracket kind played through challenges) owes its deciders by the same rule. */
 export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): RequestedOutcome {
-  if (sport === "boardgame") return { kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner };
+  if (sport === "boardgame") return tiebreakAt(n, winner);
   const level = levelReachable(sport, cfg, "knockout") && n % 2 === 0;
   return { kind: "settle", then: winner, method: SETTLE_METHODS[n % SETTLE_METHODS.length], after: level ? "level" : "abandon" };
 }

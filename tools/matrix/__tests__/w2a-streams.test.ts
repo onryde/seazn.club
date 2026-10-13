@@ -115,6 +115,35 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(checked).toBeGreaterThan(0);
   });
 
+  it("W2c BG-KO-2 (M4): an Armageddon the generator is asked to DRAW records Black and a drawn result, and Black advances", () => {
+    let checked = 0;
+    let drawnStreams = 0;
+    for (const c of cases()) {
+      if (c.key !== "boardgame") continue; // one-line reason: the Armageddon is chess's (BG-KO-2)
+      const cfg = bracketCfg(c);
+      for (const winner of ["home", "away"] as const) {
+        const black = winner === "home" ? c.home : c.away;
+        for (const result of ["black", "draw"] as const) {
+          const events = generateStream(request(c, cfg, "knockout", { kind: "tiebreak", rung: "armageddon", winner, result }));
+          const where = `${c.variant} ${winner} ${result}`;
+          expect(events[events.length - 1], where).toEqual({ type: "boardgame.tiebreak", payload: { rung: "armageddon", black, result } });
+          // The rulebook (BG-KO-2): a drawn Armageddon advances Black, exactly as a Black win does.
+          expect(outcomeAfter(c, cfg, events), where).toMatchObject({ kind: "win", winner: black, loser: black === c.home ? c.away : c.home, method: "tiebreak_armageddon" });
+          if (result === "draw") drawnStreams++;
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(variantKeys("boardgame").length * 4);
+    expect(drawnStreams).toBe(variantKeys("boardgame").length * 2);
+    expect(drawnStreams).toBeGreaterThan(0);
+    // No `result` is the plain case (Black won), as before; and a result on rapid or blitz means nothing there, so it is a named refusal.
+    const c = cases().find((x) => x.key === "boardgame")!;
+    const cfg = bracketCfg(c);
+    expect(generateStream(request(c, cfg, "knockout", { kind: "tiebreak", rung: "armageddon", winner: "away" })).at(-1)).toEqual({ type: "boardgame.tiebreak", payload: { rung: "armageddon", black: c.away, result: "black" } });
+    for (const rung of ["rapid", "blitz"] as const) expect(unreachable(() => generateStream(request(c, cfg, "knockout", { kind: "tiebreak", rung, winner: "home", result: "draw" }))), rung).toBe(true);
+  });
+
   it("W2c BG-KO-3: a stage that lists its tie-break rungs is only asked for those — an unlisted rung and an empty list are named refusals, never an event the engine would refuse", () => {
     const c = cases().find((x) => x.key === "boardgame")!;
     const onlyBlitz = { ...(bracketCfg(c) as object), tiebreakRungs: ["blitz"] };

@@ -36,6 +36,9 @@ function bodyOf(text: string, name: string): string {
   return text.slice(start, i + 1).replace(/\s+/g, " ");
 }
 const ALL = SPORT_KEYS.map((s) => buildSportVariants(s)); // one generation for the file
+/** The fields a variant can vary: the table's, minus any ordered-list ("sequence") field, which the editor does not show
+ *  until Task 17's control exists and which has no boundary classes (see the sequence test below). */
+const factorFields = (sport: string): RuleField[] => (SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence");
 /** The engine's own preset for a variant key — what the builder's blank field inherits. */
 const presetCfg = (sport: string, preset: string) =>
   ((sportModule(sport).variants as Record<string, unknown>)[preset] ?? {}) as Record<string, unknown>;
@@ -104,15 +107,31 @@ describe("builder default variant, derived offline", () => {
 
 describe("boundary classes (from SPORT_RULES — the engine schema is unbounded)", () => {
   it("empty cases first: an unbounded number field and an option-less select are refused", () => {
-    expect(() => levelsOf({ key: "x", label: "x", kind: "number", build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
-    expect(() => levelsOf({ key: "x", label: "x", kind: "select", options: [], build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "select", options: [], build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
     // A declared but non-finite bound is no bound either: String(Infinity) is not a number the editor can hold.
-    expect(() => levelsOf({ key: "x", label: "x", kind: "number", min: 0, max: Infinity, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
-    expect(() => levelsOf({ key: "x", label: "x", kind: "number", min: Number.NaN, max: 5, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: 0, max: Infinity, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: Number.NaN, max: 5, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+  });
+  it("W2c Task 8 fix round 1: a sequence field (chess's tie-break rung list) has no boundary classes, and the editor shows none, so it is no variant factor", () => {
+    // An ordered list is not a bound or an option set, so `levelsOf` refuses it by name rather than answering undefined...
+    const rungs = SPORT_RULES.boardgame!.find((f) => f.kind === "sequence")!;
+    expect(rungs, "precondition: the table holds a sequence field").toBeDefined();
+    expect(() => levelsOf(rungs)).toThrow(FieldUnbounded);
+    // ...and the factors are the fields the editor SHOWS (visibleRuleFields hides it until Task 17), over every sport.
+    let factors = 0;
+    for (const sport of SPORT_KEYS) {
+      const fs = factorsFor(sport);
+      const shown = visibleRuleFields(sport, {}).map((f) => f.key);
+      expect(fs.slice(2).map((f) => f.name), sport).toEqual(shown);
+      for (const f of fs) { expect(f.levels.length, `${sport}.${f.name}`).toBeGreaterThan(0); factors++; }
+    }
+    expect(factors).toBeGreaterThan(SPORT_KEYS.length * 2);
+    expect(factorsFor("boardgame").some((f) => f.name === rungs.key)).toBe(false);
   });
   it("every SPORT_RULES number field has min < max; interior is strictly between; blank is last", () => {
     let n = 0;
-    for (const s of SPORT_KEYS) for (const f of SPORT_RULES[s] ?? []) {
+    for (const s of SPORT_KEYS) for (const f of factorFields(s)) {
       const ls = levelsOf(f);
       expect(ls.at(-1)).toEqual({ cls: "blank", raw: "" });
       if (f.kind === "number") {
@@ -126,7 +145,7 @@ describe("boundary classes (from SPORT_RULES — the engine schema is unbounded)
   });
   it("each level is the declared value: number min/max are SPORT_RULES' own; an interior exists whenever the range has room; selects list every option", () => {
     let n = 0;
-    for (const s of SPORT_KEYS) for (const f of SPORT_RULES[s] ?? []) {
+    for (const s of SPORT_KEYS) for (const f of factorFields(s)) {
       const ls = levelsOf(f);
       const raw = (cls: string) => ls.find((l) => l.cls === cls)?.raw;
       if (f.kind === "number") {
@@ -214,7 +233,7 @@ describe("the pair-wise cover", () => {
   it("every case's values are what its classes declare in SPORT_RULES, and only for fields the editor shows", () => {
     let n = 0;
     for (const v of ALL) for (const c of v.cases) {
-      const fields = SPORT_RULES[c.sport] ?? [];
+      const fields = factorFields(c.sport);
       expect(Object.keys(c.classes).sort(), c.id).toEqual(fields.map((f) => f.key).sort());
       const shown = new Set(visibleRuleFields(c.sport, c.values, presetCfg(c.sport, c.preset)).map((f) => f.key));
       for (const f of fields) {

@@ -61,6 +61,9 @@ export function levelsOf(field: RuleField): Level[] {
       out.push({ cls: "blank", raw: "" });
       return out;
     }
+    case "sequence":
+      // An ordered list (chess's tie-break rungs) is neither a bound nor an option set: it has no boundary classes.
+      throw new FieldUnbounded(field.key);
     case "bool":
       return [{ cls: "on", raw: "on" }, { cls: "off", raw: "off" }, { cls: "blank", raw: "" }];
     case "select": {
@@ -77,7 +80,9 @@ export function factorsFor(sport: string): Factor[] {
   return [
     { name: "row", levels: ROW_KEYS.map((r) => ({ cls: r, raw: r })) },
     { name: "preset", levels: offlineVariantOrder(sport).map((v) => ({ cls: v, raw: v })) },
-    ...(SPORT_RULES[sport] ?? []).map((f) => ({ name: f.key, levels: levelsOf(f) })),
+    // The fields the editor SHOWS: `visibleRuleFields` hides a sequence field until its control exists (Task 17), and
+    // `buildVariant` refuses a value for a field that is not shown, so such a field is no factor the editor can express.
+    ...(SPORT_RULES[sport] ?? []).filter((f) => f.kind !== "sequence").map((f) => ({ name: f.key, levels: levelsOf(f) })),
   ];
 }
 

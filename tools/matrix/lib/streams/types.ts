@@ -43,9 +43,12 @@ export type RequestedOutcome =
   /** W2a: the organiser closes a match no play decided — a level result (`after: "level"`) or an abandon at a real
    *  score (`after: "abandon"`) — by core.settle naming `then` (X-ST-1, X-ST-2). */
   | { readonly kind: "settle"; readonly then: Side; readonly method: SettleMethod; readonly after: "level" | "abandon" }
-  /** W2a: a drawn chess bracket game decided by the scorer-recorded tie-break (BG-KO-1, ruling 82: the scorer
-   *  records the winner on every rung). Boardgame only. */
-  | { readonly kind: "tiebreak"; readonly rung: TiebreakRung; readonly winner: Side };
+  /** W2a: a drawn chess bracket game decided by the scorer-recorded tie-break (BG-KO-1). Boardgame only. Rapid and
+   *  blitz record the winner. W2c BG-KO-2: an Armageddon records who had Black and how it ended, and the engine
+   *  derives who advances; `winner` is the side that does, and is Black either way (a drawn Armageddon advances Black).
+   *  `result` picks how the Armageddon ended: "black" (Black won, the default) or "draw"; it means nothing on rapid or
+   *  blitz, so naming it there is a refusal. */
+  | { readonly kind: "tiebreak"; readonly rung: TiebreakRung; readonly winner: Side; readonly result?: "black" | "draw" };
 
 export type DecidedOutcome = Extract<RequestedOutcome, { kind: "win" | "draw" }>;
 

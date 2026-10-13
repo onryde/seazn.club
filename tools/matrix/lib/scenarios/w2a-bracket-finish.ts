@@ -13,7 +13,6 @@
 // the reference oracle among them), plus its own, which say what makes it THAT scenario. Expected values are the
 // rulebook's and the engine's declared lists (SETTLE_METHODS, TIEBREAK_RUNGS), never read back from the generator.
 import { SETTLE_METHODS, type StageKind } from "@seazn/engine/core";
-import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { bracketRootRows, w2aApplies } from "../w2a-cells.ts";
@@ -24,7 +23,7 @@ import type { RequestedOutcome } from "../streams/types.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
-import { Recorder, bracketPolicy, playDivision, recordPosted, setUpDivision, snapshot, type BracketPick, type DivisionSetup, type RoundHooks } from "./common.ts";
+import { Recorder, bracketPolicy, playDivision, recordPosted, setUpDivision, snapshot, tiebreakAt, type BracketPick, type DivisionSetup, type RoundHooks } from "./common.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { W2A_SCENARIO_KEYS, type Scenario, type ScenarioContext, type W2aScenarioKey } from "./types.ts";
 
@@ -56,10 +55,9 @@ export interface RefusalProbe {
 /** The settle method / tie-break rung the `n`th match rotates to — the engine's own lists, so a method added there is
  *  exercised without an edit here. */
 const methodAt = (n: number) => SETTLE_METHODS[n % SETTLE_METHODS.length];
-const rungAt = (n: number) => TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length];
 
 const settleEvery = (after: "level" | "abandon"): BracketPick => (_f, n, higher) => ({ kind: "settle", then: higher, method: methodAt(n), after });
-const tiebreakEvery: BracketPick = (_f, n, higher) => ({ kind: "tiebreak", rung: rungAt(n), winner: higher });
+const tiebreakEvery: BracketPick = (_f, n, higher) => tiebreakAt(n, higher);
 const winEvery: BracketPick = (_f, _n, higher) => ({ kind: "win", winner: higher });
 
 /** The first match of the round, in the order decideRound decides them. */

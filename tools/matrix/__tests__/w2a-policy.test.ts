@@ -43,6 +43,27 @@ describe("bracketPolicy — the first of every three bracket fixtures asks for t
     expect(new Set(rungs).size, "every tie-break rung is reached").toBe(TIEBREAK_RUNGS.length);
   });
 
+  it("W2c BG-KO-2 (M4): chess's Armageddons alternate Black won / drawn, in both pickers; rapid and blitz carry no result, and the winner advances either way", () => {
+    // 4 laps of the engine's rung list: every rung four times, so the Armageddon comes up four times - two of each result.
+    const laps = 4;
+    let armageddons = 0;
+    const results: unknown[] = [];
+    for (let n = 0; n < TIEBREAK_RUNGS.length * laps; n++) {
+      for (const winner of ["home", "away"] as const) {
+        const asked = hardPath("boardgame", cfgOf("boardgame"), n, winner) as { kind: string; rung: string; winner: string; result?: string };
+        expect(asked, `n ${n}`).toMatchObject({ kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner });
+        if (asked.rung !== "armageddon") { expect(Object.hasOwn(asked, "result"), `n ${n}: ${asked.rung} has no result`).toBe(false); continue; }
+        if (winner === "home") { armageddons++; results.push(asked.result); }
+      }
+    }
+    expect(armageddons).toBe(laps);
+    expect(results).toEqual(["black", "draw", "black", "draw"]);
+    // The fixture policy reaches the same picker (every third fixture is a hard path), so the drawn Armageddon is requested for real.
+    const viaPolicy = [2, 5, 8, 11].map((n) => bracketPolicy(setup, fixture("a", "b"), "boardgame", n * 3, cfgOf("boardgame")) as { rung: string; result?: string });
+    expect(viaPolicy.map((r) => r.rung)).toEqual(Array(4).fill("armageddon"));
+    expect(viaPolicy.map((r) => r.result)).toEqual(["black", "draw", "black", "draw"]);
+  });
+
   it("swept over the registry: chess takes its tie-break (BG-KO-1), generic can only abandon then settle (GN-KO-1), every other sport settles after a level result or an abandon — whichever its generator can build", () => {
     let judged = 0;
     let level = 0;

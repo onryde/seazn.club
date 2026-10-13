@@ -37,15 +37,19 @@ export const boardgameGenerator: SportStreamGenerator = {
     if (listed !== undefined && !listed.includes(req.outcome.rung)) {
       throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the stage plays ${listed.length === 0 ? "no tie-break rung" : `only ${listed.join(", ")}`} (BG-KO-3)`);
     }
+    if (req.outcome.rung !== "armageddon" && req.outcome.result !== undefined) {
+      throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `a ${req.outcome.rung} game records its winner; "result" is an Armageddon's (BG-KO-2)`);
+    }
     const winner = idOf(req, req.outcome.winner);
     return [
       START,
       { type: "boardgame.result", payload: { winner: null, method: "agreement" } },
-      // W2c BG-KO-2: an Armageddon records Black and the result and the engine derives who advances; naming the winner as
-      // Black with Black winning is the plain case (a rapid or blitz game still names the winner).
+      // W2c BG-KO-2: an Armageddon records Black and the result and the engine derives who advances: Black wins it, or
+      // draws it and advances all the same. So `winner` is Black, and the result is the requested one (default: Black won).
+      // A rapid or blitz game still names the winner.
       {
         type: "boardgame.tiebreak",
-        payload: req.outcome.rung === "armageddon" ? { rung: req.outcome.rung, black: winner, result: "black" } : { rung: req.outcome.rung, winner },
+        payload: req.outcome.rung === "armageddon" ? { rung: req.outcome.rung, black: winner, result: req.outcome.result ?? "black" } : { rung: req.outcome.rung, winner },
       },
     ];
   },
