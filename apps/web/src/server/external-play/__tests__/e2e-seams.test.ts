@@ -84,6 +84,18 @@ describe("e2e room link — the product's verifier accepts what the runner minte
     await expect(verifyMatchRoomToken(token)).rejects.toMatchObject({ code: "MATCH_ROOM_EXPIRED" });
   });
 
+  // M4 (T17 review): a prod-build server never signs with the dev fallback (signing-key.ts), so a runner that fell back
+  // to it minted links every room refused with no name attached. The minter refuses instead, naming the variable.
+  it("M4: refuses to mint without AUTH_SECRET, naming it — never a silent dev-secret link", async () => {
+    let checked = 0;
+    for (const bad of [undefined, ""]) {
+      vi.stubEnv("AUTH_SECRET", bad);
+      await expect(mintMatchRoomLink({ ...claims(), openedAt: new Date() }), JSON.stringify(bad)).rejects.toThrow(/AUTH_SECRET/);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("a runner on a different AUTH_SECRET mints a link the server refuses", async () => {
     vi.stubEnv("AUTH_SECRET", "runner-secret-aaaaaaaaaaaa");
     const token = await mintMatchRoomLink({ ...claims(), openedAt: new Date() });
