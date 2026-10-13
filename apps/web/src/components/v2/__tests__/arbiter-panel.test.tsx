@@ -17,7 +17,7 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import type { ArbiterBoard, ArbiterFlag, ArbiterRound } from "@/lib/arbiter-view";
+import type { ArbiterBoard, ArbiterFlag, ArbiterRound, NoResultOffer } from "@/lib/arbiter-view";
 import { initialArbiterDecision, type ArbiterDecisionState } from "../arbiter-decision";
 import {
   ArbiterPanel,
@@ -629,31 +629,41 @@ describe("your decision", () => {
 
   // M-5 (fix round 4): the panel's side column is narrow (about 290px at 1280), and a truncated winner button read as
   // a bare name — "Maximiliana Fe…" — with the verb cut away, in a knockout the organiser's one decisive control. Every
-  // settle button wraps instead; each winner takes a row of its own from 360px, so the name has the column's full width;
-  // Draw and No result keep their shared row.
-  it("every settle button shows its whole label: no truncation anywhere; each winner a row of its own, wrapping — settle and tie-break alike, counted", () => {
+  // settle button wraps instead, and takes a row of its own — except Draw and No result, the one pair that shares a row
+  // (two short labels side by side). A Draw with no No result beside it (a knockout, a Swiss, a double walkover) spans
+  // too, never left half-width alone.
+  it("every settle button shows its whole label: no truncation anywhere; a row of its own unless Draw and No result share one — every offer and the tie-break, counted", () => {
     const b = { ...ROUND.boards[2]!, whiteSide: "home" as const };
     const buttonsOf = (h: string) => [...h.matchAll(/<button([^>]*)data-settle="([a-z_]+)"([^>]*)>/g)].map((m) => ({ choice: m[2]!, cls: `${m[1]} ${m[3]}` }));
-    let winners = 0;
-    let others = 0;
-    for (const tiebreakOwed of [false, true]) {
-      const h = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    const cases: { name: string; tiebreakOwed: boolean; noResultOffer: NoResultOffer; buttons: number }[] = [
+      { name: "the void offered", tiebreakOwed: false, noResultOffer: { kind: "void" }, buttons: 4 },
+      { name: "No result refused (a knockout)", tiebreakOwed: false, noResultOffer: { kind: "refused", why: "knockout" }, buttons: 3 },
+      { name: "No result refused (a Swiss)", tiebreakOwed: false, noResultOffer: { kind: "refused", why: "swiss" }, buttons: 3 },
+      { name: "the double walkover offered", tiebreakOwed: false, noResultOffer: { kind: "double_walkover" }, buttons: 4 },
+      { name: "a tie-break owed", tiebreakOwed: true, noResultOffer: { kind: "void" }, buttons: 2 },
+    ];
+    let own = 0;
+    let shared = 0;
+    for (const c of cases) {
+      const h = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed: c.tiebreakOwed, noResultOffer: c.noResultOffer }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
       const buttons = buttonsOf(h);
-      expect(buttons.length, `tie-break ${tiebreakOwed}: premise, the buttons render`).toBe(tiebreakOwed ? 2 : 4);
+      expect(buttons.length, `${c.name}: premise, the buttons render`).toBe(c.buttons);
+      const pair = buttons.some((x) => x.choice === "no_result");
       for (const { choice, cls } of buttons) {
-        const label = `tie-break ${tiebreakOwed}, ${choice}`;
+        const label = `${c.name}, ${choice}`;
         expect(cls, `${label}: never cut short`).not.toMatch(/\btruncate\b/);
         expect(cls, `${label}: wraps`).toMatch(/\bbreak-words\b/);
-        if (choice === "home_wins" || choice === "away_wins") {
-          expect(cls, `${label}: a row of its own`).toMatch(/\bmin-\[360px\]:col-span-2\b/);
-          winners++;
-        } else {
+        if (pair && (choice === "draw" || choice === "no_result")) {
           expect(cls, `${label}: the shared row`).not.toMatch(/col-span-2/);
-          others++;
+          shared++;
+        } else {
+          expect(cls, `${label}: a row of its own`).toMatch(/\bmin-\[360px\]:col-span-2\b/);
+          own++;
         }
       }
     }
-    expect([winners, others]).toEqual([4, 2]);
+    // Own rows: 2 winners in each of the five cases, plus the lone Draw three times and the double walkover once.
+    expect([own, shared]).toEqual([2 * 5 + 3 + 1, 2]);
   });
 
   it("a drawn knockout (tie-break owed) offers a winner only — never Draw or No result", () => {
