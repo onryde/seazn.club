@@ -949,7 +949,7 @@
   "settings.account.lichess.consent.title": "Seazn jouera vos coups",
   "settings.account.lichess.consent.body": "Pour jouer sur l'échiquier de Seazn, nous avons besoin de l'autorisation de jouer des coups dans vos parties Lichess. Cette autorisation ne se limite pas aux matchs Seazn : elle couvre toute partie de votre compte. Vous pouvez la retirer à tout moment en dissociant le compte, ce qui la révoque aussi chez Lichess.",
   "settings.account.lichess.consent.cta": "Relier Lichess",
-  "settings.account.lichess.consent.scopes": "Autorisations demandées : jouer sur un échiquier, créer des défis et consulter vos défis.",
+  "settings.account.lichess.consent.scopes": "Autorisations demandées : jouer sur un échiquier, créer et accepter des défis, et consulter vos défis.",
   "settings.account.lichess.reconsentRequired": "Reliez votre compte Lichess pour que Seazn puisse jouer vos coups.",
   "settings.account.export": "Exporter vos données",
   "settings.account.downloadJson": "Télécharger le JSON",
