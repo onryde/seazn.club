@@ -61,6 +61,9 @@ import { joinAsArbiter, listFlaggedExternalPlay, loadArbiterRound, type ArbiterV
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { listNeedsOrganiserExternalPlay, type NeedsOrganiserExternalPlayRow } from "../external-play/queue";
 import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
+import type { RunSheetFixture } from "@/lib/run-sheet-groups";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
 import type { NeedsReason } from "@/server/external-play/types";
 import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus } from "../external-play/preflight";
@@ -101,6 +104,15 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // ---------------------------------------------------------------------------
 // Boundaries.
 // ---------------------------------------------------------------------------
+
+// T16 fix round 1, M10: one test mounts the run sheet's ROW with the reader's own entry (no DOM; the row's router and
+// confirm are inert here).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
+}));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
 
 // The invite T19's openRound sends: recorded, never mailed.
 vi.mock("@/lib/email", async (importOriginal) => {
@@ -3251,6 +3263,21 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         // side's quiet chip — no camera flag counted against the player.
         const sheet = (await listRunSheetOnlinePlay(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId))[m.b.fixtureId];
         expect([sheet?.cameraFlagCount, sheet?.connectionProblemCount], "the run sheet: ours, not the player's").toEqual([0, 1]);
+        // …and the ROW, handed exactly that entry: the quiet chip of our side, never the amber camera chip.
+        const [fx] = await sql<Pick<RunSheetFixture, "status" | "outcome" | "home_entrant_id" | "away_entrant_id" | "stage_id" | "round_no">[]>`
+          select status, outcome, home_entrant_id, away_entrant_id, stage_id, round_no from fixtures where id = ${m.b.fixtureId}`;
+        const tree = renderIsland(RunSheetRow, {
+          fixture: {
+            ...fx!, id: m.b.fixtureId, fixture_no: 1, seq_in_round: 1, scheduled_at: new Date(m.startedAt).toISOString(),
+            court_name: null, court_id: null, venue_name: null, officials: [], home_slot_label: null, away_slot_label: null,
+            lane: null, is_final: false, third_place: false, conditional: false, ext_key: null,
+          },
+          href: "/o/org/c/comp/d/div/f/1", tz: "UTC", orgTz: "UTC", nowMs: Date.now(), canEdit: true,
+          entrantNames: {}, onlinePlay: sheet, arbiterHref: `/arbiter?fixture=${m.b.fixtureId}`,
+        }).tree();
+        const chipsOf = (id: string) => [...new Set(tree.filter((el) => propsOf(el)["data-testid"] === id))].map((el) => propsOf(el)["data-state"]);
+        expect(chipsOf("run-sheet-connection-chip"), "the row: our side's quiet chip").toEqual(["ours"]);
+        expect(chipsOf("run-sheet-camera-chip"), "the row: no camera flag against the player").not.toContain("flagged");
       });
 
       it("past the COUNT (one stamp more than the limit, each short): the neutral flag, never camera_lost", async () => {
