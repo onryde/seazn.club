@@ -20,7 +20,7 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
-import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 // `seatLabel` is SHARED with the draw list's `RunSheetRow`: both panels sit on
 // ?tab=fixtures and must answer the same way about the same seat, so the
 // precedence lives in one place rather than once per surface.
@@ -143,18 +143,32 @@ function colX(node: Pick<BracketNode, "side" | "col">, colsPerSide: number): num
   return colsPerSide * COL_W; // center
 }
 
+function nodeHeadlines(
+  fixtures: readonly FixtureLike[],
+  stored: Record<string, string> | undefined,
+  doubleWalkoverTag: string,
+): Record<string, string> | undefined {
+  const dw = fixtures.filter((f) => creditsNobody(f.outcome));
+  if (dw.length === 0) return stored;
+  return { ...stored, ...Object.fromEntries(dw.map((f) => [f.id, doubleWalkoverTag])) };
+}
+
 export function BracketPanel({
   kind,
   fixtures,
   divisionFixtures,
   entrantNames,
   entrantBadges,
-  headlines,
+  headlines: storedHeadlines,
   orgSlug,
   compSlug,
   divSlug,
 }: Props) {
   const msg = useMsg();
+  // Design review M-1 (audit 3.1): a double walkover credits nobody, and its stored "0–0" headline read as an
+  // unplayed match — so its node carries the tag in the headline's muted slot instead, in every layout below. Done
+  // once, here, so no sub-panel can paint the stored score.
+  const headlines = nodeHeadlines(fixtures, storedHeadlines, msg("forfeit.tag.doubleWalkover"));
   // Built HERE, once, from the WHOLE DIVISION's rows — the same scope the
   // draw list (`stages-panel.tsx`) and the schedule board use, so the three
   // surfaces cannot diverge by construction rather than by agreement. See

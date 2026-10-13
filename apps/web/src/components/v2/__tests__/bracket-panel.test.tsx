@@ -324,3 +324,64 @@ describe("BracketPanel — R116-3: ruling 116's walkover names her on every layo
     );
   });
 });
+
+// Design review M-1 (audit 3.1 on the organiser's bracket): a double walkover credits nobody, but its stored summary
+// carries a "0–0" headline (`listFixtureHeadlines` reads it straight from match_states), which read as an unplayed
+// match. Every layout draws the tag in the headline's place, in the same muted voice; a credited headline is kept.
+describe("BracketPanel — a double walkover's node shows its tag, not the 0–0 (review M-1)", () => {
+  const DW = { kind: "double_walkover" };
+  const WIN = (w: string, l: string) => ({ kind: "win", winner: w, loser: l });
+  const LAYOUTS: { name: string; kind?: "stepladder" | "page_playoff"; testid: string; fx: ReturnType<typeof FIX>[] }[] = [
+    {
+      name: "knockout",
+      testid: 'data-testid="bracket-panel"',
+      fx: [FIX("dw", 0, 1, "e1", "e4", DW, "forfeited", 1), FIX("ok", 0, 2, "e2", "e3", WIN("e2", "e3"), "decided", 2), FIX("x", 1, 1, null, "e2", null, "scheduled", 3)],
+    },
+    {
+      name: "double elimination",
+      testid: 'data-testid="bracket-panel-de"',
+      fx: [
+        FIX("dw", 1, 1, "e1", "e2", DW, "forfeited", 1), FIX("ok", 1, 2, "e3", "e4", WIN("e3", "e4"), "decided", 2),
+        FIX("wf", 2, 1, null, "e3", null, "scheduled", 3), FIX("l1", 5, 1, null, null, null, "scheduled", 4),
+        FIX("lf", 6, 1, null, null, null, "scheduled", 5), FIX("gf", 9, 1, null, null, null, "scheduled", 6),
+      ],
+    },
+    {
+      name: "stepladder",
+      kind: "stepladder",
+      testid: 'data-testid="bracket-panel-ladder"',
+      fx: [FIX("dw", 1, 1, "e1", "e2", DW, "forfeited", 1), FIX("ok", 2, 1, "e3", "e4", WIN("e3", "e4"), "decided", 2), FIX("x", 3, 1, null, "e3", null, "scheduled", 3)],
+    },
+    {
+      name: "page playoff",
+      kind: "page_playoff",
+      testid: 'data-testid="bracket-panel-page"',
+      fx: [
+        FIX("dw", 1, 1, "e1", "e2", DW, "forfeited", 1), FIX("ok", 1, 2, "e3", "e4", WIN("e3", "e4"), "decided", 2),
+        FIX("q2", 2, 1, null, "e3", null, "scheduled", 3), FIX("fin", 3, 1, null, null, null, "scheduled", 4),
+      ],
+    },
+  ];
+  const MUTED = "font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]";
+
+  it("all four layouts: the tag in the headline's muted slot, once; the credited node keeps its headline", () => {
+    let checked = 0;
+    for (const l of LAYOUTS) {
+      const html = markup({ ...(l.kind ? { kind: l.kind } : {}), fixtures: l.fx as never, headlines: { dw: "0–0", ok: "2–1" } });
+      expect(html, `${l.name}: the layout rendered`).toContain(l.testid);
+      expect(html, `${l.name}: the double walkover's 0–0 is gone`).not.toContain("0–0");
+      expect(html, `${l.name}: its tag sits in the headline's muted slot`).toContain(`${MUTED}">forfeit.tag.doubleWalkover</span>`);
+      expect(html.split("forfeit.tag.doubleWalkover").length - 1, `${l.name}: once`).toBe(1);
+      expect(html, `${l.name}: the credited node keeps its headline`).toContain(`${MUTED}">2–1</span>`);
+      checked++;
+    }
+    expect(checked).toBe(LAYOUTS.length);
+    expect(checked).toBe(4);
+  });
+
+  it("the empty case: a double walkover with no stored headline still shows its tag (the result is known)", () => {
+    const html = markup({ fixtures: LAYOUTS[0]!.fx as never, headlines: {} });
+    expect(html.split("forfeit.tag.doubleWalkover").length - 1).toBe(1);
+  });
+});
+
