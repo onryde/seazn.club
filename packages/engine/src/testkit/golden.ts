@@ -923,7 +923,15 @@ const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
   // W2a BG-KO-1 — `tiebreak` is set only by bracketDeciders (a bracket stage),
   // never by a variant, so `boardgame.tiebreak` and its optional `score` were
   // reachable from no recorded config. The bracket overlay itself, by name.
-  boardgame: { knockoutTiebreak: { tiebreak: true } },
+  boardgame: {
+    knockoutTiebreak: { tiebreak: true },
+    // W2c BG-KO-3/BG-KO-2 — the stage's rung list is written by a stage, never a variant, so `tiebreakRungs` and the
+    // Armageddon's recorded colour (`armageddonBlack`) were reachable from no recorded config. An Armageddon-only list
+    // makes every tie-break stream play one, and the empty list is the organiser's "no tie-break games" (a drawn game
+    // stays a draw).
+    knockoutArmageddon: { tiebreak: true, tiebreakRungs: ["armageddon"] },
+    knockoutNoTiebreakGames: { tiebreak: true, tiebreakRungs: [] },
+  },
   // W1 (scoring free) golden-gap fix — golden coverage now measures against
   // `padSpec.fidelity`, and the set-based kernel it is shared by declares
   // `expedite.start`/`sub`/`timeout` fidelity bands unconditionally for every
