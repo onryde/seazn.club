@@ -675,18 +675,6 @@ function restoreKey(target: Record<string, unknown>, from: Record<string, unknow
   else delete target[key];
 }
 
-// What a variant's preset contributes once the schema has filled in its defaults. A preset may be partial — badminton's
-// `bwf` is `{}` and every value it brings comes from the schema — and a delta over the preset's own keys would see
-// nothing. A preset the schema cannot parse alone (a sport whose required keys the preset leaves out) falls back to its
-// own keys, which is all it can be said to set.
-function completedPreset(
-  configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } },
-  preset: Record<string, unknown>,
-): Record<string, unknown> {
-  const parsed = configSchema.safeParse(preset);
-  return parsed.success ? (parsed.data as Record<string, unknown>) : preset;
-}
-
 /** What a division save answers: the stored row, plus every field the save did NOT apply and the started stage that
  *  depends on it (`[]` when nothing was refused). */
 export type PatchDivisionResult = DivisionRow & { refused: RefusedField[] };
@@ -1004,12 +992,14 @@ export async function patchDivision(
 
       let nextConfig: Record<string, unknown> | undefined;
       let sportModule: ReturnType<typeof resolveModule> | undefined;
-      let requestedPreset: Record<string, unknown> = {};
       let configKeys: string[] = [];
-      // Only a DIFFERENT variant key is a variant change. Re-sending the current one still resets the config to the
-      // preset, but the keys that reset moves are `configKeys` below — they are refused (or not) as config keys.
+      // Only a DIFFERENT variant key is a variant change.
       const variantChanged = patch.variant_key !== undefined && patch.variant_key !== current.variant_key;
-      if (formatEdit) {
+      // Re-sending the CURRENT variant with no config asks for nothing: the same variant, the config as stored. (Before
+      // W2c it reset every customised key to the preset. No caller relied on that — division-settings.tsx always sends
+      // `config` with its variant — and a reset nobody asked for is a surprise, so it is a true no-op now.)
+      const variantResend = patch.variant_key !== undefined && !variantChanged && patch.config === undefined;
+      if (formatEdit && !variantResend) {
         const variantKey = patch.variant_key ?? current.variant_key;
         const [variant] = await tx<{ config: Record<string, unknown> }[]>`
           select config from sport_variants
@@ -1047,7 +1037,6 @@ export async function patchDivision(
           applyOnlinePlayToConfig(nextConfig, readOnlinePlay(current.config));
         }
         configKeys = changedConfigKeys(nextConfig, currentConfig);
-        requestedPreset = completedPreset(sportModule.configSchema, variant.config);
       }
       const tiebreakersChanged =
         patch.tiebreakers !== undefined && canonicalJson(patch.tiebreakers) !== canonicalJson(current.tiebreakers);
@@ -1059,26 +1048,27 @@ export async function patchDivision(
       let configApplied = false;
       if (nextConfig !== undefined && sportModule !== undefined) {
         const finalConfig = nextConfig;
-        for (const k of configKeys) if (refusedFields.has(k)) restoreKey(finalConfig, currentConfig, k);
-        if (variantRefusal) {
-          // The variant stays as stored, so nothing the requested variant would have changed may land either (review
-          // I1): a preset applied without its variant is a config that belongs to no variant. Keys the patch sets
-          // ITSELF are not the preset's to drop — they were judged above, one by one.
-          const explicit = (patch.config ?? {}) as Record<string, unknown>;
-          const presetDelta = Object.keys(requestedPreset).filter((k) => !Object.hasOwn(explicit, k) && canonicalJson(requestedPreset[k]) !== canonicalJson(currentConfig[k]));
-          for (const k of presetDelta) {
-            restoreKey(finalConfig, currentConfig, k);
-            if (!refusedFields.has(k)) {
-              refusedFields.add(k);
-              refused.push({ field: k, code: "DIVISION_FORMAT_LOCKED", stageId: variantRefusal.stageId, stageName: variantRefusal.stageName });
-            }
+        // Every key a refusal covers goes back to what is stored: the keys refused one by one, and — when the variant is
+        // refused — every CHANGED key the patch did not set itself. The variant stays as stored, so nothing the
+        // requested variant would have changed may land either (review I1): a preset applied without its variant is a
+        // config that belongs to no variant. "Changed" is read off the built config against the stored one, so it
+        // covers a key the switch REMOVES (an optional key with no default, absent from the parsed preset) as well as
+        // one it sets (review M-a). Keys the patch sets ITSELF are not the variant's to drop: they were judged above,
+        // one by one.
+        const explicit = (patch.config ?? {}) as Record<string, unknown>;
+        for (const k of configKeys) {
+          const viaVariant = variantRefusal !== undefined && !Object.hasOwn(explicit, k) ? variantRefusal : undefined;
+          if (!refusedFields.has(k) && viaVariant === undefined) continue;
+          restoreKey(finalConfig, currentConfig, k);
+          if (viaVariant !== undefined && !refusedFields.has(k)) {
+            refusedFields.add(k);
+            refused.push({ field: k, code: "DIVISION_FORMAT_LOCKED", stageId: viaVariant.stageId, stageName: viaVariant.stageName });
           }
         }
-        // A save that names no config carries no entrants, which the parse above reads as "clear the override". Two
-        // such saves must not clear it: a refused variant (nothing of it may land), and a re-send of the CURRENT
-        // variant (nothing is changing, so there is no variant change to carry a reset of an unrelated setting). An
-        // ACCEPTED change of variant keeps its pre-W2c reset.
-        if (patch.config === undefined && (variantRefusal !== undefined || !variantChanged)) {
+        // A save that names no config carries no entrants, which the parse above reads as "clear the override". A
+        // refused variant must not clear it (nothing of the variant may land); an ACCEPTED change of variant keeps its
+        // pre-W2c reset. (A re-send of the current variant never gets here: it is `variantResend`, a no-op.)
+        if (patch.config === undefined && variantRefusal !== undefined) {
           restoreKey(finalConfig, currentConfig, "entrants");
         }
         if (refused.length > 0) {

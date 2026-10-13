@@ -103,6 +103,10 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     const before = await getDivision(r.auth, r.divisionId);
     const out = await patchDivision(r.auth, r.divisionId, { config: { ...(before.config as object), setTo: 15 } });
     expect(out.refused).toEqual([]);
+    // "Saves" is a claim about the value, not just the absence of a refusal (M-d): on the returned row AND the stored one.
+    expect((before.config as { setTo: number }).setTo, "precondition: it was not already 15").toBe(11);
+    expect((out.config as { setTo: number }).setTo).toBe(15);
+    expect(((await getDivision(r.auth, r.divisionId)).config as { setTo: number }).setTo).toBe(15);
   });
 
   it("one patch, two keys: the key the started stage inherits is refused and the key it sets itself saves", async () => {
@@ -179,7 +183,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: ["points_diff", "head_to_head"] as never })).rejects.toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED" });
   });
 
-  it("every field of a three-field patch refused: one 409 carrying all of them, the variant's code first", async () => {
+  it("every field of a two-field patch refused (variant + tiebreakers, and the preset keys the variant would move): one 409 carrying all of them, the variant's code first", async () => {
     const r = await rig("generic", "score");
     await start(r.auth, r.fixtureId);
     const before = await getDivision(r.auth, r.divisionId);
@@ -417,29 +421,6 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.config).toEqual(before.config);
   });
 
-  it("M-3 a variant preset the schema cannot parse alone still contributes its own keys to a refused variant", async () => {
-    // Custom preset { cap: 10 }: alone it is invalid (cap below the default setTo of 21), so `completedPreset` falls back to its
-    // own keys. Pool A sets `cap` itself, so only the preset delta can put the preset's cap back.
-    const r = await rig("badminton", "short");
-    const key = "zz-partial-" + randomUUID().slice(0, 6);
-    const m = resolveLatestModule("badminton");
-    expect(m.configSchema.safeParse({ cap: 10 }).success, "the preset alone is invalid, or the fallback is never reached").toBe(false);
-    await sql`insert into sport_variants (sport_key, key, name, config, is_system) values ('badminton', ${key}, 'partial', ${sql.json({ cap: 10 } as never)}, true)`;
-    try {
-      await putStageRules(r.auth, r.s1.id, { rules: { cap: 15 } });
-      await start(r.auth, r.fixtureId);
-      const before = await getDivision(r.auth, r.divisionId);
-      expect(m.configSchema.safeParse({ cap: 10, setTo: 7, finalSetTo: 7 }).success, "merged with the patch the config parses").toBe(true);
-      const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", variant_key: key, config: { setTo: 7, finalSetTo: 7 } });
-      expect(out.variant_key).toBe("short");
-      expect(out.config, "the preset's cap did not land beside the kept variant").toEqual(before.config);
-      expect(out.refused).toContainEqual(expect.objectContaining({ field: "cap", code: "DIVISION_FORMAT_LOCKED", stageName: "Pool A" }));
-      expect(out.refused).toContainEqual(expect.objectContaining({ field: "variant_key" }));
-    } finally {
-      await sql`delete from sport_variants where sport_key = 'badminton' and key = ${key}`;
-    }
-  });
-
   it("sibling gap: re-sending the CURRENT variant with no config on a started division is a no-op — the entrants override survives", async () => {
     const r = await rig("generic", "score");
     const stored = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
@@ -452,6 +433,53 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.refused).toEqual([]);
     expect(out.variant_key).toBe("score");
     expect(out.config, "nothing changed, the entrants override included").toEqual(before.config);
+  });
+
+  it("M-c: re-sending the CURRENT variant with no config changes nothing — a customised key survives it, started or not; an ACCEPTED variant change still resets", async () => {
+    // No web caller relies on "re-select the variant to reset to its preset": division-settings.tsx:619-622 always sends
+    // `config` with the variant, and no other caller sends a bare variant_key.
+    const r = await rig("badminton", "short");
+    const base = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown> & { setTo: number };
+    const customised = await patchDivision(r.auth, r.divisionId, { config: { ...base, setTo: 13, cap: 15 } });
+    expect((customised.config as { setTo: number }).setTo, "precondition: a customised key, off the preset's 11").toBe(13);
+    const stored = await getDivision(r.auth, r.divisionId);
+
+    const again = await patchDivision(r.auth, r.divisionId, { variant_key: "short" });      // nothing started: no lock involved
+    expect(again.refused).toEqual([]);
+    expect(again.variant_key).toBe("short");
+    expect(again.config, "the re-send reset nothing").toEqual(stored.config);
+    expect((await getDivision(r.auth, r.divisionId)).config, "and wrote nothing").toEqual(stored.config);
+
+    // Paired positive: a CHANGE of variant (no config) is still the reset to the new preset.
+    const changed = await patchDivision(r.auth, r.divisionId, { variant_key: "bwf" });
+    expect(changed.variant_key).toBe("bwf");
+    expect((changed.config as { setTo: number }).setTo, "bwf's own 21").toBe(21);
+  });
+
+  it("M-a: a refused variant also keeps a key the variant switch would REMOVE (optional, no default) even when every started stage sets it", async () => {
+    // tennis `interruptions` is an optional config key with NO default: present in the stored config, absent from the parsed
+    // preset of any variant, so a restore driven by the preset's keys never names it. Fixture-only: no tennis rule field
+    // writes it into a stage (the rule fields are bestOf, setType, finalSet, noAd, tiebreakWinBy), so the stage's own
+    // `rules.interruptions` goes to the column; the lock reads `config.rules[key]` whoever wrote it.
+    const r = await rig("tennis", "tour");
+    const allowance = { medical: { count: 1 } };
+    const stored = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    await patchDivision(r.auth, r.divisionId, { config: { ...stored, interruptions: allowance } });
+    await sql`update stages set config = config || ${sql.json({ rules: { interruptions: allowance } } as never)} where id = ${r.s1.id}`;
+    await start(r.auth, r.fixtureId);
+    const before = await getDivision(r.auth, r.divisionId);
+    expect((before.config as { interruptions?: unknown }).interruptions, "precondition: the key is stored").toEqual(allowance);
+    const [grandSlam] = await sql<{ config: Record<string, unknown> }[]>`select config from sport_variants where sport_key = 'tennis' and key = 'grand-slam' order by org_id nulls last limit 1`;
+    const preset = resolveLatestModule("tennis").configSchema.safeParse(grandSlam!.config);
+    expect(preset.success && !Object.hasOwn(preset.data as object, "interruptions"), "precondition: the parsed preset has no such key").toBe(true);
+    expect(preset.success && (preset.data as { bestOf: number }).bestOf, "and the switch is a real change (best of 5)").toBe(5);
+
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", variant_key: "grand-slam" });
+    expect(out.variant_key, "the variant stays").toBe("tour");
+    expect(out.config, "no preset value landed and the key was not dropped").toEqual(before.config);
+    expect((await getDivision(r.auth, r.divisionId)).config).toEqual(before.config);
+    expect(out.refused).toContainEqual({ field: "interruptions", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" });
+    expect(out.refused).toContainEqual(expect.objectContaining({ field: "variant_key", stageName: "Pool A" }));
   });
 
   it("tiebreakers: [] against a stored null is a CHANGE (an empty cascade is not the sport default) — refused once started", async () => {
