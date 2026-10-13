@@ -1902,6 +1902,8 @@ Before Step 2, confirm the cricket `t20` and football `youth` keys in each modul
 
 ### Task 7: Engine — "If a match is abandoned" options (E1, same loop as Task 6)
 
+> **Carried from Task 4.** `abandonPolicy` is held in `UNSETTABLE` in `packages/engine/src/sport/rule-keys.test.ts` until this task declares it; delete those 3 rows (add the file to this task's Files) when the per-sport abandon options land.
+
 Spec item 12; Q10; D9; HK-AB-2, CA-AB-2, GN-AB-2; ruling 117. Review fixes I4 (the Q4 predicate), I5 (ice hockey is never offered `q4_stands`), I6 (`share` under `allowDraws: false`; owner P-5).
 
 **Files:**
@@ -3428,6 +3430,8 @@ The mutant re-inserts the deleted overlay. The first assertion of the D3 case ki
 ---
 
 ### Task 14: The one override writer and the live correction (Q11) (server; Opus)
+
+> **Carried from Task 4 (c).** `writeFixtureRulesOverride` stores only the CHANGED leaves of a fragment (deep diff against the stage-resolved cfg), never a whole resolved sub-object — otherwise a stored override hides later stage edits to neighbouring keys. Test: override `bestOf` only, then change the stage's `setTo`; the fixture resolves the new `setTo`. Mutate once.
 
 > **Carried from batch-1 Opus review (I-A, one layer up).** A division or stage save must not invalidate an unstarted fixture's `rules_override`: reuse Task 11's merged-parse helper to check `{division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override}` for every unstarted fixture with an override when the division or stage rules change, refusing 422 naming the match. Red-first test + one mutant.
 
