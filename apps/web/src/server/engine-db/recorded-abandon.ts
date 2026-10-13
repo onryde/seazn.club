@@ -1,6 +1,6 @@
 import "server-only";
 import type postgres from "postgres";
-import { isLevelOutcome } from "@seazn/engine/core";
+import { settleApplies, settleOffered, type MatchOutcome } from "@seazn/engine/core";
 import type { FixtureStatus } from "@seazn/engine/competition";
 import { engineFixtureStatus } from "@/lib/fixture-engine-status";
 import { ABANDON_RESULT_KINDS, ABANDON_WIN_METHODS } from "@/lib/forfeit-tag";
@@ -68,13 +68,34 @@ export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
 }
 
 /**
- * A recorded abandon that decided NOBODY, and so is owed the organiser's `core.settle` (X-ST-1: `settleApplies` is
- * true for an abandon with no outcome and for a level one). Outcome null in eight sports; `no_result` where the
- * sport's abandon folds to one (cricket, carrom, generic, football under `abandonPolicy: "award"` at a level score).
- * An abandon that DID decide (football's award to the leader) names its winner and is settled like any result.
+ * A recorded abandon that decided NOBODY in a BRACKET stage, and so is owed the organiser's `core.settle` (X-ST-1:
+ * `settleApplies` is true for an abandon with no outcome and for a level one). Outcome null in eight sports;
+ * `no_result` where the sport's abandon folds to one (cricket, carrom, generic, football under `abandonPolicy: "award"`
+ * at a level score). An abandon that DID decide (football's award to the leader) names its winner and is
+ * settled like any result. The bracket half only: it is what `bracketEngineStatus` reads for the bracket and ladder
+ * completion branches. The stage-aware reading (a TABLE stage's abandon is held too, X-AB-5) is
+ * `fixtureAwaitsSettle` (usecases/competition-desk.ts); both ask the engine's own `settleApplies`/`settleOffered`.
  */
 export function abandonAwaitsSettle(f: { status: string; outcome: unknown; has_active_abandon: boolean }): boolean {
-  return f.status === "abandoned" && f.has_active_abandon && (f.outcome == null || isLevelOutcome(f.outcome as never));
+  return f.status === "abandoned" && f.has_active_abandon && settleApplies({}, { outcome: f.outcome as MatchOutcome | null, abandoned: true, state: null });
+}
+
+/**
+ * W2c P-7 / X-AB-5 - the STAGE-AWARE reading of "this stored row is owed the organiser's settle": a recorded abandon
+ * (stored `abandoned`, told apart from the generator's void only by the ledger) that the engine's `settleOffered`
+ * says is settleable in this stage kind - a bracket's held abandon, or a TABLE stage's abandon that decided nobody
+ * (a Swiss board holds the next round). A withdrawal's EXPUNGE (`expunged`) took the match out of the table and is
+ * owed nothing. ONE predicate shared with the server's settle guard and the console's block (`settleOffered`).
+ */
+export function rowAwaitsSettle(
+  stageKind: string | null | undefined,
+  f: { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean },
+): boolean {
+  return (
+    f.status === "abandoned" &&
+    f.has_active_abandon &&
+    settleOffered({}, stageKind, { outcome: f.outcome as MatchOutcome | null, abandoned: true, expunged: f.expunged === true, state: null })
+  );
 }
 
 /**

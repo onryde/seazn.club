@@ -286,6 +286,62 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await expect.poll(() => seatedInFinal(sf.id)).toContain(sf.away_entrant_id);
   });
 
+  test("X-AB-5 (fix round 1, I1): an ABANDONED league match that decided nobody is held in a TABLE stage too - the run sheet says so, the console block asks who WON, and the settle records a result the table then counts", async ({ page, request }) => {
+    // A league, not a bracket: the same abandon is stored `abandoned` with no outcome; before the fix the server allowed the
+    // settle but no screen offered it (the console and the desk both read the bracket-only predicate).
+    const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
+    expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
+    const [held, playing] = [lg.ready[0]!, lg.ready[1]!];
+    await post(request, held.id, "core.start");
+    await post(request, held.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, held.id)).status).toBe("abandoned");
+    // The negative pair: a sibling merely IN PLAY is held by nothing.
+    await post(request, playing.id, "core.start");
+
+    const path = await fixturePath(request, held.id);
+    const division = path.split("/f/")[0]!;
+    await page.goto(`${division}?tab=fixtures`);
+    const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
+    await expect(row.getByTestId("run-sheet-held-chip"), "the run sheet holds the abandoned league match").toHaveText("Needs a decision");
+    await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
+    const playingNo = (await fixturePath(request, playing.id)).split("/f/")[1]!;
+    await expect(page.locator(`li[data-fixture-no="${playingNo}"]`).getByTestId("run-sheet-held-chip"), "an in-play sibling is not held").toHaveCount(0);
+
+    await row.locator('[data-row-action="decide"]').click();
+    await page.waitForURL((u) => u.pathname === path);
+    const block = page.getByTestId("needs-decision");
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(block, `${w}: the console holds it`).toBeVisible();
+      await expect(block.locator("[data-cause]")).toHaveAttribute("data-cause", "abandoned");
+      // The TABLE sentence: no "advances" in a league.
+      await expect(block.locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.abandoned.table"));
+      await expectNoHorizontalScroll(page);
+      await crop(block, "console-held-block-table", w);
+      widths++;
+    }
+    expect(widths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(page.getByTestId("score-finalize")).toHaveCount(0);
+    await page.getByTestId("settle-open").click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(ui("score.needsDecision.whoWins"), { exact: true })).toBeVisible();
+    await expect(dialog.getByText(ui("score.needsDecision.whoAdvances"), { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("settle-confirm")).toBeDisabled(); // nothing chosen yet: pin what it OPENS AT
+    await dialog.getByTestId(`settle-winner-${held.home_entrant_id}`).click();
+    await dialog.getByTestId("settle-method-lot").check();
+    await page.getByTestId("settle-confirm").click();
+    await expect(block).toHaveCount(0);
+    const after = await read(request, held.id);
+    expect(after.status).toBe("decided");
+    expect(after.outcome).toMatchObject({ kind: "win", winner: held.home_entrant_id, method: "settled_lot" });
+    // The desk row no longer holds it.
+    await page.goto(`${division}?tab=fixtures`);
+    await expect(page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`).getByTestId("run-sheet-held-chip")).toHaveCount(0);
+  });
+
   test("Review Focus 2: a double submit of the settle dialog sends one settle", async ({ page, request }) => {
     const { sf } = await knockout(request, "generic", "score");
     await post(request, sf.id, "core.start");

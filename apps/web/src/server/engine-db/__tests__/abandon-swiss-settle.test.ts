@@ -12,6 +12,10 @@ import { sql } from "@/lib/db";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { generateStageFixtures } from "@/server/usecases/stages";
 import { seedBracket } from "./helpers/seed-bracket";
+import { v1 } from "@/server/api-v1/http";
+import { classifyActError } from "@/components/v2/stages-panel";
+import { ApiV1Error } from "@/lib/client-v1";
+import { msg } from "@/lib/messages";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -77,6 +81,29 @@ describe.skipIf(!HAS_DB)("X-AB-5 an abandoned board holds the next Swiss round u
     // ...and the next round now generates.
     await generateStageFixtures(t.auth, t.stageId);
     expect(await seatedRound2(t.stageId), "round 2 is seated").toBeGreaterThan(0);
+  }, 120_000);
+
+  it("I2: the REAL refusal reaches the organiser - through the v1 wire body to the desk's localized sentence naming the board", async () => {
+    // Producer (generateStageFixtures' own refusal) -> wire (v1) -> consumer (the stages panel's classifier): nothing in
+    // the middle is a fixture. The report once claimed the desk showed this; the boards never left the server.
+    const t = await swissWithAbandonedBoard("boardgame");
+    const refusal = await refusalOf(t.auth, t.stageId);
+    expect(refusal, "the next round must be refused").not.toBeNull();
+    const res = await v1(async () => {
+      throw refusal;
+    });
+    expect(res.status).toBe(422);
+    const { code, message, ...extra } = ((await res.json()) as { error: { code: string; message: string } & Record<string, unknown> }).error;
+    expect(code).toBe("STAGE_NOT_READY");
+    expect(extra, "the wire names the reason and the boards").toEqual({
+      reason: "swiss_abandoned_boards",
+      abandoned: [{ fixtureId: t.b.id, round: 1, board: t.b.seq_in_round }],
+    });
+    const shown = classifyActError(new ApiV1Error(message, res.status, code, extra), msg, "en");
+    expect(shown.tone, "amber: one concrete thing to do").toBe("warning");
+    expect(shown.text).toContain(`round 1 board ${t.b.seq_in_round}`);
+    expect(shown.text, "the localized sentence, not the server's English").not.toBe(message);
+    expect(shown.text).toBe(msg("schedule.error.swissAbandonedOne", { boards: `round 1 board ${t.b.seq_in_round}` }));
   }, 120_000);
 
   it("X-AB-5 a board merely in play holds the round as before and is not named; once abandoned it is named (chess, the sequence)", async () => {
@@ -205,5 +232,36 @@ describe.skipIf(!HAS_DB)("X-AB-5 an abandoned board holds the next Swiss round u
     }
     expect(checked).toBe(DRAW_KINDS.size);
     expect(checked).toBeGreaterThan(0);
+  }, 300_000);
+
+  it("I1: a withdrawal's EXPUNGE is not settleable in any table kind - the match left the table, nothing is owed (the console's shared predicate, server side)", async () => {
+    let checked = 0;
+    for (const kind of DRAW_KINDS) {
+      const s = await seedBracket({
+        sport: "generic",
+        variant: "score",
+        stageKind: kind,
+        entrants: kind === "americano" ? 8 : 4,
+        ...(kind === "swiss" ? { stageConfig: { rounds: 3 } } : {}),
+        ...(kind === "americano" ? { stageConfig: { mode: "americano", courtCount: 2, rounds: 3 } } : {}),
+      });
+      const f = s.fixtureIds[0]!;
+      const row = await rowOf(f);
+      await post(s.auth, f, "core.start");
+      // Written the way the withdrawal cascade writes it (PF-2 refuses `expunge` from anyone else).
+      await scoreEvent(
+        s.auth,
+        f,
+        { expected_seq: await seq(f), type: "core.abandon", payload: { reason: "withdrew", expunge: true } } as never,
+        { writer: "withdrawal_cascade" },
+      );
+      expect((await rowOf(f)).status, `${kind}: the rig must record the expunge`).toBe("abandoned");
+      await expect(post(s.auth, f, "core.settle", { winner: row.home, method: "organiser" }), `${kind} expunge`).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+        data: { reason: "not_bracket" },
+      });
+      checked++;
+    }
+    expect(checked).toBe(DRAW_KINDS.size);
   }, 300_000);
 });

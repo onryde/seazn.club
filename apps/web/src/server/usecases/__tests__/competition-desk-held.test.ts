@@ -31,6 +31,18 @@ async function bracket(stageKind: "knockout" | "league", entrants: number) {
   const s = await seedBracket({ sport: "generic", variant: declaredVariant("generic", "score"), stageKind, entrants });
   return { ...s, f: s.fixtureIds[0]! };
 }
+/** A two-board table stage of any table kind (swiss and americano need their own config and a wider field). */
+async function bracketOf(stageKind: "league" | "group" | "swiss" | "americano") {
+  const s = await seedBracket({
+    sport: "generic",
+    variant: declaredVariant("generic", "score"),
+    stageKind,
+    entrants: stageKind === "americano" ? 8 : 4,
+    ...(stageKind === "swiss" ? { stageConfig: { rounds: 3 } } : {}),
+    ...(stageKind === "americano" ? { stageConfig: { mode: "americano", courtCount: 2, rounds: 3 } } : {}),
+  });
+  return { ...s, f: s.fixtureIds[0]! };
+}
 async function abandonLevel(t: Awaited<ReturnType<typeof bracket>>) {
   await post(t.auth, t.f, "core.start");
   await post(t.auth, t.f, "core.abandon", { reason: "floodlights" });
@@ -101,12 +113,59 @@ describe.skipIf(!HAS_DB)("the desk reads a held bracket fixture as owed work (W2
     expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([]);
   });
 
-  it("a TABLE stage's recorded abandon is a void: no row, and the page's read stays empty", async () => {
+  it("I1 / X-AB-5: a TABLE stage's recorded abandon that decided nobody is HELD like a bracket's - a red row, and the page's read names it", async () => {
+    // The server's settle guard takes a settle there (abandon-swiss-settle.test.ts) and the console's block offers it
+    // (needs-decision.tsx); the desk must not strike it as a void beside a console that demands a decision.
+    let checked = 0;
+    for (const stageKind of ["league", "group", "swiss", "americano"] as const) {
+      const t = await bracketOf(stageKind);
+      expect((await desk(t)).held, `${stageKind}: nothing abandoned yet`).toBeUndefined();
+      await abandonLevel(t);
+      const d = await desk(t);
+      expect(d.held, stageKind).toEqual({ kind: "needs_decision", count: 1, fixtureIds: [t.f] });
+      expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))], `${stageKind}: the division page's read`).toEqual([t.f]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  }, 120_000);
+
+  it("I1 sequence (league): the void of the abandon, a second abandon, and the settle each move the row; a settled match is a result (Finished again)", async () => {
     const t = await bracket("league", 2);
     await abandonLevel(t);
-    expect((await desk(t)).held).toBeUndefined();
+    const held = await desk(t);
+    expect(held.held?.fixtureIds).toEqual([t.f]);
+    // One board in the whole division, so "Finished" is decided by that board alone: the old read struck it as a void.
+    expect(held.phase, "an unresolved board is not Finished").not.toBe("finished");
+    const [abandon] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${t.f} and type = 'core.abandon'`;
+    await appendEvent(t.auth.orgId, t.f, await seq(t.f), { type: "core.void", payload: {}, voids: abandon!.id });
+    expect((await desk(t)).held, "an undone abandon holds nothing").toBeUndefined();
     expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([]);
-  });
+    await post(t.auth, t.f, "core.abandon", { reason: "floodlights again" });
+    expect((await desk(t)).held?.fixtureIds).toEqual([t.f]);
+    const [{ home }] = await sql<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${t.f}`;
+    await post(t.auth, t.f, "core.settle", { winner: home, method: "organiser" });
+    expect(await status(t.f)).toBe("decided");
+    const after = await desk(t);
+    expect(after.held, "settled: nothing owed").toBeUndefined();
+    expect(after.phase, "the positive pair: a settled single board IS finished").toBe("finished");
+    expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([]);
+  }, 120_000);
+
+  it("a TABLE stage's withdrawal EXPUNGE (core.abandon{expunge:true}) holds nothing: the match left the table, nothing is owed", async () => {
+    const t = await bracket("league", 2);
+    await post(t.auth, t.f, "core.start");
+    await scoreEvent(
+      t.auth,
+      t.f,
+      { expected_seq: await seq(t.f), type: "core.abandon", payload: { reason: "withdrew", expunge: true } } as never,
+      { writer: "withdrawal_cascade" },
+    );
+    expect(await status(t.f), "the rig must actually record the expunge").toBe("abandoned");
+    const d = await desk(t);
+    expect(d.held).toBeUndefined();
+    expect(d.phase, "an expunged match is out of the table: nothing is owed, the division is Finished").toBe("finished");
+    expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([]);
+  }, 120_000);
 
   it("the generator's void (abandoned, no core.abandon in the ledger) is terminal: no row, and Finished", async () => {
     const t = await bracket("knockout", 2);

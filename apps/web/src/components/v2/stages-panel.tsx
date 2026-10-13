@@ -13,6 +13,8 @@ import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
+import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -1917,6 +1919,15 @@ export function generatePreconditionMessage(
       ? msg("schedule.error.previousStageIncomplete", { source, stage })
       : msg("schedule.error.previousStageIncompleteUnnamed");
   }
+  // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is not drawn while an abandoned board has no result. The
+  // boards ride the envelope (api-v1/http.ts, lib/swiss-abandoned-refusal.ts); an organiser reads WHICH to settle, in
+  // their own language. A shape that does not parse keeps the code's own copy (null here), never a guess.
+  if (err.extra.reason === SWISS_ABANDONED_BOARDS_REASON) {
+    const boards = abandonedBoardsOf(err.extra);
+    if (boards === null) return null;
+    const named = boards.map((b) => msg("schedule.error.swissAbandonedRef", { round: b.round, board: b.board })).join(", ");
+    return msg(boards.length === 1 ? "schedule.error.swissAbandonedOne" : "schedule.error.swissAbandonedMany", { boards: named });
+  }
   if (err.extra.reason === "group_too_few_entrants") {
     const groups = Number(err.extra.groups ?? 1);
     return groups > 1
@@ -2239,7 +2250,8 @@ function StageFormatRow({
       setOpen(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof ApiV1Error ? err.message : String(err));
+      // W2c P-5: a refused fragment names its problem (CONFIG_INVALID `issues`), localized where this app owns it.
+      setError(err instanceof ApiV1Error ? settingsSaveErrorText(err, msg, msg("schedule.error.failed")) : String(err));
     } finally {
       setSaving(false);
     }

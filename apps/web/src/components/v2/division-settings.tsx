@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
@@ -631,7 +632,9 @@ export function DivisionSettings({
         // flag change, a kept answer gone stale, PostHog down. Server English otherwise: localise the code.
         setError(msg("divset.err.onlineChessDisabled"));
       } else {
-        setError(err instanceof Error ? err.message : msg("divset.failed"));
+        // W2c P-5: a refused match-rules save names its problem (CONFIG_INVALID `issues`) - the rule's own sentence,
+        // localized where this app owns it - instead of the generic "invalid <sport> config".
+        setError(settingsSaveErrorText(err, msg, msg("divset.failed")));
       }
     } finally {
       setBusy(false);

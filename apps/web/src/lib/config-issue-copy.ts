@@ -1,0 +1,52 @@
+// W2c owner P-5 (fix round 1): a refused match-rules save (CONFIG_INVALID) names the PROBLEM in `data.issues` - the
+// rule's own sentence on the field's path. `server/api-v1/http.ts` forwards the issues on the wire; this is the reader.
+// The engine's sentences are English; a sentence this codebase owns (the share-on-abandon refusals) maps to a dictionary
+// key in all four locales, and anything else shows the engine's own message rather than the generic "invalid config".
+// No `server-only`: the settings forms read it.
+import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
+import type { MessageKey } from "@/lib/messages";
+
+type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+export interface ConfigIssue {
+  path: (string | number)[];
+  message: string;
+}
+
+/** The issues of a CONFIG_INVALID envelope (`path` and `message` only), or null when it carries none this reader can
+ *  use: not an object, no list, an empty list, or no entry with a message. Entries without a message are dropped. */
+export function configIssuesOf(data: unknown): ConfigIssue[] | null {
+  if (typeof data !== "object" || data === null) return null;
+  const list = (data as { issues?: unknown }).issues;
+  if (!Array.isArray(list)) return null;
+  const out: ConfigIssue[] = [];
+  for (const raw of list) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { path, message } = raw as { path?: unknown; message?: unknown };
+    if (typeof message !== "string" || message === "") continue;
+    const cleanPath = Array.isArray(path) ? path.filter((p): p is string | number => typeof p === "string" || typeof p === "number") : [];
+    out.push({ path: cleanPath, message });
+  }
+  return out.length === 0 ? null : out;
+}
+
+/** The engine sentences this app localizes, keyed by the engine's own constants (never retyped here). */
+export const LOCALIZED_CONFIG_ISSUES: ReadonlyMap<string, MessageKey> = new Map<string, MessageKey>([
+  [SHARE_NEEDS_DRAWS, "rules.err.shareNeedsDraws"],
+  [SHARE_NEEDS_DRAWN_GAME, "rules.err.shareNeedsDrawnGame"],
+]);
+
+/** One issue as the reader should see it: the localized sentence when this app owns it, else the engine's message. */
+export function configIssueText(issue: ConfigIssue, msg: Msg): string {
+  const key = LOCALIZED_CONFIG_ISSUES.get(issue.message);
+  return key === undefined ? issue.message : msg(key);
+}
+
+/** What a failed settings save says. A CONFIG_INVALID that names its problems says them (all of them, in order); any
+ *  other error keeps its own message, and a non-Error falls back to `fallback`. `err.extra` is the envelope's detail. */
+export function settingsSaveErrorText(err: unknown, msg: Msg, fallback: string): string {
+  const extra = (err as { code?: unknown; extra?: unknown } | null)?.code === "CONFIG_INVALID" ? (err as { extra?: unknown }).extra : undefined;
+  const issues = configIssuesOf(extra);
+  if (issues !== null) return issues.map((i) => configIssueText(i, msg)).join(" ");
+  return err instanceof Error ? err.message : fallback;
+}

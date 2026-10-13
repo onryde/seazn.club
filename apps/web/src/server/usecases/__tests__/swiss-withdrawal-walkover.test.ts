@@ -227,4 +227,47 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
     // Nothing of S4's was abandoned.
     expect(after.filter((f) => f.status === "abandoned")).toEqual([]);
   });
+  // W2c X-AB-5 (fix round 1): an abandoned board is neither played nor pending, so the table policy never touches it, and
+  // it holds the next round until the organiser settles it. The withdrawal report must SAY so, or the organiser is left
+  // with an unexplained "undecided fixtures" refusal.
+  it("X-AB-5: a board of theirs abandoned with no result is left as it stands and NAMED in left_to_organiser; the opponent can still be settled the winner", async () => {
+    const rig = await pairedRoundOne();
+    const S2 = rig.id("S2");
+    const S4 = rig.id("S4");
+    const r1 = round(await fixturesOf(rig.stageId), 1);
+    const theirs = boardOf(r1, 1, S2, S4);
+    const other = boardOf(r1, 1, rig.id("S1"), rig.id("S3"));
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 1, type: "core.abandon", payload: { reason: "rain" } });
+    expect((await fixturesOf(rig.stageId)).find((f) => f.id === theirs.id)!.status, "the rig must abandon the board").toBe("abandoned");
+
+    const out = await withdrawEntrantCascade(rig.auth, S4);
+    expect(out.left_to_organiser, "the abandoned board is reported").toEqual([theirs.id]);
+    expect(out.walkovers, "nothing was walked over").toBe(0);
+    const after = await fixturesOf(rig.stageId);
+    expect(after.find((f) => f.id === theirs.id), "left exactly as it was").toMatchObject({ status: "abandoned", outcome: null });
+
+    // The settle may not name the departed entrant (C17), but the opponent is a fine winner - and it unblocks the round.
+    await expect(
+      scoreEvent(rig.auth, theirs.id, { expected_seq: 2, type: "core.settle", payload: { winner: S4, method: "organiser" } }),
+    ).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE" });
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 2, type: "core.settle", payload: { winner: S2, method: "organiser" } });
+    expect((await fixturesOf(rig.stageId)).find((f) => f.id === theirs.id)).toMatchObject({ status: "decided" });
+    await homeWins(rig.auth, other.id);
+    await expect(generateStageFixtures(rig.auth, rig.stageId), "Pair next goes on once it is settled").resolves.toBeDefined();
+  });
+
+  it("X-AB-5 negative pairs: a board of theirs merely in play, decided, or abandoned and then un-abandoned is NOT reported", async () => {
+    const rig = await pairedRoundOne();
+    const S4 = rig.id("S4");
+    const r1 = round(await fixturesOf(rig.stageId), 1);
+    const theirs = boardOf(r1, 1, rig.id("S2"), S4);
+    // abandoned, then the abandon voided: live again, so owed nothing as an abandon (and walked over as ordinary play)
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 1, type: "core.abandon", payload: { reason: "rain" } });
+    const [abandon] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${theirs.id} and type = 'core.abandon'`;
+    await scoreEvent(rig.auth, theirs.id, { expected_seq: 2, type: "core.void", payload: { event_id: abandon!.id } });
+    const out = await withdrawEntrantCascade(rig.auth, S4);
+    expect(out.left_to_organiser, "an undone abandon is not owed").toEqual([]);
+  });
 });

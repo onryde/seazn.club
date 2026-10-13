@@ -140,7 +140,8 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
   //     moves until it gets one. Neither a result (nobody advanced) nor open scoring (the match is over). The settle
   //     is organiser-only on the server, so a viewer who cannot edit only views it. Fix round 1 (M10): a recorded
   //     abandon awaiting its settle is held the same way — before rule 2, where its stored `abandoned` would read as a
-  //     result.
+  //     result. X-AB-5: so is a TABLE stage's (a Swiss board holds the next round); the caller's `awaitsSettle` is the
+  //     engine's stage-aware settle offer, so this rule never reads a stage kind.
   if (status === "needs_decision" || awaitsSettle) return canEdit ? { kind: "decide" } : { kind: "view" };
 
   // 2. Settled. Checked before the scheduling rules below so a cancelled match

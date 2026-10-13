@@ -5,6 +5,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
+import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
 import { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
@@ -1150,7 +1151,9 @@ async function swissGen(
         abandoned.length === 0
           ? "current swiss round has undecided fixtures"
           : `current swiss round has undecided fixtures - settle the abandoned ${abandoned.length === 1 ? "board" : "boards"} first: ${named}`,
-        { stageId, ...(abandoned.length === 0 ? {} : { abandoned }) },
+        // `reason` rides with the boards so the wire (api-v1/http.ts) and the desk (generatePreconditionMessage) can
+        // name them in the reader's language; a refusal with no abandoned board keeps the bare shape.
+        { stageId, ...(abandoned.length === 0 ? {} : { reason: SWISS_ABANDONED_BOARDS_REASON, abandoned }) },
       );
     }
   }

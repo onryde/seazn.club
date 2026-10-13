@@ -4,17 +4,18 @@
 // nobody decided, or is a drawn chess knockout waiting on its tie-break — is HELD: nobody is seated until the
 // organiser settles it. This is the console's block that says so, and the dialog that sends the settle.
 //
-// ONE authority for "does this fixture need a decision": the kernel's own `settleApplies` (core/events.ts), fed the
+// ONE authority for "does this fixture need a decision": the engine's `settleOffered` (core/events.ts), fed the
 // same facts the kernel's settle precondition reads — the effective outcome, whether an abandon is ACTIVE in the
-// ledger, and the module's pending-decider hook — gated on the stage being a bracket kind (controller ruling C12).
-// The server holds the same rule twice over (append-event's status, scoring's refusal), so the block can never offer
-// a settle the server would refuse for a reason the block could have known.
+// ledger (and whether it is a withdrawal's expunge), and the module's pending-decider hook. A bracket kind is the
+// kernel's own `settleApplies` (controller ruling C12); a TABLE stage (W2c P-7 / X-AB-5) is held only by an abandon that
+// decided nobody. The server's settle guard (append-event.ts) calls the SAME function, so the block can never offer a
+// settle the server would refuse for a reason the block could have known - nor withhold one it would take.
 import { useEffect, useId, useRef, useState } from "react";
-import { SETTLE_METHODS, forbidsLevelResult, settleApplies, type MatchOutcome, type SettleMethod } from "@seazn/engine/core";
+import { SETTLE_METHODS, forbidsLevelResult, settleOffered, type MatchOutcome, type SettleMethod } from "@seazn/engine/core";
 import type { MessageKey } from "@/lib/messages";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
-type LedgerRow = { id: string; type: string; voids_event_id: string | null };
+type LedgerRow = { id: string; type: string; voids_event_id: string | null; payload?: unknown };
 
 /** An abandon no row voids — the kernel's own reading (voids are not themselves voidable, core/events.ts
  *  `resolveVoids`, so "a void names it" is the whole test). The generator's void writes NO event, so it never counts. */
@@ -22,13 +23,30 @@ export function hasActiveAbandon(events: readonly LedgerRow[]): boolean {
   return events.some((e) => e.type === "core.abandon" && !events.some((v) => v.voids_event_id === e.id));
 }
 
-/** Controller ruling C12: bracket kind AND the kernel's own settle precondition, fed the same facts. */
+/** An active abandon that is a withdrawal's EXPUNGE (`core.abandon{expunge: true}`, W2b D5): the match left the table
+ *  altogether, so nothing is owed on it. Read from the payload the way the kernel's fold does (`expunge === true`). */
+export function abandonExpunged(events: readonly LedgerRow[]): boolean {
+  return events.some(
+    (e) =>
+      e.type === "core.abandon" &&
+      !events.some((v) => v.voids_event_id === e.id) &&
+      (e.payload as { expunge?: unknown } | null | undefined)?.expunge === true,
+  );
+}
+
+/** Controller ruling C12 + W2c P-7 / X-AB-5: the engine's stage-aware settle offer (`settleOffered`) fed the same facts
+ *  the server's settle guard reads. A bracket kind: the kernel's precondition. A table stage: an active abandon that
+ *  decided nobody, a withdrawal's expunge aside. */
 export function needsDecision(
   module: { awaitingDecider?(state: never): boolean },
   f: { outcome: unknown; state: unknown; stageKind: string | null; events: readonly LedgerRow[] },
 ): boolean {
-  if (!forbidsLevelResult(f.stageKind)) return false;
-  return settleApplies(module, { outcome: f.outcome as MatchOutcome | null, abandoned: hasActiveAbandon(f.events), state: f.state });
+  return settleOffered(module, f.stageKind, {
+    outcome: f.outcome as MatchOutcome | null,
+    abandoned: hasActiveAbandon(f.events),
+    expunged: abandonExpunged(f.events),
+    state: f.state,
+  });
 }
 
 /** Ruling D-H3 — WHY a held fixture is held, so the block can say so: an active abandon (it wins: an abandon over a level
@@ -46,7 +64,7 @@ const BODY_KEY: Record<HeldCause, MessageKey> = {
   tiebreak: "score.needsDecision.body.tiebreak",
 };
 
-/** Fix round 2 (N2) — the OFFICIAL's line, by cause. A level or abandoned hold waits on the organiser's settle; a chess
+/** Fix round 2 (N2) - the OFFICIAL's line, by cause. A level or abandoned hold waits on the organiser's settle; a chess
  *  tie-break does not: the official's own pad offers the Tie-break tile, and recording it is the scorer's job (BG-KO-1).
  *  Telling them to wait for the organiser there would stall the match. */
 const WAITING_KEY: Record<HeldCause, MessageKey> = {
@@ -55,11 +73,29 @@ const WAITING_KEY: Record<HeldCause, MessageKey> = {
   tiebreak: "score.needsDecision.waiting.tiebreak",
 };
 
+/** X-AB-5 - a TABLE stage's abandoned match has nobody to ADVANCE: the settle names the winner of a match the table
+ *  does not count yet. Only the abandoned cause reaches a table (a level result there is a result, and chess's
+ *  tie-break is a knockout's), so it is the one sentence each key map overrides. */
+const TABLE_BODY_KEY: Partial<Record<HeldCause, MessageKey>> = { abandoned: "score.needsDecision.body.abandoned.table" };
+const TABLE_WAITING_KEY: Partial<Record<HeldCause, MessageKey>> = { abandoned: "score.needsDecision.waiting.table" };
+
+/** Is the fixture's stage a TABLE kind (or no stage at all) - the vocabulary the held sentences speak in. */
+export const inTableStage = (stageKind: string | null): boolean => !forbidsLevelResult(stageKind);
+
+/** The block's sentence for a cause, in the stage's own vocabulary (`table`: the stage is not a bracket kind). */
+export function heldBodyKey(cause: HeldCause, table: boolean): MessageKey {
+  return (table ? TABLE_BODY_KEY[cause] : undefined) ?? BODY_KEY[cause];
+}
+/** The official's line for a cause, in the stage's own vocabulary. */
+export function heldWaitingKey(cause: HeldCause, table: boolean): MessageKey {
+  return (table ? TABLE_WAITING_KEY[cause] : undefined) ?? WAITING_KEY[cause];
+}
+
 /** Fix round 1 (M7), round 2 (N2): one line for an official scorer on a held fixture, saying what happens next. */
-export function HeldNote({ msg, cause }: { msg: Msg; cause: HeldCause }) {
+export function HeldNote({ msg, cause, table = false }: { msg: Msg; cause: HeldCause; table?: boolean }) {
   return (
     <p data-testid="held-note" data-cause={cause} className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-      {msg(WAITING_KEY[cause])}
+      {msg(heldWaitingKey(cause, table))}
     </p>
   );
 }
@@ -84,6 +120,9 @@ interface BlockProps {
   msg: Msg;
   /** Ruling D-H3 — which sentence the block says (`heldCause`). */
   cause: HeldCause;
+  /** X-AB-5 - the fixture's stage is a TABLE kind (not a bracket): the abandoned sentence and the dialog's question speak
+   *  of the winner, not of who advances. Absent reads as a bracket. */
+  table?: boolean;
   /** `withdrawn` (W2b D-R9, legacy rows only): a side that has left the competition is never offered as the winner —
    *  the server refuses it (C17). New rows cannot hold a withdrawn entrant on a held line: a withdrawal walks it over. */
   home: { id: string; name: string; withdrawn?: boolean };
@@ -115,7 +154,7 @@ export function NeedsDecisionBlock(props: BlockProps) {
           {msg("score.needsDecision.title")}
         </h2>
         <p data-cause={props.cause} className="mt-1 text-sm text-slate-700">
-          {msg(BODY_KEY[props.cause])}
+          {msg(heldBodyKey(props.cause, props.table === true))}
         </p>
         {refusal !== null && (
           <p data-testid="settle-error" role="alert" className="mt-2 text-sm font-medium text-red-700">
@@ -230,7 +269,7 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
           {msg("score.needsDecision.dialogTitle")}
         </h2>
         <fieldset className="mt-4 min-w-0">
-          <legend className="text-sm font-medium text-slate-700">{msg("score.needsDecision.whoAdvances")}</legend>
+          <legend className="text-sm font-medium text-slate-700">{msg(props.table === true ? "score.needsDecision.whoWins" : "score.needsDecision.whoAdvances")}</legend>
           {/* Loop-F M-8 (legacy rows only, PF-8a): both sides withdrawn leaves no choice — say so, never an empty grid. */}
           {choices.length === 0 && (
             <p data-testid="settle-no-choice" className="mt-2 text-sm text-slate-600">

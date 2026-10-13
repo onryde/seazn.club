@@ -18,10 +18,11 @@ runContract(carrom, CARROM_RULES, {
     "club-29/queenCapAt/50": "queenCapAt must not exceed gameTo",
     // Owner P-5, applied to carrom: sharing the points on an abandon is a drawn result, and carrom takes a draw only under the
     // tieBoard "draw" house rule. Every shipped carrom variant plays ICF "extra", so "Share the points" is unavailable over
-    // each until the same save also turns tieBoard to "draw" (the form shows it unavailable). The owner's wording, as signed.
-    "-/abandon/share": "Sharing the points needs draws to be allowed.",
-    "icf/abandon/share": "Sharing the points needs draws to be allowed.",
-    "club-29/abandon/share": "Sharing the points needs draws to be allowed.",
+    // each until the same save also turns tieBoard to "draw" (the form shows it unavailable). The owner's wording (fix round 1
+    // ruling: it names the setting the organiser has to change).
+    "-/abandon/share": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
+    "icf/abandon/share": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
+    "club-29/abandon/share": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
   },
   // The engine's schema gives these no maximum (`.positive().int()` only), so the web's range is its own choice and cannot be
   // checked against the engine; the contract lists them so a bound the engine adds later is noticed.

@@ -37,6 +37,7 @@ import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
+import { rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
@@ -152,7 +153,9 @@ export interface WithdrawCascadeOut {
    *  waiting for the organiser's settle under W2a, and is walked over now (merge notice N1). */
   walked_over_held: number;
   /** Loop R M-5: the fixtures both of whose sides have now gone (X-WD-4) but where play was recorded (`playRecorded`) —
-   *  written nothing, never overwritten: each is the organiser's ledger to void or settle. */
+   *  written nothing, never overwritten: each is the organiser's ledger to void or settle. W2c X-AB-5: and a table
+   *  stage's board of theirs that was ABANDONED with no result (a Swiss board holds the next round) - left as it stands,
+   *  still owed the organiser's settle (the opponent can be chosen; the departed entrant cannot, C17). */
   left_to_organiser: string[];
 }
 
@@ -322,6 +325,21 @@ export async function withdrawEntrantCascade(
         for (const u of result.updates) {
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
+        }
+        // W2c X-AB-5 (fix round 1): a board of theirs ABANDONED with no result is neither played nor pending, so the
+        // policy above never touches it - and it holds the next round (Swiss) until the organiser settles it. Left as
+        // it is (the settle may not name the departed entrant, C17: the opponent can still be chosen), and NAMED here so
+        // the report says which board is still owed a decision. `rowAwaitsSettle` is the one reading of "owed a settle".
+        for (const f of mine) {
+          if (f.status !== "abandoned") continue;
+          const active = activeAbandons(await listEvents(auth, f.id, 0));
+          const owed = rowAwaitsSettle(stage.kind, {
+            status: f.status,
+            outcome: f.outcome,
+            has_active_abandon: active.length > 0,
+            expunged: active.some((e) => (e.payload as { expunge?: unknown } | null)?.expunge === true),
+          });
+          if (owed) out.left_to_organiser.push(f.id);
         }
       } else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {
         const bracketFixtures: BracketFixture[] = [];

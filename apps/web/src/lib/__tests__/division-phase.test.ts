@@ -1254,6 +1254,21 @@ describe("held fixtures — needs_decision attention and never Finished (W2a)", 
     expect(leadingAttention([{ attention }])?.kind).toBe("needs_decision");
   });
 
+  it("X-AB-5: a TABLE stage's held board (a Swiss board abandoned with no result) keeps a COMPLETE stage's division from Finished, and is named", () => {
+    // The reading is the same boolean for any stage kind (`rowAwaitsSettle` decides it from the engine); this pins that
+    // the phase honours it for a stage that is already complete with every other board decided - the shape a Swiss
+    // stage ends in - and does not treat the stored `abandoned` as terminal.
+    const swiss = stage({ id: "sw", name: "Swiss", status: "complete" });
+    const board = (o: Partial<PhaseFixture>) => fx({ id: "b2", stageId: "sw", scheduledAt: null, ...o });
+    const decided = fx({ id: "b1", stageId: "sw", status: "decided", scheduledAt: null });
+    const held = input({ stages: [swiss], fixtures: [decided, board({ status: "abandoned", awaitsSettle: true })] });
+    expect(resolvePhase(held)).not.toBe("finished");
+    expect(resolveAttention(held).find((a) => a.kind === "needs_decision")).toEqual({ kind: "needs_decision", count: 1, fixtureIds: ["b2"] });
+    const voided = input({ stages: [swiss], fixtures: [decided, board({ status: "abandoned", awaitsSettle: false })] });
+    expect(resolvePhase(voided), "the positive pair: the same board with nothing owed is terminal").toBe("finished");
+    expect(resolveAttention(voided).some((a) => a.kind === "needs_decision")).toBe(false);
+  });
+
   it("D-H2 (fix round 1): a held fixture counts as PLAYED — a held-only division reads in progress, never 'Setting up'", () => {
     // Both held shapes, alone in the division, nothing dated: before D-H2 rule 5's fallback read `setting_up` ("nothing
     // has happened yet") beside a final that was played to a level score.

@@ -11,6 +11,8 @@ import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
 import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
+import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
+import { configIssuesOf } from "@/lib/config-issue-copy";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -239,6 +241,20 @@ async function v1Inner<T>(
       ) {
         const d = err.data as { stageId: string; previousStageId: string };
         extra = { reason: "previous_stage_incomplete", stageId: d.stageId, previousStageId: d.previousStageId };
+      }
+      // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is refused while an abandoned board has no result; the
+      // refusal names the boards (round and board number) so the desk can say which to settle. Forwarded only when the
+      // shape parses (lib/swiss-abandoned-refusal.ts); otherwise the code's own copy stands.
+      if (err.code === "STAGE_NOT_READY" && (err.data as { reason?: unknown } | undefined)?.reason === SWISS_ABANDONED_BOARDS_REASON) {
+        const abandoned = abandonedBoardsOf(err.data);
+        if (abandoned) extra = { reason: SWISS_ABANDONED_BOARDS_REASON, abandoned };
+      }
+      // W2c owner P-5 (fix round 1): a refused match-rules save names its PROBLEM in `data.issues` (the rule's own
+      // sentence on the field's path - the share-on-abandon refusals); the generic message alone told the organiser
+      // nothing to change. Only `path` and `message` go out - the issue's `input` and `code` are not wire contract.
+      if (err.code === "CONFIG_INVALID") {
+        const issues = configIssuesOf(err.data);
+        if (issues) extra = { issues };
       }
       // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things (enter
       // the winner; settle before finalizing), so the copy branches on the reason — forwarded only when named.

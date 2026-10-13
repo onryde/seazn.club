@@ -10,6 +10,7 @@ import {
   outcomeOf,
   resolveVoids,
   settleApplies,
+  settleOffered,
   summaryOf,
   type EventEnvelope,
   type MatchOutcome,
@@ -413,15 +414,21 @@ export async function appendEventInTx(
     // Loop-F addendum 3: the engine's settle precondition is not stage-aware (spec §5.1), and a league, group,
     // swiss or americano draw is a RESULT that standings credit — a settle there would turn it into a win.
     //
-    // W2c P-7 / X-AB-5 is the one exception: an ABANDONED match that decided nobody (status `abandoned`) has no result
-    // to turn into a win - it stays out of the table and, in a Swiss stage, holds the next round - so the organiser's
-    // settle is how it is decided. Read from the ledger and the fold (an active core.abandon and no effective outcome),
-    // never from the status column or a source, so an abandon written by any path qualifies and one that recorded a result
+    // W2c P-7 / X-AB-5 is the one exception: an ABANDONED match that decided nobody has no result to turn into a win -
+    // it stays out of the table and, in a Swiss stage, holds the next round - so the organiser's settle is how it is
+    // decided. The offer is `settleOffered` (@seazn/engine/core), the SAME predicate the console's needs-decision block
+    // reads, fed from the ledger and the fold (an active core.abandon, no effective outcome, not a withdrawal's expunge),
+    // never from the status column or a source: an abandon written by any path qualifies, one that recorded a result
     // (shared points, a leader's win) does not.
     if (!forbidsLevelResult(stageKind)) {
       const before = foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq });
-      const abandonedNoResult = resolveVoids(prior).some((e) => e.type === "core.abandon") && outcomeOf(sportModule, before) === null;
-      if (!abandonedNoResult) {
+      const offered = settleOffered(sportModule, stageKind, {
+        outcome: outcomeOf(sportModule, before),
+        abandoned: resolveVoids(prior).some((e) => e.type === "core.abandon"),
+        expunged: before.expunged === true,
+        state: before.state,
+      });
+      if (!offered) {
         throw new EngineError("SETTLE_NOT_APPLICABLE", "only a knockout match is settled — a draw here is a result", {
           fixtureId,
           reason: "not_bracket",

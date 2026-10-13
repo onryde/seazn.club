@@ -8,6 +8,7 @@
 // Real Postgres (callers skip without DATABASE_URL). Expected values are the rule rows (GN-AB-1/2, CA-AB-1/2) and the
 // owner's wording, never the code under test.
 import { afterAll, describe, expect, it } from "vitest";
+import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
 import { patchDivision } from "@/server/usecases/divisions";
@@ -24,6 +25,8 @@ afterAll(async () => {
 
 /** The owner's wording (P-5), as signed in the rule row GN-AB-2. */
 const SHARE_NEEDS_DRAWS = "Sharing the points needs draws to be allowed.";
+/** Carrom's refusal (P-5 fix round 1, owner ruling): it names the setting to change. */
+const SHARE_NEEDS_DRAWN_GAME = "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.";
 
 type Fx = { status: string; outcome: { kind: string } | null; home: string; away: string };
 const fx = async (id: string) =>
@@ -149,9 +152,83 @@ describe.skipIf(!HAS_DB)("P-5 the save refuses share without draws, with the own
     const refusal = await refusalOf(b.auth, b.divisionId, { ...before, tieBoard: "extra", abandonPolicy: "share" });
     expect(refusal, "the save must be refused").not.toBeNull();
     expect(refusal!.code).toBe("CONFIG_INVALID");
-    expect(refusal!.data.issues.map((i) => [i.message, i.path])).toEqual([[SHARE_NEEDS_DRAWS, ["abandonPolicy"]]]);
+    expect(refusal!.data.issues.map((i) => [i.message, i.path])).toEqual([[SHARE_NEEDS_DRAWN_GAME, ["abandonPolicy"]]]);
     expect(await configOf(b.divisionId), "nothing was written").toEqual(before);
     expect(await refusalOf(b.auth, b.divisionId, { ...before, tieBoard: "draw", abandonPolicy: "share" })).toBeNull();
     expect(await configOf(b.divisionId)).toMatchObject({ tieBoard: "draw", abandonPolicy: "share" });
+  });
+});
+
+// I3 (owner ruling, fix round 1): `share` is a TABLE-stage policy. A shared abandon is a drawn result, and a bracket
+// forbids a level result (someone must advance), so in a bracket stage the policy is IGNORED: an abandon follows W2a (held,
+// ruling 72) and the organiser's settle decides it. The abandon itself is never refused. Before this, generic refused the
+// abandon (LEVEL_RESULT_IN_BRACKET) and carrom recorded a draw in a bracket.
+describe.skipIf(!HAS_DB)("I3 share applies in table stages only: every stage kind, generic and carrom", () => {
+  const KIND_CONFIG: Partial<Record<(typeof StageKind.options)[number], { entrants: number; stageConfig?: Record<string, unknown> }>> = {
+    swiss: { entrants: 4, stageConfig: { rounds: 3 } },
+    americano: { entrants: 8, stageConfig: { mode: "americano", courtCount: 2, rounds: 3 } },
+  };
+  const sports = [
+    { key: "generic", variant: "score", share: { allowDraws: true, abandonPolicy: "share" } },
+    { key: "carrom", variant: "icf", share: { tieBoard: "draw", abandonPolicy: "share" } },
+  ] as const;
+
+  /** The first seated board of a stage of `kind`, started, with `share` applied to the division cfg and, for generic, a
+   *  2-1 score on it - so the abandon is of a match that is not level (a bare share-draw would not be a draw of two
+   *  equals, and the replay/share difference must be visible). */
+  async function board(sport: (typeof sports)[number], kind: (typeof StageKind.options)[number]) {
+    const k = KIND_CONFIG[kind] ?? { entrants: 4 };
+    const b = await seedBracket({ sport: sport.key, variant: sport.variant, stageKind: kind, entrants: k.entrants, ...(k.stageConfig ? { stageConfig: k.stageConfig } : {}) });
+    await setConfig(b.divisionId, sport.share);
+    const id = b.fixtureIds[0]!;
+    const f = await fx(id);
+    await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    let seq = 1;
+    if (sport.key === "generic") {
+      await appendEvent(b.auth.orgId, id, seq++, { type: "generic.score", payload: { by: f.home, points: 2 } });
+      await appendEvent(b.auth.orgId, id, seq++, { type: "generic.score", payload: { by: f.away, points: 1 } });
+    }
+    return { b, id, f, seq };
+  }
+
+  it("every BRACKET kind: the share policy is ignored - the abandon is ACCEPTED and held (outcome null, never a draw), and the settle decides it", async () => {
+    let checked = 0;
+    for (const sport of sports)
+      for (const kind of BRACKET_KINDS) {
+        const { b, id, f, seq } = await board(sport, kind);
+        await appendEvent(b.auth.orgId, id, seq, { type: "core.abandon", payload: { reason: "weather" } }).catch((e: unknown) => {
+          throw new Error(`${sport.key} ${kind}: the abandon itself was refused: ${(e as { code?: string }).code ?? String(e)}`);
+        });
+        expect(await fx(id), `${sport.key} ${kind}: held, nobody decided`).toMatchObject({ status: "abandoned", outcome: null });
+        await appendEvent(b.auth.orgId, id, seq + 1, { type: "core.settle", payload: { winner: f.home, method: "organiser" } });
+        expect(await fx(id), `${sport.key} ${kind}: the organiser's settle seats a winner`).toMatchObject({ status: "decided", outcome: { kind: "win" } });
+        checked++;
+      }
+    expect(checked).toBe(sports.length * BRACKET_KINDS.size);
+    expect(checked).toBeGreaterThan(0);
+  }, 600_000);
+
+  it("the positive pair - every TABLE kind keeps the policy: the same abandon under share is a drawn result the table credits", async () => {
+    let checked = 0;
+    for (const sport of sports)
+      for (const kind of DRAW_KINDS) {
+        const { b, id, seq } = await board(sport, kind);
+        await appendEvent(b.auth.orgId, id, seq, { type: "core.abandon", payload: { reason: "weather" } });
+        expect(await fx(id), `${sport.key} ${kind}: shared`).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+        checked++;
+      }
+    expect(checked).toBe(sports.length * DRAW_KINDS.size);
+    expect(checked + sports.length * BRACKET_KINDS.size, "every stage kind was visited, by one half or the other").toBe(sports.length * StageKind.options.length);
+  }, 600_000);
+
+  it("sequence (generic knockout): abandon, undo the abandon, play on to a win - the bracket line behaves as without any policy", async () => {
+    const { b, id, f, seq } = await board(sports[0], "knockout");
+    await appendEvent(b.auth.orgId, id, seq, { type: "core.abandon", payload: { reason: "weather" } });
+    const [abandon] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and type = 'core.abandon'`;
+    await appendEvent(b.auth.orgId, id, seq + 1, { type: "core.void", payload: {}, voids: abandon!.id });
+    expect(await fx(id)).toMatchObject({ status: "in_play", outcome: null });
+    await appendEvent(b.auth.orgId, id, seq + 2, { type: "generic.score", payload: { by: f.home, points: 5 } });
+    await appendEvent(b.auth.orgId, id, seq + 3, { type: "core.abandon", payload: { reason: "weather again" } });
+    expect(await fx(id), "a second abandon is held the same way").toMatchObject({ status: "abandoned", outcome: null });
   });
 });

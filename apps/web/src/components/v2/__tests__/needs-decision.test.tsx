@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { BRACKET_KINDS, FORFEIT_REASONS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, FORFEIT_REASONS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame"; // the "./sports/*" subpath export (engine package.json)
 import { declaredCfgs, defaultLineupPair, forEachSport, makeEnvelope } from "@seazn/engine/testkit";
 import { renderToStaticMarkup } from "react-dom/server";
-import { NeedsDecisionBlock, SettleDialog, confirmBlocked, finalizeVisible, hasActiveAbandon, heldCause, needsDecision, type HeldCause } from "../needs-decision";
+import { HeldNote, NeedsDecisionBlock, SettleDialog, abandonExpunged, confirmBlocked, finalizeVisible, hasActiveAbandon, heldBodyKey, heldCause, heldWaitingKey, inTableStage, needsDecision, type HeldCause } from "../needs-decision";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -104,8 +104,63 @@ describe("needsDecision = bracket kind AND the kernel's settleApplies (ruling C1
     expect(needsDecision(plain, { outcome: null, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(true);
     expect(needsDecision(plain, { outcome: { kind: "no_result" }, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(true);
     expect(needsDecision(plain, { outcome: WIN, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(false);
-    // …and the same abandon in a league needs nothing: a league's abandoned match is void, not owed a settle.
-    expect(needsDecision(plain, { outcome: null, state: {}, stageKind: "league", events: [start, abandon] })).toBe(false);
+    // …and a TABLE stage's abandon that decided nobody IS held too (X-AB-5, the sweep below); a bracket's level
+    // `no_result` is a held result, a table's is a result the standings credit.
+    expect(needsDecision(plain, { outcome: { kind: "no_result" }, state: {}, stageKind: "league", events: [start, abandon] })).toBe(false);
+  });
+
+  it("I1 / X-AB-5: in EVERY table kind an active abandon that decided nobody needs a decision - the server's settle guard takes it, so the block must offer it (counted)", () => {
+    // [name, outcome, events, expected]: the same rows the server's guard decides (abandon-swiss-settle.test.ts), read
+    // through the console's predicate. A draw/win in a table is a RESULT; a voided abandon is no abandon; the generator's
+    // void has no ledger; a withdrawal's expunge took the match out of the table.
+    const expunge = { id: "e2", type: "core.abandon", voids_event_id: null, payload: { reason: "withdrew", expunge: true } };
+    const rows: [string, unknown, readonly { id: string; type: string; voids_event_id: string | null; payload?: unknown }[], boolean][] = [
+      ["abandoned, nobody decided", null, [start, abandon], true],
+      ["abandoned, nobody decided, a payload without expunge", null, [start, { ...abandon, payload: { reason: "rain" } }], true],
+      ["abandoned over a shared draw", { kind: "draw" }, [start, abandon], false],
+      ["abandoned with a leader's win", WIN, [start, abandon], false],
+      ["a played draw", { kind: "draw" }, [start], false],
+      ["the generator's void (no ledger)", null, [start], false],
+      ["a voided abandon", null, [start, abandon, voidOfAbandon], false],
+      ["a withdrawal's expunge", null, [start, expunge], false],
+    ];
+    let checked = 0;
+    let positives = 0;
+    for (const kind of DRAW_KINDS)
+      for (const [why, outcome, events, want] of rows) {
+        expect(needsDecision(plain, { outcome, state: {}, stageKind: kind, events }), `${kind}: ${why}`).toBe(want);
+        checked++;
+        if (want) positives++;
+      }
+    expect(checked).toBe(DRAW_KINDS.size * rows.length);
+    expect(positives, "both answers are reached").toBe(DRAW_KINDS.size * 2);
+    // A fixture outside any stage reads as a table; an unknown kind too.
+    expect(needsDecision(plain, { outcome: null, state: {}, stageKind: null, events: [start, abandon] })).toBe(true);
+  });
+
+  it("I1: the console's predicate IS the server's - the same engine function answers both (sequence: abandon, void, abandon again, settle)", () => {
+    const again = { id: "e5", type: "core.abandon", voids_event_id: null };
+    const sequence: [string, unknown, { id: string; type: string; voids_event_id: string | null }[], boolean][] = [
+      ["started", null, [start], false],
+      ["abandoned", null, [start, abandon], true],
+      ["abandon undone", null, [start, abandon, voidOfAbandon], false],
+      ["abandoned again", null, [start, abandon, voidOfAbandon, again], true],
+      ["settled (effective outcome a win)", WIN, [start, abandon, voidOfAbandon, again, { id: "e6", type: "core.settle", voids_event_id: null }], false],
+    ];
+    for (const [why, outcome, events, want] of sequence)
+      expect(needsDecision(plain, { outcome, state: {}, stageKind: "swiss", events }), why).toBe(want);
+    expect(sequence.some(([, , , w]) => w) && sequence.some(([, , , w]) => !w)).toBe(true);
+  });
+
+  it("abandonExpunged reads the ACTIVE abandon's payload the way the fold does (expunge === true) and nothing else", () => {
+    const ex = (extra: object = {}) => ({ id: "e2", type: "core.abandon", voids_event_id: null, payload: { reason: "withdrew", expunge: true, ...extra } });
+    expect(abandonExpunged([])).toBe(false);
+    expect(abandonExpunged([start, abandon])).toBe(false); // no payload at all
+    expect(abandonExpunged([start, { ...abandon, payload: { reason: "rain" } }])).toBe(false);
+    expect(abandonExpunged([start, ex()])).toBe(true); // the positive pair
+    expect(abandonExpunged([start, ex({ expunge: "true" })]), "only the literal true").toBe(false);
+    expect(abandonExpunged([start, ex(), voidOfAbandon]), "a voided expunge is gone").toBe(false);
+    expect(abandonExpunged([start, { ...start, payload: { expunge: true } }]), "not an abandon").toBe(false);
   });
 
   it("the generator's void (abandoned, outcome null, NO abandon event) and a voided abandon need nothing — the kernel would refuse the settle", () => {
@@ -209,6 +264,83 @@ describe("heldCause and the block's sentence (ruling D-H3)", () => {
       checked++;
     }
     expect(checked).toBe(3);
+  });
+});
+
+describe("X-AB-5 table copy: a TABLE stage's held abandon speaks of the winner, not of who advances", () => {
+  const msgEn = (k: string) => (en as Record<string, string>)[k] ?? k;
+  const CAUSES: HeldCause[] = ["level", "abandoned", "tiebreak"];
+  const html = (cause: HeldCause, table: boolean) =>
+    renderToStaticMarkup(
+      <NeedsDecisionBlock msg={msgEn as never} cause={cause} table={table} home={{ id: "h", name: "Riverside" }} away={{ id: "a", name: "Summit" }} busy={false} settle={async () => ({ ok: true })} />,
+    );
+
+  it("inTableStage is the complement of the bracket kinds, for every kind and for no stage at all (counted)", () => {
+    let checked = 0;
+    for (const k of StageKind.options) {
+      expect(inTableStage(k), k).toBe(!BRACKET_KINDS.has(k));
+      checked++;
+    }
+    expect(checked).toBe(BRACKET_KINDS.size + DRAW_KINDS.size);
+    expect(inTableStage(null), "no stage").toBe(true);
+  });
+
+  it("only the abandoned cause changes in a table; a bracket keeps every sentence it had", () => {
+    for (const cause of CAUSES) {
+      expect(heldBodyKey(cause, false), `bracket body ${cause}`).toBe(cause === "abandoned" ? "score.needsDecision.body.abandoned" : cause === "level" ? "score.needsDecision.body" : "score.needsDecision.body.tiebreak");
+      expect(heldWaitingKey(cause, false), `bracket waiting ${cause}`).toBe(cause === "tiebreak" ? "score.needsDecision.waiting.tiebreak" : "score.needsDecision.waiting");
+    }
+    expect(heldBodyKey("abandoned", true)).toBe("score.needsDecision.body.abandoned.table");
+    expect(heldWaitingKey("abandoned", true)).toBe("score.needsDecision.waiting.table");
+    // The causes a table never reaches fall back to the bracket sentence rather than to a missing key.
+    expect(heldBodyKey("level", true)).toBe("score.needsDecision.body");
+    expect(heldWaitingKey("tiebreak", true)).toBe("score.needsDecision.waiting.tiebreak");
+  });
+
+  it("the table block says the table sentence and the winner question; the bracket block says neither - markup, English", () => {
+    const tableHtml = html("abandoned", true);
+    const bracketHtml = html("abandoned", false);
+    const apos = (t: string) => t.replace(/'/g, "&#x27;");
+    expect(tableHtml).toContain(apos(en["score.needsDecision.body.abandoned.table"]!));
+    expect(tableHtml).not.toContain(apos(en["score.needsDecision.body.abandoned"]!));
+    expect(bracketHtml).toContain(apos(en["score.needsDecision.body.abandoned"]!));
+    expect(bracketHtml).not.toContain(apos(en["score.needsDecision.body.abandoned.table"]!));
+    // "choose who advances" has no meaning in a table
+    expect(en["score.needsDecision.body.abandoned.table"]!.toLowerCase()).not.toContain("advance");
+    expect(en["score.needsDecision.waiting.table"]!.toLowerCase()).not.toContain("advance");
+  });
+
+  it("the official's held line follows the stage: the table line in a table, the bracket line in a bracket", () => {
+    const note = (table: boolean) => renderToStaticMarkup(<HeldNote msg={msgEn as never} cause="abandoned" table={table} />);
+    expect(note(true)).toContain(en["score.needsDecision.waiting.table"]!.replace(/'/g, "&#x27;"));
+    expect(note(true)).not.toContain(en["score.needsDecision.waiting"]!);
+    expect(note(false)).toContain(en["score.needsDecision.waiting"]!);
+    expect(note(false)).not.toContain(en["score.needsDecision.waiting.table"]!);
+    expect(note(true)).toContain('data-cause="abandoned"');
+  });
+
+  it("the dialog asks who WON in a table and who ADVANCES in a bracket", () => {
+    const dialog = (table: boolean) =>
+      renderToStaticMarkup(
+        <SettleDialog msg={msgEn as never} cause="abandoned" table={table} home={{ id: "h", name: "Riverside" }} away={{ id: "a", name: "Summit" }} busy={false} settle={async () => ({ ok: true })} onClose={() => {}} onRefused={() => {}} />,
+      );
+    expect(dialog(true)).toContain(en["score.needsDecision.whoWins"]!);
+    expect(dialog(true)).not.toContain(en["score.needsDecision.whoAdvances"]!);
+    expect(dialog(false)).toContain(en["score.needsDecision.whoAdvances"]!);
+    expect(dialog(false)).not.toContain(en["score.needsDecision.whoWins"]!);
+  });
+
+  it("every locale carries the three new keys, translated (not the English string) and non-empty", () => {
+    const keys = ["score.needsDecision.body.abandoned.table", "score.needsDecision.waiting.table", "score.needsDecision.whoWins"] as const;
+    let checked = 0;
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const)
+      for (const k of keys) {
+        const v = (dict as Record<string, string>)[k];
+        expect(v, `${loc} ${k}`).toBeTruthy();
+        expect(v, `${loc} ${k} must be translated`).not.toBe((en as Record<string, string>)[k]);
+        checked++;
+      }
+    expect(checked).toBe(9);
   });
 });
 

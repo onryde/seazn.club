@@ -72,7 +72,7 @@ import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
-import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, inTableStage, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
 import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
 import { lineupPairFrom } from "@/components/v2/scorepad/registry";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -883,9 +883,10 @@ export function FixtureConsole({
   // row may still be voided, and undoing a mistaken abandon must stay possible.
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
-  // W2a Task 11 (spec §5.5, ruling C12) — HELD: a bracket fixture the kernel's own settle precondition says is owed
-  // the organiser's settle (a level result, an active abandon that decided nobody, a chess game whose tie-break is
-  // pending). The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
+  // W2a Task 11 (spec §5.5, ruling C12) — HELD: a fixture the engine's `settleOffered` says is owed the organiser's
+  // settle: in a bracket stage the kernel's own precondition (a level result, an active abandon that decided nobody, a
+  // chess game whose tie-break is pending); in a TABLE stage (W2c X-AB-5) an active abandon that decided nobody - the
+  // server's settle guard reads the same function, so this never offers a settle it would refuse. The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
   // back to "no pending-decider hook", which can only HIDE the block in phase tiebreak, never show it wrongly.
   // W2b Task 11: the same resolution feeds the forfeit dialog (its phase guard, credit and metric order); null there
   // offers no Forfeit at all rather than a dialog with nothing to choose.
@@ -1404,7 +1405,7 @@ export function FixtureConsole({
           (N2 — a chess tie-break is the scorer's to record, so it never says "wait for the organiser"), and it sits
           straight under the Scoring card, above the ledger and lineups, so it is in view at 768 and 1280 (m5). */}
       {scoring && home && away && !canOrganise && held && (
-        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />
+        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} table={inTableStage(stageKind)} />
       )}
 
       {/* Spec 2026-09-30 §2 + Review Focus 4: the Scoring section renders only while this fixture can be scored with both
@@ -1600,6 +1601,7 @@ export function FixtureConsole({
         <NeedsDecisionBlock
           msg={msg}
           cause={heldCause({ outcome: live.outcome, events })}
+          table={inTableStage(stageKind)}
           home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
           away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
           feedsNextMatch={fixture.feeds_next_match}

@@ -371,8 +371,8 @@ export function RunSheetRow({
   // that reads like an ordinary played one at a glance is the "two
   // contradicting facts in one row" class this wave exists to remove.
   const voided = VOID_STATUSES.has(fixture.status);
-  // W2a fix round 1 (M10): a recorded abandon awaiting its settle is stored `abandoned` but is owed work — the settle
-  // seats a winner — so its names are not struck as a void's are (that beside "Needs a decision" read as two
+  // W2a fix round 1 (M10), X-AB-5: a recorded abandon awaiting its settle (a bracket's, or a table stage's - a Swiss
+  // board holds the next round) is stored `abandoned` but is owed work — the settle decides a winner — so its names are not struck as a void's are (that beside "Needs a decision" read as two
   // contradicting facts). Its reason line still says abandoned.
   const struck = voided && !awaitsSettle;
   // The held chip's one condition, read by the chip and by the phone line it changes (loop R M7(d)).

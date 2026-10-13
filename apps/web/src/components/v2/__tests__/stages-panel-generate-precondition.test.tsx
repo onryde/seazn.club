@@ -85,6 +85,39 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(text).toContain("3");
   });
 
+  // W2c P-7 / X-AB-5 (fix round 1, I2): the next Swiss round is refused while an abandoned board has no result. The
+  // organiser must read WHICH board(s) to settle, in their own language - not the generic failure banner.
+  describe("swiss_abandoned_boards (X-AB-5)", () => {
+    const refusal = (abandoned: unknown) => new ApiV1Error("current swiss round has undecided fixtures", 422, "STAGE_NOT_READY", { reason: "swiss_abandoned_boards", abandoned });
+    const b = (round: number, board: number) => ({ fixtureId: `f-${round}-${board}`, round, board });
+
+    it("one board: the singular sentence naming round and board", () => {
+      const text = generatePreconditionMessage(refusal([b(1, 3)]), msg);
+      expect(text).toBe(msg("schedule.error.swissAbandonedOne", { boards: msg("schedule.error.swissAbandonedRef", { round: 1, board: 3 }) }));
+      expect(text).toContain("round 1 board 3");
+    });
+
+    it("several boards: the plural sentence naming each, in the order given", () => {
+      const text = generatePreconditionMessage(refusal([b(1, 2), b(1, 5), b(2, 1)]), msg)!;
+      expect(text).toBe(
+        msg("schedule.error.swissAbandonedMany", {
+          boards: ["round 1 board 2", "round 1 board 5", "round 2 board 1"].join(", "),
+        }),
+      );
+      expect(text.indexOf("round 1 board 2")).toBeLessThan(text.indexOf("round 1 board 5"));
+      expect(text).not.toBe(msg("schedule.error.swissAbandonedOne", { boards: "round 1 board 2" }));
+    });
+
+    it("an unreadable list keeps the code's own copy (null), never a guess", () => {
+      for (const abandoned of [undefined, [], [{ fixtureId: "f", round: 0, board: 1 }], "x"]) expect(generatePreconditionMessage(refusal(abandoned), msg), JSON.stringify(abandoned)).toBeNull();
+    });
+
+    it("the same STAGE_NOT_READY without the reason is not mistaken for it", () => {
+      const err = new ApiV1Error("x", 422, "STAGE_NOT_READY", { abandoned: [b(1, 1)] });
+      expect(generatePreconditionMessage(err, msg)).toBeNull();
+    });
+  });
+
   it("returns null for an unrelated ApiV1Error (falls through to the generic error banner)", () => {
     const err = new ApiV1Error("boom", 500, "INTERNAL", {});
     expect(generatePreconditionMessage(err, msg)).toBeNull();

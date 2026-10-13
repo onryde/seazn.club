@@ -66,8 +66,9 @@ export const FOOTBALL_RULES: RuleField[] = [
     kind: "bool",
     build: (v) => ({ shootout: v === "on" }),
   },
-  // W2c FB-SO-1 — the kicks each side takes before sudden death. A match-scope key the engine bounds 1–10; the stage
-  // default is 5 (3 in youth football), and one match may only shorten it (X-SR-2).
+  // W2c FB-SO-1 — the kicks each side takes before sudden death. A match-scope key the engine bounds 1–10. A blank box is
+  // 5 (the engine's SHOOTOUT_ATTEMPTS_DEFAULT; the stage's own value, once Task 12 writes the knockout preset into a new
+  // stage, is 5, or 3 in the youth formats), and one match may only shorten it (X-SR-2).
   {
     key: "shootoutAttempts",
     edits: ["shootoutAttempts"],
