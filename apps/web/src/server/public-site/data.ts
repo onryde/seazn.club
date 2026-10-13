@@ -1239,7 +1239,7 @@ export async function getPublicFixture(
           // variant, in the org's locale; the catalog name above only for a
           // variant the map does not name, the key after that.
           formatLabel: variantLabel(
-            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null },
+            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null, config: division.config },
             (key) => msgFor(locale, key),
           ),
           tz: tzRow?.division_tz ?? null,
@@ -1311,7 +1311,9 @@ export async function getPublicFixture(
     // decided on the pad would read its stale hold under the printed result.
     //
     // v8 (chess T17 round B, 2026-10-13): `pairedWhiteSide`, the start position's colours (option B). A `-v7` entry
-    // has none, so the board before the first move would name each side by its colour only.
+    // has none, so the board before the first move would name each side by its colour only. The same round (C)
+    // names an online chess division's format by its time control (variant-label.ts), so a `-v7` entry also
+    // carries the declared clock family's word in its header — "Classical" over a 10+5 game.
     ["pub-fixture-v8", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();

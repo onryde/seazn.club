@@ -28,6 +28,7 @@ import { scoreEvent } from "@/server/usecases/scoring";
 import { publicFixture } from "@/server/usecases/public";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
 import { appendEvent } from "@/server/engine-db";
+import uiEn from "@/dictionaries/en/ui.json";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -281,6 +282,27 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
     const sl2 = await slugsOf(later.divisionId);
     const notOpened = await getPublicFixture(sl2.org, sl2.comp, sl2.div, later.boards[0]!.fixtureId);
     expect(notOpened!.matchCentre.header.status, "round not opened").toBe("scheduled");
+  });
+
+  // T17 round B, C: the header's format word over an online game is the time control's speed. The seed declares the
+  // "classical" clock family at 10+5 — a pair nothing in the product refuses — and Lichess plays 10+5 as rapid.
+  it("C: an online board's format is its time control's speed — Rapid at 10+5, on the page and on the poll", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, clock: { base: 600, increment: 5 } });
+    seeded.push(r.orgId);
+    const [div] = await sql<{ variant_key: string }[]>`select variant_key from divisions where id = ${r.divisionId}`;
+    expect(div!.variant_key, "premise: the division declares Classical").toBe("classical");
+    const sl = await slugsOf(r.divisionId);
+    const page = (await getPublicFixture(sl.org, sl.comp, sl.div, r.boards[0]!.fixtureId))!;
+    const poll = (await publicFixture(r.boards[0]!.fixtureId)) as { match_centre: { header: { metaLine: string | null } } };
+    const RAPID = (uiEn as Record<string, string>)["variant.boardgame.rapid"]!;
+    const CLASSICAL = (uiEn as Record<string, string>)["variant.boardgame.classical"]!;
+    let checked = 0;
+    for (const [where, line] of [["page", page.matchCentre.header.metaLine], ["poll", poll.match_centre.header.metaLine]] as const) {
+      expect(line?.split(" · ")[0], where).toBe(RAPID);
+      expect(line, where).not.toContain(CLASSICAL);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("another sport: a bridge row under a non-online sport is never read — the header keeps the fixture's state", async () => {

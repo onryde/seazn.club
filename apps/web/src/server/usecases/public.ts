@@ -772,7 +772,7 @@ async function loadFixtureMatchCentreCtx(
       // T16b fix round 3: the same word the page's own loader prints
       // (getPublicFixture) — this document replaces the page's on every poll.
       formatLabel: variantLabel(
-        { sportKey: row.sport_key, variantKey: row.variant_key, storedName: row.variant_name },
+        { sportKey: row.sport_key, variantKey: row.variant_key, storedName: row.variant_name, config: row.division_config },
         (key) => msgFor(locale, key),
       ),
       tz: row.division_tz,
