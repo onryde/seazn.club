@@ -5,6 +5,7 @@
 //
 // The forfeit outcomes are the engine's shape for each of its reasons (`FORFEIT_REASONS`; forfeit-tag.test.ts folds
 // them through real modules); the words are the real public.json / ui.json, never typed here except UI-2's tags.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
@@ -549,9 +550,16 @@ describe("ForfeitTagChip — the house pill (audit 3.2)", () => {
   it("the seed chip's pill shape and colours; none of the one-off shape", () => {
     const h = renderToStaticMarkup(createElement(ForfeitTagChip, { tag: "w/o", sentence: "S" }));
     const cls = new Set((/class="([^"]*)"/.exec(h)?.[1] ?? "").split(/\s+/u));
-    for (const token of ["rounded-full", "px-2", "py-0.5", "text-[11px]", "font-semibold", "bg-zinc-100", "text-ink-muted", "whitespace-nowrap", "shrink-0"]) {
-      expect(cls.has(token), `the pill's ${token}`).toBe(true);
-    }
+    // Design review M-6: the seed chip's classes are READ from teams-tab.tsx (both of its sites), never typed here,
+    // so a change to the seed chip moves this test with it. `tabular-nums` is the seed's numeral setting — a tag
+    // carries no figures — and is the one class the pill does not take.
+    const src = readFileSync(new URL("../matches-hub/teams-tab.tsx", import.meta.url), "utf8");
+    const seeds = [...src.matchAll(/<span className="([^"]+)">\s*\{t\(dict, "teams\.seed"/gu)].map((m) => m[1]!.split(/\s+/u).sort().join(" "));
+    expect(seeds.length, "teams-tab's seed chips").toBe(2);
+    expect(new Set(seeds).size, "one seed chip, two sites").toBe(1);
+    const seed = seeds[0]!.split(" ").filter((token) => token !== "tabular-nums");
+    expect(seed.length, "the seed chip's shape and colour classes").toBeGreaterThanOrEqual(6);
+    expect(seed.filter((token) => !cls.has(token)), "the pill wears every class of the seed chip").toEqual([]);
     for (const token of ["rounded", "px-1", "py-px"]) expect(cls.has(token), `no one-off ${token}`).toBe(false);
   });
 });
