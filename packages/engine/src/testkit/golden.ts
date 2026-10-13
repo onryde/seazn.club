@@ -927,10 +927,9 @@ const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
     knockoutTiebreak: { tiebreak: true },
     // W2c BG-KO-3/BG-KO-2 — the stage's rung list is written by a stage, never a variant, so `tiebreakRungs` and the
     // Armageddon's recorded colour (`armageddonBlack`) were reachable from no recorded config. An Armageddon-only list
-    // makes every tie-break stream play one, and the empty list is the organiser's "no tie-break games" (a drawn game
-    // stays a draw).
+    // makes every tie-break stream play one. (The empty list adds no field and no state path, so the corpus has no
+    // reason to record it: tiebreak.test.ts BG-KO-3 owns "a drawn game stays a draw".)
     knockoutArmageddon: { tiebreak: true, tiebreakRungs: ["armageddon"] },
-    knockoutNoTiebreakGames: { tiebreak: true, tiebreakRungs: [] },
   },
   // W1 (scoring free) golden-gap fix — golden coverage now measures against
   // `padSpec.fidelity`, and the set-based kernel it is shared by declares

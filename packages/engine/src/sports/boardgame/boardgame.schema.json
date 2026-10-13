@@ -223,6 +223,9 @@
   "snapshotVersion": 1,
   "state": {
     "paths": {
+      "armageddonBlack": [
+        "string"
+      ],
       "board": [
         "number"
       ],
