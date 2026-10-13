@@ -3355,7 +3355,8 @@ export async function moveFixture(
       orgName: n.org_name,
       officialName: n.display_name,
       roleKey: n.role_key,
-      label: `${n.home_name ?? resolveSlotLabel(n.home_slot_label, lookup, "schedule.tbd")} vs ${n.away_name ?? resolveSlotLabel(n.away_slot_label, lookup, "schedule.tbd")}`,
+      // Design review M-7: the join word is the dictionary's (fr "contre"), as officials.ts's assignment notice says it.
+      label: `${n.home_name ?? resolveSlotLabel(n.home_slot_label, lookup, "schedule.tbd")} ${lookup("schedule.vs")} ${n.away_name ?? resolveSlotLabel(n.away_slot_label, lookup, "schedule.tbd")}`,
       prevAt: out.change.prevAt,
       nextAt: out.change.nextAt,
       venueTz: n.venue_tz,

@@ -151,7 +151,7 @@ export default async function MePage({
               <div className="min-w-0">
                 <p className="app-display text-2xl font-bold leading-tight text-cream sm:text-3xl">
                   {next.entrant_name ?? t(ui, "me.tbd")}{" "}
-                  <span className="text-cream/50">vs</span>{" "}
+                  <span className="text-cream/50">{t(ui, "schedule.vs")}</span>{" "}
                   {next.opponent_name ?? t(ui, "me.tbd")}
                 </p>
                 <p className="mt-1.5 text-sm text-cream/70">
@@ -204,7 +204,7 @@ export default async function MePage({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-800">
-                        {f.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">vs</span>{" "}
+                        {f.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
                         {f.opponent_name ?? t(ui, "me.tbd")}
                       </p>
                       <p className="mt-0.5 text-xs text-slate-400">
@@ -272,7 +272,7 @@ export default async function MePage({
                 <li key={r.id} className="card flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-800">
-                      {r.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">vs</span>{" "}
+                      {r.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
                       {r.opponent_name ?? t(ui, "me.tbd")}
                     </p>
                     <p className="mt-0.5 text-xs text-slate-400">
