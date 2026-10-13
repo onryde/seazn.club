@@ -259,6 +259,36 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay — a fixture settled t
   });
 });
 
+describe.skipIf(!HAS_DB)("T16 fix round 1, I2 (F5): a held card names the PERSON, never the entrant snapshot", () => {
+  // A 43-character name — the width the canvas is drawn for — on a person whose singles entrant row still reads
+  // "Entry 3" (the registration snapshot). The rulebook (lib/entrant-name.ts): a singles entrant reads as its
+  // person. The Flagged list and the Open-round confirmation already resolve it so (loadSides); the queue did not,
+  // so one board carried two names on one screen.
+  const LONG = "Maximiliana Wolfeschlegel-Featherstonehaugh";
+  it("the held card reads the person's 43-character name; the other side keeps its own; a pair stays its snapshot", async () => {
+    expect(LONG.length, "premise: the canvas width").toBe(43);
+    const s = await seeded();
+    await sql`update entrants set display_name = 'Entry 3' where id = ${s.home.entrantId}`;
+    await sql`update persons set full_name = ${LONG} where id = ${s.home.personId}`;
+    const [{ name: awayName }] = await sql<{ name: string }[]>`select full_name as name from persons where id = ${s.away.personId}`;
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "fair_play", null);
+    const [row, ...rest] = await listNeedsOrganiserExternalPlay(s.auth, s.divisionId);
+    expect(rest).toEqual([]);
+    expect([row!.homeName, row!.awayName]).toEqual([LONG, awayName]);
+    expect(row!.homeName, "never the snapshot").not.toBe("Entry 3");
+  });
+
+  it("the empty case: an entrant with NO member left (a merge tombstone) falls back to its snapshot, never its id", async () => {
+    const s = await seeded();
+    await sql`update entrants set display_name = 'Entry 3' where id = ${s.home.entrantId}`;
+    await sql`delete from entrant_members where entrant_id = ${s.home.entrantId}`;
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "fair_play", null);
+    const [row] = await listNeedsOrganiserExternalPlay(s.auth, s.divisionId);
+    expect(row!.homeName).toBe("Entry 3");
+    expect(row!.homeName).not.toBe(s.home.entrantId);
+  });
+});
+
 describe.skipIf(!HAS_DB)("a fair-play verdict reaches the organiser under its OWN reason (T12 fix round 1, I2)", () => {
   it("a fair_play hold is listed as fair_play — never folded into provider_error", async () => {
     const s = await seeded();
