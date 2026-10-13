@@ -970,9 +970,12 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     const current = state.games.find((game) => game.winner === null);
     // A forfeit reads its credited games (X-WO-1); the per-game detail below stays as played.
     const won = displayedGames(state);
+    // Loop R M-2b: the bracket is the game IN PLAY. A decided match has none — a forfeit leaves its game unfinished,
+    // and that game's score beside the credited games ("2 (0)") read as a running board.
+    const inPlay = state.outcome === null ? current : undefined;
     const line = (side: Side): string => {
       const games = `${won[side]}`;
-      return current === undefined ? games : `${games} (${current.score[side]})`;
+      return inPlay === undefined ? games : `${games} (${inPlay.score[side]})`;
     };
     const breaker =
       state.phase === "live" && current !== undefined

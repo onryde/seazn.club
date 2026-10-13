@@ -2195,7 +2195,14 @@ export function makeNestedModule(
     // closed-set strip (6–4 7–6(5) [10–7]), live games and the spoken game
     // score; serve state rides in detail for pads and scorebugs.
     summary(state): ScoreSummary {
-      const strip = state.sets.map(closedSetLine).join(" ");
+      // Loop R M-2c: a forfeit ends the match in the set it stopped — that set stays in the strip ("3–6 2–1", the way
+      // a retirement is scored) and in the detail as an open set, as the set kernels keep their open game. Without it a
+      // retirement at 3–6 2–1 read "2 — 0 · 3–6", the set she retired in gone from every surface.
+      const stopped = (state.outcome?.kind === "award" || state.outcome?.kind === "double_walkover") && setInProgress(state);
+      const strip = [
+        ...state.sets.map(closedSetLine),
+        ...(stopped ? [state.points.kind === "matchTiebreak" ? `[${state.points.home}–${state.points.away}]` : `${state.games.home}–${state.games.away}`] : []),
+      ].join(" ");
       const liveGames =
         state.phase === "live" && (setInProgress(state) || state.sets.length > 0)
           ? state.points.kind === "matchTiebreak"
@@ -2225,7 +2232,7 @@ export function makeNestedModule(
           // without knowing the sport. The MTB live entry carries its points.
           sets: [
             ...state.sets.map((set) => ({ ...set, closed: true })),
-            ...(state.phase === "live" && setInProgress(state)
+            ...((state.phase === "live" || stopped) && setInProgress(state)
               ? [
                   state.points.kind === "matchTiebreak"
                     ? { home: state.points.home, away: state.points.away, closed: false }

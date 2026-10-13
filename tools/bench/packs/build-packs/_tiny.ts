@@ -440,8 +440,10 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r3-c1",
     outcome: { kind: "award", winner: "e-alpha" },
+    // W2b Loop R M-2: Bravo RETIRED, so Alpha won the game — "W", not the walkover's "W/O" (generic's sideLine marks a
+    // walked-over side "W/O" only for a walkover, a withdrawal or a bye).
     perSide: [
-      { entrant: "e-alpha", line: "W/O" },
+      { entrant: "e-alpha", line: "W" },
       { entrant: "e-bravo", line: "L" },
     ],
   },

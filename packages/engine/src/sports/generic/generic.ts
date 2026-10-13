@@ -213,6 +213,11 @@ function applyScore(state: GenericState, payload: GenericScore): GenericState {
   return { ...state, running: { ...base, [side]: next } };
 }
 
+/** Loop R M-2 — an award's winner's mark. "W/O" names a side that walked over: its opponent never played the game (a
+ *  walkover, a withdrawal, a bye). A side whose opponent retired from the game or was disqualified from it won it: "W",
+ *  with the result's own chip ("ret." / "DQ") naming how — the "W/O" every award used to read misnamed both. */
+const AWARD_WINNER_MARK: Record<AwardReason, "W/O" | "W"> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
+
 function sideLine(state: GenericState, side: Side): string {
   if (state.score && !creditReplacesCard(state)) return String(state.score[side]);
   const outcome = state.outcome;
@@ -228,7 +233,7 @@ function sideLine(state: GenericState, side: Side): string {
     case "no_result":
       return "N/R";
     case "award":
-      return outcome.winner === state.entrants[side] ? "W/O" : "L";
+      return outcome.winner === state.entrants[side] ? AWARD_WINNER_MARK[awardReasonOf(outcome)] : "L";
     case "double_walkover":
       return "L"; // X-DW-1: both sides lose
   }

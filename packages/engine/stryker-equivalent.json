@@ -290,7 +290,7 @@
       "reason": "The flag only moves the played ledger's `wins` value; creditedMetrics lays the double-walkover credit over it, and that credit carries every key the ledger has (wins, white, black) at 0, so the played value is never observable."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1058:56 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:1061:56 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = carromForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
@@ -350,61 +350,61 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; every non-bye credit carries gf, ga and gd, and a bye's credit is the played ledger with the real goals (computed with zero=false), so creditedMetrics overwrites those three keys either way."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:262:72 ArrayDeclaration → []",
+      "mutant": "src/sports/generic/generic.ts:267:72 ArrayDeclaration → []",
       "original": "[\"for\", \"against\", \"diff\"]",
       "line": "if (by === \"both\") return doubleWalkoverCredit(played[0], played[1], [\"for\", \"against\", \"diff\"]);",
       "reason": "sideMetrics (and zeroMetrics) always return exactly {for, against, diff} in that order, so the union of the played ledgers' keys already is the declared list: same keys, same order, same zeroed perSide and excluded."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:704:57 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:709:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "genericForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:704:69 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:709:69 StringLiteral → \"\"",
       "original": "\"both\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "With by \"\" the credit is the walkover arm's: both records 0-0-0 over the same keys {for, against, diff}; laid over the played ledger that is exactly the double walkover's all-zero metrics (excluded only re-zeroes zeros)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:706:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:711:72 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:706:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:711:89 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:707:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:712:72 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:707:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:712:89 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:263:7 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:268:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:263:18 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:268:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2285:58 StringLiteral → \"\"",
+      "mutant": "src/sports/nested/kernel.ts:2292:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = nestedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."

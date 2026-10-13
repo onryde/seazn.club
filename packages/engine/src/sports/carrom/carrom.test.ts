@@ -11,6 +11,7 @@ import {
   type PlayerStatsFoldCtx,
 } from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
+import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
 import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import {
   carrom,
@@ -216,6 +217,48 @@ describe("carrom golden: walkover", () => {
     expect(home.metrics).toMatchObject({ boards_won: 1, sets_won: games, sets_lost: 0, points_won: games * cfg.gameTo, points_lost: 0 });
     expect(away.metrics).toMatchObject({ boards_won: 0, sets_won: 0, sets_lost: games, points_won: 0, points_lost: games * cfg.gameTo });
     expect(home.points + away.points).toBe(2); // inside declaredPointsSets
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2b Loop R M-2b — a decided match's side line is its games, with no running board in brackets. The bracket is the
+// game in play's score ("1 (12)" while the second game runs); a forfeit leaves that game unfinished, so the line kept
+// printing it beside the credited games — "2 (12)" for the side credited the match, "2 (0)" for a walkover before a
+// board. The per-game detail keeps what was played. Every declared cfg, both seats at fault, a walkover, a
+// retirement, a disqualification and a double walkover; the expected games are the module's own forfeit credit.
+// ---------------------------------------------------------------------------
+describe("carrom: a forfeit's side line is its credited games, no running board (Loop R M-2b)", () => {
+  it("every declared cfg, either seat at fault, every forfeit: the line is the credited games alone", () => {
+    let checked = 0;
+    for (const { name, cfg: c } of declaredCfgs(carrom as never)) {
+      const played: Array<[string, unknown?]> = [["core.start"], ...boards(["H", 5])];
+      const cases: Array<[label: string, events: Array<[string, unknown?]>, offender: "home" | "away" | "both", reason: string]> = [];
+      for (const [at, side] of [["H", "home"], ["A", "away"]] as const) {
+        cases.push([`walkover by ${at}`, [["core.forfeit", { by: at, reason: "walkover" }]], side, "walkover"]);
+        cases.push([`retirement by ${at}`, [...played, ["core.forfeit", { by: at, reason: "retired" }]], side, "retired"]);
+        cases.push([`disqualification of ${at}`, [...played, ["core.forfeit", { by: at, reason: "disqualified" }]], side, "disqualified"]);
+      }
+      cases.push(["double walkover", [["core.forfeit", { by: "both", reason: "walkover" }]], "both", "walkover"]);
+      for (const [label, events, offender, reason] of cases) {
+        const state = fold(stream(...events), c as never);
+        expect(state.outcome, `${name}: ${label} decided it`).not.toBeNull();
+        // A forfeit after a board leaves its game unfinished — the bracket's source; one before a board has no game.
+        expect(state.games.some((g) => g.winner === null), `${name}: ${label} — premise: a game left unfinished`).toBe(events.length > 1);
+        const credit = carrom.forfeitCredit(c as never, state, reason as never, offender);
+        const want = credit.perSide.map((x) => String(x.sets_won ?? 0));
+        expect(carrom.summary(state).perSide.map((p) => p.line), `${name}: ${label}`).toEqual(want);
+        checked++;
+      }
+    }
+    expect(checked, "cfgs × (2 seats × 3 reasons + a double walkover)").toBe(declaredCfgs(carrom as never).length * 7);
+  });
+
+  it("the positive pair: an undecided match still shows the game in play in brackets", () => {
+    const state = fold(stream(["core.start"], ...boards(["H", 5])));
+    const g = state.games.at(-1)!;
+    expect(g.winner, "premise: game 1 in play").toBeNull();
+    expect(carrom.summary(state).perSide.map((p) => p.line)).toEqual([`0 (${g.score.home})`, `0 (${g.score.away})`]);
+    expect(g.score.home, "premise: a board scored").toBeGreaterThan(0);
   });
 });
 

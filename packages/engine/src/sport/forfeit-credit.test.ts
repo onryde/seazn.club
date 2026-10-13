@@ -1317,17 +1317,18 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
   };
   /** Summaries that are not a scoreline for a forfeit, each with why — and each exemption ASSERTED on the fold (the
    *  summary, the credit and the side at fault), never assumed. */
-  const NOT_A_SCORELINE: Record<string, { why: string; holds: (lines: string[], want: (number | null)[], offenderAt: 0 | 1) => void }> = {
+  const NOT_A_SCORELINE: Record<string, { why: string; holds: (lines: string[], want: (number | null)[], offenderAt: 0 | 1, reason: string) => void }> = {
     cricket: {
       why: "the summary is the innings scorecard ('—' before a ball); the credit is the table's NRR charge (CK-WO-1), with no runs to show",
       holds: (_lines, want) => expect(want, "a cricket forfeit credits no runs").toEqual([0, 0]),
     },
     generic: {
-      why: "a generic forfeit's summary is the result marker ('W/O' / 'L'), not a score: GN-WO-1 credits 0-0 and GN-RT-1 keeps the recorded score only where it is worse for the offender (ruling 124)",
-      holds: (lines, _want, offenderAt) => {
+      why: "a generic forfeit's summary is the result marker ('W/O' or 'W' / 'L'), not a score: GN-WO-1 credits 0-0 and GN-RT-1 keeps the recorded score only where it is worse for the offender (ruling 124)",
+      holds: (lines, _want, offenderAt, reason) => {
         expect(lines.map(shown), "a generic forfeit shows no number").toEqual([null, null]);
-        expect(lines[offenderAt], "the side at fault is the one marked lost").not.toBe(lines[1 - offenderAt]);
-        expect(lines[1 - offenderAt], "the winner carries the walkover marker").toMatch(/W\/O/);
+        expect(lines[offenderAt], "the side at fault is the one marked lost").toBe("L");
+        // Loop R M-2: "W/O" where the winner walked over, "W" where its opponent retired (generic.test.ts sweeps every reason).
+        expect(lines[1 - offenderAt], `the winner's mark for a ${reason}`).toBe(reason === "walkover" ? "W/O" : reason === "retired" ? "W" : `<no row for ${reason}>`);
       },
     },
   };
@@ -1345,7 +1346,7 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
     const lines = summary.perSide.map((side) => side.line);
     const exemption = NOT_A_SCORELINE[key];
     if (exemption !== undefined && lines.every((line) => shown(line) === null || key === "cricket")) {
-      exemption.holds(lines, want, offenderSide === "home" ? 0 : 1);
+      exemption.holds(lines, want, offenderSide === "home" ? 0 : 1, reason);
       return "exempt";
     }
     expect(lines.map(shown), `${tag}: perSide ${JSON.stringify(summary.perSide)}`).toEqual(want);
@@ -1411,5 +1412,51 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
     const m = mod("badminton");
     const f = foldMatchWithStoppage(m as never, r.cfg as never, defaultLineupPair(m.positions), [["core.start"], ...r.played, ["core.forfeit", { by: H, reason: "retired" }]].map(([t, p], i) => ev(i + 1, t as string, p ?? {})));
     expect(summaryOf(m as never, f as never).headline).toContain(" · 21–15, 18–21");
+  });
+
+  // W2b Loop R M-2c: the strip is what was played — including the set the retirement stopped. The set kernels kept it
+  // (badminton "0–21 (5–3)", its open game in brackets), but tennis's strip printed closed sets only once the match was
+  // over, so a retirement at 3–6 2–1 read "2 — 0 · 3–6": the set she retired in was gone, from the headline and from
+  // the set scoreboard's detail. The headline's "2 — 0" is TN-RT-1's credit (straight sets, X-WO-1) and stays.
+  // Every set sport; the expected sets are the stream's own (one set to A, then the next stopped at H 2, A 1).
+  it("the strip keeps the set the retirement stopped, every set sport: in the detail as an open set, and in the headline", () => {
+    const pts = (t: string, n: number, by: string): Spec => times(n, [t, t === "tennis.point" ? { by } : { wonBy: by }]);
+    const games = (n: number, by: string): Spec => Array.from({ length: n }, () => pts("tennis.point", 4, by)).flat();
+    // [first set's home, away], played to A; then the stopped set at H 2, A 1.
+    const STREAMS: Record<string, { played: Spec; first: [number, number]; stopped: string }> = {
+      tennis: { played: [...games(3, H), ...games(6, A), ...games(2, H), ...games(1, A)], first: [3, 6], stopped: "3–6 2–1" },
+      badminton: { played: [...pts("badminton.rally", 21, A), ...pts("badminton.rally", 2, H), ...pts("badminton.rally", 1, A)], first: [0, 21], stopped: "(2–1)" },
+      volleyball: { played: [...pts("volleyball.rally", 25, A), ...pts("volleyball.rally", 2, H), ...pts("volleyball.rally", 1, A)], first: [0, 25], stopped: "(2–1)" },
+      tabletennis: { played: [...pts("tabletennis.rally", 11, A), ...pts("tabletennis.rally", 2, H), ...pts("tabletennis.rally", 1, A)], first: [0, 11], stopped: "(2–1)" },
+    };
+    let checked = 0;
+    for (const [key, { played, first, stopped }] of Object.entries(STREAMS)) {
+      const m = mod(key);
+      const cfg = parsed(key);
+      const f = foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), [["core.start"], ...played, ["core.forfeit", { by: A, reason: "retired" }]].map(([t, p], i) => ev(i + 1, t as string, p ?? {})));
+      expect(outcomeOf(m as never, f as never), `${key}: premise — A retired`).toMatchObject({ kind: "award", winner: H, reason: "retired" });
+      const summary = summaryOf(m as never, f as never);
+      expect((summary.detail as { sets?: unknown }).sets, `${key}: the detail keeps both sets, the stopped one open`).toEqual([
+        expect.objectContaining({ home: first[0], away: first[1], closed: true }),
+        expect.objectContaining({ home: 2, away: 1, closed: false }),
+      ]);
+      expect(summary.headline, `${key}: the headline shows the set it stopped in`).toContain(stopped);
+      checked++;
+    }
+    expect(checked, "set sports checked").toBe(Object.keys(STREAMS).length);
+
+    // Tennis's match tie-break (the deciding set played as one tie-break, ITF Appendix V): a retirement in it keeps it,
+    // in the ITF bracket form a closed one prints — "[3–1]" — and in the detail as the open set's points.
+    // single-sport: the match tie-break is the nested kernel's alone.
+    const m = mod("tennis");
+    const mtbCfg = parsed("tennis", m.variants["doubles-noad-mtb10"] as Record<string, unknown>);
+    const mtb = [...games(6, H), ...games(6, A), ...pts("tennis.point", 3, H), ...pts("tennis.point", 1, A)];
+    const f = foldMatchWithStoppage(m as never, mtbCfg as never, defaultLineupPair(m.positions), [["core.start"], ...mtb, ["core.forfeit", { by: A, reason: "retired" }]].map(([t, p], i) => ev(i + 1, t as string, p ?? {})));
+    const summary = summaryOf(m as never, f as never);
+    expect(summary.headline, "a retirement in the match tie-break").toContain("6–0 0–6 [3–1]");
+    expect((summary.detail as { sets: unknown[] }).sets.at(-1), "its open entry is the tie-break's points").toEqual({ home: 3, away: 1, closed: false });
+    expect(Object.keys(STREAMS).sort(), "every module with a set scoreboard").toEqual(
+      builtinModules.filter((x) => { const st = x.summary(x.init(parsed(x.key), defaultLineupPair(x.positions))).detail as { sets?: unknown } | undefined; return Array.isArray(st?.sets); }).map((x) => x.key).sort(),
+    );
   });
 });

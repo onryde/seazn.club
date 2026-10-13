@@ -1,7 +1,7 @@
 // Generic module goldens + conformance — spec 04 §8, PROMPT-03 §3/§5.
 import { describe, expect, it } from "vitest";
 import { foldMatch, SETTLE_METHODS, type EventEnvelope } from "../../core/events.ts";
-import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
+import { AWARD_REASONS, DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import { evalPadGate } from "../../sport/module.ts";
 import {
   aggregatePlayerStats,
@@ -121,7 +121,28 @@ describe("generic — core event mapping (spec 03 §2 table)", () => {
     const [home, away] = generic.standingsDelta(state.outcome!, winLossCfg, league, state);
     expect(home).toMatchObject({ lost: 1, points: 0 });
     expect(away).toMatchObject({ won: 1, points: 3 });
-    expect(generic.summary(state).headline).toBe("L — W/O");
+    // Loop R M-2: a retirement is a win over a game the opponent left, not a walkover — "W", beside the result's "ret.".
+    expect(generic.summary(state).headline).toBe("L — W");
+  });
+
+  // Loop R M-2: generic's summary writes result letters, and an award's winner read "W/O" whatever the award was — so a
+  // retirement or a disqualification printed "W/O" beside its own "ret." / "DQ" chip. "W/O" names a side that walked
+  // over: a walkover, a withdrawal, a bye. A side whose opponent retired or was disqualified won the game: "W". The
+  // loser reads "L" either way. Every award reason the engine declares, both seats — a reason added owes its row here.
+  it("an award's winner reads W/O only where it walked over (walkover, withdrawal, bye) and W where it won (retired, DQ)", () => {
+    const WINNER_MARK: Record<(typeof AWARD_REASONS)[number], string> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
+    expect(Object.keys(WINNER_MARK).sort(), "a row for every declared award reason").toEqual([...AWARD_REASONS].sort());
+    let checked = 0;
+    for (const reason of AWARD_REASONS) {
+      for (const [winner, loser] of [["H", "A"], ["A", "H"]] as const) {
+        const outcome = { kind: "award" as const, winner, loser: reason === "bye" ? null : loser, reason };
+        const state = { ...generic.init(winLossCfg, lineups), phase: "done" as const, outcome };
+        const lines = generic.summary(state).perSide.map((p) => p.line);
+        expect(lines, `${reason} to ${winner}`).toEqual(winner === "H" ? [WINNER_MARK[reason], "L"] : ["L", WINNER_MARK[reason]]);
+        checked++;
+      }
+    }
+    expect(checked, "award reasons × seats").toBe(AWARD_REASONS.length * 2);
   });
 
   // W2b GN-AB-1 (product rule W2b-R6): until W2b this mapped core.abandon to no_result with shared points. An abandon

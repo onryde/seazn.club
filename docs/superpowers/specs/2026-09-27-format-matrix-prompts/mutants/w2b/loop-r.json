@@ -1005,5 +1005,117 @@
     "name": "Unpair refuses a match_state with no score_events"
    }
   ]
+ },
+ {
+  "id": "lr-m2-award-mark-collapsed",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "AWARD_WINNER_MARK[awardReasonOf(outcome)] : \"L\"",
+  "replace": "\"W/O\" : \"L\"",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "maps core.forfeit to an award for the other side"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "an award's winner reads W/O only where it walked over"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2-dq-reads-walkover",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "retired: \"W\", disqualified: \"W\" }",
+  "replace": "retired: \"W\", disqualified: \"W/O\" }",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "an award's winner reads W/O only where it walked over"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2b-bracket-after-decision",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "    const inPlay = state.outcome === null ? current : undefined;\n",
+  "replace": "    const inPlay = current;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/carrom/carrom.test.ts"
+    ],
+    "name": "every declared cfg, either seat at fault, every forfeit: the line is the credited games alone"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-stopped-never",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "      const stopped = (state.outcome?.kind === \"award\" || state.outcome?.kind === \"double_walkover\") && setInProgress(state);\n",
+  "replace": "      const stopped = false;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-strip-drops-stopped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "        ...(stopped ? [state.points.kind",
+  "replace": "        ...(false ? [state.points.kind",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-detail-drops-stopped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "            ...((state.phase === \"live\" || stopped) && setInProgress(state)\n",
+  "replace": "            ...(state.phase === \"live\" && setInProgress(state)\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-mtb-printed-as-games",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "state.points.kind === \"matchTiebreak\" ? `[${state.points.home}–${state.points.away}]` : `${state.games.home}–${state.games.away}`",
+  "replace": "`${state.games.home}–${state.games.away}`",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
  }
 ]
