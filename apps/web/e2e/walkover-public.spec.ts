@@ -470,14 +470,21 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(row, `${w}: the schedule row names her`).toContainText(herName);
       await expect(row, `${w}: the schedule row prints no bye word`).not.toContainText(BYE, { useInnerText: true });
       // Stacked by seat as any walkover's row (the tag rides the winner's line), never the no-lines headline chip.
-      const lines = row.locator("span.pl-2.text-right");
+      const lines = row.getByTestId("schedule-score");
       await expect(lines, `${w}: the schedule row stacks two score lines`).toHaveCount(2);
       // Design audit 3.9: the tag FOLLOWS the winner's credit ("3" then "w/o"), as on the other hosts; her line ends 0.
+      // Design review M-3: each score cell holds its digit alone and the tag sits in its own track, in the cell right
+      // after the winner's score — so both digits end on one edge.
       const winLine = final.home_entrant_id === arriving ? 0 : 1;
-      const tagRe = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       for (const i of [0, 1]) {
-        await expect(lines.nth(i), `${w}: the schedule row's line ${i}`).toHaveText(new RegExp(`(^|\\D)${want[i]!}${i === winLine ? tagRe : ""}$`));
+        await expect(lines.nth(i), `${w}: the schedule row's line ${i}`).toHaveText(new RegExp(`(^|\\D)${want[i]!}$`));
       }
+      await expect(
+        lines.nth(winLine).locator("xpath=following-sibling::*[1]").getByRole("img", { name: sentence }),
+        `${w}: the tag follows the winner's score`,
+      ).toHaveText(tag);
+      const edges = await lines.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().right));
+      expect(Math.abs(edges[0]! - edges[1]!), `${w}: both digits end on one edge (${edges.join(", ")})`).toBeLessThanOrEqual(0.5);
       await expectNoHorizontalScroll(page);
       await crop(row, `schedule-withdrew-final-${w}`);
       screens++;
