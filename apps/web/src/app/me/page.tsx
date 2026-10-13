@@ -27,6 +27,7 @@ import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
+import { creditsNobody } from "@/lib/forfeit-tag";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
@@ -279,9 +280,27 @@ export default async function MePage({
                       {r.competition_name} · {r.division_name} · {r.org_name}
                     </p>
                   </div>
-                  <span className="app-display text-lg font-bold text-slate-700">
-                    {headline(r) ?? "—"}
-                  </span>
+                  {creditsNobody(r.outcome) ? (
+                    // Design re-review N-1 — a double walkover credits nobody, but its stored summary carries 0 — 0
+                    // (the console can finalize one): the line prints the house tag, muted, as a symbol named by the
+                    // full words (`components/v2/outcome-tag-text.tsx`). The tag keeps its case on an INNER span:
+                    // `.app-display` (globals.css) is unlayered and uppercases, so it beats a `normal-case` utility on
+                    // the same element ("2× W/O" in the browser); on a child it is only inherited, and overridden.
+                    <span className="app-display text-lg font-bold text-slate-500">
+                      <span
+                        role="img"
+                        aria-label={t(ui, "forfeit.tagFull.doubleWalkover")}
+                        title={t(ui, "forfeit.tagFull.doubleWalkover")}
+                        className="normal-case"
+                      >
+                        {t(ui, "forfeit.tag.doubleWalkover")}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="app-display text-lg font-bold text-slate-700">
+                      {headline(r) ?? "—"}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

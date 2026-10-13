@@ -399,3 +399,88 @@ test("ruling 122: the coach is listed with no team match; a bench row follows th
   expect(seen.length, "surfaces read").toBe(21);
   testInfo.annotations.push({ type: "numbers", description: seen.join(" | ") });
 });
+
+// Design re-review N-1 — /me's results list prints each FINALIZED match's stored headline, and a double walkover's
+// stored summary carries a 0 — 0 (the console can finalize a decided double walkover). It credits nobody, so the line
+// prints the house tag, a symbol named by the full words; the pair, a walkover finalized beside it, keeps its credited
+// score. Both recorded and finalized through POST /api/v1/fixtures/{id}/events (core.forfeit, core.finalize), the
+// console's own door. Single-sport (badminton): /me reads the stored row and never the sport; the registry sweeps live in
+// the unit tests.
+test("re-review N-1: /me's results print a finalized double walkover's tag, never its 0 — 0; a finalized walkover keeps its score, at 1280/768/320", async ({ page, browser }, testInfo) => {
+  test.setTimeout(180_000);
+  const person = async (n: string) =>
+    (await apiJson<{ id: string }>(page.request, "/api/v1/persons", "POST", { full_name: `${n} ${TAG}`, consent: { public_name: true } })).data!.id;
+  const pat = await person("Pat DW");
+  const opponents = [await person("Opp DW"), await person("Opp WO")];
+  const comp = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `N-1 ${TAG}`, visibility: "public" });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(page.request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "N-1",
+    sport_key: "badminton",
+    variant_key: SPORTS.badminton.variant,
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const names = [`N1 Pat ${TAG}`, `N1 Hawks ${TAG}`, `N1 Ravens ${TAG}`];
+  const ents = await apiJson<{ id: string }[]>(
+    page.request,
+    `/api/v1/divisions/${div.data!.id}/entrants`,
+    "POST",
+    [pat, ...opponents].map((person_id, i) => ({ kind: "individual", display_name: names[i], seed: i + 1, members: [{ person_id }] })),
+  );
+  expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
+  const [patE, dwOpp, woOpp] = ents.data!.map((e) => e.id);
+  const stage = await apiJson<{ id: string }>(page.request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  const gen = await apiJson<{ fixtures: Fixture[] }>(page.request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(gen.status).toBeLessThan(300);
+  await apiJson(page.request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  const meets = (opp: string) =>
+    gen.data!.fixtures.find((f) => [f.home_entrant_id, f.away_entrant_id].includes(patE!) && [f.home_entrant_id, f.away_entrant_id].includes(opp))!;
+  const dw = meets(dwOpp!);
+  const wo = meets(woOpp!);
+  expect([dw, wo].every(Boolean), "Pat meets both opponents").toBe(true);
+  for (const [f, by] of [[dw, "both"], [wo, woOpp!]] as const) {
+    const seq = { n: 0 };
+    await post(page.request, f.id, seq, "core.forfeit", { by, reason: "walkover" });
+    await post(page.request, f.id, seq, "core.finalize", {});
+  }
+
+  const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const me = await ctx.newPage();
+  await loginUi(me, `delivered+pat-n1-${TAG}@resend.dev`, "/me");
+  const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
+  expect(whoami.status).toBe(200);
+  await linkPersonToUserBySql(pat, whoami.data!.id);
+  await me.goto("/me");
+  await me.getByTestId("cookie-accept").click();
+  const tag = word(UI_EN, "forfeit.tag.doubleWalkover");
+  const full = word(UI_EN, "forfeit.tagFull.doubleWalkover");
+  const line = (opponent: string) => me.locator("li").filter({ hasText: opponent });
+  const shots = process.env.T13_SHOTS;
+  let screens = 0;
+  for (const width of [1280, 768, 320]) {
+    await me.setViewportSize({ width, height: 900 });
+    await me.reload();
+    const dwLine = line(names[1]!);
+    const woLine = line(names[2]!);
+    await expect(dwLine, `${width}: the double walkover is a result`).toHaveCount(1, { timeout: 20_000 });
+    await expect(woLine, `${width}: the walkover is a result`).toHaveCount(1);
+    const dwCell = dwLine.locator("span.app-display");
+    await expect(dwCell, `${width}: one score cell`).toHaveCount(1);
+    await expect(dwCell, `${width}: the tag is a symbol`).toHaveAttribute("role", "img");
+    await expect(dwCell, `${width}: named by the full words`).toHaveAccessibleName(full);
+    // innerText, so `.app-display`'s uppercase would show: the tag keeps its case.
+    expect(await dwCell.innerText(), `${width}: the double walkover prints its tag, in its own case`).toBe(tag);
+    await expect(dwLine, `${width}: never the stored 0 — 0`).not.toContainText(/0\s*[–—-]\s*0/);
+    // The pair: the same cell on the walkover's line prints its credited score.
+    const woCell = woLine.locator("span.app-display");
+    await expect(woCell, `${width}: the walkover keeps its credited score`).toHaveText(/\d+\s*[–—-]\s*\d+/);
+    await expect(woCell, `${width}: and no tag`).not.toHaveAttribute("role", "img");
+    await expectNoHorizontalScroll(me);
+    const box = me.locator("section").filter({ has: dwLine });
+    await box.screenshot({ path: shots ? `${shots}/me-results-double-walkover-${width}.png` : testInfo.outputPath(`me-results-dw-${width}.png`) });
+    screens++;
+  }
+  expect(screens, "every width was checked").toBe(3);
+  await ctx.close();
+});
+

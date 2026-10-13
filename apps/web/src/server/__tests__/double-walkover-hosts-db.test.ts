@@ -1,6 +1,6 @@
 // Design review I-1 / M-1 (audit 3.1 beyond the web hosts) — a double walkover credits nobody, but its summary carries
 // a 0 / 0, and every host that reads `match_states.summary` straight from the database painted it: the organiser's
-// slideshow, the printed bracket poster, the auto-drafted result post. Each host now asks the one predicate (`creditsNobody`, lib/forfeit-tag.ts).
+// slideshow, the printed bracket poster, the auto-drafted result post — and (re-review N-1) the player's /me results. Each host now asks the one predicate (`creditsNobody`, lib/forfeit-tag.ts).
 //
 // ONE real scene through the real write path (`scoreEvent`): a 4-entrant knockout whose first semi is a double
 // walkover and whose second is a one-sided walkover (the pair, which keeps its credited score). The premise — the
@@ -16,7 +16,11 @@ import { buildDivisionSlides, type FixtureSlideItem } from "@/server/slideshow-d
 import { buildDivisionDocModel } from "@/server/usecases/exports";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import { fixtureRow, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { fixtureRow, post, tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { finalizeFixture } from "@/server/usecases/scoring";
+import { listMyFixtures } from "@/server/usecases/me";
+import { createPerson } from "@/server/usecases/persons";
+import { creditsNobody } from "@/lib/forfeit-tag";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -111,5 +115,36 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
     expect(node(dwId), "the bracket slide has the double walkover's node").toBeDefined();
     expect([node(dwId)!.line, node(dwId)!.tag], "bracket slide: the double walkover").toEqual([null, TAG]);
     expect([node(woId)!.line, node(woId)!.tag ?? null], "bracket slide: the walkover keeps its score").toEqual([woHeadline, null]);
+  });
+
+  // Re-review N-1, the producer leg: the console finalizes a decided double walkover (`finalizeFixture`, core.finalize),
+  // and /me lists finalized results only. The real `listMyFixtures` row must carry the outcome the page's
+  // `creditsNobody` reads — beside the stored 0 / 0 it must not print. The page's render of that row is
+  // `app/me/__tests__/me-page-results-forfeit.test.tsx`. LAST in the file: it finalizes both semis.
+  it("the player's /me: a finalized double walkover's row carries the outcome that credits nobody; the walkover's credits its winner", async () => {
+    // One player per side: a user holds one person per org (persons_org_user_lane_uq), and both semis are this org's.
+    const players: Record<string, string> = {};
+    const sides = await sql<{ id: string; home_entrant_id: string }[]>`select id, home_entrant_id from fixtures where id in (${dwId}, ${woId})`;
+    for (const f of sides) {
+      const [{ id: player }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified)
+        values (${`dw-me-${f.id.slice(0, 8)}@test.local`}, 'Pat', true) returning id`;
+      const person = await createPerson(auth, { full_name: `Pat ${f.id.slice(0, 4)}`, consent: {}, dob: null, gender: null, external_ref: null });
+      await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${f.home_entrant_id}, ${person.id}, ${auth.orgId})`;
+      await sql`update persons set user_id = ${player} where id = ${person.id}`;
+      players[f.id] = player;
+    }
+    expect(Object.keys(players).length, "a player on each semi").toBe(2);
+    const listed = async (id: string) => (await listMyFixtures(players[id]!)).results.find((r) => r.id === id);
+    expect([await listed(dwId), await listed(woId)], "premise: an unfinalized result is not listed").toEqual([undefined, undefined]);
+    for (const id of [dwId, woId]) await finalizeFixture(auth, id, await tip(id));
+    const rows = { [dwId]: await listed(dwId), [woId]: await listed(woId) };
+    const row = (id: string) => rows[id];
+    expect([row(dwId), row(woId)].map((r) => r !== undefined), "both finalized results are listed").toEqual([true, true]);
+    expect(row(dwId)!.outcome, "the double walkover's row carries its outcome").toEqual({ kind: "double_walkover" });
+    expect(creditsNobody(row(dwId)!.outcome), "so the page prints its tag").toBe(true);
+    expect((row(dwId)!.summary as { headline?: string } | null)?.headline, "premise: beside the stored headline it must not print").toMatch(/\d/);
+    expect(creditsNobody(row(woId)!.outcome), "the pair: the walkover credits its winner").toBe(false);
+    expect((row(woId)!.summary as { headline?: string } | null)?.headline, "and keeps its credited score").toBe(woHeadline);
   });
 });
