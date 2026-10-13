@@ -91,6 +91,13 @@ SCHEDULING_AI_BASE_URL=http://127.0.0.1:4319 \
 ANTHROPIC_API_KEY=sk-ant-e2e-fixture \
 STRIPE_SECRET_KEY=sk_test_ci_e2e_dummy \
 STRIPE_WEBHOOK_SECRET=whsec_e2e_payments \
+LICHESS_BASE_URL=http://127.0.0.1:4321 \
+REALTIMEKIT_BASE_URL=http://127.0.0.1:4322 \
+CLOUDFLARE_ACCOUNT_ID=e2e-rtk-account \
+REALTIMEKIT_API_TOKEN=e2e-rtk-api-token \
+REALTIMEKIT_APP_ID=e2e-rtk-app \
+REALTIMEKIT_PLAYER_PRESET=e2e_chess_player \
+REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter \
   node .next/standalone/apps/web/server.js
 ```
 
@@ -106,6 +113,9 @@ STRIPE_WEBHOOK_SECRET=whsec_e2e_payments \
 | `NEXT_PUBLIC_SUPABASE_URL` | A stub, not empty: `publicStorageUrl("")` hides every badge/crest and makes logo assertions untestable. |
 | `SCHEDULING_AI_BASE_URL`, `ANTHROPIC_API_KEY` | `ai-architect.spec.ts` starts a model fixture server on `AI_FIXTURE_PORT` (4319); the app must point at it and carry a non-empty key so the ai-plan routes never 503. These used to be injected by the old `webServer.env` block, which only ever applied to a server Playwright started itself. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Only for `payments-hardening.spec.ts`, which posts signed synthetic webhooks at the real route. CI dummies; no real Stripe call is made. |
+| `LICHESS_BASE_URL`, `REALTIMEKIT_BASE_URL` | The online-chess walkthrough (`walkthrough/chess-external-play.spec.ts`) starts a Lichess fixture server on 4321 and a RealtimeKit one on 4322 (`e2e/lichess-fixture-server.ts`, `e2e/realtimekit-fixture-server.ts`); the server must point at both. **An unset `LICHESS_BASE_URL` means the server calls lichess.org for real** (and an unset `REALTIMEKIT_BASE_URL`, Cloudflare), with the suite's fake tokens. The spec's first assertion of each names these variables when its fixture sees no traffic. |
+| `CLOUDFLARE_ACCOUNT_ID`, `REALTIMEKIT_API_TOKEN`, `REALTIMEKIT_APP_ID`, `REALTIMEKIT_PLAYER_PRESET`, `REALTIMEKIT_ARBITER_PRESET` | The video fixture's own credentials (`REALTIMEKIT_FIXTURE_ENV`; anything else is refused 401 / routed nowhere). Without all five the server never calls video at all ("unconfigured"), and the walkthrough's camera states cannot be reached. |
+| `LICHESS_TOKEN_KEK`, `CRON_SECRET` | The chess walkthrough seals each player's Lichess token and fires the external-play sweep itself, so the RUNNER needs the server's values too: the CI ones are in `scripts/ci-local.sh`'s `common_env` and e2e.yml (`CRON_SECRET` in e2e.yml only). `AUTH_SECRET` likewise: the runner mints the players' room links. |
 
 `NEXT_PUBLIC_*` values are baked at **build** time — set them for step 2 as well
 as step 4.

@@ -494,6 +494,27 @@ jobs:
       # CI-only dummy; no real Anthropic call is made.
       SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
       ANTHROPIC_API_KEY: sk-ant-e2e-fixture
+      # Online chess (design 2026-10-09, Task 17): the chess walkthrough
+      # (walkthrough/chess-external-play.spec.ts) starts a Lichess fixture
+      # server on 4321 and a RealtimeKit one on 4322; the app server must be
+      # pointed at both or it reaches the REAL lichess.org and Cloudflare with
+      # fake tokens. Same mechanism as SCHEDULING_AI_BASE_URL above, and the
+      # spec's first assertion of each names these vars when its stub sees no
+      # traffic. The five RealtimeKit values are the video fixture's own
+      # (REALTIMEKIT_FIXTURE_ENV): without them the server never calls video
+      # ("unconfigured") and the walkthrough's camera states are unreachable.
+      # Job level, so every leg's server has them; where no spec starts the
+      # fixtures the ports are closed and a stray call is refused on the
+      # runner instead of leaving it. Only this job runs the walkthrough —
+      # e2e-mobile's match-room block seeds a ledger game and reaches neither
+      # service. e2e-ci-wiring.test.ts pins these lines to the fixture modules.
+      LICHESS_BASE_URL: "http://127.0.0.1:4321"
+      REALTIMEKIT_BASE_URL: "http://127.0.0.1:4322"
+      CLOUDFLARE_ACCOUNT_ID: e2e-rtk-account
+      REALTIMEKIT_API_TOKEN: e2e-rtk-api-token
+      REALTIMEKIT_APP_ID: e2e-rtk-app
+      REALTIMEKIT_PLAYER_PRESET: e2e_chess_player
+      REALTIMEKIT_ARBITER_PRESET: e2e_chess_arbiter
 
     steps:
       - uses: actions/checkout@v5

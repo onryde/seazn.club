@@ -319,6 +319,17 @@ e2e_env() {
   export ANTHROPIC_API_KEY=sk-ant-e2e-fixture
   # e2e.yml's e2e-parallel job sets this for sitemap.spec.ts (server AND runner).
   export SITEMAP_REVALIDATE_SECONDS=20
+  # Online chess walkthrough (Task 17): the server must point at the local fixture servers the spec starts, with the
+  # video fixture's credentials (e2e.yml's e2e-parallel sets these; e2e-ci-wiring.test.ts pins both to the fixture
+  # modules). No job here runs the walkthrough leg, but a server this script starts is then the one it needs
+  # (docs/runbooks/e2e-local.md), and a stray call from any other spec is refused locally rather than leaving the machine.
+  export LICHESS_BASE_URL=http://127.0.0.1:4321
+  export REALTIMEKIT_BASE_URL=http://127.0.0.1:4322
+  export CLOUDFLARE_ACCOUNT_ID=e2e-rtk-account
+  export REALTIMEKIT_API_TOKEN=e2e-rtk-api-token
+  export REALTIMEKIT_APP_ID=e2e-rtk-app
+  export REALTIMEKIT_PLAYER_PRESET=e2e_chess_player
+  export REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter
 }
 
 # ===========================================================================

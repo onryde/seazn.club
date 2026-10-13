@@ -43,6 +43,8 @@ import {
   TUNABLE_NAMES,
   tunable,
 } from "../../server/relay/config";
+import { LICHESS_FIXTURE_URL } from "../../../e2e/lichess-fixture-server";
+import { REALTIMEKIT_FIXTURE_ENV, REALTIMEKIT_FIXTURE_URL } from "../../../e2e/realtimekit-fixture-server";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -491,7 +493,10 @@ const WALKTHROUGH_SPECS: string[] = [
   "capture-panel-pr2.spec.ts",
 
   // Online chess (Lichess) — OTB has no Play CTA, an online board links to no
-  // Lichess game, and the organiser's needs-result queue resolves a held board.
+  // Lichess game, and the organiser's needs-result queue resolves a held board;
+  // and (Task 17) the venue end to end on the local Lichess and RealtimeKit
+  // fixture servers: D12's unopened round, the organiser's open, the camera
+  // preflight's cards, the game made and played at Lichess, the sweep, round 2.
   "chess-external-play.spec.ts",
 ];
 
@@ -1431,5 +1436,84 @@ describe("the stream-slot pool: one helper, one hold limit, one wait", () => {
       vi.unstubAllEnvs();
     }
     expect(checked, "rows checked").toBe(6);
+  });
+});
+
+// Online chess (design 2026-10-09, Task 17): the chess walkthrough starts a
+// Lichess fixture server and a RealtimeKit one, and the APP SERVER — a separate
+// process the workflow boots — must already point at both, with the video
+// fixture's credentials. Without the base URLs it would call lichess.org and
+// Cloudflare with fake tokens; without the credentials it never calls video at
+// all ("unconfigured"), and the camera states the walkthrough proves are out of
+// reach. Like every line in this file, a lost one would red only on a push to
+// main, after the merge. The values are the fixture modules' own, imported —
+// never typed here.
+describe("the online-chess fixture servers' wiring", () => {
+  const strip = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  const WANT: Record<string, string> = {
+    LICHESS_BASE_URL: LICHESS_FIXTURE_URL,
+    REALTIMEKIT_BASE_URL: REALTIMEKIT_FIXTURE_URL,
+    ...REALTIMEKIT_FIXTURE_ENV,
+  };
+  const STARTERS = /\bstart(?:Lichess|RealtimeKit)FixtureServer\(/;
+
+  function job(name: string, next: string): string {
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    const start = yml.indexOf(`\n  ${name}:\n`);
+    const end = yml.indexOf(`\n  ${next}:\n`);
+    expect(start, `no ${name} job`).toBeGreaterThan(-1);
+    expect(end, `no ${next} job after ${name}`).toBeGreaterThan(start);
+    return yml.slice(start, end);
+  }
+  /** A job's JOB-level env: four spaces in, as opposed to a service's or a step's. */
+  function jobEnv(body: string): Map<string, string> {
+    const env = /\n {4}env:\n((?: {6}.*\n|\s*\n)*)/.exec(body)?.[1] ?? "";
+    return new Map([...env.matchAll(/^ {6}([A-Z0-9_]+): *"?([^"\s]*)"?\s*$/gm)].map((m) => [m[1]!, m[2]!]));
+  }
+
+  it("premises: the walkthrough project selects the chess walkthrough, only e2e-parallel runs it, and no spec outside it starts a fixture", async () => {
+    const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
+    expect(selects(walkthrough, "walkthrough/chess-external-play.spec.ts"), "premise: the walkthrough project selects the chess walkthrough").toBe(true);
+    expect(job("e2e-parallel", "e2e-serial"), "premise: e2e-parallel runs the walkthrough project").toMatch(/^\s+project: walkthrough\s*$/m);
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    expect(yml.slice(yml.indexOf("\n  e2e-serial:\n")), "premise: no later job runs the walkthrough project").not.toMatch(
+      /^\s+project: walkthrough\s*$/m,
+    );
+    // Only e2e-parallel carries the pair. A spec in ANOTHER leg that starts a
+    // fixture (mobile.spec.ts's match-room block seeds a ledger game and does
+    // not) would run against a server pointed nowhere — so it reds here first.
+    const starters = specFiles().filter((f) => STARTERS.test(readFileSync(join(E2E_DIR, f), "utf8")));
+    expect(starters.length, "anti-vacuity: some spec starts the fixture servers").toBeGreaterThan(0);
+    expect(
+      starters.filter((f) => !selects(walkthrough, f)),
+      "these specs start a Lichess/RealtimeKit fixture server outside the walkthrough leg; their job's env must point the server at it too, and this test must pin that",
+    ).toEqual([]);
+  });
+
+  it("e2e-parallel's job-level env points the server at both fixtures, with the video fixture's credentials", () => {
+    const env = jobEnv(job("e2e-parallel", "e2e-serial"));
+    let checked = 0;
+    for (const [k, v] of Object.entries(WANT)) {
+      expect(env.get(k), `e2e-parallel's job-level env: ${k}`).toBe(v);
+      checked++;
+    }
+    expect(checked, "vars checked").toBe(7);
+  });
+
+  it("is mirrored by ci-local.sh's e2e_env", () => {
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
+    expect(body, "no e2e_env() in ci-local.sh").not.toBe("");
+    let checked = 0;
+    for (const [k, v] of Object.entries(WANT)) {
+      const local = new RegExp(`^\\s*export ${k}="?([^"\\s]*)"?\\s*$`, "m").exec(body)?.[1];
+      expect(local, `ci-local.sh's e2e_env: ${k}`).toBe(v);
+      checked++;
+    }
+    expect(checked, "vars checked").toBe(7);
   });
 });
