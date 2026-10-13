@@ -1896,6 +1896,7 @@ export type DictionaryKey =
   | "division.present"
   | "division.resultsGrid"
   | "division.resultsGrid.corner"
+  | "division.roundOpened"
   | "division.scheduleEmpty"
   | "division.seed"
   | "division.share.text"

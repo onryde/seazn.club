@@ -1,0 +1,10 @@
+{
+  "capturedAt": "b42a805ab",
+  "cases": {
+    "rail:no-watch": "dc8a2cdf9244f3eec77ce4aebca69708f5b5e096aed71dd3dddad94a894f5ed4",
+    "rail:links-empty/en": "dc8a2cdf9244f3eec77ce4aebca69708f5b5e096aed71dd3dddad94a894f5ed4",
+    "rail:links-some/en": "5e9d3847c1d962f7ec89b2aa64d176d2ee242179fa74e0de9e8887e83944faff",
+    "rail:links-empty/fr": "dc8a2cdf9244f3eec77ce4aebca69708f5b5e096aed71dd3dddad94a894f5ed4",
+    "rail:links-some/fr": "4e6ee33e9788a1ec24152ff1ebe3681ad048ebb597246f7f37439f828838de56"
+  }
+}

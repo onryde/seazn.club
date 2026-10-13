@@ -23,7 +23,7 @@ vi.mock("next/cache", () => ({
 import { sql } from "@/lib/db";
 import { getPublicFixture } from "../data";
 import { seedOnlineChessFixture, seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
+import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { applyOnlinePlayToConfig } from "@/server/external-play/online-play";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { publicFixture } from "@/server/usecases/public";
@@ -371,7 +371,7 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
   });
 });
 
-describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list's watch links, from the real schema (I4)", () => {
+describe.skipIf(!HAS_DB)("loadDivisionWatch — the division Fixtures list's watch links, from the real schema (I4)", () => {
   it("one read for the division: live, final with its score, starting, not opened — and nothing private", async () => {
     // Round 1 opened with three boards: one being played, one finished and decided on the pad, one with no game yet.
     const r = await seedOnlineChessRound({ fixtures: 3 });
@@ -388,7 +388,7 @@ describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list'
     await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
     await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: done!.home.entrantId, method: "resign" } });
     expect((await sql<{ status: string }[]>`select status from fixtures where id = ${done!.fixtureId}`)[0]!.status, "premise: decided").toBe("decided");
-    const links = await loadDivisionWatchLinks(r.divisionId);
+    const { links, roundOpenedAt } = await loadDivisionWatch(r.divisionId);
     // The away entrant plays White on the finished board: White first reads 0–1.
     // T17 owner change (2026-10-13): the idle board, its round open and no move yet, reads Starting.
     expect(links).toEqual({
@@ -397,11 +397,16 @@ describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list'
       [idle!.fixtureId]: { kind: "starting" },
     });
     expect(JSON.stringify(links), "no challenge id, no Lichess id, no hold reason").not.toMatch(/gm-|lichess|needs_|token/i);
+    // V4 (T17 fix round 4): the same read carries the round's open moment for each board still to be played — the
+    // stamp itself (T19's openRound writes it) — and none for the decided board.
+    const [{ opened_at }] = await sql<{ opened_at: Date }[]>`
+      select opened_at from stage_round_opens where stage_id = ${r.stageId} and round_no = 1`;
+    expect(roundOpenedAt).toEqual({ [live!.fixtureId]: opened_at.toISOString(), [idle!.fixtureId]: opened_at.toISOString() });
 
     // A later round, not opened: every board of it reads "Round not opened yet".
     const r2 = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
     seeded.push(r2.orgId);
-    expect(await loadDivisionWatchLinks(r2.divisionId)).toEqual({ [r2.boards[0]!.fixtureId]: { kind: "not_opened" } });
+    expect(await loadDivisionWatch(r2.divisionId)).toEqual({ links: { [r2.boards[0]!.fixtureId]: { kind: "not_opened" } }, roundOpenedAt: {} });
   });
 
   it("the empty case: a division with no fixtures has no links", async () => {
@@ -409,7 +414,7 @@ describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list'
     seeded.push(s.orgId);
     const [{ division_id }] = await sql<{ division_id: string }[]>`select division_id from fixtures where id = ${s.fixtureId}`;
     await sql`delete from fixtures where id = ${s.fixtureId}`;
-    expect(await loadDivisionWatchLinks(division_id)).toEqual({});
+    expect(await loadDivisionWatch(division_id)).toEqual({ links: {}, roundOpenedAt: {} });
   });
 });
 

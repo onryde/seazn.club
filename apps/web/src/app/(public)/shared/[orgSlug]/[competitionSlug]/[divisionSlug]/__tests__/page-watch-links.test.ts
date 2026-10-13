@@ -13,10 +13,10 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),
 }));
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
-const loadDivisionWatchLinks = vi.fn();
+const loadDivisionWatch = vi.fn();
 vi.mock("@/server/usecases/external-play-read", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/external-play-read")>()),
-  loadDivisionWatchLinks: (...a: unknown[]) => loadDivisionWatchLinks(...a),
+  loadDivisionWatch: (...a: unknown[]) => loadDivisionWatch(...a),
 }));
 
 import { msgFor } from "@/lib/messages-i18n";
@@ -58,16 +58,18 @@ async function scheduleProps(sportKey: string, config: unknown) {
 }
 
 beforeEach(() => {
-  loadDivisionWatchLinks.mockReset();
-  loadDivisionWatchLinks.mockResolvedValue({ f1: { kind: "live" } });
+  loadDivisionWatch.mockReset();
+  loadDivisionWatch.mockResolvedValue({ links: { f1: { kind: "live" } }, roundOpenedAt: { f1: "2026-10-16T13:05:00.000Z" } });
 });
 
 describe("public division page — the watch links (I4)", () => {
   it("an online chess division: one read for THIS division, its links and the org locale's words reach the list", async () => {
     const props = await scheduleProps("boardgame", { variant: "classical", onlinePlay: "lichess" });
-    expect(loadDivisionWatchLinks.mock.calls).toEqual([["d1"]]);
+    expect(loadDivisionWatch.mock.calls).toEqual([["d1"]]);
+    // V4 (T17 fix round 4): the same read carries each open board's round-open moment, for the rail.
     expect(props.watch).toEqual({
       links: { f1: { kind: "live" } },
+      roundOpenedAt: { f1: "2026-10-16T13:05:00.000Z" },
       copy: {
         live: msgFor("fr", "externalPlay.watch.list.live"),
         final: msgFor("fr", "externalPlay.watch.list.final"),
@@ -87,7 +89,7 @@ describe("public division page — the watch links (I4)", () => {
       expect(props.watch, key).toBeUndefined();
       checked += 1;
     }
-    expect(loadDivisionWatchLinks, "no read for any of them").not.toHaveBeenCalled();
+    expect(loadDivisionWatch, "no read for any of them").not.toHaveBeenCalled();
     expect(checked, "anti-vacuity: sports swept").toBeGreaterThan(3);
   });
 });

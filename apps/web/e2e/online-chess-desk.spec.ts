@@ -112,6 +112,38 @@ async function ringDot(label: Locator): Promise<{ filled: boolean; ringed: boole
   });
 }
 
+/** V4 (T17 fix round 4): a Fixtures-list row's rail — its two lines (the clock or status word, then the court/date
+ *  line), as the browser renders them. */
+async function railLines(page: Page, fixtureId: string): Promise<[string, string]> {
+  const cell = listRow(page, fixtureId).first().locator(":scope > span.flex-col");
+  // textContent, not innerText: the second line is uppercased by CSS, and the dictionary holds the word as written.
+  const parts = (await cell.locator(":scope > span").allTextContents()).map((t) => t.trim());
+  expect(parts, "the rail has its two lines").toHaveLength(2);
+  return [parts[0]!, parts[1]!];
+}
+
+/** V4: the rail cell stays inside its fixed track (3.5rem) at 320, 768 and 1280 — nothing it holds paints wider. */
+async function railFits(page: Page, fixtureId: string): Promise<number> {
+  let checked = 0;
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(150);
+    const { cell, track, kids } = await listRow(page, fixtureId).first().evaluate((row) => {
+      const c = row.querySelector(":scope > span.flex-col") as HTMLElement;
+      const style = getComputedStyle(row as HTMLElement);
+      return {
+        cell: c.getBoundingClientRect().width,
+        track: Number.parseFloat(style.gridTemplateColumns.split(" ")[0]!),
+        kids: [...c.children].map((k) => (k as HTMLElement).scrollWidth),
+      };
+    });
+    expect(cell, `the rail cell is the track at ${width}px`).toBeCloseTo(track, 0);
+    for (const w of kids) expect(w, `a rail line fits the track at ${width}px`).toBeLessThanOrEqual(Math.ceil(track));
+    checked += 1;
+  }
+  return checked;
+}
+
 /** The division's public Fixtures list: each fixture row's own link, by the fixture it opens. */
 const listRow = (page: Page, fixtureId: string) => page.locator(`a[href$="/fixtures/${fixtureId}"]`);
 
@@ -717,6 +749,13 @@ test.describe("online chess — the public fixture page", () => {
     await expect(listWatch).toHaveAttribute("data-kind", "starting", { timeout: 30_000 });
     await expect(listWatch).toHaveText(uiEn["externalPlay.watch.list.starting"]!);
     expect(await ringDot(listWatch), "the list's dot is an empty ring").toEqual({ filled: false, ringed: true });
+    // V4 (T17 fix round 4): the board has no scheduled time and its round is open, so the rail shows WHEN IT OPENED
+    // (compared below with the fixture page's own line), with the word under it — never "TBD".
+    const [railTime, railWord] = await railLines(page, room.fixtureId);
+    expect(railTime, "the rail's clock").toMatch(/^\d{2}:\d{2}$/);
+    expect(railTime).not.toBe(uiEn["schedule.tbd"]);
+    expect(railWord).toBe(publicEn["division.roundOpened"]!);
+    expect(await railFits(page, room.fixtureId), "the rail keeps its track at every width").toBe(3);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "division-watch-starting");
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -782,6 +821,8 @@ test.describe("online chess — the public fixture page", () => {
     const subheading = page.getByTestId("mc-subheading");
     const opened = await roundOpenLine(page);
     await expect(subheading).toHaveText(opened);
+    // V4: the list's rail printed the very clock this line prints.
+    expect(opened, "the list's rail and the fixture page agree").toBe(publicEn["matchCentre.status.roundOpened"]!.replace("{time}", railTime));
     // V2, the empty case: before the first move the Summary still says the match has not started.
     const summaryEmpty = page.getByTestId("mc-summary-empty");
     await expect(summaryEmpty).toHaveText(publicEn["matchCentre.empty.beforeStart"]!);
@@ -875,6 +916,8 @@ test.describe("online chess — the public fixture page", () => {
     const watch = listRow(page, room.fixtureId).first().getByTestId("schedule-watch");
     await expect(watch).toHaveAttribute("data-kind", "not_opened", { timeout: 30_000 });
     await expect(watch).toHaveText(uiEn["externalPlay.watch.list.notOpened"]!);
+    // V4, the other direction: the round is not open, so the rail still says TBD.
+    expect((await railLines(page, room.fixtureId))[0], "not opened: TBD").toBe(uiEn["schedule.tbd"]);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "division-watch-not-opened");
 

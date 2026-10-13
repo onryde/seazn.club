@@ -185,15 +185,23 @@ export function watchLinkOf(row: WatchLinkRow): PublicWatchLink | null {
 
 /** Every online board's link on the division Fixtures list, in ONE read (a public read: `public_fixtures_v` decides
  *  which fixtures exist). Keyed by fixture id; a board with nothing to offer is absent. The caller asks only for a
- *  division that plays online. Never a challenge id, a Lichess id or a hold reason — only the link's kind and score. */
-export async function loadDivisionWatchLinks(divisionId: string): Promise<Record<string, PublicWatchLink>> {
+ *  division that plays online. Never a challenge id, a Lichess id or a hold reason — only the link's kind and score.
+ *
+ *  V4 (T17 fix round 4): the same read also carries, for each board still to be played (scheduled, in play) whose
+ *  round is open, the moment it opened — the stamp the fixture page's "Round opened HH:MM" line prints — for the
+ *  rail of a board with no scheduled time. */
+export async function loadDivisionWatch(
+  divisionId: string,
+): Promise<{ links: Record<string, PublicWatchLink>; roundOpenedAt: Record<string, string> }> {
   const rows = await watchLinkRows({ divisionId });
-  const out: Record<string, PublicWatchLink> = {};
+  const links: Record<string, PublicWatchLink> = {};
+  const roundOpenedAt: Record<string, string> = {};
   for (const r of rows) {
     const l = watchLinkOf(r);
-    if (l !== null) out[r.fixture_id] = l;
+    if (l !== null) links[r.fixture_id] = l;
+    if (r.round_opened_at !== null && isPlayableFixtureStatus(r.fixture_status)) roundOpenedAt[r.fixture_id] = r.round_opened_at.toISOString();
   }
-  return out;
+  return { links, roundOpenedAt };
 }
 
 /** R3 (T16 fix round 1): is an online game being played on this board? Exactly when the Fixtures list offers "Watch
@@ -220,11 +228,12 @@ export async function loadOnlineHeader(fixtureId: string): Promise<{ onlineGameI
 /** The rows `watchLinkOf` reads — a public read: `public_fixtures_v` decides which fixtures exist. ONE query for the
  *  Fixtures list (a division) and the match centre (a fixture), so the two read the same columns the same way. */
 function watchLinkRows(of: { divisionId: string } | { fixtureId: string }) {
-  return sql<(WatchLinkRow & { fixture_id: string })[]>`
+  return sql<(WatchLinkRow & { fixture_id: string; round_opened_at: Date | null })[]>`
     select v.id as fixture_id, f.status as fixture_status, f.home_entrant_id, f.away_entrant_id, f.outcome, v.summary,
            f.finished_at, ep.status, ep.challenge_id, ep.white_side, coalesce(ep.move_count, 0)::int as move_count,
            ep.needs_reason,
-           exists(select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no) as round_opened
+           exists(select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no) as round_opened,
+           (select o.opened_at from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no) as round_opened_at
       from public_fixtures_v v
       join fixtures f on f.id = v.id
       left join fixture_external_play ep on ep.fixture_id = v.id

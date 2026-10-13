@@ -23,6 +23,7 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     allEntrants: t(dict, "division.filter.allEntrants"),
     live: t(dict, "matchesHub.live"),
     ended: t(dict, "matchesHub.ended"),
+    roundOpened: t(dict, "division.roundOpened"),
     // W2a: the SAME words the match centre's status line uses for a held fixture (Task 7), so the bracket card and the
     // page it opens cannot describe one match two ways.
     held: t(dict, "matchCentre.status.needs_decision"),

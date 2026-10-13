@@ -10,7 +10,8 @@ import { msgFor } from "@/lib/messages-i18n";
 import { publicWatchCopy } from "@/server/public-site/schedule-copy";
 import type { PublicFixture } from "@/server/public-site/data";
 import type { PublicWatchLink } from "@/server/external-play/public-view";
-import { Schedule, type ScheduleCopy } from "../schedule";
+import { Schedule, timeOf, type ScheduleCopy } from "../schedule";
+import { formatWatchTime } from "../match-centre/watch-parts";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 const F = (id: string, over: Partial<PublicFixture> = {}): PublicFixture => ({
@@ -38,7 +39,7 @@ const F = (id: string, over: Partial<PublicFixture> = {}): PublicFixture => ({
 const COPY: ScheduleCopy = {
   timeTbd: "(time tbd)", allEntrants: "(all)", live: "(live)", ended: "(ended)", tbd: "(tbd)", held: "(held)",
   filterLabel: "(filter)", viewLabel: "(view)", viewDay: "(day)", viewRound: "(round)", calendar: "(calendar)",
-  timesIn: "(times in {zone})", empty: "(empty)",
+  timesIn: "(times in {zone})", empty: "(empty)", roundOpened: "(opened)",
 };
 const FIXTURES = [F("f1", { status: "in_play" }), F("f2", { status: "decided" }), F("f3"), F("f4")];
 const LINKS: Record<string, PublicWatchLink> = {
@@ -63,6 +64,12 @@ const render = (watch?: Parameters<typeof Schedule>[0]["watch"], fixtures = FIXT
       {...(watch ? { watch } : {})}
     />,
   );
+/** The rail cell's two lines (the clock or status word, then the court/date line), as text. */
+const railOf = (row: string): [string, string] => {
+  const m = row.match(/<span class="row-span-2 flex min-w-0 flex-col items-start">(<span[^>]*>(?:<span[^>]*><\/span>)?([^<]*)<\/span>)<span[^>]*>([^<]*)<\/span><\/span>/);
+  if (!m) throw new Error(`no rail cell in ${row.slice(0, 200)}`);
+  return [m[2]!, m[3]!];
+};
 /** Each fixture row's own link, by its href. */
 const rows = (html: string) =>
   Object.fromEntries([...html.matchAll(/<a [^>]*href="\/o\/c\/d\/fixtures\/(f\d)"[^>]*>([^]*?)<\/a>/g)].map((m) => [m[1]!, m[2]!]));
@@ -128,6 +135,65 @@ describe("Schedule — the online watch links (I4)", () => {
       checked += 1;
     }
     expect(checked).toBe(4);
+  });
+
+  // T17 fix round 4, V4 (coordinator ruling, as V1): an online board whose round is open and which has no scheduled
+  // time shows WHEN THE ROUND OPENED in the rail, where it said "TBD" — the clock the fixture page's "Round opened
+  // HH:MM" line prints (formatWatchTime), with the short word under it on the rail's second line. A board with a
+  // real time keeps it; a decided or live row keeps its own word.
+  it("V4: no time, its round open — the rail shows the round-open clock (the fixture page's own format) over 'Opened', never TBD; all four locales", () => {
+    const OPENED = "2026-10-16T13:05:00.000Z"; // 14:05 in London (BST)
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const copy = publicWatchCopy((k) => msgFor(loc, k));
+      const html = render({ links: {}, copy, roundOpenedAt: { f4: OPENED } }, FIXTURES.map((f) => (f.id === "f4" ? { ...f, scheduled_at: null } : f)));
+      const rail = railOf(rows(html).f4!);
+      const clock = formatWatchTime(OPENED, "Europe/London", loc, false);
+      expect(clock, "premise: the fixture page's clock").toBe("14:05");
+      expect(rail[0], `${loc}: the round-open clock`).toBe(clock);
+      expect(rail[1], `${loc}: the word under it`).toBe(COPY.roundOpened);
+      expect(rail[0], `${loc}: not TBD`).not.toBe(COPY.tbd);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("V4: the gate — a real scheduled time is kept; a live or decided row keeps its word; no entry, or no watch, is TBD as before", () => {
+    const OPENED = "2026-10-16T13:05:00.000Z";
+    const copy = publicWatchCopy((k) => msgFor("en", k));
+    const fx = [
+      F("f1", { status: "in_play", scheduled_at: null }),
+      F("f2", { status: "decided", scheduled_at: null }),
+      F("f3"),
+      F("f4", { scheduled_at: null }),
+      F("f5", { scheduled_at: null }),
+    ];
+    const opened = { f1: OPENED, f2: OPENED, f3: OPENED, f4: OPENED };
+    const r = rows(render({ links: {}, copy, roundOpenedAt: opened }, fx));
+    const bare = rows(render({ links: {}, copy }, fx));
+    expect(railOf(r.f3!), "a real time is kept").toEqual(railOf(bare.f3!));
+    expect(railOf(r.f3!)[0], "premise: 19:00 in London").toBe("19:00");
+    expect(r.f1, "live keeps its word").toBe(bare.f1);
+    expect(r.f2, "decided keeps its word").toBe(bare.f2);
+    expect(railOf(r.f4!)[0], "the one the ruling is for").toBe("14:05");
+    expect(railOf(r.f5!), "no entry: TBD, as before").toEqual(railOf(bare.f5!));
+    expect(railOf(bare.f4!)[0], "premise: today it says TBD").toBe(COPY.tbd);
+    // No watch at all (every other division, the embed): today's markup.
+    expect(rows(render(undefined, fx)).f4, "no watch: TBD").toBe(bare.f4);
+  });
+
+  it("V4: the rail's clock IS the fixture page's — timeOf and formatWatchTime agree at every 7th minute of a day, across a DST change, in all four locales", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const day of ["2026-10-24", "2026-10-25"]) {
+        for (let m = 0; m < 24 * 60; m += 7) {
+          const iso = new Date(Date.parse(`${day}T00:00:00.000Z`) + m * 60_000).toISOString();
+          expect(timeOf(iso, "Europe/London"), `${loc} ${iso}`).toBe(formatWatchTime(iso, "Europe/London", loc, false));
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(4 * 2 * Math.ceil((24 * 60) / 7));
   });
 
   it("a final position with no recorded score shows the words alone", () => {
