@@ -566,6 +566,13 @@ const RUNG_KEY: Record<string, MessageKey> = {
   armageddon: "pad.boardgame.tiebreak.rung.armageddon",
 };
 
+// W2c BG-KO-2 (D7) — boardgame.tiebreak's Armageddon `result`, from White's side. The draw says what the rule does with it.
+const ARMAGEDDON_RESULT_KEY: Record<string, MessageKey> = {
+  white: "pad.boardgame.armageddon.result.white",
+  black: "pad.boardgame.armageddon.result.black",
+  draw: "pad.boardgame.armageddon.result.draw",
+};
+
 /**
  * Enum field name → the vocabularies that can label its members. A field maps
  * to SEVERAL maps where an existing closed enum already covers part of it:
@@ -585,6 +592,7 @@ export const ENUM_VOCAB: Record<string, readonly Record<string, MessageKey>[]> =
   receiverSide: [COURT_KEY],
   offence: [OFFENCE_KEY], // S4 (#428) — FootballPenalty.offence
   rung: [RUNG_KEY], // W2a — BoardgameTiebreak.rung
+  result: [ARMAGEDDON_RESULT_KEY], // W2c — BoardgameArmageddon.result
 };
 
 /**
@@ -641,6 +649,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   ABANDONED_SETTLE_OR_VOID: "engineError.ABANDONED_SETTLE_OR_VOID",
   DOUBLE_WALKOVER_NO_NEXT_MATCH: "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH",
   STAGE_SEAT_DEPARTED: "engineError.STAGE_SEAT_DEPARTED",
+  // W2c (D7).
+  TIEBREAK_COLOUR_REQUIRED: "engineError.TIEBREAK_COLOUR_REQUIRED",
 };
 
 /**
@@ -788,6 +798,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // emits, which is the gate that would have caught it.
   "pad.badminton.scorebug.rally.hint",
 
+  "pad.boardgame.action.armageddon", // W2c BG-KO-2: bracket cfg only, with a tie-break list that has an Armageddon
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",
   "pad.boardgame.action.result",

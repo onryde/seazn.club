@@ -50,4 +50,23 @@ export const BOARDGAME_RULES: RuleField[] = [
     max: 60,
     build: () => ({}),
   },
+  // W2c BG-KO-3 (D8): which tie-break games a knockout stage plays, in the order they are played. The first ordered-list
+  // ("sequence") field. Bracket stages only; the engine decides what a drawn game does when the list is empty.
+  {
+    key: "tiebreakRungs",
+    edits: ["tiebreakRungs"],
+    label: "Tie-break games, in order",
+    help: "Played in this order after a drawn knockout game. Leave blank to play all three.",
+    kind: "sequence",
+    options: [
+      { value: "rapid", label: "Rapid game" },
+      { value: "blitz", label: "Blitz game" },
+      { value: "armageddon", label: "Armageddon" },
+    ],
+    build: (v) => ({ tiebreakRungs: v === "" ? [] : v.split(",") }),
+    // Report only what the config carries, so a stage's saved order reopens as itself: a stage's PUT is a fragment where a
+    // blank means "inherit", and a blank over a saved list would drop it on the next save. An empty list has no value of
+    // its own here (blank is "the engine's own order"); the sequence control that renders this field owns that case.
+    read: (config) => (Array.isArray(config.tiebreakRungs) && config.tiebreakRungs.length > 0 ? config.tiebreakRungs.join(",") : undefined),
+  },
 ];

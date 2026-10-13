@@ -98,6 +98,7 @@ describe("v1 envelope", () => {
     ["TIEBREAK_NOT_APPLICABLE", 409],
     ["LEVEL_RESULT_IN_BRACKET", 409],
     ["LEVEL_RESULT_SEATED", 500], // an assertion: only reachable through a bug
+    ["TIEBREAK_COLOUR_REQUIRED", 422], // W2c D7: an Armageddon that names no Black
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");

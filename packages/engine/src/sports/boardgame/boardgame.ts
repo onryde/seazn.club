@@ -673,7 +673,7 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   };
   const armageddonAction: PadAction = {
     type: BOARDGAME_TIEBREAK_TYPE,
-    labelKey: { key: "pad.boardgame.action.armageddon", label: "Armageddon" },
+    labelKey: { key: "pad.boardgame.action.armageddon", label: "Armageddon game" },
     fields: [
       { kind: "enum", path: "rung", values: ["armageddon"] },
       { kind: "enum", path: "result", values: ARMAGEDDON_RESULTS },

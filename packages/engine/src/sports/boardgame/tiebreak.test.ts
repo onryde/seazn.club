@@ -316,6 +316,7 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
       { kind: "enum", path: "result", values: ARMAGEDDON_RESULTS },
     ]);
     expect(armageddon.attribution.map((i) => [i.kind, i.path, i.required])).toEqual([["side", "black", true]]); // Confirm waits for Black
+    expect(armageddon.labelKey).toEqual({ key: "pad.boardgame.action.armageddon", label: "Armageddon game" }); // the dictionary contract (apps/web ui.json)
     expect(tb!.actions).toHaveLength(2);
     // Behaviour, through the pad's own evaluator: a live bracket game offers the result panels, a drawn one only the
     // tie-break.

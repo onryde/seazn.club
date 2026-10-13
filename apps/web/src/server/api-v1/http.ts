@@ -89,6 +89,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   ABANDONED_SETTLE_OR_VOID: 409,
   DOUBLE_WALKOVER_NO_NEXT_MATCH: 409,
   STAGE_SEAT_DEPARTED: 409,
+  // W2c (D7) — a malformed Armageddon (it names no Black), like INVALID_EVENT: the scorer re-sends it complete.
+  TIEBREAK_COLOUR_REQUIRED: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

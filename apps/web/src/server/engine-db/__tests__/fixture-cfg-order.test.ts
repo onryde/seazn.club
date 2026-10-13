@@ -3,7 +3,9 @@
 // bracket-overlay-callers.test.ts. Expected values come from the engine's declarations (`bracketDeciders`,
 // `configSchema`, `variants`) and from the literals the case itself writes, never from the resolver.
 import { describe, expect, it } from "vitest";
+import { EngineError, foldMatch } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { resolveFixtureCfg } from "../fixture-cfg";
 
 const mod = (key: string) => builtinModules.find((m) => m.key === key)!;
@@ -77,5 +79,55 @@ describe("P3 resolveFixtureCfg order", () => {
     expect(division).toEqual({ bestOf: 5 });
     expect(rules).toEqual({ setTo: 15 });
     expect(override).toEqual({ bestOf: 1 });
+  });
+});
+
+// W2c Task 8 (BG-KO-3, G1): the stage's tie-break rung list is written by the STAGE and the bracket overlay lands after
+// it, so the overlay must never overwrite it (`bracketDeciders` forces `tiebreak: true` and nothing else). Driven through
+// the real resolver and the real boardgame fold: a list the overlay clobbered would reopen a tie-break the organiser
+// switched off, or reorder the rungs they chose.
+describe("BG-KO-3 (G1): the stage's tie-break rungs survive the bracket overlay", () => {
+  const boardgame = mod("boardgame");
+  const lineups = defaultLineupPair(boardgame.positions);
+  const H = lineups.home.entrantId;
+  const A = lineups.away.entrantId;
+  const division = boardgame.configSchema.parse({});
+  const knockout = (rungs?: readonly string[]) => ({ kind: "knockout" as const, config: { rules: rungs === undefined ? {} : { tiebreakRungs: rungs } } });
+  const resolved = (fixture: { config_snapshot: unknown; rules_override: unknown }, rungs?: readonly string[]) => resolveFixtureCfg(fixture, division, knockout(rungs), boardgame) as { tiebreak?: boolean; tiebreakRungs?: string[] };
+  const ev = (seq: number, type: string, payload: unknown = {}) => makeEnvelope(seq, { type, payload });
+  const drawn = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "agreement" })];
+  const fold = (cfg: unknown, events = drawn) => foldMatch(boardgame, boardgame.configSchema.parse(cfg) as never, lineups, events);
+  const codeOf = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return EngineError.is(e) ? e.code : String(e); } };
+
+  it("an EMPTY list is still empty after the overlay (the overlay still forces tiebreak: true), and a drawn game is then held, not sent to a tie-break (ruling 79)", () => {
+    const cfg = resolved(none, []);
+    expect(cfg.tiebreakRungs).toEqual([]);
+    expect(cfg.tiebreak, "the overlay still ran: it forces the decider on").toBe(true);
+    const s = fold(cfg);
+    expect(s.phase, "a drawn game with no tie-break to play stays a draw").toBe("done");
+    expect(boardgame.outcome(s)).toEqual({ kind: "draw" });
+  });
+  it("a reordered, shortened list keeps the organiser's order, and only its rungs are played", () => {
+    const cfg = resolved(none, ["blitz", "armageddon"]);
+    expect(cfg.tiebreakRungs).toEqual(["blitz", "armageddon"]);
+    expect(fold(cfg).phase).toBe("tiebreak");
+    expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })])), "rapid is not in the list").toBe("TIEBREAK_NOT_APPLICABLE");
+    expect(fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "blitz", winner: A })]).outcome, "a listed rung is played").toMatchObject({ kind: "win", winner: A });
+  });
+  it("the positive pair: a stage that sets no list adds none (the key stays absent) and every rung is played", () => {
+    const cfg = resolved(none);
+    expect(Object.hasOwn(cfg, "tiebreakRungs")).toBe(false);
+    expect(cfg.tiebreak).toBe(true);
+    expect(fold(cfg).phase).toBe("tiebreak");
+    let played = 0;
+    for (const body of [{ rung: "rapid", winner: H }, { rung: "blitz", winner: A }, { rung: "armageddon", black: H, result: "draw" }]) {
+      expect(fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", body)]).outcome, body.rung).toMatchObject({ kind: "win" });
+      played++;
+    }
+    expect(played).toBe(3);
+  });
+  it("X-SR-2: a match's own override lands after the stage's list (an empty list restored to a rung, and a list emptied)", () => {
+    expect(resolved({ config_snapshot: null, rules_override: { tiebreakRungs: ["rapid"] } }, []).tiebreakRungs).toEqual(["rapid"]);
+    expect(resolved({ config_snapshot: null, rules_override: { tiebreakRungs: [] } }, ["blitz", "rapid"]).tiebreakRungs).toEqual([]);
   });
 });
