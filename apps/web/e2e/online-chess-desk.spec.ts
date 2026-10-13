@@ -89,6 +89,14 @@ const publicEn = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8"),
 ) as Record<string, string>;
 
+/** V1 (T17 fix round 2): the line under the title an online board carries from its round's open — the dictionary's
+ *  sentence around the very time Match details prints for "Round opened" (the two must agree). */
+async function roundOpenLine(page: Page): Promise<string> {
+  const time = (await page.locator('[data-testid="watch-details"] [data-detail="round-opened"] dd').innerText()).trim();
+  expect(time, "Match details prints the round's open").toMatch(/^\d{2}:\d{2}$/);
+  return publicEn["matchCentre.status.roundOpened"]!.replace("{time}", time);
+}
+
 /** The division's public Fixtures list: each fixture row's own link, by the fixture it opens. */
 const listRow = (page: Page, fixtureId: string) => page.locator(`a[href$="/fixtures/${fixtureId}"]`);
 
@@ -711,8 +719,9 @@ test.describe("online chess — the public fixture page", () => {
     await shoot(page, "b-not-started");
 
     /** Where the status line, the board and both clocks sit inside the panel, at a width — measured from the panel's
-     *  own corner, because the page above it is not the panel's: a fixture with no time loses its "Time TBD" line
-     *  when the header goes Live (fixture-subheading.ts, R11 C3), which moves the whole panel, not its contents. */
+     *  own corner — and, V1 (T17 fix round 2), where the panel and the board sit ON THE PAGE: the line under the title
+     *  used to say "Time TBD" and then drop when the header went Live (R11 C3), moving the whole panel ~36px. V3: the
+     *  panel's heading row too, for its order against the board. */
     const layout = async (width: number) => {
       await page.setViewportSize({ width, height: 900 });
       await page.waitForTimeout(150);
@@ -722,21 +731,53 @@ test.describe("online chess — the public fixture page", () => {
           const r = document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
           return r ? [Math.round(r.left - panel.left), Math.round(r.top - panel.top), Math.round(r.width), Math.round(r.height)] : null;
         };
+        const onPage = (id: string) => {
+          const r = document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
+          return r ? Math.round(r.top + window.scrollY) : null;
+        };
         return {
           status: box("watch-status"),
           board: box("room-board-surface"),
           white: box("watch-clock-white"),
           black: box("watch-clock-black"),
+          heading: box("watch-heading"),
+          panelTop: onPage("watch-panel"),
+          boardTop: onPage("room-board-surface"),
         };
       });
     };
     const WIDTHS = [320, 768, 1280];
+    // V1: from the round's open the line under the title says when it opened — the time Match details shows.
+    const subheading = page.getByTestId("mc-subheading");
+    const opened = await roundOpenLine(page);
+    await expect(subheading).toHaveText(opened);
+    // V2, the empty case: before the first move the Summary still says the match has not started.
+    const summaryEmpty = page.getByTestId("mc-summary-empty");
+    await expect(summaryEmpty).toHaveText(publicEn["matchCentre.empty.beforeStart"]!);
     const before: Record<number, Awaited<ReturnType<typeof layout>>> = {};
+    let ordered = 0;
     for (const w of WIDTHS) {
       before[w] = await layout(w);
       // The line belongs to the board: it starts where the board's column starts (at 768 that column is centred).
       expect(before[w]!.status?.[0], `the status line lines up with the board at ${w}px`).toBe(before[w]!.black?.[0]);
+      // V3: a phone reads the heading, the status line, then the board; 768 keeps the board first; 1280 keeps the
+      // heading at the top of the right-hand column.
+      const [hx, hy] = before[w]!.heading!;
+      const [sx, sy] = before[w]!.status!;
+      const [bx, by, bw] = before[w]!.board!;
+      if (w === 320) {
+        expect(hy, "320: the heading above the status line").toBeLessThan(sy!);
+        expect(sy, "320: the status line above the board").toBeLessThan(by!);
+      } else if (w === 768) {
+        expect(by, "768: the board above the heading, as before").toBeLessThan(hy!);
+      } else {
+        expect(hx, "1280: the heading in the right-hand column").toBeGreaterThanOrEqual(bx! + bw!);
+        expect(hy, "1280: at the top of it, level with the status line").toBeLessThanOrEqual(sy! + 8);
+      }
+      expect(sx).toBeGreaterThanOrEqual(0);
+      ordered += 1;
     }
+    expect(ordered, "anti-vacuity: three widths ordered").toBe(3);
 
     // The first move (labelled SQL, the kit's: T10's append of 1.e4) reaches the open page through the poll.
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -745,16 +786,26 @@ test.describe("online chess — the public fixture page", () => {
     await expect(panel).toHaveAttribute("data-state", "live");
     await expect(status).toHaveAttribute("data-kind", "black");
     await expect(status).toHaveText(uiEn["externalPlay.watch.status.blackToMove"]!);
+    // Premise of the comparison below: the header HAS folded live (R3) — measured before it does, a delta of 0
+    // would prove nothing. Then V1: the line is unchanged; V2: the Summary says where the game is.
+    await expect(page.getByTestId("mc-live-pill")).toHaveText(publicEn["matchCentre.status.live"]!, { timeout: POLL_MS + 15_000 });
+    await expect(subheading).toHaveText(opened);
+    await expect(summaryEmpty).toHaveText(publicEn["matchCentre.empty.onlineInPlay"]!);
     let compared = 0;
     for (const w of WIDTHS) {
       const after = await layout(w);
-      for (const part of ["status", "board", "white", "black"] as const) {
+      for (const part of ["status", "board", "white", "black", "heading"] as const) {
         expect(before[w]![part], `${part} at ${w}px has a box`).not.toBeNull();
         expect(after[part], `${part} at ${w}px: the first move moved nothing`).toEqual(before[w]![part]);
         compared += 1;
       }
+      // V1: on the page, not only inside the panel — the board's top before and after, delta 0.
+      expect(before[w]!.boardTop, `the board's top on the page at ${w}px`).not.toBeNull();
+      expect(after.boardTop! - before[w]!.boardTop!, `the board's top at ${w}px: delta`).toBe(0);
+      expect(after.panelTop! - before[w]!.panelTop!, `the panel's top at ${w}px: delta`).toBe(0);
+      compared += 2;
     }
-    expect(compared, "anti-vacuity: 4 parts × 3 widths").toBe(12);
+    expect(compared, "anti-vacuity: (5 parts + 2 page tops) × 3 widths").toBe(21);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "b-first-move");
 
@@ -792,6 +843,16 @@ test.describe("online chess — the public fixture page", () => {
     await expect(watch).toHaveText(uiEn["externalPlay.watch.list.notOpened"]!);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "division-watch-not-opened");
+
+    // V1 (T17 fix round 2): a viewer who loaded the page BEFORE the open. The line says "Time TBD"; the organiser
+    // opens the round; with no reload the panel's poll learns it and the line says when — what Match details says.
+    await page.goto(room.fixturePath);
+    await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "not_opened", { timeout: 30_000 });
+    await expect(page.getByTestId("mc-subheading")).toHaveText(publicEn["matchCentre.status.timeTbd"]!);
+    const opened = await apiJson(request, `/api/v1/stages/${room.stageId}/open-round`, "POST", { roundNo: 1 });
+    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+    await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "not_started", { timeout: POLL_MS + 15_000 });
+    await expect(page.getByTestId("mc-subheading")).toHaveText(await roundOpenLine(page));
     await ctx.close();
   });
 });
