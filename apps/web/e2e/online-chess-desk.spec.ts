@@ -10,7 +10,13 @@
  *  - "Your board": a signed-in player's door into their room, nobody else's;
  *  - the public watch panel: the game's position, view-only, kept current by
  *    the poll, and the not-opened line before the round opens;
- *  - /me's Lichess card for an entered player who is not linked.
+ *  - /me's Lichess card for an entered player who is not linked, its 44px
+ *    controls hit-tested, and the re-link's grant disclosure;
+ *  - T16 fix round 1: the Open round confirmation's earlier-round note (R1),
+ *    the run sheet's quiet connection chip (I3), "Mark as reviewed" on a
+ *    finished flagged board, the fixture page's Live header while the game is
+ *    played (R3), the division list's watch links (I4), and the Lichess card
+ *    on the registration's consent step (I5).
  *
  * The organiser's half goes through the product (match-room-kit.ts:
  * seedOnlineRound / seedMatchRoom). What no API writes is seeded by SQL, and
@@ -29,14 +35,17 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
-import { loginUi, withDb } from "./helpers";
+import { apiJson, loginUi, withDb } from "./helpers";
 import {
+  CLOCK,
   fill,
   longName,
   roundGameSql,
   seedGameSql,
   seedMatchRoom,
+  seedLichessLink,
   seedOnlineRound,
+  seedUser,
   uiEn,
   type RoundBoard,
   type SeededRound,
@@ -64,6 +73,23 @@ const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5", "c2c3", "g8f6"];
 
 const vs = (a: string, b: string) => `${a} ${uiEn["schedule.vs"]} ${b}`;
 
+/** R2's readable "signed in" hint (lib/session-hint.ts SESSION_HINT_COOKIE), read from its source: a client module
+ *  this runner does not import. */
+const SESSION_HINT = (() => {
+  const src = readFileSync(fileURLToPath(new URL("../src/lib/session-hint.ts", import.meta.url)), "utf8");
+  const m = /export const SESSION_HINT_COOKIE = "([^"]+)";/.exec(src);
+  if (!m) throw new Error("online-chess-desk: SESSION_HINT_COOKIE not found in session-hint.ts");
+  return m[1]!;
+})();
+
+/** The public site's own English dictionary (the match centre's header words). */
+const publicEn = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
+/** The division's public Fixtures list: each fixture row's own link, by the fixture it opens. */
+const listRow = (page: Page, fixtureId: string) => page.locator(`a[href$="/fixtures/${fixtureId}"]`);
+
 async function shoot(page: Page, name: string): Promise<void> {
   if (!SHOTS) return;
   mkdirSync(SHOTS, { recursive: true });
@@ -89,6 +115,23 @@ async function noSidewaysScroll(page: Page, widths = [320, 768, 1280]): Promise<
     checked += 1;
   }
   return checked;
+}
+
+/** M5: a control a thumb can hit — at least 44px tall at 320, and a tap at its centre lands on it (paint is not hit:
+ *  `boundingBox()` measures the one, `elementFromPoint` the other). */
+async function tappable(page: Page, control: ReturnType<Page["getByTestId"]>, name: string): Promise<void> {
+  await page.setViewportSize({ width: 320, height: 700 });
+  // Centred, so the site's cookie notice (pinned to the bottom of a cold context) is not what the tap meets.
+  await control.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  const box = await control.boundingBox();
+  expect(box, `${name}: has a box`).not.toBeNull();
+  expect(box!.height, `${name}: 44px tall at 320`).toBeGreaterThanOrEqual(44);
+  const hit = await control.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return top !== null && (top === el || el.contains(top));
+  });
+  expect(hit, `${name}: a tap at its centre lands on it`).toBe(true);
 }
 
 /** A fresh context: no session — a stranger opening a shared link. */
@@ -181,6 +224,8 @@ test.describe("online chess — the organiser's desk", () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(fill("runsheet.round.confirmTitle", { round: 1 }));
     await expect(dialog).toContainText(fill("runsheet.round.confirmBody.other", { count: 4 }));
+    // R1, the empty case: round 1 has no earlier round, so no note.
+    await expect(dialog.getByTestId("open-round-earlier")).toHaveCount(0);
     let named = 0;
     for (const b of r.boards) {
       const row = dialog.getByTestId(`open-round-invitee-${b.fixtureId}`);
@@ -250,6 +295,26 @@ test.describe("online chess — the organiser's desk", () => {
     for (const b of r.boards) await expect((await runSheetRow(page, b)).getByTestId("run-sheet-round-unopened")).toHaveCount(0);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "open-round-open");
+
+    // R1: round 2's confirmation says round 1 is still being played (its boards still to be played), and opening
+    // stays the organiser's call — the confirm is there. Cancel sends nothing.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await roundControl(2).getByTestId("open-round-cta").click();
+    const second = page.getByTestId("open-round-confirm");
+    await expect(second).toContainText(fill("runsheet.round.confirmTitle", { round: 2 }));
+    const earlier = second.getByTestId("open-round-earlier");
+    await expect(earlier).toHaveAttribute("role", "note");
+    await expect(earlier.locator("[data-earlier-round]")).toHaveCount(1);
+    await expect(earlier.locator('[data-earlier-round="1"]')).toHaveText(
+      fill("runsheet.round.confirmEarlierInPlay.other", { round: 1, count: r.boards.length }),
+    );
+    await expect(page.getByTestId("open-round-confirm-confirm")).toBeEnabled();
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "open-round-earlier");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByTestId("open-round-confirm-cancel").click();
+    await expect(second).toHaveCount(0);
+    expect(await opens(), "Cancel opened nothing: round 1's open is still the only one").toBe(1);
   });
 
   test("the queue: a held board settled from it, a flagged board let go on — and the run sheet's chips point at both", async ({
@@ -257,11 +322,36 @@ test.describe("online chess — the organiser's desk", () => {
     request,
   }) => {
     test.setTimeout(180_000);
-    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei"], { camera: "required" });
-    const [held, flagged] = [r.boards[0]!, r.boards[1]!];
+    const r = await seedOnlineRound(request, [longName(), "Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor", "Eli Brandt"], {
+      camera: "required",
+    });
+    const [held, flagged, over] = [r.boards[0]!, r.boards[1]!, r.boards[2]!];
     await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "mismatch" });
     await roundGameSql(flagged, { moves: LINE });
     await flagBoard(r, flagged);
+    // I3: our safeguard's connection problems on the flagged board, in the sweep's job-5 note format (see the header).
+    await withDb(
+      (sql) => sql`
+        insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
+          (${flagged.fixtureId}, ${r.orgId}, 'camera_connection_problems', ${flagged.home.personId},
+           ${"61 s stamped as our side's camera connection problems, 1 stamp in the match: no time inside it; camera required"})`,
+    );
+    // A finished game whose flag is still open: its result through the organiser's own scoring API (what reconcile
+    // writes), the flag reconcile's out-of-band adoption left behind.
+    await roundGameSql(over, { moves: LINE });
+    for (const [seq, event] of [
+      [0, { type: "core.start", payload: {} }],
+      [1, { type: "boardgame.result", payload: { winner: over.home.entrantId, method: "resign" } }],
+    ] as const) {
+      const res = await apiJson(request, `/api/v1/fixtures/${over.fixtureId}/events`, "POST", { expected_seq: seq, ...event });
+      expect(res.status, JSON.stringify(res.error)).toBeLessThan(300);
+    }
+    await withDb(
+      (sql) => sql`
+        insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
+          (${over.fixtureId}, ${r.orgId}, 'out_of_band_play', null,
+           ${`plies 3-4 (${LINE.slice(2, 4).join(" ")}) played at Lichess, not through Seazn; camera required`})`,
+    );
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
@@ -277,11 +367,17 @@ test.describe("online chess — the organiser's desk", () => {
     await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveAttribute("href", `${r.arbiterPath}?fixture=${flagged.fixtureId}`);
     await expect(heldRow.getByTestId("run-sheet-camera-chip")).toHaveCount(0);
     await expect(flaggedRow.getByTestId("run-sheet-online-held-chip")).toHaveCount(0);
+    // I3: our side's connection problems — the quiet chip, to the same panel; never counted as a camera flag.
+    const connection = flaggedRow.getByTestId("run-sheet-connection-chip");
+    await expect(connection).toHaveAttribute("data-state", "ours");
+    await expect(connection).toHaveText(uiEn["arbiter.flag.connection.chipPlain"]!);
+    await expect(connection).toHaveAttribute("href", `${r.arbiterPath}?fixture=${flagged.fixtureId}`);
+    await expect(heldRow.getByTestId("run-sheet-connection-chip")).toHaveCount(0);
 
     // The queue: Held | Flagged, each board once.
     const queue = page.getByTestId("external-play-needs-result-queue");
     await expect(queue.getByTestId("external-play-held")).toContainText(fill("externalPlay.queue.heldHeading", { count: 1 }));
-    await expect(queue.getByTestId("external-play-flagged")).toContainText(fill("externalPlay.queue.flaggedHeading", { count: 1 }));
+    await expect(queue.getByTestId("external-play-flagged")).toContainText(fill("externalPlay.queue.flaggedHeading", { count: 2 }));
     await expect(queue.getByTestId(`external-play-queue-row-${held.fixtureId}`)).toBeVisible();
     const flaggedCard = queue.getByTestId(`external-play-flagged-${flagged.fixtureId}`);
     await expect(flaggedCard).toBeVisible();
@@ -302,7 +398,8 @@ test.describe("online chess — the organiser's desk", () => {
           left join org_members m on m.user_id = f.resolved_by and m.org_id = f.org_id
          where f.fixture_id = ${flagged.fixtureId}`,
     );
-    expect(flags, "both flags closed and kept, resolved by an organiser").toEqual([
+    expect(flags, "all three flags closed and kept, resolved by an organiser").toEqual([
+      { closed: true, role: expect.stringMatching(/^(owner|admin)$/) },
       { closed: true, role: expect.stringMatching(/^(owner|admin)$/) },
       { closed: true, role: expect.stringMatching(/^(owner|admin)$/) },
     ]);
@@ -314,6 +411,19 @@ test.describe("online chess — the organiser's desk", () => {
     // No open camera flag left on a live, camera-required board: the chip reads "Camera ok".
     await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveAttribute("data-state", "ok");
     await expect(flaggedRow.getByTestId("run-sheet-camera-chip")).toHaveText(uiEn["runsheet.camera.ok"]!);
+    await expect(flaggedRow.getByTestId("run-sheet-connection-chip")).toHaveCount(0);
+
+    // A finished game's flags: nothing to let go on — "Mark as reviewed" closes them, and the queue says so.
+    const overCard = queue.getByTestId(`external-play-flagged-${over.fixtureId}`);
+    const review = overCard.getByTestId("external-play-go-on");
+    await expect(review).toHaveText(uiEn["externalPlay.queue.markReviewed"]!);
+    await review.click();
+    await expect(answer).toHaveText(uiEn["externalPlay.queue.reviewed"]!);
+    await expect(queue.getByTestId(`external-play-flagged-${over.fixtureId}`)).toHaveCount(0);
+    const overFlags = await withDb(
+      (sql) => sql<{ closed: boolean }[]>`select closed_at is not null as closed from fixture_play_flags where fixture_id = ${over.fixtureId}`,
+    );
+    expect(overFlags, "closed and kept").toEqual([{ closed: true }]);
 
     // Settle the held board: White (the home side, on the row) wins.
     const heldCard = queue.getByTestId(`external-play-queue-row-${held.fixtureId}`);
@@ -370,8 +480,8 @@ test.describe("online chess — the organiser's desk", () => {
 });
 
 test.describe("online chess — the public fixture page", () => {
-  test("Your board: the signed-in player's door into THEIR room; a stranger gets nothing", async ({ browser, request }) => {
-    test.setTimeout(180_000);
+  test("Your board: the signed-in player's door into THEIR room; a stranger gets nothing — and asks nothing (R2)", async ({ browser, request }) => {
+    test.setTimeout(180_000 + 2 * POLL_MS);
     const room = await seedMatchRoom(request, { names: [longName(), "Bo Lindqvist"] });
 
     const ctx = await cold(browser);
@@ -379,6 +489,8 @@ test.describe("online chess — the public fixture page", () => {
     await loginUi(p, room.white.email, room.fixturePath);
     await p.waitForURL((u) => u.pathname === room.fixturePath);
     const card = p.getByTestId("your-board");
+    // R2: signing in set the readable hint beside the session, so the island asks the lobby.
+    expect((await ctx.cookies()).filter((c) => c.name === SESSION_HINT).map((c) => [c.value, c.httpOnly])).toEqual([["1", false]]);
     // Opened a moment ago: the check-in window is open.
     await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
     await expect(card).toContainText(uiEn["externalPlay.yourBoard.state.check_in"]);
@@ -392,13 +504,20 @@ test.describe("online chess — the public fixture page", () => {
     await expect(p.getByTestId("match-room")).toBeVisible();
     await ctx.close();
 
-    // Anonymous: the lobby refuses (401) and the island shows nothing.
+    // Anonymous (R2): no session hint, so the island never asks the lobby — no 401 in a spectator's console — and
+    // shows nothing. Absence is read only once the page's client has run: the watch panel's own poll has answered.
     const anon = await cold(browser);
     const a = await anon.newPage();
-    const asked = a.waitForResponse((res) => res.url().includes(`/fixtures/${room.fixtureId}/external-play/lobby`));
+    const lobby: string[] = [];
+    a.on("request", (req) => {
+      if (req.url().includes(`/fixtures/${room.fixtureId}/external-play/lobby`)) lobby.push(req.url());
+    });
+    const polled = a.waitForResponse((res) => res.url().includes(`/api/v1/public/fixtures/${room.fixtureId}`), { timeout: POLL_MS + 30_000 });
     await a.goto(room.fixturePath);
-    expect((await asked).status()).toBe(401);
     await expect(a.getByTestId("watch-panel")).toBeVisible();
+    expect((await polled).status(), "premise: the page's client is running").toBe(200);
+    expect(lobby, "no lobby request without the hint").toEqual([]);
+    expect((await anon.cookies()).filter((c) => c.name === SESSION_HINT)).toEqual([]);
     await expect(a.getByTestId("your-board")).toHaveCount(0);
     await anon.close();
   });
@@ -458,6 +577,32 @@ test.describe("online chess — the public fixture page", () => {
     );
     await expect(surface).toHaveAttribute("data-fen", rules.fen(), { timeout: POLL_MS + 15_000 });
     await expect(page.getByTestId("watch-clock-black")).toHaveAttribute("data-active", "true");
+
+    // R3: the fixture is still `scheduled` (nothing writes in_play for a Lichess game), yet the header reads Live
+    // while its game is being played — on the page as served, and after the poll.
+    const status = await withDb(async (sql) => (await sql<{ s: string }[]>`select status as s from fixtures where id = ${room.fixtureId}`)[0]!.s);
+    expect(status, "premise: the fixture row still says scheduled").toBe("scheduled");
+    await expect(page.getByTestId("mc-live-pill")).toHaveText(publicEn["matchCentre.status.live"]!);
+    await page.reload();
+    await expect(page.getByTestId("mc-live-pill")).toHaveText(publicEn["matchCentre.status.live"]!, { timeout: 30_000 });
+    await shoot(page, "watch-live-header");
+
+    // I4: the division's Fixtures list says the board can be watched — a label inside the row's own link, which
+    // opens this page, never Lichess.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${room.standingsPath}?tab=schedule`);
+    const row = listRow(page, room.fixtureId).first();
+    const watch = row.getByTestId("schedule-watch");
+    await expect(watch).toHaveAttribute("data-kind", "live", { timeout: 30_000 });
+    await expect(watch).toContainText(uiEn["externalPlay.watch.list.live"]!);
+    await expect(row.locator("a")).toHaveCount(0);
+    await expect(page.locator('a[href*="lichess.org"]')).toHaveCount(0);
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "division-watch-live");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await row.click();
+    await page.waitForURL((u) => u.pathname === room.fixturePath);
+    await expect(page.getByTestId("watch-panel")).toBeVisible();
     await ctx.close();
   });
 
@@ -471,8 +616,19 @@ test.describe("online chess — the public fixture page", () => {
     await expect(panel).toHaveAttribute("data-state", "not_opened", { timeout: 30_000 });
     await expect(panel).toContainText(uiEn["externalPlay.watch.notOpened"]);
     await expect(page.getByTestId("watch-board")).toHaveCount(0);
+    // R3, the other direction: no game being played — the header keeps "Scheduled", never Live.
+    await expect(page.getByTestId("mc-live-pill")).toHaveCount(0);
+    await expect(page.getByTestId("mc-result-chip")).toHaveText(publicEn["matchCentre.status.scheduled"]!);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "watch-not-opened");
+
+    // I4: the division list says the round is not opened yet, on this board's row.
+    await page.goto(`${room.standingsPath}?tab=schedule`);
+    const watch = listRow(page, room.fixtureId).first().getByTestId("schedule-watch");
+    await expect(watch).toHaveAttribute("data-kind", "not_opened", { timeout: 30_000 });
+    await expect(watch).toHaveText(uiEn["externalPlay.watch.list.notOpened"]!);
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "division-watch-not-opened");
     await ctx.close();
   });
 });
@@ -497,6 +653,8 @@ test.describe("online chess — /me", () => {
     if (CONFIGURED) {
       await expect(card.getByTestId("lichess-link")).toHaveText(uiEn["settings.account.lichess.link"]!);
       await expect(card.getByTestId("lichess-linked-username")).toHaveCount(0);
+      await expect(card.getByTestId("lichess-scope"), "a first link has no re-link disclosure").toHaveCount(0);
+      await tappable(p, card.getByTestId("lichess-link"), "Link");
     } else {
       await expect(card.getByTestId("lichess-not-configured")).toHaveText(uiEn["settings.account.lichess.notConfigured"]!);
     }
@@ -513,9 +671,139 @@ test.describe("online chess — /me", () => {
     if (CONFIGURED) {
       await expect(linked.getByTestId("lichess-linked-username")).toContainText(room.black.lichessId);
       await expect(linked.getByTestId("lichess-unlink")).toBeVisible();
+      await expect(linked.getByTestId("lichess-relink")).toHaveCount(0);
+      await tappable(q, linked.getByTestId("lichess-unlink"), "Unlink");
+      // A grant from before the play scopes (labelled SQL: what an identity-only consent left on the row): the card
+      // asks again, says what the new grant allows, and both controls stay thumb-sized.
+      await withDb((sql) => sql`update user_external_accounts set scopes = array['email:read'] where user_id = ${room.black.userId} and provider = 'lichess'`);
+      await q.setViewportSize({ width: 1280, height: 900 });
+      await q.reload();
+      await expect(linked.getByTestId("lichess-reconsent")).toBeVisible({ timeout: 30_000 });
+      const scope = linked.getByTestId("lichess-scope");
+      await expect(scope).toContainText(uiEn["settings.account.lichess.consent.title"]!);
+      await expect(scope).toContainText(uiEn["settings.account.lichess.consent.scopes"]!);
+      await tappable(q, linked.getByTestId("lichess-relink"), "Re-link");
+      await tappable(q, linked.getByTestId("lichess-unlink"), "Unlink (re-link state)");
+      expect(await noSidewaysScroll(q)).toBe(3);
+      await shoot(q, "me-lichess-relink");
     } else {
       await expect(linked.getByTestId("lichess-not-configured")).toBeVisible();
     }
     await ctx2.close();
+  });
+});
+
+test.describe("online chess — registration (I5)", () => {
+  /** The start can only be offered by a server with a Lichess client (see /me above). */
+  const CONFIGURED = Boolean(process.env.LICHESS_CLIENT_ID);
+
+  /** A public competition with one free, open online division (camera off) — registration through the product's own
+   *  settings route. */
+  async function openOnlineRegistration(request: Parameters<typeof seedOnlineRound>[0]) {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Sign-up ${Date.now() % 1e6}`,
+      visibility: "public",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBeLessThan(300);
+    const name = `Online Rapid ${Date.now() % 1e5}`;
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name,
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: CLOCK },
+    });
+    expect(div.status, JSON.stringify(div.error)).toBeLessThan(300);
+    const settings = await apiJson(request, `/api/v1/divisions/${div.data!.id}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      payment_method: "offline",
+      form_fields: [],
+    });
+    expect(settings.status, JSON.stringify(settings.error)).toBeLessThan(300);
+    return withDb(async (sql) => {
+      const [row] = await sql<{ org: string; comp: string }[]>`
+        select o.slug as org, c.slug as comp from competitions c join organizations o on o.id = c.org_id where c.id = ${comp.data!.id}`;
+      return { divisionName: name, orgSlug: row!.org, registerPath: `/shared/${row!.org}/${row!.comp}/register` };
+    });
+  }
+
+  /** WHO → (ENTRIES) → DETAILS → CONSENT, through the real stepper. A competition with one open division skips
+   *  ENTRIES (its one entry is added for the player); with several, "Add an entry" on this division's card. */
+  async function toConsent(page: Page, divisionName: string, who: { name: string; email: string }): Promise<void> {
+    const next = () => page.getByRole("button", { name: /^next$/i }).click();
+    await page.locator("#reg-who-name").fill(who.name);
+    const email = page.locator("#reg-who-email");
+    if (await email.isEditable()) await email.fill(who.email);
+    await next();
+    const add = page.getByRole("button", { name: uiEn["register.entries.add.individual"] });
+    const roster = page.getByTestId("reg-roster-name").first();
+    await expect(add.or(roster).first()).toBeVisible({ timeout: 20_000 });
+    if (await add.isVisible()) {
+      await page.locator("section, article, div").filter({ has: page.getByRole("heading", { name: divisionName }) }).last().getByRole("button", { name: uiEn["register.entries.add.individual"] }).click();
+      await next();
+    }
+    await expect(roster).toBeVisible();
+    if ((await roster.inputValue()) === "") await roster.fill(who.name);
+    await next();
+    await expect(page.getByTestId("reg-consent-grant")).toBeVisible({ timeout: 20_000 });
+  }
+
+  test("the consent step offers the link before signup, back to this registration; returning linked, it says who — the step kept", async ({
+    browser,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const reg = await openOnlineRegistration(request);
+
+    // A stranger: the card, its grant disclosure, and a start that comes back HERE.
+    const anon = await cold(browser);
+    const a = await anon.newPage();
+    await a.setViewportSize({ width: 1280, height: 900 });
+    await a.goto(reg.registerPath);
+    await toConsent(a, reg.divisionName, { name: "Ada Okonkwo", email: `ada-${Date.now()}@example.test` });
+    const card = a.getByTestId("register-lichess-card");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(uiEn["register.lichess.title"]!);
+    await expect(card).toContainText(uiEn["register.lichess.required"]!);
+    await expect(card).toContainText(fill("register.lichess.lead.one", { divisions: reg.divisionName }));
+    await expect(card).toContainText(uiEn["settings.account.lichess.consent.scopes"]!);
+    await expect(card.getByTestId("register-lichess-linked")).toHaveCount(0);
+    if (CONFIGURED) {
+      const start = card.getByTestId("register-lichess-start");
+      const href = new URL((await start.getAttribute("href"))!, "https://seazn.test");
+      expect(href.origin, "same origin").toBe("https://seazn.test");
+      expect(href.searchParams.get("org")).toBe(reg.orgSlug);
+      expect(href.searchParams.get("next"), "the start comes back to this registration").toBe(reg.registerPath);
+      await expect(card).toContainText(uiEn["register.lichess.returnHint"]!);
+      await tappable(a, start, "Link my Lichess account");
+    } else {
+      await expect(card).toContainText(uiEn["settings.account.lichess.notConfigured"]!);
+    }
+    expect(await noSidewaysScroll(a)).toBe(3);
+    await shoot(a, "register-lichess-unlinked");
+    await anon.close();
+
+    // A signed-in player with a link, as the callback leaves them: back on the register page with ?lichess=linked.
+    // The draft and the step live in this tab's sessionStorage, so the stepper is where they left it.
+    const player = await seedUser(`Bo Lindqvist ${Date.now() % 1e5}`);
+    const lichessId = `e2e-reg-${Date.now() % 1e8}`;
+    await seedLichessLink(player.userId, lichessId);
+    const ctx = await cold(browser);
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width: 1280, height: 900 });
+    await loginUi(p, player.email, reg.registerPath);
+    await p.waitForURL((u) => u.pathname === reg.registerPath);
+    await toConsent(p, reg.divisionName, { name: "Bo Lindqvist", email: player.email });
+    await p.goto(`${reg.registerPath}?lichess=linked`);
+    const back = p.getByTestId("register-lichess-card");
+    await expect(p.getByTestId("reg-consent-grant"), "the step restored: CONSENT").toBeVisible({ timeout: 30_000 });
+    await expect(back.getByTestId("register-lichess-linked")).toHaveText(fill("settings.account.lichess.linkedAs", { username: lichessId }));
+    await expect(back.getByTestId("register-lichess-start")).toHaveCount(0);
+    await expect(back.getByTestId("register-lichess-flash")).toHaveCount(0);
+    expect(await noSidewaysScroll(p)).toBe(3);
+    await shoot(p, "register-lichess-linked");
+    await ctx.close();
   });
 });
