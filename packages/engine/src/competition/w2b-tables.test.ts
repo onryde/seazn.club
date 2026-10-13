@@ -105,7 +105,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
       const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
       expect(dw.outcome, `${m.key}: the fold of core.forfeit{by:"both"}`).toEqual({ kind: "double_walkover" });
       for (const rule of [undefined, RULE]) {
-        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : applyPointsRule(f.outcome, f.pair, rule, f.played));
+        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : applyPointsRule(f.outcome, f.pair, rule, f.played, m.awardScoreKeys));
         const without = foldResults([X, Y, Z], [scored(xz), scored(yz)]);
         const withDw = foldResults([X, Y, Z], [scored(xz), scored(yz), scored(dw)]);
         const tag = `${m.key} ${rule === undefined ? "sport points" : "stage rule"}`;
@@ -122,7 +122,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         expect(rowOf(withDw, Z), `${tag} Z`).toEqual(rowOf(without, Z));
       }
       // The rule's own reading of the result itself: 0 each, never `base.loss` / `forfeit.loserPoints` (both 1 here).
-      expect(applyPointsRule(dw.outcome, dw.pair, RULE, dw.played).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
+      expect(applyPointsRule(dw.outcome, dw.pair, RULE, dw.played, m.awardScoreKeys).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
@@ -149,7 +149,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
         const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
-        const scored = applyPointsRule(dw.outcome, dw.pair, RULE, dw.played);
+        const scored = applyPointsRule(dw.outcome, dw.pair, RULE, dw.played, m.awardScoreKeys);
         expect(scored.map((d) => d.points), `${m.key}/${name}: double walkover`).toEqual([0, 0]);
         expect(scored.map((d) => d.metrics), `${m.key}/${name}: no award score on a double walkover`).toEqual(dw.pair.map((d) => d.metrics));
         dws++;
@@ -158,7 +158,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         const state = m.init(cfg, { home: { entrantId: X, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
         const pair = m.standingsDelta(bye, cfg, { kind: "swiss" }, state) as FixtureResult;
         // A bye is written with no event (stages.ts), so no ledger: nothing played.
-        const winner = applyPointsRule(bye, pair, RULE, false).find((d) => d.entrantId === X);
+        const winner = applyPointsRule(bye, pair, RULE, false, m.awardScoreKeys).find((d) => d.entrantId === X);
         expect(winner?.points, `${m.key}/${name}: a bye is a forfeit win (winnerPoints 5 + forfeit_win 16)`).toBe(21);
         byes++;
       }

@@ -1260,19 +1260,24 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
     expect(nil.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
-  it("X-PT-1: a withdrawal with nothing played is rule-scored like the walkover; after play it is not (it reads as the unscored rule)", () => {
+  it("X-PT-1: a withdrawal with nothing played is rule-scored like the walkover; after play it is the real match it was (ruling 124)", () => {
     // The walkover scene with B–D a withdrawal instead. Nothing played: the rule's 3–0 replaces the credit, so it is a
-    // ledger match, as the walkover is. Something played: the rule pays base points and leaves the sport's credit, so
-    // the scene reads exactly as it does under the same rule without an awarded score.
+    // ledger match, as the walkover is. Something played: the rule pays base points and leaves the sport's credit — and
+    // the generic credit of a withdrawal after play is the RECORDED score wherever it is worse for the offender (ruling
+    // 124, GN-RT-1: football's `goalCredit` at generic's 0–0), here B's lead when D withdrew. That is a real match in the
+    // ledger like any other, not the walkover's nothing, so the scene reads exactly as it does with B–D an ordinary result.
     const o = open4({ D: [6, 8], B: [7, 2] });
-    const scene = (played: boolean) => [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), withdrew(2, "B", "D", played), open(3, "A", "B"), open(3, "C", "D")];
-    const walkoverScored = must(view({ ...o, fixtures: [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")], meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
-    const unscored = must(view({ ...o, fixtures: scene(true), meta: { pointsRule: scoredRule() } })).rows.D!;
-    expect(walkoverScored.whatIf, "premise: the rule's score changes this scene").not.toBe(unscored.whatIf);
-    const nothingPlayed = must(view({ ...o, fixtures: scene(false), meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    const scene = (bd: QualFixture) => [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), bd, open(3, "A", "B"), open(3, "C", "D")];
+    const scored = { pointsRule: scoredRule([3, 0]) };
+    const asResult = must(view({ ...o, fixtures: scene(won(2, "B", "D")), meta: scored })).rows.D!;
+    const leftOut = must(view({ ...o, fixtures: scene(walkover(2, "B", "D")), meta: { pointsRule: scoredRule() } })).rows.D!;
+    expect(asResult.whatIf, "premise: counting B–D or leaving it out prints different sentences").not.toBe(leftOut.whatIf);
+    const walkoverScored = must(view({ ...o, fixtures: scene(walkover(2, "B", "D")), meta: scored })).rows.D!;
+    const nothingPlayed = must(view({ ...o, fixtures: scene(withdrew(2, "B", "D", false)), meta: scored })).rows.D!;
     expect(nothingPlayed.whatIf).toBe(walkoverScored.whatIf);
-    const afterPlay = must(view({ ...o, fixtures: scene(true), meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
-    expect(afterPlay.whatIf).toBe(unscored.whatIf);
+    const afterPlay = must(view({ ...o, fixtures: scene(withdrew(2, "B", "D", true)), meta: scored })).rows.D!;
+    expect(afterPlay.whatIf).toBe(asResult.whatIf);
+    expect(afterPlay.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
   });
   it("…but never a one-sided bye: the rule pays a bye no score (X-PT-1), so it stays out of the average", () => {
     // swiss5's fixtures: r1 A–B, E–D, C bye; r2 A–C, E–B, D bye. The snapshot rows are the scene's as given (the

@@ -2206,9 +2206,10 @@ function deriveStandings(
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
       // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
-      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module.
+      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
+      // the module's own score keys (`awardScoreKeys`) take the awarded score too.
       result: pointsRule
-        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module))
+        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module), fold.module.awardScoreKeys)
         : pair,
     });
   }

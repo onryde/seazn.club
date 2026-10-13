@@ -117,9 +117,30 @@
   {
     "id": "t9-qual-retired-module",
     "file": "apps/web/src/server/public-site/division-qualification.ts",
-    "find": "  if (!i.module_) return () => null;\n",
+    "find": "    if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule)) return null;\n",
     "replace": "",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"] }]
+  },
+  {
+    "id": "t9-fr1-m2-retired-narrow",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule)) return null;",
+    "replace": "if (!i.module_) return null;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"], "name": "only where the rule scores forfeits" }]
+  },
+  {
+    "id": "t9-fr1-i2-bye-seated",
+    "file": "apps/web/src/server/public-site/division-qualification.ts",
+    "find": "played: seated(f) ? playedFor(f, facts) : false",
+    "replace": "played: playedFor(f, facts)",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/division-qualification.test.ts"], "name": "a one-seated award under a scoring stage rule" }]
+  },
+  {
+    "id": "t9-fr1-m1-played-real-match",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  return !awardAddsToLedger && !f.played;",
+    "replace": "  return !awardAddsToLedger;",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-view.test.ts"], "name": "after play it is the real match it was" }]
   },
   {
     "id": "t9-lock-scoring",
@@ -165,5 +186,61 @@
     "find": "  if (!asksPlayed(f.outcome)) return false;\n",
     "replace": "",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/forfeit-played.test.ts"] }]
+  },
+  {
+    "id": "t9-gapa-assign-own-keys",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "      if (scoreKeys !== undefined) {\n        metrics[scoreKeys.for] = mine;\n        metrics[scoreKeys.against] = theirs;\n        metrics[scoreKeys.diff] = mine - theirs;\n      }\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "gd \\+5 on the table" }]
+  },
+  {
+    "id": "t9-gapa-assign-diff-key",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "        metrics[scoreKeys.diff] = mine - theirs;\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "pointsRuleAwardReachesTable" }]
+  },
+  {
+    "id": "t9-gapa-football-decl",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  awardScoreKeys: { for: \"gf\", against: \"ga\", diff: \"gd\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-period-decl",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "    awardScoreKeys: { for: \"gf\", against: \"ga\", diff: \"gd\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-generic-decl",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "  awardScoreKeys: { for: \"for\", against: \"against\", diff: \"diff\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "declares exactly the score triple" }]
+  },
+  {
+    "id": "t9-gapa-reaches-always",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  return module_.awardScoreKeys !== undefined;",
+    "replace": "  return true;",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "pointsRuleAwardReachesTable" }]
+  },
+  {
+    "id": "t9-gapa-fold-seam",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "playedFor(f, playedFacts), sportModule.awardScoreKeys)",
+    "replace": "playedFor(f, playedFacts), undefined)",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/w2b-status.test.ts"], "name": "gap \\(a\\): football under a stage rule" }]
+  },
+  {
+    "id": "t9-fr1-lock-awardscore-after-play",
+    "file": "apps/web/src/server/usecases/rule-locks.ts",
+    "find": "new Set([\"points\", \"pointsMap\"])",
+    "replace": "new Set([\"points\", \"pointsMap\", \"awardScore\"])",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "carries its own forfeit award score" }]
   }
 ]

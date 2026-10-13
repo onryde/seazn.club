@@ -2797,6 +2797,8 @@ export function makePeriodModule(
     },
 
     metrics: preset.metrics,
+    // W2c X-PT-1 (gap a): the kernel's own goal ledger (`sideMetrics`, `periodForfeitCredit`) is gf / ga / gd.
+    awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
     defaultTiebreakers: preset.defaultTiebreakers,
 
     // v6/00 §3 — draws are a table result only where no decider is

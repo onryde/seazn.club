@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { EntrantId, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
 import { EngineError } from "../core/errors.ts";
 import { awardReasonOf } from "../sport/forfeit-credit.ts";
-import type { MatchPointsBounds } from "../sport/module.ts";
+import type { AnySportModule, AwardScoreKeys, MatchPointsBounds } from "../sport/module.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 
 // Jul3/05 §2 — declarative points rule (stages.config.points).
@@ -154,9 +154,12 @@ function bonusesFor(
 /**
  * Re-derive both sides' competition points from the rule (Jul3/05 §2). Only `points` changes — plus, on a forfeit with
  * nothing played, the rule's configured award score (never a fake score unless the organiser configured one, 20 Jan /
- * 8 Dec), which REPLACES `for` / `against` / `diff` (W2c X-PT-1, owner Q9). The sport's own ledger keys (`gf`,
- * `runs_for`, `sets_won`, …) are never touched: the rule writes only the generic three, so where a sport keeps its
- * credit under its own keys that credit stands beside the rule's score (P1, 2026-09-24; tiebreak-rule-award-alias.test.ts).
+ * 8 Dec), which REPLACES `for` / `against` / `diff` (W2c X-PT-1, owner Q9) and, where the sport keeps its match score
+ * under its own keys, those too: `scoreKeys` is the module's `awardScoreKeys` declaration (football's and the period
+ * sports' `gf` / `ga` / `gd`; gap a, 2026-10-13), REQUIRED so no caller can leave it out — `undefined` where the module
+ * declares none. Every other ledger key (`runs_for` — cricket is exempt, P1 2026-09-24, tiebreak-rule-award-alias.test.ts
+ * — `sets_won`, …) is never touched: the credit stands beside the rule's score, out of the rule's reach
+ * (`pointsRuleAwardReachesTable`).
  *
  * `played` (W2c Task 9, owner P-3 "A") is the fixture's "was anything played" fact — W2b's `playRecorded` over its
  * ledger under its sport module (rulings 112–115, 118, 120, 127). REQUIRED, so no caller can leave it out: a stored
@@ -173,6 +176,7 @@ export function applyPointsRule(
   pair: FixtureResult,
   rule: PointsRule,
   played: boolean,
+  scoreKeys: AwardScoreKeys | undefined,
 ): FixtureResult {
   const forfeit = isUnplayedForfeit(outcome, played);
   // The rule's forfeit row pays an unplayed forfeit and a bye alike; only the award score tells them apart.
@@ -201,10 +205,26 @@ export function applyPointsRule(
       metrics.for = mine;
       metrics.against = theirs;
       metrics.diff = mine - theirs;
+      if (scoreKeys !== undefined) {
+        metrics[scoreKeys.for] = mine;
+        metrics[scoreKeys.against] = theirs;
+        metrics[scoreKeys.diff] = mine - theirs;
+      }
     }
     return { ...delta, points, metrics };
   }) as unknown as FixtureResult;
   return mapped;
+}
+
+/**
+ * W2c X-PT-1 (gap a) — does a stage PointsRule's `forfeit.awardScore` reach this sport's table? Only where the module
+ * declares the keys it keeps its match score under (`awardScoreKeys`): there the award replaces the credit the
+ * tie-breaks read. Elsewhere — the set sports, carrom, the board games, cricket — the rule's score lands only on the
+ * generic `for` / `against` / `diff`, which those tables never rank by, so an editor offering a walkover score there would
+ * offer a number that changes nothing: hide it or explain it (Tasks 13 / 18).
+ */
+export function pointsRuleAwardReachesTable(module_: Pick<AnySportModule, "awardScoreKeys">): boolean {
+  return module_.awardScoreKeys !== undefined;
 }
 
 // ---------------------------------------------------------------------------

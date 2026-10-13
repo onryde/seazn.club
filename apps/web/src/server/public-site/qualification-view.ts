@@ -86,8 +86,9 @@ export interface QualFixture {
   expunged?: boolean;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
    *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
-   *  Read only by `ruleScoreReaches`, under a stage rule that scores forfeits, for a two-seated forfeit; false where it
-   *  is not read (and a bye's is false: it has no ledger). */
+   *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
+   *  bye's is false: it has no ledger). Read by `ruleScoreReaches` and by `ledgerless` (an award after play is a real
+   *  match, fix round 1 M-1). */
   played: boolean;
 }
 
@@ -179,17 +180,22 @@ function counted(f: QualFixture): boolean {
 /** A counted match that adds nothing to the ledger the what-if reads
  *  (T3-⚠3): a no-result; and, unless a stage rule's awarded score reached it and is in what the average reads
  *  (`ruleInAverage` from `ruleScoreInAverage`, and `ruleScoreReaches`), a one-sided bye (the adapter folds it from a
- *  fresh 0–0 state) or a two-sided award in a sport whose walkover credits nothing (`awardAddsToLedger` false:
- *  generic's; every other sport's credits its ledger, so its walkover is an ordinary match here — W2b X-WO-1). And a
- *  double walkover, always (X-DW-4, Loop R M-13): it credits nothing in any sport — no forfeit score, and no stage
- *  rule's award score (`applyPointsRule` pays it as no forfeit) — so whatever either flag says, it adds nothing to the
- *  ledger. The what-if's average match leaves these out. */
+ *  fresh 0–0 state) or a two-sided award with NOTHING PLAYED in a sport whose walkover credits nothing
+ *  (`awardAddsToLedger` false: generic's; every other sport's credits its ledger, so its walkover is an ordinary match
+ *  here — W2b X-WO-1). A two-sided award AFTER play (`played`, W2c fix round 1 M-1) is the real match it was: generic's
+ *  credit keeps the recorded score wherever it is worse for the offender (ruling 124, GN-RT-1). Where the offender led,
+ *  the credit is the walkover's 0–0 and this over-counts it — the view holds no score to tell; and `played` is read only
+ *  under a stage rule that scores forfeits (`qualificationFixtures`), so without one an award after play stays out, as
+ *  before W2c. And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in any sport — no forfeit score,
+ *  and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so whatever either flag says, it adds
+ *  nothing to the ledger. The what-if's average match leaves these out. */
 function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean, meta: StageQualMeta): boolean {
   const kind = outcomeKind(f);
   if (kind === "no_result" || kind === "double_walkover") return true;
   if (kind !== "award") return false;
   if (ruleInAverage && ruleScoreReaches(f, meta)) return false;
-  return isOneSidedAwardBye(f) || !awardAddsToLedger;
+  if (isOneSidedAwardBye(f)) return true;
+  return !awardAddsToLedger && !f.played;
 }
 
 /** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a non-zero `forfeit.awardScore`: the

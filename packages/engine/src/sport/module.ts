@@ -659,6 +659,13 @@ export function stampAttributionRequired(
  *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
  *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
  *  "win and you're through" with `max` would be wrong for an OT win. */
+/** W2c X-PT-1 (gap a) — the metric keys a sport keeps its match score under (`SportModule.awardScoreKeys`). */
+export interface AwardScoreKeys {
+  readonly for: string;
+  readonly against: string;
+  readonly diff: string;
+}
+
 export interface MatchPointsBounds {
   max: number;
   min: number;
@@ -916,6 +923,16 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
     state: State,
   ): [StandingsDelta, StandingsDelta];
   metrics: MetricSpec[]; // ledger fields this sport maintains (gd, nrr, set_ratio…)
+  /**
+   * W2c X-PT-1 (gap a) — the metrics that ARE this sport's match score: its spelling of `for` / `against` / `diff`, one
+   * of the tie-break alias triples (tiebreakers.ts FOR_KEYS / AGAINST_KEYS / DIFF_KEYS). A stage PointsRule's
+   * `forfeit.awardScore` lands here too, REPLACING the sport's credit, on a forfeit with nothing played
+   * (`applyPointsRule`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
+   * such a table. Absent where the table keeps no score an awarded one can stand in for — the set sports, carrom and the
+   * board games (no score triple at all), and cricket (its runs are NRR operands beside the balls; a walkover credits
+   * none, CK-WO-2) — which `pointsRuleAwardReachesTable` reports. Held to `metrics` by points-w2c.test.ts.
+   */
+  awardScoreKeys?: AwardScoreKeys;
   defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
   // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top

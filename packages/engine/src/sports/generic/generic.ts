@@ -752,6 +752,8 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     { key: "against", label: "Against", direction: "asc" },
     { key: "diff", label: "Difference", direction: "desc" },
   ],
+  // W2c X-PT-1 (gap a): generic's own ledger IS the generic for / against / diff.
+  awardScoreKeys: { for: "for", against: "against", diff: "diff" },
   defaultTiebreakers: ["points", "diff", "for", "h2h_points", "lots"],
 
   // X-DR-1 (ruling 78): an allow-list — draws only where nobody must advance,

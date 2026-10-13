@@ -555,8 +555,11 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
     expect([...declared].filter((k) => !STAGE_POINTS_REPLACES.has(k)).sort()).toEqual(["awardScore", "byeScore", "scoring"]);
   });
 
-  it("I-2 awardScore reaches the table through the sport's own forfeit credit, and a stage PointsRule leaves that credit in place (engine differential, every module that declares it)", () => {
-    const outcome = { kind: "award", winner: "H", loser: "A", reason: "walkover" } as never;
+  it("I-2 awardScore reaches the table through the sport's own forfeit credit AFTER play, which a stage PointsRule — even one carrying its own award score — leaves in place (engine differential, every module that declares it)", () => {
+    // W2c gap (a): a rule's award score now REPLACES the sport's own score keys (`awardScoreKeys`) on a forfeit with nothing
+    // played, so there the division's awardScore stops mattering. It still decides every forfeit AFTER play: X-PT-1 pays
+    // that as a result and leaves the sport's credit, and the credit is `goalCredit(awardScore, real)` (FB-RT-1 / HK-RT-1 /
+    // IH-RT-1) — so the key stays locked whatever the stage rule carries.
     const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [1, 0] } });
     let swept = 0;
     for (const m of builtinModules) {
@@ -565,17 +568,19 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
       const lineups = defaultLineupPair(m.positions);
       const base = m.configSchema.parse({}) as { awardScore: { goals: number } };
       const raised = m.configSchema.parse({ awardScore: { goals: base.awardScore.goals + 2 } });
-      const ledger = (cfg: unknown) => m.forfeitCredit(cfg as never, m.init(cfg as never, lineups), "walkover", "away").perSide;
-      const delta = (side: 0 | 1, cfg: unknown) => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg)[side] } });
-      // An outcome-only walkover: no ledger, nothing played (W2c X-PT-1) — the rule's score is written, beside the sport's.
-      const viaRule = (cfg: unknown) => applyPointsRule(outcome, [delta(0, cfg), delta(1, cfg)] as never, rule, false)[0].metrics;
-      const own = Object.keys(ledger(base)[0]);
+      const ledger = (cfg: unknown, reason: "walkover" | "retired") => m.forfeitCredit(cfg as never, m.init(cfg as never, lineups), reason, "away").perSide;
+      const outcome = (reason: "walkover" | "retired") => ({ kind: "award", winner: "H", loser: "A", reason }) as never;
+      const delta = (side: 0 | 1, cfg: unknown, reason: "walkover" | "retired") => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg, reason)[side] } });
+      const viaRule = (cfg: unknown, reason: "walkover" | "retired", played: boolean) =>
+        applyPointsRule(outcome(reason), [delta(0, cfg, reason), delta(1, cfg, reason)] as never, rule, played, m.awardScoreKeys)[0].metrics;
+      const own = Object.keys(ledger(base, "retired")[0]);
       expect(own.length, `${m.key}: the forfeit credits the winner something`).toBeGreaterThan(0);
-      expect(ledger(raised)[0], `${m.key}: awardScore changes what the forfeit credits`).not.toEqual(ledger(base)[0]);
-      // The rule's award score lands in for/against/diff; the sport's own keys are different ones, so it cannot stand in.
-      expect(own.filter((k) => ["for", "against", "diff"].includes(k)), `${m.key}: the sport's ledger keys are not the rule's`).toEqual([]);
-      for (const k of own) expect(viaRule(raised)[k], `${m.key}.${k}: the rule leaves the sport's credit as it was`).toBe(ledger(raised)[0][k]);
-      expect(viaRule(raised), `${m.key}: awardScore still decides the table's goals under the rule`).not.toEqual(viaRule(base));
+      expect(ledger(raised, "retired")[0], `${m.key}: awardScore changes what a retirement credits`).not.toEqual(ledger(base, "retired")[0]);
+      // After play: the sport's credit stands under the rule, so awardScore still decides the table's goals.
+      for (const k of own) expect(viaRule(raised, "retired", true)[k], `${m.key}.${k}: the rule leaves an after-play credit as it was`).toBe(ledger(raised, "retired")[0][k]);
+      expect(viaRule(raised, "retired", true), `${m.key}: awardScore decides an after-play forfeit under the rule`).not.toEqual(viaRule(base, "retired", true));
+      // Nothing played (gap a): the rule's award replaces it, whatever the division says — the case that does NOT lock.
+      expect(viaRule(raised, "walkover", false), `${m.key}: an unplayed walkover reads the rule's award, not the division's`).toEqual(viaRule(base, "walkover", false));
     }
     expect(swept, "football, ice hockey and hockey declare awardScore").toBe(3);
   });
@@ -875,10 +880,10 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect(checked).toBe(3);
   });
 
-  // Fix round 2, I-2. A stage PointsRule re-derives `points` and nothing else (engine competition/points.ts,
-  // `applyPointsRule`: "the sport's metrics ledger is untouched"), so what it exempts from the division is the keys that
-  // feed `delta.points`. `awardScore` feeds the forfeit goal credit in the sport's own ledger (gf/ga/gd); a stage rule's
-  // own award score writes for/against/diff beside it. The differential proving that is in the no-database describe.
+  // Fix round 2, I-2. A stage PointsRule re-derives `points`, and (W2c X-PT-1 gap a) a forfeit with nothing played's
+  // score, so what it exempts from the division is the keys that feed `delta.points`. `awardScore` feeds the forfeit
+  // goal credit in the sport's own ledger (gf/ga/gd), which still decides every forfeit after play. The differential
+  // proving that is in the no-database describe.
   it("I-2 a started football league with its OWN stage points still locks awardScore (the forfeit goal credit); the points key it replaces saves", async () => {
     const r = await rig("football", "11-a-side", "team");
     await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
@@ -893,7 +898,9 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect((out.config as typeof before).points.win, "the key the stage rule replaces was").toBe(before.points.win + 1);
   });
 
-  it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: it writes for/against/diff beside the sport's gf/ga/gd", async () => {
+  // W2c gap (a): the rule's award now replaces gf/ga/gd on a forfeit with nothing played, but a forfeit AFTER play keeps
+  // the sport's `goalCredit(awardScore, real)` (FB-RT-1), so the division's value still reaches this stage's table.
+  it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: a forfeit after play still reads the division's", async () => {
     const r = await rig("football", "11-a-side", "team");
     await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);

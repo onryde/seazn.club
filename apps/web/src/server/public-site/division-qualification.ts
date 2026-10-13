@@ -14,9 +14,10 @@ import "server-only";
 //  * (W2c X-PT-1) each fixture's played fact, from its ledger under the same
 //    module (`qualificationFixtures`), so a stage rule's awarded score lands in
 //    the what-if exactly where the standings fold wrote it. Without the module
-//    that fact is unknowable, so a retired build gives no view at all — under a
-//    stage PointsRule too, whose bounds would otherwise stand in for the
-//    module's (no status beats a wrong one, R3);
+//    that fact is unknowable, so a retired build gives no view for a stage
+//    whose rule scores forfeits, though its bounds would otherwise stand in for
+//    the module's (no status beats a wrong one, R3); every other stage builds
+//    as before (fix round 1 M-2);
 //
 // and, per table, the stage's V414 meta and the pool the SNAPSHOT is for.
 import type { StandingsRow } from "@seazn/engine/competition";
@@ -85,15 +86,17 @@ export async function qualificationFixtures<F extends Omit<QualFixture, "played"
 export function divisionQualification(
   i: DivisionQualificationInput,
 ): (stage: QualStage, snap: QualSnapshot) => QualificationView | null {
-  // A retired build: no bounds, and no played facts for a stage rule's awarded score (see the header).
-  if (!i.module_) return () => null;
   const bounds = divisionPointsBounds(i.module_, i.division.config);
   const awardAddsToLedger = divisionAwardAddsToLedger(i.module_, i.division.config);
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(i.dict, key, vars);
   const pluralMsg = (key: string, count: number, vars?: Record<string, string | number>) =>
     plural(i.dict, key, count, i.locale, vars);
-  return (stage, snap) =>
-    buildQualificationView({
+  return (stage, snap) => {
+    // A retired build has no played facts, so a stage rule's awarded score cannot be placed (see the header): no view for
+    // a stage whose rule scores forfeits. Any other stage builds as before W2c — with no module bounds the builder states
+    // nothing, and a rule's own bounds stand in for them (fix round 1 M-2).
+    if (!i.module_ && pointsRuleScoresForfeits(stage.points_rule)) return null;
+    return buildQualificationView({
       stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
       poolId: snap.pool_id ?? null,
       rows: snap.rows,
@@ -106,4 +109,5 @@ export function divisionQualification(
       msg,
       plural: pluralMsg,
     });
+  };
 }

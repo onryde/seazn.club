@@ -375,7 +375,7 @@ export function runCustomPointsScenario(module: AnySportModule, seed: number): C
     if (outcome.kind === "no_result") continue;
     const pair = module.standingsDelta(outcome, cfg, { kind: "league" }, played.state);
     // W2c Task 9: the played fact from the scenario's own ledger, under its module (ruling 118), as the product reads it.
-    const mapped = applyPointsRule(outcome, pair, CUSTOM_RULE, playRecorded(played.events, module));
+    const mapped = applyPointsRule(outcome, pair, CUSTOM_RULE, playRecorded(played.events, module), module.awardScoreKeys);
     for (const [i, delta] of mapped.entries()) {
       // W2b D14 (X-DW-4): a double walkover is a 0-point loss under any rule (a boardgame double forfeit decides one).
       const want = outcome.kind === "double_walkover" ? 0 : delta.won === 1 ? 5 : delta.drawn === 1 ? 2 : delta.lost === 1 ? 1 : 0;

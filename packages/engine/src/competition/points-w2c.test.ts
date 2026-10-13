@@ -16,8 +16,9 @@ import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { buildStream, lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
-import { applyPointsRule, forfeitShaped, isUnplayedForfeit, pointsRuleExpressible, PointsRule } from "./points.ts";
-import type { FixtureResult } from "./standings.ts";
+import { applyPointsRule, forfeitShaped, isUnplayedForfeit, pointsRuleAwardReachesTable, pointsRuleExpressible, PointsRule } from "./points.ts";
+import { foldResults, type FixtureResult } from "./standings.ts";
+import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, metricKeyOf, rankStandings } from "./tiebreakers.ts";
 
 const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1, awardScore: [5, 0] } });
 const FORFEIT = rule.forfeit!;
@@ -29,7 +30,8 @@ type D = ReturnType<typeof delta>;
 const pair = (gf: number, ga: number) => [delta("H", 1, 0, gf, ga), delta("A", 0, 1, ga, gf)] as unknown as FixtureResult;
 const award = (reason: string): MatchOutcome => ({ kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason }) as never;
 const win = (method: string): MatchOutcome => ({ kind: "win", winner: "H", loser: "A", method });
-const apply = (o: MatchOutcome, p: FixtureResult, played: boolean, r = rule) => applyPointsRule(o, p, r, played) as unknown as [D, D];
+/** The generic-shaped pair's own keys ARE for/against/diff, so no further score keys are named (`undefined`). */
+const apply = (o: MatchOutcome, p: FixtureResult, played: boolean, r = rule) => applyPointsRule(o, p, r, played, undefined) as unknown as [D, D];
 
 const mod = (key: string): AnySportModule => {
   const m = builtinModules.find((x) => x.key === key);
@@ -119,7 +121,7 @@ describe("X-PT-1 a forfeit is an award with nothing played, whatever its reason"
     const played = playRecorded(events, chess);
     expect(played, "precondition: in chess the Start itself is play").toBe(true);
     expect(isUnplayedForfeit(outcome, played)).toBe(true);
-    const [h, a] = applyPointsRule(outcome, chess.standingsDelta(outcome, cfg, { kind: "swiss" }, folded.state), rule, played);
+    const [h, a] = applyPointsRule(outcome, chess.standingsDelta(outcome, cfg, { kind: "swiss" }, folded.state), rule, played, chess.awardScoreKeys);
     expect([h.points, a.points]).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
     expect([h.metrics.for, a.metrics.against]).toEqual([AWARDED[0], AWARDED[0]]);
   });
@@ -243,8 +245,9 @@ function playedThenForfeit(m: AnySportModule, cfg: unknown, reason: string): Eve
 }
 
 describe("X-PT-1 through every sport's own producer (fold → standingsDelta → applyPointsRule)", () => {
-  it("a walkover with nothing played pays the forfeit row, and the awarded score replaces for/against/diff — every sport, every declared cfg (counted)", () => {
+  it("a walkover with nothing played pays the forfeit row, and the awarded score replaces for/against/diff AND the sport's declared score keys — every sport, every declared cfg (counted)", () => {
     let checked = 0;
+    let ownKeys = 0;
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
         const events = [makeEnvelope(1, { type: "core.forfeit", payload: { by: "A", reason: "walkover" } })];
@@ -254,15 +257,20 @@ describe("X-PT-1 through every sport's own producer (fold → standingsDelta →
         const played = playRecorded(events, m);
         expect(played, `${m.key}/${name}: nothing played`).toBe(false);
         const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-        const [h, a] = applyPointsRule(outcome, credit, rule, played);
+        const [h, a] = applyPointsRule(outcome, credit, rule, played, m.awardScoreKeys);
         expect([h.points, a.points], `${m.key}/${name}`).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
-        // The sport's own keys stand as the sport credited them; the generic keys ARE the awarded score.
-        expect(h.metrics, `${m.key}/${name} home`).toEqual({ ...credit[0].metrics, for: AWARDED[0], against: AWARDED[1], diff: AWARDED[0] - AWARDED[1] });
-        expect(a.metrics, `${m.key}/${name} away`).toEqual({ ...credit[1].metrics, for: AWARDED[1], against: AWARDED[0], diff: AWARDED[1] - AWARDED[0] });
+        // The generic keys ARE the awarded score, and so are the sport's own score keys where it declares them (gap a,
+        // held to its metrics by the declaration guard below); every other key stands as the sport credited it.
+        const k = m.awardScoreKeys;
+        const own = (mine: number, theirs: number) => (k === undefined ? {} : { [k.for]: mine, [k.against]: theirs, [k.diff]: mine - theirs });
+        expect(h.metrics, `${m.key}/${name} home`).toEqual({ ...credit[0].metrics, for: AWARDED[0], against: AWARDED[1], diff: AWARDED[0] - AWARDED[1], ...own(AWARDED[0], AWARDED[1]) });
+        expect(a.metrics, `${m.key}/${name} away`).toEqual({ ...credit[1].metrics, for: AWARDED[1], against: AWARDED[0], diff: AWARDED[1] - AWARDED[0], ...own(AWARDED[1], AWARDED[0]) });
+        if (k !== undefined) ownKeys++;
         checked++;
       }
     });
     expect(checked).toBeGreaterThanOrEqual(builtinModules.length);
+    expect(ownKeys, "some sport declares its own score keys, so the spread above is not vacuous").toBeGreaterThan(0);
   });
 
   it("a withdrawal, a disqualification and a retirement after play earn normal points and keep the sport's own credit — every sport (counted)", () => {
@@ -279,7 +287,7 @@ describe("X-PT-1 through every sport's own producer (fold → standingsDelta →
           const played = playRecorded(events, m);
           expect(played, `${m.key}/${name}/${reason}: something played`).toBe(true);
           const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
-          const [h, a] = applyPointsRule(outcome, credit, rule, played);
+          const [h, a] = applyPointsRule(outcome, credit, rule, played, m.awardScoreKeys);
           expect([h.points, a.points], `${m.key}/${name}/${reason}`).toEqual([rule.base.win, rule.base.loss]);
           expect([h.metrics, a.metrics], `${m.key}/${name}/${reason}: the sport's credit, untouched`).toEqual([credit[0].metrics, credit[1].metrics]);
           covered.add(m.key);
@@ -290,6 +298,144 @@ describe("X-PT-1 through every sport's own producer (fold → standingsDelta →
     expect(checked).toBeGreaterThan(0);
     // Every module reaches "something played, nothing decided" in some declared cfg, so none is skipped.
     expect([...covered].sort()).toEqual(builtinModules.map((m) => m.key).sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2c X-PT-1 gap (a) (coordinator's overnight ruling under the owner's standing instruction, 2026-10-13): the signed rule
+// says the awarded score REPLACES the credit, and the tie-breaks read a sport's own score keys BEFORE the generic ones
+// (tiebreakers.ts FOR_KEYS / DIFF_KEYS: `gd` before `diff`, `gf` before `for`) — so a rule writing only the generic keys
+// never reached football's table. Which keys a sport keeps its match score under is the module's own declaration
+// (`awardScoreKeys`); the guard holds it to the module's metrics and the tie-break alias lists, never a hand list.
+// ---------------------------------------------------------------------------
+
+/** The score triples the tie-breaks know, index for index (`for` / `against` / `diff` under each sport's spelling). */
+const ALIAS_TRIPLES = DIFF_KEYS.map((diff, i) => ({ for: FOR_KEYS[i]!, against: AGAINST_KEYS[i]!, diff }));
+/** A sport whose metrics carry a score triple but whose table takes no awarded score — by name, with the reason. */
+const NO_AWARD_SCORE: Readonly<Record<string, string>> = {
+  cricket:
+    "its runs are NRR operands beside the balls; a walkover credits no runs and is out of NRR (CK-WO-2, ruling 125), and P1 (2026-09-24) keeps a rule's award off the runs (tiebreak-rule-award-alias.test.ts)",
+};
+
+/** A real decided match (a win) from the module's own generator: the row a sport's table builds from real play. */
+function playedWin(m: AnySportModule, cfg: unknown): FixtureResult | null {
+  const l = sides(m, "H", "A");
+  for (let seed = 1; seed <= 60; seed++) {
+    const stream = buildStream(m as never, cfg as never, l, seed, 400);
+    if (stream.some((e) => e.type === "core.forfeit" || e.type === "core.abandon")) continue;
+    const folded = foldMatchWithStoppage(m as never, cfg as never, l, stream);
+    const outcome = outcomeOf(m as never, folded as never);
+    if (outcome?.kind !== "win" || outcome.winner !== "H") continue;
+    return m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state);
+  }
+  return null;
+}
+
+/** A walkover by A through the module's own fold, then the rule, with the module's declared score keys. */
+function ruledWalkover(m: AnySportModule, cfg: unknown, r: PointsRule = rule): { credit: FixtureResult; ruled: FixtureResult } {
+  const events = [makeEnvelope(1, { type: "core.forfeit", payload: { by: "A", reason: "walkover" } })];
+  const folded = foldMatchWithStoppage(m as never, cfg as never, sides(m, "H", "A"), events);
+  const outcome = outcomeOf(m as never, folded as never)!;
+  const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
+  return { credit, ruled: applyPointsRule(outcome, credit, r, playRecorded(events, m), m.awardScoreKeys) };
+}
+
+describe("X-PT-1 gap (a) — the awarded score reaches the sport's own score keys", () => {
+  it("every module declares exactly the score triple its own metrics carry; cricket alone is exempt, by name (counted)", () => {
+    let checked = 0;
+    let declared = 0;
+    const exempt: string[] = [];
+    for (const m of builtinModules) {
+      const metricKeys = new Set(m.metrics.map((x) => x.key));
+      const triples = ALIAS_TRIPLES.filter((t) => metricKeys.has(t.for) && metricKeys.has(t.against) && metricKeys.has(t.diff));
+      expect(triples.length, `${m.key}: at most one score triple`).toBeLessThanOrEqual(1);
+      if (NO_AWARD_SCORE[m.key] !== undefined) {
+        expect(triples.length, `${m.key}: an exemption is for a sport that HAS a score triple`).toBe(1);
+        expect(m.awardScoreKeys, m.key).toBeUndefined();
+        exempt.push(m.key);
+      } else if (triples.length === 1) {
+        expect(m.awardScoreKeys, m.key).toEqual(triples[0]);
+        declared++;
+      } else {
+        expect(m.awardScoreKeys, `${m.key}: no score triple, nothing to declare`).toBeUndefined();
+      }
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
+    expect(declared, "some sport declares its score keys").toBeGreaterThan(0);
+    expect(exempt, "every exemption names a real module").toEqual(Object.keys(NO_AWARD_SCORE));
+  });
+
+  it("football: a walkover under a stage rule awarding 5-0 reads gd +5 on the table, not the division's own 3-0 — and ranks by it", () => {
+    // single-sport: the differential the ruling names; the sweep above and the reach test below cover the registry.
+    const cfg = football.configSchema.parse({}) as { awardScore: { goals: number } };
+    const divisionGoals = cfg.awardScore.goals;
+    expect(AWARDED[0] - AWARDED[1], "premise: the rule's margin differs from the division's").not.toBe(divisionGoals);
+    const { credit, ruled: [h, a] } = ruledWalkover(football, cfg);
+    expect(credit[0].metrics.gd, "precondition: the sport's own credit is the division's awardScore").toBe(divisionGoals);
+    expect([h.metrics.gf, h.metrics.ga, h.metrics.gd]).toEqual([AWARDED[0], AWARDED[1], AWARDED[0] - AWARDED[1]]);
+    expect([a.metrics.gf, a.metrics.ga, a.metrics.gd]).toEqual([AWARDED[1], AWARDED[0], AWARDED[1] - AWARDED[0]]);
+    // Through the tie-break reader: B won 4-0 for real, level with H on points. The `diff` key reads `gd` first, so H's
+    // rule-awarded +5 ranks it above B's +4; on the division's 3-0 it would rank below.
+    const realWin = (id: string, opp: string, gf: number) =>
+      [
+        { entrantId: id, played: 1, won: 1, drawn: 0, lost: 0, points: FORFEIT.winnerPoints, metrics: { gf, ga: 0, gd: gf } },
+        { entrantId: opp, played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { gf: 0, ga: gf, gd: -gf } },
+      ] as unknown as FixtureResult;
+    const RIVAL_GD = divisionGoals + 1;
+    expect(RIVAL_GD, "premise: the rival sits between the division's credit and the rule's").toBeLessThan(AWARDED[0] - AWARDED[1]);
+    const rows = rankStandings(foldResults(["H", "A", "B", "C"], [[h, a] as unknown as FixtureResult, realWin("B", "C", RIVAL_GD)]), { cascade: ["points", "diff"] }).rows;
+    expect(rows.map((r) => r.entrantId).slice(0, 2)).toEqual(["H", "B"]);
+  });
+
+  it("pointsRuleAwardReachesTable: true exactly where the key the sport's OWN table ranks `diff` by takes the awarded score — every sport, read through the tie-break alias reader (counted)", () => {
+    // An award no sport credits by itself (ice hockey's own walkover is 5-0, the shared rule's), so "the table now reads
+    // the award" cannot be a coincidence — the precondition below holds it.
+    const odd = PointsRule.parse({ ...rule, forfeit: { ...FORFEIT, awardScore: [9, 1] } });
+    const oddDiff = odd.forfeit!.awardScore![0] - odd.forfeit!.awardScore![1];
+    let checked = 0;
+    const reaching: string[] = [];
+    for (const m of builtinModules) {
+      const cfg = declaredCfgs(m as never)[0]!.cfg;
+      const real = playedWin(m, cfg);
+      expect(real, `${m.key}: a real win from its own generator`).not.toBeNull();
+      // The key this sport's table reads for `diff`, off a row holding only real play.
+      const readKey = metricKeyOf(foldResults(["H", "A"], [real!]).find((r) => r.entrantId === "H")!, DIFF_KEYS);
+      const { credit, ruled: [h] } = ruledWalkover(m, cfg, odd);
+      if (readKey !== undefined) expect(credit[0].metrics[readKey], `${m.key}: precondition, the credit is not already the award`).not.toBe(oddDiff);
+      const takes = readKey !== undefined && h.metrics[readKey] === oddDiff;
+      expect(pointsRuleAwardReachesTable(m), `${m.key} (its table reads ${readKey ?? "no score difference"})`).toBe(takes);
+      if (takes) reaching.push(m.key);
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
+    expect(reaching.length, "some sport's table takes the award").toBeGreaterThan(0);
+    expect(reaching.length, "and some sport's does not (the set sports)").toBeLessThan(builtinModules.length);
+  });
+
+  it("the division's awardScore still decides a football award AFTER play under the same rule (FB-RT-1 goalCredit), so a stage rule never makes it irrelevant", () => {
+    // single-sport: the premise the ruling's step 3 rests on, checked where it fails (period sports share goalCredit).
+    // A real 1-0 lead, then the away side retires. FB-RT-1: the awarded score unless the real margin is worse for the
+    // offender — 1 is not worse than 3 or 4 — so the credit is the division's awardScore-0, and the rule (an award after
+    // play is a result, X-PT-1) leaves it standing.
+    const seen = new Set<number>();
+    for (const goals of [3, 4]) {
+      const cfg = football.configSchema.parse({ awardScore: { goals } });
+      const events = [
+        makeEnvelope(1, { type: "core.start", payload: {} }),
+        makeEnvelope(2, { type: "football.goal", payload: { by: "H" } }),
+        makeEnvelope(3, { type: "core.forfeit", payload: { by: "A", reason: "retired" } }),
+      ];
+      const folded = foldMatchWithStoppage(football as never, cfg as never, sides(football, "H", "A"), events);
+      const outcome = outcomeOf(football as never, folded as never)!;
+      const played = playRecorded(events, football);
+      expect(played, "precondition: a goal is play").toBe(true);
+      const credit = football.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
+      const [h] = applyPointsRule(outcome, credit, rule, played, football.awardScoreKeys);
+      expect(h.metrics.gd, `division awardScore ${goals}`).toBe(goals);
+      seen.add(h.metrics.gd as number);
+    }
+    expect(seen.size, "two division values, two different tables under one stage rule").toBe(2);
   });
 });
 

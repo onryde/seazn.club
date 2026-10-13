@@ -22,8 +22,9 @@ const pair = (): FixtureResult => [
   { entrantId: "H", played: 1, won: 1, drawn: 0, lost: 0, points: 0, metrics: { for: 1, against: 0, diff: 1 } },
   { entrantId: "A", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: { for: 0, against: 1, diff: -1 } },
 ];
+/** The pair is generic-shaped (its own score keys ARE for/against/diff), so no further score keys are named. */
 const scoreChanged = (outcome: MatchOutcome, played: boolean, r = rule): boolean =>
-  applyPointsRule(outcome, pair(), r, played)[0].metrics.for !== 1;
+  applyPointsRule(outcome, pair(), r, played, undefined)[0].metrics.for !== 1;
 
 describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awarded score lands", () => {
   it("empty case first: no stage rule, or a rule with no awarded score, reaches nothing — every award reason × played (counted)", () => {

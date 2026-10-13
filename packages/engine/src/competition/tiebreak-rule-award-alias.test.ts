@@ -51,7 +51,9 @@ function fixture(home: EntrantId, away: EntrantId, specs: Array<[string, unknown
   if (state.outcome === null) throw new Error(`${home} v ${away} did not finish`);
   const pair = cricket.standingsDelta(state.outcome, t20, league, state);
   // W2c Task 9: the played fact is the ledger's own (`playRecorded`): the walkover's is nothing, the matches' something.
-  return applyPointsRule(state.outcome, pair, RULE, playRecorded(events, cricket));
+  // Gap (a): cricket declares no score keys (its runs stay off the rule's award, P1), so the module's own declaration
+  // passes nothing — exactly what this suite pins.
+  return applyPointsRule(state.outcome, pair, RULE, playRecorded(events, cricket), cricket.awardScoreKeys);
 }
 
 // Home bats first and wins; the chasing side is bowled out.

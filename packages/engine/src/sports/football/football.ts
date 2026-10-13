@@ -2795,6 +2795,8 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     { key: "red", label: "Red cards", direction: "asc", display: false },
     { key: "fair_play", label: "Fair play points", direction: "desc", display: false },
   ],
+  // W2c X-PT-1 (gap a): football's goal ledger (`sideMetrics`, `footballForfeitCredit`) is gf / ga / gd.
+  awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
   // Module default = fifa2026 (spec 04 §1.6); `classic` selectable by the
   // organiser via FOOTBALL_TIEBREAKERS.
   defaultTiebreakers: FOOTBALL_TIEBREAKERS.fifa2026,

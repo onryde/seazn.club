@@ -423,4 +423,25 @@ describe.skipIf(!HAS_DB)("X-PT-1 stage points read a forfeit's played fact from 
     expect([t.home.points, t.away.points]).toEqual([RULE.forfeit.winnerPoints, RULE.forfeit.loserPoints]);
     expect(t.home.metrics).toMatchObject({ for: 21, against: 0, diff: 21 });
   });
+
+  it("gap (a): football under a stage rule awarding 5-0 — the walkover's goals on the table are the rule's, not the division's own credit", async () => {
+    // single-sport: football is the sport the ruling names (its table reads gf/gd before for/diff); the engine's reach
+    // sweep (points-w2c.test.ts) covers the registry. Through the real fold: `sportModule.awardScoreKeys` must reach it.
+    const FB_RULE = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [5, 0] } };
+    const [won, lost] = FB_RULE.forfeit.awardScore as [number, number];
+    async function walkover(rule: boolean) {
+      const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "league", entrants: 2, ...(rule ? { stageConfig: { points: FB_RULE } } : {}) });
+      const id = s.fixtureIds[0]!;
+      const f = await fixtureRow(id);
+      await post(s.auth, id, "core.forfeit", { by: f.away_entrant_id, reason: "walkover" });
+      expect((await fixtureRow(id)).status, "rig: the walkover decided the fixture").toBe("forfeited");
+      const rows = await standings(s.auth, s.stageId);
+      return { home: rows.find((r) => r.entrantId === f.home_entrant_id)!, away: rows.find((r) => r.entrantId === f.away_entrant_id)! };
+    }
+    const twin = await walkover(false);
+    expect(twin.home.metrics?.gd, "premise: the division's own credit is not the rule's").not.toBe(won - lost);
+    const t = await walkover(true);
+    expect([t.home.metrics?.gf, t.home.metrics?.ga, t.home.metrics?.gd]).toEqual([won, lost, won - lost]);
+    expect([t.away.metrics?.gf, t.away.metrics?.ga, t.away.metrics?.gd]).toEqual([lost, won, lost - won]);
+  });
 });
