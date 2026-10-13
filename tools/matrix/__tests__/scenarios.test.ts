@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
+import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";

@@ -3,6 +3,7 @@
 // from W1b Task 5, the match-rules table the variant set is built from), and
 // the invariant layer is type-only so W1b's fast-check model and W10's shadow
 // checks can reuse it.
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -34,7 +35,9 @@ const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
 // than retype what the dialog authors. Its one import is @seazn/engine/core, a bare package @seazn/matrix depends on
 // (pinned below), so plain node loads it with no alias — the bench's scorer.ts already loads it in this process.
 const FORFEIT_PHASE_REFUSAL = "apps/web/src/lib/forfeit-phase-refusal.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL]);
+// W2c Task 1: the match-rules table is a DIRECTORY (one file per sport); its registry is the only entry the matrix names.
+const MATCH_RULES_DIR = "apps/web/src/lib/match-rules";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -148,6 +151,37 @@ describe("tools/matrix import boundary", () => {
     expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === FORFEIT_PHASE_REFUSAL)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
+  });
+
+  // W2c Task 1: lib/match-rules/ became a directory, and the matrix CLIs (`matrix:*`) load it under plain
+  // `node --experimental-strip-types`, which resolves no extensionless specifier. vitest, tsc and eslint all accept
+  // `./shared`, so nothing else in the repo goes red when a sibling import loses its `.ts`.
+  // The expected API is the public surface the single-file module exported (the Task 1 brief's interface list), not
+  // anything read back from the code under test.
+  const MATCH_RULES_API = [
+    "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "STAGE_RULES_SPORTS", "alignBestOfOnePoints", "borrowOptionLabel",
+    "buildRuleOverride", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleOptionLabel", "setRuleValue",
+    "showsOnePointsField", "visibleRuleFields",
+  ];
+  it("the match-rules directory is a tree plain node can load: every relative import names its .ts, and node loads the whole public API", () => {
+    const dir = join(REPO, MATCH_RULES_DIR);
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
+    expect(files, "the directory holds the registry and its sibling files (an empty scan would pass vacuously)").toContain("index.ts");
+    let relativeImports = 0;
+    const bare: string[] = [];
+    for (const f of files) {
+      for (const { spec } of importsOf(join(dir, f))) {
+        if (!spec.startsWith(".")) continue;
+        relativeImports++;
+        if (!spec.endsWith(".ts")) bare.push(`${f}: ${spec}`);
+      }
+    }
+    console.info(`boundary: ${files.length} match-rules files, ${relativeImports} relative imports, all with .ts`);
+    expect(relativeImports).toBeGreaterThan(files.length);
+    expect(bare, "plain node cannot resolve an extensionless relative import").toEqual([]);
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "-e", `import(${JSON.stringify(join(dir, "index.ts"))}).then((m) => console.log(JSON.stringify(Object.keys(m).sort())))`], { cwd: REPO, encoding: "utf8", timeout: 30_000, env: { PATH: process.env.PATH ?? "" } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout) as string[]).toEqual(MATCH_RULES_API);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {

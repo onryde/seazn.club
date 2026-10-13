@@ -6,7 +6,7 @@
 // guards live in applicability.test.ts. Pure and deterministic (R11).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
-import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules.ts";
+import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";

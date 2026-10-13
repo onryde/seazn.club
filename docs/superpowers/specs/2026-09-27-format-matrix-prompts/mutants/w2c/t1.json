@@ -1,0 +1,58 @@
+[
+  {
+    "id": "t1-ts-type",
+    "file": "apps/web/src/lib/match-rules/cricket.ts",
+    "find": "import type { RuleField } from \"./types.ts\";",
+    "replace": "import type { RuleField } from \"./types\";",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": ["tools/matrix/__tests__/boundary.test.ts"],
+        "name": "the match-rules directory is a tree plain node can load"
+      }
+    ]
+  },
+  {
+    "id": "t1-ts-value",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "import { BADMINTON_RULES } from \"./badminton.ts\";",
+    "replace": "import { BADMINTON_RULES } from \"./badminton\";",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": ["tools/matrix/__tests__/boundary.test.ts"],
+        "name": "the match-rules directory is a tree plain node can load"
+      }
+    ]
+  },
+  {
+    "id": "t1-node-load",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "import { CARROM_RULES } from \"./carrom.ts\";",
+    "replace": "import { CARROM_RULES } from \"./carrom-missing.ts\";",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": ["tools/matrix/__tests__/boundary.test.ts"],
+        "name": "the match-rules directory is a tree plain node can load"
+      }
+    ]
+  },
+  {
+    "id": "t1-order",
+    "equivalent": "SURVIVES BY DESIGN, EQUIVALENT. Nothing observes the key order of SPORT_RULES. Every consumer indexes it by sport key (SPORT_RULES[sport]); the only iteration, Object.keys(SPORT_RULES) in apps/web/src/lib/__tests__/match-rules-best-of-one.test.ts:35, is .sort()ed on the next lines. No UI, API or output lists sports in this table's order. Evidence: git grep -a SPORT_RULES over apps, packages, tools, scripts (2026-10-13). Field order WITHIN a sport is the observable one and is pinned by the Task 5 per-sport contract tests.",
+    "file": "apps/web/src/lib/match-rules/index.ts",
+    "find": "  football: FOOTBALL_RULES,\n  cricket: CRICKET_RULES,",
+    "replace": "  cricket: CRICKET_RULES,\n  football: FOOTBALL_RULES,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/match-rules-labels.test.ts",
+          "src/lib/__tests__/match-rules-hydrate.test.ts"
+        ],
+        "name": "."
+      }
+    ]
+  }
+]

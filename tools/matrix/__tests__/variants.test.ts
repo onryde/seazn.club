@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   SPORT_RULES, buildRuleOverride, showsOnePointsField, visibleRuleFields, type RuleField,
-} from "../../../apps/web/src/lib/match-rules.ts";
+} from "../../../apps/web/src/lib/match-rules/index.ts";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";

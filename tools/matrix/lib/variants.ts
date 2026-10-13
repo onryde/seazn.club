@@ -6,7 +6,7 @@
 // by the engine's configSchema. Deterministic greedy cover: no clock, no
 // randomness (R11) — a regeneration is a reviewed diff of variants.json.
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules.ts";
+import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./catalogue.ts";
 import { foldStream } from "./fold.ts";
 import { CfgInvalid, resolveSportCfg, sportModule, stageCfg, variantKeys } from "./sport-cfg.ts";

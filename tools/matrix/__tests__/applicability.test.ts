@@ -13,7 +13,7 @@ import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
 import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
-import { configKeysFor } from "../../../apps/web/src/lib/match-rules.ts";
+import { configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
