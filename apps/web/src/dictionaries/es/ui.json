@@ -6243,5 +6243,10 @@
   "register.lichessLinkCta": "Vincular Lichess",
   "register.online.lichess": "Se juega en línea en Seazn. Para inscribirte necesitas una cuenta de Lichess vinculada.",
   "register.camera.required": "Tu cámara debe estar encendida durante tus partidas.",
-  "register.camera.optional": "La cámara es opcional durante tus partidas."
+  "register.camera.optional": "La cámara es opcional durante tus partidas.",
+  "register.lichess.title": "Vincula tu cuenta de Lichess",
+  "register.lichess.required": "Obligatorio",
+  "register.lichess.lead.one": "{divisions} se juega en línea, en el tablero de Seazn. Vincula Lichess ahora, antes de inscribirte.",
+  "register.lichess.lead.other": "{divisions} se juegan en línea, en el tablero de Seazn. Vincula Lichess ahora, antes de inscribirte.",
+  "register.lichess.returnHint": "Irás a Lichess y volverás directamente a este paso. Tus respuestas se conservan."
 }

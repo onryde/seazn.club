@@ -6243,5 +6243,10 @@
   "register.lichessLinkCta": "Link Lichess",
   "register.online.lichess": "Played online on Seazn. Entering needs a linked Lichess account.",
   "register.camera.required": "Your camera must be on during your games.",
-  "register.camera.optional": "Your camera is optional during your games."
+  "register.camera.optional": "Your camera is optional during your games.",
+  "register.lichess.title": "Link your Lichess account",
+  "register.lichess.required": "Required",
+  "register.lichess.lead.one": "{divisions} is played online, on Seazn's board. Link Lichess now, before you enter.",
+  "register.lichess.lead.other": "{divisions} are played online, on Seazn's board. Link Lichess now, before you enter.",
+  "register.lichess.returnHint": "You'll go to Lichess and come straight back to this step. Your answers are kept."
 }

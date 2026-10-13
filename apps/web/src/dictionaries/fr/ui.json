@@ -6243,5 +6243,10 @@
   "register.lichessLinkCta": "Lier Lichess",
   "register.online.lichess": "Se joue en ligne sur Seazn. Pour vous inscrire, il faut un compte Lichess relié.",
   "register.camera.required": "Votre caméra doit être allumée pendant vos parties.",
-  "register.camera.optional": "La caméra est facultative pendant vos parties."
+  "register.camera.optional": "La caméra est facultative pendant vos parties.",
+  "register.lichess.title": "Liez votre compte Lichess",
+  "register.lichess.required": "Obligatoire",
+  "register.lichess.lead.one": "{divisions} se joue en ligne, sur l'échiquier de Seazn. Liez Lichess maintenant, avant de vous inscrire.",
+  "register.lichess.lead.other": "{divisions} se jouent en ligne, sur l'échiquier de Seazn. Liez Lichess maintenant, avant de vous inscrire.",
+  "register.lichess.returnHint": "Vous irez sur Lichess puis reviendrez directement à cette étape. Vos réponses sont conservées."
 }

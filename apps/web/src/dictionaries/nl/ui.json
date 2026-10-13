@@ -6243,5 +6243,10 @@
   "register.lichessLinkCta": "Lichess koppelen",
   "register.online.lichess": "Wordt online gespeeld op Seazn. Om je in te schrijven heb je een gekoppeld Lichess-account nodig.",
   "register.camera.required": "Je camera moet aan staan tijdens je partijen.",
-  "register.camera.optional": "Je camera is optioneel tijdens je partijen."
+  "register.camera.optional": "Je camera is optioneel tijdens je partijen.",
+  "register.lichess.title": "Koppel je Lichess-account",
+  "register.lichess.required": "Verplicht",
+  "register.lichess.lead.one": "{divisions} wordt online gespeeld, op het bord van Seazn. Koppel Lichess nu, voordat je je inschrijft.",
+  "register.lichess.lead.other": "{divisions} worden online gespeeld, op het bord van Seazn. Koppel Lichess nu, voordat je je inschrijft.",
+  "register.lichess.returnHint": "Je gaat naar Lichess en komt meteen terug bij deze stap. Je antwoorden blijven bewaard."
 }

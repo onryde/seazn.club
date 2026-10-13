@@ -52,6 +52,7 @@ import { FormFields } from "../form-fields";
 import { RegisterStepper, type RegisterInfo } from "../register-stepper";
 import { RosterTable } from "../roster-table";
 import { StepConsent } from "../step-consent";
+import type { RegisterLichessState } from "../register-lichess-card";
 import { StepDetails } from "../step-details";
 import { StepEntries } from "../step-entries";
 import { StepReview } from "../step-review";
@@ -193,7 +194,7 @@ const DIV_WOMENS: DivisionLike = {
 const DIV_OPEN_2: DivisionLike = { ...DIV_OPEN, division_id: "div-open-2", name: "Open Doubles" };
 
 
-function mount(divisions: DivisionLike[]) {
+function mount(divisions: DivisionLike[], extra: { lichess?: RegisterLichessState | null } = {}) {
   const info: RegisterInfo = {
     competition: { name: "Test Cup", starts_on: "2026-09-01" },
     org: { name: "Test Org" },
@@ -201,7 +202,7 @@ function mount(divisions: DivisionLike[]) {
   };
   const island = renderIsland(
     RegisterStepper,
-    { orgSlug: ORG_SLUG, competitionSlug: COMPETITION_SLUG, info, locale: "en", joinCode: null },
+    { orgSlug: ORG_SLUG, competitionSlug: COMPETITION_SLUG, info, locale: "en", joinCode: null, ...extra },
     deepExpand,
   );
 
@@ -1708,6 +1709,40 @@ describe("step 5 — REVIEW→PAY line items", () => {
   });
 });
 
+// I5 (T16 fix round 1): the consent step offers the Lichess link for the SELECTED online divisions, starting back to
+// this registration — driven through the real stepper, from WHO to CONSENT, so the wiring (not just the card) is proven.
+describe("step 4 — the Lichess link on CONSENT (I5)", () => {
+  const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, flash: null };
+  async function reachConsent(division: DivisionLike, lichess: RegisterLichessState | null) {
+    const m = mount([division], { lichess });
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    const el = m.island.tree().find((e) => e.type === StepConsent);
+    expect(el, "on the CONSENT step").toBeTruthy();
+    return propsOf(el!).lichess as unknown;
+  }
+
+  // One mount per test: the draft (step included) persists in sessionStorage, which beforeEach resets.
+  it("the empty case first: no online division selected — no card", async () => {
+    expect(await reachConsent(DIV_OPEN, UNLINKED), "over the board").toBeNull();
+  });
+
+  it("an online division, but the page read no link state — no card", async () => {
+    expect(await reachConsent({ ...DIV_OPEN, online_play: true }, null)).toBeNull();
+  });
+
+  it("an online division selected: the card names it, starts at this club, and comes back here", async () => {
+    expect(await reachConsent({ ...DIV_OPEN, online_play: true }, UNLINKED)).toEqual({
+      divisions: ["Open Singles"],
+      orgSlug: ORG_SLUG,
+      next: `/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`,
+      state: UNLINKED,
+    });
+  });
+});
+
 describe("step 5 — submit", () => {
   /** Drives a single free (DIV_OPEN) cart from WHO through CONSENT, landing
    *  on REVIEW with privacy consent already given — the shared setup every
@@ -1839,7 +1874,11 @@ describe("step 5 — submit", () => {
 
     const links = island.tree().filter((e) => propsOf(e)["data-testid"] === "register-lichess-link");
     expect(links, "exactly one link to Lichess").toHaveLength(1);
-    expect(propsOf(links[0]!).href).toBe(`/api/auth/lichess?org=${ORG_SLUG}`);
+    // I5 (T16 fix round 1): and it comes BACK to this registration (a same-origin path the route re-validates) — it
+    // used to land the player on /me, out of the form.
+    expect(propsOf(links[0]!).href).toBe(
+      `/api/auth/lichess?org=${ORG_SLUG}&next=${encodeURIComponent(`/shared/${ORG_SLUG}/${COMPETITION_SLUG}/register`)}`,
+    );
   });
 
   it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {
