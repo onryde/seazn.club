@@ -31,6 +31,7 @@ import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { playerStatsWithoutWaiting } from "./player-stats";
+import { creditsNobody } from "@/lib/forfeit-tag";
 import {
   resultDraft,
   roundRecapDraft,
@@ -457,9 +458,9 @@ export async function draftPostsForDecidedFixture(
   // 3a, so a fixture decided after the cutover drafted its result/recap post
   // with a blank venue line regardless of what venue it was actually played
   // at (draftResult below renders `venue` verbatim into the post body).
-  const [fx] = await tx<FixtureCtx[]>`
+  const [fx] = await tx<(FixtureCtx & { outcome: unknown })[]>`
     select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id,
-           st.kind as stage_kind, f.round_no, f.status,
+           st.kind as stage_kind, f.round_no, f.status, f.outcome,
            f.home_entrant_id, f.away_entrant_id,
            h.display_name as home_name, a.display_name as away_name,
            f.scheduled_at, ven.name as venue, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
@@ -493,7 +494,10 @@ export async function draftPostsForDecidedFixture(
   }
 
   const drafted: DraftedAutoPost[] = [];
-  const result = await draftResult(tx, fx, locale);
+  // Design review gap hunt (audit 3.1): a double walkover credits nobody — its result post would be titled with the
+  // summary's "A 0 — 0 B", a score nobody played. No result is drafted; a league round's recap still is (it is about
+  // the table, which the double walkover moves).
+  const result = creditsNobody(fx.outcome) ? null : await draftResult(tx, fx, locale);
   if (result) drafted.push(result);
   if (fx.round_no !== null && TABLE_KINDS.has(fx.stage_kind)) {
     const recap = await maybeDraftRecap(tx, fx, locale);
