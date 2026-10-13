@@ -22,22 +22,22 @@ const LEVEL: Record<string, { type: string; payload: unknown }[]> = {
 };
 
 function rig(sport: string) {
-  const module = moduleOf(sport);
-  const cfg = module.configSchema.parse({});
-  const lineups = defaultLineupPair(resolvePositions(module as never, cfg as never));
-  return { module, cfg, lineups };
+  const sportModule = moduleOf(sport);
+  const cfg = sportModule.configSchema.parse({});
+  const lineups = defaultLineupPair(resolvePositions(sportModule as never, cfg as never));
+  return { sportModule, cfg, lineups };
 }
 
 describe("Loop R M-17: admittedLevelWithdrawal is the kernel's own admission", () => {
   it("a withdrawal over a held level result: the helper admits exactly what the kernel's fold admits, either side withdrawing", () => {
     let checked = 0;
     for (const sport of Object.keys(LEVEL)) {
-      const { module, cfg, lineups } = rig(sport);
+      const { sportModule, cfg, lineups } = rig(sport);
       for (const side of ["home", "away"] as const) {
         const level = LEVEL[sport]!.map((e, i) => makeEnvelope(i, e as never));
         const forfeit: EventEnvelope = makeEnvelope(level.length, ev("core.forfeit", { by: lineups[side].entrantId, reason: "withdrew" }) as never);
-        expect(outcomeOf(module as never, foldMatchWithStoppage(module as never, cfg as never, lineups, level)), `${sport}: premise, level`).toEqual({ kind: "draw" });
-        const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, [...level, forfeit]);
+        expect(outcomeOf(sportModule as never, foldMatchWithStoppage(sportModule as never, cfg as never, lineups, level)), `${sport}: premise, level`).toEqual({ kind: "draw" });
+        const folded = foldMatchWithStoppage(sportModule as never, cfg as never, lineups, [...level, forfeit]);
         expect(folded.levelWithdrawal, `${sport} ${side}: premise, the kernel admits it`).not.toBeNull();
         expect(folded.levelWithdrawal!.loser, `${sport} ${side}: premise, the withdrawn side loses`).toBe(lineups[side].entrantId);
         expect(admittedLevelWithdrawal(forfeit, lineups), `${sport} ${side}`).toEqual(folded.levelWithdrawal);
@@ -61,10 +61,10 @@ describe("Loop R M-17: admittedLevelWithdrawal is the kernel's own admission", (
   });
 
   it("a forfeit by neither side is refused, as the kernel refuses it — never a stranger credited", () => {
-    const { module, cfg, lineups } = rig("football");
+    const { sportModule, cfg, lineups } = rig("football");
     const level = LEVEL.football!.map((e, i) => makeEnvelope(i, e as never));
     const stranger: EventEnvelope = makeEnvelope(level.length, ev("core.forfeit", { by: "stranger", reason: "withdrew" }) as never);
-    expect(() => foldMatchWithStoppage(module as never, cfg as never, lineups, [...level, stranger]), "premise: the kernel refuses it").toThrow();
+    expect(() => foldMatchWithStoppage(sportModule as never, cfg as never, lineups, [...level, stranger]), "premise: the kernel refuses it").toThrow();
     expect(() => admittedLevelWithdrawal(stranger, lineups)).toThrow(/neither side of this fixture/);
   });
 });
