@@ -175,9 +175,10 @@ export const hockey = makePeriodModule({
   // W2c (spec §4.1 Q5) — the period kernel's keys, narrowed: FIH hockey has no overtime, so neither the stage key nor
   // its match-length leaf is offered (the X-SR-1 sweep holds `overtime` UNSETTABLE for hockey).
   ruleKeys: (({ overtime: _noOvertime, "overtime.minutes": _noOvertimeMinutes, ...keys }) => keys)(PERIOD_RULE_KEYS),
-  // W2c X-SR-6 (spec §4.2) — a NEW bracket stage starts with the FIH shoot-out (5 one-on-ones, 8 s, then sudden death),
-  // read from the module's own `fih-shootout` preset through its own schema (a fresh object on every call, so a caller
-  // that edits its copy never reaches the preset); a table stage starts with none. Hockey has no overtime.
+  // W2c X-SR-6 (spec §4.2) — the preset a NEW bracket stage should start with: the FIH shoot-out (5 one-on-ones, 8 s,
+  // then sudden death), read from the module's own `fih-shootout` preset through its own schema (a fresh object on every
+  // call, so a caller that edits its copy never reaches the preset); a table stage starts with none. Hockey has no
+  // overtime. A DECLARATION only: Task 12 (stage creation) writes it into `stages.config.rules`; nothing reads it before.
   stageDefaults: (kind) =>
     BRACKET_KINDS.has(kind) ? { shootout: hockey.configSchema.parse(hockey.variants["fih-shootout"]).shootout } : {},
   positions,

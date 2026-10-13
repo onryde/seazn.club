@@ -703,6 +703,10 @@ export interface RuleKeyFact {
    *  bounded key (spec §4.1 Q5): `shorter` a length or count a match may only lower (overtime minutes, shoot-out
    *  attempts); `off_or_shorter` an `{enabled, halfMinutes}` decider, off or a shorter half (RB2B-3, football ET). */
   readonly matchBound?: "shorter" | "off_or_shorter";
+  /** What the engine plays when a stage carries NO value at this key (a stage created before the key existed), for a
+   *  `shorter` bound: the bound compares a match's value against it instead of reading the missing key as "off" (fix
+   *  round 1, ruling). Pinned to the engine's own constant by the module's test. Absent = a missing key is off. */
+  readonly whenAbsent?: number;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection and its "no decider" notice
    *  read it through `deciderKeysFor` (spec §4.2, X-SR-6). Stage keys, except football ET, a bounded match key. */
@@ -897,10 +901,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // freeze then carries it). `{}` is a legal declaration.
   bracketDeciders(cfg: Cfg): Partial<Cfg>;
   /**
-   * W2c (spec §4.2) — the rules a NEW stage of this kind starts with, layered after the variant preset and before the
-   * stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). Written into the stage when it
-   * is created, never inferred at resolve time. Every key is a stage key of its kind (X-SR-1 sweep). Absent = `{}`;
-   * W2c Task 6 fills it.
+   * W2c (spec §4.2) — the rules a NEW stage of this kind should start with, layered after the variant preset and before
+   * the stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). A declaration only: Task 12
+   * (stage creation) writes it into the stage's `config.rules`, and it is never inferred at resolve time. Every key is a
+   * stage key of its kind (X-SR-1 sweep). Absent = `{}`; Task 6 fills it.
    */
   stageDefaults?(kind: StageKind, variant: string | null): Partial<Cfg>;
 

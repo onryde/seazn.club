@@ -20,6 +20,7 @@ import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
 import {
   EntrantId,
   FORFEIT_REASONS,
+  forbidsLevelResult,
   isLevelOutcome,
   type ForfeitPhase,
   type ForfeitReason,
@@ -179,6 +180,29 @@ export function settleApplies(module: { awaitingDecider?(state: never): boolean 
   // P1 follow-up: a fixture nobody started has no fold — the console is fed `match_states.state ?? null` — and a
   // module's hook reads its own state shape (boardgame: `s.phase`). No state, no decider owed; never ask the hook.
   return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);
+}
+
+/** W2c P-7 / X-AB-5 - the TABLE half of the settle offer. A league, group, swiss or americano draw is a RESULT the
+ *  standings credit, so none of `settleApplies`' arms (a level outcome, a pending decider) applies there; the one
+ *  exception is an ABANDONED match that decided nobody (no effective outcome), which has no result to turn into a win,
+ *  stays out of the table and, in a Swiss stage, holds the next round - the organiser's settle is how it is decided.
+ *  An EXPUNGE abandon (W2b D5, a withdrawal's) also folds to no outcome but took the match out of the table altogether:
+ *  nothing is owed on it, so it is never offered. `abandoned` is the ACTIVE `core.abandon` of the ledger. */
+export interface TableSettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly expunged?: boolean }
+export function settleAppliesInTable(f: TableSettleFacts): boolean {
+  return f.abandoned && f.expunged !== true && f.outcome === null;
+}
+
+/** THE stage-aware settle offer: ONE entry for the server's append guard (a table stage's settle) and the console's
+ *  block, the pad's held line, and any other reader that asks "is this match owed the organiser's settle?". A bracket
+ *  kind (controller ruling C12) is `settleApplies`; every other kind - and a fixture outside any stage - is the table
+ *  arm above. `state` is read only by a bracket's pending-decider hook. */
+export function settleOffered(
+  module: { awaitingDecider?(state: never): boolean },
+  stageKind: string | null | undefined,
+  f: SettleFacts & { readonly expunged?: boolean },
+): boolean {
+  return forbidsLevelResult(stageKind) ? settleApplies(module, f) : settleAppliesInTable(f);
 }
 
 /** THE outcome of a fold. An expunge abandon (W2b D5) outranks everything — the match left the table, so there is

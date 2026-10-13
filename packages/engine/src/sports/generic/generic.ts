@@ -760,8 +760,11 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
 
-  // W2a: none (spec §5.2)
-  bracketDeciders: () => ({}),
+  // W2a: none (spec §5.2). W2c I3 (ruling): sharing the points is a table-stage policy (its rule key applies in
+  // DRAW_KINDS only) - a bracket cannot end level, so an abandon there follows W2a (held, then settled) whatever the
+  // division's policy says: the overlay replays instead of sharing. Only where a share is set, so every other bracket
+  // fixture's cfg - and the snapshot frozen from it - stays exactly what it was.
+  bracketDeciders: (cfg) => (cfg.abandonPolicy === "share" ? { abandonPolicy: "replay" as const } : {}),
 
   // §9.3 — decisive total w+l; shared total 2d (draw/tie/no_result — abandon
   // can produce no_result even when allowDraws is false).

@@ -21,6 +21,8 @@ const evs = (spec: Spec): EventEnvelope[] => spec.map(([type, payload, voids], i
 const ABANDON: [string, unknown] = ["core.abandon", { reason: "weather" }];
 /** The owner's wording (P-5), verbatim: the refusal a save of `share` without draws gets. */
 const SHARE_NEEDS_DRAWS = "Sharing the points needs draws to be allowed.";
+/** Carrom's refusal (fix round 1, ruling): the same rule, but it names the setting that decides it. */
+const SHARE_NEEDS_DRAWN_GAME = "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.";
 
 const hk = defaultLineupPair(hockey.positions);
 const H = hk.home.entrantId;
@@ -225,7 +227,7 @@ describe("GN-AB-2 CA-AB-2 opt-in shared points on an abandon; the default is tod
   it("carrom refuses share the same way where its cfg takes no draw (tieBoard extra is ICF play: a winner always exists)", () => {
     const r = carrom.configSchema.safeParse({ tieBoard: "extra", abandonPolicy: "share" });
     expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues.map((i) => [i.message, i.path])).toEqual([[SHARE_NEEDS_DRAWS, ["abandonPolicy"]]]);
+    if (!r.success) expect(r.error.issues.map((i) => [i.message, i.path])).toEqual([[SHARE_NEEDS_DRAWN_GAME, ["abandonPolicy"]]]);
     expect(carrom.configSchema.safeParse({ tieBoard: "draw", abandonPolicy: "share" }).success).toBe(true);
     expect(carrom.configSchema.safeParse({ tieBoard: "extra", abandonPolicy: "replay" }).success).toBe(true);
   });
@@ -253,6 +255,59 @@ describe("GN-AB-2 CA-AB-2 opt-in shared points on an abandon; the default is tod
       expect(offered, m.key).toBe(DRAW_KINDS.size * variants);
       expect(withheld, m.key).toBe(BRACKET_KINDS.size * variants);
     }
+  });
+});
+
+describe("I3 (ruling) share applies in table stages only: in a bracket the policy is ignored and the abandon is held", () => {
+  const gl = defaultLineupPair(generic.positions);
+  const cl = defaultLineupPair(carrom.positions);
+  const tally: Spec = [["core.start"], ["generic.score", { by: gl.home.entrantId, points: 2 }], ["generic.score", { by: gl.away.entrantId, points: 1 }]];
+  const cfgOf = (m: typeof generic | typeof carrom, extra: Record<string, unknown>) =>
+    m === generic ? generic.configSchema.parse({ ...generic.variants["score"], allowDraws: true, ...extra }) : carrom.configSchema.parse({ tieBoard: "draw", ...extra });
+  /** What resolveFixtureCfg lays over the stage's cfg for a fixture in a bracket stage: `division ⊕ bracketDeciders`. */
+  /** The fold, read for the two fields these tests compare (the generic fold's state is not one shared type). */
+  const folded = (m: unknown, cfg: unknown, lineups: unknown, spec: Spec): { outcome?: unknown; phase?: unknown } =>
+    ((): { outcome?: unknown; phase?: unknown } => {
+      const state: unknown = foldMatch(m as never, cfg as never, lineups as never, evs(spec));
+      return state as { outcome?: unknown; phase?: unknown };
+    })();
+  const inBracket = <C extends object>(m: { bracketDeciders(c: never): object }, cfg: C): C => ({ ...cfg, ...m.bracketDeciders(cfg as never) });
+
+  it("a bracket abandon under share folds like a replay (held, nobody decided) - never a draw; the same cfg in a table stage is the draw", () => {
+    let bracket = 0;
+    let table = 0;
+    for (const [m, lineups, spec] of [[generic, gl, tally], [carrom, cl, [["core.start"]] as Spec]] as const) {
+      const cfg = cfgOf(m, { abandonPolicy: "share" });
+      expect(cfg.abandonPolicy, `${m.key}: rig`).toBe("share");
+      // The table stage folds the cfg as it is: the draw.
+      expect(folded(m, cfg, lineups, [...spec, ABANDON]).outcome, `${m.key} table`).toEqual({ kind: "draw" });
+      table++;
+      // Every bracket kind folds the overlay: bracketDeciders takes no kind, so one overlay serves all five - counted per kind.
+      for (const kind of BRACKET_KINDS) {
+        const s = folded(m, inBracket(m as never, cfg), lineups, [...spec, ABANDON]);
+        expect([s.outcome ?? null, s.phase], `${m.key} ${kind}`).toEqual([null, "abandoned"]);
+        bracket++;
+      }
+    }
+    expect(table).toBe(2);
+    expect(bracket).toBe(2 * BRACKET_KINDS.size);
+  });
+
+  it("the overlay touches nothing else: with no policy, or an explicit replay, a bracket fixture's cfg is exactly what it was", () => {
+    let checked = 0;
+    for (const m of [generic, carrom]) {
+      for (const extra of [{}, { abandonPolicy: "replay" }]) {
+        const overlay = m.bracketDeciders(cfgOf(m, extra) as never) as Record<string, unknown>;
+        expect(Object.keys(overlay).sort(), `${m.key} ${JSON.stringify(extra)}`).toEqual(m === carrom ? ["tieBoard"] : []);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("carrom keeps CA-KO-1 beside it: the overlay under share is the extra board AND replay", () => {
+    expect(carrom.bracketDeciders(cfgOf(carrom, { abandonPolicy: "share" }) as never)).toEqual({ tieBoard: "extra", abandonPolicy: "replay" });
+    expect(generic.bracketDeciders(cfgOf(generic, { abandonPolicy: "share" }) as never)).toEqual({ abandonPolicy: "replay" });
   });
 });
 

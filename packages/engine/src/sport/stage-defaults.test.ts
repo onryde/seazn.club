@@ -7,6 +7,7 @@ import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "../core/types.ts";
 import { foldMatch, type EventEnvelope } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { football } from "../sports/football/index.ts";
+import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
 import { hockey } from "../sports/hockey/index.ts";
 import { icehockey } from "../sports/icehockey/index.ts";
 import { cricket } from "../sports/cricket/index.ts";
@@ -36,21 +37,28 @@ describe("X-SR-6 table kinds get no preset", () => {
   });
 });
 
+/** FB-SO-1: "youth variants 3". `youth` and `mini-soccer` (FA mini-soccer, U7-U10: the youth game by another name - fix
+ *  round 1 ruling) are youth formats; `small-sided` (adult 7-a-side and the like) is not, and stays at 5. */
+const YOUTH_VARIANTS = ["youth", "mini-soccer"];
+
 describe("X-SR-6 FB-SO-1 football knockout preset", () => {
-  it("every bracket kind presets ET 2×15, penalties and 5 kicks; youth 3", () => {
+  it("every bracket kind presets ET 2×15, penalties and 5 kicks; the youth variants 3 (FB-SO-1)", () => {
     let checked = 0;
     for (const kind of BRACKET_KINDS) {
       expect(stageDefaultsFor(football, kind, null)).toEqual({ extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 5 });
-      expect(stageDefaultsFor(football, kind, "youth")).toEqual({ extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 3 });
-      checked++;
+      for (const youth of YOUTH_VARIANTS) {
+        expect(stageDefaultsFor(football, kind, youth), `${kind}/${youth}`).toEqual({ extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 3 });
+        checked++;
+      }
     }
-    expect(checked).toBe(BRACKET_KINDS.size);
-    expect(Object.keys(football.variants)).toContain("youth");
+    expect(checked).toBe(BRACKET_KINDS.size * YOUTH_VARIANTS.length);
+    for (const youth of YOUTH_VARIANTS) expect(Object.keys(football.variants)).toContain(youth);
   });
 
   it("a variant with no preset of its own, and a name that is no variant at all, fall back to 5 (a Map lookup, never the prototype chain)", () => {
     let checked = 0;
-    const others = Object.keys(football.variants).filter((v) => v !== "youth");
+    const others = Object.keys(football.variants).filter((v) => !YOUTH_VARIANTS.includes(v));
+    expect(others, "small-sided is not a youth format").toContain("small-sided");
     const notVariants = ["no-such-variant", "constructor", "__proto__", "toString"];
     for (const variant of [...others, ...notVariants])
       for (const kind of BRACKET_KINDS) {
@@ -108,7 +116,53 @@ describe("X-SR-6 FB-SO-1 football knockout preset", () => {
     expect(foldMatch(football, cfg, lineups, events).outcome).toMatchObject({ kind: "win", winner: H, method: "shootout" });
     expect(foldMatch(football, cfg, lineups, events.slice(0, -2)).outcome ?? null).toBeNull(); // 2-0 after two rounds: not yet
   });
+
+  it("fix round 1 (ruling): the key's declared whenAbsent IS the engine's effective default - the fold with the key absent equals the fold with it set to whenAbsent, and to no neighbour", () => {
+    const fact = football.ruleKeys!.shootoutAttempts!;
+    expect(fact.whenAbsent, "football declares what an absent shootoutAttempts reads as").toBe(SHOOTOUT_ATTEMPTS_DEFAULT);
+    const kick = (by: string, scored: boolean): [string, unknown] => ["football.shootout.kick", { by, scored }];
+    const lineups = defaultLineupPair(football.positions);
+    const H = lineups.home.entrantId, A = lineups.away.entrantId;
+    const toShootout: Array<[string, unknown?]> = [
+      ["core.start"], ["football.period", { phase: "HT" }], ["football.period", { phase: "FT" }],
+      ["football.period", { phase: "ET_HT" }], ["football.period", { phase: "ET_FT" }],
+    ];
+    // Where the shoot-out is decided: the length of the first prefix of the kicks that folds to an outcome, or null when
+    // none does. A longer sequence under a SHORTER count would be rejected past its decision, so each prefix is folded.
+    const base = { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true };
+    const kicks = [kick(H, true), kick(A, false), kick(H, true), kick(A, false), kick(H, true), kick(A, false), kick(H, false), kick(A, false)];
+    const decidedAt = (shootoutAttempts?: number): number | null => {
+      const cfg = football.configSchema.parse(shootoutAttempts === undefined ? base : { ...base, shootoutAttempts });
+      for (let n = 1; n <= kicks.length; n++)
+        if ((foldMatch(football, cfg, lineups, stream(...toShootout, ...kicks.slice(0, n))).outcome ?? null) !== null) return n;
+      return null;
+    };
+    const absent = decidedAt();
+    expect(absent, "rig: the sequence decides the shoot-out under the default").not.toBeNull();
+    expect(decidedAt(fact.whenAbsent as number)).toBe(absent);
+    for (const neighbour of [(fact.whenAbsent as number) - 1, (fact.whenAbsent as number) + 1])
+      expect(decidedAt(neighbour), `an absent key is not ${neighbour}`).not.toBe(absent);
+  });
+
+  it("every ruleKey that declares whenAbsent is a bounded match key on an optional, default-less schema leaf holding a valid value (counted)", () => {
+    let declared = 0;
+    for (const m of builtinModules)
+      for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
+        if (fact.whenAbsent === undefined) continue;
+        expect(fact.matchBound, `${m.key}.${key}: whenAbsent only means something to a bound`).toBeDefined();
+        const props = (m.configSchema as unknown as { shape: Record<string, unknown> }).shape;
+        expect(props, `${m.key}.${key}`).toHaveProperty(key); // top-level leaf
+        const withKey = m.configSchema.safeParse({ ...(declaredBase(m) as object), [key]: fact.whenAbsent });
+        expect(withKey.success, `${m.key}.${key} = ${String(fact.whenAbsent)} must be a value the schema takes`).toBe(true);
+        declared++;
+      }
+    expect(declared).toBeGreaterThan(0);
+  });
 });
+
+/** A cfg each module parses with no per-sport extras (football's base); the sweep above names only football today. */
+const declaredBase = (m: { key: string }): unknown =>
+  m.key === "football" ? { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true } : {};
 
 describe("hockey, ice hockey and cricket knockout presets", () => {
   it("hockey: the FIH preset's shoot-out, in every bracket kind", () => {
@@ -160,7 +214,7 @@ describe("hockey, ice hockey and cricket knockout presets", () => {
   });
   it("a second call hands back a fresh object: mutating one result never reaches the next call or the module's own presets", () => {
     for (const m of [football, hockey, icehockey, cricket]) {
-      const first = stageDefaultsFor(m, "knockout", null) as Record<string, any>;
+      const first = stageDefaultsFor(m, "knockout", null);
       const frozen = JSON.stringify(first);
       for (const v of Object.values(first)) if (v !== null && typeof v === "object") for (const k of Object.keys(v)) (v as Record<string, unknown>)[k] = "poisoned";
       first.extra = "poisoned";

@@ -84,8 +84,11 @@ function offOrShorter(o: unknown, s: unknown): string | null {
 
 /** X-SR-2 (signed): a decider may only be switched off or shortened for one match. `o` and `s` are the override's and
  *  the stage's values at the decider's key; the X-SR-1 sweep proves each bound's shape. */
-function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown, s: unknown): string | null {
-  if (bound === "off_or_shorter") return offOrShorter(o, s);
+function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown, stageValue: unknown, whenAbsent: number | undefined): string | null {
+  if (bound === "off_or_shorter") return offOrShorter(o, stageValue);
+  // A key the stage does not carry plays the engine's effective default where the module declares one (`whenAbsent`),
+  // so a legacy stage is not read as "off"; with none declared, a missing key is off, as before.
+  const s = stageValue === undefined ? whenAbsent : stageValue;
   if (!isLength(s)) return OFF_AT_STAGE;
   // Shorter = the smaller of the two. The bound only sees a CHANGED leaf, so `o` never equals `s` (an `o <= s` would
   // carry an untestable `<` twin).
@@ -121,7 +124,7 @@ export function checkFixtureOverride(
       if (owner === null || owner.fact.scope !== "match" || !ruleKeyApplies(owner.fact, kind, variant))
         return notSettable(path, "it can be set per stage, not per match");
       if (owner.fact.matchBound !== undefined) {
-        const why = deciderBound(owner.fact.matchBound, valueAt(override, owner.key), valueAt(stageResolved, owner.key));
+        const why = deciderBound(owner.fact.matchBound, valueAt(override, owner.key), valueAt(stageResolved, owner.key), owner.fact.whenAbsent);
         if (why !== null) return notSettable(owner.key, why);
       }
       changed.push(path);

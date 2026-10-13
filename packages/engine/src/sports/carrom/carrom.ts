@@ -34,7 +34,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { SHARE_NEEDS_DRAWS } from "../../sport/abandon-share.ts";
+import { SHARE_NEEDS_DRAWN_GAME } from "../../sport/abandon-share.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
@@ -91,7 +91,7 @@ export const CarromCfg = z
   // tieBoard "draw" house rule (`supportsDraws`) - ICF play ("extra") always produces a winner, and the server refuses a
   // draw it does not support (DRAW_NOT_ALLOWED), so a share under "extra" would be an abandon nobody could record.
   .refine((cfg) => cfg.abandonPolicy !== "share" || cfg.tieBoard === "draw", {
-    message: SHARE_NEEDS_DRAWS,
+    message: SHARE_NEEDS_DRAWN_GAME,
     path: ["abandonPolicy"],
   });
 export type CarromCfg = z.infer<typeof CarromCfg>;
@@ -1122,8 +1122,13 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     return cfg.tieBoard === "draw" && DRAW_KINDS.has(stage);
   },
 
-  // CA-KO-1 (ICF Law 56)
-  bracketDeciders: () => ({ tieBoard: "extra" as const }),
+  // CA-KO-1 (ICF Law 56). W2c I3 (ruling): sharing the points is a table-stage policy (its rule key applies in
+  // DRAW_KINDS only) - a bracket cannot end level, so an abandon there follows W2a (held, then settled) whatever the
+  // division's policy says: under a share the overlay replays instead. Without a share the overlay is the extra board alone.
+  bracketDeciders: (cfg) =>
+    cfg.abandonPolicy === "share"
+      ? { tieBoard: "extra" as const, abandonPolicy: "replay" as const }
+      : { tieBoard: "extra" as const },
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {

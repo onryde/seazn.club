@@ -215,8 +215,9 @@ export const icehockey = makePeriodModule({
   // W2c Q10 (D9; review I5) - replay or the result as it stood (IH-AB-1). The 4th-quarter rule is a field-hockey rule
   // (HK-AB-2): ice hockey is never offered `q4_stands`, and its schema refuses it.
   abandonOptions: ["replay", "award"],
-  // W2c X-SR-6, IH-KO-1 (spec §4.2) — a NEW bracket stage starts with a 10-minute sudden-death overtime and the GWS,
-  // each the organiser's to switch off; a table stage starts with none. A fresh object on every call.
+  // W2c X-SR-6, IH-KO-1 (spec §4.2) — the preset a NEW bracket stage should start with: a 10-minute sudden-death overtime
+  // and the GWS, each the organiser's to switch off; a table stage starts with none. A fresh object on every call. A
+  // DECLARATION only: Task 12 (stage creation) writes it into `stages.config.rules`; nothing reads it before then.
   stageDefaults: (kind) =>
     BRACKET_KINDS.has(kind)
       ? { overtime: { ...IIHF_OVERTIME, minutes: KNOCKOUT_OVERTIME_MINUTES }, shootout: { ...IIHF_SHOOTOUT } }

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
+import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { schemaHasPath, schemaTopKeys } from "../testkit/schema-paths.ts";
 import {
@@ -619,6 +620,23 @@ describe("X-SR-2 checkFixtureOverride", () => {
     expect(checkFixtureOverride(fb, "knockout", null, { extraTime: { enabled: false, halfMinutes: 15 } }, { extraTime: { enabled: true, halfMinutes: 15 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", reason: expect.stringMatching(/off/) });
     expect(checkFixtureOverride(fb, "knockout", null, {}, { extraTime: { enabled: true, halfMinutes: 10 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "extraTime" }); // the stage names none
     expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: null })).toMatchObject({ ok: true }); // switches nothing on; the schema judges the shape
+  });
+  it("fix round 1 (ruling) a legacy stage with the shoot-out on and NO shootoutAttempts key: an absent key reads as the engine's default (5), never as off", () => {
+    const legacy = { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true };
+    expect(legacy).not.toHaveProperty("shootoutAttempts");
+    expect(fb.configSchema.safeParse(legacy).success, "rig: the legacy stage is a valid football cfg").toBe(true);
+    const asked = (n: number) => checkFixtureOverride(fb, "knockout", null, legacy, { shootoutAttempts: n });
+    // The probe: a match asks for 3 kicks each.
+    expect(asked(3)).toEqual({ ok: true, changed: ["shootoutAttempts"] });
+    // Shorter-or-equal to the default only: the default is the bound.
+    expect(asked(SHOOTOUT_ATTEMPTS_DEFAULT)).toEqual({ ok: true, changed: ["shootoutAttempts"] });
+    expect(asked(SHOOTOUT_ATTEMPTS_DEFAULT + 1)).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "shootoutAttempts", reason: expect.stringMatching(/shorter/) });
+    // A stage that DOES carry the key is bound by its own value, not by the default (the right answer differs from the constant).
+    const youth = { ...legacy, shootoutAttempts: 3 };
+    expect(checkFixtureOverride(fb, "knockout", null, youth, { shootoutAttempts: 2 })).toEqual({ ok: true, changed: ["shootoutAttempts"] });
+    expect(checkFixtureOverride(fb, "knockout", null, youth, { shootoutAttempts: 4 })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", reason: expect.stringMatching(/shorter/) });
+    // Every OTHER bounded key still reads an absent stage value as off (no whenAbsent declared): ice hockey's overtime.
+    expect(checkFixtureOverride(sport("icehockey"), "knockout", null, { periods: { count: 3, minutes: 20 } }, { overtime: { kind: "sudden_death", minutes: 5, skaters: 3 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "overtime" });
   });
   it("a match key outside its declared kinds is refused; a format key the stage does not carry may be set", () => {
     // Synthetic module: no builtin declares a kind-limited match key.
