@@ -388,7 +388,7 @@ test.describe("arbiter panel", () => {
   // division's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the
   // knockout's, not a final's. The pairs: a league board offers it, and settling it reads back as No result; a winner
   // still settles the knockout board, through the real server.
-  test("I-3: a league board settles No result as VOID; on a knockout line that feeds a next match No result is hidden and the settle says why, panel and queue; no sideways scroll at 320, 768 or 1280", async ({
+  test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line that feeds a next match No result is hidden and the settle says why, panel and queue; no sideways scroll at 320, 768 or 1280", async ({
     page,
     request,
   }) => {
@@ -412,7 +412,7 @@ test.describe("arbiter panel", () => {
       uiEn["externalPlay.resolve.draw"]!,
       uiEn["externalPlay.resolve.noResult"]!,
     ]);
-    await expect(page.getByTestId("arbiter-settle-knockout")).toHaveCount(0);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveCount(0);
     await shoot(page, "arbiter-league-settle");
     await page.setViewportSize({ width: 1280, height: 900 });
     await choices.filter({ hasText: uiEn["externalPlay.resolve.noResult"]! }).click();
@@ -431,6 +431,35 @@ test.describe("arbiter panel", () => {
     await expect(page.getByText(uiEn["arbiter.status.noResult"]!, { exact: true })).toBeVisible();
     await shoot(page, "arbiter-league-no-result");
 
+    const winners = [fill("externalPlay.settle.wins", { name: b2.home.name }), fill("externalPlay.settle.wins", { name: b2.away.name })];
+    const settleOn = async (fixtureId: string) => {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`${r.arbiterPath}?fixture=${fixtureId}`);
+      const open = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+      await open.click();
+      await expect(open).toHaveAttribute("aria-expanded", "true");
+      return page.getByTestId("arbiter-settle").getByRole("button");
+    };
+    const queueSettle = async (fixtureId: string) => {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(r.fixturesTab);
+      const row = page.getByTestId(`external-play-queue-row-${fixtureId}`);
+      await row.getByTestId("external-play-settle-toggle").click();
+      return row;
+    };
+
+    // A Swiss (fix round 3): the held board's stage a Swiss — a void would hold the next round up, so No result is
+    // hidden there too, and the settle says why, in the queue and on the panel.
+    await withDb((sql) => sql`update stages set kind = 'swiss' where id = (select stage_id from fixtures where id = ${b2.fixtureId})`);
+    const swissRow = await queueSettle(b2.fixtureId);
+    await expect(swissRow.getByTestId("external-play-settle").getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(swissRow.getByTestId("external-play-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
+    const swissChoices = await settleOn(b2.fixtureId);
+    await expect(swissChoices).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
+    await shoot(page, "arbiter-swiss-settle");
+    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the Swiss panel").toBe(3);
+
     // A knockout line that feeds a next match.
     const feeds = await withDb(async (sql) => {
       const [f] = await sql<{ stage_id: string; division_id: string; org_id: string }[]>`
@@ -444,27 +473,18 @@ test.describe("arbiter panel", () => {
       return sql<{ w: string | null }[]>`select winner_to_fixture as w from fixtures where id = ${b2.fixtureId}`;
     });
     expect(feeds[0]!.w, "premise: the line feeds a next match — not a final").not.toBeNull();
-    const winners = [fill("externalPlay.settle.wins", { name: b2.home.name }), fill("externalPlay.settle.wins", { name: b2.away.name })];
 
     // The division's queue: the held card's settle, opened.
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.fixturesTab);
-    const row = page.getByTestId(`external-play-queue-row-${b2.fixtureId}`);
-    await row.getByTestId("external-play-settle-toggle").click();
+    const row = await queueSettle(b2.fixtureId);
     await expect(row.getByTestId("external-play-settle").getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
-    await expect(row.getByTestId("external-play-settle-knockout")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
+    await expect(row.getByTestId("external-play-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
     await shoot(page, "queue-knockout-settle");
     expect(await noSidewaysScroll(page, [320, 768, 1280]), "the queue").toBe(3);
 
     // The arbiter panel: the same three, the same sentence.
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(`${r.arbiterPath}?fixture=${b2.fixtureId}`);
-    const settle2 = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
-    await settle2.click();
-    await expect(settle2).toHaveAttribute("aria-expanded", "true");
-    const choices2 = page.getByTestId("arbiter-settle").getByRole("button");
+    const choices2 = await settleOn(b2.fixtureId);
     await expect(choices2).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
-    await expect(page.getByTestId("arbiter-settle-knockout")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
     await shoot(page, "arbiter-knockout-settle");
     expect(await noSidewaysScroll(page, [320, 768, 1280]), "the panel").toBe(3);
 

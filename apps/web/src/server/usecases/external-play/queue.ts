@@ -4,12 +4,13 @@ import "server-only";
 // pre-redesign reader was deleted in 340dce7ed together with the schema it
 // read. Same shape the page already consumes, plus `reason` — V439 moved the
 // why out of free-text `last_error` into the `needs_reason` vocabulary.
+import type { NoResultOffer } from "@/lib/arbiter-view";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
-import { noResultRefused } from "./no-result";
+import { noResultOffer } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
 import { fixturesSeating } from "./seated";
 
@@ -34,9 +35,8 @@ export type NeedsOrganiserExternalPlayRow = {
   canResync: boolean;
   /** The viewer plays on this board: another organiser settles it (C). */
   seated: boolean;
-  /** I-3: a knockout — the server refuses No result here (a knockout game needs a winner), so the settle does not
-   *  offer it. The settle's own reading (`noResultRefused`, no-result.ts). */
-  knockout: boolean;
+  /** I-3: what the settle offers in place of a winner — the settle's own reading (`noResultOffer`, no-result.ts). */
+  noResultOffer: NoResultOffer;
 };
 
 const REVOKED_SEATS = ["white", "black", "both"] as const;
@@ -117,23 +117,26 @@ export async function listNeedsOrganiserExternalPlay(
   );
   const nameOf = (id: string | null) => (id === null ? "" : (names.get(id) ?? ""));
   return Promise.all(
-    rows.map(async (r): Promise<NeedsOrganiserExternalPlayRow> => ({
-      fixtureId: r.fixture_id,
-      fixtureNo: r.fixture_no,
-      homeName: nameOf(r.home_entrant_id),
-      awayName: nameOf(r.away_entrant_id),
-      scheduledAt: r.scheduled_at ? r.scheduled_at.toISOString() : null,
-      reason: readNeedsReason(r.needs_reason),
-      lastError: r.last_error,
-      // Before a game exists the colour is the pairing's (guard.ts).
-      whiteSide: r.white_side ?? (await whiteSideOf({ fixtureId: r.fixture_id, orgId: auth.orgId })),
-      revokedSeat: readRevokedSeat(r.revoked_seat),
-      roundNo: r.round_no,
-      boardNo: r.seq_in_round,
-      stageName: r.stage_name,
-      canResync: r.challenge_id !== null,
-      seated: seated.has(r.fixture_id),
-      knockout: noResultRefused(r.stage_kind),
-    })),
+    rows.map(async (r): Promise<NeedsOrganiserExternalPlayRow> => {
+      const reason = readNeedsReason(r.needs_reason);
+      return {
+        fixtureId: r.fixture_id,
+        fixtureNo: r.fixture_no,
+        homeName: nameOf(r.home_entrant_id),
+        awayName: nameOf(r.away_entrant_id),
+        scheduledAt: r.scheduled_at ? r.scheduled_at.toISOString() : null,
+        reason,
+        lastError: r.last_error,
+        // Before a game exists the colour is the pairing's (guard.ts).
+        whiteSide: r.white_side ?? (await whiteSideOf({ fixtureId: r.fixture_id, orgId: auth.orgId })),
+        revokedSeat: readRevokedSeat(r.revoked_seat),
+        roundNo: r.round_no,
+        boardNo: r.seq_in_round,
+        stageName: r.stage_name,
+        canResync: r.challenge_id !== null,
+        seated: seated.has(r.fixture_id),
+        noResultOffer: noResultOffer({ stageKind: r.stage_kind, reason }),
+      };
+    }),
   );
 }

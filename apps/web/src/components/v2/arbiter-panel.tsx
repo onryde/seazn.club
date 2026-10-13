@@ -42,7 +42,8 @@ import {
   MUTED,
   noticeSentence,
   settleChoices,
-  settleKnockoutGuidance,
+  settleGuidance,
+  SETTLE_GUIDANCE_KEY,
   SOFT,
   useFmt,
   type Fmt,
@@ -581,6 +582,7 @@ function Decision({
   const notice = decision.notice;
   if (!canResync && !canGoOn && !canSettle && notice === null) return null;
   const busy = decision.busy !== null;
+  const guidance = settleGuidance(board);
   return (
     <section aria-labelledby={headingId} className="order-5 flex min-w-0 flex-col gap-2 border-t border-[#e7e3f3] pt-3 lg:pt-3.5">
       <h2 id={headingId} className="m-0 text-[17px] font-semibold">
@@ -636,7 +638,7 @@ function Decision({
               </p>
               <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
                 {settleChoices(
-                  { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, knockout: board.knockout },
+                  { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, noResultOffer: board.noResultOffer },
                   f,
                 ).map((c) => (
                   <button
@@ -652,9 +654,9 @@ function Decision({
                   </button>
                 ))}
               </div>
-              {settleKnockoutGuidance(board) && (
-                <p data-testid="arbiter-settle-knockout" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
-                  {f.t("arbiter.decide.knockoutNeedsWinner")}
+              {guidance !== null && (
+                <p data-testid="arbiter-settle-guidance" data-why={guidance} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+                  {f.t(SETTLE_GUIDANCE_KEY[guidance])}
                 </p>
               )}
             </fieldset>

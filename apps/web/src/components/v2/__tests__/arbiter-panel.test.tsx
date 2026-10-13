@@ -79,7 +79,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     canSettle: true,
     whiteSide: "home",
     tiebreakOwed: false,
-    knockout: false,
+    noResultOffer: { kind: "void" },
     flags: [],
     ...over,
   };
@@ -638,30 +638,38 @@ describe("your decision", () => {
     ]);
   });
 
-  // I-3: in any knockout the server refuses No result (a knockout game needs a winner) — its own reading arrives as
-  // `knockout`, so the settle never offers the "No result" it would refuse with a 409, and says why in its place, in
-  // every locale.
-  it("a knockout board: No result is not offered and the guidance says why — every locale, counted", () => {
-    const b = { ...ROUND.boards[2]!, knockout: true, whiteSide: "away" as const };
-    let locales = 0;
-    for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
-      const dict = LOCALES[loc] as Record<string, string>;
-      const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
-      expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw"]);
-      const guide = h.match(/<p[^>]*data-testid="arbiter-settle-knockout"[^>]*>(.*?)<\/p>/);
-      expect(guide, `${loc}: the guidance renders`).not.toBeNull();
-      expect(text(guide![1]!), loc).toBe(dict["arbiter.decide.knockoutNeedsWinner"]);
-      locales++;
+  // I-3: where the server refuses No result — any knockout (a knockout game needs a winner) and a Swiss (fix round 3: a
+  // Swiss round needs every game decided) — its own reading arrives as `noResultOffer`, so the settle never offers the
+  // "No result" it would refuse with a 409, and says why in its place, in every locale.
+  it("a refused No result (knockout, Swiss): not offered, and the guidance says why — each refusal, every locale, counted", () => {
+    const b = { ...ROUND.boards[2]!, whiteSide: "away" as const };
+    // The sentence for each refusal, typed from the rulings (never the component's own map).
+    const SENTENCE = { knockout: "arbiter.decide.knockoutNeedsWinner", swiss: "arbiter.decide.swissNeedsResult" } as const;
+    const open = (board: typeof b, loc?: keyof typeof LOCALES) =>
+      html(props({ round: { ...ROUND, boards: [board] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
+    let cells = 0;
+    for (const why of ["knockout", "swiss"] as const) {
+      const refused = { ...b, noResultOffer: { kind: "refused" as const, why } };
+      for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+        const dict = LOCALES[loc] as Record<string, string>;
+        const h = open(refused, loc);
+        expect(settleButtons(h).map(([c]) => c), `${why}, ${loc}`).toEqual(["away_wins", "home_wins", "draw"]);
+        const guide = h.match(/<p[^>]*data-testid="arbiter-settle-guidance"[^>]*data-why="([a-z]+)"[^>]*>(.*?)<\/p>/);
+        expect(guide, `${why}, ${loc}: the guidance renders`).not.toBeNull();
+        expect(guide![1], `${why}, ${loc}`).toBe(why);
+        expect(text(guide![2]!), `${why}, ${loc}`).toBe(dict[SENTENCE[why]]);
+        cells++;
+      }
+      // A drawn knockout: a winner only, as before — No result is never offered there, so no guidance.
+      const owed = open({ ...refused, tiebreakOwed: true });
+      expect(settleButtons(owed).map(([c]) => c), why).toEqual(["away_wins", "home_wins"]);
+      expect(owed, why).not.toContain('data-testid="arbiter-settle-guidance"');
     }
-    expect(locales).toBe(4);
-    // A drawn knockout: a winner only, as before — No result is never offered there, so no guidance.
-    const owed = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed: true }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
-    expect(settleButtons(owed).map(([c]) => c)).toEqual(["away_wins", "home_wins"]);
-    expect(owed).not.toContain('data-testid="arbiter-settle-knockout"');
-    // The pair: a board that is not a knockout offers No result, and no guidance.
-    const league = html(props({ round: { ...ROUND, boards: [{ ...b, knockout: false }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(cells).toBe(2 * 4);
+    // The pair: where the void is offered, No result is there, and no guidance.
+    const league = open({ ...b, noResultOffer: { kind: "void" } });
     expect(settleButtons(league).map(([c]) => c)).toEqual(["away_wins", "home_wins", "draw", "no_result"]);
-    expect(league).not.toContain('data-testid="arbiter-settle-knockout"');
+    expect(league).not.toContain('data-testid="arbiter-settle-guidance"');
   });
 
   it("a board nobody reached (no online game on file) keeps T15's way to its match page — no settle buttons; closed, the disclosure paints none", () => {

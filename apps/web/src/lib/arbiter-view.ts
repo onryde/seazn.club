@@ -12,6 +12,17 @@
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
 
 export type ArbiterColour = "white" | "black";
+/** What the organiser's settle offers in place of a winner (I-3, fix rounds 2 and 3) — the server's one reading
+ *  (`noResultOffer`, server/usecases/external-play/no-result.ts), carried on the panel's board and the queue's row and
+ *  never re-derived on the client:
+ *   - "void": "No result", an abandon — only in a league or a group's round-robin, where a void holds nothing up;
+ *   - "double_walkover": both players stayed away — W2b's double walkover, wherever W2b takes one;
+ *   - "refused": neither is offered, and `why` names the sentence said in its place: a knockout game needs a winner,
+ *     a Swiss round needs every game decided before the next is paired. */
+export type NoResultOffer =
+  | { kind: "void" }
+  | { kind: "double_walkover" }
+  | { kind: "refused"; why: "knockout" | "swiss" };
 export type ArbiterCameraPolicy = "off" | "optional" | "required";
 
 /** Where one board stands, as the run sheet would say it. */
@@ -126,10 +137,8 @@ export type ArbiterBoard = {
   /** T16: a drawn knockout game waits for the organiser to pick who goes
    *  through (held `tiebreak_owed`): the settle offers a winner only. */
   tiebreakOwed: boolean;
-  /** I-3: a knockout — every stage kind where a level result is forbidden — so the server refuses No result (a
-   *  knockout game needs a winner) and the settle does not offer it. The server's own reading (`noResultRefused`,
-   *  server/usecases/external-play/no-result.ts), never re-derived on the client. */
-  knockout: boolean;
+  /** I-3: what the settle offers in place of a winner — No result, a double walkover, or neither (and why). */
+  noResultOffer: NoResultOffer;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };

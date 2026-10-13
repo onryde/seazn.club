@@ -28,12 +28,12 @@ import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type ArbiterNotice } from "./arbiter-decision";
-import { boardStateWord, BUTTON_QUIET, FlagCard, MUTED, noticeSentence, settleChoices, settleKnockoutGuidance, SOFT, useFmt, type Fmt } from "./arbiter-flag-cards";
+import { boardStateWord, BUTTON_QUIET, FlagCard, MUTED, noticeSentence, settleChoices, settleGuidance, SETTLE_GUIDANCE_KEY, SOFT, useFmt, type Fmt } from "./arbiter-flag-cards";
 import { HELD_TITLE_KEYS, heldBody, namesByColour, queueRowAnchor } from "./external-play-held-copy";
 
 export type HeldRow = Pick<
   NeedsOrganiserExternalPlayRow,
-  "fixtureId" | "homeName" | "awayName" | "reason" | "whiteSide" | "revokedSeat" | "roundNo" | "boardNo" | "stageName" | "canResync" | "seated" | "knockout"
+  "fixtureId" | "homeName" | "awayName" | "reason" | "whiteSide" | "revokedSeat" | "roundNo" | "boardNo" | "stageName" | "canResync" | "seated" | "noResultOffer"
 >;
 
 export type ExternalPlayQueueProps = {
@@ -139,13 +139,14 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
     const { whiteName, blackName } = namesByColour(row);
     const body = heldBody({ reason: row.reason, revokedSeat: row.revokedSeat, whiteName, blackName });
     const tiebreak = row.reason === "tiebreak_owed";
+    const guidance = settleGuidance({ tiebreakOwed: tiebreak, noResultOffer: row.noResultOffer });
     const fieldset = (
       <fieldset data-testid="external-play-settle" className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
         <legend className="float-left mb-0.5 w-full p-0 text-sm font-semibold text-[#2e1065]">
           {tiebreak ? f.t("externalPlay.settle.pickLegend") : f.t("externalPlay.settle.legend")}
         </legend>
         <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
-          {settleChoices({ whiteSide: row.whiteSide, whiteName, blackName, tiebreakOwed: tiebreak, knockout: row.knockout }, f).map((c) => (
+          {settleChoices({ whiteSide: row.whiteSide, whiteName, blackName, tiebreakOwed: tiebreak, noResultOffer: row.noResultOffer }, f).map((c) => (
             <button
               key={c.choice}
               type="button"
@@ -163,9 +164,9 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
             </button>
           ))}
         </div>
-        {settleKnockoutGuidance({ tiebreakOwed: tiebreak, knockout: row.knockout }) && (
-          <p data-testid="external-play-settle-knockout" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
-            {f.t("arbiter.decide.knockoutNeedsWinner")}
+        {guidance !== null && (
+          <p data-testid="external-play-settle-guidance" data-why={guidance} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+            {f.t(SETTLE_GUIDANCE_KEY[guidance])}
           </p>
         )}
       </fieldset>
