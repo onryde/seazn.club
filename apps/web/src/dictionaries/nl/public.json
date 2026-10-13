@@ -45,6 +45,7 @@
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.needs_decision": "Gelijkspel — winnaar nog te bepalen",
   "matchCentre.status.timeTbd": "Tijd NNB",
+  "matchCentre.status.roundOpened": "Ronde geopend om {time}",
   "matchCentre.status.timeNotRecorded": "Tijd niet vastgelegd",
   "matchCentre.winner": "Winnaar:",
   "matchCentre.updatedAgo": "Bijgewerkt {seconds}s geleden",

@@ -113,7 +113,7 @@ const SIDES: [SideT, SideT] = [
   { entrantId: "away", name: "Southend Queens", short: "SEQ", colour: null, badgeUrl: null },
 ];
 
-function docFor(over: Partial<PublicFixture> = {}): MatchCentreDocT {
+function docFor(over: Partial<PublicFixture> = {}, inputOver: Partial<MatchCentreInput> = {}): MatchCentreDocT {
   const fixture: PublicFixture = {
     id: "fx1",
     division_id: "d1",
@@ -150,6 +150,7 @@ function docFor(over: Partial<PublicFixture> = {}): MatchCentreDocT {
     stage: null,
     moduleVersion: null,
     formatLabel: null,
+    ...inputOver,
   };
   return buildMatchCentre(input);
 }
@@ -268,6 +269,53 @@ describe("fixtureSubheading — a held fixture (W2a)", () => {
   it("a held fixture WITH a start time shows the time, like any other", () => {
     expect(fixtureSubheadingLine(docFor({ status: "needs_decision" }), "needs_decision", LABELS)).toBe(
       "20 Jul 2026, 14:30 · Riverside Sports Hall · Court 3",
+    );
+  });
+});
+
+// T17 fix round 2, V1 — an online board whose round is open. It carries no start time, so the line said "Time TBD"
+// until the first move folded the header live (R3), and then dropped (C3) — the panel below jumped ~36px. From the
+// round's open the line says when the round opened instead, the same fact Match details shows, so the first move
+// changes nothing above the board.
+describe("fixtureSubheadingLine — an online board's round-open line (V1)", () => {
+  const ROUND = "Round opened 11:42";
+  const OPENED = { ...LABELS, roundOpened: ROUND };
+  const bare = { scheduled_at: null, venue_name: null, court_name: null } as const;
+
+  it("empty case first: without a round-open label every status keeps its old line", () => {
+    expect(fixtureSubheadingLine(docFor(bare), "scheduled", LABELS)).toBe("Time TBD");
+    expect(fixtureSubheadingLine(docFor({ ...bare, status: "in_play" }), "in_play", LABELS)).toBeNull();
+    expect(fixtureSubheadingLine(docFor(bare), "scheduled", { ...LABELS, roundOpened: null })).toBe("Time TBD");
+  });
+
+  it("the same line before the first move and after it — the header folding live (R3) moves nothing", () => {
+    const waiting = docFor(bare);
+    const playing = docFor(bare, { onlineGameInPlay: true });
+    expect(waiting.header.status, "premise: before the first move").toBe("scheduled");
+    expect(playing.header.status, "premise: the online game folds the header live").toBe("in_play");
+    expect(fixtureSubheadingLine(waiting, "scheduled", OPENED)).toBe(ROUND);
+    expect(fixtureSubheadingLine(playing, "scheduled", OPENED)).toBe(ROUND);
+  });
+
+  it("swept: every status with no start time says when the round opened — counted", () => {
+    let checked = 0;
+    for (const status of ["scheduled", "in_play", "decided", "finalized", "needs_decision", "abandoned", "forfeited", "cancelled"]) {
+      expect(fixtureSubheadingLine(docFor({ ...bare, status }), status, OPENED), status).toBe(ROUND);
+      expect(fixtureSubheadingLine(undefined, status, OPENED), `${status}, no document`).toBe(ROUND);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: eight statuses").toBe(8);
+  });
+
+  it("a board WITH a start time keeps its time — the round's open never replaces it", () => {
+    expect(fixtureSubheadingLine(docFor({}, { onlineGameInPlay: true }), "scheduled", OPENED)).toBe(
+      "20 Jul 2026, 14:30 · Riverside Sports Hall · Court 3",
+    );
+  });
+
+  it("joins the venue like any time would", () => {
+    expect(fixtureSubheadingLine(docFor({ scheduled_at: null }), "scheduled", OPENED)).toBe(
+      `${ROUND} · Riverside Sports Hall · Court 3`,
     );
   });
 });

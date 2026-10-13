@@ -45,6 +45,7 @@
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.needs_decision": "Level — winner to be decided",
   "matchCentre.status.timeTbd": "Time TBD",
+  "matchCentre.status.roundOpened": "Round opened {time}",
   "matchCentre.status.timeNotRecorded": "Time not recorded",
   "matchCentre.winner": "Winner:",
   "matchCentre.updatedAgo": "Updated {seconds}s ago",

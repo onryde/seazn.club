@@ -45,6 +45,7 @@
   "matchCentre.status.walkover": "Walk-over",
   "matchCentre.status.needs_decision": "Égalité — vainqueur à désigner",
   "matchCentre.status.timeTbd": "Heure à déterminer",
+  "matchCentre.status.roundOpened": "Ronde ouverte à {time}",
   "matchCentre.status.timeNotRecorded": "Heure non enregistrée",
   "matchCentre.winner": "Vainqueur :",
   "matchCentre.updatedAgo": "Mis à jour il y a {seconds}s",

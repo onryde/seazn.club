@@ -12,6 +12,7 @@ import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { api } from "@/lib/client";
 import type { PublicWatchDoc } from "@/server/external-play/public-view";
 import { subscribeBoardPush } from "./live-board-channel";
+import { clearRoundOpenedAt, publishRoundOpenedAt } from "./round-open-channel";
 import { POLL_MS } from "./use-live-fixture";
 import { WatchBoard } from "./watch-board";
 import {
@@ -77,6 +78,10 @@ export function WatchPanelInner({ fixtureId, initial, names, details, pairedWhit
       }),
     [fixtureId],
   );
+
+  // V1: the line under the title says when the round opened — told here, where the poll learns it.
+  useEffect(() => publishRoundOpenedAt(fixtureId, model.roundOpenedAt), [fixtureId, model.roundOpenedAt]);
+  useEffect(() => () => clearRoundOpenedAt(fixtureId), [fixtureId]);
 
   const polling = pollsAgain(model);
   useEffect(() => {

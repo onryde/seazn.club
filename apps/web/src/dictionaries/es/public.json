@@ -45,6 +45,7 @@
   "matchCentre.status.walkover": "Walkover",
   "matchCentre.status.needs_decision": "Empate — ganador por decidir",
   "matchCentre.status.timeTbd": "Hora por confirmar",
+  "matchCentre.status.roundOpened": "Ronda abierta a las {time}",
   "matchCentre.status.timeNotRecorded": "Hora no registrada",
   "matchCentre.winner": "Ganador:",
   "matchCentre.updatedAgo": "Actualizado hace {seconds}s",
