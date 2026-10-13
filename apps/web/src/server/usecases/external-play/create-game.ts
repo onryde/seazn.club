@@ -94,6 +94,7 @@ import {
   type OnlinePlayFixture,
   type Side,
 } from "./guard";
+import { PLAYABLE_FIXTURE_STATUSES } from "./bridge-close";
 import { onlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus, playGrantRefusal, seatPlayer, type GrantRefusal } from "./preflight";
 
@@ -675,6 +676,11 @@ async function findSentGame(
   // that sends after it cannot be in the lists already read. Conservative on purpose: any member of either entrant,
   // colours and age unchecked — a peer with the colours reversed cannot list a candidate here (the lists are
   // filtered to White → Black), so at worst it costs a hold, never a wrong adoption; a merged-away member counts too.
+  // N5 (T17 re-review 3; controller ruling 2026-10-13): IN FLIGHT means mid-create — the peer's bridge still
+  // `pending` (not held for the organiser, not closed) under a fixture still playable (T8's predicate, as
+  // bridge-close lists it). A settled board's marker stays on its row — bridge-close keeps it, as evidence the
+  // organiser view shows — and without this it held every later recovery of the same two players for ever. A dead
+  // fixture cannot record what we adopt: its claim refuses an unplayable fixture and a row not pending.
   const peers: string[] = [];
   if (all.length > 0) {
     const seen = await sql<{ kind: string; id: string }[]>`
@@ -684,6 +690,8 @@ async function findSentGame(
         from fixture_external_play b
         join fixtures f on f.id = b.fixture_id
        where b.fixture_id <> ${plan.fixtureId} and b.challenge_id is null and b.create_sent_at is not null
+         and b.status = 'pending'
+         and f.status in ${sql(PLAYABLE_FIXTURE_STATUSES as string[])}
          and exists (
            select 1 from entrant_members em
              join persons p on p.id = em.person_id

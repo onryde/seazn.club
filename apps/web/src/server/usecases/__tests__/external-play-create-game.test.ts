@@ -21,6 +21,8 @@ import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { PLAY_SCOPES, getLichessLink } from "../external-accounts";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady, type CreateOutcome } from "../external-play/create-game";
+import { closeBridgeIfUnplayable } from "../external-play/bridge-close";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
@@ -2082,6 +2084,107 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(lateMatch, late)] });
     await expectRecreated(late.fixtureId, "past the window");
     expect(board.cancelChallenge, "the peer's challenge was cancelled as a stray").not.toHaveBeenCalled();
+  });
+
+  // ─── N5 (T17 re-review 3; controller ruling 2026-10-13: filter in the peer query, never clear the marker) ────────
+  //
+  // A peer is a create IN FLIGHT: its bridge still mid-create (`pending`) under a fixture still playable. A board
+  // held as create_outcome_unknown and then settled, or a fixture decided, withdrawn or cancelled, keeps its marker
+  // (bridge-close leaves it: the organiser view shows it as evidence) — and before this it held every later recovery
+  // of the same two players, across orgs and with the colours reversed, for ever.
+
+  /** LABELLED SQL: the row an outcome_unknown create leaves (the marker lifecycle test above): held, marker kept. */
+  const heldUnknown = (fixtureId: string, orgId: string) => {
+    const at = new Date(NOW.getTime() - 60_000);
+    return sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, needs_reason, mint_claimed_at, create_sent_at)
+      values (${fixtureId}, ${orgId}, ${T}, 'needs_organiser', 'create_outcome_unknown', null, ${at})`;
+  };
+  /** T8's predicate as the rulebook states it (scheduled, in play) — typed here, never read from the code. */
+  const SETTLED = FIXTURE_STATUSES.filter((st) => st !== "scheduled" && st !== "in_play");
+
+  it("N5: a DEAD same-pair peer — its fixture settled, its bridge closed by the real closeBridgeIfUnplayable — never holds: the live board adopts its one match, every settled status", async () => {
+    let checked = 0;
+    for (const settled of SETTLED) {
+      const s = await seed();
+      const dead = await samePairFixture(s);
+      await heldUnknown(dead, s.orgId);
+      await sql`update fixtures set status = ${settled} where id = ${dead}`; // LABELLED SQL: the settle / the cancel
+      expect(await closeBridgeIfUnplayable(dead, NOW), `${settled}: the real close closed it`).toBe(true);
+      const closed = await marker(dead);
+      expect(closed?.status, settled).toBe("finished");
+      expect(closed?.create_sent_at, `${settled}: the marker is kept (evidence), not cleared`).not.toBeNull();
+      await crashedAfterSend(s);
+      const match = freshGameId();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(match, s)] });
+      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${settled}: adopted`).toEqual({ created: true, gameId: match });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every settled status").toBe(FIXTURE_STATUSES.length - 2);
+    expect(SETTLED.length, "premise: six statuses are not playable").toBe(6);
+  });
+
+  it("N5: beside a dead peer the players' OWN ongoing game is adopted; with a live peer in flight beside the dead one, the board holds — naming the live one only", async () => {
+    // The ongoing-game adoption that worked before T17 (the reviewer's second break).
+    const g = await seed();
+    const deadG = await samePairFixture(g);
+    await heldUnknown(deadG, g.orgId);
+    await sql`update fixtures set status = 'cancelled' where id = ${deadG}`; // LABELLED SQL: the organiser's cancel
+    expect(await closeBridgeIfUnplayable(deadG, NOW)).toBe(true);
+    const sent = await crashedAfterSend(g);
+    const game = freshGameId();
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(game, g.away.lichessId)] });
+    exportsAnswer({ [game]: ourMeta(game, sent) });
+    expect(await createGameIfReady(g.fixtureId, { now: NOW }), "our own game: adopted").toEqual({ created: true, gameId: game });
+    expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
+
+    // The pair: the same dead peer, and a live one mid-create (pending, its fixture scheduled) — the live one holds.
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [] });
+    const s = await seed();
+    const dead = await samePairFixture(s);
+    await heldUnknown(dead, s.orgId);
+    await sql`update fixtures set status = 'cancelled' where id = ${dead}`;
+    expect(await closeBridgeIfUnplayable(dead, NOW)).toBe(true);
+    const [live] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                            home_entrant_id, away_entrant_id, scheduled_at)
+      values (${s.stageId}, ${s.divisionId}, ${s.orgId}, 2, 2, ${`n5-${randomUUID().slice(0, 8)}`}, 'scheduled',
+              ${s.home.entrantId}, ${s.away.entrantId}, ${T})
+      returning id`;
+    await peerInFlight(live!.id, s.orgId);
+    await crashedAfterSend(s);
+    board.acceptChallenge.mockClear();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(freshGameId(), s)] });
+    await expectHeld(s.fixtureId, "a live peer in flight", "peer_in_flight");
+    const why = (await marker(s.fixtureId))?.last_error ?? "";
+    expect(why, "names the live peer").toContain(live!.id);
+    expect(why, "never the dead one").not.toContain(dead);
+    expect(board.acceptChallenge).not.toHaveBeenCalled();
+  });
+
+  it("N5: each half of the peer test on its own — a HELD peer under a playable fixture, and a PENDING peer under a settled one the sweep has not closed yet, are not in flight: adopted", async () => {
+    let checked = 0;
+    const cases: [string, (peer: string, s: Awaited<ReturnType<typeof seed>>) => Promise<unknown>][] = [
+      // The bridge is not mid-create (held for the organiser), the fixture still playable.
+      ["held, fixture scheduled", (peer, s) => heldUnknown(peer, s.orgId)],
+      // The bridge still pending with its marker, the fixture already settled (decided on the pad; the sweep's close
+      // runs on its next tick) — LABELLED SQL.
+      ["pending, fixture decided", async (peer, s) => {
+        await peerInFlight(peer, s.orgId);
+        await sql`update fixtures set status = 'decided' where id = ${peer}`;
+      }],
+    ];
+    for (const [label, peerOf] of cases) {
+      const s = await seed();
+      const peer = await samePairFixture(s);
+      await peerOf(peer, s);
+      await crashedAfterSend(s);
+      const match = freshGameId();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(match, s)] });
+      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${label}: adopted`).toEqual({ created: true, gameId: match });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("N2: an id another fixture STORES while this call adopts it is refused at the commit — never thrown, never recorded twice", async () => {
