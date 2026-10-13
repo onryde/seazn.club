@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { lockChanges } from "../lib/lock-diff.ts";
+import { GIT_SHOW_MAX_BUFFER } from "../lock-append-only.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 // Not process.cwd(): vitest is run from the repo root in CI and from tools/matrix
@@ -132,6 +133,22 @@ describe("lock-append-only CLI", () => {
     expect(r.stdout).toContain("1 entries compared, 1 added");
     expect(r.stderr).toBe("");
   }, spawnBudget(1));
+  it("a base lock past execFileSync's 1 MiB default buffer is read whole — the real lock grew past it and CI died with ENOBUFS", () => {
+    const ONE_MIB = 1024 * 1024; // node's default maxBuffer for execFileSync / spawnSync
+    const big = { runs: { w1c: { ...entry("slice"), driven: ["x".repeat(ONE_MIB + 4096)] }, w1d: entry("slice") } };
+    // anti-vacuity: the blob `git show` hands the CLI really is past the default buffer
+    expect(Buffer.byteLength(JSON.stringify(big))).toBeGreaterThan(ONE_MIB);
+    const d = repo(big, { runs: { ...big.runs, w1e: entry("slice") } });
+    const r = check(d);
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("2 entries compared, 1 added");
+    // and an edit inside the big blob is still judged (exit 1), not swallowed by a read refusal
+    const edited = repo(big, { runs: { ...big.runs, w1d: entry("--layer L1") } });
+    const e = check(edited);
+    expect(e.status, e.stderr).toBe(1);
+    expect(e.stderr).toContain("w1d: edited");
+  }, spawnBudget(2));
   it("the sequence: an entry the last commit ADDED is frozen for the next one — a second change cannot edit it", () => {
     const v0 = { runs: { w1c: entry("slice") } };
     const v1 = { runs: { w1c: entry("slice"), w1d: entry("slice") } };
@@ -216,7 +233,8 @@ describe("lock-append-only CLI", () => {
     expect(bare.stderr).not.toContain("crashed");
   }, spawnBudget(2));
   it("the real lock, run the way CI runs it (no --lock): every entry the base commit holds is compared, and exit is 0", () => {
-    const baseText = execFileSync("git", ["show", `HEAD:${LOCK_PATH}`], { cwd: REPO, encoding: "utf8" });
+    // maxBuffer: the real lock is past execFileSync's 1 MiB default (the test that read it died with ENOBUFS)
+    const baseText = execFileSync("git", ["show", `HEAD:${LOCK_PATH}`], { cwd: REPO, encoding: "utf8", maxBuffer: GIT_SHOW_MAX_BUFFER });
     const baseCount = Object.keys(JSON.parse(baseText).runs).length;
     expect(baseCount).toBeGreaterThanOrEqual(135);
     const r = cli(["--against", "HEAD"], REPO);

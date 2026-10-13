@@ -12,6 +12,11 @@ import { lockChanges, type LockFile } from "./lib/lock-diff.ts";
 
 export const DEFAULT_LOCK = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json";
 
+/** `git show` hands the whole base lock back on a pipe. execFileSync's default maxBuffer is 1 MiB and the real lock is past
+ *  it (1.08 MB at W2b) — a read that overflows throws ENOBUFS, which the CLI turns into a refusal (exit 2) on a lock that
+ *  is fine. 64 MiB is ~60x today's lock; a lock that outgrows even that fails loudly on the same ENOBUFS, never silently. */
+export const GIT_SHOW_MAX_BUFFER = 64 * 1024 * 1024;
+
 function asLock(text: string, what: string): LockFile {
   const v: unknown = JSON.parse(text);
   if (v === null || typeof v !== "object" || typeof (v as { runs?: unknown }).runs !== "object" || (v as { runs: unknown }).runs === null) {
@@ -29,7 +34,7 @@ export function main(argv: readonly string[]): number {
   } catch (e) { console.error(`lock-append-only: ${(e as Error).message}`); return 2; }
   let base: LockFile; let head: LockFile;
   try {
-    base = asLock(execFileSync("git", ["show", `${against}:${lock}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), `${against}:${lock}`);
+    base = asLock(execFileSync("git", ["show", `${against}:${lock}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: GIT_SHOW_MAX_BUFFER }), `${against}:${lock}`);
     head = asLock(readFileSync(lock, "utf8"), lock);
   } catch (e) { console.error(`lock-append-only: cannot read the locks — ${(e as Error).message.split("\n")[0]}`); return 2; }
   const r = lockChanges(base, head);
