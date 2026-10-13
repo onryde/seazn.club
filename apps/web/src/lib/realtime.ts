@@ -7,6 +7,7 @@ import {
   type JWK,
 } from "jose";
 import type { LichessStatus } from "@/server/external-play/types";
+import { spectatorBoard, type PublicBoardPush } from "@/server/external-play/public-view";
 
 /** How long a broadcast may take before its fetch is aborted. Every caller is
  *  fire-and-forget, but one that awaits the promise (a player-stats refresh
@@ -314,7 +315,7 @@ export type RoomBroadcast = {
   drawOfferBy: "white" | "black" | null;
 };
 
-/** Push the room state to both players. Same endpoint, headers and topic as
+/** Push the room state to both players, and the board to spectators. Same endpoint, headers and topic as
  *  `publishExternalPlayLobby` — the topic's realtime policy (V434) already
  *  admits a seated player, so no new policy — plus the timeout that
  *  `publishFixtureUpdate` carries. Fire-and-forget: never throws. */
@@ -322,6 +323,14 @@ export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcas
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return;
+  // A board the spectators' copy cannot read (not a FEN, a status nobody
+  // declared) costs the spectators one push — never the players theirs.
+  let spectator: PublicBoardPush | null = null;
+  try {
+    spectator = spectatorBoard(body);
+  } catch (err) {
+    console.warn(`[realtime] spectator board skipped for ${fixtureId}:`, err);
+  }
   try {
     const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
       method: "POST",
@@ -338,6 +347,13 @@ export async function publishRoomBroadcast(fixtureId: string, body: RoomBroadcas
             payload: body,
             private: true,
           },
+          // T16 — the spectators' copy, on the public fixture topic the public
+          // realtime token is minted for (V403): the board alone, never the
+          // draw offer. The watch island reads it through the match centre's
+          // one subscription (use-live-fixture → live-board-channel).
+          ...(spectator === null
+            ? []
+            : [{ topic: `fixture:${fixtureId}`, event: "board_state", payload: spectator, private: true }]),
         ],
       }),
       signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
