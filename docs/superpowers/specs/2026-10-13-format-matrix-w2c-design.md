@@ -31,9 +31,13 @@ Today only four sports (tennis, badminton, table tennis, volleyball) can set rul
   create/replace stages API body, where they are typed `z.unknown()` (`api-v1/schemas.ts:1109-1110`, SC-P8).
 - **No match-level change.** The only per-match config is the V347 snapshot (`fixtures.config_snapshot`), null until
   the first event and then frozen (`append-event.ts:297`, `:449`). There is nowhere to say "this one match is best of 1".
-- **Silent division edits.** The division save (`divisions.ts:899`) has no started check. Editing tie-breaks or points
-  mid-group silently re-orders a live table; editing match format silently changes the unstarted half of a running
-  group. Stage-level rules already refuse after start (`stage-rules.ts:177-183`, `STAGE_FORMAT_LOCKED`).
+- **Division edits: one lock too strict, one missing** (corrected by the plan review; the brainstorm's "no started
+  check" was half wrong). `patchDivision` refuses ANY config change (match format and points alike) with a generic
+  `409 FORMAT_LOCKED` as soon as fixtures exist, started or not (`divisions.ts:820-856`), so a typo found after
+  generating fixtures means regenerating them. The `tiebreakers` column (`:899`) has NO lock, so editing tie-breaks
+  mid-group silently re-orders a live table. Stage-level rules already refuse after start (`stage-rules.ts:177-183`,
+  `STAGE_FORMAT_LOCKED`). Owner P-2 "A": Q3/Q4 as ruled — the config lock LOOSENS to per started inheriting stage, and
+  tie-breaks GAIN the lock.
 - **Stage points have no screen** (ST-G8): `PointsRule` (`competition/points.ts:12-39`) is API/template only. Under
   a stage rule, every award is a forfeit, so a retirement after play pays forfeit points, and `awardScore` is ADDED on
   top of the sport's credited score (W2b `points.ts:57-59`, `:149-154`; Loop R M-1).
@@ -77,7 +81,7 @@ table is never re-ordered and a played match never re-scored by a settings chang
 | 8 | Ice hockey KO default 10' OT + GWS; football shoot-out attempts per stage | RB2B-9, RB2B-38 (stage halves) | routing (d) |
 | 9 | Carrom `tieBoard` per stage (table stages) | SC-O4, RB2B-23 residual | routing |
 | 10 | ST-G8 stage points screen; inexpressible rule refused at screen and API | ST-G8, ruling 83, SC-P10 (refusal only) | Q1 |
-| 11 | Under a stage `PointsRule`, only a walkover is a forfeit; `awardScore` replaces the credit | Loop R M-1, RB2B-29 | Q9 |
+| 11 | Under a stage `PointsRule`, a forfeit = an award with **nothing played**, whatever its reason (walkover, or withdrew/DQ before play), decided from the fixture's events with ruling 120's "was anything played" test; `awardScore` replaces the credit; a bye keeps its points but never gets `awardScore`; the public qualification calculator (`qualification-view.ts`) follows with a parity test | Loop R M-1, RB2B-29 | Q9, P-3 "A" |
 | 12 | "If a match is abandoned" per stage: replay / result stands / hockey Q4 rule / share points | H-15, RB2B-25 | Q10 |
 | 13 | Chess: per-stage tie-break rung list; Armageddon colours recorded, BG-KO-2 enforced | rulings 73, 82 | Q6 |
 | 14 | Chess over-the-board clock per stage (not per match) | B-15 | routing (c), Q5 |
@@ -201,15 +205,20 @@ The public stage label (`public-site/stage-format-lines.ts:46`) switches to the 
 2. **`writeFixtureRulesOverride(fixtureIds[], fragment, actor)`** — the ONE validated writer: per-sport allowlist,
    engine-schema validation, all-or-nothing in one transaction, audited. Unstarted fixture → write. Started and not
    finalized/cancelled (Q11) → refold the recorded events under the corrected cfg; if the fold refuses or ends in a
-   state the recorded play contradicts, refuse `FORMAT_DOES_NOT_FIT_PLAY` with the engine's reason; else write and
-   re-freeze the snapshot. Finalized/cancelled → `FIXTURE_FORMAT_LOCKED`. The future bulk action calls it unchanged.
-   **Open pads follow a correction (owner "approve", 2026-10-13).** The re-freeze advances the fixture's rules version
-   (`config_snapshot_at`, existing column — no new one). Every pad (console pad and remote scoring `/score/[token]`,
-   both loaded through `loadFixturePadCfg`, `usecases/fixtures.ts:124`) sends the version it loaded with each append;
-   a mismatch is refused `FIXTURE_RULES_CHANGED` before any event is written. On that refusal, or on its next refresh,
-   the pad reloads its rules and shows "The organiser changed this match's format: {format}". A tap sent under the old
-   rules is never applied under the new ones. (Whether an open pad refreshes rules today is unverified; the plan
-   drives it before building.)
+   state the recorded play contradicts, refuse `FORMAT_DOES_NOT_FIT_PLAY` with the engine's reason. **A correction
+   the play fits but that would END the match is also refused** ("This format would end the match as it stands",
+   owner P-4 "A"): a correction never finishes a match, seats anyone or moves a table. Else write and re-freeze the
+   snapshot. Finalized/cancelled → `FIXTURE_FORMAT_LOCKED`. The future bulk action calls it unchanged.
+   **Open pads follow a correction (owner "approve" 2026-10-13; mechanism owner P-1 "A").** A new column
+   `fixtures.rules_version int not null default 0` (greenfield; replaces the earlier `config_snapshot_at` idea, which
+   the plan review showed can never match the first event's clock) is incremented ONLY by a Q11 correction or a staff
+   re-freeze. The server checks it **only when the sender includes it**: the scoring pads (console pad and remote
+   scoring `/score/[token]`, loaded through `loadFixturePadCfg`, `usecases/fixtures.ts:124`) always send the version
+   they loaded, and a stale one is refused `FIXTURE_RULES_CHANGED` before any event is written; the pad reloads and
+   shows "The organiser changed this match's format: {format}". Console settle/forfeit/finalize and the server's own
+   writers (withdrawal, finalize, import) do not send it and are never blocked. A source-scan test enumerates every
+   `/api/v1/fixtures/{id}/events` POST site and fails if a scoring pad stops sending the version. (Whether an open pad
+   refreshes rules today is unverified; the plan drives it before building.)
 3. **Division save** — refuses, by name, table points/tie-breaks (Q3) and match-format fields (Q4) while any stage
    inheriting them has started; other fields still save and the response lists what was refused.
 
@@ -246,7 +255,8 @@ for finalized matches after a reopen, and is a `resolveFixtureCfg` caller, so it
 - `api-v1/schemas.ts` — decider keys validated (SC-P8); `PUT /stages/{id}/rules` covers every sport;
   `PUT /fixtures/{id}/rules` (new); error codes in OpenAPI (CI drift check).
 - `public-site/stage-format-lines.ts`, `describe-rules.ts` — stage resolution, all sports, deciders.
-- `db/migration/deltas/V4xx__fixture_rules_override.sql` (number above V438).
+- `db/migration/deltas/V4xx__fixture_rules_override.sql` (number above V438): `fixtures.rules_override jsonb null`
+  and `fixtures.rules_version int not null default 0` (P-1).
 
 ### 5.3 UI (`apps/web/src/components/`) — owner-chosen layouts
 
@@ -382,7 +392,9 @@ Proposed ids; wording finalised with the owner at plan start (ruling 71).
   rules lock when its first fixture starts. **X-SR-4** division table rules and match format lock per started
   inheriting stage. **X-SR-5** a started, unfinished match's format may be corrected only if the recorded play fits it.
   **X-SR-6** a new knockout stage presets its sport's deciders; with none, level results wait for settle.
-  **X-PT-1** under a stage points rule only a walkover is a forfeit; its awarded score replaces the credit.
+  **X-PT-1** under a stage points rule a forfeit is an award with nothing played (walkover, or withdrawal/DQ before
+  play); its awarded score replaces the credit; a bye never receives the awarded score; an award after play earns
+  normal points.
 - `boardgame.md` — **BG-KO-3** a stage chooses its tie-break rungs and their order. **BG-KO-2** (now enforced) a drawn
   Armageddon is won by the recorded Black.
 - `cricket.md` — **CR-SO-1** super over per stage; KO preset on, league off; on in a league plays on every tie.
