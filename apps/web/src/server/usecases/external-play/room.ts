@@ -42,6 +42,7 @@ import {
   realtimeExpiry,
   ABANDONED_RESULT,
   decisiveResultFor,
+  withSettle,
   type DecisiveEvent,
   roomPhaseWire,
   turnAfter,
@@ -204,13 +205,24 @@ async function roomFacts(fixtureId: string): Promise<RoomFacts> {
 /** The latest event on the ledger that nothing voided and that decided the game: a boardgame.result, or — W2b spec
  *  §5.2 records every chess forfeit this way — a core.forfeit (a no-show's walkover, the organiser's default win or
  *  No result). */
-async function recordedResult(fixtureId: string): Promise<DecisiveEvent | null> {
-  const [row] = await sql<DecisiveEvent[]>`
-    select e.type, e.payload from score_events e
+async function recordedResult(fixtureId: string): Promise<(DecisiveEvent & { seq: number }) | null> {
+  const [row] = await sql<(DecisiveEvent & { seq: number })[]>`
+    select e.type, e.payload, e.seq from score_events e
      where e.fixture_id = ${fixtureId} and e.type in ('boardgame.result', 'core.forfeit')
        and not exists (select 1 from score_events v where v.voids_event_id = e.id)
      order by e.seq desc limit 1`;
   return row ?? null;
+}
+
+/** Final review M-1: the winner of the organiser's settle of a level knockout game (`core.settle`, resolve.ts — W2a's
+ *  tie-break), the latest recorded after the deciding event; null when there is none. No void filter: a voided settle
+ *  puts the tie-break back, so the fixture is open again and the room reads no result at all (tested). */
+async function settledWinner(fixtureId: string, afterSeq: number): Promise<string | null> {
+  const [row] = await sql<{ winner: string | null }[]>`
+    select e.payload->>'winner' as winner from score_events e
+     where e.fixture_id = ${fixtureId} and e.type = 'core.settle' and e.seq > ${afterSeq}
+     order by e.seq desc limit 1`;
+  return row?.winner ?? null;
 }
 
 /** Who the opponent is in the fixture's meeting (review I8): their player
@@ -275,12 +287,13 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   // I-3: an abandoned board decided nobody — No result, whatever event the ledger last decided with.
   const recorded =
     f.fixtureStatus === "scheduled" || f.fixtureStatus === "in_play" || f.fixtureStatus === "abandoned" ? null : await recordedResult(f.fixtureId);
+  const seats = { myEntrantId: player.entrantId, opponentEntrantId: opponent.entrantId, myColour: mine };
   const result =
     f.fixtureStatus === "abandoned"
       ? ABANDONED_RESULT
       : recorded === null
         ? null
-        : decisiveResultFor(recorded, { myEntrantId: player.entrantId, opponentEntrantId: opponent.entrantId, myColour: mine });
+        : withSettle(decisiveResultFor(recorded, seats), await settledWinner(f.fixtureId, recorded.seq), seats);
 
   // T11 M7: a token_revoked hold freezes a seat (or both, when none was
   // recorded); the other player's board stays live. A WRITTEN result ends
