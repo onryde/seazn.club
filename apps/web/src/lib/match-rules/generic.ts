@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const GENERIC_RULES: RuleField[] = [
   {
     key: "resultMode",
+    edits: ["resultMode"],
     label: "How results are recorded",
     kind: "select",
     options: [
@@ -15,6 +16,7 @@ export const GENERIC_RULES: RuleField[] = [
   },
   {
     key: "allowDraws",
+    edits: ["allowDraws"],
     label: "Allow draws",
     help: "Ignored in knockout, double-elim and stepladder stages.",
     kind: "bool",

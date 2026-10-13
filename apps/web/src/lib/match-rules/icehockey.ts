@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const ICEHOCKEY_RULES: RuleField[] = [
   {
     key: "periodMinutes",
+    edits: ["periods.minutes"],
     label: "Period length (minutes)",
     kind: "number",
     min: 5,
@@ -13,6 +14,7 @@ export const ICEHOCKEY_RULES: RuleField[] = [
   },
   {
     key: "overtime",
+    edits: ["overtime"],
     label: "Sudden-death overtime",
     help: "Only applies when set to On. IIHF default: 5 minutes, 3 skaters.",
     kind: "bool",
@@ -29,6 +31,7 @@ export const ICEHOCKEY_RULES: RuleField[] = [
   },
   {
     key: "overtimeMinutes",
+    edits: ["overtime.minutes"],
     label: "Overtime length (minutes)",
     help: "Only applies when sudden-death overtime above is On.",
     kind: "number",
@@ -38,6 +41,7 @@ export const ICEHOCKEY_RULES: RuleField[] = [
   },
   {
     key: "overtimeSkaters",
+    edits: ["overtime"],
     label: "Overtime skaters per side",
     help: "Only applies when sudden-death overtime above is On.",
     kind: "number",
@@ -47,6 +51,7 @@ export const ICEHOCKEY_RULES: RuleField[] = [
   },
   {
     key: "shootout",
+    edits: ["shootout"],
     label: "Shootout (GWS)",
     help: "Only applies when set to On.",
     kind: "bool",
@@ -57,6 +62,7 @@ export const ICEHOCKEY_RULES: RuleField[] = [
   },
   {
     key: "shootoutAttempts",
+    edits: ["shootout.attempts"],
     label: "Shootout attempts",
     help: "Only applies when shootout above is On.",
     kind: "number",

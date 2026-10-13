@@ -30,6 +30,7 @@ const TENNIS_FINAL_SET_SHAPES: Record<string, unknown> = {
 export const TENNIS_RULES: RuleField[] = [
   {
     key: "bestOf",
+    edits: ["bestOf"],
     label: "Best of (sets)",
     kind: "select",
     options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
@@ -38,6 +39,7 @@ export const TENNIS_RULES: RuleField[] = [
   },
   {
     key: "setType",
+    edits: ["set"],
     label: "Set type",
     kind: "select",
     options: [
@@ -56,6 +58,7 @@ export const TENNIS_RULES: RuleField[] = [
   },
   {
     key: "finalSet",
+    edits: ["finalSet"],
     label: "Deciding set",
     kind: "select",
     options: [
@@ -72,6 +75,7 @@ export const TENNIS_RULES: RuleField[] = [
   },
   {
     key: "noAd",
+    edits: ["game.noAd"],
     label: "No-ad games",
     help: "A single deciding point at deuce.",
     kind: "bool",
@@ -87,6 +91,7 @@ export const TENNIS_RULES: RuleField[] = [
   },
   {
     key: "tiebreakWinBy",
+    edits: ["tiebreak.winBy"],
     label: "Tiebreak win margin",
     kind: "select",
     options: [

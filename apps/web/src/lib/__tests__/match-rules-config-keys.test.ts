@@ -46,6 +46,7 @@ describe("configKeysFor", () => {
   it("probes every option, so a value-branching build cannot hide a key", () => {
     const branching: RuleField = {
       key: "probe",
+      edits: ["probe"],
       label: "Probe",
       kind: "select",
       options: [

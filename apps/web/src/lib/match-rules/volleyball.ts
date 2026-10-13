@@ -6,6 +6,7 @@ import type { RuleField } from "./types.ts";
 export const VOLLEYBALL_RULES: RuleField[] = [
   {
     key: "bestOf",
+    edits: ["bestOf"],
     label: "Best of (sets)",
     kind: "select",
     options: [1, 3, 5, 7].map((n) => ({ value: String(n), label: `Best of ${n}` })),
@@ -14,6 +15,7 @@ export const VOLLEYBALL_RULES: RuleField[] = [
   },
   {
     key: "setTo",
+    edits: ["setTo"],
     label: "Points to win a set",
     kind: "number",
     min: 1,
@@ -23,6 +25,7 @@ export const VOLLEYBALL_RULES: RuleField[] = [
   },
   {
     key: "finalSetTo",
+    edits: ["finalSetTo"],
     label: "Points in the deciding set",
     kind: "number",
     min: 1,
@@ -32,6 +35,7 @@ export const VOLLEYBALL_RULES: RuleField[] = [
   },
   {
     key: "cap",
+    edits: ["cap"],
     label: "Hard cap (deciding point)",
     help: "Must be at least the points needed to win a set. Blank inherits the variant's own cap, if it has one.",
     kind: "number",

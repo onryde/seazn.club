@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const CRICKET_RULES: RuleField[] = [
   {
     key: "overs",
+    edits: ["ballsPerInnings"],
     label: "Overs per innings",
     kind: "number",
     min: 1,
@@ -13,6 +14,7 @@ export const CRICKET_RULES: RuleField[] = [
   },
   {
     key: "maxOversPerBowler",
+    edits: ["maxOversPerBowler"],
     label: "Max overs per bowler",
     kind: "number",
     min: 1,
@@ -21,6 +23,7 @@ export const CRICKET_RULES: RuleField[] = [
   },
   {
     key: "superOver",
+    edits: ["superOver"],
     label: "Super over on a tie",
     help: "Knockout fixtures only.",
     kind: "bool",
@@ -28,6 +31,7 @@ export const CRICKET_RULES: RuleField[] = [
   },
   {
     key: "dls",
+    edits: ["dls"],
     label: "DLS revised targets",
     help: "Pro feature — a manual umpire target works on every plan.",
     kind: "bool",
@@ -35,6 +39,7 @@ export const CRICKET_RULES: RuleField[] = [
   },
   {
     key: "playersPerSide",
+    edits: ["playersPerSide"],
     label: "Players per side",
     kind: "number",
     min: 3,

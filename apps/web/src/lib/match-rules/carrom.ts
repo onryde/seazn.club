@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const CARROM_RULES: RuleField[] = [
   {
     key: "gameTo",
+    edits: ["gameTo"],
     label: "Points to win a game",
     help: "Also lowers the queen bonus cutoff below if that field is left blank.",
     kind: "number",
@@ -30,6 +31,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "maxBoards",
+    edits: ["maxBoards"],
     label: "Max boards per game",
     help: "ICF: leader after 8 boards wins if untied.",
     kind: "number",
@@ -39,6 +41,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "bestOf",
+    edits: ["bestOf"],
     label: "Best of (games)",
     kind: "select",
     options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
@@ -46,6 +49,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "queenPoints",
+    edits: ["queenPoints"],
     label: "Queen bonus (points)",
     kind: "number",
     min: 0,
@@ -54,6 +58,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "queenCapAt",
+    edits: ["queenCapAt"],
     label: "Queen bonus cutoff (score)",
     help: "Must not exceed points to win a game.",
     kind: "number",
@@ -63,6 +68,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "queenFollowsBoard",
+    edits: ["queenFollowsBoard"],
     label: "Queen always follows board winner",
     help: "House rule — skips tracking who covered the queen (ICF requires it).",
     kind: "bool",
@@ -70,6 +76,7 @@ export const CARROM_RULES: RuleField[] = [
   },
   {
     key: "tieBoard",
+    edits: ["tieBoard"],
     label: "Game tied at max boards",
     kind: "select",
     options: [

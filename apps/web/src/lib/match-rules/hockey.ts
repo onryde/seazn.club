@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const HOCKEY_RULES: RuleField[] = [
   {
     key: "quarterMinutes",
+    edits: ["periods.minutes"],
     label: "Quarter length (minutes)",
     kind: "number",
     min: 5,
@@ -13,6 +14,7 @@ export const HOCKEY_RULES: RuleField[] = [
   },
   {
     key: "shootout",
+    edits: ["shootout"],
     label: "Shoot-out on a draw",
     help: "Only applies when set to On. FIH default: 5 attempts, 8 seconds each.",
     kind: "bool",
@@ -29,6 +31,7 @@ export const HOCKEY_RULES: RuleField[] = [
   },
   {
     key: "shootoutAttempts",
+    edits: ["shootout.attempts"],
     label: "Shootout attempts",
     help: "Only applies when shoot-out above is On.",
     kind: "number",

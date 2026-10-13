@@ -1,6 +1,7 @@
 // Helpers more than one sport file (or the registry) needs. Nothing here
 // knows a sport's rules except `WIN_BY`, the one field three sets-based sports
 // share verbatim. Client-safe like the rest of this directory.
+import type { AnySportModule } from "@seazn/engine/sport";
 import type { RuleField } from "./types.ts";
 
 /**
@@ -64,9 +65,34 @@ export const WIN_BY: RuleField = {
   key: "winBy",
   label: "Win margin (points)",
   help: "How many clear points are needed to win a set.",
+  edits: ["winBy"],
   kind: "number",
   min: 1,
   max: 2,
   build: (v) => ({ winBy: Number(v) }),
   read: readNumber("winBy"),
 };
+
+/**
+ * W2c D9 — the English picker label for each abandon policy the engine can name (`abandonPolicy`'s vocabulary). A lookup
+ * table, not an if/else per sport: which of them a sport OFFERS is the module's own `abandonOptions` list, so adding a
+ * policy is one engine value and one row here. Canonical English like every rule label (design 2026-09-17).
+ */
+export const ABANDON_LABELS: Readonly<Record<string, string>> = {
+  replay: "Replay the match",
+  award: "Result stands",
+  q4_stands: "Result stands from the 4th quarter, otherwise replay",
+  share: "Share the points",
+};
+
+/**
+ * The abandon picker's options for a sport: the module's own declared list (`SportModule.abandonOptions`), in its
+ * order, each through `ABANDON_LABELS`. A module that declares none offers none. A policy the table cannot label is a
+ * programming error (an engine value added without its row), so it throws instead of rendering a blank option.
+ */
+export function abandonOptions(module: AnySportModule): { value: string; label: string }[] {
+  return (module.abandonOptions ?? []).map((value) => {
+    if (!Object.hasOwn(ABANDON_LABELS, value)) throw new Error(`${module.key}: no label for abandon policy "${value}"`);
+    return { value, label: ABANDON_LABELS[value]! };
+  });
+}

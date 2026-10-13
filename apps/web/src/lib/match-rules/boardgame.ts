@@ -5,6 +5,7 @@ import type { RuleField } from "./types.ts";
 export const BOARDGAME_RULES: RuleField[] = [
   {
     key: "variant",
+    edits: ["variant"],
     label: "Clock family",
     kind: "select",
     options: [
@@ -16,6 +17,7 @@ export const BOARDGAME_RULES: RuleField[] = [
   },
   {
     key: "clockBaseMinutes",
+    edits: ["clock"],
     label: "Time per side (minutes)",
     help: "Leave blank to skip a clock override entirely.",
     kind: "number",
@@ -30,6 +32,7 @@ export const BOARDGAME_RULES: RuleField[] = [
   },
   {
     key: "clockIncrementSeconds",
+    edits: ["clock"],
     label: "Increment per move (seconds, Fischer)",
     help: "Only applies when time per side above is set.",
     kind: "number",
@@ -39,6 +42,7 @@ export const BOARDGAME_RULES: RuleField[] = [
   },
   {
     key: "clockDelaySeconds",
+    edits: ["clock"],
     label: "Move delay (seconds, Bronstein/US delay)",
     help: "Only applies when time per side above is set.",
     kind: "number",

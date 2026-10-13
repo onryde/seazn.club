@@ -41,6 +41,7 @@ export function shootoutPointsPatch(values: Record<string, string>): Record<stri
 export const FOOTBALL_RULES: RuleField[] = [
   {
     key: "halfMinutes",
+    edits: ["halfMinutes"],
     label: "Half length (minutes)",
     kind: "number",
     min: 5,
@@ -49,6 +50,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "extraTime",
+    edits: ["extraTime"],
     label: "Extra time",
     help: "Knockout fixtures only.",
     kind: "bool",
@@ -56,6 +58,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "shootout",
+    edits: ["shootout"],
     label: "Penalty shootout",
     help: "Knockout fixtures only.",
     kind: "bool",
@@ -90,6 +93,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   // tells applyFormat's merge to actually delete it — see RuleField.
   {
     key: "shootoutWin",
+    edits: ["points"],
     label: "Points for a shoot-out win",
     help: "Group stages only, and only when Penalty shootout is on. Both this and the loss points below must be set for the split to apply — leave either blank to award a normal win/loss instead.",
     kind: "number",
@@ -104,6 +108,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "shootoutLoss",
+    edits: ["points"],
     label: "Points for a shoot-out loss",
     help: "Group stages only, and only when Penalty shootout is on. Both this and the win points above must be set for the split to apply — leave either blank to award a normal win/loss instead.",
     kind: "number",
@@ -118,6 +123,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "teamSize",
+    edits: ["teamSize"],
     label: "Team size (players per side)",
     kind: "number",
     min: 5,
@@ -126,6 +132,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "maxSubs",
+    edits: ["maxSubs"],
     label: "Substitutes allowed",
     help: "Ignored when the variant already uses rolling subs.",
     kind: "number",
@@ -135,6 +142,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "subWindows",
+    edits: ["subWindows"],
     label: "Substitution windows allowed",
     help: "Stoppages a side may use subs in — independent cap from Substitutes allowed. Blank = unlimited.",
     kind: "number",
@@ -144,6 +152,7 @@ export const FOOTBALL_RULES: RuleField[] = [
   },
   {
     key: "sinBinMinutes",
+    edits: ["sinBinMinutes"],
     label: "Sin-bin length (minutes)",
     kind: "number",
     min: 1,

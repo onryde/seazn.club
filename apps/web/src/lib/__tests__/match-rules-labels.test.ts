@@ -122,6 +122,7 @@ describe("borrowOptionLabel refuses a peer that labels the FIELD differently", (
   // could kill. Peers are passed in here so the disagreement is constructible.
   const field: RuleField = {
     key: "bestOf",
+    edits: ["bestOf"],
     label: "Best of (sets)",
     kind: "select",
     options: [{ value: "3", label: "Best of 3" }],

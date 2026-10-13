@@ -7,8 +7,17 @@ export interface RuleField {
   key: string;
   label: string;
   help?: string;
-  /** number input, or a Default/On/Off select for booleans, or an option list. */
-  kind: "number" | "bool" | "select";
+  /**
+   * W2c X-SR-1 — the engine `ruleKeys` entries this field edits, as declared cfg paths ("overtime.minutes", "set").
+   * REQUIRED, so the compiler lists every field that has not named its key. `lib/rule-scope.ts` sorts fields into the
+   * stage, match and points forms by the SCOPE the engine gives these keys, and each sport's contract test
+   * (`match-rules/__tests__/<sport>.contract.test.ts`) checks them against that declaration. Several fields may edit
+   * one key (ice hockey's overtime on/off and its skaters both edit `overtime`); one field may name several.
+   */
+  edits: readonly string[];
+  /** number input, or a Default/On/Off select for booleans, or an option list, or an ORDERED list of options (value =
+   *  the chosen option values, comma-joined, in order; blank = the engine's own default order). */
+  kind: "number" | "bool" | "select" | "sequence";
   min?: number;
   max?: number;
   options?: { value: string; label: string }[];
