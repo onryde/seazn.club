@@ -565,15 +565,17 @@ describe("your decision", () => {
     expect(h).toMatch(/aria-expanded="false"[^>]*>Settle the result now…/);
   });
 
-  it("which controls each board offers (resync needs a game at Lichess; going on needs a flag; settling needs a game not over)", () => {
+  // T16 fix round 1, R4: a FINISHED board's open flags stay closable — job 5 raises its camera flags after the game, so
+  // a finished board is the usual home of one. Its words are the queue's ("Mark as reviewed"): the game cannot go on.
+  it("which controls each board offers (resync needs a game at Lichess; a flag is closable, the game over or not; settling needs a game not over)", () => {
     const rows: [string, string[]][] = [
       ["f1", ["Resync from Lichess", "Settle the result now…"]],
-      ["f2", []],
+      ["f2", ["Mark as reviewed"]],
       ["f3", ["Resync from Lichess", "Let the game go on", "Settle the result now…"]],
       ["f4", ["Settle the result now…"]],
       ["f5", ["Resync from Lichess", "Settle the result now…"]],
     ];
-    const ALL = ["Resync from Lichess", "Let the game go on", "Settle the result now…"];
+    const ALL = ["Resync from Lichess", "Let the game go on", "Mark as reviewed", "Settle the result now…"];
     let checked = 0;
     for (const [id, offered] of rows) {
       const t = text(html(props({ decision: initialArbiterDecision(id) })));
@@ -582,6 +584,16 @@ describe("your decision", () => {
       checked++;
     }
     expect(checked).toBe(5);
+    // The empty case: a finished board with no open flag offers nothing at all.
+    const bare = { ...ROUND, boards: ROUND.boards.map((b) => (b.fixtureId === "f2" ? { ...b, flags: [] } : b)) };
+    expect(text(html(props({ round: bare, decision: initialArbiterDecision("f2") }))), "no flag: no decision").not.toContain("Your decision");
+    // Every locale names it with the queue's own key.
+    let locales = 0;
+    for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      expect(text(html(props({ decision: initialArbiterDecision("f2") }), loc)), loc).toContain(LOCALES[loc]["externalPlay.queue.markReviewed"]!);
+      locales++;
+    }
+    expect(locales).toBe(4);
   });
 
   // T16: the disclosure settles the board itself (it used to link to the
@@ -684,6 +696,23 @@ describe("your decision", () => {
     // 21 notices; "failed" is the shared fallback sentence (2 rows), so 20.
     expect(notices.length).toBe(21);
     expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(20);
+  });
+
+  // R4 (T16 fix round 1): on a FINISHED board the close is a review, not a go-on — so is its answer (the queue's words).
+  it("a finished board's closed flags: 'Marked as reviewed', with any newer flag counted — never 'The game goes on'", () => {
+    const rows: [number, string][] = [
+      [0, EN["externalPlay.queue.reviewed"]!],
+      [1, EN["externalPlay.queue.reviewedNew.one"]!.replace("{count}", "1")],
+      [3, EN["externalPlay.queue.reviewedNew.other"]!.replace("{count}", "3")],
+    ];
+    let checked = 0;
+    for (const [stillOpen, sentence] of rows) {
+      const t = text(html(props({ decision: { ...initialArbiterDecision("f2"), notice: { boardId: "f2", kind: "went_on", stillOpen } } })));
+      expect(t, `${stillOpen}`).toContain(sentence);
+      expect(t, `${stillOpen}: not a go-on`).not.toContain("The game goes on");
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
 

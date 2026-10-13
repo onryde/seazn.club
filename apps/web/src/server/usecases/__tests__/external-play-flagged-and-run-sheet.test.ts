@@ -15,7 +15,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { listFlaggedExternalPlay } from "../external-play/arbiter";
+import { listFlaggedExternalPlay, loadArbiterRound } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { holdForOrganiser } from "../external-play/result";
 import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
@@ -81,6 +81,27 @@ async function seatedAdmin(r: SeedOnlineChessRoundResult, userId: string): Promi
 // ---------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("listFlaggedExternalPlay — the queue's Flagged list", () => {
+  // T16 fix round 1, R4: a cancelled board's OPEN flags are still the organiser's to review. `cancelled` has no product
+  // writer (stages.ts: "defensive", an import path only), so the test sets it as an import would.
+  it("R4: a CANCELLED board's open flag is listed (as cancelled, nothing to settle or resync) and closable; the round panel lists no cancelled board", async () => {
+    const r = await round(2);
+    const [b, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await gameBridge(r, b);
+    const id = await flag(r, b.fixtureId, "camera_lost", b.home.personId);
+    await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+
+    const listed = (await listFlaggedExternalPlay(r.owner, r.divisionId)).boards;
+    expect(listed.map((x) => [x.fixtureId, x.state, x.flags.map((f) => f.id), x.canSettle, x.canResync, x.playable])).toEqual([
+      [b.fixtureId, { kind: "cancelled" }, [id], false, false, false],
+    ]);
+    // The round panel's grid: the cancelled board is not one of the round's boards; its neighbour is.
+    const panel = await loadArbiterRound(r.owner, r.divisionId);
+    expect(panel!.boards.map((x) => x.fixtureId)).toEqual([other.fixtureId]);
+
+    expect(await closeExternalPlayFlags(r.owner, b.fixtureId, [id])).toEqual({ closed: 1, stillOpen: 0 });
+    expect((await listFlaggedExternalPlay(r.owner, r.divisionId)).boards, "reviewed: off the list").toEqual([]);
+  });
+
   it("the empty case first: no flags ⇒ nothing; a CLOSED flag only ⇒ still nothing", async () => {
     const r = await round();
     const b = r.boards[0]!;

@@ -24,7 +24,15 @@ export type ArbiterBoardState =
   /** Held for the organiser (fixture_external_play.status = needs_organiser). */
   | { kind: "on_hold" }
   /** Over: a result written (score White first, "1–0"), or settled without one. */
-  | { kind: "result"; score: string | null };
+  | { kind: "result"; score: string | null }
+  /** T16 fix round 1, R4 — the fixture was cancelled: no result will come, but its OPEN flags are still the organiser's
+   *  to review. Only the Flagged list carries one; the round panel lists no cancelled board. */
+  | { kind: "cancelled" };
+
+/** No game to watch, settle or let go on: a result is in, or the board was cancelled. */
+export function boardIsOver(state: ArbiterBoardState): boolean {
+  return state.kind === "result" || state.kind === "cancelled";
+}
 
 export type ArbiterPlayer = {
   name: string;

@@ -207,6 +207,15 @@ describe("the flagged list", () => {
     expect(text(h)).not.toContain("Let the game go on");
   });
 
+  // R4 (T16 fix round 1): a cancelled board's open flags are reviewed too — never "Finished", never "go on".
+  it("a CANCELLED board's flags: its state says cancelled, the button says 'Mark as reviewed'", () => {
+    const h = render({ flagged: [flaggedBoard({ fixtureId: "fx-1", state: { kind: "cancelled" }, canSettle: false, canResync: false, playable: false })] });
+    expect(text(h)).toContain(`Round 3 · Board 3 · ${(en as Record<string, string>)["arbiter.state.cancelled"]}`);
+    expect(text(h)).toContain("Mark as reviewed");
+    expect(text(h)).not.toContain("Let the game go on");
+    expect(text(h)).not.toContain("Finished");
+  });
+
   it("Held and Flagged side by side on desktop, one column below `lg`: one DOM, the grid splits at lg", () => {
     const h = render({ held: [held({ fixtureId: "a", reason: "aborted" })], flagged: [flaggedBoard({ fixtureId: "b" })] });
     expect(h).toMatch(/class="[^"]*\bgrid-cols-1\b[^"]*\blg:grid-cols-\[minmax\(0,3fr\)_minmax\(0,2fr\)\]/);

@@ -21,6 +21,7 @@
 // answer shows on the row it was sent for.
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useRouter } from "next/navigation";
+import { boardIsOver } from "@/lib/arbiter-view";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
@@ -64,9 +65,9 @@ function Names({ white, black, f }: { white: string; black: string; f: Fmt }) {
 }
 
 /** What the last answer says. A closed flag on a finished game was reviewed,
- *  not let go on: the queue says so (the panel never offers it there). */
+ *  not let go on: the queue says so, as the panel does (noticeSentence's `over`). */
 function sentence(n: ArbiterNotice, over: boolean, f: Fmt): string {
-  return n.kind === "went_on" && over && n.stillOpen === 0 ? f.t("externalPlay.queue.reviewed") : noticeSentence(n, f);
+  return noticeSentence(n, f, over);
 }
 
 /** The answer, on the row it was sent for (visual only: the queue's one live
@@ -246,7 +247,7 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
             <p className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>{f.t("externalPlay.queue.flaggedLede")}</p>
             <ul className="m-0 flex min-w-0 list-none flex-col gap-3 p-0">
               {flagged.map((b) => {
-                const over = b.state.kind === "result";
+                const over = boardIsOver(b.state);
                 return (
                   <li
                     key={b.fixtureId}
