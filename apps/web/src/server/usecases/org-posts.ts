@@ -26,12 +26,13 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
-import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { playerStatsWithoutWaiting } from "./player-stats";
-import { creditsNobody } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
 import {
   resultDraft,
   roundRecapDraft,
@@ -458,9 +459,10 @@ export async function draftPostsForDecidedFixture(
   // 3a, so a fixture decided after the cutover drafted its result/recap post
   // with a blank venue line regardless of what venue it was actually played
   // at (draftResult below renders `venue` verbatim into the post body).
-  const [fx] = await tx<(FixtureCtx & { outcome: unknown })[]>`
+  const [fx] = await tx<(FixtureCtx & CreditedCtx)[]>`
     select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id,
            st.kind as stage_kind, f.round_no, f.status, f.outcome,
+           ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
            f.home_entrant_id, f.away_entrant_id,
            h.display_name as home_name, a.display_name as away_name,
            f.scheduled_at, ven.name as venue, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
@@ -527,7 +529,24 @@ async function staleDrafts(tx: Tx, fx: FixtureCtx): Promise<void> {
   }
 }
 
-async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<DraftedAutoPost | null> {
+/** Loop R M-11 — what a credited result's tag reads beside the fixture's seats: the stored outcome and the active
+ *  abandon's reason (`activeAbandonReasonSql`). */
+interface CreditedCtx {
+  outcome: unknown;
+  abandon_reason: string | null;
+}
+
+/** Loop R M-11 — a credited result's house tag in the org's locale ("w/o", "ret.", "Aband."; UI-2), or null for a
+ *  played result: `outcomeTagWords`, the one reader every other host uses, over the stored outcome, the ledger's active
+ *  abandon and the seats (an award stored before W2b names its reason only beside two seats). */
+function creditedTag(
+  locale: Locale,
+  f: CreditedCtx & { home_entrant_id: string | null; away_entrant_id: string | null },
+): string | null {
+  return outcomeTagWords((k, v) => msgFor(locale, k, v), f.outcome, forfeitLedgerOfReason(f.abandon_reason), f)?.word ?? null;
+}
+
+async function draftResult(tx: Tx, fx: FixtureCtx & CreditedCtx, locale: Locale): Promise<DraftedAutoPost | null> {
   const [state] = await tx<{ summary: unknown }[]>`
     select summary from match_states where fixture_id = ${fx.fixture_id}`;
   const scorers = await extractScorers(tx, fx);
@@ -552,6 +571,7 @@ async function draftResult(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<Draf
     ...(scorers.length > 0 ? { scorers } : {}),
     movement,
     ...(enriched ? { enrichment } : {}),
+    tag: creditedTag(locale, fx),
   });
 
   const autoSource = {
@@ -582,10 +602,11 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   if (open > 0) return null; // round not complete yet
 
   const resultRows = await tx<
-    { home_name: string | null; away_name: string | null; home_id: string | null; away_id: string | null; summary: unknown }[]
+    ({ home_name: string | null; away_name: string | null; home_id: string | null; away_id: string | null; summary: unknown } & CreditedCtx)[]
   >`
     select h.display_name as home_name, a.display_name as away_name,
-           f.home_entrant_id as home_id, f.away_entrant_id as away_id, m.summary
+           f.home_entrant_id as home_id, f.away_entrant_id as away_id, m.summary,
+           f.outcome, ${activeAbandonReasonSql(tx, "f")} as abandon_reason
     from fixtures f
     left join entrants h on h.id = f.home_entrant_id
     left join entrants a on a.id = f.away_entrant_id
@@ -599,6 +620,9 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     awayName: r.away_name ?? "TBD",
     homeScore: sideLine(r.summary, r.home_id),
     awayScore: sideLine(r.summary, r.away_id),
+    // Loop R M-11: a credited line says which; a double walkover's tag stands in its 0–0's place.
+    tag: creditedTag(locale, { ...r, home_entrant_id: r.home_id, away_entrant_id: r.away_id }),
+    creditsNobody: creditsNobody(r.outcome),
   }));
 
   const standings = await topStandings(tx, fx.stage_id);

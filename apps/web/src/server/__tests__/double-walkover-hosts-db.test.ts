@@ -76,6 +76,9 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
       where org_id = ${auth.orgId} and auto_source->>'trigger' = 'fixture_decided'`; // org-posts.ts TRIGGER_RESULT
     expect(drafts.filter((d) => d.fixture_id === woId).length, "premise: the core.forfeit path drafts a result post").toBe(1);
     expect(drafts.filter((d) => d.fixture_id === dwId), "the double walkover drafts no result post").toEqual([]);
+    // Loop R M-11: the walkover's title says so after its credited score (it read "A 2–0 B", a match nobody played).
+    const title = drafts.find((d) => d.fixture_id === woId)!.title;
+    expect(title.endsWith(` (${msgFor("en", "forfeit.tag.walkover")})`), `the result post's title carries the walkover's tag: "${title}"`).toBe(true);
   });
 
   /** Every object in a model that carries a `headline` beside a `home` — a poster node, whatever the layout. */

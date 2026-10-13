@@ -419,3 +419,40 @@ describe("ENRICHMENT_DICT_KEYS", () => {
     }
   });
 });
+
+// Loop R M-11 — a credited result's post said nothing of why: a walkover's title read "Riverside 3–0 Northside", a
+// score nobody played, and a round recap listed a double walkover as "A 0–0 B". The caller now hands the house tag in
+// the org's locale (UI-2, `outcomeTagWords` in org-posts.ts); the templates place it. Absent, every output is
+// byte-identical (the regression anchor above).
+describe("credited results say which (Loop R M-11)", () => {
+  it("empty case first: no tag, the title is the plain score", () => {
+    expect(resultDraft({ ...BASE, tag: null }).title).toBe(resultDraft(BASE).title);
+    expect(resultDraft(BASE).title).toBe("Riverside 3–1 Northside");
+  });
+
+  it("a result post's title carries the tag after the credited score", () => {
+    expect(resultDraft({ ...BASE, homeScore: "3", awayScore: "0", tag: "w/o" }).title).toBe("Riverside 3–0 Northside (w/o)");
+    // The body is untouched: the tag is the title's.
+    expect(resultDraft({ ...BASE, tag: "w/o" }).bodyMd).toBe(resultDraft(BASE).bodyMd);
+  });
+
+  it("a recap line: a credited score keeps it and adds the tag; a double walkover's tag stands in the score's place", () => {
+    const base = {
+      locale: "en" as const, competitionName: "Spring Cup", divisionName: "Premier", roundNo: 2, standings: [],
+    };
+    const { bodyMd } = roundRecapDraft({
+      ...base,
+      results: [
+        { homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" },
+        { homeName: "Eastend", homeScore: "3", awayName: "Westgate", awayScore: "0", tag: "w/o" },
+        { homeName: "Hilltop", homeScore: "0", awayName: "Lowfield", awayScore: "0", tag: "2× w/o", creditsNobody: true },
+      ],
+    });
+    const lines = bodyMd.split("\n").filter((l) => l.startsWith("- "));
+    expect(lines).toEqual(["- Riverside 3–1 Northside", "- Eastend 3–0 Westgate (w/o)", "- Hilltop 2× w/o Lowfield"]);
+    expect(bodyMd, "never the double walkover's 0–0").not.toContain("Hilltop 0–0");
+    // Untagged rows are byte-identical to a call that never heard of the fields.
+    const plain = roundRecapDraft({ ...base, results: [{ homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" }] });
+    expect(plain.bodyMd.split("\n").filter((l) => l.startsWith("- "))).toEqual([lines[0]]);
+  });
+});
