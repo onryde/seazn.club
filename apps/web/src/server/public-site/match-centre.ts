@@ -157,6 +157,10 @@ export interface MatchCentreInput {
    *  seated, so the loader reads her name (masked as it masks a side) and the sentence names her. Absent or null for
    *  every other fixture: a seated loser is named by the sides. */
   unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
+  /** R3 (T16 fix round 1): an online game is being played on this board (`loadOnlineGameInPlay` — the Fixtures
+   *  list's "Watch live"). Nothing marks such a fixture in play, so without this the header said "Scheduled" over a
+   *  game being watched. Lifts ONLY a `scheduled` fixture to the live state; absent is false. */
+  onlineGameInPlay?: boolean;
 }
 
 // --------------------------------------------------------------- constants
@@ -946,8 +950,10 @@ function buildHeader(
     doubleWalkoverNext?: string | null;
     unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
   },
+  onlineGameInPlay: boolean,
 ): MatchCentreHeaderT {
-  const status = statusOf(fixture.status);
+  // R3: a scheduled fixture whose online game is being played reads live; every other status keeps its own.
+  const status = onlineGameInPlay && fixture.status === "scheduled" ? "in_play" : statusOf(fixture.status);
   // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one (the status line, below) — `forfeitTag` is the one
   // reader, answering only for a decided outcome, so a live or scheduled match is untouched.
   const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);
@@ -1410,6 +1416,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     input.stage,
     input.events,
     { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext, unseatedForfeitLoser: input.unseatedForfeitLoser },
+    input.onlineGameInPlay === true,
   );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 

@@ -25,6 +25,7 @@ import { getPublicFixture } from "../data";
 import { seedOnlineChessFixture, seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
 import { scoreEvent } from "@/server/usecases/scoring";
+import { publicFixture } from "@/server/usecases/public";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -211,6 +212,66 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
       insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
       select ${s.stageId}, ${s.orgId}, 1, now() - interval '1 minute', ${s.home.userId}`;
     expect((await read())!.roundOpened, "opened").toBe(true);
+  });
+});
+
+// R3 — the match centre's header over an online game being played: the page (ISR) and the poll (the live transport
+// that re-renders it) both read live, through the one loader both use; the fixture's own wire status is NOT changed.
+describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3), from the real schema", () => {
+  const slugsOf = async (divisionId: string) => {
+    const [x] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div
+        from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id
+       where d.id = ${divisionId}`;
+    return x!;
+  };
+
+  it("a game being played reads live on the page and the poll; a board with no game, and a decided one, do not", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 3 });
+    seeded.push(r.orgId);
+    const [live, idle, done] = r.boards;
+    await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+              values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
+    // Labelled SQL: T10's move append (two accepted moves) and T12's close — the columns the reading uses.
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, moves_uci, move_count)
+      values (${live!.fixtureId}, ${r.orgId}, 'live', now(), ${`gm-${uniq()}`}, 'home', ${sql.json(["e2e4", "e7e5"])}, 2),
+             (${done!.fixtureId}, ${r.orgId}, 'finished', now(), ${`gm-${uniq()}`}, 'home', ${sql.json(["e2e4"])}, 1)`;
+    await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: done!.home.entrantId, method: "resign" } });
+    const sl = await slugsOf(r.divisionId);
+    const page = async (id: string) => (await getPublicFixture(sl.org, sl.comp, sl.div, id))!;
+
+    const p = await page(live!.fixtureId);
+    expect(p.fixture.status, "premise: nothing marks the fixture in play").toBe("scheduled");
+    expect([p.matchCentre.header.status, p.matchCentre.header.live], "page").toEqual(["in_play", true]);
+    const poll = (await publicFixture(live!.fixtureId)) as { status: string; match_centre: { header: { status: string } } };
+    expect([poll.status, poll.match_centre.header.status], "poll: the wire status is the fixture's; the header is live").toEqual(["scheduled", "in_play"]);
+
+    expect((await page(idle!.fixtureId)).matchCentre.header.status, "no game yet").toBe("scheduled");
+    expect((await page(done!.fixtureId)).matchCentre.header.status, "decided stays decided").toBe("decided");
+
+    // A board of a round not yet opened (the list says "Round not opened yet") is not being played.
+    const later = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
+    seeded.push(later.orgId);
+    const sl2 = await slugsOf(later.divisionId);
+    const notOpened = await getPublicFixture(sl2.org, sl2.comp, sl2.div, later.boards[0]!.fixtureId);
+    expect(notOpened!.matchCentre.header.status, "round not opened").toBe("scheduled");
+  });
+
+  it("another sport: a bridge row under a non-online sport is never read — the header keeps the fixture's state", async () => {
+    // A forged row (no product path writes one for a generic fixture): the gate is the sport, not the row's absence.
+    const s = await seedPublicFixture();
+    seeded.push(s.orgId);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, moves_uci, move_count)
+      values (${s.fixtureId}, ${s.orgId}, 'live', now(), ${`gm-${uniq()}`}, 'home', ${sql.json(["e2e4", "e7e5"])}, 2)`;
+    // Its round opened too, so the only thing between this row and "live" is the sport gate.
+    const opener = await makeUser("pub-ep-r3-opener");
+    await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+              select f.stage_id, f.org_id, 1, now(), ${opener.id} from fixtures f where f.id = ${s.fixtureId}`;
+    const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect([data!.fixture.status, data!.matchCentre.header.status]).toEqual(["scheduled", "scheduled"]);
   });
 });
 
