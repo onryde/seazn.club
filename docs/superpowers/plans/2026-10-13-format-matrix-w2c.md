@@ -2827,6 +2827,8 @@ In `bracket-overlay-callers.test.ts`:
 
 ### Task 11: Stage rules for every sport — `putStageRules` (server)
 
+> **Carried from Task 8 review (I2).** Opening `putStageRules` to every sport makes boardgame reachable: the stage PUT does `config || {rules: fragment}` (`stage-rules.ts:~247`), which REPLACES `rules`, so a save that touches another field drops a stored `tiebreakRungs: []` and all rungs return (a data-changing defect). Merge the fragment into the stored rules (keys the body omits are kept; an explicit `[]` is stored). Test: chess knockout stored with `[]` → PUT another field → read back `[]`.
+
 > **Carried from Task 14 (overnight ruling).** A stage save (`putStageRules`) or a division save (`patchDivision`) that would make an UNSTARTED match's `rules_override` no longer fit (`checkFixtureOverride` against the new schema-parsed stage-resolved cfg — e.g. a decider limit shortened below the override's length, or a key no longer match-scoped) is REFUSED, naming the match(es) ("Match 3 has its own format that no longer fits", code `FIXTURE_HAS_OWN_FORMAT` or a sibling — reuse Task 14's guard module `fixture-override-guards.ts`). Never drop an override silently. Task 14 built a local check because this task's merged-parse helper did not exist; fold it into the helper. Red-first DB tests for both writers.
 
 > **Carried from batch-1 Opus review (I-A).** Since Task 2 (P-2 "A") the division config can change after stages have stored `config.rules`, but `patchDivision` never re-checks them: e.g. Pool B `{cap:21}` + a division change to setTo/finalSetTo 25 with cap 30 leaves B's merged config breaking the kernel's cap ≥ setTo refinement, frozen as is; or a division `pointsMap` edit drops a score a stage's `bestOf` override needs (standings throw, and the key then locks). Extract ONE merged-parse helper here (`{division ⊕ stage.rules}` parse + `unansweredSetScores` when rules set `bestOf`), use it in `putStageRules` AND in `patchDivision` for every stage that has `config.rules`: refuse naming the stage, with 422 `CONFIG_INVALID` for a parse failure and the existing `POINTS_MAP_INCOMPLETE` for the pointsMap arm (so `putStageRules`' current contract is unchanged). Red-first tests for both examples; mutate the new call in `patchDivision` once. Must land before Task 12 writes `stageDefaults` into every knockout stage's rules.
@@ -4259,6 +4261,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 ---
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
+
+> **Carried from Task 8 review.** (I1) Until this task, `kind: "sequence"` fields are hidden from `visibleRuleFields` (Task 8 fix round); this task builds the real ordered-subset control and UN-HIDES them — remove that filter and its pin. (I2) The control must represent `[]` ("No tie-break games — a drawn game goes to you"), and open/edit-another-field/save/read-back must keep `[]`. For chess, `tiebreakRungs` is the decider (empty = held); `tiebreak` is no longer organiser-settable.
 
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
