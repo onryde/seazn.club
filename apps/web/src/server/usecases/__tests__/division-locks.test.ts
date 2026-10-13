@@ -787,7 +787,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect(refused.refused).toEqual([{ field: "shootout", code: "DIVISION_FORMAT_LOCKED", stageId: inherits.ko.id, stageName: "Final" }]);
   });
 
-  it("M-b the division's own variant reaches the lock: cricket DLS, offered in t20, is refused naming the started stage", async () => {
+  it("M-b cricket DLS, offered in t20, is refused naming the started stage (an engine `appliesTo` is not a lock input, I-1)", async () => {
     const cr = resolveLatestModule("cricket");
     expect(ruleKeyApplies(cr.ruleKeys!.dls!, "league", "t20"), "precondition: the engine offers DLS in t20").toBe(true);
     // (The pair, a test-match division, cannot be witnessed through a save: the cricket schema refuses DLS there outright,
@@ -798,6 +798,22 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, dls: { ...before.dls, enabled: true } } });
     expect(out.refused).toEqual([{ field: "dls", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
     expect((out.config as { dls: { enabled: boolean } }).dls.enabled, "nothing refused was written").toBe(false);
+  });
+
+  // The division's own variant is a lock input through the engine's DECIDER declaration for the stage kind and variant
+  // (`deciderKeysFor`): cricket's super over is a decider declared for the limited-overs variants only, so a started t20
+  // stage that carries its own is not a stage that inherits the division's.
+  it("M-b the division's own variant reaches the lock: a started t20 stage that carries its own `superOver` does not inherit the division's", async () => {
+    const cr = resolveLatestModule("cricket");
+    expect(deciderKeysFor(cr, "league", "t20"), "precondition: the engine declares superOver a t20 decider").toContain("superOver");
+    expect(deciderKeysFor(cr, "league", ""), "precondition: and not one under another variant").not.toContain("superOver");
+    const r = await rig("cricket", "t20", "team");
+    await sql`update stages set config = config || ${sql.json({ superOver: true } as never)} where id = ${r.s1.id}`;
+    await start(r.auth, r.fixtureId);
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    const out = await patchDivision(r.auth, r.divisionId, { config: { ...before, superOver: true } });
+    expect(out.refused).toEqual([]);
+    expect((out.config as { superOver: boolean }).superOver).toBe(true);
   });
 
   // Fix round 2, I-1. The engine's `appliesTo` says where a key is OFFERED, not where the fold READS it: boardgame lists
