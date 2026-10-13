@@ -77,10 +77,12 @@ const baseData = (
     // and the page names a WAITING side from it rather than resolving the slot
     // label a second time. See `docNaming` below.
     matchCentre: docNaming(locale, fixture),
-    // T16 — `getPublicFixture` always carries these two (null / false when the
+    // T16 — `getPublicFixture` always carries these (null / false when the
     // division does not play online): the watch panel reads them.
     externalPlay: null,
     roundOpened: false,
+    roundOpenedAt: null,
+    venueTz: "UTC",
   };
 };
 

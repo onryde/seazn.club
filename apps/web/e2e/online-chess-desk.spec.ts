@@ -418,7 +418,7 @@ test.describe("online chess — the public fixture page", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(room.fixturePath);
     const panel = page.getByTestId("watch-panel");
-    await expect(panel).toHaveAttribute("data-state", "board", { timeout: 30_000 });
+    await expect(panel).toHaveAttribute("data-state", "live", { timeout: 30_000 });
     await expect(panel).toContainText(uiEn["externalPlay.watch.title"]);
     await expect(panel).toContainText(uiEn["externalPlay.watch.viewOnly"]);
     const surface = page.getByTestId("room-board-surface");

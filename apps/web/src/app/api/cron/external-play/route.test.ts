@@ -38,6 +38,7 @@ describe("POST /api/cron/external-play", () => {
     hdrs.store = new Headers({ "x-cron-secret": "s3cret" });
     const report = {
       skipped: false,
+      bridgesClosed: 10,
       noShows: 1,
       mintRetries: 2,
       meetingsEnded: 3,

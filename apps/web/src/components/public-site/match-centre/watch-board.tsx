@@ -3,8 +3,10 @@
 // the room's own Board, client-only (chessground touches `document`) and
 // reached through the licence loader, with `viewOnly`: chessground binds no
 // events, so a spectator can neither move nor select. Around it: each side's
-// name and clock, whose move, and the end. Nothing here can act on the game,
-// and nothing links off to Lichess (D3 — one venue).
+// name and clock, and whose move. Nothing here can act on the game, and
+// nothing links off to Lichess (D3 — one venue). The panel owns every line
+// around the board — the result, a hold, the "not started" line (fix round
+// 1, M9: one owner per testid) — so this draws a game, only when there is one.
 import dynamic from "next/dynamic";
 import type { PublicWatch } from "@/server/external-play/public-view";
 import { formatClock, remainingMs } from "../match-room/clock-math";
@@ -42,7 +44,7 @@ function Clock({
           <span className={`min-w-0 truncate text-xs ${active ? "text-[#ddd3f7]" : "text-[#6b5b8a]"}`}>{word}</span>
         ) : null}
       </div>
-      <span className="shrink-0 font-mono text-base font-semibold tabular-nums md:text-lg">{ms === null ? "—" : formatClock(ms)}</span>
+      <span className="shrink-0 font-display text-2xl font-semibold tabular-nums md:text-[32px]">{ms === null ? "—" : formatClock(ms)}</span>
     </div>
   );
 }
@@ -53,20 +55,13 @@ export function WatchBoard({
   nowMs,
   t,
 }: {
-  watch: PublicWatch | null;
+  watch: PublicWatch;
   /** Who plays each colour, once White's side is on file. */
   names: { white: string; black: string } | null;
   /** The viewer's tick, or null before the first one (first paint). */
   nowMs: number | null;
   t: RoomT;
 }) {
-  if (watch === null) {
-    return (
-      <p data-testid="watch-not-started" className="m-0 mt-2 text-sm text-[#4a3a6b]">
-        {t("externalPlay.watch.notStarted")}
-      </p>
-    );
-  }
   const asOfMs = watch.asOf === null ? null : Date.parse(watch.asOf);
   const clock = (colour: Colour): number | null => {
     const base = colour === "white" ? watch.whiteMs : watch.blackMs;
@@ -86,13 +81,8 @@ export function WatchBoard({
       data-view-only="true"
       data-ply={watch.ply}
       data-over={watch.over ? "true" : "false"}
-      className="mx-auto mt-3 flex w-full min-w-0 max-w-[440px] flex-col gap-2"
+      className="mx-auto flex w-full min-w-0 max-w-[560px] flex-col gap-2 lg:mx-0"
     >
-      <div className="flex min-w-0 items-center justify-end">
-        <span className="shrink-0 rounded-full bg-[#f3effc] px-2.5 py-0.5 text-xs font-medium text-[#5b21b6]">
-          {t("externalPlay.watch.viewOnly")}
-        </span>
-      </div>
       <Clock colour="black" name={names?.black ?? null} ms={clock("black")} active={toMove("black")} t={t} />
       <div className="w-full min-w-0">
         <Board
@@ -108,11 +98,6 @@ export function WatchBoard({
         />
       </div>
       <Clock colour="white" name={names?.white ?? null} ms={clock("white")} active={toMove("white")} t={t} />
-      {watch.over ? (
-        <p data-testid="watch-over" className="m-0 text-center text-sm font-semibold text-[#2e1065]">
-          {t("externalPlay.room.over.title")}
-        </p>
-      ) : null}
     </div>
   );
 }

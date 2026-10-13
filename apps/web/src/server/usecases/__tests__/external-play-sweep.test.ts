@@ -30,7 +30,7 @@
 //
 // Single-sport by construction: online play exists only for `boardgame`
 // (guard.ts `d.sport_key = 'boardgame'`); the sweep adds no sport branch.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync, writeSync } from "node:fs";
@@ -83,7 +83,18 @@ import {
   type SweepDeps,
   type SweepReport,
 } from "../external-play/sweep";
-import { seedOnlineChessFixture, seedPlayer, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
+import {
+  seedOnlineChessFixture,
+  seedOnlineChessRound,
+  seedPlayer,
+  type SeedOnlineChessFixtureResult,
+  type SeedOnlineChessRoundResult,
+} from "./_external-play-seed";
+import { POST as appendEventRoute } from "@/app/api/v1/fixtures/[id]/events/route";
+import { GET as fixtureStateRoute } from "@/app/api/v1/fixtures/[id]/state/route";
+import { POST as withdrawRoute } from "@/app/api/v1/entrants/[id]/withdraw/route";
+import { initialWatch, pollsAgain, watchView } from "@/components/public-site/match-centre/watch-state";
+import { publicFixtureBoard } from "../external-play-read";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -95,6 +106,21 @@ const HAS_DB = !!process.env.DATABASE_URL;
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   return { ...actual, sendExternalPlayInviteEmail: vi.fn(async () => true) };
+});
+
+// The I1 real-route block at the end drives the pad's and the organiser's ROUTES, which read a session. Unset
+// (every other test here), the real auth module answers; set, it is that user. In THIS file because the sweep
+// is a single-flight pass (a global advisory lock): a second file sweeping in parallel would skip passes here.
+const routeAuth = vi.hoisted(() => ({ userId: "" }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    requireUser: async (...a: Parameters<typeof actual.requireUser>) => (routeAuth.userId ? { id: routeAuth.userId } : actual.requireUser(...a)),
+    getCurrentUser: async (...a: Parameters<typeof actual.getCurrentUser>) =>
+      routeAuth.userId ? { id: routeAuth.userId } : actual.getCurrentUser(...a),
+    getActiveOrgId: async (...a: Parameters<typeof actual.getActiveOrgId>) => (routeAuth.userId ? null : actual.getActiveOrgId(...a)),
+  };
 });
 
 // T9's creation and T10's play consume the Board API: module-mocked at its
@@ -1659,8 +1685,13 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
     const gameId = await liveGame(b);
     await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
     const r = await sweep(b, { now: b.at(10) });
-    expect(r.reconciled).toBe(1);
+    // Job 0 (T16 fix round 1, I1) closes it before job 4 would read it: one close, nothing left to reconcile.
+    expect([r.bridgesClosed, r.reconciled]).toEqual([1, 0]);
     expect((await bridge(b)).status).toBe("finished");
+    // A live game cut off by its fixture: this close IS the game's end on file (as reconcile always stamped it).
+    const [{ finished_at }] = await sql<{ finished_at: Date | null }[]>`
+      select finished_at from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(finished_at).toEqual(b.at(10));
     expect(readsOf(gameId)).toBe(0);
   });
 
@@ -1971,7 +2002,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     await inside;
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
-      skipped: true, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
+      skipped: true, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
       cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, failures: [],
     });
     release();
@@ -2228,19 +2259,28 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     steps: 0, skipped_precondition: 0, passes: 0, reads: 0, backoff_skips: 0, empty_counted: 0, truth_reset: 0,
     forfeit_one: 0, forfeit_both: 0, not_started_held: 0, quiet_before_deadline: 0,
     retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
-    aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
+    aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_unplayable: 0, creates: 0, moves: 0, withdrawals: 0,
     refused_held: 0,
   };
 
   type PassFacts = {
+    /** Job 0 (T16 fix round 1, I1): a bridge closed because its fixture left play. */
+    closed: number;
     reconciled: number; mintRetries: number; forfeitBy: string | null; held: number; noShows: number; readLichess: boolean;
     /** The refusal the forfeit met, when it is a failure this pass. */
     refusedWith: string | null;
   };
 
-  /** One pass, as the rulebook says it goes: job 4, job 2, job 1. Mutates m. */
+  /** One pass, as the rulebook says it goes: job 0, job 4, job 2, job 1. Mutates m. */
   function predictPass(m: Model, b: Board): PassFacts {
-    const p: PassFacts = { reconciled: 0, mintRetries: 0, forfeitBy: null, held: 0, noShows: 0, readLichess: false, refusedWith: null };
+    const p: PassFacts = { closed: 0, reconciled: 0, mintRetries: 0, forfeitBy: null, held: 0, noShows: 0, readLichess: false, refusedWith: null };
+    // Job 0 (I1): a fixture out of play closes its bridge — pending, ready, live or HELD — with no read and
+    // nothing written. Before job 4, so a withdrawn board is closed here, never read.
+    if (!m.playable && m.bridge !== "finished") {
+      m.bridge = "finished";
+      p.closed = 1;
+      counters.closed_unplayable++;
+    }
     // Job 4: a game on file — ready/live on any fixture, or held for a
     // mid-game diagnosis on a fixture still playable.
     // M3: never a hold T9 placed when the accept failed — that challenge was
@@ -2256,10 +2296,9 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         m.lastRead = m.t;
         counters.reads++;
         const end = (m.startedAt ?? DEADLINE) + SPAN;
-        if (!m.playable) {
-          m.bridge = "finished"; // closed with no read, nothing written
-          counters.closed_by_withdrawal++;
-        } else if (m.bridge === "held") {
+        // Job 0 closed every bridge whose fixture is out of play: what job 4 reads is on a playable fixture.
+        if (!m.playable) throw new Error("model: job 4 met an unplayable fixture job 0 should have closed");
+        if (m.bridge === "held") {
           // Ruling C3: every read of a held row counts toward its back-off,
           // whatever Lichess says and whatever the expected end; never a new
           // hold. The game's end is still written.
@@ -2376,7 +2415,8 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "m4_held": return last?.held === 1 && m.reason === "provider_error";
       case "m4_held_read_again": return last?.reconciled === 1 && last.held === 0 && m.bridge === "held" && m.emptyReads === N + 1;
       case "m4_ready_held": return last?.held === 1 && m.heldBy === "sweep" && m.startedAt === null;
-      case "held_then_withdrawn": return last?.reconciled === 0 && m.bridge === "held" && !m.playable;
+      // I1: a held row on a withdrawn fixture is no longer left in a queue that cannot list it — job 0 closes it.
+      case "held_then_withdrawn": return last?.closed === 1 && last.reconciled === 0 && m.bridge === "finished" && !m.playable;
       // Three minutes after a read: inside half a tick of the cadence, so read.
       case "tick_jitter_read": return last?.reconciled === 1 && m.lastRead === m.t && m.emptyReads === 0;
       // Past both base clocks, but not past the increments the game earned.
@@ -2388,7 +2428,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "t11_hold_backs_off": return last?.reconciled === 0 && m.bridge === "held" && m.heldBy === "reconcile" && m.emptyReads === 2;
       case "at_end_not_past": return last?.reconciled === 1 && m.emptyReads === 0 && m.t === (m.startedAt ?? Number.NaN) + SPAN;
       case "ended_finishes": return last?.reconciled === 1 && m.bridge === "finished" && !m.playable;
-      case "withdrawn_closes_unread": return last?.reconciled === 1 && !last.readLichess && m.bridge === "finished";
+      case "withdrawn_closes_unread": return last?.closed === 1 && last.reconciled === 0 && !last.readLichess && m.bridge === "finished";
       case "truth_resets": return last?.reconciled === 1 && last.readLichess && m.emptyReads === 0;
     }
   }
@@ -2514,15 +2554,15 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
             p.readLichess = p.readLichess && lichess.calls.length > lichessBefore;
             counters.passes++;
             expect(
-              { reconciled: report.reconciled, mintRetries: report.mintRetries, noShows: report.noShows, held: report.heldForOrganiser },
+              { closed: report.bridgesClosed, reconciled: report.reconciled, mintRetries: report.mintRetries, noShows: report.noShows, held: report.heldForOrganiser },
               `${label}: the pass`,
-            ).toEqual({ reconciled: p.reconciled, mintRetries: p.mintRetries, noShows: p.noShows, held: p.held });
+            ).toEqual({ closed: p.closed, reconciled: p.reconciled, mintRetries: p.mintRetries, noShows: p.noShows, held: p.held });
             const attempts = forfeitsAttempted(b.fixtureId).slice(forfeitsBefore);
             expect(attempts.map((a) => (a.input.payload as { by: string }).by), `${label}: forfeits`).toEqual(p.forfeitBy === null ? [] : [p.forfeitBy]);
             expect(report.failures, `${label}: failures`).toEqual(
               p.refusedWith !== null ? [{ job: "no_show", fixtureId: b.fixtureId, code: p.refusedWith }] : [],
             );
-            if (p.reconciled === 1 && !m.playable && m.bridge === "finished" && !p.readLichess) {
+            if (p.closed === 1) {
               expect(lichess.calls.length, `${label}: closed unread`).toBe(lichessBefore);
             }
             const [row] = await sql<{ status: string; needs_reason: string | null; sweep_no_truth_reads: number }[]>`
@@ -4012,5 +4052,156 @@ describe("the sweep's own hold reasons have organiser copy in all four locales (
       }
     }
     expect(checked, "key × locale checked").toBe(KEYS.length * LOCALES.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T16 fix round 1, I1 (+ review M2) — a fixture that leaves the playable set by
+// ANY route closes its online board's bridge, held rows included.
+//
+// Before: reconcile closed only ready/live rows, the sweep handed reconcile no
+// held row of an unplayable fixture, and the queue lists playable fixtures
+// only — so a board HELD for the organiser under a fixture decided on the pad
+// or by a withdrawal was orphaned: out of the queue, "needs the organiser" on
+// the public page, and polled every 15 s for ever.
+//
+// Driven through the REAL routes a person uses — the scoring pad's
+// POST /fixtures/{id}/events and the organiser's POST /entrants/{id}/withdraw —
+// then the real sweep, the real queue read and the real public board doc, read
+// by the real watch state. Expected values come from the routes' own effects
+// (the fixture's status after the write) and the rulebook (a decided fixture is
+// over), never from bridge-close.ts. Single-sport: online play is boardgame only.
+// ---------------------------------------------------------------------------
+const routeCtx = (id: string) => ({ params: Promise.resolve({ id }) });
+const routeReq = (path: string, method = "GET", body?: unknown) =>
+  new Request(`https://test.local/api/v1${path}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+
+
+/** An opened round whose one board has a game on file (two plies) HELD for the organiser. */
+async function heldBoard(reason: "fair_play" | "token_revoked" | "tiebreak_owed" | "provider_error") {
+  const r = await seedOnlineChessRound({ fixtures: 1 });
+  await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+            values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
+  const b = r.boards[0]!;
+  await sql`
+    insert into fixture_external_play
+      (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id,
+       moves_uci, move_count, needs_reason, revoked_seat, started_at)
+    values (${b.fixtureId}, ${r.orgId}, 'needs_organiser', now(), ${`gm-${randomUUID().slice(0, 12)}`}, 'home',
+            ${b.home.lichessId}, ${b.away.lichessId}, ${sql.json(["e2e4", "e7e5"])}, 2, ${reason},
+            ${reason === "token_revoked" ? "white" : null}, now())`;
+  return { r, b };
+}
+
+async function heldBridgeOf(fixtureId: string) {
+  const [row] = await sql<{ status: string; needs_reason: string | null; revoked_seat: string | null; finished_at: Date | null }[]>`
+    select status, needs_reason, revoked_seat, finished_at from fixture_external_play where fixture_id = ${fixtureId}`;
+  return row!;
+}
+const fixtureStatus = async (id: string) => (await sql<{ status: string }[]>`select status from fixtures where id = ${id}`)[0]!.status;
+
+/** The scoring pad's two writes, through the route: start, then the result (home wins by resignation). */
+async function padResult(r: SeedOnlineChessRoundResult, fixtureId: string, winnerEntrantId: string) {
+  routeAuth.userId = r.ownerUserId;
+  const state = (await (await fixtureStateRoute(routeReq(`/fixtures/${fixtureId}/state`), routeCtx(fixtureId))).json()) as { data: { last_seq: number } };
+  let seq = state.data.last_seq;
+  const send = async (type: string, payload: unknown) => {
+    const res = await appendEventRoute(routeReq(`/fixtures/${fixtureId}/events`, "POST", { expected_seq: seq, type, payload }), routeCtx(fixtureId));
+    expect(res.status, `${type}: ${await res.clone().text()}`).toBe(201);
+    seq += 1;
+  };
+  await send("core.start", {});
+  await send("boardgame.result", { winner: winnerEntrantId, method: "resign" });
+}
+
+/** What a spectator's panel does with the board doc a poll brings now. */
+async function spectator(fixtureId: string) {
+  const doc = await publicFixtureBoard(fixtureId);
+  const m = initialWatch(doc);
+  return { doc, view: watchView(m), polls: pollsAgain(m) };
+}
+
+describe.runIf(HAS_DB)("I1 — a fixture leaving the playable set closes its held bridge (real routes)", () => {
+  afterEach(() => {
+    routeAuth.userId = "";
+  });
+  it("the empty case first: a held board under an OPEN fixture stays held, in the queue, and polled", async () => {
+    const { r, b } = await heldBoard("fair_play");
+    expect(isPlayableFixtureStatus(await fixtureStatus(b.fixtureId)), "premise: the fixture is open").toBe(true);
+    const report = await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] });
+    expect(report.bridgesClosed, "nothing to close").toBe(0);
+    expect((await heldBridgeOf(b.fixtureId)).status).toBe("needs_organiser");
+    expect((await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((x) => x.fixtureId)).toEqual([b.fixtureId]);
+    const s = await spectator(b.fixtureId);
+    expect([s.view, s.polls, s.doc.externalPlay?.hold]).toEqual(["held", true, "confirm"]);
+  });
+
+  const routes: [string, (h: Awaited<ReturnType<typeof heldBoard>>) => Promise<void>, "fair_play" | "token_revoked"][] = [
+    ["a result entered on the scoring pad", async ({ r, b }) => padResult(r, b.fixtureId, b.home.entrantId), "fair_play"],
+    [
+      "the opponent's withdrawal",
+      async ({ r, b }) => {
+        routeAuth.userId = r.ownerUserId;
+        const res = await withdrawRoute(routeReq(`/entrants/${b.away.entrantId}/withdraw`, "POST"), routeCtx(b.away.entrantId));
+        expect(res.status, await res.clone().text()).toBe(200);
+      },
+      "token_revoked",
+    ],
+  ];
+
+  it("each route: the queue drops it at once, the spectators see it over at once (no hold, no more polling), and the sweep closes the bridge", async () => {
+    let checked = 0;
+    for (const [label, leave, reason] of routes) {
+      const held = await heldBoard(reason);
+      const { r, b } = held;
+      await leave(held);
+      const status = await fixtureStatus(b.fixtureId);
+      expect(isPlayableFixtureStatus(status), `${label}: premise — the route took the fixture out of play (${status})`).toBe(false);
+      expect((await heldBridgeOf(b.fixtureId)).status, `${label}: premise — nothing on the route closed the bridge`).toBe("needs_organiser");
+
+      // At once, before any sweep: the fixture decides.
+      expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), `${label}: queue`).toEqual([]);
+      const before = await spectator(b.fixtureId);
+      expect(before.doc.externalPlay?.decided, `${label}: decided`).toBe(true);
+      expect(before.doc.externalPlay?.hold, `${label}: no hold under a decided fixture`).toBeNull();
+      expect([before.view, before.polls], `${label}: finished, not polled`).toEqual(["finished", false]);
+      expect(before.doc.externalPlay?.watch?.over, `${label}: the board's clocks stop`).toBe(true);
+
+      // The sweep closes the orphaned bridge: finished, no hold reason, no seat.
+      const report = await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] });
+      expect(report.bridgesClosed, `${label}: one bridge closed`).toBe(1);
+      expect(report.failures, label).toEqual([]);
+      const bridge = await heldBridgeOf(b.fixtureId);
+      expect([bridge.status, bridge.needs_reason, bridge.revoked_seat], label).toEqual(["finished", null, null]);
+      // The close is not the game's end: job 5 reads finished_at as that end, so a held row's stays as it was.
+      expect(bridge.finished_at, `${label}: finished_at untouched`).toBeNull();
+      const after = await spectator(b.fixtureId);
+      expect([after.view, after.polls], `${label}: still finished after the close`).toEqual(["finished", false]);
+      // A second pass has nothing left to close.
+      expect((await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed, `${label}: second pass`).toBe(0);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: routes driven").toBe(routes.length);
+  });
+
+  it("the pad's result reaches the spectators' header: home won, by resignation, White's score first", async () => {
+    const { r, b } = await heldBoard("fair_play");
+    await padResult(r, b.fixtureId, b.home.entrantId);
+    const { doc } = await spectator(b.fixtureId);
+    expect(doc.externalPlay?.result).toMatchObject({ kind: "win", winner: "home", method: "resign", score: "1–0" });
+    expect(doc.externalPlay?.result?.recordedAt, "recorded when the fixture got its result").not.toBeNull();
+  });
+
+  it("M2: a settle that wrote its result and crashed before its close is healed by the next sweep", async () => {
+    // The crash, as a state: the fixture decided (the settle's score write landed), the bridge still held.
+    const { r, b } = await heldBoard("tiebreak_owed");
+    await padResult(r, b.fixtureId, b.away.entrantId);
+    expect((await heldBridgeOf(b.fixtureId)).status, "premise: the close never ran").toBe("needs_organiser");
+    expect((await sweepExternalPlay({ now: new Date(), orgIds: [r.orgId] })).bridgesClosed).toBe(1);
+    expect((await heldBridgeOf(b.fixtureId)).status).toBe("finished");
   });
 });

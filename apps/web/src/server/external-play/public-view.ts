@@ -3,7 +3,7 @@
 // game), never `last_error` (operator text), never a participant, token or
 // draw offer. Isomorphic: the public page's server read, the spectator
 // broadcast (lib/realtime) and the watch island all speak this one shape.
-import { LICHESS_STATUSES, type LichessStatus } from "./types";
+import { LICHESS_STATUSES, type LichessStatus, type NeedsReason } from "./types";
 
 export type PublicExternalPlayStatus = "pending" | "ready" | "live" | "finished" | "needs_organiser";
 
@@ -24,12 +24,60 @@ export type PublicWatch = {
   over: boolean;
   /** Which entrant plays White, once the game recorded it. */
   whiteSide: "home" | "away" | null;
+  /** The plies the position stands after, in standard notation, oldest first (T16 fix round 1, I4: the move
+   *  list). A push moves the board ahead of it; the next poll brings the list level. */
+  moves: string[];
+};
+
+/** Why a held board waits, in the public's words (T16 fix round 1, I4). A knockout draw waits for the organiser to
+ *  say who goes through; any other hold waits for a result to be confirmed. Never the hold's own reason or its
+ *  operator text. */
+export type PublicHold = "tiebreak" | "confirm";
+
+/** Every hold reason's public reading — a Record, so a reason added to the vocabulary cannot go unread. `null`: the
+ *  game goes on while the hold stands (a revoked token is one seat's problem; the board is still played), so the
+ *  spectators keep the live board. */
+export const PUBLIC_HOLD: Record<NeedsReason, PublicHold | null> = {
+  no_show_white: "confirm",
+  no_show_black: "confirm",
+  no_show_both: "confirm",
+  not_started: "confirm",
+  aborted: "confirm",
+  mismatch: "confirm",
+  provider_error: "confirm",
+  token_revoked: null,
+  double_walkover_blocked: "confirm",
+  create_outcome_unknown: "confirm",
+  tiebreak_owed: "tiebreak",
+  fair_play: "confirm",
+};
+
+/** The fixture's recorded result, for the finished board's header ("X won · Checkmate · move 30 · 1–0"). Read
+ *  from the fixture itself (its engine outcome and its public summary), so the header can never disagree with the
+ *  result printed above the panel. */
+export type PublicGameResult = {
+  kind: "win" | "draw" | "no_result";
+  winner: "home" | "away" | null;
+  /** The engine's method (boardgame's vocabulary), when one was recorded. */
+  method: string | null;
+  /** White's score first ("1–0", "½–½"); home first while no game recorded the colours. */
+  score: string;
+  /** When the fixture got its result. */
+  recordedAt: string | null;
 };
 
 export type PublicExternalPlay = {
   status: PublicExternalPlayStatus;
   /** Null until a game exists at Lichess. */
   watch: PublicWatch | null;
+  /** The FIXTURE is no longer playable — decided on the pad, settled, walked over, voided or cancelled (T16 fix
+   *  round 1, I1). Its game is over for the spectators whatever the bridge row still reads, and nothing is polled
+   *  for it any more. */
+  decided: boolean;
+  /** Why the board is held, while its fixture is still open; null otherwise. */
+  hold: PublicHold | null;
+  /** The fixture's result once it has one. */
+  result: PublicGameResult | null;
 };
 
 /** What the watch island polls (GET /public/fixtures/{id}/board), and what the
@@ -38,15 +86,10 @@ export type PublicExternalPlay = {
  *  board has a bridge row. */
 export type PublicWatchDoc = {
   roundOpened: boolean;
+  /** When the round was opened (the Match details line), or null while it is not. */
+  roundOpenedAt: string | null;
   externalPlay: PublicExternalPlay | null;
 };
-
-/** Watchable means there is a board to render HERE. `status` alone is not
- *  enough: a `live` row whose `watch` is null would render an empty board,
- *  which reads as a game with no pieces rather than as "not started yet". */
-export function isWatchable(ep: PublicExternalPlay): boolean {
-  return (ep.status === "live" || ep.status === "finished") && ep.watch !== null;
-}
 
 const LIVE_STATUSES: ReadonlySet<LichessStatus> = new Set<LichessStatus>(["created", "started"]);
 

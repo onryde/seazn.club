@@ -8,30 +8,27 @@
 // centre's subscription (live-board-channel). `watch-state` decides which
 // answer shows. Spectators watch here; nothing links off to Lichess (D3).
 import { useEffect, useReducer, useRef, useState } from "react";
-import { useT } from "@/components/i18n/dict-provider";
+import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { api } from "@/lib/client";
 import type { PublicWatchDoc } from "@/server/external-play/public-view";
 import { subscribeBoardPush } from "./live-board-channel";
 import { POLL_MS } from "./use-live-fixture";
 import { WatchBoard } from "./watch-board";
-import { initialWatch, nextWatch, pollsAgain, watchView, type WatchView } from "./watch-state";
+import { WatchDetails, WatchMoves, WatchNote, WatchResult, formatWatchTime, moveLabel, type WatchDetailsFacts } from "./watch-parts";
+import { holdOf, initialWatch, nextWatch, pollsAgain, watchView } from "./watch-state";
 
 export async function fetchPublicBoard(fixtureId: string): Promise<PublicWatchDoc> {
   // Never a browser-cached answer: the route's Cache-Control is for the edge.
   return api<PublicWatchDoc>(`/api/v1/public/fixtures/${encodeURIComponent(fixtureId)}/board`, { cache: "no-store" });
 }
 
-const LINE: Record<Exclude<WatchView, "board">, string> = {
-  not_opened: "externalPlay.watch.notOpened",
-  not_started: "externalPlay.watch.notStarted",
-  held: "externalPlay.needsOrganiser",
-};
-
 type Props = {
   fixtureId: string;
   initial: PublicWatchDoc;
   /** The entrants' display names; White's side picks which plays White. */
   names: { home: string; away: string };
+  /** The page's own public facts for Match details (the round's open comes from the doc). */
+  details: Omit<WatchDetailsFacts, "roundOpenedAt" | "locale">;
   fetchBoard?: (fixtureId: string) => Promise<PublicWatchDoc>;
 };
 
@@ -41,8 +38,10 @@ export function WatchPanel(props: Props) {
   return <WatchPanelInner key={props.fixtureId} {...props} />;
 }
 
-export function WatchPanelInner({ fixtureId, initial, names, fetchBoard = fetchPublicBoard }: Props) {
+export function WatchPanelInner({ fixtureId, initial, names, details, fetchBoard = fetchPublicBoard }: Props) {
   const t = useT();
+  const plural = usePlural();
+  const locale = useLocale();
   const [model, dispatch] = useReducer(nextWatch, initial, initialWatch);
   const modelRef = useRef(model);
   const fetchRef = useRef(fetchBoard);
@@ -52,14 +51,16 @@ export function WatchPanelInner({ fixtureId, initial, names, fetchBoard = fetchP
     fetchRef.current = fetchBoard;
   });
 
-  // Pushed moves. A pushed board does not say which entrant plays White; when
-  // the panel does not know yet, the poll is asked at once.
+  // Pushed moves. A pushed board says neither which entrant plays White nor the
+  // move list; when the panel lacks either, the poll is asked at once.
   useEffect(
     () =>
       subscribeBoardPush(fixtureId, (push) => {
-        const unknownSide = (modelRef.current.play?.watch?.whiteSide ?? null) === null;
+        const w = modelRef.current.play?.watch ?? null;
+        const unknownSide = (w?.whiteSide ?? null) === null;
+        const listBehind = push.ply > (w?.moves.length ?? 0);
         dispatch({ kind: "push", push, at: new Date().toISOString() });
-        if (unknownSide) pollNow.current?.();
+        if (unknownSide || listBehind) pollNow.current?.();
       }),
     [fixtureId],
   );
@@ -97,25 +98,71 @@ export function WatchPanelInner({ fixtureId, initial, names, fetchBoard = fetchP
   }, [running]);
 
   const view = watchView(model);
-  const watch = model.play?.watch ?? null;
-  const side = watch?.whiteSide ?? null;
+  const hold = holdOf(model);
+  const play = model.play;
+  // A board whenever a game with a move is on file and the view is about the game (live, held, finished): a
+  // knockout draw keeps its final position on the board (canvas WatchStates B), and so does any other hold.
+  const watch = play?.watch ?? null;
+  const board = watch !== null && watch.ply > 0 && (view === "live" || view === "held" || view === "finished") ? watch : null;
+  const side = board?.whiteSide ?? null;
   const boardNames =
     side === null ? null : side === "home" ? { white: names.home, black: names.away } : { white: names.away, black: names.home };
+  const note =
+    view === "not_opened" || view === "not_started" ? (
+      <WatchNote kind={view} t={t} />
+    ) : hold !== null ? (
+      <WatchNote kind={hold} t={t} />
+    ) : null;
+  const facts: WatchDetailsFacts = { ...details, roundOpenedAt: model.roundOpenedAt, locale };
+  const finished = view === "finished";
+  const result = play?.result ?? null;
+  const lastSan = board === null ? null : (board.moves[board.ply - 1] ?? null);
   return (
     <section
       data-testid="watch-panel"
       data-state={view}
-      aria-label={t("externalPlay.watch.title")}
-      className="mb-4 min-w-0 rounded-xl border border-[#e7e3f3] bg-white p-3 shadow-sm md:p-4"
+      {...(hold !== null ? { "data-hold": hold } : {})}
+      data-polling={polling ? "true" : "false"}
+      aria-label={t(finished ? "externalPlay.watch.finalTitle" : "externalPlay.watch.title")}
+      className="mb-4 flex min-w-0 flex-col gap-3 rounded-xl border border-[#e7e3f3] bg-white p-3 shadow-sm md:p-4"
     >
-      <h2 className="m-0 min-w-0 truncate text-sm font-semibold text-[#2e1065]">{t("externalPlay.watch.title")}</h2>
-      {view === "board" ? (
-        <WatchBoard watch={watch} names={boardNames} nowMs={nowMs} t={t} />
-      ) : (
-        <p data-testid={`watch-${view.replace("_", "-")}`} className="m-0 mt-1 text-sm text-[#4a3a6b]">
-          {t(LINE[view])}
-        </p>
-      )}
+      {finished ? <WatchResult result={result} names={names} ply={watch?.ply ?? 0} t={t} /> : null}
+      <div className={`grid min-w-0 gap-4 ${board !== null ? "lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)] lg:gap-6" : ""}`}>
+        {board !== null ? (
+          <div className="flex min-w-0 flex-col gap-3">
+            <WatchBoard watch={board} names={boardNames} nowMs={nowMs} t={t} />
+            {finished && lastSan !== null ? (
+              <p data-testid="watch-final-line" className="m-0 text-[13px] text-[#4a3a6b]">
+                {t("externalPlay.watch.finalLine", { move: moveLabel(board.ply, lastSan) })}
+              </p>
+            ) : null}
+            {note}
+          </div>
+        ) : null}
+        <aside className="flex min-w-0 flex-col gap-4">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <h2 className="m-0 min-w-0 truncate text-lg font-semibold text-[#2e1065]">
+              {t(finished ? "externalPlay.watch.finalTitle" : "externalPlay.watch.title")}
+            </h2>
+            {board !== null ? (
+              <span className="shrink-0 rounded-full bg-[#f3effc] px-2.5 py-1 text-xs font-semibold text-[#4a3a6b]">
+                {t("externalPlay.watch.viewOnly")}
+              </span>
+            ) : null}
+          </div>
+          {view === "live" ? <p className="m-0 text-sm leading-relaxed text-[#4a3a6b]">{t("externalPlay.watch.intro")}</p> : null}
+          {finished ? (
+            <p data-testid="watch-recorded" className="m-0 text-xs leading-relaxed text-[#6b5b8a]">
+              {result?.recordedAt
+                ? t("externalPlay.watch.result.recordedAt", { time: formatWatchTime(result.recordedAt, details.timeZone, locale, false) })
+                : t(play?.decided ? "externalPlay.watch.result.noRecord" : "externalPlay.watch.result.toConfirm")}
+            </p>
+          ) : null}
+          {board === null ? note : null}
+          {board !== null ? <WatchMoves moves={board.moves} t={t} /> : null}
+          <WatchDetails facts={facts} t={t} plural={plural} />
+        </aside>
+      </div>
     </section>
   );
 }

@@ -50,17 +50,29 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { ensureBridgeRow, loadOnlinePlayFixture, loadSides, whiteSideOf, type OnlinePlayFixture } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { RECONCILED_WHILE_HELD, reconcile, type ReconcileOutcome } from "./reconcile";
+import { closeBridgeIfUnplayable } from "./bridge-close";
 import { holdForOrganiser, holdRefusedNoShow } from "./result";
 import { checkIns } from "./room";
 import { isSeatedOn } from "./seated";
 
-export type SweepJob = "no_show" | "mint_retry" | "teardown" | "reconcile" | "camera_evidence" | "arbiter_revoke";
+export type SweepJob =
+  | "close_unplayable"
+  | "no_show"
+  | "mint_retry"
+  | "teardown"
+  | "reconcile"
+  | "camera_evidence"
+  | "arbiter_revoke";
 
 export type SweepReport = {
   /** Review M8: another pass held the lock, so this one did nothing — every
    *  count below is zero because nothing was looked at, not because nothing
    *  was due. */
   skipped: boolean;
+  /** Bridges closed because their fixture is no longer playable (job 0, T16
+   *  fix round 1, I1): held, pending, ready or live rows under a fixture
+   *  decided on the pad, settled, withdrawn, voided or cancelled. */
+  bridgesClosed: number;
   noShows: number;
   mintRetries: number;
   meetingsEnded: number;
@@ -167,6 +179,33 @@ async function each<T extends { fixtureId: string }>(
  *  list as `in (null)` — and is never read as "every org" (tested). */
 function orgScope(pass: Pass) {
   return pass.orgIds === undefined ? sql`` : sql`and f.org_id in ${sql(pass.orgIds as string[])}`;
+}
+
+// ─── Job 0: a fixture no longer playable closes its bridge (T16 fix round 1, I1)
+//
+// A fixture decided on the scoring pad, settled, walked over or voided by a
+// withdrawal, or cancelled ends our interest in its online game, whatever its
+// bridge row reads. Reconcile closed only the ready/live rows it was handed,
+// and job 4 hands it no HELD row of such a fixture, so a held board under a
+// decided fixture was orphaned: out of the queue (which lists playable
+// fixtures only), and "needs the organiser" on the public page for ever. Every
+// non-finished row of an unplayable fixture is closed here, every tick — which
+// also heals a settle that wrote its result and crashed before its close
+// (review M2). First, so no later job acts on a board that is over.
+
+async function unplayableCandidates(pass: Pass): Promise<{ fixtureId: string }[]> {
+  return sql<{ fixtureId: string }[]>`
+    select ep.fixture_id as "fixtureId"
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+     where ep.status <> 'finished'
+       and f.status not in ${sql(PLAYABLE_STATUSES as string[])}
+       ${orgScope(pass)}
+     order by ep.fixture_id`;
+}
+
+async function closeUnplayable(pass: Pass, c: { fixtureId: string }): Promise<void> {
+  if (await closeBridgeIfUnplayable(c.fixtureId, pass.now)) pass.report.bridgesClosed++;
 }
 
 // ─── A game that is, or may be, on file (review M1, ruling I3) ─────────────
@@ -1007,6 +1046,7 @@ async function arbiterRevoke(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDe
 function emptyReport(skipped: boolean): SweepReport {
   return {
     skipped,
+    bridgesClosed: 0,
     noShows: 0,
     mintRetries: 0,
     meetingsEnded: 0,
@@ -1044,6 +1084,8 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   const report = emptyReport(false);
   const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
 
+  // Job 0 before everything: a board whose fixture is decided is over for us.
+  await each(pass, "close_unplayable", await unplayableCandidates(pass), (c) => closeUnplayable(pass, c));
   // FIRST: a game on file is brought to the truth before anything rules on
   // its board — a ready game aborted at ply 0 is the organiser's `aborted`,
   // never a no-show (T10 ruling), and a game it finishes is torn down below.

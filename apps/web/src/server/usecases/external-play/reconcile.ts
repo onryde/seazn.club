@@ -46,6 +46,7 @@ import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import { effectiveBridge, loadOnlinePlayFixture, loadSides, type BridgeRow, type OnlinePlayFixture, type Side } from "./guard";
 import { fenAfter } from "./play";
+import { closeBridgeIfUnplayable } from "./bridge-close";
 import { isPlayableFixtureStatus } from "./preflight";
 import { holdForOrganiser, writeResultFrom, type HoldReason, type ResultWrite, type RevokedSeat } from "./result";
 
@@ -377,19 +378,12 @@ function readable(b: BridgeRow): boolean {
  *  finalized or cancelled fixture: the organiser's decision stands, so the
  *  bridge closes with no read and no result (T12 review carry — otherwise a
  *  withdrawn board's bridge stays `live` forever and the sweep keeps it).
- *  A held row is left in the organiser's queue. */
+ *  A HELD row closes too (T16 fix round 1, I1): the queue lists playable
+ *  fixtures only, so a held row under a decided fixture was orphaned —
+ *  one authority, bridge-close.ts, for every caller. */
 async function closeUnplayable(fixtureId: string, at: Date): Promise<void> {
-  const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtureId}`;
-  if (!fx || isPlayableFixtureStatus(fx.status)) return;
-  // A closed bridge holds no standing offer (an offer means something only
-  // while the game is played — review M2).
-  const closed = await sql`
-    update fixture_external_play
-       set status = 'finished', finished_at = ${at}, draw_offer_by = null, updated_at = now()
-     where fixture_id = ${fixtureId} and status in ('ready', 'live')
-     returning fixture_id`;
-  if (closed.length > 0) {
-    log.info({ fixtureId, fixtureStatus: fx.status }, "lichess reconcile: fixture no longer playable — bridge closed, nothing written");
+  if (await closeBridgeIfUnplayable(fixtureId, at)) {
+    log.info({ fixtureId }, "lichess reconcile: fixture no longer playable — bridge closed, nothing written");
   }
 }
 

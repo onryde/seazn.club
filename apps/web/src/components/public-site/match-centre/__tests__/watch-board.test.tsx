@@ -1,7 +1,9 @@
 // T16 — the spectators' view-only board (brief Steps 4-5). The board itself
 // is chessground, reached only through the room's Board (client-only, via
 // board-loader — licence-isolation.test.ts holds the one-importer rule), so a
-// node render paints the frame around it: names, clocks, whose move, the end.
+// node render paints the frame around it: names, clocks, whose move. Every
+// line AROUND the board (view-only chip, the result, a hold, "not started")
+// belongs to the panel (fix round 1, M9: one owner per testid).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -22,9 +24,10 @@ const watch: PublicWatch = {
   clockRunning: false,
   over: false,
   whiteSide: "home",
+  moves: ["e4"],
 };
 const ROOM_CONTROLS = ["room-draw", "room-resign", "room-abort", "room-promotion", "room-offer-draw", "room-checkin"];
-const render = (w: PublicWatch | null, names: { white: string; black: string } | null = { white: "Ada", black: "Bo" }, nowMs: number | null = null) =>
+const render = (w: PublicWatch, names: { white: string; black: string } | null = { white: "Ada", black: "Bo" }, nowMs: number | null = null) =>
   renderToStaticMarkup(<WatchBoard watch={w} names={names} nowMs={nowMs} t={t} />);
 
 describe("WatchBoard", () => {
@@ -32,7 +35,6 @@ describe("WatchBoard", () => {
     const html = render(watch);
     expect(html).toContain('data-testid="watch-board"');
     expect(html).toContain('data-view-only="true"');
-    expect(html).toContain("externalPlay.watch.viewOnly");
     let checked = 0;
     for (const id of ROOM_CONTROLS) {
       expect(html, id).not.toContain(`data-testid="${id}`);
@@ -43,10 +45,18 @@ describe("WatchBoard", () => {
     expect(html).not.toContain("<button");
   });
 
-  it("the empty case: no board states 'not started', never an empty board", () => {
-    const html = render(null);
-    expect(html).toContain("externalPlay.watch.notStarted");
-    expect(html).not.toContain('data-testid="watch-board"');
+  it("draws the game and nothing else: no line of its own, over or not (the panel owns them — M9)", () => {
+    let checked = 0;
+    for (const w of [watch, { ...watch, over: true }]) {
+      const html = render(w);
+      for (const key of ["externalPlay.watch.notStarted", "externalPlay.watch.viewOnly", "externalPlay.room.over.title"]) {
+        expect(html, `${key} over=${w.over}`).not.toContain(key);
+      }
+      expect(html).not.toContain('data-testid="watch-over"');
+      expect(html).not.toContain('data-testid="watch-not-started"');
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("each side's name and clock; the side to move is marked, and an unread clock shows a dash, never 0:00", () => {
@@ -81,10 +91,8 @@ describe("WatchBoard", () => {
     expect(html).toContain("externalPlay.room.colour.black");
   });
 
-  it("a game that is over says so, and marks neither side to move", () => {
+  it("a game that is over marks neither side to move", () => {
     const html = render({ ...watch, over: true });
-    expect(html).toContain('data-testid="watch-over"');
-    expect(html).toContain("externalPlay.room.over.title");
     expect(html).not.toContain('data-active="true"');
     expect(html).toContain('data-over="true"');
   });

@@ -133,9 +133,10 @@ function replay(moves: readonly string[]): { board: Chess; replayed: number } {
  *  an arbiter: Lichess decides legality (spec §1), so a move it accepted and
  *  chess.js rejects stops the replay and leaves the caller to reconcile —
  *  it must not refuse the player's move. Throws nothing. */
-export function fenAfter(moves: readonly string[]): { fen: string; replayed: number } {
+export function fenAfter(moves: readonly string[]): { fen: string; replayed: number; san: string[] } {
   const { board, replayed } = replay(moves);
-  return { fen: board.fen(), replayed };
+  // The replayed plies in standard notation — the spectators' move list (T16 fix round 1, I4).
+  return { fen: board.fen(), replayed, san: board.history() };
 }
 
 // lila source, not measured — live measurement owed (T17). Two well-formed
