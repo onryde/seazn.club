@@ -786,6 +786,21 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
       await crop(s.header.locator("xpath=ancestor::header[1]"), `organiser-console-withdrew-final-${width}`);
       console.log(`R116-4 ${width} console header: ${header}`);
       screens++;
+      // Review M-4 follow-up: on the phone the closed strip truncates the names; opening its details shows both whole
+      // (≥768 has no toggle and wraps, so both are whole there already). Gated on the toggle, never a width literal.
+      const toggle = page.locator('[data-role="match-details-toggle"]');
+      if (await toggle.isVisible()) {
+        await toggle.click();
+        await expect(toggle, `${width}: the details opened`).toHaveAttribute("aria-expanded", "true");
+      }
+      const cut = await s.header.evaluate((h1, names) =>
+        names.map((name) => {
+          const el = [...h1.querySelectorAll("span")].find((x) => x.textContent === name);
+          return el ? el.scrollWidth > el.clientWidth + 0.5 : "missing";
+        }), pair);
+      expect(cut, `${width}: ${await toggle.isVisible() ? "details open" : "≥768"} — both names whole (${pair.join(" / ")})`).toEqual([false, false]);
+      await expectNoHorizontalScroll(page);
+      await crop(s.header.locator("xpath=ancestor::header[1]"), `organiser-console-withdrew-final-open-${width}`);
 
       await s.openBoard();
       const card = await quote(s.card);
