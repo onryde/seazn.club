@@ -42,7 +42,7 @@ export const CHECKER_FILES: readonly string[] = [
  *  W2c's rows: the value names the first W2c task that proves the row (plan Appendix A). The orchestrator's batch-end
  *  proof commit deletes the entry and fills the row's `proved by`; W2c Task 23 requires the map empty. */
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
-  ["X-SR-1", "W2c Task 4"], ["X-SR-2", "W2c Task 4"], ["X-SR-3", "W2c Task 11"], ["X-SR-5", "W2c Task 14"],
+  ["X-SR-3", "W2c Task 11"], ["X-SR-5", "W2c Task 14"],
   ["X-SR-6", "W2c Task 6"], ["X-SR-7", "W2c Task 15"], ["X-PT-1", "W2c Task 9"],
   ["BG-KO-1", "W2c Task 8"], ["BG-KO-2", "W2c Task 8"], ["BG-KO-3", "W2c Task 8"],
   ["CK-SO-1", "W2c Task 6"], ["HK-AB-2", "W2c Task 7"], ["CA-AB-2", "W2c Task 7"], ["GN-AB-2", "W2c Task 7"],
