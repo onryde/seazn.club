@@ -175,10 +175,12 @@ function counted(f: QualFixture): boolean {
  *  bye (the adapter folds it from a fresh 0–0 state) or a two-sided award — a
  *  walkover — in a sport whose walkover credits nothing (`awardAddsToLedger`
  *  false: generic's; every other sport's credits its ledger, so its walkover
- *  is an ordinary match here — W2b X-WO-1). The what-if's average match leaves these out. */
+ *  is an ordinary match here — W2b X-WO-1). And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in
+ *  any sport — no forfeit score, and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so
+ *  whatever either flag says, it adds nothing to the ledger. The what-if's average match leaves these out. */
 function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean): boolean {
   const kind = outcomeKind(f);
-  if (kind === "no_result") return true;
+  if (kind === "no_result" || kind === "double_walkover") return true;
   if (kind !== "award") return false;
   if (ruleInAverage) return false;
   return isOneSidedAwardBye(f) || !awardAddsToLedger;

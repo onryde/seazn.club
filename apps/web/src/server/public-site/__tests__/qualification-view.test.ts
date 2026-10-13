@@ -1107,6 +1107,40 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view({ ...o, fixtures })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
+  // Loop R M-13 (X-DW-4): a double walkover credits NOTHING — no score to either side, in every sport, whatever the
+  // division's walkover credits (`applyPointsRule` and the folds pay it nothing) — so it is a match the average leaves
+  // out, as it leaves out a no-result. Swept over every sport whose engine folds a both-sides forfeit to a double
+  // walkover, the outcome being the engine's own fold, never typed; `awardAddsToLedger` is each sport's own reading, so
+  // a sport whose WALKOVER would count (ice hockey's 5–0) is in the sweep too. D's 14 goals then came from ONE match and
+  // the win by 8 fits; counted as a match, they halve to 7 and there is no target (the right answer differs from the
+  // wrong one's sentence).
+  it("…and double walkovers, in every sport (X-DW-4: a match that credited nothing)", () => {
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const target = `If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`;
+    const checked: string[] = [];
+    let ledgerSports = 0;
+    for (const m of builtinModules) {
+      const cfg = m.configSchema.parse(Object.values(m.variants ?? {})[0] ?? {});
+      const l = defaultLineupPair(m.positions);
+      const events: EventEnvelope[] = [makeEnvelope(1, { type: "core.forfeit", payload: { by: "both", reason: "walkover" } })];
+      let outcome: unknown;
+      try {
+        outcome = outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, events));
+      } catch {
+        continue; // a sport whose kernel refuses a both-sides forfeit has no double walkover to read
+      }
+      if ((outcome as { kind?: string } | null)?.kind !== "double_walkover") continue;
+      const addsToLedger = divisionAwardAddsToLedger(m, cfg);
+      if (addsToLedger) ledgerSports++;
+      const dw = fx(2, "B", "D", "forfeited", outcome);
+      const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), dw, open(3, "A", "B"), open(3, "C", "D")];
+      const d = must(view({ ...o, fixtures }, { awardAddsToLedger: addsToLedger })).rows.D!;
+      expect(d.whatIf, `${m.key}: the double walkover is no match in the average`).toBe(target);
+      checked.push(m.key);
+    }
+    expect(checked.length, `sports checked: ${checked.join(", ")}`).toBeGreaterThanOrEqual(5);
+    expect(ledgerSports, "premise: at least one swept sport's walkover WOULD count toward the average").toBeGreaterThan(0);
+  });
   it("an ice-hockey walkover writes its forfeit score into the ledger, so it COUNTS toward the average; a generic one does not", () => {
     // The walkover scene above, in a sport whose core.forfeit records
     // cfg.awardScore (5–0) as the match's goals (period kernel `applyForfeit`,
