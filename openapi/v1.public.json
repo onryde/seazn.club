@@ -39066,6 +39066,9 @@
                                       },
                                       "sentence": {
                                         "type": "string"
+                                      },
+                                      "played": {
+                                        "type": "boolean"
                                       }
                                     },
                                     "required": [
