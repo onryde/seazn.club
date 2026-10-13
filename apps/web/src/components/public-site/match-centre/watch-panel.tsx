@@ -21,15 +21,6 @@ export async function fetchPublicBoard(fixtureId: string): Promise<PublicWatchDo
   return api<PublicWatchDoc>(`/api/v1/public/fixtures/${encodeURIComponent(fixtureId)}/board`, { cache: "no-store" });
 }
 
-const OPEN_FIXTURE: ReadonlySet<string> = new Set(["scheduled", "in_play", "needs_decision"]);
-
-/** Does the page show the panel? Always while the fixture is open; once it is
- *  decided or cancelled, only when there is a game to show — a board settled
- *  without one would otherwise read "not started" under its result. */
-export function showWatchPanel(fixtureStatus: string, doc: PublicWatchDoc): boolean {
-  return OPEN_FIXTURE.has(fixtureStatus) || (doc.externalPlay?.watch ?? null) !== null;
-}
-
 const LINE: Record<Exclude<WatchView, "board">, string> = {
   not_opened: "externalPlay.watch.notOpened",
   not_started: "externalPlay.watch.notStarted",

@@ -30,7 +30,8 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { POLL_MS } from "../use-live-fixture";
 import { publishBoardPush } from "../live-board-channel";
 import { WatchBoard } from "../watch-board";
-import { WatchPanel, WatchPanelInner, showWatchPanel } from "../watch-panel";
+import { WatchPanel, WatchPanelInner } from "../watch-panel";
+import { showWatchPanel } from "../watch-state";
 
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
 const esc = (x: string) => x.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -213,6 +214,32 @@ describe("WatchPanel — after hydration", () => {
     const el = WatchPanel({ fixtureId: "f2", initial: live(board(1)), names: NAMES }) as ReactElement;
     expect(el.type).toBe(WatchPanelInner);
     expect(el.key).toBe("f2");
+  });
+});
+
+describe("the fixture page (a server component) calls nothing from a client module", () => {
+  // Found by the browser pass: `showWatchPanel` once lived in watch-panel.tsx ("use client"), and the page's
+  // call answered 500 — "Attempted to call showWatchPanel() from the server". A node render never sees it.
+  it("every binding it imports from a \"use client\" module is a component (or a type)", () => {
+    const SRC = join(__dirname, "..", "..", "..", "..");
+    const page = readFileSync(join(SRC, "app", "(public)", "shared", "[orgSlug]", "[competitionSlug]", "[divisionSlug]", "fixtures", "[fixtureId]", "page.tsx"), "utf8");
+    const imports = [...page.matchAll(/^import (type )?\{([^}]*)\} from "@\/([^"]+)";$/gm)];
+    let clientModules = 0;
+    const offenders: string[] = [];
+    for (const [, typeOnly, names, mod] of imports) {
+      if (typeOnly) continue;
+      const base = join(SRC, mod!);
+      const file = [".tsx", ".ts"].map((x) => base + x).find((f) => { try { return statSync(f).isFile(); } catch { return false; } });
+      if (!file || !/^\s*["']use client["']/.test(readFileSync(file, "utf8"))) continue;
+      clientModules += 1;
+      for (const raw of names!.split(",")) {
+        const name = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()!;
+        if (name === "" || raw.trim().startsWith("type ")) continue;
+        if (!/^[A-Z]/.test(name)) offenders.push(`${mod}: ${name}`);
+      }
+    }
+    expect(clientModules, "anti-vacuity: client modules the page imports").toBeGreaterThan(2);
+    expect(offenders).toEqual([]);
   });
 });
 

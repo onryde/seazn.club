@@ -56,6 +56,10 @@ describe("overFromStatus — a broadcast's Lichess status, as the spectator's 'i
     expect(checked, "anti-vacuity: every declared status").toBe(LICHESS_STATUSES.length);
     expect(checked).toBeGreaterThan(2);
   });
+
+  it("a status nobody declared is a refusal, never read as 'still on' or 'over'", () => {
+    expect(() => overFromStatus("unrecognised" as never)).toThrow(/unknown status/);
+  });
 });
 
 describe("plyOfFen — the order of two boards, from the FEN's own fields", () => {
