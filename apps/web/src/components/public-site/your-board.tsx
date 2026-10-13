@@ -1,13 +1,15 @@
 "use client";
 // "Your board" (T16, controller ruling 2026-10-12): a signed-in player's door from the public fixture page into their
 // match room. The page is ISR — one HTML for every viewer — so it renders nothing here; after hydration this island
-// asks the lobby route (GET, session only, `private, no-store`), and only one of the two players gets an answer. Every
+// asks the lobby route (GET, session only, `private, no-store`) — only when the browser carries the signed-in hint
+// (R2) — and only one of the two players gets an answer. Every
 // refusal (anonymous 401, a stranger or another club's player 404, a fault) shows nothing. One venue (D3): the door
 // leads to OUR room, never to lichess.org.
 import { useEffect, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
 import { LOBBY_STATES, type ExternalPlayLobby } from "@/lib/external-play-lobby";
+import { hasSessionHint } from "@/lib/session-hint";
 
 type Get = (url: string, init: RequestInit) => Promise<unknown>;
 
@@ -31,6 +33,9 @@ export function YourBoard({ fixtureId }: { fixtureId: string }) {
   // Keyed by the fixture it answers, so a navigation to another fixture never shows the previous one's door.
   const [answer, setAnswer] = useState<{ fixtureId: string; view: ExternalPlayLobby | null } | null>(null);
   useEffect(() => {
+    // R2 (T16 fix round 1): no signed-in hint, no request — an anonymous viewer would only be refused (401). The hint
+    // has no authority (lib/session-hint.ts); the route still checks the session itself.
+    if (!hasSessionHint(document.cookie)) return;
     let live = true;
     void loadYourBoard(fixtureId).then((view) => {
       if (live) setAnswer({ fixtureId, view });

@@ -13,7 +13,7 @@
 // your-board-route.test.ts.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { t as tRuntime } from "@/lib/i18n-runtime";
@@ -39,6 +39,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { YourBoard, YourBoardCard, loadYourBoard } from "../your-board";
+import { SESSION_HINT_COOKIE } from "@/lib/session-hint";
 
 const ROOM = "/shared/club/cup/open/fixtures/f1/play";
 const answer = (state: ExternalPlayLobby["state"]): ExternalPlayLobby =>
@@ -134,6 +135,9 @@ describe("YourBoardCard — every lobby state", () => {
 
 describe("YourBoard — after hydration, and across a navigation", () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // The island asks only a browser that says someone is signed in (R2); every island case below is that browser.
+  beforeEach(() => void vi.stubGlobal("document", { cookie: `${SESSION_HINT_COOKIE}=1` }));
+  afterEach(() => void vi.unstubAllGlobals());
   /** The lobby's answers, each released by hand, so the ORDER they land in is the test's. */
   function lobby() {
     const pending = new Map<string, (v: unknown) => void>();
@@ -149,6 +153,20 @@ describe("YourBoard — after hydration, and across a navigation", () => {
   }
   const cards = (island: { tree: () => ReactElement[] }) =>
     island.tree().filter((el) => el.type === YourBoardCard).map((el) => propsOf(el).view as ExternalPlayLobby);
+
+  // T16 fix round 1, R2: without the signed-in hint the island asks NOTHING — an anonymous viewer would only be refused.
+  it("R2: no signed-in hint ⇒ no lobby call at all and nothing drawn; the hint ⇒ the call", async () => {
+    lobby();
+    vi.stubGlobal("document", { cookie: "seazn_locale=fr" });
+    const anon = renderIsland(YourBoard, { fixtureId: "f1" });
+    await flush();
+    expect(apiV1Mock, "anonymous: no request").not.toHaveBeenCalled();
+    expect(cards(anon)).toEqual([]);
+    vi.stubGlobal("document", { cookie: `seazn_locale=fr; ${SESSION_HINT_COOKIE}=1` });
+    renderIsland(YourBoard, { fixtureId: "f1" });
+    await flush();
+    expect(apiV1Mock.mock.calls.map((c) => c[0])).toEqual(["/api/v1/fixtures/f1/external-play/lobby"]);
+  });
 
   it("draws nothing until the lobby answers, then the player's own board", async () => {
     const answer = lobby();
