@@ -2,7 +2,8 @@
 //
 // W2a (BG-KO-1, ruling 73): in a bracket (cfg.tiebreak, set by the stage overlay) a drawn game is not a result —
 // it opens phase 'tiebreak', and the scorer records the tie-break on a rung (rapid, blitz, armageddon) with the
-// WINNER (ruling 82: every rung, the scorer taps who won). Lots is not a rung: it is the organiser's core.settle.
+// WINNER (ruling 82: rapid and blitz, the scorer taps who won); W2c: an Armageddon records who had Black and how it
+// ended, and the engine derives the advancer. Lots is not a rung: it is the organiser's core.settle.
 import { OutcomeUnreachable, START, idOf, outcomeLabel, type SportStreamGenerator } from "./types.ts";
 
 export const boardgameGenerator: SportStreamGenerator = {
@@ -31,10 +32,21 @@ export const boardgameGenerator: SportStreamGenerator = {
     if ((req.cfg as { tiebreak?: boolean }).tiebreak !== true) {
       throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), "cfg.tiebreak is not set: a drawn game here is an ordinary draw (apply stageCfg() for a bracket stage)");
     }
+    // W2c BG-KO-3: the stage plays the rungs it lists (absent = all), and an empty list opens no tie-break at all.
+    const listed = (req.cfg as { tiebreakRungs?: readonly string[] }).tiebreakRungs;
+    if (listed !== undefined && !listed.includes(req.outcome.rung)) {
+      throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the stage plays ${listed.length === 0 ? "no tie-break rung" : `only ${listed.join(", ")}`} (BG-KO-3)`);
+    }
+    const winner = idOf(req, req.outcome.winner);
     return [
       START,
       { type: "boardgame.result", payload: { winner: null, method: "agreement" } },
-      { type: "boardgame.tiebreak", payload: { rung: req.outcome.rung, winner: idOf(req, req.outcome.winner) } },
+      // W2c BG-KO-2: an Armageddon records Black and the result and the engine derives who advances; naming the winner as
+      // Black with Black winning is the plain case (a rapid or blitz game still names the winner).
+      {
+        type: "boardgame.tiebreak",
+        payload: req.outcome.rung === "armageddon" ? { rung: req.outcome.rung, black: winner, result: "black" } : { rung: req.outcome.rung, winner },
+      },
     ];
   },
 };

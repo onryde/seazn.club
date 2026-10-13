@@ -115,6 +115,22 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(checked).toBeGreaterThan(0);
   });
 
+  it("W2c BG-KO-3: a stage that lists its tie-break rungs is only asked for those — an unlisted rung and an empty list are named refusals, never an event the engine would refuse", () => {
+    const c = cases().find((x) => x.key === "boardgame")!;
+    const onlyBlitz = { ...(bracketCfg(c) as object), tiebreakRungs: ["blitz"] };
+    let refused = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const ask = () => generateStream(request(c, onlyBlitz, "knockout", { kind: "tiebreak", rung, winner: "away" }));
+      if (rung === "blitz") expect(outcomeAfter(c, onlyBlitz, ask())).toMatchObject({ kind: "win", winner: c.away, method: "tiebreak_blitz" }); // the positive pair
+      else { expect(unreachable(ask), `${rung} is not in the stage's list`).toBe(true); refused++; }
+    }
+    expect(refused).toBe(TIEBREAK_RUNGS.length - 1);
+    // The empty list opens no tie-break: every rung is refused (and the engine agrees, a drawn game stays a draw).
+    const none = { ...(bracketCfg(c) as object), tiebreakRungs: [] };
+    for (const rung of TIEBREAK_RUNGS) expect(unreachable(() => generateStream(request(c, none, "knockout", { kind: "tiebreak", rung, winner: "home" }))), rung).toBe(true);
+    expect(outcomeAfter(c, none, [START, { type: "boardgame.result", payload: { winner: null, method: "agreement" } }])).toEqual({ kind: "draw" });
+  });
+
   it("boardgame, other sports: a tie-break needs the bracket overlay and a sport that has one (named refusals that reach them)", () => {
     const board = cases().find((c) => c.key === "boardgame")!;
     const bare = resolveSportCfg("boardgame", board.variant); // no overlay: a drawn game here is an ordinary draw
