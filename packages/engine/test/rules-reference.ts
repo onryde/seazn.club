@@ -38,8 +38,16 @@ export const CHECKER_FILES: readonly string[] = [
 
 /** Signed rows whose proving test lands in a later W2a task. A task that adds
  *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
- *  this map to be EMPTY. A row not named here must already be proved. */
-export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
+ *  this map to be EMPTY. A row not named here must already be proved.
+ *  W2c's rows: the value names the first W2c task that proves the row (plan Appendix A). The orchestrator's batch-end
+ *  proof commit deletes the entry and fills the row's `proved by`; W2c Task 23 requires the map empty. */
+export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
+  ["X-SR-1", "W2c Task 4"], ["X-SR-2", "W2c Task 4"], ["X-SR-3", "W2c Task 11"], ["X-SR-5", "W2c Task 14"],
+  ["X-SR-6", "W2c Task 6"], ["X-SR-7", "W2c Task 15"], ["X-PT-1", "W2c Task 9"],
+  ["BG-KO-1", "W2c Task 8"], ["BG-KO-2", "W2c Task 8"], ["BG-KO-3", "W2c Task 8"],
+  ["CK-SO-1", "W2c Task 6"], ["HK-AB-2", "W2c Task 7"], ["CA-AB-2", "W2c Task 7"], ["GN-AB-2", "W2c Task 7"],
+  ["IH-KO-1", "W2c Task 6"], ["FB-SO-1", "W2c Task 6"],
+]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
  *  part of the row's text, not of the checkout. Rows whose path starts with it are the ENGINE's to check (test/rules-reference.test.ts);
