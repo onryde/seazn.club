@@ -22,6 +22,7 @@ vi.mock("next/cache", () => ({
 
 import { sql } from "@/lib/db";
 import { getPublicFixture } from "../data";
+import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -79,6 +80,8 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     expect(data, "the seeded fixture must be publicly visible").not.toBeNull();
     expect(data!.fixture.id).toBe(s.fixtureId);
     expect(data!.externalPlay).toBeNull();
+    // Not an online division: no round-open read, never "opened".
+    expect(data!.roundOpened).toBe(false);
   });
 
   it("a fixture WITH a bridge row loads, and carries its status and nothing else", async () => {
@@ -172,5 +175,21 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
     expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null });
     expect(JSON.stringify(data)).not.toContain("operator-only detail");
+  });
+
+  it("T16: an online board's page says whether its round is open (D12) — before and after the organiser opens it", async () => {
+    const s = await seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: true, linked: true, scheduledAt: new Date() });
+    seeded.push(s.orgId);
+    const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div
+        from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id
+       where d.id = ${s.divisionId}`;
+    const read = () => getPublicFixture(slugs!.org, slugs!.comp, slugs!.div, s.fixtureId);
+    expect((await read())!.roundOpened, "not opened").toBe(false);
+    // Labelled SQL: T19's openRound stamps this row.
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      select ${s.stageId}, ${s.orgId}, 1, now() - interval '1 minute', ${s.home.userId}`;
+    expect((await read())!.roundOpened, "opened").toBe(true);
   });
 });

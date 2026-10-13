@@ -1,6 +1,8 @@
 import "server-only";
 import { sql } from "@/lib/db";
-import type { PublicExternalPlay, PublicWatch } from "@/server/external-play/public-view";
+import { HttpError } from "@/lib/errors";
+import type { PublicExternalPlay, PublicWatch, PublicWatchDoc } from "@/server/external-play/public-view";
+import { roundOpenFor } from "@/server/external-play/round-open";
 import { fenAfter } from "./external-play/play";
 
 type PublicBridgeRow = {
@@ -49,4 +51,25 @@ export async function loadPublicExternalPlay(fixtureId: string): Promise<PublicE
      where fixture_id = ${fixtureId}`;
   if (!row) return null;
   return { status: row.status, watch: watchFromLedger(row) };
+}
+
+/** Has this fixture's round been opened (D12)? Opening stamps
+ *  `stage_round_opens`; a stamp in the future is not open yet. */
+export async function loadPublicRoundOpened(fixtureId: string, now: Date = new Date()): Promise<boolean> {
+  const open = await roundOpenFor(sql, fixtureId);
+  return open !== null && open.roundOpenedAt.getTime() <= now.getTime();
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The watch island's poll: the public page's own board facts for a fixture
+ *  the public can see (`public_fixtures_v` — a public or unlisted
+ *  competition), 404 for any other. Uncached here: one keyed read per call,
+ *  and the route's short public window collapses a crowd at the edge. */
+export async function publicFixtureBoard(fixtureId: string): Promise<PublicWatchDoc> {
+  if (!UUID.test(fixtureId)) throw new HttpError(404, "fixture not found");
+  const [visible] = await sql<{ id: string }[]>`select id from public_fixtures_v where id = ${fixtureId}`;
+  if (!visible) throw new HttpError(404, "fixture not found");
+  const [externalPlay, roundOpened] = await Promise.all([loadPublicExternalPlay(fixtureId), loadPublicRoundOpened(fixtureId)]);
+  return { roundOpened, externalPlay };
 }

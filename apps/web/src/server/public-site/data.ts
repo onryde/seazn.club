@@ -34,7 +34,8 @@ import { loadMatchCentre } from "./match-centre-load";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
-import { loadPublicExternalPlay } from "@/server/usecases/external-play-read";
+import { loadPublicExternalPlay, loadPublicRoundOpened } from "@/server/usecases/external-play-read";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
 /**
@@ -1157,6 +1158,9 @@ export async function getPublicFixture(
   stageName: string | null;
   /** Online Lichess play bridge (chess external-play 2026-09-15), or null. */
   externalPlay: PublicExternalPlay | null;
+  /** T16 — an online board's round has been opened (D12). Always false for a
+   *  division that does not play online (no read is made for it). */
+  roundOpened: boolean;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1300,6 +1304,10 @@ export async function getPublicFixture(
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
         externalPlay: await loadPublicExternalPlay(fixtureId),
+        roundOpened:
+          supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
+            ? await loadPublicRoundOpened(fixtureId)
+            : false,
       };
     },
     // v2 (owner decision 2026-09-16): `matchCentre.header.statusLine` for a
