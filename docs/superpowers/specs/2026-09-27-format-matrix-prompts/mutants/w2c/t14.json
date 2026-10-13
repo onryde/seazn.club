@@ -105,6 +105,21 @@
   ]
  },
  {
+  "id": "t14-self-check",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (resolvesTo(leaves)) return leaves;",
+  "replace": "return leaves;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the check reads the PARSED stage"
+   }
+  ]
+ },
+ {
   "id": "t14-check-refusal",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
   "find": "if (!check.ok) {",

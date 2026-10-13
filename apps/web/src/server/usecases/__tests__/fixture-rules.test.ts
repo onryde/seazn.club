@@ -258,6 +258,12 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
     const ot = parsedVariant<{ overtime: { minutes: number } & Record<string, unknown> }>("icehockey", "iihf").overtime;
     const b = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "knockout", entrants: 2 });
     const id = b.fixtureIds[0]!;
+    // `createDivision` stores the PARSED preset (defaults materialised), so a stage only inherits the schema's overtime
+    // without carrying it when its stored division config predates the key — the shape the resolver and the fold read
+    // raw. Made here, so the check below really meets a raw config with no `overtime` in it (mutation t14-parsed-stage).
+    await sql`update divisions set config = config - 'overtime' where id = ${b.divisionId}`;
+    const raw = (await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${b.divisionId}`)[0]!.config;
+    expect(Object.hasOwn(raw, "overtime"), "the premise: the stored division config carries no overtime").toBe(false);
     await expect(writeFixtureRulesOverride(b.auth, [id], { overtime: { ...ot, minutes: ot.minutes + 1 } })).rejects.toMatchObject({
       status: 400,
       code: "RULE_NOT_SETTABLE",
@@ -267,6 +273,9 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
     const cfg = await padCfg(b, id);
     expect(ice.configSchema.safeParse(cfg).success, "the resolved cfg is a valid ice hockey cfg").toBe(true);
     expect((cfg.overtime as { minutes: number }).minutes).toBe(ot.minutes - 1);
+    // Over a raw stage with no overtime the leaf alone would not resolve (the strict union needs its `kind`), so the
+    // writer's self-check stored the whole overtime instead.
+    expect((await row(id)).rules_override).toEqual({ overtime: { ...ot, minutes: ot.minutes - 1 } });
   });
 
   it("period (ice hockey) carry (c) nested: a shortened overtime stores the leaf, so a later stage edit to another overtime leaf still reaches the match", async () => {
