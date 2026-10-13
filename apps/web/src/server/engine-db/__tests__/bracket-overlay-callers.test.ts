@@ -1,8 +1,16 @@
 // W2a Task 6 — spec §5.4.1 + risk row 1 (the inert seam): the bracket overlay must reach EVERY resolveFixtureCfg
 // call site. Each case drives the site's REAL exported entry on real rows and reads what resolveFixtureCfg returned
 // THERE, through a spy that wraps the real function. A source scan pins the site count, so a 13th caller fails
-// until it has a case. Three sites are driven from the existing suite that already builds their inputs
-// (match-centre-load-feeder-read, event-import-dryrun, org-posts-enrichment-sources); `SITES[].case` names them.
+// until it has a case.
+//
+// W2c Task 10 (spec §4.4, D4) — the same ledger proves the fixture's OWN match override (`fixtures.rules_override`)
+// reaches every one of those sites. The resolver now takes the fixture ROW, so tsc forces each caller to pass a
+// `rules_override` — but tsc cannot read the SQL text, and a select that forgot the column hands the resolver
+// `undefined`, which it reads as "no override" and says nothing. So every case below seeds an override on its
+// fixture BEFORE invoking the entry and asserts that every call the entry made carried it, and — where the fixture
+// has no frozen snapshot — that the cfg handed back carries it last. All 12 sites are driven from THIS file, the
+// three whose W2a overlay case lives in their own suite (match-centre-load-feeder-read, event-import-dryrun,
+// org-posts-enrichment-sources) included. Task 14 re-points the seeding to the real writer (the §8 seam).
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -12,11 +20,18 @@ vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/engine-db/fixture-cfg")>();
   return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
 });
+import { builtinModules } from "@seazn/engine/sports";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { appendEvent, completeStageIfReady, recomputeStandings } from "@/server/engine-db";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { sql, withTenant } from "@/lib/db";
+import type { MessageKey } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import type { PublicFixture } from "@/server/public-site/data";
+import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { importEvents } from "@/server/usecases/event-import";
 import { loadFixturePadCfg } from "@/server/usecases/fixtures";
+import { draftPostsForDecidedFixture } from "@/server/usecases/org-posts";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
@@ -43,6 +58,33 @@ function expectOverlay(kind: string): void {
   const calls = seen();
   expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
   expect(calls.some((c) => c.kind === kind && c.out !== null && c.out.tiebreak === true), JSON.stringify(calls)).toBe(true);
+}
+
+/** The brief's override: badminton's match-scoped `bestOf` (spec §4.1 Q5). Boardgame — the sport the W2a cases ride,
+ *  because its bracket overlay is observable — declares NO match-scoped key, so on a boardgame row this is a
+ *  plumbing witness, not a format a writer would accept; the resolver merges without validating (Task 14's writer
+ *  validates). Boardgame's cfg has no `bestOf`, so the key reads back only if the override landed. */
+const OVERRIDE = { bestOf: 1 } as const;
+async function seedOverride(where: { fixtureId: string } | { stageId: string }): Promise<void> {
+  const n =
+    "fixtureId" in where
+      ? await sql`update fixtures set rules_override = ${sql.json(OVERRIDE as never)} where id = ${where.fixtureId}`
+      : await sql`update fixtures set rules_override = ${sql.json(OVERRIDE as never)} where stage_id = ${where.stageId}`;
+  expect(n.count, "the override was written").toBeGreaterThan(0);
+}
+/** Every call the entry made carried the fixture row's override (the brief's `calls.at(-1)` check, on every call);
+ *  returns how many calls that was, which is never 0. */
+function expectOverrideArg(): number {
+  const calls = spy.mock.calls;
+  expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
+  expect(spy.mock.calls.at(-1)![0]).toMatchObject({ rules_override: OVERRIDE });
+  for (const c of calls) expect(c[0], JSON.stringify(c[0])).toMatchObject({ rules_override: OVERRIDE });
+  return calls.length;
+}
+/** …and a call of `kind` handed back a LIVE cfg with the override merged (the fixture had no frozen snapshot). */
+function expectOverrideOut(kind: string): void {
+  const calls = seen();
+  expect(calls.some((c) => c.kind === kind && c.out !== null && c.out.bestOf === OVERRIDE.bestOf), JSON.stringify(calls)).toBe(true);
 }
 
 const REPO = resolve(__dirname, "../../../../../..");
@@ -94,26 +136,34 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
 
   it.skipIf(!HAS_DB)("fold.ts loadFoldInputs", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
     const inputs = await withTenant(s.auth.orgId, (tx) => loadFoldInputs(tx, s.fixtureIds[0]!));
     expect(inputs!.stageKind).toBe("knockout");
     expect((inputs!.cfg as { tiebreak?: unknown }).tiebreak).toBe(true);
+    expect((inputs!.cfg as { bestOf?: unknown }).bestOf, "W2c: the fold reads the match override").toBe(OVERRIDE.bestOf);
     expectOverlay("knockout");
+    expectOverrideArg();
   });
 
   it.skipIf(!HAS_DB)("append-event.ts appendEvent: the first event freezes the overlay into config_snapshot", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     expectOverlay("knockout");
+    expectOverrideArg();
     const [row] = await sql<{ config_snapshot: Record<string, unknown> }[]>`
       select config_snapshot from fixtures where id = ${s.fixtureIds[0]!}`;
     expect(row!.config_snapshot.tiebreak).toBe(true);
+    // Spec §4.4: at the first event the override is frozen with everything else.
+    expect(row!.config_snapshot.bestOf, "W2c: the override was frozen at the first event").toBe(OVERRIDE.bestOf);
   });
 
   it.skipIf(!HAS_DB)("competition.ts loadStageInputs: both knockout calls (a decided game, a seeded bye) get the overlay", async () => {
     // Three entrants in a four-draw: one seated semi-final and one bye. Completion reads each fixture's cfg —
     // the played one through the standings delta, the bye through awardByeDelta — and both are bracket fixtures.
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 3 });
+    await seedOverride({ stageId: s.stageId }); // the bye's row too: it is the second call's fixture
     const [home] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${s.fixtureIds[0]!}`;
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 1, { type: "boardgame.result", payload: { winner: home!.home_entrant_id, method: "checkmate" } });
@@ -125,11 +175,14 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     for (const c of calls) {
       expect(c.kind).toBe("knockout");
       expect(c.out?.tiebreak, JSON.stringify(calls)).toBe(true);
+      expect(c.out?.bestOf, `W2c: ${JSON.stringify(calls)}`).toBe(OVERRIDE.bestOf);
     }
+    expect(expectOverrideArg()).toBe(2);
   });
 
   it.skipIf(!HAS_DB)("competition.ts loadStageInputs: a league passes its kind and gets NO overlay (the negative pair)", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "league", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 1, { type: "boardgame.result", payload: { winner: null, method: "agreement" } });
     await sql`update fixtures set config_snapshot = null where id = ${s.fixtureIds[0]!}`;
@@ -141,29 +194,39 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       expect(c.kind).toBe("league");
       expect(c.out?.tiebreak).toBeUndefined();
     }
+    // W2c: the override is no bracket decider — it lands in a league exactly as in a knockout.
+    expectOverrideOut("league");
+    expectOverrideArg();
   });
 
   it.skipIf(!HAS_DB)("fixtures.ts loadFixturePadCfg (feeds the console pad and the device pad)", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     const loaded = await loadFixturePadCfg(s.auth, s.fixtureIds[0]!);
     expect((loaded.cfg as Record<string, unknown>).tiebreak).toBe(true);
+    expect((loaded.cfg as Record<string, unknown>).bestOf, "W2c: the pad reads the match override").toBe(OVERRIDE.bestOf);
     expect(loaded.stageKind).toBe("knockout"); // Task 12 threads it on to the pad
     expectOverlay("knockout");
+    expectOverrideArg();
   });
 
   it.skipIf(!HAS_DB)("player-stats.ts computePlayerStats", async () => {
     // Boardgame rather than a sport that declares {}: chess has a stats model AND a non-empty overlay, so what the
     // site returned is observable, not only the kind it was handed.
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
     await withTenant(s.auth.orgId, (tx) => computePlayerStats(tx, s.divisionId));
     expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
   });
 
   it.skipIf(!HAS_DB)("awarded-state.ts writeAwardedMatchState: ruling 116's walkover is scored under the bracket's cfg", async () => {
     // A two-entrant final whose away side withdrew after winning in: her seat is empty, the award names her.
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
+    await seedOverride({ fixtureId: id });
     const [f] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
       select home_entrant_id, away_entrant_id from fixtures where id = ${id}`;
     const award = { kind: "award", winner: f!.home_entrant_id, loser: f!.away_entrant_id, reason: "withdrew" };
@@ -171,17 +234,26 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     spy.mockClear();
     await withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id));
     expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
     const [row] = await sql<{ summary: { perSide: unknown[] } }[]>`select summary from match_states where fixture_id = ${id}`;
     expect(row!.summary.perSide, "and its score was written").toHaveLength(2);
   });
 
   it.skipIf(!HAS_DB)("admin-fixture-config.ts panel and resnapshot", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
     const panel = await fixtureConfigPanel(s.fixtureIds[0]!);
     expect((panel!.live as Record<string, unknown>).tiebreak).toBe(true);
+    expect((panel!.live as Record<string, unknown>).bestOf, "W2c: the panel's live cfg carries the override").toBe(OVERRIDE.bestOf);
     expectOverlay("knockout");
+    expectOverrideArg();
     spy.mockClear();
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
+    // W2c: the frozen cfg carries the override, so the panel's live cfg must too — or every overridden match would
+    // read "diverged" to staff the moment it started.
+    spy.mockClear();
+    expect((await fixtureConfigPanel(s.fixtureIds[0]!))!.diverged, "a just-frozen overridden fixture has not diverged").toBe(false);
     spy.mockClear();
     const suffix = randomUUID().slice(0, 8);
     const [{ id: actorId }] = await sql<{ id: string }[]>`
@@ -189,8 +261,119 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       values (${`staff-${suffix}@example.test`}, 'Staff', true, 'superadmin') returning id`;
     await resnapshotFixtureConfig(actorId, s.fixtureIds[0]!, "W2a overlay check");
     expectOverlay("knockout");
+    expectOverrideArg();
+    // The hatch's own call is the one that resolves LIVE (snapshot null); it must pass the row's override, not null.
+    const hatch = spy.mock.calls.filter((c) => (c[0] as { config_snapshot: unknown }).config_snapshot === null);
+    expect(hatch, JSON.stringify(spy.mock.calls.map((c) => c[0]))).toHaveLength(1);
+    expect(hatch[0]![0]).toEqual({ config_snapshot: null, rules_override: OVERRIDE });
     const [row] = await sql<{ config_snapshot: Record<string, unknown> }[]>`
       select config_snapshot from fixtures where id = ${s.fixtureIds[0]!}`;
     expect(row!.config_snapshot.tiebreak).toBe(true); // the re-frozen cfg kept the deciders
+    expect(row!.config_snapshot.bestOf, "W2c: and the match override").toBe(OVERRIDE.bestOf);
+  });
+
+  it.skipIf(!HAS_DB)("match-centre-load.ts loadMatchCentre: both reads — the loader's own, and publicFixture's pre-read rows", async () => {
+    // Pre-V347 history (no snapshot), so the public read resolves LIVE cfg — the one shape in which this site's
+    // overlay and override are observable. `readConfigRows` has TWO selects of the fixture row: the one-statement
+    // read, and the snapshot-only read when the caller already holds the division and stage rows.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
+    await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
+    const [fixture] = await sql<PublicFixture[]>`
+      select id, division_id, stage_id, pool_id, round_no, seq_in_round,
+             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+             scheduled_at, venue, court_label,
+             status, outcome, summary, last_seq,
+             lane, is_final, third_place, conditional, stream_url
+      from public_fixtures_v where id = ${s.fixtureIds[0]!}`;
+    expect(fixture, "the public view serves the seeded fixture").toBeDefined();
+    const [div] = await sql<{ module_version: string; config: unknown }[]>`
+      select module_version, config from divisions where id = ${s.divisionId}`;
+    const [stage] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`
+      select kind, config from stages where id = ${s.stageId}`;
+    const ctx: MatchCentreLoadCtx = {
+      orgTz: null,
+      division: { sportKey: "boardgame", moduleVersion: div!.module_version, formatLabel: "classical", tz: null, youth: false, playerNameDisplay: null },
+      locale: "en",
+      hrefs: { division: "/d", competition: "/c", calendar: null },
+      stage: { name: "Knockout", roundLabel: null },
+      slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars),
+    };
+    let paths = 0;
+    for (const c of [ctx, { ...ctx, configRows: { division: { config: div!.config }, stage: { config: stage!.config, kind: stage!.kind } } }]) {
+      spy.mockClear();
+      await loadMatchCentre(sql, fixture!, c);
+      expectOverlay("knockout");
+      expectOverrideOut("knockout");
+      expectOverrideArg();
+      paths++;
+    }
+    expect(paths).toBe(2);
+  });
+
+  it.skipIf(!HAS_DB)("event-import.ts importEvents", async () => {
+    // The dry-run fold resolves the fixture's cfg before it judges the stream; a start-only stream is then refused
+    // not_decided, which writes nothing — the cfg it was judged under is what this case reads.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
+    spy.mockClear();
+    const report = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-w2c-override",
+      streams: [{ fixture: { id: s.fixtureIds[0]! }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error?.code).toBe("import.not_decided"); // the fold ran (a refusal earlier would skip it)
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
+  });
+
+  it.skipIf(!HAS_DB)("org-posts.ts draftPostsForDecidedFixture", async () => {
+    // A decided boardgame knockout fixture in an auto-posting division, its snapshot nulled (the legacy shape) so the
+    // result draft's scorer fold (`extractScorers`) resolves LIVE cfg — where this site's override is observable.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await sql`update divisions set auto_posts = true where id = ${s.divisionId}`;
+    const id = s.fixtureIds[0]!;
+    await seedOverride({ fixtureId: id });
+    const [f] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${id}`;
+    await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.auth.orgId, id, 1, { type: "boardgame.result", payload: { winner: f!.home_entrant_id, method: "checkmate" } });
+    await sql`update fixtures set config_snapshot = null where id = ${id}`;
+    spy.mockClear();
+    await withTenant(s.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, id, true));
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
+  });
+});
+
+describe("W2c: a match override through the real read and write folds (spec §4.4)", () => {
+  // Badminton, a league: `bestOf` is a key badminton declares match-scoped (spec §4.1 Q5), and a league adds no
+  // decider, so every value below is the division's, the override's, or the frozen one — nothing else.
+  it.skipIf(!HAS_DB)("X-SR-2 sequence: no override, an override, a second read, the first event freezes it, then neither a cleared override nor a void moves it", async () => {
+    const badminton = builtinModules.find((m) => m.key === "badminton")!;
+    const declared = (badminton.configSchema.parse(badminton.variants.bwf) as { bestOf: unknown }).bestOf;
+    expect(typeof declared, "the premise: the variant declares a bestOf").toBe("number");
+    expect(declared, "the premise: the override differs from the division's value").not.toBe(OVERRIDE.bestOf);
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    const padBestOf = async () => ((await loadFixturePadCfg(s.auth, id)).cfg as { bestOf?: unknown }).bestOf;
+    const foldBestOf = async () =>
+      ((await withTenant(s.auth.orgId, (tx) => loadFoldInputs(tx, id)))!.cfg as { bestOf?: unknown }).bestOf;
+
+    expect(await padBestOf(), "1. empty case: no override reads the division's value").toBe(declared);
+    await seedOverride({ fixtureId: id });
+    expect(await padBestOf(), "2. the override").toBe(OVERRIDE.bestOf);
+    expect(await padBestOf(), "3. a second read agrees").toBe(OVERRIDE.bestOf);
+    const start = await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    const [frozen] = await sql<{ config_snapshot: { bestOf?: unknown } }[]>`select config_snapshot from fixtures where id = ${id}`;
+    expect(frozen!.config_snapshot.bestOf, "4. the first event froze the override").toBe(OVERRIDE.bestOf);
+    // A raw column write after the freeze is not a correction (Task 14's writer refolds); the snapshot wins.
+    await sql`update fixtures set rules_override = null where id = ${id}`;
+    expect(await padBestOf(), "5. a cleared override moves the pad nothing").toBe(OVERRIDE.bestOf);
+    expect(await foldBestOf(), "5. nor the read fold").toBe(OVERRIDE.bestOf);
+    await appendEvent(s.auth.orgId, id, 1, { type: "core.void", payload: {}, voids: start.event.id });
+    expect(await padBestOf(), "6. after the start is voided the frozen cfg still holds (V347 is monotonic)").toBe(OVERRIDE.bestOf);
+    expect(await foldBestOf(), "6. and the read fold agrees").toBe(OVERRIDE.bestOf);
   });
 });
