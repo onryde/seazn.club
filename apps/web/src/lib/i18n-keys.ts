@@ -3326,6 +3326,7 @@ export type DictionaryKey =
   | "matchCentre.empty.beforeStart"
   | "matchCentre.empty.inPlay"
   | "matchCentre.empty.noDetail"
+  | "matchCentre.empty.onlineInPlay"
   | "matchCentre.endOfOver"
   | "matchCentre.endOfOverNoBowler"
   | "matchCentre.extras"

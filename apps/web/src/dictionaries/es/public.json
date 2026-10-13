@@ -55,6 +55,7 @@
   "matchCentre.atTheCrease": "Bateando",
   "matchCentre.empty.beforeStart": "Los resultados en directo y los momentos destacados aparecerán aquí cuando empiece el partido.",
   "matchCentre.empty.inPlay": "El partido está en juego. Los resultados y los momentos destacados aparecerán aquí a medida que avance el encuentro.",
+  "matchCentre.empty.onlineInPlay": "Esta partida se está jugando en línea. Sigue las jugadas en el tablero en directo.",
   "matchCentre.empty.noDetail": "Este partido se registró solo como resultado, sin detalle jugada a jugada.",
   "matchCentre.thisOver": "Este over",
   "matchCentre.partnership": "Sociedad",

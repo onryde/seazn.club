@@ -55,6 +55,7 @@
   "matchCentre.atTheCrease": "Au guichet",
   "matchCentre.empty.beforeStart": "Les scores en direct et les temps forts s’afficheront ici dès le coup d’envoi.",
   "matchCentre.empty.inPlay": "Le match est en cours. Les scores et les temps forts s’afficheront ici au fil de l’action.",
+  "matchCentre.empty.onlineInPlay": "Cette partie se joue en ligne. Suivez les coups sur l’échiquier en direct.",
   "matchCentre.empty.noDetail": "Ce match n’a été enregistré que comme résultat, sans détail action par action.",
   "matchCentre.thisOver": "Cet over",
   "matchCentre.partnership": "Partenariat",
