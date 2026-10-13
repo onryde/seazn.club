@@ -2279,8 +2279,9 @@ async function hubKnockoutSuite(): Promise<void> {
  *  1. a football semi-final played to full time level, no decider configured (C18): held `needs_decision`; the
  *     organiser settles it by lot for the away side → decided, `settled_lot`, the final's seat holds the winner, and
  *     the public match page says the winner "advanced on lot";
- *  2. a chess semi-final drawn, then `boardgame.tiebreak` at Armageddon naming the away side (ruling 82: the scorer
- *     records the winner) → decided, `tiebreak_armageddon`, the away side seated in the final;
+ *  2. a chess semi-final drawn, then `boardgame.tiebreak` at Armageddon recording the away side as Black, who won
+ *     (W2c BG-KO-2: the scorer records Black and the result and the ENGINE decides who advances) → decided,
+ *     `tiebreak_armageddon`, the away side seated in the final;
  *  3. a generic semi-final `generic.result` level → 409 `LEVEL_RESULT_IN_BRACKET`, the fixture unchanged (the positive
  *     pair: the other semi's non-level result is accepted);
  *  4. a device link's `core.settle` on a held semi-final → 403 `FORBIDDEN`, the fixture unchanged (X-ST-2); the same
@@ -2426,7 +2427,7 @@ async function bracketFinishSuite(): Promise<void> {
     lotLine.includes("advanced on lot") && !lotLine.includes("{winner}") && matchPage.status === 200 && statusLine(matchPage.body) === lotLine,
   );
 
-  // --- 2. Chess: a drawn game goes to its tie-break; Armageddon names the away side. ---
+  // --- 2. Chess: a drawn game goes to its tie-break; Armageddon records the away side as Black, and Black won. ---
   const ARMAGEDDON = "armageddon";
   const chess = await knockout("BF Chess", { sport_key: "boardgame", variant_key: "classical" }, "individual");
   const chessSf = chess.semis[0];
@@ -2442,11 +2443,11 @@ async function bracketFinishSuite(): Promise<void> {
     chessWrites.length === 2 && chessWrites.every((s) => s === 201) && drawnGame?.status === "in_play" && drawnGame.outcome === null,
   );
   const tiebreak = chessSf
-    ? await post(chessSf.id, "boardgame.tiebreak", { rung: ARMAGEDDON, winner: chessAway })
+    ? await post(chessSf.id, "boardgame.tiebreak", { rung: ARMAGEDDON, black: chessAway, result: "black" })
     : undefined;
   const broken = chessSf ? await fixture(chessSf.id) : undefined;
   check(
-    `bracket finish (chess): the Armageddon tie-break naming the away side decides it — status ${broken?.status}, method ${broken?.outcome?.method}`,
+    `bracket finish (chess): the Armageddon with the away side as Black, winning, decides it — status ${broken?.status}, method ${broken?.outcome?.method}`,
     (TIEBREAK_RUNGS as readonly string[]).includes(ARMAGEDDON) &&
       tiebreak?.status === 201 &&
       broken?.status === "decided" &&
