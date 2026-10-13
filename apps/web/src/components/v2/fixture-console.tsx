@@ -1248,7 +1248,7 @@ export function FixtureConsole({
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
 
       {/* Soft suspension warnings (SPEC-1) — one dismissible banner per flagged
@@ -1650,7 +1650,7 @@ export function FixtureConsole({
           refusal that resynced the match into its decided state is still read. Design audit 1.4: in the console's own
           error-banner treatment (the `error` line under the header, the app's house alert) — one red banner style. */}
       {forfeitRefusal !== null && (
-        <p data-testid="forfeit-refusal" role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 [overflow-wrap:anywhere]">
+        <p data-testid="forfeit-refusal" role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 [overflow-wrap:anywhere]">
           {forfeitRefusal}
         </p>
       )}

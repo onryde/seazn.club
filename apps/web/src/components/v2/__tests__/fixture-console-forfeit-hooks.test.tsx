@@ -13,6 +13,7 @@
 // a walkover or Neither — after a bare Start too, beside a disqualification; once something is played retired or
 // disqualified; never withdrew — PF-2), and ruling 118 for chess (its Start is play, so a bare Start offers the
 // retirement), §7 for the refusal (the dialog closes, the reason shows on the console).
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
@@ -367,10 +368,16 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     expect(line).toHaveLength(1);
     expect(textOf(line[0]!)).toBe(en("engineError.ALREADY_DECIDED"));
     // Design audit 1.4: ONE red-banner treatment on the console — the refusal wears the console's own error banner
-    // (fixture-console's `error` line, the app's house alert: rounded-md bg-red-50 px-3 py-2 text-sm text-red-600), not
-    // a second bordered, rounded-lg, red-800 style. role=alert stays.
+    // (fixture-console's `error` line), not a second bordered, rounded-lg, red-800 style. role=alert stays. The banner's
+    // classes are READ from that line in the source, never typed here, so the two cannot drift apart.
+    const src = readFileSync(new URL("../fixture-console.tsx", import.meta.url), "utf8");
+    const banners = [...src.matchAll(/<p className="([^"]+)">\{error\}<\/p>/gu)];
+    expect(banners, "the console's error banner, once").toHaveLength(1);
+    const house = banners[0]![1]!.split(/\s+/u);
     const cls = new Set(String(propsOf(line[0]!).className).split(/\s+/u));
-    for (const token of ["rounded-md", "bg-red-50", "px-3", "py-2", "text-sm", "text-red-600"]) expect(cls.has(token), `the house alert's ${token}`).toBe(true);
+    expect(house.filter((token) => !cls.has(token)), "the refusal wears every class of the console's error banner").toEqual([]);
+    // Design review M-2: the banner's text is red-700 on red-50 (≈5.9:1); red-600 measured 4.4:1, under AA for 14px.
+    expect([cls.has("text-red-700"), cls.has("text-red-600")], "AA red on the banner").toEqual([true, false]);
     for (const token of ["border", "border-red-200", "rounded-lg", "text-red-800"]) expect(cls.has(token), `no second style: ${token}`).toBe(false);
     expect(propsOf(line[0]!).role).toBe("alert");
     // Reopening the dialog clears the old refusal.
