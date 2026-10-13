@@ -14,10 +14,10 @@ import { consumeReferralCookie } from "@/lib/referral";
 import { routes } from "@/lib/routes";
 import { setRequestActor } from "@/server/request-context";
 import { slugify, uniqueSlug } from "@/server/usecases/slugs";
+import { SESSION_DAYS, SESSION_HINT_COOKIE, SESSION_MAX_AGE_S } from "@/lib/session-hint";
 
 const COOKIE_NAME = "seazn_session";
 const ORG_COOKIE = "seazn_org";
-const SESSION_DAYS = 30;
 /** The `aud` this cookie is minted with and verified against (review I2).
  *  Several things in this repo sign with AUTH_SECRET — relay job/page tokens
  *  (`server/relay/tokens.ts`) and check-in QR tokens
@@ -86,19 +86,17 @@ export async function createSession(userId: string): Promise<void> {
     .sign(secretKey());
 
   const jar = await cookies();
-  jar.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_DAYS * 24 * 60 * 60,
-  });
+  const life = { sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: SESSION_MAX_AGE_S } as const;
+  jar.set(COOKIE_NAME, token, { httpOnly: true, ...life });
+  // R2 (T16 fix round 1): the readable signed-in hint — no identity, no authority (lib/session-hint.ts).
+  jar.set(SESSION_HINT_COOKIE, "1", { httpOnly: false, ...life });
 }
 
 export async function destroySession(): Promise<void> {
   const jar = await cookies();
   jar.delete(COOKIE_NAME);
   jar.delete(ORG_COOKIE);
+  jar.delete(SESSION_HINT_COOKIE);
 }
 
 /** Returns the logged-in user, or null. */

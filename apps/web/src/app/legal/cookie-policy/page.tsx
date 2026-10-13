@@ -13,7 +13,7 @@ export default function CookiePolicyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Cookie Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 9 July 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 13 October 2026</p>
         <div className="space-y-6 text-sm text-slate-700">
 
           <section>
@@ -37,6 +37,12 @@ export default function CookiePolicyPage() {
                   <tr>
                     <td className="font-mono">seazn_session</td>
                     <td>Keeps you logged in</td>
+                    <td>30 days</td>
+                    <td>Essential</td>
+                  </tr>
+                  <tr>
+                    <td className="font-mono">seazn_signed_in</td>
+                    <td>Tells our pages that you are logged in, so they only ask for your own details when you are. It holds no personal data.</td>
                     <td>30 days</td>
                     <td>Essential</td>
                   </tr>
