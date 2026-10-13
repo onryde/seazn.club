@@ -13,7 +13,7 @@ import { roundOpenFor } from "@/server/external-play/round-open";
 import { whiteSideOfFold } from "@/server/external-play/colours";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { isPlayableFixtureStatus } from "./external-play/preflight";
-import { fenAfter } from "./external-play/play";
+import { fenAfter } from "@/server/external-play/fen";
 
 type PublicBridgeRow = {
   status: PublicExternalPlay["status"];

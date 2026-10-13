@@ -60,7 +60,8 @@ import {
 } from "./guard";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
-import { act, actAcceptance, fenAfter, playableGame, type PlayAction, type PlayResult } from "./play";
+import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
+import { fenAfter } from "@/server/external-play/fen";
 import { seatPlayer, type SeatResult } from "./preflight";
 import { reconcile } from "./reconcile";
 import { throttledRetryAt } from "./sweep";
