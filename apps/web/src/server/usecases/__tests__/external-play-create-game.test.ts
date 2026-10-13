@@ -1936,6 +1936,184 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     await createGameIfReady(acc.fixtureId, { now: NOW });
     expect(await marker(acc.fixtureId)).toMatchObject({ status: "needs_organiser", challenge_id: GM, create_sent_at: null });
   });
+
+  // ─── N2 (T17 re-review; controller ruling 2026-10-13: add the guard, do not accept the risk) ─────────────────────
+  //
+  // Two fixtures of the SAME two Lichess accounts on the SAME clock (a double round robin, or two divisions) make
+  // challenges that agree on every field Lichess lists. So a recovery must never adopt, or cancel as a stray, the
+  // OTHER fixture's challenge: neither one already stored on another fixture's bridge, nor one whose create is still
+  // in flight there (marked sent, nothing recorded yet — invisible to a "stored" check). An in-process peer cannot be
+  // in flight beside us (the creation queue is serial per challenger), so the peer's in-flight row is LABELLED SQL:
+  // another server process mid-create.
+
+  /** A second fixture of the SAME two entrants in round 2 (opened at OPENED as round 1 is). */
+  const samePairFixture = async (s: Awaited<ReturnType<typeof seed>>): Promise<string> => {
+    const [f] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status,
+                            home_entrant_id, away_entrant_id, scheduled_at)
+      values (${s.stageId}, ${s.divisionId}, ${s.orgId}, 2, 1, ${`n2-${randomUUID().slice(0, 8)}`}, 'scheduled',
+              ${s.home.entrantId}, ${s.away.entrantId}, ${T})
+      returning id`;
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      values (${s.stageId}, ${s.orgId}, 2, ${OPENED}, ${s.ownerUserId})
+      on conflict do nothing`;
+    return f!.id;
+  };
+  /** LABELLED SQL: another process's create for `fixtureId`, marked sent `agoMs` ago and not yet recorded. */
+  const peerInFlight = (fixtureId: string, orgId: string, agoMs = 2_000) => {
+    const at = new Date(NOW.getTime() - agoMs);
+    return sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at, create_sent_at)
+      values (${fixtureId}, ${orgId}, ${T}, ${at}, ${at})`;
+  };
+
+  it("N2: a matching challenge already STORED on another fixture's bridge is neither adopted (in the window) nor cancelled (past it)", async () => {
+    const other = await seed();
+    let checked = 0;
+    for (const [label, age] of [["in the window", MINT_CLAIM_STALE_MS + 1], ["past the window", WINDOW_MS + 1]] as const) {
+      const s = await seed();
+      await crashedAfterSend(s, age);
+      const theirs = freshGameId();
+      await sql`
+        insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+        values (${other.fixtureId}, ${other.orgId}, ${T}, 'ready', ${theirs})
+        on conflict (fixture_id) do update set status = 'ready', challenge_id = excluded.challenge_id`;
+      board.cancelChallenge.mockClear();
+      board.acceptChallenge.mockClear();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(theirs, s)] });
+      await expectRecreated(s.fixtureId, label);
+      expect(board.acceptChallenge, `${label}: the other fixture's challenge was accepted`).not.toHaveBeenCalledWith(
+        expect.objectContaining({ challengeId: theirs }),
+      );
+      expect(board.cancelChallenge, `${label}: the other fixture's game was cancelled`).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("N2: two fixtures, the same two players, the same clock, both in flight — the other's challenge is never adopted or cancelled; with no peer, or a peer of other players, it is (the differential)", async () => {
+    // Positive pairs first: the same lookup with the second fixture NOT in flight adopts the one match — whether that
+    // fixture has no bridge row, a row with nothing sent, a recorded game (the marker cleared, as both recording writes do), or — LABELLED SQL,
+    // a state no writer leaves — a recorded game beside a marker: recorded is not in flight.
+    const notInFlight: Array<[string, ((peer: string, s: Awaited<ReturnType<typeof seed>>) => Promise<unknown>) | null]> = [
+      ["no bridge row", null],
+      ["a bridge row with nothing sent", (peer, s) => sql`
+        insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis) values (${peer}, ${s.orgId}, ${T})`],
+      ["a recorded game", (peer, s) => sql`
+        insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+        values (${peer}, ${s.orgId}, ${T}, 'ready', ${freshGameId()})`],
+      ["a recorded game beside a marker", (peer, s) => sql`
+        insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id, create_sent_at)
+        values (${peer}, ${s.orgId}, ${T}, 'ready', ${freshGameId()}, ${new Date(NOW.getTime() - 2_000)})`],
+    ];
+    for (const [label, bridgeOf] of notInFlight) {
+      const solo = await seed();
+      const peer = await samePairFixture(solo);
+      if (bridgeOf) await bridgeOf(peer, solo);
+      await crashedAfterSend(solo);
+      const loneMatch = freshGameId();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(loneMatch, solo)] });
+      expect(await createGameIfReady(solo.fixtureId, { now: NOW }), `same pair, ${label}: adopted`)
+        .toEqual({ created: true, gameId: loneMatch });
+    }
+
+    // A peer in flight for OTHER players changes nothing: adopted.
+    const strangers = await seed();
+    await peerInFlight(strangers.fixtureId, strangers.orgId);
+    const s0 = await seed();
+    await crashedAfterSend(s0);
+    const m0 = freshGameId();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(m0, s0)] });
+    expect(await createGameIfReady(s0.fixtureId, { now: NOW }), "a peer of other players: adopted").toEqual({ created: true, gameId: m0 });
+
+    // A peer in flight sharing only ONE of the two players is not this pair: adopted. LABELLED SQL: a third fixture's
+    // home entrant carries the shared player as a second member (a pairs entry), so its other seat is somebody else.
+    let oneSided = 0;
+    for (const shared of ["white", "black"] as const) {
+      const s1 = await seed();
+      const third = await seed();
+      await sql`
+        insert into entrant_members (entrant_id, person_id, org_id)
+        values (${third.home.entrantId}, ${shared === "white" ? s1.home.personId : s1.away.personId}, ${third.orgId})`;
+      await peerInFlight(third.fixtureId, third.orgId);
+      await crashedAfterSend(s1);
+      const m1 = freshGameId();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(m1, s1)] });
+      expect(await createGameIfReady(s1.fixtureId, { now: NOW }), `a peer sharing only ${shared}: adopted`)
+        .toEqual({ created: true, gameId: m1 });
+      oneSided += 1;
+    }
+    expect(oneSided).toBe(2);
+
+    // The same two players' second fixture is mid-create: its challenge is the one listed. Inside the window it
+    // cannot be told from ours, so the board holds — nothing accepted, nothing cancelled, nothing sent.
+    const s = await seed();
+    const peer = await samePairFixture(s);
+    await peerInFlight(peer, s.orgId);
+    await crashedAfterSend(s);
+    const peers = freshGameId();
+    board.acceptChallenge.mockClear();
+    board.cancelChallenge.mockClear();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(peers, s)] });
+    await expectHeld(s.fixtureId, "in the window", "peer_in_flight");
+    expect((await marker(s.fixtureId))?.last_error, "names the peer").toContain(peer);
+    expect(board.acceptChallenge, "the peer's challenge was accepted").not.toHaveBeenCalled();
+    expect(board.cancelChallenge).not.toHaveBeenCalled();
+    // The second call: the peer commits its game (LABELLED SQL, as its own ready write leaves it), an organiser
+    // re-arms this board — the challenge is now the peer's on record, so this board makes its own.
+    await sql`
+      update fixture_external_play set status = 'ready', challenge_id = ${peers}, mint_claimed_at = null, create_sent_at = null
+       where fixture_id = ${peer}`;
+    await sql`update fixture_external_play set status = 'pending', needs_reason = null where fixture_id = ${s.fixtureId}`;
+    await expectRecreated(s.fixtureId, "after the peer committed");
+    expect(board.acceptChallenge, "after the peer committed").not.toHaveBeenCalledWith(expect.objectContaining({ challengeId: peers }));
+    expect(board.cancelChallenge).not.toHaveBeenCalled();
+    expect((await marker(peer))?.challenge_id, "still the peer's").toBe(peers);
+
+    // Past the window the same match would be a stray — but it may be the peer's, so it is not cancelled; with
+    // nothing else of ours found, this board re-creates its own game.
+    const late = await seed();
+    const latePeer = await samePairFixture(late);
+    await peerInFlight(latePeer, late.orgId);
+    await crashedAfterSend(late, WINDOW_MS + 1);
+    const lateMatch = freshGameId();
+    board.cancelChallenge.mockClear();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(lateMatch, late)] });
+    await expectRecreated(late.fixtureId, "past the window");
+    expect(board.cancelChallenge, "the peer's challenge was cancelled as a stray").not.toHaveBeenCalled();
+  });
+
+  it("N2: an id another fixture STORES while this call adopts it is refused at the commit — never thrown, never recorded twice", async () => {
+    const other = await seed();
+    let checked = 0;
+    for (const acceptOk of [true, false]) {
+      const s = await seed();
+      await crashedAfterSend(s);
+      const theirs = freshGameId();
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(theirs, s)] });
+      board.acceptChallenge.mockImplementationOnce(async () => {
+        // Another process committed this id first (its own accept, or its hold after a failed one).
+        await sql`
+          insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+          values (${other.fixtureId}, ${other.orgId}, ${T}, 'ready', ${theirs})
+          on conflict (fixture_id) do update set status = 'ready', challenge_id = excluded.challenge_id`;
+        return acceptOk ? { ok: true } : { ok: false, code: "not_found", raw: "accept refused" };
+      });
+      const label = acceptOk ? "accepted, then the ready commit" : "accept failed, then the hold that records it";
+      expect(await createGameIfReady(s.fixtureId, { now: NOW }), `${label}: refused, not thrown`)
+        .toEqual({ created: false, reason: "not_ready" });
+      const row = await marker(s.fixtureId);
+      // Refused: the claim goes, the marker STAYS (whoever comes next looks again), nothing is recorded here.
+      expect(row, label).toMatchObject({ status: "pending", challenge_id: null, mint_claimed_at: null });
+      expect(row?.create_sent_at, `${label}: marker kept`).not.toBeNull();
+      expect(row?.last_error, label).toBe(`recover:recorded_elsewhere:${theirs}`);
+      expect((await marker(other.fixtureId))?.challenge_id, `${label}: still the other fixture's`).toBe(theirs);
+      expect(board.cancelChallenge, "the other fixture's game is never cancelled").not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
 });
 
 // Fix round 1, Minor b: a game this call made but could not record is closed

@@ -484,11 +484,17 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
       // The challenge EXISTS at Lichess. Record it, so the unique index makes
       // a second create impossible and reconcile can still find the game, and
       // hand the fixture to an organiser.
-      const recorded = await holdForOrganiser(fixtureId, claim, {
-        needsReason: needsReasonFor(acc.code),
-        lastError: `accept:${acc.code}: ${acc.raw}`,
-        game: { challengeId: gameId, plan },
-      });
+      let recorded: boolean;
+      try {
+        recorded = await holdForOrganiser(fixtureId, claim, {
+          needsReason: needsReasonFor(acc.code),
+          lastError: `accept:${acc.code}: ${acc.raw}`,
+          game: { challengeId: gameId, plan },
+        });
+      } catch (err) {
+        if (!isChallengeRecordedElsewhere(err)) throw err;
+        return refuseRecordedElsewhere(fixtureId, claim, gameId);
+      }
       if (recorded) return { stage: "held" };
       if (sentHere) await closeStray(fixtureId, gameId, whiteToken, "accept_failed_claim_lost");
       return { stage: "lost" };
@@ -498,7 +504,9 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   // Ready: create + accept. T10's first accepted move flips it to `live`;
   // nothing here writes 'live'. white_side and BOTH Lichess ids are what T8's
   // re-entry after T+20 reads to recognise a seated player.
-  const ready = await sql<{ fixture_id: string }[]>`
+  let ready: { fixture_id: string }[];
+  try {
+    ready = await sql<{ fixture_id: string }[]>`
     update fixture_external_play
        set status = 'ready', challenge_id = ${gameId}, white_side = ${plan.whiteSide},
            white_lichess_id = ${plan.white.lichessId}, black_lichess_id = ${plan.black.lichessId},
@@ -507,6 +515,10 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
            mint_claimed_at = null, create_sent_at = null, last_error = null, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}
      returning fixture_id`;
+  } catch (err) {
+    if (!isChallengeRecordedElsewhere(err)) throw err;
+    return refuseRecordedElsewhere(fixtureId, claim, gameId);
+  }
   if (ready.length === 0) {
     // Lost the claim to a takeover mid-flight: do NOT record, do not publish.
     // A game THIS call made is closed; an adopted one is left for whoever
@@ -515,6 +527,22 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     return { stage: "lost" };
   }
   return { stage: "created", gameId };
+}
+
+/** N2 (T17 re-review; controller ruling 2026-10-13): fixture_external_play_challenge_idx is UNIQUE — a write of a game
+ *  id some other fixture stored first. */
+function isChallengeRecordedElsewhere(err: unknown): boolean {
+  const e = err as { code?: string; constraint_name?: string };
+  return e?.code === "23505" && e.constraint_name === "fixture_external_play_challenge_idx";
+}
+
+/** N2: the id this call adopted was stored by another fixture before this call could record it — that fixture's game,
+ *  never this one's, and never cancelled. Refused, never thrown: the claim goes and the marker STAYS, so whoever comes
+ *  next looks again (and finds the id recorded, so not a candidate). */
+async function refuseRecordedElsewhere(fixtureId: string, claim: Date, gameId: string): Promise<QueueStep> {
+  log.warn({ fixtureId, challengeId: gameId }, "lichess: an adopted game was recorded by another fixture first; refused");
+  await releaseClaim(fixtureId, claim, `recover:recorded_elsewhere:${gameId}`);
+  return { stage: "lost" };
 }
 
 /** What an earlier claimant's send left at Lichess, as far as can be shown:
@@ -602,7 +630,9 @@ function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
  * failing (or a page too full to prove absence) is "unknown", never "none":
  * only proof of absence may re-create. A candidate is White's challenge to
  * Black that is still open, or White's ongoing game, as White, against Black;
- * one already recorded on any bridge row is another fixture's game, not ours.
+ * one already recorded on any bridge row is another fixture's game, not ours,
+ * and beside another fixture of the same two players with a create out and
+ * nothing recorded (N2), nothing is adopted and no stray is cancelled.
  * Each surviving candidate is then VERIFIED (N1): a game through its export
  * (in parallel — one more call-time), a challenge on its own fields and only
  * inside the window (L1); an id in both lists is the game. Exactly one
@@ -634,12 +664,42 @@ async function findSentGame(
     if (g.color === "white" && g.opponentId?.toLowerCase() === black) games.add(g.gameId);
   }
   const all = [...new Set([...challenges.keys(), ...games])];
+  // N2 (T17 re-review; controller ruling 2026-10-13): another fixture of the SAME two players on the same clock (a
+  // double round robin, two divisions) makes a challenge that agrees with ours on every field Lichess lists. ONE
+  // statement — one snapshot — reads both what is already stored on any bridge (another fixture's game: never a
+  // candidate, never a stray) and which other fixtures of these two players have a create out and nothing recorded
+  // (a PEER in flight, invisible to the first read). A peer that commits after this read was in flight in it; one
+  // that sends after it cannot be in the lists already read. Conservative on purpose: any member of either entrant,
+  // colours and age unchecked — a peer with the colours reversed cannot list a candidate here (the lists are
+  // filtered to White → Black), so at worst it costs a hold, never a wrong adoption; a merged-away member counts too.
+  const peers: string[] = [];
   if (all.length > 0) {
-    const recorded = await sql<{ challenge_id: string }[]>`
-      select challenge_id from fixture_external_play where challenge_id = any(${all})`;
-    for (const r of recorded) {
-      challenges.delete(r.challenge_id);
-      games.delete(r.challenge_id);
+    const seen = await sql<{ kind: string; id: string }[]>`
+      select 'recorded' as kind, challenge_id as id from fixture_external_play where challenge_id = any(${all})
+      union all
+      select 'peer' as kind, b.fixture_id::text as id
+        from fixture_external_play b
+        join fixtures f on f.id = b.fixture_id
+       where b.fixture_id <> ${plan.fixtureId} and b.challenge_id is null and b.create_sent_at is not null
+         and exists (
+           select 1 from entrant_members em
+             join persons p on p.id = em.person_id
+             join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
+            where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+              and uea.external_user_id = ${plan.white.lichessId})
+         and exists (
+           select 1 from entrant_members em
+             join persons p on p.id = em.person_id
+             join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
+            where em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+              and uea.external_user_id = ${plan.black.lichessId})`;
+    for (const r of seen) {
+      if (r.kind === "peer") {
+        peers.push(r.id);
+        continue;
+      }
+      challenges.delete(r.id);
+      games.delete(r.id);
     }
   }
 
@@ -655,10 +715,15 @@ async function findSentGame(
     else if (v === "ours") strays.push(id);
   }
 
+  // N2: with a peer in flight a stray may be the PEER's challenge — left, never cancelled.
+  if (peers.length > 0 && strays.length > 0) {
+    log.warn({ fixtureId: plan.fixtureId, strays, peers }, "lichess: a stray matching ours may be another fixture's create; not cancelled");
+  }
+  const toCancel = peers.length > 0 ? [] : strays;
   const gameIds = [...games];
   const [metas] = await Promise.all([
     Promise.all(gameIds.map((id) => exportGameMeta(id))),
-    Promise.all(strays.map((id) => cancelStray(plan.fixtureId, id, whiteToken))),
+    Promise.all(toCancel.map((id) => cancelStray(plan.fixtureId, id, whiteToken))),
   ]);
   const now = clock();
   const ours: Array<{ id: string; kind: "game" | "challenge" }> = [];
@@ -672,6 +737,10 @@ async function findSentGame(
     tally(id, "game", m.ok ? gameVerdict(m.meta, plan, sentAt, now) : "unverified");
   });
   for (const [id, v] of open) tally(id, "challenge", v);
+  // N2: beside a peer in flight, nothing here can be told from the peer's create — held, never adopted.
+  if (peers.length > 0 && ours.length + unverified.length > 0) {
+    return { kind: "unknown", why: `peer_in_flight:${peers.join(",")}: ${[...ours.map((o) => o.id), ...unverified].join(",")}` };
+  }
   if (unverified.length > 0) return { kind: "unknown", why: `unverified: ${unverified.join(",")}` };
   if (ours.length > 1) return { kind: "unknown", why: `ambiguous: ${ours.map((o) => o.id).join(",")}` };
   if (ours.length === 1) return { kind: ours[0]!.kind, id: ours[0]!.id };
