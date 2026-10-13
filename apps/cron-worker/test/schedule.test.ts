@@ -76,8 +76,16 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
   it("the external-play row is in the table exactly once, on the spec's */5 trigger (chess in-page design §4)", () => {
     expect(JOBS.filter((j) => j.id === "external-play")).toEqual([
       // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
-      // re-send with `skipped`. No failureCounts: its report carries failures as a list, not a number (drift.test.ts R3).
-      { id: "external-play", path: "/api/cron/external-play", trigger: EVERY_5, due: { kind: "every" }, retry: false, manual: true },
+      // re-send with `skipped`. Final review I-1: a failed fixture and a skipped pass are both failures to the monitor.
+      {
+        id: "external-play",
+        path: "/api/cron/external-play",
+        trigger: EVERY_5,
+        due: { kind: "every" },
+        retry: false,
+        manual: true,
+        failureCounts: ["data.failed", "data.skipped"],
+      },
     ]);
   });
 
@@ -126,6 +134,9 @@ describe("JOBS table", () => {
       "billing-grant": ["data.failed"],
       // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing).
       "stream-tick": ["data.failed"],
+      // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
+      // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
+      "external-play": ["data.failed", "data.skipped"],
     });
   });
 });
