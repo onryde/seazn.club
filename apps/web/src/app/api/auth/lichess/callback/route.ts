@@ -102,10 +102,12 @@ export async function GET(req: Request) {
         externalUserId: account.id,
         username: account.username,
         // The grant we ASKED for: Lichess does not return the granted list on
-        // this endpoint, which is why assertLichessConsentForPlay checks
-        // `board:play` membership rather than trusting a stored list blindly —
-        // a narrowed grant surfaces as a 401 at the first submission and T12
-        // routes it to the organiser queue.
+        // this endpoint. assertLichessConsentForPlay (via lichessGrantPlays)
+        // requires a consent timestamp and EVERY scope in PLAY_SCOPES on this
+        // stored list, so a link made under a shorter list re-consents. A
+        // grant the user narrowed at Lichess is not visible here: it surfaces
+        // as a 401 at the first call that needs it, and T12 routes that to the
+        // organiser queue.
         scopes: [...PLAY_SCOPES],
         token: accessToken,
       });
