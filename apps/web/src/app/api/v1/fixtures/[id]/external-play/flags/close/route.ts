@@ -11,8 +11,9 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
-    const body = await parseBody(req, CloseExternalPlayFlags);
+    // Auth first (fix round 1, M3): a caller who may not decide this board learns nothing about the body's schema.
     const auth = await requireResourceAuth(req, "fixture", id, "write");
+    const body = await parseBody(req, CloseExternalPlayFlags);
     return closeExternalPlayFlags(auth, id, body.ids);
   });
 }
