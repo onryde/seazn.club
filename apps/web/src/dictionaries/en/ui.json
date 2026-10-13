@@ -6223,6 +6223,7 @@
   "arbiter.notice.settledTiebreak": "Recorded as a draw. This knockout needs a winner: pick who goes through.",
   "arbiter.notice.alreadyResolved": "This board already has its result.",
   "arbiter.notice.boardChanged": "This board changed while you were deciding — reload to see it.",
+  "arbiter.notice.onlineGameOver": "This board's online game is over. Record its result on the scoring pad.",
   "arbiter.notice.needsWinner": "A drawn knockout game needs a winner. Pick who goes through.",
   "arbiter.notice.settleOwnBoard": "You play on this board, so another organiser must settle it.",
   "arbiter.notice.overridden": "This board now plays without video. It's in the audit log.",

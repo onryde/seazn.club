@@ -6223,6 +6223,7 @@
   "arbiter.notice.settledTiebreak": "Vastgelegd als remise. Deze knock-out heeft een winnaar nodig: kies wie doorgaat.",
   "arbiter.notice.alreadyResolved": "Dit bord heeft al een uitslag.",
   "arbiter.notice.boardChanged": "Dit bord is veranderd terwijl je besliste — herlaad om het te zien.",
+  "arbiter.notice.onlineGameOver": "De online partij van dit bord is afgelopen. Leg de uitslag vast op het scorepad.",
   "arbiter.notice.needsWinner": "Een knock-outpartij in remise heeft een winnaar nodig. Kies wie doorgaat.",
   "arbiter.notice.settleOwnBoard": "Je speelt op dit bord, dus een andere organisator moet de uitslag vaststellen.",
   "arbiter.notice.overridden": "Dit bord speelt nu zonder video. Het staat in het auditlogboek.",

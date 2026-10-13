@@ -48,6 +48,9 @@ import {
   type ReconcileTrigger,
 } from "../external-play/reconcile";
 import { holdForOrganiser } from "../external-play/result";
+import { resolveExternalPlay } from "../external-play/resolve";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { offersSettle } from "@/lib/arbiter-view";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
@@ -2445,3 +2448,58 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
     for (const [name, n] of Object.entries(counters)) expect(n, `path counter ${name}`).toBeGreaterThan(0);
   });
 });
+
+// T16 fix round 3, N4 (controller ruling (b)). A board whose online game ended and whose result the organiser then
+// voided on the pad: the fixture is open again, the bridge stays finished — the bridge cannot reopen a game Lichess
+// ended (Gap 3). The online settle is not the tool for it: the server answers ONLINE_GAME_OVER, pointing to the
+// scoring pad, never "already has its result" (it has none), and the arbiter panel offers no settle. Reached through
+// the real producers: reconcile reads the recorded game end, T12 writes the result, the pad's void undoes it.
+describe.runIf(HAS_DB)("an online game over, its result voided on the pad (N4)", () => {
+  const refusalOf = (p: Promise<unknown>) =>
+    p.then(
+      (ok) => ({ ok }),
+      (err: unknown) => (err instanceof HttpError ? { refused: [err.status, err.code] } : Promise.reject(err)),
+    );
+
+  it("settling is refused ONLINE_GAME_OVER and writes nothing; the panel offers no settle — before the void it is ALREADY_RESOLVED", async () => {
+    const g = await liveGame();
+    serveStream(gameFull(g, EXPIRED_2));
+    const { deps } = observed();
+    expect(await reconcile(g.fixtureId, "game_end", deps), "premise: the game end wrote the result").toMatchObject({
+      result: { wrote: "decided" },
+      finished: true,
+    });
+    const organiser = { orgId: g.orgId, via: "session", userId: g.ownerUserId, role: "owner", keyId: null } as AuthCtx;
+    const panelBoard = async () => (await loadArbiterRound(organiser, g.divisionId))!.boards.find((b) => b.fixtureId === g.fixtureId)!;
+
+    // Before the void: the board has its result — the other answer, and no settle either.
+    expect(await refusalOf(resolveExternalPlay(organiser, g.fixtureId, "home_wins"))).toEqual({ refused: [409, "ALREADY_RESOLVED"] });
+    expect(offersSettle(await panelBoard()), "a decided board offers no settle").toBe(false);
+
+    // The organiser voids the result on the pad (the pad's own write).
+    const [res] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${g.fixtureId} and type = 'boardgame.result'`;
+    const [{ last }] = await sql<{ last: number }[]>`select max(seq)::int as last from score_events where fixture_id = ${g.fixtureId}`;
+    await scoreEvent(organiser, g.fixtureId, { expected_seq: last, type: "core.void", payload: { event_id: res!.id } });
+    expect(await fixtureStatus(g.fixtureId), "premise: the void opened the fixture again").toBe("in_play");
+    expect((await rowOf(g.fixtureId)).status, "premise: the bridge stays finished").toBe("finished");
+    const [{ n: before }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${g.fixtureId}`;
+
+    // Every way to settle gets the same true answer, and none writes.
+    let refused = 0;
+    for (const kind of ["home_wins", "away_wins", "draw", "no_result"] as const) {
+      expect(await refusalOf(resolveExternalPlay(organiser, g.fixtureId, kind)), kind).toEqual({ refused: [409, "ONLINE_GAME_OVER"] });
+      refused++;
+    }
+    expect(refused, "anti-vacuity: every settle kind asked").toBe(4);
+    const [{ n: after }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${g.fixtureId}`;
+    expect(after, "nothing written").toBe(before);
+    expect((await rowOf(g.fixtureId)).status).toBe("finished");
+
+    // The panel, from the same loader the page uses: no settle offered on it.
+    const b = await panelBoard();
+    expect([b.state.kind, b.canSettle, b.playable], "the panel reads the online game as over").toEqual(["result", false, false]);
+    expect(offersSettle(b), "the panel offers no settle the server refuses").toBe(false);
+  });
+});
+

@@ -34,6 +34,14 @@ export function boardIsOver(state: ArbiterBoardState): boolean {
   return state.kind === "result" || state.kind === "cancelled";
 }
 
+/** Whether the panel offers "Settle the result now…" on this board: never on a board that is over; through the
+ *  resolve route when an online game is on file and still to be decided (`canSettle`), else on the board's match page
+ *  when it has one. One predicate for the panel and the tests that drive the loader into it (T16 fix round 3, N4: an
+ *  online game over, its result voided on the pad, is settled on the pad — never offered here). */
+export function offersSettle(board: Pick<ArbiterBoard, "state" | "canSettle" | "fixtureNo">): boolean {
+  return !boardIsOver(board.state) && (board.canSettle || board.fixtureNo !== null);
+}
+
 export type ArbiterPlayer = {
   name: string;
   /** The seat's ONE player (guard.ts `loadSides`), or null when the side has
