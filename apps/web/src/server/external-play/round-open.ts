@@ -38,6 +38,24 @@ export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number):
   return rows[0] ?? null;
 }
 
+/** The key `roundOpensOfDivisions` answers by: one (stage, round). */
+export function roundKey(stageId: string, roundNo: number): string {
+  return `${stageId}:${roundNo}`;
+}
+
+/** T16 fix round 1, M8 + R4 — the same read for many rounds at once: every opened (stage, round) of these divisions,
+ *  keyed by `roundKey`. A round absent from the answer has never been opened. One statement, for the readers that
+ *  ask about a whole division (the Open-round confirmation) or a whole competition (the ledger). */
+export async function roundOpensOfDivisions(db: AnySql, divisionIds: readonly string[]): Promise<Map<string, RoundOpenRow>> {
+  if (divisionIds.length === 0) return new Map();
+  const rows = await db<(RoundOpenRow & { stageId: string; roundNo: number })[]>`
+    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.stage_id as "stageId", o.round_no as "roundNo"
+      from stage_round_opens o
+      join stages s on s.id = o.stage_id
+     where s.division_id = any(${divisionIds as string[]}::uuid[])`;
+  return new Map(rows.map(({ stageId, roundNo, ...open }) => [roundKey(stageId, roundNo), open]));
+}
+
 /** `null` ⇒ this fixture's round has never been opened (or there is no such
  *  fixture). Resolves the fixture's (stage, round) and asks `roundOpenAt`. */
 export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<RoundOpenRow | null> {

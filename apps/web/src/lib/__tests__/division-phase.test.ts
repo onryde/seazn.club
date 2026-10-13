@@ -31,7 +31,7 @@ const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: false, stageId: "st1", awaitsSeedDraw: false, awaitsSettle: false, ...o,
+  hasScorer: false, stageId: "st1", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false, ...o,
 });
 /**
  * M1 (fix round I): a stage that owes its DRAW — the only shape that raises
@@ -415,6 +415,23 @@ describe("resolveAttention", () => {
     // field the desk and the division page would disagree about one division.
     expect(new Set(phases).size).toBe(1);
   });
+  it("resolvePhase never reads awaitsRoundOpen — the division page passes false (T16 fix round 1, R4)", () => {
+    // Every phase shape this suite builds a fixture list for, each with the field both ways.
+    const shapes: PhaseInput[] = [
+      input(),
+      input({ fixtures: [fx({ status: "in_play" })] }),
+      input({ fixtures: [fx({ status: "decided" }), fx({ id: "f2", status: "scheduled", scheduledAt: "2026-09-05T07:00:00Z" })] }),
+      input({ divisionStatus: "scheduled", fixtures: [fx({ scheduledAt: "2026-09-05T07:00:00Z" })] }),
+      input({ stages: [drawable()], fixtures: [seedSlotFx("fin")] }),
+    ];
+    let checked = 0;
+    for (const shape of shapes) {
+      const flip = (v: boolean) => resolvePhase({ ...shape, fixtures: shape.fixtures.map((f) => ({ ...f, awaitsRoundOpen: v })) });
+      expect(flip(true), JSON.stringify(shape.fixtures.map((f) => f.status))).toBe(flip(false));
+      checked += 1;
+    }
+    expect(checked).toBe(shapes.length);
+  });
   // K1 (fix round G, Critical — instance NINE), the attention half: the
   // unseeded stage the finding names had NO row of any kind, so nothing on
   // the page asked for the one action that unblocks it.
@@ -688,6 +705,20 @@ describe("resolveAttention", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "result_missing", count: 1, fixtureIds: ["r"] });
   });
+  // T16 fix round 1, R4 (D12): a board of an online round nobody has opened cannot be played — nobody is invited and
+  // nobody can take a seat — so its slot passing owes NO result. The run sheet already says so; the ledger now agrees.
+  it("R4: result_missing skips a board whose online round is not opened; the same board once opened is owed", () => {
+    const past = { scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 };
+    const missing = (fixtures: PhaseFixture[]) => resolveAttention(input({ fixtures })).find((a) => a.kind === "result_missing");
+    expect(missing([fx({ id: "u", ...past, awaitsRoundOpen: true })]), "the empty case: only an unopened board").toBeUndefined();
+    expect(missing([fx({ id: "u", ...past, awaitsRoundOpen: false })]), "the positive pair").toEqual({
+      kind: "result_missing", count: 1, fixtureIds: ["u"],
+    });
+    // Mixed: the unopened board is neither counted nor named.
+    expect(
+      missing([fx({ id: "u", ...past, awaitsRoundOpen: true }), fx({ id: "o", ...past }), fx({ id: "o2", ...past })]),
+    ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
+  });
   it("result_missing is not raised while the match window is still open", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "result_missing")).toBe(false);
@@ -947,9 +978,9 @@ describe("isUnscheduledFixture", () => {
 
   it("agrees with the `unscheduled` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
-      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
+      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
@@ -989,9 +1020,9 @@ describe("isResultMissing", () => {
 
   it("agrees with the `result_missing` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
-      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
+      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false },
     ];
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
