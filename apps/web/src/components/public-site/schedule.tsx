@@ -85,6 +85,8 @@ export interface ScheduleWatchCopy {
   live: string;
   final: string;
   notOpened: string;
+  /** T17 owner change (2026-10-13): the round open, no move yet. */
+  starting: string;
 }
 
 export interface ScheduleCopy {
@@ -200,7 +202,8 @@ function sideLines(f: PublicFixture): [string, string] | null {
 }
 
 /** I4 — one online board's watch link, as a label in its row: a live pill, the final position with its score,
- *  or the quiet "round not opened" line. */
+ *  the quiet "round not opened" line, or — from the round's open until the first move (T17 owner change,
+ *  2026-10-13) — "starting", between the two: an outlined pill with an empty ring where Live has a filled one. */
 function WatchChip({ link, copy }: { link: PublicWatchLink; copy: ScheduleWatchCopy }) {
   const base = "col-span-2 col-start-2 mt-1 justify-self-start";
   if (link.kind === "live") {
@@ -212,6 +215,18 @@ function WatchChip({ link, copy }: { link: PublicWatchLink; copy: ScheduleWatchC
       >
         <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
         {copy.live}
+      </span>
+    );
+  }
+  if (link.kind === "starting") {
+    return (
+      <span
+        data-testid="schedule-watch"
+        data-kind="starting"
+        className={`${base} inline-flex items-center gap-1.5 rounded-full border border-accent-line px-2.5 py-0.5 text-xs font-semibold text-accent-strong`}
+      >
+        <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full border border-current" />
+        {copy.starting}
       </span>
     );
   }

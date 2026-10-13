@@ -448,8 +448,8 @@ export async function loadMatchCentre(
   // only for a sport that can play online, and only while the fixture is still scheduled (in play already reads
   // live; a settled one keeps its state). Lazy, so no other sport's page loads the online-play reader at all.
   const askOnline = fixture.status === "scheduled" && supportsOnlinePlay(ctx.division.sportKey);
-  const readOnlineGame = async () => (await import("@/server/usecases/external-play-read")).loadOnlineGameInPlay(fixture.id);
-  const [eventRows, configRows, lineups, feeders, sideRead, onlineGameInPlay] = await Promise.all([
+  const readOnlineGame = async () => (await import("@/server/usecases/external-play-read")).loadOnlineHeader(fixture.id);
+  const [eventRows, configRows, lineups, feeders, sideRead, onlineHeader] = await Promise.all([
     sql<
       {
         id: string;
@@ -470,7 +470,7 @@ export async function loadMatchCentre(
     }),
     seatToName ? readFeeders() : null,
     readSides(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay }),
-    askOnline ? readOnlineGame() : false,
+    askOnline ? readOnlineGame() : { onlineGameInPlay: false, onlineGameStarting: false },
   ]);
 
   const envelopes: EventEnvelope[] = eventRows.map((r) => ({
@@ -586,7 +586,8 @@ export async function loadMatchCentre(
     resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
     doubleWalkoverNext,
     unseatedForfeitLoser: unseated,
-    onlineGameInPlay,
+    onlineGameInPlay: onlineHeader.onlineGameInPlay,
+    onlineGameStarting: onlineHeader.onlineGameStarting,
   };
   return buildMatchCentre(input);
 }

@@ -154,7 +154,8 @@ export type WatchLinkRow = Omit<PublicFixtureRow, "status" | "moves_uci" | "whit
 };
 
 /** The Fixtures list's link for one online board (I4), or null when there is nothing to watch — a bye, a no-show,
- *  a game not begun; the row says the rest. Before the round opens: "Round not opened yet" (D12). A game being
+ *  a game not begun; the row says the rest. Before the round opens: "Round not opened yet" (D12). From the open
+ *  until the first move, a board a game can still start on is "Starting" (T17 owner change, 2026-10-13). A game being
  *  played — a held seat whose game goes on (a revoked token) included — is "Watch live". A game over — the fixture
  *  out of play, the bridge closed, or a knockout draw held for its winner — is its final position, with the score.
  *  A board held for the organiser mid-question offers nothing: the fixture page says why. */
@@ -162,8 +163,19 @@ export function watchLinkOf(row: WatchLinkRow): PublicWatchLink | null {
   const open = isPlayableFixtureStatus(row.fixture_status);
   if (open && !row.round_opened) return { kind: "not_opened" };
   const hasGame = row.status !== null && row.challenge_id !== null && row.move_count > 0;
-  if (!hasGame) return null;
   const hold = row.status === "needs_organiser" ? publicHoldOf(row.needs_reason) : null;
+  if (!hasGame) {
+    // Starting: the watch panel's "not started" — the round open, no move on file — for a fixture still to be played
+    // (an in-play one reads Live on its own row), both players paired (a bye has no game to start), no hold the
+    // organiser owes an answer to, and the bridge not closed (a game that ended with no move is not starting).
+    const starting =
+      row.fixture_status === "scheduled" &&
+      row.home_entrant_id !== null &&
+      row.away_entrant_id !== null &&
+      row.status !== "finished" &&
+      hold === null;
+    return starting ? { kind: "starting" } : null;
+  }
   if (!open || row.status === "finished" || hold === "tiebreak") {
     return { kind: "final", score: publicResultOf(row)?.score ?? "" };
   }
@@ -189,8 +201,20 @@ export async function loadDivisionWatchLinks(divisionId: string): Promise<Record
  *  play for a Lichess game (its result is written when the game ends), so the header asks this instead. A fixture with
  *  no bridge row is not. */
 export async function loadOnlineGameInPlay(fixtureId: string): Promise<boolean> {
+  return (await loadOnlineHeader(fixtureId)).onlineGameInPlay;
+}
+
+/** The match centre header's two online inputs for one board, read off the Fixtures list's link for it — so the list
+ *  and the header never disagree: "Watch live" is R3's live fold, "Starting" (T17 owner change, 2026-10-13) the
+ *  starting chip. One link kind, so at most one is true. */
+export function onlineHeaderOf(link: PublicWatchLink | null): { onlineGameInPlay: boolean; onlineGameStarting: boolean } {
+  return { onlineGameInPlay: link?.kind === "live", onlineGameStarting: link?.kind === "starting" };
+}
+
+/** `onlineHeaderOf` for a fixture, in one read. A fixture with no row in the public view is neither. */
+export async function loadOnlineHeader(fixtureId: string): Promise<{ onlineGameInPlay: boolean; onlineGameStarting: boolean }> {
   const [row] = await watchLinkRows({ fixtureId });
-  return row !== undefined && watchLinkOf(row)?.kind === "live";
+  return onlineHeaderOf(row === undefined ? null : watchLinkOf(row));
 }
 
 /** The rows `watchLinkOf` reads — a public read: `public_fixtures_v` decides which fixtures exist. ONE query for the

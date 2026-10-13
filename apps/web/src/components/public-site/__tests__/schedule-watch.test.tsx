@@ -100,6 +100,36 @@ describe("Schedule — the online watch links (I4)", () => {
     expect(checked).toBe(4);
   });
 
+  // T17 owner change (2026-10-13): from the round's open until the first move the row says the board is starting —
+  // between "Round not opened yet" (quiet text) and "Watch live" (a filled pill, a filled dot): an outlined pill and
+  // an EMPTY ring.
+  it("starting: its own label in all four locales — an outlined pill with a ring dot, inside its row's link", () => {
+    const en = publicWatchCopy((k) => msgFor("en", k));
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const copy = publicWatchCopy((k) => msgFor(loc, k));
+      expect(copy.starting.trim().length > 0 && !copy.starting.startsWith("externalPlay."), `${loc}: authored`).toBe(true);
+      expect(copy.starting, `${loc}: not the live words`).not.toBe(copy.live);
+      expect(copy.starting, `${loc}: not the not-opened words`).not.toBe(copy.notOpened);
+      if (loc !== "en") expect(copy.starting, `${loc}: translated`).not.toBe(en.starting);
+      const html = render({ links: { ...LINKS, f4: { kind: "starting" } }, copy });
+      const r = rows(html);
+      const label = r.f4!.match(/<span data-testid="schedule-watch" data-kind="starting" class="([^"]*)">(<span[^>]*><\/span>[^<]*)<\/span>/);
+      expect(label, `${loc}: the starting label in row f4`).not.toBeNull();
+      const [, cls, inner] = label! as unknown as [string, string, string];
+      expect(cls, `${loc}: outlined, not filled`).toMatch(/\bborder-accent-line\b/);
+      expect(cls, `${loc}: not the live pill's fill`).not.toMatch(/\bbg-accent\b/);
+      expect(inner, `${loc}: a ring dot, then the words`).toMatch(new RegExp(`^<span aria-hidden="true" class="[^"]*\\bborder-current\\b[^"]*"></span>${esc(copy.starting)}$`));
+      expect(inner, `${loc}: the dot is not filled`).not.toContain("bg-current");
+      // The other rows are as before, and still one link per row.
+      expect(r.f1, loc).toContain('data-kind="live"');
+      expect(r.f3, loc).toContain('data-kind="not_opened"');
+      expect(html.match(/<a /g)?.length, `${loc}: one link per row, plus the calendar`).toBe(FIXTURES.length + 1);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("a final position with no recorded score shows the words alone", () => {
     const copy = publicWatchCopy((k) => msgFor("en", k));
     const r = rows(render({ links: { f2: { kind: "final", score: "" } }, copy }));

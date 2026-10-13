@@ -42,11 +42,14 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
 /** T16 fix round 1, I4 — the online watch links' words (ui keys; the canvas's "Watch live", "Final position",
  *  "Round not opened yet"), from the org-locale lookup the division page already holds. */
 export function publicWatchCopy(
-  ui: (key: "externalPlay.watch.list.live" | "externalPlay.watch.list.final" | "externalPlay.watch.list.notOpened") => string,
+  ui: (
+    key: "externalPlay.watch.list.live" | "externalPlay.watch.list.final" | "externalPlay.watch.list.notOpened" | "externalPlay.watch.list.starting",
+  ) => string,
 ): ScheduleWatchCopy {
   return {
     live: ui("externalPlay.watch.list.live"),
     final: ui("externalPlay.watch.list.final"),
     notOpened: ui("externalPlay.watch.list.notOpened"),
+    starting: ui("externalPlay.watch.list.starting"),
   };
 }

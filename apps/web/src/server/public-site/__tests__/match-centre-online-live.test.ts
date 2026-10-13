@@ -14,6 +14,8 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { buildMatchCentre, statusOf, type MatchCentreInput } from "../match-centre";
 import type { PublicFixture } from "../data";
 import type { SideT } from "../match-centre-schema";
+import type { PublicWatchLink } from "@/server/external-play/public-view";
+import { onlineHeaderOf } from "@/server/usecases/external-play-read";
 
 const F = (over: Partial<PublicFixture> = {}): PublicFixture => ({
   id: "fx1",
@@ -82,5 +84,74 @@ describe("match centre header — an online game being played (R3)", () => {
     }
     expect(checked, "anti-vacuity").toBe(FIXTURE_STATUSES.length);
     expect(lifted, "the case the rule exists for was reached").toBe(1);
+  });
+});
+
+// T17 owner change (2026-10-13): from the round's open until the first move an online board reads STARTING. The
+// header's STATUS stays `scheduled` (the poster, the hub, the subheading and every other reader keep their scheduled
+// reading); a separate flag, present ONLY in that state, is what the court card's chip reads. Its source is the
+// Fixtures list's link (`watchLinkOf` — kind "starting"), as R3's is, so the list and the header never disagree.
+describe("match centre header — an online board starting: the round open, no move yet (owner, 2026-10-13)", () => {
+  it("the empty case first: the input absent or false — no flag at all, the header byte-for-byte today's", () => {
+    let checked = 0;
+    for (const doc of [buildMatchCentre(input()), buildMatchCentre(input({ onlineGameStarting: false })), buildMatchCentre(input({ onlineGameInPlay: false, onlineGameStarting: false }))]) {
+      expect(Object.hasOwn(doc.header, "onlineStarting"), "no key, not a false one").toBe(false);
+      expect(doc.header).toEqual(buildMatchCentre(input()).header);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("starting: the header stays scheduled (not live, the start-time sentence kept) and carries the flag", () => {
+    const doc = buildMatchCentre(input({ onlineGameStarting: true }));
+    expect([doc.header.status, doc.header.live, doc.header.statusLine?.key, doc.header.onlineStarting]).toEqual([
+      "scheduled",
+      false,
+      "matchCentre.status.startsAt",
+      true,
+    ]);
+    // Nothing else of the header moved: the same document as today's, plus the one key.
+    const rest = { ...doc.header };
+    delete rest.onlineStarting;
+    expect(rest).toEqual(buildMatchCentre(input()).header);
+  });
+
+  it("every fixture status: only a scheduled one carries the flag; every other keeps its own header", () => {
+    let checked = 0;
+    let flagged = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const doc = buildMatchCentre(input({ fixture: F({ status }), onlineGameStarting: true }));
+      const today = buildMatchCentre(input({ fixture: F({ status }) }));
+      if (status === "scheduled") {
+        expect(doc.header.onlineStarting, status).toBe(true);
+        flagged += 1;
+      } else {
+        expect(doc.header, status).toEqual(today.header);
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(FIXTURE_STATUSES.length);
+    expect(flagged, "the case the ruling exists for was reached").toBe(1);
+  });
+
+  it("a guard, not an assumption: both inputs at once (one link kind gives one) — live wins and no flag is carried", () => {
+    const doc = buildMatchCentre(input({ onlineGameInPlay: true, onlineGameStarting: true }));
+    expect([doc.header.status, doc.header.live, Object.hasOwn(doc.header, "onlineStarting")]).toEqual(["in_play", true, false]);
+  });
+
+  it("the one authority: the header inputs come from the Fixtures list's link — Starting, Live, and Scheduled before the open", () => {
+    const cases: [PublicWatchLink | null, { onlineGameInPlay: boolean; onlineGameStarting: boolean }][] = [
+      [{ kind: "starting" }, { onlineGameInPlay: false, onlineGameStarting: true }],
+      [{ kind: "live" }, { onlineGameInPlay: true, onlineGameStarting: false }],
+      [{ kind: "not_opened" }, { onlineGameInPlay: false, onlineGameStarting: false }],
+      [{ kind: "final", score: "1–0" }, { onlineGameInPlay: false, onlineGameStarting: false }],
+      [null, { onlineGameInPlay: false, onlineGameStarting: false }],
+    ];
+    let checked = 0;
+    for (const [link, want] of cases) {
+      expect(onlineHeaderOf(link), JSON.stringify(link)).toEqual(want);
+      checked += 1;
+    }
+    expect(checked).toBe(5);
   });
 });

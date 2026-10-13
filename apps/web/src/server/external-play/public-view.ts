@@ -68,7 +68,8 @@ export type PublicGameResult = {
 
 /** The division Fixtures list's watch link for an online board (T16 fix round 1, I4; canvas WatchStatesDesktop A):
  *  a game being played, a game over (its score White first, "" when none is recorded), or a round not opened. */
-export type PublicWatchLink = { kind: "live" } | { kind: "final"; score: string } | { kind: "not_opened" };
+/** "starting" (T17 owner change, 2026-10-13): the round open, both players paired, no move yet, nothing held. */
+export type PublicWatchLink = { kind: "live" } | { kind: "final"; score: string } | { kind: "not_opened" } | { kind: "starting" };
 
 export type PublicExternalPlay = {
   status: PublicExternalPlayStatus;

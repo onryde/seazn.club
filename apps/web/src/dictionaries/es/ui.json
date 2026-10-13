@@ -5969,6 +5969,7 @@
   "externalPlay.watch.list.live": "Ver en directo",
   "externalPlay.watch.list.final": "Posición final",
   "externalPlay.watch.list.notOpened": "Ronda aún no abierta",
+  "externalPlay.watch.list.starting": "Por empezar",
   "externalPlay.yourBoard.title": "Tu tablero",
   "externalPlay.yourBoard.cta": "Ir a tu tablero",
   "externalPlay.yourBoard.state.online_chess_off": "El juego en línea no está disponible para esta partida ahora mismo.",

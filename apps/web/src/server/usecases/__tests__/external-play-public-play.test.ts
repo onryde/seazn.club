@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { publicPlayOf, watchLinkOf, type PublicFixtureRow, type WatchLinkRow } from "../external-play-read";
+import { NEEDS_REASONS } from "@/server/external-play/types";
 
 const OPEN = new Set(["scheduled", "in_play"]);
 const AWAITING_DECISION = "needs_decision";
@@ -101,14 +102,52 @@ describe("publicPlayOf — every fixture status × every bridge state", () => {
 describe("watchLinkOf — what the Fixtures list offers for an online board", () => {
   const link = (o: Partial<WatchLinkRow>): WatchLinkRow => ({ ...row({}), round_opened: true, ...o });
 
-  it("the empty case first: no bridge row, or a game with no move, offers nothing once the round is open", () => {
+  it("the empty case first: no bridge row, or a game with no move, once the round is open — Starting under a scheduled fixture (owner, 2026-10-13), nothing under any other", () => {
     let checked = 0;
+    let starting = 0;
     for (const fixtureStatus of FIXTURE_STATUSES) {
-      expect(watchLinkOf(link({ status: null, challenge_id: null, move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toBeNull();
-      expect(watchLinkOf(link({ status: "ready", move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toBeNull();
+      const want = fixtureStatus === "scheduled" ? { kind: "starting" } : null;
+      expect(watchLinkOf(link({ status: null, challenge_id: null, move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toEqual(want);
+      expect(watchLinkOf(link({ status: "ready", move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toEqual(want);
+      if (want !== null) starting += 1;
       checked += 1;
     }
     expect(checked).toBe(FIXTURE_STATUSES.length);
+    expect(starting, "the case the ruling exists for was reached").toBe(1);
+  });
+
+  // T17 owner change (2026-10-13): from the round's open until the first move the board reads STARTING — the watch
+  // panel's "not started" (the start position, the waiting line). Only for a board a game can still start on: a
+  // scheduled fixture, both players paired, no hold for the organiser, the bridge not closed.
+  it("STARTING: the round open, both paired, no move on file, nothing held — every bridge state and hold reason", () => {
+    const STARTING = { kind: "starting" } as const;
+    const before = (o: Partial<WatchLinkRow>) => link({ fixture_status: "scheduled", move_count: 0, ...o });
+    const cells: [string, WatchLinkRow, ReturnType<typeof watchLinkOf>][] = [
+      ["no bridge row yet", before({ status: null, challenge_id: null }), STARTING],
+      ["a bridge pending its challenge", before({ status: "pending", challenge_id: null }), STARTING],
+      ["a challenge made, no move", before({ status: "ready" }), STARTING],
+      ["the game begun at Lichess, no move", before({ status: "live" }), STARTING],
+      ["a seat's token revoked before a move (the game goes on)", before({ status: "needs_organiser", needs_reason: "token_revoked" }), STARTING],
+      ["the bridge closed with no move", before({ status: "finished" }), null],
+      ["a bye: no away entrant", before({ status: null, challenge_id: null, away_entrant_id: null }), null],
+      ["a bye: no home entrant", before({ status: null, challenge_id: null, home_entrant_id: null }), null],
+      ["the round not opened", before({ status: null, challenge_id: null, round_opened: false }), { kind: "not_opened" }],
+      ["the first move: live from here", before({ status: "live", move_count: 1 }), { kind: "live" }],
+    ];
+    // Every hold the organiser owes an answer to, before a move: the fixture page says why, so the row offers nothing.
+    const HELD = ["no_show_white", "no_show_black", "no_show_both", "not_started", "aborted", "mismatch", "provider_error",
+      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play"] as const;
+    for (const reason of HELD) cells.push([`held: ${reason}`, before({ status: "needs_organiser", needs_reason: reason }), null]);
+    expect([...HELD, "token_revoked"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
+    let checked = 0;
+    let starting = 0;
+    for (const [label, r, want] of cells) {
+      expect(watchLinkOf(r), label).toEqual(want);
+      if (want?.kind === "starting") starting += 1;
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(10 + HELD.length);
+    expect(starting, "anti-vacuity: the starting cells").toBe(5);
   });
 
   it("every fixture status × bridge state × round opened or not", () => {

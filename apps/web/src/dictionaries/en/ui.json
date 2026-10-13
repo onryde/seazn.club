@@ -5969,6 +5969,7 @@
   "externalPlay.watch.list.live": "Watch live",
   "externalPlay.watch.list.final": "Final position",
   "externalPlay.watch.list.notOpened": "Round not opened yet",
+  "externalPlay.watch.list.starting": "Starting",
   "externalPlay.yourBoard.title": "Your board",
   "externalPlay.yourBoard.cta": "Go to your board",
   "externalPlay.yourBoard.state.online_chess_off": "Online play isn't available for this match right now.",

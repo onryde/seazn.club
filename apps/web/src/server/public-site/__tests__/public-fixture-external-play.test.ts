@@ -275,6 +275,15 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
 
     expect((await page(idle!.fixtureId)).matchCentre.header.status, "no game yet").toBe("scheduled");
     expect((await page(done!.fixtureId)).matchCentre.header.status, "decided stays decided").toBe("decided");
+    // T17 owner change (2026-10-13): the board with no move yet, its round open, reads STARTING — its header still
+    // scheduled, plus the flag the chip reads — on the page and on the poll. The live and decided boards carry no flag.
+    const idlePage = (await page(idle!.fixtureId)).matchCentre.header;
+    const idlePoll = ((await publicFixture(idle!.fixtureId)) as { match_centre: { header: { status: string; onlineStarting?: boolean } } }).match_centre.header;
+    expect([idlePage.status, idlePage.onlineStarting], "page: starting").toEqual(["scheduled", true]);
+    expect([idlePoll.status, idlePoll.onlineStarting], "poll: starting").toEqual(["scheduled", true]);
+    for (const id of [live!.fixtureId, done!.fixtureId]) {
+      expect(Object.hasOwn((await page(id)).matchCentre.header, "onlineStarting"), id).toBe(false);
+    }
 
     // A board of a round not yet opened (the list says "Round not opened yet") is not being played.
     const later = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
@@ -282,6 +291,7 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
     const sl2 = await slugsOf(later.divisionId);
     const notOpened = await getPublicFixture(sl2.org, sl2.comp, sl2.div, later.boards[0]!.fixtureId);
     expect(notOpened!.matchCentre.header.status, "round not opened").toBe("scheduled");
+    expect(Object.hasOwn(notOpened!.matchCentre.header, "onlineStarting"), "round not opened: Scheduled, never Starting").toBe(false);
   });
 
   // T17 round B, C: the header's format word over an online game is the time control's speed. The seed declares the
@@ -318,11 +328,15 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
               select f.stage_id, f.org_id, 1, now(), ${opener.id} from fixtures f where f.id = ${s.fixtureId}`;
     const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
     expect([data!.fixture.status, data!.matchCentre.header.status]).toEqual(["scheduled", "scheduled"]);
+    // And a game not begun on that forged row (the round open, no move): never Starting under another sport either.
+    await sql`update fixture_external_play set status = 'ready', moves_uci = '[]'::jsonb, move_count = 0 where fixture_id = ${s.fixtureId}`;
+    const idle = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
+    expect([idle!.matchCentre.header.status, Object.hasOwn(idle!.matchCentre.header, "onlineStarting")]).toEqual(["scheduled", false]);
   });
 });
 
 describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list's watch links, from the real schema (I4)", () => {
-  it("one read for the division: live, final with its score, not opened — and nothing private", async () => {
+  it("one read for the division: live, final with its score, starting, not opened — and nothing private", async () => {
     // Round 1 opened with three boards: one being played, one finished and decided on the pad, one with no game yet.
     const r = await seedOnlineChessRound({ fixtures: 3 });
     seeded.push(r.orgId);
@@ -340,8 +354,12 @@ describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list'
     expect((await sql<{ status: string }[]>`select status from fixtures where id = ${done!.fixtureId}`)[0]!.status, "premise: decided").toBe("decided");
     const links = await loadDivisionWatchLinks(r.divisionId);
     // The away entrant plays White on the finished board: White first reads 0–1.
-    expect(links).toEqual({ [live!.fixtureId]: { kind: "live" }, [done!.fixtureId]: { kind: "final", score: "0–1" } });
-    expect(Object.keys(links), "the idle board offers nothing once its round is open").not.toContain(idle!.fixtureId);
+    // T17 owner change (2026-10-13): the idle board, its round open and no move yet, reads Starting.
+    expect(links).toEqual({
+      [live!.fixtureId]: { kind: "live" },
+      [done!.fixtureId]: { kind: "final", score: "0–1" },
+      [idle!.fixtureId]: { kind: "starting" },
+    });
     expect(JSON.stringify(links), "no challenge id, no Lichess id, no hold reason").not.toMatch(/gm-|lichess|needs_|token/i);
 
     // A later round, not opened: every board of it reads "Round not opened yet".
