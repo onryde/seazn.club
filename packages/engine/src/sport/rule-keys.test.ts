@@ -343,7 +343,10 @@ describe("X-SR-2 checkFixtureOverride", () => {
     expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: false, halfMinutes: 15 } })).toMatchObject({ ok: true });
     expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: false, halfMinutes: 20 } })).toMatchObject({ ok: true }); // off: the length is moot
     expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: true, halfMinutes: 10 } })).toEqual({ ok: true, changed: ["extraTime.halfMinutes"] });
-    expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: true, halfMinutes: 15 } })).toEqual({ ok: true, changed: [] }); // equal is not longer
+    expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: true, halfMinutes: 15 } })).toEqual({ ok: true, changed: [] }); // nothing differs
+    // The bound reads the length alone: the stage's own length restated beside another sub-key is not longer (the
+    // writer's schema parse judges the extra sub-key, not this check).
+    expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: true, halfMinutes: 15, note: "x" } })).toEqual({ ok: true, changed: ["extraTime.note"] });
     expect(checkFixtureOverride(fb, "knockout", null, st, { extraTime: { enabled: true, halfMinutes: 20 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "extraTime", reason: expect.stringMatching(/shorter/) });
     expect(checkFixtureOverride(fb, "knockout", null, { extraTime: { enabled: false, halfMinutes: 15 } }, { extraTime: { enabled: true, halfMinutes: 15 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", reason: expect.stringMatching(/off/) });
     expect(checkFixtureOverride(fb, "knockout", null, {}, { extraTime: { enabled: true, halfMinutes: 10 } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "extraTime" }); // the stage names none
