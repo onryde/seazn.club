@@ -603,6 +603,14 @@ async function writePlan(tx: Tx, plan: readonly Step[]): Promise<string[]> {
 async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
   const src = await readNode(tx, fixtureId);
   if (!src) return [];
+  // Nothing in this stage to revive: a line that feeds no next match (a league's, a group's — X-DW-4 records and counts
+  // it) or only another stage's (never reached, never touched). Read before the guard: a feed edge and its target's
+  // stage are structure, not a seat — and `lockStageSeatsForVoid` took no lock for a line that feeds nothing.
+  const [{ own }] = await tx<{ own: number }[]>`
+    select count(*)::int as own from fixtures
+     where id in (${src.winner_to_fixture ?? src.id}, ${src.loser_to_fixture ?? src.id}) and id <> ${src.id}
+       and stage_id = ${src.stage_id}`;
+  if (own === 0) return [];
   // I-2: before the first read of a seat this double walkover killed — a sibling's decision must not judge it dead
   // while this void is in flight, nor this void judge it before that decision's cascade has committed. N-1: taken by
   // the caller BEFORE its own fixture lock (`lockStageSeatsForVoid`), never here — taking it now, behind a fixture

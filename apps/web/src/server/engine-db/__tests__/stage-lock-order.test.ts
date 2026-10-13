@@ -210,6 +210,19 @@ describe.skipIf(!HAS_DB)("Loop R2 N-1: the stage lock comes before every fixture
     expect(seatOf(final, sf1.winner_to_slot), "and then seated its winner").toBe(decided.outcome!.winner);
   }, 60_000);
 
+  it("another stage kind: the void of a double walkover on a line that feeds nothing takes no stage lock, and needs none", async () => {
+    // A league's line feeds no next match, so its double walkover killed no seat (X-DW-4: a table line is recorded and
+    // counted). Its void revives nothing; the revive's lock-order guard must not refuse it.
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 4 });
+    const line = await fixtureRow(s.fixtureIds[0]!);
+    expect([line.winner_to_fixture, line.loser_to_fixture], "rig: a league line feeds nothing").toEqual([null, null]);
+    const dw = await post(s.auth, line.id, "core.forfeit", { by: "both", reason: "walkover" });
+    expect([dw.status, dw.outcome], "rig: a recorded double walkover").toEqual(["forfeited", { kind: "double_walkover" }]);
+    await post(s.auth, line.id, "core.void", { event_id: dw.event_id });
+    const after = await fixtureRow(line.id);
+    expect([after.status, after.outcome], "the void stands: the line is unplayed again").toEqual(["scheduled", null]);
+  }, 60_000);
+
   it("the revive refuses to run without the stage lock taken first (a writer that reaches it fixture-first is a lock-order bug, not a race to lose)", async () => {
     const { s, sf1 } = await four();
     await expect(
