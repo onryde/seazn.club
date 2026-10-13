@@ -301,10 +301,7 @@ export default async function MePage({
                       </span>
                     </span>
                   ) : (
-                    <span className="app-display text-lg font-bold text-slate-700">
-                      {headline(r) ?? "—"}
-                      {resultTag(r, ui)}
-                    </span>
+                    <span className="app-display text-lg font-bold text-slate-700">{scoreLine(r, ui)}</span>
                   )}
                 </li>
               ))}
@@ -495,6 +492,19 @@ function resultTag(r: MyResult, ui: Dict): ReactNode {
     <span role="img" aria-label={tag.full} title={tag.full} className="ml-1.5 normal-case text-slate-500">
       {tag.word}
     </span>
+  );
+}
+
+/** Loop R2 N-5 — the score cell: the headline, then its house tag (`resultTag`); a line with no stored headline prints
+ *  the dash alone, since a tag beside nothing ("— w/o") gives a reason with no score for it to explain. */
+function scoreLine(r: MyResult, ui: Dict): ReactNode {
+  const score = headline(r);
+  if (score === null) return "—";
+  return (
+    <>
+      {score}
+      {resultTag(r, ui)}
+    </>
   );
 }
 

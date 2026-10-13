@@ -49,6 +49,8 @@ const RESULTS: MyResult[] = [
   result("dls", "Kites", "Crows", "180/4 — 150/9", { kind: "win", winner: "e-kites", loser: "e-crows", method: "dls" }, "rain"),
   // An award stored before W2b: its reason in `method`, no loser — a walkover only beside two seats (Loop R I-1).
   result("legacy", "Ospreys", "Larks", "2 — 0", { kind: "award", winner: "e-ospreys", method: "walkover" }),
+  // Loop R2 N-5: a credited walkover with NO stored summary (no match_states row behind the award) — no headline.
+  { ...result("nosum", "Swifts", "Terns", "", { kind: "award", winner: "e-swifts", loser: "e-terns", reason: "walkover" }), summary: null },
 ];
 /** The credited results and the tag each owes, by the house key tables (never the page's own words). */
 const TAGGED = { wo: "walkover", ret: "retired", dq: "disqualified", dls: "abandoned_dls", legacy: "walkover" } as const;
@@ -113,7 +115,7 @@ describe("/me results — a double walkover prints its tag, never the stored 0 �
       const full = msgFor(at, "forfeit.tagFull.doubleWalkover");
       if (at === "fr") expect(tag, "premise: the French tag differs from the English").not.toBe(msgFor("en", "forfeit.tag.doubleWalkover"));
       const got = await scores(at);
-      expect(Object.keys(got), "every line was read").toEqual(["dw", "wo", "won", "ret", "dq", "dls", "legacy"]);
+      expect(Object.keys(got), "every line was read").toEqual(["dw", "wo", "won", "ret", "dq", "dls", "legacy", "nosum"]);
       expect(got.dw!.text, `${at}: the double walkover prints the house tag`).toBe(tag);
       expect(got.dw!.li, `${at}: and nowhere the stored 0 — 0`).not.toContain("0 — 0");
       expect([got.dw!.symbol?.role, got.dw!.symbol?.label], `${at}: a symbol named by the full words`).toEqual(["img", full]);
@@ -145,6 +147,15 @@ describe("/me results — a double walkover prints its tag, never the stored 0 �
         checked++;
       }
       expect(checked).toBe(Object.keys(TAGGED).length);
+    });
+
+    it(`${at}: Loop R2 N-5 — a credited result with no stored headline prints the dash alone, never a tag beside nothing`, async () => {
+      const got = await scores(at);
+      // The premise that makes the case bite: this row's outcome DOES owe a tag (a walkover), so only the missing
+      // headline keeps it off the line.
+      expect(got.wo!.symbol?.label, `${at}: premise, a walkover is tagged`).toBe(msgFor(at, FORFEIT_TAG_FULL_KEY.walkover));
+      expect([got.nosum!.text, got.nosum!.symbol], `${at}: the dash, no tag`).toEqual(["—", null]);
+      expect(got.nosum!.li, `${at}: and nowhere the tag's word`).not.toContain(msgFor(at, FORFEIT_TAG_KEY.walkover));
     });
   }
 });
