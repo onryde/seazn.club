@@ -5568,6 +5568,8 @@
   "runsheet.round.confirmWindow": "Pueden registrarse de inmediato. Si un jugador no ha ocupado su asiento {minutes} minutos después de que abras, ese tablero pasa a ti para decidir.",
   "runsheet.round.confirmWindowReinvite": "Si un jugador no ha ocupado su asiento a las {time}, ese tablero pasa a ti para decidir.",
   "runsheet.round.confirmScheduled": "La hora programada ({time}) es solo lo que se mostró a los jugadores.",
+  "runsheet.round.confirmEarlierInPlay.one": "La ronda {round} todavía tiene {count} partida en juego.",
+  "runsheet.round.confirmEarlierInPlay.other": "La ronda {round} todavía tiene {count} partidas en juego.",
   "runsheet.round.confirmCta.one": "Abrir ronda e invitar a {count} jugador",
   "runsheet.round.confirmCta.other": "Abrir ronda e invitar a {count} jugadores",
   "runsheet.round.skipLine": "{board}: {reason}",

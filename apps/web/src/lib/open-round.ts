@@ -74,6 +74,10 @@ export type OpenRoundView = {
   scheduledAt: string | null;
   press: OpenRoundPress;
   pairings: OpenRoundPairing[];
+  /** T16 fix round 1, R1 — this stage's EARLIER rounds that still have games in play (a paired board still to be
+   *  played), lowest round first; empty when none. Opening is still allowed (the organiser drives; D8 never blocks):
+   *  the confirmation names them so the press is made knowingly. */
+  earlierInPlay: { roundNo: number; games: number }[];
 };
 
 /** `invited` is a count: render through the plural helper (`.one`/`.other`). */

@@ -337,6 +337,51 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     await expectPressAgrees(r, roundOf(after, 2), at(MIN));
   });
 
+  // T16 fix round 1, R1 (controller ruling): opening round 2 while round 1 is still being played is ALLOWED — the
+  // organiser drives, D8 never blocks — but the confirmation names what is still in play. "In play" is the rulebook's
+  // still-to-be-played (scheduled / in_play) on a paired board; a decided board or a bye is not.
+  it("R1: round 2's Open names round 1's games still in play — and stays offered and pressable; none once they finish", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, spares: 1, bye: true });
+    await addFixture(r.owner, r.stageId, {
+      home_entrant_id: r.spares[0]!.home.entrantId,
+      away_entrant_id: r.spares[0]!.away.entrantId,
+      round_no: 2,
+      scheduled_at: null,
+    });
+    const decide = async (b: (typeof r.boards)[number]) => {
+      const fs = await getFixtureState(r.owner, b.fixtureId);
+      await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq, type: "core.start", payload: {} });
+      await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq + 1, type: "boardgame.result", payload: { winner: b.home.entrantId } });
+    };
+    // The empty case first: before round 1 opens, round 1 is the one offered and nothing is earlier than it.
+    expect((await view(r, T0)).map((v) => [v.roundNo, v.earlierInPlay])).toEqual([[1, []]]);
+    await press(r, 1, T0);
+    await decide(r.boards[0]!);
+    const two = roundOf(await view(r, at(MIN)), 2);
+    expect(two.press, "allowed: the organiser drives").toBe("open");
+    expect(two.earlierInPlay, "one board of round 1 still to play; the decided one and the bye are not").toEqual([{ roundNo: 1, games: 1 }]);
+    expect(roundOf(await view(r, at(MIN)), 1).earlierInPlay, "round 1 itself: nothing earlier").toEqual([]);
+    await decide(r.boards[1]!);
+    expect(roundOf(await view(r, at(MIN)), 2).earlierInPlay, "round 1 finished: nothing to name").toEqual([]);
+    expect(await press(r, 2, at(MIN))).toMatchObject({ opened: true });
+  });
+
+  it("R1: an empty seat in an earlier round is not a game in play — only its paired boards are named", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, unpaired: true, spares: 1 });
+    await addFixture(r.owner, r.stageId, {
+      home_entrant_id: r.spares[0]!.home.entrantId,
+      away_entrant_id: r.spares[0]!.away.entrantId,
+      round_no: 2,
+      scheduled_at: null,
+    });
+    // The press refuses a round with an empty seat (not_paired); opened by SQL to put one in an opened round.
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
+      values (${r.stageId}, ${r.orgId}, 1, ${r.ownerUserId}, ${T0})`;
+    const two = roundOf(await view(r, at(MIN)), 2);
+    expect(two.earlierInPlay, "the paired board, not the empty seat").toEqual([{ roundNo: 1, games: 1 }]);
+  });
+
   it("Swiss: round 1 paired by the real generator is offered; the later rounds' empty shells are not", async () => {
     const s = await seedOnlineSwiss({ players: 4, rounds: 3 });
     const shells = await sql<{ n: number }[]>`

@@ -81,6 +81,18 @@ async function seatedAdmin(r: SeedOnlineChessRoundResult, userId: string): Promi
 // ---------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("listFlaggedExternalPlay — the queue's Flagged list", () => {
+  // T16 fix round 1, M4 (a false premise, recorded): the review feared a board with no seq_in_round being numbered by a
+  // count running across rounds. The schema refuses such a board, so its number is always its own — the fallback is
+  // gone, and this pins the premise that let it go.
+  it("M4: fixtures.seq_in_round is NOT NULL — the schema refuses a board without its number", async () => {
+    const r = await round(1);
+    const b = r.boards[0]!;
+    await expect(sql`update fixtures set seq_in_round = null where id = ${b.fixtureId}`).rejects.toMatchObject({ code: "23502" });
+    await flag(r, b.fixtureId);
+    const [seq] = await sql<{ n: number }[]>`select seq_in_round as n from fixtures where id = ${b.fixtureId}`;
+    expect((await listFlaggedExternalPlay(r.owner, r.divisionId)).boards.map((x) => x.boardNo)).toEqual([seq!.n]);
+  });
+
   // T16 fix round 1, R4: a cancelled board's OPEN flags are still the organiser's to review. `cancelled` has no product
   // writer (stages.ts: "defensive", an import path only), so the test sets it as an import would.
   it("R4: a CANCELLED board's open flag is listed (as cancelled, nothing to settle or resync) and closable; the round panel lists no cancelled board", async () => {

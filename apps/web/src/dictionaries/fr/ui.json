@@ -5568,6 +5568,8 @@
   "runsheet.round.confirmWindow": "Ils peuvent s'enregistrer tout de suite. Si un joueur n'a pas pris place {minutes} minutes après l'ouverture, cet échiquier vous revient pour décision.",
   "runsheet.round.confirmWindowReinvite": "Si un joueur n'a pas pris place à {time}, cet échiquier vous revient pour décision.",
   "runsheet.round.confirmScheduled": "L'heure prévue ({time}) n'est que ce qui a été affiché aux joueurs.",
+  "runsheet.round.confirmEarlierInPlay.one": "La ronde {round} a encore {count} partie en cours.",
+  "runsheet.round.confirmEarlierInPlay.other": "La ronde {round} a encore {count} parties en cours.",
   "runsheet.round.confirmCta.one": "Ouvrir la ronde et inviter {count} joueur",
   "runsheet.round.confirmCta.other": "Ouvrir la ronde et inviter {count} joueurs",
   "runsheet.round.skipLine": "{board} : {reason}",

@@ -54,7 +54,9 @@ import { fixturesSeating, isSeatedOn } from "./seated";
 type BoardRow = {
   fixtureId: string;
   fixtureNo: number | null;
-  seq: number | null;
+  /** `fixtures.seq_in_round`, NOT NULL in the schema: every board has its own number (M4, T16 fix round 1 — the old
+   *  `i + 1` fallback numbered across rounds, and could never run). */
+  seq: number;
   roundNo: number | null;
   stageName: string;
   fixtureStatus: string;
@@ -168,7 +170,7 @@ export async function loadArbiterRound(
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
   const boards: ArbiterBoard[] = await Promise.all(
-    listed.map(([i, r]) => boardOf(auth, r, { limitMs, policy, flagRows, fallbackNo: i + 1 })),
+    listed.map(([, r]) => boardOf(auth, r, { limitMs, policy, flagRows })),
   );
   return { stageId: round.stageId, stageName: round.stageName, roundNo: round.roundNo, timeControl, boards, ownBoards: own.size, current };
 }
@@ -209,9 +211,9 @@ export async function listFlaggedExternalPlay(
   const flagRows = await openFlagRows(auth, listed.map((r) => r.fixtureId));
   const limitMs = (division.config?.clock?.base ?? 0) * 1_000;
   const boards = await Promise.all(
-    listed.map(async (r, i): Promise<FlaggedBoard> => {
+    listed.map(async (r): Promise<FlaggedBoard> => {
       const policy = await fixtureCameraPolicy(r.fixtureId);
-      const board = await boardOf(auth, r, { limitMs, policy, flagRows, fallbackNo: i + 1 });
+      const board = await boardOf(auth, r, { limitMs, policy, flagRows });
       return { ...board, roundNo: r.roundNo, stageName: r.stageName };
     }),
   );
@@ -262,7 +264,7 @@ function openFlagRows(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Fla
 async function boardOf(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; fallbackNo: number },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[] },
 ): Promise<ArbiterBoard> {
   const { limitMs, policy, flagRows } = ctx;
   const [sides, whiteSide] = await Promise.all([
@@ -310,7 +312,7 @@ async function boardOf(
   return {
     fixtureId: r.fixtureId,
     fixtureNo: r.fixtureNo,
-    boardNo: r.seq ?? ctx.fallbackNo,
+    boardNo: r.seq,
     white: { name: white.displayName, personId: white.personId },
     black: { name: black.displayName, personId: black.personId },
     state,

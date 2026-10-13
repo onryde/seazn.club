@@ -5723,6 +5723,8 @@ export type DictionaryKey =
   | "runsheet.round.confirmBodyReinvite.other"
   | "runsheet.round.confirmCta.one"
   | "runsheet.round.confirmCta.other"
+  | "runsheet.round.confirmEarlierInPlay.one"
+  | "runsheet.round.confirmEarlierInPlay.other"
   | "runsheet.round.confirmListLabel"
   | "runsheet.round.confirmScheduled"
   | "runsheet.round.confirmTitle"

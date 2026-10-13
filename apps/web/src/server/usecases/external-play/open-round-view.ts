@@ -131,6 +131,17 @@ export async function listOpenRounds(
           ).map((r) => r.id),
         );
 
+  // R1: per stage, each round's games still in play — a paired board still to be played (a bye is forfeited, a
+  // decided board settled: neither is in play).
+  const inPlay = new Map<string, { roundNo: number; games: number }[]>();
+  for (const group of groups.values()) {
+    const games = group.filter((r) => isPlayableFixtureStatus(r.status) && r.homeEntrantId !== null && r.awayEntrantId !== null).length;
+    if (games === 0) continue;
+    const list = inPlay.get(group[0]!.stageId) ?? [];
+    list.push({ roundNo: group[0]!.roundNo, games });
+    inPlay.set(group[0]!.stageId, list);
+  }
+
   const facts: RoundFacts[] = [];
   for (const group of groups.values()) {
     const first = group[0]!;
@@ -203,6 +214,7 @@ export async function listOpenRounds(
       scheduledAt: times.length === 0 ? null : new Date(Math.min(...times)).toISOString(),
       press: f.press,
       pairings,
+      earlierInPlay: (inPlay.get(f.stageId) ?? []).filter((x) => x.roundNo < f.roundNo).sort((a, b) => a.roundNo - b.roundNo),
     };
     out.push(view);
   }
