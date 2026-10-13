@@ -5061,6 +5061,8 @@ Spec §10 MD-1. See "MD-1 mutation ownership" below.
 
 ### Task 23: Ship gates, PR, e2e dispatch, and the cross-programme P8 (orchestrator)
 
+> **Carried (mutation session, 2026-10-13).** A post-W2b Stryker re-measure PR (stryker-measured.json, stryker-timeouts.json, possibly stryker.groups.mjs cut anchors) is expected to merge BEFORE W2c. Before the PR: rebase onto it, run the engine `stryker-sizing` and `stryker-cuts` tests, and re-measure (CI dispatch per leg) any leg W2c pushes past 10% drift — W2c adds mutants in core/errors.ts (core-2 leg), points.ts, sport/*, period kernel, boardgame and every module's `ruleKeys`. Edit groups/measured files only on top of that PR.
+
 Spec §9 P8; §11; Global Constraints. The P8 step is **BLOCKED until `feat/chess-lichess-external-play` merges**.
 
 - [ ] **Step 1: Rule rows.**
