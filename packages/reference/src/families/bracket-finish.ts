@@ -89,10 +89,11 @@ export const BRACKET_STAGE_KINDS = ["knockout", "double_elim", "stepladder", "pa
 /** The sports with a KO row of their own, keyed by their rules file (= the registry key). Every other sport answers
  *  by the cross-sport rows alone. */
 export const RULED_SPORTS = {
-  boardgame: ["BG-KO-1", "BG-KO-2"],
+  boardgame: ["BG-KO-1", "BG-KO-2", "BG-KO-3"],
   carrom: ["CA-KO-1"],
   generic: ["GN-KO-1"],
   cricket: ["CK-KO-1"],
+  icehockey: ["IH-KO-1"], // W2c: a stage preset (overtime and a shootout), no level-play answer of its own
 } as const satisfies Record<string, readonly string[]>;
 type RuledSport = keyof typeof RULED_SPORTS;
 const CHESS: RuledSport = "boardgame"; // BG-KO-1, BG-KO-2
@@ -343,10 +344,11 @@ export interface BracketFinishFamily {
 /** The family record `FAMILIES` holds (preflight C29). */
 export const bracketFinish: BracketFinishFamily = Object.freeze({
   id: "bracket-finish",
-  rulebook: "packages/engine/rules (cross-sport, boardgame, carrom, cricket, generic); spec 2026-10-08-format-matrix-w2a-design.md; spec 2026-10-08-format-matrix-w2b-design.md Appendix A",
+  rulebook: "packages/engine/rules (cross-sport, boardgame, carrom, cricket, generic, icehockey); spec 2026-10-08-format-matrix-w2a-design.md; spec 2026-10-08-format-matrix-w2b-design.md Appendix A",
   rows: Object.freeze([
     "X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1",
     "X-RS-1", "X-RS-3", "X-DW-1", "X-DW-2", "X-DW-3", "X-AB-4", "X-WD-1", "X-WD-2", "X-WD-3", "X-WD-4", "X-WD-5", "X-DE-1", "BG-DW-1", "BG-WO-2", "BG-WO-3",
+    "BG-KO-3", "IH-KO-1", // W2c: the two new KO rows, classified in bracket-finish.test.ts (neither answers a level PLAY result)
   ]),
   stageKinds: BRACKET_STAGE_KINDS,
   sports: "any",

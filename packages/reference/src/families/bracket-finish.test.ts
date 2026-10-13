@@ -111,6 +111,17 @@ const LEVEL_PLAY_BY_KO_ROW: Readonly<Record<string, Readonly<Partial<Record<Leve
   // since W2b: BG-DW-1 folds it to the double walkover (play `double_walkover`, below "W2b"), retiring T15-R1's hold.
   "BG-KO-1": { draw: { status: "in_play", advances: null, refused: [] } },
   "BG-KO-2": null, // the armageddon winner — about the tie-break, not the play
+  // W2c BG-KO-3: "the tie-break sequence is the organiser's ordered list; an empty list sends a drawn game to the
+  // organiser". One answer per row, and two rows answering chess `draw` is a contradiction the sweep refuses, so BG-KO-1
+  // keeps the DEFAULT stage's answer (rungs preset: in_play, awaiting its tie-break). The EMPTY-list case (held,
+  // needs_decision, ruling 79) is owned by W2c Task 8, which proves BG-KO-3 and gives the oracle a stage-rules input.
+  "BG-KO-3": null,
+  // W2c IH-KO-1: "a knockout stage starts with overtime and a shootout" is what a NEW stage is given, not what a recorded
+  // level result becomes. With the preset on a level regulation score plays on and there is no level result to record;
+  // with every decider off X-SR-6 holds it for the organiser, which is X-BR-2's answer the oracle already gives. A
+  // BracketCase carries no stage rules, and tools/matrix's reference-bracket.test.ts models ice hockey as held, so the
+  // row answers no kind. Tasks 6 and 12 own the preset's proof.
+  "IH-KO-1": null,
   // "always plays the ICF extra board": a level board SCORE never stands. A no_result is no score: X-BR-2 holds it.
   "CA-KO-1": { draw: "ruled-out", tie: "ruled-out" },
   // "refuses a draw" (ruling 79: "refusal remains only for a generic draw"); a tie or a no_result is held by X-BR-2.
