@@ -555,6 +555,23 @@ describe("lichess fixture server — the measured facts", () => {
     expect((await api.readGameStream({ token: B.token, gameId: id })).ok).toBe(true);
   });
 
+  it("DELETE /api/token revokes the bearer itself (lila OAuth.tokenRevoke: 204 NoContent; a bad bearer is Scoped's 401): every later call with it 401s, the other token plays on", async () => {
+    const id = await startGame();
+    const del = (token: string) => fetch(`${fx.url}/api/token`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+    const res = await del(W.token);
+    expect(res.status).toBe(204);
+    expect(await res.text(), "NoContent: no body").toBe("");
+    expect(fx.calls.at(-1)).toMatchObject({ method: "DELETE", path: "/api/token", token: W.token });
+    expect(await api.submitMove({ token: W.token, gameId: id, uci: "e2e4" })).toMatchObject({ ok: false, code: "unauthorized" });
+    expect((await api.readGameStream({ token: B.token, gameId: id })).ok, "per token: Black still reads").toBe(true);
+    // A second revoke of the same token, and one nobody issued: refused, as Scoped refuses any bearer it does not know.
+    for (const bad of [W.token, "tok-nobody"]) {
+      const again = await del(bad);
+      expect(again.status, bad).toBe(401);
+      expect(await again.json(), bad).toEqual({ error: "No such token" });
+    }
+  });
+
   it("an unregistered bearer is refused like a revoked one — a misconfigured token never plays", async () => {
     const id = await startGame();
     const res = await rawPost(`/api/board/game/${id}/move/e2e4`, "tok-nobody");
