@@ -13,7 +13,8 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
@@ -128,6 +129,11 @@ export interface FixtureSlideItem {
    *  read as a played draw — and this, the forfeit tag in the org's locale, drawn where the score would be. Absent on
    *  every other row. */
   tag?: string | null;
+  /** Loop R M-11 (UI-2): a credited result's house tag ("w/o", "ret.", "DQ", "Aband. · DLS") and its expansion, in the
+   *  org's locale, drawn in the status cell in place of the status word — which said "Forfeit" for every reason and
+   *  "Ended" for an abandon decided by DLS or the award policy. Read through the one reader (`statusTagOf`). Absent on
+   *  a played result, a bye, and a double walkover, whose tag already stands in the score's place (`tag`). */
+  statusTag?: { word: string; full: string };
   status: string;
   round: number;
   /** N1d d4 — the fixture's round NAME in the org's locale ("Losers' round 1"),
@@ -337,8 +343,10 @@ export async function buildDivisionSlides(
         );
   const lineOf = new Map(summaries.map((s) => [s.fixture_id, s.summary?.headline ?? null]));
   // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
-  const scoreOf = (f: (typeof fixtures)[number]): { line: string | null; tag?: string } =>
-    creditsNobody(f.outcome) ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") } : { line: lineOf.get(f.id) ?? null };
+  const scoreOf = (f: (typeof fixtures)[number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
+    creditsNobody(f.outcome)
+      ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
+      : { line: lineOf.get(f.id) ?? null, ...statusTagOf(lookup, f) };
 
   // Fix round 3 (Important 4): `lookup` (this org's REAL locale, resolved
   // above from `orgLocale`) — was `msg` (client-safe English, always),
@@ -496,6 +504,10 @@ export interface PublicSlideInput {
      *  withdrawn winner, never "Bye"). Optional for the reason the feed edges are; both /present pages spread
      *  `getPublicDivision`'s fixtures, which carry it. */
     outcome?: unknown;
+    /** Loop R M-11 — the active abandon's reason (`activeAbandonReasonSql`), the ledger `statusTagOf` reads an abandon's
+     *  tag from. Optional for the reason the outcome is; both /present pages spread `getPublicDivision`'s fixtures,
+     *  which carry it. */
+    abandon_reason?: string | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: {
@@ -524,6 +536,18 @@ export interface PublicSlideInput {
    *  existing caller/test that predates this keeps its current behaviour;
    *  every real /present page has an `org` in scope and should pass it. */
   orgLocale?: string;
+}
+
+/** Loop R M-11 — a fixtures-slide row's status tag (`FixtureSlideItem.statusTag`), or nothing: `outcomeTagWords`, the
+ *  one reader the organiser's result line uses, over the stored outcome, the active abandon's reason and the seats (an
+ *  award stored before W2b names its reason only beside two seats). A double walkover never reaches here (its tag is
+ *  the score's). */
+function statusTagOf(
+  lookup: SlotLabelLookup,
+  f: { outcome: unknown; abandon_reason?: string | null; home_entrant_id: string | null; away_entrant_id: string | null },
+): { statusTag?: { word: string; full: string } } {
+  const words = outcomeTagWords(lookup, f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  return words === null ? {} : { statusTag: words };
 }
 
 export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise<Slide[]> {
@@ -605,8 +629,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   };
 
   // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
-  const publicScoreOf = (f: PublicSlideInput["fixtures"][number]): { line: string | null; tag?: string } =>
-    creditsNobody(f.outcome) ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") } : { line: f.summary?.headline ?? null };
+  const publicScoreOf = (f: PublicSlideInput["fixtures"][number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
+    creditsNobody(f.outcome)
+      ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
+      : { line: f.summary?.headline ?? null, ...statusTagOf(lookup, { ...f, outcome: f.outcome ?? null }) };
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))

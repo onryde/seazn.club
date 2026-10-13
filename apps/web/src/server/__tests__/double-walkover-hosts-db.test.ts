@@ -110,6 +110,11 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
     expect(woItems.length, "the walkover is on a results slide").toBeGreaterThan(0);
     for (const i of dwItems) expect([i.line, i.tag], "results slide: the double walkover").toEqual([null, TAG]);
     for (const i of woItems) expect([i.line, i.tag ?? null], "results slide: the walkover keeps its score").toEqual([woHeadline, null]);
+    // Loop R M-11: the status cell names the walkover's reason (it read "Forfeit" for every reason) — through the real
+    // division read (`listDivisionFixtures`), the dictionary's words. The double walkover's tag is its score's; never twice.
+    const woWords = { word: msgFor("en", "forfeit.tag.walkover"), full: msgFor("en", "forfeit.tagFull.walkover") };
+    for (const i of woItems) expect(i.statusTag, "results slide: the walkover's status cell").toEqual(woWords);
+    for (const i of dwItems) expect(i.statusTag, "results slide: the double walkover's status cell keeps its word").toBeUndefined();
     const nodes = slides.flatMap((sl) => (sl.kind === "bracket" ? sl.fixtures : []));
     const node = (id: string) => nodes.find((n) => n.id === id);
     expect(node(dwId), "the bracket slide has the double walkover's node").toBeDefined();

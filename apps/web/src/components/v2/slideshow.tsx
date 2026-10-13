@@ -424,7 +424,16 @@ export function Slideshow({
                           </>
                         ) : (
                           <span className="text-court-muted">
-                            {(labels.status as Record<string, string | undefined>)[f.status] ?? f.status}
+                            {/* Loop R M-11: a credited result's house tag in place of the status word ("Forfeit" for
+                                every reason, "Ended" for a DLS abandon), as the organiser's result line draws it — a
+                                symbol named by its expansion, its case kept on its own span (this cell uppercases). */}
+                            {f.statusTag ? (
+                              <span role="img" aria-label={f.statusTag.full} title={f.statusTag.full} className="normal-case">
+                                {f.statusTag.word}
+                              </span>
+                            ) : (
+                              (labels.status as Record<string, string | undefined>)[f.status] ?? f.status
+                            )}
                           </span>
                         )}
                       </span>

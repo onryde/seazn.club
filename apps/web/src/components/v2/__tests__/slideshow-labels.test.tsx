@@ -709,3 +709,47 @@ describe("<Slideshow> draws a double walkover's tag where the score would be (re
     expect(sites, "every render site").toEqual(["fixtures", "knockout", "stepladder", "double_elim", "page_playoff"]);
   });
 });
+
+// Loop R M-11 — the status cell names a credited result's reason (the builder's `statusTag`, slideshow-data.ts) in place
+// of the status word, which said "Forfeit" for every reason and "Ended" for an abandon decided by DLS. The tag keeps its
+// case on its own span (the cell is `uppercase`, "W/O" would be a different word), and is a symbol named by its
+// expansion — the pattern the organiser's result line uses (`outcome-tag-text.tsx`).
+describe("<Slideshow> names a credited result's reason in the status cell (Loop R M-11)", () => {
+  const render = (items: FixtureSlideItem[], locale = "en") =>
+    renderToStaticMarkup(
+      createElement(Slideshow, {
+        title: "Copa",
+        slides: [{ kind: "fixtures", division: "Open", title: "Latest results", items }],
+        backHref: "/",
+        liveHref: "/shared/o/c",
+        labels: slideshowLabels(locale),
+      }),
+    );
+  const TAG_SPAN = (word: string, full: string) =>
+    `<span role="img" aria-label="${full}" title="${full}" class="normal-case">${word}</span>`;
+
+  it("empty case first: a row with no tag keeps its status word", async () => {
+    const { en } = await catalogs();
+    const html = render([item("forfeited", 1, "3–0")]);
+    expect(shows(html, t(en, "slideshow.status.forfeit"))).toBe(true);
+    expect(html).not.toContain('role="img"');
+  });
+
+  it("a forfeit's and an abandon's tag replace 'Forfeit' and 'Ended', case kept, named by the expansion", async () => {
+    const { en } = await catalogs();
+    const cases = [
+      { status: "forfeited", word: "ret.", full: "retired", replaced: "slideshow.status.forfeit" },
+      { status: "decided", word: "Aband. · DLS", full: "abandoned — decided by DLS", replaced: "slideshow.status.ended" },
+    ] as const;
+    let checked = 0;
+    for (const c of cases) {
+      const html = render([{ ...item(c.status, 1, "3–0"), statusTag: { word: c.word, full: c.full } }]);
+      expect(html, c.status).toContain(TAG_SPAN(c.word, c.full));
+      expect(shows(html, t(en, c.replaced)), `${c.status}: the status word gives way`).toBe(false);
+      // Inside the status cell's muted span, never the score's slot.
+      expect(html, c.status).toMatch(new RegExp(`<span class="text-court-muted">${TAG_SPAN(c.word, c.full).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</span>`));
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+});
