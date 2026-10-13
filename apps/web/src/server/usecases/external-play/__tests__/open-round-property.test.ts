@@ -212,7 +212,7 @@ function applyReset(m: Model, fixtureId: string) {
 const fixtureOfUrl = (url: string) => url.split("/fixtures/")[1]!.split(/[/?#]/)[0]!;
 
 describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
-  it("holds I1–I4 and the model over random interleavings", { timeout: 900_000 }, async () => {
+  it("holds I1–I4 and the model over random interleavings", async () => {
     const paths = {
       firstOpen: 0,
       alreadyOpen: 0,

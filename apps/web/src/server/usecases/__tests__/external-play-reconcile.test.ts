@@ -2223,7 +2223,7 @@ describe.runIf(HAS_DB)("reconcile — property: any interleaving of triggers and
   const incidental = { t10_move_out_of_sync: 0, t10_offer_noop: 0 };
   const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
 
-  it("holds the model on every step — counted per path, K runs each", { timeout: 600_000 }, async () => {
+  it("holds the model on every step — counted per path, K runs each", async () => {
     let run = 0;
     await fc.assert(
       fc.asyncProperty(fc.array(stepArb, { minLength: 0, maxLength: 4 }), async (suffix) => {
