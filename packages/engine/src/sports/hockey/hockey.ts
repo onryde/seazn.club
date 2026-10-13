@@ -5,6 +5,7 @@
 // green 2' / yellow 5' / red permanent — the team plays short on ALL of them
 // — and the App 12 shoot-out (5 one-on-ones, 8 s, sudden death) where a
 // competition demands a winner.
+import { BRACKET_KINDS } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
 import { makePeriodModule, PERIOD_RULE_KEYS, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
@@ -169,6 +170,11 @@ export const hockey = makePeriodModule({
   // W2c (spec §4.1 Q5) — the period kernel's keys, narrowed: FIH hockey has no overtime, so neither the stage key nor
   // its match-length leaf is offered (the X-SR-1 sweep holds `overtime` UNSETTABLE for hockey).
   ruleKeys: (({ overtime: _noOvertime, "overtime.minutes": _noOvertimeMinutes, ...keys }) => keys)(PERIOD_RULE_KEYS),
+  // W2c X-SR-6 (spec §4.2) — a NEW bracket stage starts with the FIH shoot-out (5 one-on-ones, 8 s, then sudden death),
+  // read from the module's own `fih-shootout` preset through its own schema (a fresh object on every call, so a caller
+  // that edits its copy never reaches the preset); a table stage starts with none. Hockey has no overtime.
+  stageDefaults: (kind) =>
+    BRACKET_KINDS.has(kind) ? { shootout: hockey.configSchema.parse(hockey.variants["fih-shootout"]).shootout } : {},
   positions,
   keeperGroup: "GK",
   // S3/W4b (#426) ruling 2 — FIH Rule 5.2: substitution is UNLIMITED and

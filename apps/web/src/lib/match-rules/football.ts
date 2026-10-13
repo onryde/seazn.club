@@ -60,9 +60,21 @@ export const FOOTBALL_RULES: RuleField[] = [
     key: "shootout",
     edits: ["shootout"],
     label: "Penalty shootout",
-    help: "Knockout fixtures only.",
+    help: "Penalties decide a level knockout match.",
     kind: "bool",
     build: (v) => ({ shootout: v === "on" }),
+  },
+  // W2c FB-SO-1 — the kicks each side takes before sudden death. A match-scope key the engine bounds 1–10; the stage
+  // default is 5 (3 in youth football), and one match may only shorten it (X-SR-2).
+  {
+    key: "shootoutAttempts",
+    edits: ["shootoutAttempts"],
+    label: "Shoot-out kicks each",
+    help: "Kicks each side takes before sudden death. Blank = 5.",
+    kind: "number",
+    min: 1,
+    max: 10,
+    build: (v) => ({ shootoutAttempts: Number(v) }),
   },
   // R3.5/Task I — cfg.points.shootoutWin/shootoutLoss have worked in the
   // engine since spec 04 (standingsDelta, football.ts) but had ZERO

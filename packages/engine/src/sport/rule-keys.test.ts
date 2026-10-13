@@ -52,6 +52,21 @@ function switchedOn(m: AnySportModule, top: string, preset: Record<string, unkno
   return forced ?? donors.map((d) => d[top]).find((d) => d !== undefined && d !== null);
 }
 
+/** Every cfg a sport DECLARES, with what a NEW stage of each bracket kind stores over it (`stageDefaults`, spec §4.2) —
+ *  the engine's own declaration of a knockout preset. A key only a stage preset sets (football's shootoutAttempts) has a
+ *  value to sweep nowhere else: `declaredCfgs` reads variants, and no variant carries it. The base cfgs come first and
+ *  unchanged; a preset that adds nothing for a cell adds no row. */
+function declaredCfgsWithStagePresets(m: AnySportModule): { name: string; cfg: Record<string, unknown> }[] {
+  const base = declaredCfgs(m).map(({ name, cfg }) => ({ name, cfg: cfg as Record<string, unknown> }));
+  const staged: { name: string; cfg: Record<string, unknown> }[] = [];
+  for (const { name, cfg } of base)
+    for (const kind of BRACKET_KINDS) {
+      const preset = stageDefaultsFor(m, kind, Object.hasOwn(m.variants, name) ? name : null);
+      if (Object.keys(preset).length > 0) staged.push({ name: `${name}+${kind}`, cfg: m.configSchema.parse({ ...cfg, ...preset }) as Record<string, unknown> });
+    }
+  return [...base, ...staged];
+}
+
 /** Top-level cfg keys an organiser never sets, per sport, each with its reason.
  *  Reviewed line by line; a new schema key fails the sweep until it is either
  *  declared in ruleKeys or listed here, and a row whose key becomes declared
@@ -225,7 +240,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     for (const m of builtinModules)
       for (const [key, fact] of deciders(m)) {
         expect(fact.scope, `${m.key}.${key}`).toBe("match");
-        const held = declaredCfgs(m).map(({ cfg }) => at(cfg, key)).filter((v) => v !== undefined);
+        const held = declaredCfgsWithStagePresets(m).map(({ cfg }) => at(cfg, key)).filter((v) => v !== undefined);
         expect(held.length, `${m.key}.${key}: no declared cfg holds it`).toBeGreaterThan(0);
         for (const v of held) {
           if (fact.matchBound === "off_or_shorter") {
@@ -339,7 +354,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       const presets: [string | null, Record<string, unknown>][] = Object.entries(m.variants).map(([v, p]) => [v, m.configSchema.parse(p) as Record<string, unknown>]);
       const bare = m.configSchema.safeParse({});
       if (bare.success) presets.push([null, bare.data as Record<string, unknown>]); // the division level: no variant
-      const donors = presets.map(([, c]) => c);
+      const donors = declaredCfgsWithStagePresets(m).map(({ cfg }) => cfg);
       const tops = new Set(Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.scope !== "points").map(([k]) => k.split(".")[0]!));
       for (const [variant, preset] of presets) {
         const parsesOn = new Map<string, boolean>();
@@ -644,7 +659,7 @@ describe("X-SR-2 checkFixtureOverride", () => {
         const parses = (st: Record<string, unknown>, ov: Record<string, unknown>) =>
           expect(m.configSchema.safeParse({ ...st, ...ov }).success, `${m.key}.${key} parses`).toBe(true);
         const refused = (reason: RegExp) => ({ ok: false, code: "RULE_NOT_SETTABLE", path: key, reason: expect.stringMatching(reason) });
-        const cfgs = declaredCfgs(m).map(({ cfg }) => cfg as Record<string, unknown>);
+        const cfgs = declaredCfgsWithStagePresets(m).map(({ cfg }) => cfg);
         if (fact.matchBound === "shorter") {
           const on = cfgs.find((c) => typeof at(c, key) === "number" && (at(c, key) as number) > 1);
           expect(on, `${m.key}: no declared cfg carries a length above 1 for ${key}`).toBeDefined();

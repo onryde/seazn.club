@@ -1811,6 +1811,9 @@ export interface PeriodPreset {
   /** W2c (spec §4.1 as amended) — who may set which cfg key, from `PERIOD_RULE_KEYS` spread or narrowed. Optional only
    *  so hand-built test presets compile: the X-SR-1 sweep (`sport/rule-keys.test.ts`) fails a builtin without it. */
   ruleKeys?: RuleKeys;
+  /** W2c X-SR-6 (spec §4.2) — what a NEW stage of this kind and variant starts with, passed through to the module's own
+   *  `stageDefaults`. Omitted ⇒ the module declares none. */
+  stageDefaults?: (kind: StageKind, variant: string | null) => Partial<PeriodCfg>;
   variants: Record<string, Partial<PeriodParams>>;
   positions: PositionCatalog;
   // W4 (#407) — which `positions.groups` key is the goalkeeper, so the kernel
@@ -2562,6 +2565,7 @@ export function makePeriodModule(
     },
     variants: preset.variants,
     ruleKeys: preset.ruleKeys,
+    ...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),
 
     // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. `lineupPolicy` is
     // declared only when the preset states one, and since the 2026-10-15 ruling a

@@ -25,7 +25,7 @@ export const CRICKET_RULES: RuleField[] = [
     key: "superOver",
     edits: ["superOver"],
     label: "Super over on a tie",
-    help: "Knockout fixtures only.",
+    help: "Plays a super over whenever a match ends tied — in any stage where it is On.",
     kind: "bool",
     build: (v) => ({ superOver: v === "on" }),
   },

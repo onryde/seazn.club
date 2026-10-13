@@ -34,6 +34,7 @@ import {
 } from "../../core/lineup.ts";
 import {
   AttemptOutcome,
+  BRACKET_KINDS,
   DRAW_KINDS,
   EntrantId,
   type AwardReason,
@@ -115,6 +116,10 @@ export const FootballCfg = z.object({
     })
     .default({ enabled: false, halfMinutes: 15 }), // knockout only
   shootout: z.boolean().default(false), // knockout only
+  // W2c FB-SO-1 (spec item 8) — the kicks each side takes before sudden death: 5 (the Laws), 3 in youth football.
+  // Optional with NO default: absent ≡ 5, which is what every stream recorded before W2c assumed, and a default would
+  // land in the cfg serialised into every frozen golden state.
+  shootoutAttempts: z.number().int().min(1).max(10).optional(),
   points: z
     .object({
       win: z.number().int().nonnegative().default(3),
@@ -1641,7 +1646,7 @@ function applyShootoutKick(
     }
   }
   const kicks = [...state.shootout.kicks, { side, scored: payload.scored }];
-  const winnerSide = shootoutDecision(kicks);
+  const winnerSide = shootoutDecision(kicks, state.cfg.shootoutAttempts ?? 5);
   if (winnerSide === null) return { ...state, shootout: { kicks } };
   return {
     ...sweepEndOfMatch(state), // W4a — the decider ends every timed dismissal
@@ -2506,6 +2511,13 @@ export function padSpec(cfg: FootballCfg): PadSpec {
   );
 }
 
+/** FB-SO-1 — what a variant changes in the knockout preset, over the base. Youth football takes 3 kicks each. A Map, so
+ *  a variant name that is no key (or "constructor") falls back to the base instead of reading the prototype chain; the
+ *  `null` variant (the division level) is no key either. */
+const KO_VARIANT_PRESET: ReadonlyMap<string | null, Pick<FootballCfg, "shootoutAttempts">> = new Map([
+  ["youth", { shootoutAttempts: 3 }],
+]);
+
 export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   key: "football",
   version: "1.0.0",
@@ -2544,6 +2556,8 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     halfMinutes: { scope: "match" },
     extraTime: { scope: "match", matchBound: "off_or_shorter", decider: true },
     shootout: { scope: "stage", decider: true },
+    // FB-SO-1 / X-SR-2 — the kicks per side differ per stage (youth 3) and a match may only shorten them.
+    shootoutAttempts: { scope: "match", matchBound: "shorter" },
     teamSize: { scope: "stage" },
     maxSubs: { scope: "stage" },
     subWindows: { scope: "stage" },
@@ -2782,6 +2796,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
 
   // W2a: none (football's deciders stay organiser-configured until W2c, spec §5.2)
   bracketDeciders: () => ({}),
+
+  // W2c X-SR-6, FB-SO-1 (spec §4.2) — a NEW bracket stage starts with extra time 2×15, penalties and 5 kicks each (3 in
+  // youth football), every one the organiser's to switch off; a table stage starts with none. Written into the stage
+  // when it is created, never inferred at resolve time.
+  stageDefaults: (kind, variant) =>
+    BRACKET_KINDS.has(kind)
+      ? { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 5, ...KO_VARIANT_PRESET.get(variant) }
+      : {},
 
   // §9.3 — {win+loss, 2·draw} plus the optional shootout split total.
   declaredPointsSets(cfg) {
