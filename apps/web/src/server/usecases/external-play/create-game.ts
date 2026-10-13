@@ -480,6 +480,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
        set status = 'ready', challenge_id = ${gameId}, white_side = ${plan.whiteSide},
            white_lichess_id = ${plan.white.lichessId}, black_lichess_id = ${plan.black.lichessId},
            expires_at = ${windowFor(plan.roundOpenedAt).deadline},
+           ${resetLedger()},
            mint_claimed_at = null, create_sent_at = null, last_error = null, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}
      returning fixture_id`;
@@ -671,6 +672,16 @@ async function releaseClaim(
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claimAt}`;
 }
 
+/** T16 (T10 carry): a NEW game on a pending row starts from the start
+ *  position — the move ledger's nine columns (V436) back to empty, so no
+ *  earlier game's moves, clocks or draw offer reach the new board (the room
+ *  and the spectators' board both read them). Both writes that record a game
+ *  on a pending row carry it. A fresh `sql` fragment per query (a list of
+ *  assignments), never one shared Query object. */
+const resetLedger = () => sql`
+  moves_uci = '[]'::jsonb, move_count = 0, last_move_at = null, white_ms = null, black_ms = null,
+  clock_increment_s = null, draw_offer_by = null, white_draw_offer_ply = null, black_draw_offer_ply = null`;
+
 /** needs_organiser, conditional on THIS call's claim. With `game`, the
  *  challenge that exists at Lichess is recorded alongside — the unique index
  *  on challenge_id is what then makes a second create for the board
@@ -690,6 +701,7 @@ async function holdForOrganiser(
            black_lichess_id = ${g ? g.plan.black.lichessId : null},
            -- a recorded game is a known outcome; an unrecorded one stays marked
            create_sent_at = case when ${g !== undefined}::boolean then null else create_sent_at end,
+           ${resetLedger()},
            mint_claimed_at = null, last_error = ${a.lastError.slice(0, 500)}, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claimAt}
      returning fixture_id`;

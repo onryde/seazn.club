@@ -1814,3 +1814,52 @@ describe.skipIf(!process.env.DATABASE_URL)("Minor b — a stray game is cancelle
     expect((await bridge(s.fixtureId))?.challenge_id).toBe(stray);
   });
 });
+
+// T16 (controller addendum, T10 carry): "On a game re-create, reset all nine
+// V435 columns" (the move ledger, V436 after renumbering). A new game starts
+// from the start position: a ledger left by an earlier game would put that
+// game's moves, clocks and draw offer on the new board — the spectators' board
+// (watchFromLedger) and the players' room both read it. No path returns a row
+// with a game to `pending` today, so the stale ledger is LABELLED SQL; both
+// writes that record a new game on a pending row are the guard.
+describe.skipIf(!process.env.DATABASE_URL)("T16: a new game on a row that carried a ledger starts from nothing", () => {
+  const LEDGER = [
+    "moves_uci", "move_count", "last_move_at", "white_ms", "black_ms",
+    "clock_increment_s", "draw_offer_by", "white_draw_offer_ply", "black_draw_offer_ply",
+  ] as const;
+  const EMPTY: Record<(typeof LEDGER)[number], unknown> = {
+    moves_uci: [], move_count: 0, last_move_at: null, white_ms: null, black_ms: null,
+    clock_increment_s: null, draw_offer_by: null, white_draw_offer_ply: null, black_draw_offer_ply: null,
+  };
+  /** Labelled SQL: the earlier game's ledger (1.e4 e5, White's draw offer) on a row back at pending. */
+  const staleLedger = (s: { fixtureId: string; orgId: string }) => sql`
+    insert into fixture_external_play
+      (fixture_id, org_id, scheduled_at_basis, status, moves_uci, move_count, last_move_at, white_ms, black_ms,
+       clock_increment_s, draw_offer_by, white_draw_offer_ply, black_draw_offer_ply)
+    values (${s.fixtureId}, ${s.orgId}, ${T}, 'pending', ${sql.json(["e2e4", "e7e5"])}, 2, ${OPENED}, 290000, 295000,
+            3, 'white', 2, null)`;
+  const ledger = async (fixtureId: string) => {
+    const [row] = await sql<Record<string, unknown>[]>`
+      select ${sql(LEDGER as unknown as string[])} from fixture_external_play where fixture_id = ${fixtureId}`;
+    return row!;
+  };
+
+  it("created (ready): every ledger column back to empty, the new game recorded", async () => {
+    const s = await seed();
+    await staleLedger(s);
+    expect((await ledger(s.fixtureId)).move_count, "premise: the stale ledger is there").toBe(2);
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    expect(await ledger(s.fixtureId)).toEqual(EMPTY);
+    expect(Object.keys(EMPTY), "anti-vacuity: all nine columns").toHaveLength(9);
+    expect((await bridge(s.fixtureId))?.challenge_id).toBe(GM);
+  });
+
+  it("held with the new game recorded (accept failed): the ledger is reset there too", async () => {
+    const s = await seed();
+    await staleLedger(s);
+    board.acceptChallenge.mockResolvedValueOnce({ ok: false, code: "unavailable", raw: "x" });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect((await bridge(s.fixtureId))?.status).toBe("needs_organiser");
+    expect(await ledger(s.fixtureId)).toEqual(EMPTY);
+  });
+});
