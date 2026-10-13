@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { BRACKET_KINDS, DRAW_KINDS, foldMatch, playRecorded, StageKind } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, StageKind } from "@seazn/engine/core";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import EN from "@/dictionaries/en/ui.json";
@@ -467,18 +467,29 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       expect(pick(after.get(e))).toEqual({ played: 0, won: 0, drawn: 0, lost: 0, points: 0 });
       checked += 1;
     }
-    // The double walkover and the win: the engine's own standingsDelta for the engine's own fold.
-    const deltaOf = (b: SeedRoundBoard, type: string, payload: unknown) => {
-      const state = foldMatch(
+    // The double walkover and the win: the engine's own standingsDelta for the engine's own fold of the ledger each
+    // settle actually WROTE, read back — never a hand-typed event (fix round 4, M-8: the win's row once came from a
+    // core.forfeit while the settle writes a Start and an adjudication, so the two rules could drift unseen).
+    const written = async (b: SeedRoundBoard) => {
+      const rows = await sql<{ id: string; seq: number; type: string; payload: unknown; recorded_at: Date; recorded_by: string | null }[]>`
+        select id, seq, type, payload, recorded_at, recorded_by from score_events where fixture_id = ${b.fixtureId} order by seq`;
+      const folded = foldMatchWithStoppage(
         boardgame,
         cfg,
         { home: { entrantId: b.home.entrantId, slots: [] }, away: { entrantId: b.away.entrantId, slots: [] } },
-        [{ id: "e0", fixtureId: b.fixtureId, seq: 0, type, payload, recordedAt: "2026-10-13T10:00:00.000Z", recordedBy: null }],
+        rows.map((e) => ({ id: e.id, fixtureId: b.fixtureId, seq: Number(e.seq), type: e.type, payload: e.payload, recordedAt: e.recorded_at.toISOString(), recordedBy: e.recorded_by })),
       );
-      return boardgame.standingsDelta(boardgame.outcome(state)!, cfg, { kind: "league" }, state);
+      const outcome = outcomeOf(boardgame, folded);
+      expect(outcome, `premise: the ledger written for ${b.fixtureId} decides it`).not.toBeNull();
+      return { types: rows.map((e) => e.type), outcome: outcome!, delta: boardgame.standingsDelta(outcome!, cfg, { kind: "league" }, folded.state) };
     };
-    const dw = deltaOf(walkedOver, "core.forfeit", { by: "both", reason: "walkover" });
-    const win = deltaOf(won, "core.forfeit", { by: won.away.entrantId, reason: "walkover" });
+    const dwWritten = await written(walkedOver);
+    const winWritten = await written(won);
+    // The settle's own request is the anchor the read-back cannot supply: home_wins names the home player.
+    expect(winWritten.types, "premise: a winner on a board never started is a Start and an adjudication").toEqual(["core.start", "boardgame.result"]);
+    expect(winWritten.outcome, "the written ledger decides for the player the organiser named").toMatchObject({ kind: "win", winner: won.home.entrantId, loser: won.away.entrantId });
+    const dw = dwWritten.delta;
+    const win = winWritten.delta;
     for (const d of [...dw, ...win]) {
       expect(pick(after.get(d.entrantId)), d.entrantId).toEqual({ played: d.played, won: d.won, drawn: d.drawn, lost: d.lost, points: d.points });
       checked += 1;
