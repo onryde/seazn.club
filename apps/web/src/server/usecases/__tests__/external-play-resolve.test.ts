@@ -22,8 +22,15 @@ import { BRACKET_KINDS, DRAW_KINDS, foldMatch, playRecorded } from "@seazn/engin
 import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import EN from "@/dictionaries/en/ui.json";
+import EN_PUBLIC from "@/dictionaries/en/public.json";
 import FR from "@/dictionaries/fr/ui.json";
 import { sql } from "@/lib/db";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import type { MessageKey } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import type { PublicFixture } from "@/server/public-site/data";
+import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { recomputeStandings } from "@/server/engine-db/competition";
@@ -326,6 +333,40 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     expect(links[voided.fixtureId]).toEqual({ kind: "final", score: "", noResult: true });
     expect(links[won.fixtureId]).toMatchObject({ kind: "final", noResult: false });
     expect((links[won.fixtureId] as { score: string }).score, "the pair: a decided board keeps its score").not.toBe("");
+  });
+
+  it("I-3: W2b's SHARED match-centre line is left as W2b words it — a VOID board reads 'Abandoned ({reason})' with the hold's reason, a both-absent board W2b's double walkover — through the real match-centre loader", async () => {
+    const r = await round({ fixtures: 2 });
+    const [voided, walkedOver] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await sql`update competitions set visibility = 'public' where id = ${r.competitionId}`;
+    await holdAs(r, voided, "aborted");
+    await holdAs(r, walkedOver, "no_show_both");
+    await resolveExternalPlay(r.owner, voided.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "no_result");
+    const [div] = await sql<{ sport_key: string; module_version: string }[]>`select sport_key, module_version from divisions where id = ${r.divisionId}`;
+    const ctx: MatchCentreLoadCtx = {
+      orgTz: null,
+      division: { sportKey: div!.sport_key, moduleVersion: div!.module_version, formatLabel: "x", tz: null, youth: false, playerNameDisplay: null },
+      locale: "en",
+      hrefs: { division: "/d", competition: "/c", calendar: null },
+      stage: { name: "League", roundLabel: null },
+      slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars),
+    };
+    const lineOf = async (fixtureId: string) => {
+      const [row] = await sql<PublicFixture[]>`
+        select id, division_id, stage_id, pool_id, round_no, seq_in_round,
+               home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+               scheduled_at, venue, court_label, status, outcome, summary, last_seq,
+               lane, is_final, third_place, conditional, stream_url
+          from public_fixtures_v where id = ${fixtureId}`;
+      expect(row, "premise: the fixture is public").toBeDefined();
+      const line = (await loadMatchCentre(sql, row!, ctx)).header.statusLine;
+      return line === null ? null : t(EN_PUBLIC as unknown as Dict, line.key, line.params);
+    };
+    // The expected sentences are W2b's own copy, filled from the dictionaries — never a string typed here.
+    const reason = abandonReasonText(EN, "aborted");
+    expect(await lineOf(voided.fixtureId), "VOID").toBe(t(EN_PUBLIC as unknown as Dict, "forfeit.sentence.abandonedBare", { reason }));
+    expect(await lineOf(walkedOver.fixtureId), "both absent").toBe(t(EN_PUBLIC as unknown as Dict, "forfeit.sentence.doubleWalkover", {}));
   });
 
   it("I-3: the abandon's reason is stored in the club's own language (its default locale), as the public 'Abandoned (…)' prints it", async () => {
