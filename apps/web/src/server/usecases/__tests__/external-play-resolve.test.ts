@@ -171,6 +171,9 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
   // The method each decision is written with, from the rulebook (FIDE Laws
   // Art. 6.7: a player absent at the start loses by default — a forfeit; any
   // other decision of the arbiter is an adjudication). Home is White here.
+  // RB4 (W2b spec §5.2, D15): a default is `core.forfeit {by: the absent
+  // loser, reason: "walkover"}` — the sweep's own no-show shape — with no
+  // Start; an adjudication is a Start and `boardgame.result`.
   const cases: { hold: "no_show_white" | "no_show_black" | "no_show_both" | "not_started" | "token_revoked"; kind: "home_wins" | "away_wins"; method: "forfeit" | "adjudication" }[] = [
     { hold: "no_show_black", kind: "home_wins", method: "forfeit" }, // Black (away) stayed away and loses
     { hold: "no_show_black", kind: "away_wins", method: "adjudication" }, // the present player loses: a ruling
@@ -183,6 +186,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
 
   it("each hold × winner: the result, its method, the bridge closed, the queue emptied — and the ledger names who settled", async () => {
     let checked = 0;
+    const shapes = new Set<string>();
     for (const c of cases) {
       const r = await round();
       const b = r.boards[0]!;
@@ -199,16 +203,46 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       expect(await resolveExternalPlay(r.owner, b.fixtureId, c.kind), JSON.stringify(c)).toEqual({ status: "finished" });
 
       const winner = c.kind === "home_wins" ? b.home.entrantId : b.away.entrantId;
+      const loser = c.kind === "home_wins" ? b.away.entrantId : b.home.entrantId;
+      const ledger = await ledgerOf(b.fixtureId);
+      const want: [string, unknown][] =
+        c.method === "forfeit"
+          ? [["core.forfeit", { by: loser, reason: "walkover" }]]
+          : [
+              ["core.start", {}],
+              ["boardgame.result", { winner, method: "adjudication" }],
+            ];
+      expect(ledger.map((e) => [e.type, e.payload]), JSON.stringify(c)).toEqual(want);
+      shapes.add(ledger.map((e) => e.type).join("+"));
+      expect(ledger.every((e) => e.recorded_by === r.ownerUserId), "the ledger names who settled").toBe(true);
+      // The fixture's outcome is the engine's own fold of that ledger (a default is W2b's award; an adjudication a win).
+      const state = foldMatch(
+        boardgame,
+        boardgame.configSchema.parse({}),
+        { home: { entrantId: b.home.entrantId, slots: [] }, away: { entrantId: b.away.entrantId, slots: [] } },
+        ledger.map((e, k) => ({ id: e.id, fixtureId: b.fixtureId, seq: k + 1, type: e.type, payload: e.payload, recordedAt: "2026-10-13T10:00:00.000Z", recordedBy: null })),
+      );
       const f = await fixtureOf(b.fixtureId);
-      expect(f.outcome, JSON.stringify(c)).toMatchObject({ kind: "win", winner, method: c.method });
+      expect(f.outcome, JSON.stringify(c)).toEqual(boardgame.outcome(state));
+      expect(f.outcome, `${JSON.stringify(c)}: the winner`).toMatchObject({ winner });
+      expect(f.status, JSON.stringify(c)).toBe(c.method === "forfeit" ? "forfeited" : "decided");
       expect(await bridgeOf(b.fixtureId), JSON.stringify(c)).toMatchObject({ status: "finished", needs_reason: null, revoked_seat: null });
       expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), `${c.hold}: the queue no longer lists it`).toEqual([]);
-      const ledger = await ledgerOf(b.fixtureId);
-      expect(ledger.map((e) => e.type), "a fold in `pre` is started first").toEqual(["core.start", "boardgame.result"]);
-      expect(ledger.every((e) => e.recorded_by === r.ownerUserId), "the ledger names who settled").toBe(true);
+      // What the organiser and the spectators read back: the engine's lines and method, home (White) first.
+      const summary = boardgame.summary(state);
+      const line = (entrant: string) => summary.perSide.find((p) => p.entrantId === entrant)!.line;
+      const score = `${line(b.home.entrantId)}–${line(b.away.entrantId)}`;
+      expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state, JSON.stringify(c)).toEqual({ kind: "result", score });
+      expect((await loadPublicExternalPlay(b.fixtureId))?.result, JSON.stringify(c)).toMatchObject({
+        kind: "win",
+        winner: c.kind === "home_wins" ? "home" : "away",
+        method: (summary.detail as { method?: string }).method,
+        score,
+      });
       checked += 1;
     }
     expect(checked, "anti-vacuity: hold × winner cases").toBe(cases.length);
+    expect([...shapes].sort(), "both shapes were written").toEqual(["core.forfeit", "core.start+boardgame.result"]);
   });
 
   it("Draw ⇒ a draw by adjudication — in a league", async () => {
