@@ -317,7 +317,8 @@ export async function holdForOrganiser(a: {
 /** Review M3: the sweep's no-show whose forfeit the engine refused the same
  *  way, pass after pass — the organiser's, as the no-show it is (whose
  *  colour stayed away), with the refusal as `detail`. The board stays open;
- *  nothing is decided. */
+ *  nothing is decided. Also the no-show the sweep will not ask for because
+ *  play is recorded (RB3; rebase review M-1). */
 export async function holdRefusedNoShow(a: {
   fixtureId: string;
   absent: keyof typeof NO_SHOW_REASONS;

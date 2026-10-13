@@ -311,7 +311,19 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   // the arbiter's. Read AFTER the seq the forfeit is written at: a Start landing in between is seen here, and one
   // landing after makes the write SEQ_CONFLICT — refused, never a walkover over it.
   const ledger = await listEvents(auth, f.fixtureId, 0);
-  if (playRecorded(ledger.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), boardgame)) return;
+  if (playRecorded(ledger.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), boardgame)) {
+    // Rebase review M-1: not silent. A Start with a player absent at the deadline (an organiser who tapped Start on
+    // the pad before anyone came) would otherwise read live for ever with nobody playing. Held ONCE for the
+    // organiser as the no-show it is — the hold takes the board out of this job's candidates — and counted.
+    await ensureBridgeRow(f);
+    const held = await holdRefusedNoShow({
+      fixtureId: f.fixtureId,
+      absent: await absentColour(f, by),
+      detail: "sweep: absent at the deadline, but play is recorded (a Start on the ledger) — never walked over",
+    });
+    if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
+    return;
+  }
   try {
     await scoreEvent(auth, f.fixtureId, {
       expected_seq: state.last_seq,
@@ -348,6 +360,12 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
 export const NO_SHOW_REFUSALS_BEFORE_HOLD = 3;
 const NO_SHOW_REFUSED_MARKER = "noshow:refused:";
 
+/** The colour (or both) a no-show's `by` names — the RECORDED colours (a pairing card may put Black on home). */
+async function absentColour(f: OnlinePlayFixture, by: string): Promise<"white" | "black" | "both"> {
+  if (by === "both") return "both";
+  return (by === f.homeEntrantId ? "home" : "away") === (await whiteSideOf(f)) ? "white" : "black";
+}
+
 async function refusedNoShow(pass: Pass, f: OnlinePlayFixture, by: string, err: unknown): Promise<void> {
   const code = codeOf(err);
   const prefix = `${NO_SHOW_REFUSED_MARKER}${code} n=`;
@@ -360,11 +378,9 @@ async function refusedNoShow(pass: Pass, f: OnlinePlayFixture, by: string, err: 
      where fixture_id = ${f.fixtureId} and status = 'pending' and challenge_id is null
     returning substring(last_error from length(${prefix}) + 1)::int as n`;
   if (!row || row.n < NO_SHOW_REFUSALS_BEFORE_HOLD) throw err;
-  const absent =
-    by === "both" ? "both" : (by === f.homeEntrantId ? "home" : "away") === (await whiteSideOf(f)) ? "white" : "black";
   const held = await holdRefusedNoShow({
     fixtureId: f.fixtureId,
-    absent,
+    absent: await absentColour(f, by),
     detail: `sweep: the no-show forfeit was refused ${row.n} passes running (${code})`,
   });
   if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;

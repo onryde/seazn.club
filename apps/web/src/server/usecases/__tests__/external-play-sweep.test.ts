@@ -924,7 +924,8 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
 // T+20 sweep never writes a walkover over it. W2b admits a chess walkover
 // after the Start (walkoverPhases, ruling 118: the Start is play), so the
 // engine would take it: the sweep must not ask. Such a board is left open,
-// for the arbiter.
+// for the arbiter — and (rebase review M-1) held for the organiser ONCE, as the
+// no-show it is, so it never sits live and silent with nobody playing.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("RB3 — no walkover over a Start", () => {
   /** The organiser's Start through the real scoring write (the pad's producer, or a settle that wrote its Start and
@@ -937,20 +938,24 @@ describe.runIf(HAS_DB)("RB3 — no walkover over a Start", () => {
     return row!.id;
   }
 
-  it("a board with an active Start is never forfeited at T+20 — one player absent, and both — and is left open", async () => {
+  it("a board with an active Start is never forfeited at T+20 — one player absent, and both — and is held for the organiser once, counted", async () => {
     let checked = 0;
-    for (const checkedIn of [["home"], []] as Side[][]) {
+    // The seed pairs home as White: only home came, so Black is the no-show; nobody came is both.
+    for (const [checkedIn, reason] of [[["home"], "no_show_black"], [[], "no_show_both"]] as [Side[], NeedsReason][]) {
       const label = `checked in: ${JSON.stringify(checkedIn)}`;
       const b = await openedBoard({ checkedIn });
       await startRecorded(b);
       const report = await sweep(b, { now: b.at(45) });
       expect(forfeitsAttempted(b.fixtureId), `${label}: never asked`).toEqual([]);
       expect(await forfeitsWritten(b.fixtureId), label).toEqual([]);
-      expect([report.noShows, report.failures], label).toEqual([0, []]);
+      expect([report.noShows, report.failures, report.heldForOrganiser], `${label}: held, counted`).toEqual([0, [], 1]);
+      expect(await bridgeOf(b.fixtureId), label).toEqual({ status: "needs_organiser", needs_reason: reason });
+      await expectQueued(b, reason);
       expect((await fixtureRow(b.fixtureId)).status, `${label}: open, the arbiter's`).toBe("in_play");
-      // A second pass is no different.
-      await sweep(b, { now: b.at(50) });
+      // A second pass is no different, and holds nothing again.
+      const again = await sweep(b, { now: b.at(50) });
       expect(forfeitsAttempted(b.fixtureId), `${label}: never asked, twice`).toEqual([]);
+      expect([again.noShows, again.failures, again.heldForOrganiser], `${label}: second pass`).toEqual([0, [], 0]);
       checked++;
     }
     expect(checked, "anti-vacuity: boards").toBe(2);
