@@ -75,7 +75,7 @@ const THIRD_PLACE_KEY = "third-place";
  *  producer's `HubMatch.forfeit.played`, the engine's one "played" reader over the final's ledger, never the kind (a
  *  disqualification after a bare Start is a walkover, ruling 115; one after play is not). Only an explicit `false`
  *  claims the walkover line: unknown makes no claim, and the final's tag beside the plain line says what it was. */
-const finalUnplayed = (forfeit: HubMatchT["forfeit"]): boolean => forfeit?.played === false;
+const finalUnplayed = (match: Pick<HubMatchT, "forfeit">): boolean => match.forfeit?.played === false;
 
 /** A round-0 cell in the Draw, in px; round k is this times 2^k, so every node
  *  sits centred between the two that feed it. */
@@ -456,7 +456,7 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
               dict,
               // A final won by a forfeit with nothing played before it was
               // never played, so "Beat X" would report a match that did not happen.
-              finalUnplayed(final.forfeit)
+              finalUnplayed(final)
                 ? "knockout.championLineWalkover"
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
@@ -466,7 +466,7 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
                 Design audit 3.6: (a) only there — the walkover line already says "by walkover", and its "w/o" tag
                 beside it said it twice (a withdrawal shares that tag, X-RS-2; the final's card keeps its sentence);
                 (b) in the on-court tone, the banner being the dark court. */}
-            {final.forfeit && !finalUnplayed(final.forfeit) ? (
+            {final.forfeit && !finalUnplayed(final) ? (
               <span className="ml-1.5 inline-block align-middle">
                 <ForfeitTagChip
                   tag={final.forfeit.tag}
