@@ -6000,6 +6000,7 @@
   "externalPlay.queue.matchUnknown": "Match",
   "externalPlay.resolve.draw": "Nulle",
   "externalPlay.resolve.noResult": "Sans résultat",
+  "externalPlay.resolve.doubleWalkover": "Aucun des deux présent — double forfait",
   "externalPlay.resolve.failed": "Impossible d'enregistrer le résultat. Réessayez.",
   "externalPlay.resolve.abandonReason.no_show_white": "les Blancs ne se sont pas présentés",
   "externalPlay.resolve.abandonReason.no_show_black": "les Noirs ne se sont pas présentés",

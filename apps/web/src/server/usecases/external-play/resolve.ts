@@ -29,7 +29,8 @@ import "server-only";
 //                 absence. Only where BOTH players stayed away (no_show_both,
 //                 double_walkover_blocked) is it W2b's double walkover,
 //                 `core.forfeit {by: "both", reason: "walkover"}` (W2b spec
-//                 §5.2). Never a Start: before play the board stays unplayed
+//                 §5.2) — offered wherever W2b takes one, a knockout line
+//                 that feeds a next match included (fix round 3). Never a Start: before play the board stays unplayed
 //                 (ruling 118 reads chess's play from an active Start), after
 //                 it the Start stands. The void is offered only in a
 //                 league or a group's round-robin (fix round 3): in ANY
@@ -80,6 +81,9 @@ type Board = {
   stageKind: string | null;
   /** The club's default locale: the abandon reason's language (I-3). */
   orgLocale: string | null;
+  /** The two feed edges: whether this line feeds a next match (W2b D19, read by `noResultOffer`). */
+  winner_to_fixture: string | null;
+  loser_to_fixture: string | null;
 };
 
 function requireOrganiserSession(auth: AuthCtx): string {
@@ -97,7 +101,7 @@ async function loadBoard(auth: AuthCtx, fixtureId: string): Promise<Board> {
     select f.org_id as "orgId", f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.white_side as "whiteSide",
-           s.kind as "stageKind", o.default_locale as "orgLocale"
+           s.kind as "stageKind", o.default_locale as "orgLocale", f.winner_to_fixture, f.loser_to_fixture
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = f.org_id
@@ -219,7 +223,7 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   }
 
   if (kind === "no_result") {
-    const offer = noResultOffer({ stageKind: b.stageKind, reason });
+    const offer = noResultOffer({ stageKind: b.stageKind, reason, edges: b });
     if (offer.kind === "refused") {
       const refusal = NO_RESULT_REFUSAL[offer.why];
       throw new HttpError(409, refusal.message, refusal.code);

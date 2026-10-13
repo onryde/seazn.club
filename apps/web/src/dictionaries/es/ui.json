@@ -6000,6 +6000,7 @@
   "externalPlay.queue.matchUnknown": "Partido",
   "externalPlay.resolve.draw": "Tablas",
   "externalPlay.resolve.noResult": "Sin resultado",
+  "externalPlay.resolve.doubleWalkover": "Ninguno se presentó — doble incomparecencia",
   "externalPlay.resolve.failed": "No se pudo guardar el resultado. Inténtalo de nuevo.",
   "externalPlay.resolve.abandonReason.no_show_white": "las blancas no se presentaron",
   "externalPlay.resolve.abandonReason.no_show_black": "las negras no se presentaron",

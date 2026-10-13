@@ -92,6 +92,8 @@ export async function listNeedsOrganiserExternalPlay(
         seq_in_round: number | null;
         stage_name: string;
         stage_kind: string | null;
+        winner_to_fixture: string | null;
+        loser_to_fixture: string | null;
       }[]
     >`
       select f.id as fixture_id, f.fixture_no, f.status as fixture_status,
@@ -99,7 +101,7 @@ export async function listNeedsOrganiserExternalPlay(
              f.scheduled_at, ep.needs_reason, ep.last_error,
              ep.white_side, ep.revoked_seat, ep.challenge_id,
              f.round_no, f.seq_in_round, s.name as stage_name,
-             s.kind as stage_kind
+             s.kind as stage_kind, f.winner_to_fixture, f.loser_to_fixture
         from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id
         join stages s on s.id = f.stage_id
@@ -135,7 +137,7 @@ export async function listNeedsOrganiserExternalPlay(
         stageName: r.stage_name,
         canResync: r.challenge_id !== null,
         seated: seated.has(r.fixture_id),
-        noResultOffer: noResultOffer({ stageKind: r.stage_kind, reason }),
+        noResultOffer: noResultOffer({ stageKind: r.stage_kind, reason, edges: r }),
       };
     }),
   );

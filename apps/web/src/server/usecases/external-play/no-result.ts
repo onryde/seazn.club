@@ -14,11 +14,15 @@ import "server-only";
 //     americano's (its mexicano mode waits on every game decided), which reads the same sentence.
 //   - Both players absent (no_show_both, double_walkover_blocked): W2b's double walkover, `core.forfeit {by: "both",
 //     reason: "walkover"}` — each charged a game played and lost at 0 points; it folds to `forfeited`, which a Swiss
-//     round counts as decided.
+//     round counts as decided. Offered wherever W2b takes one (fix round 3), a knockout line that feeds a next match
+//     included, and hidden exactly where W2b refuses it — W2b's OWN predicate, D19 `doubleWalkoverRefused` (a final, a
+//     last rung, a third-place match: a bracket line that feeds no next match), so the two can never disagree.
 //   - In any knockout (every kind where a level result is forbidden: `forbidsLevelResult`), No result is refused: a
 //     knockout game needs a winner.
 import { forbidsLevelResult } from "@seazn/engine/core";
 import type { NoResultOffer } from "@/lib/arbiter-view";
+import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
+import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
@@ -49,12 +53,13 @@ const ABANDON_REASON_KEY = {
 /** The stage kinds a void cannot hold up: a table that completes over it, and pairs nothing round by round. */
 const VOID_SAFE_KINDS: ReadonlySet<string> = new Set(["league", "group"]);
 
-/** What the settle offers in place of a winner on a board of a `stageKind` stage held for `reason` (null: not held) —
- *  the server's one reading: the settle's refusal, and both readers' `noResultOffer`. */
-export function noResultOffer(board: { stageKind: string | null; reason: NeedsReason | null }): NoResultOffer {
+/** What the settle offers in place of a winner on a board of a `stageKind` stage held for `reason` (null: not held),
+ *  its two feed edges saying whether its line feeds a next match — the server's one reading: the settle's refusal, and
+ *  both readers' `noResultOffer`. */
+export function noResultOffer(board: { stageKind: string | null; reason: NeedsReason | null; edges: FeedEdges }): NoResultOffer {
   const knockout = forbidsLevelResult(board.stageKind);
   if (board.reason !== null && isBothAbsent(board.reason)) {
-    return knockout ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
+    return doubleWalkoverRefused(board.stageKind, feedsNextMatch(board.edges)) ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
   }
   if (board.stageKind !== null && VOID_SAFE_KINDS.has(board.stageKind)) return { kind: "void" };
   return { kind: "refused", why: knockout ? "knockout" : "swiss" };

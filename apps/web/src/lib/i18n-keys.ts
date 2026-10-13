@@ -2467,6 +2467,7 @@ export type DictionaryKey =
   | "externalPlay.resolve.abandonReason.provider_error"
   | "externalPlay.resolve.abandonReason.tiebreak_owed"
   | "externalPlay.resolve.abandonReason.token_revoked"
+  | "externalPlay.resolve.doubleWalkover"
   | "externalPlay.resolve.draw"
   | "externalPlay.resolve.failed"
   | "externalPlay.resolve.noResult"
