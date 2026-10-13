@@ -147,6 +147,29 @@ describe("/me: the Lichess card", () => {
     expect(html).toContain('data-testid="lichess-unlink"');
   });
 
+  // M5 (T16 fix round 1, canvas MePhone): every control is a 44px target, and the re-link block discloses what the
+  // grant allows — the canvas's three lines, the account tab's own consent copy (the room's re-link card reads it too).
+  it("M5: link, re-link and unlink are 44px targets; the re-link block discloses the grant, and only it does", async () => {
+    const control = (html: string, id: string) => html.match(new RegExp(`<(?:a|button)[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
+    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: true, orgSlug: "club-b" });
+    const relinkHtml = await render();
+    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: "club-b" });
+    const linkHtml = await render();
+    let checked = 0;
+    for (const [html, id] of [[relinkHtml, "lichess-relink"], [relinkHtml, "lichess-unlink"], [linkHtml, "lichess-link"]] as const) {
+      const tag = control(html, id);
+      expect(tag, `${id}: rendered`).not.toBe("");
+      expect(tag, `${id}: 44px`).toMatch(/class="[^"]*\bmin-h-11\b/);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    const scope = relinkHtml.match(/<div[^>]*data-testid="lichess-scope"[^>]*>([^]*?)<\/div>/)?.[1] ?? "";
+    for (const k of ["settings.account.lichess.consent.title", "settings.account.lichess.consent.body", "settings.account.lichess.consent.scopes"]) {
+      expect(scope, k).toContain(escaped(EN[k]!));
+    }
+    expect(linkHtml, "the plain link state (canvas: no disclosure)").not.toContain('data-testid="lichess-scope"');
+  });
+
   it("a card handed no club and no link (the account tab of a club not offered online chess) starts nothing", async () => {
     card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: null });
     const html = await render();

@@ -94,6 +94,25 @@ describe("the ENTRIES step states online play and the camera, before signup", ()
     expect(checked, "anti-vacuity: every declared policy").toBe(CAMERA_POLICIES.length);
   });
 
+  // M6 (T16 fix round 1): the canvas (RegisterEntriesPhone) and the brief give the notice the house amber when the
+  // camera is REQUIRED — a duty — and the quiet lavender otherwise; never the sky blue it shipped with.
+  it("M6: the notice's tone follows the duty — amber when the camera is required, lavender otherwise, never sky", () => {
+    const AMBER = ["bg-[#fef3c7]", "border-[#f5d27a]", "text-[#713f12]"];
+    const LAVENDER = ["bg-[#f3effc]", "text-[#4a3a6b]"];
+    let checked = 0;
+    for (const policy of CAMERA_POLICIES) {
+      const h = card({ online_play: true, camera_policy: policy });
+      const cls = /data-testid="division-online-play"[^>]*class="([^"]*)"|class="([^"]*)"[^>]*data-testid="division-online-play"/.exec(h);
+      const classes = (cls?.[1] ?? cls?.[2] ?? "").split(/\s+/);
+      expect(classes.length > 1, `${policy}: the notice's classes were read`).toBe(true);
+      for (const c of policy === "required" ? AMBER : LAVENDER) expect(classes, `${policy}: ${c}`).toContain(c);
+      for (const c of policy === "required" ? LAVENDER : AMBER) expect(classes, `${policy}: not ${c}`).not.toContain(c);
+      expect(classes.some((c) => c.includes("sky")), `${policy}: no sky`).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(CAMERA_POLICIES.length);
+  });
+
   it("the seam: the server's own wire object (typed PublicDivisionInfo, so a renamed field fails tsc) renders the notice as handed", () => {
     const wire: PublicDivisionInfo = {
       ...DIVISION,

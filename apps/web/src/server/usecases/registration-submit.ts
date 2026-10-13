@@ -562,9 +562,12 @@ export async function submitRegistrationGroup(
 
     // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
     // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
+    // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
+    // (registrations.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
+    // and this demand cannot disagree. The person is still the one whose link is checked.
     if (
       readOnlinePlay(divCtx.config) === "lichess" &&
-      (await onlineChessOffered({ orgId: divCtx.org_id, userId: ctx.sessionUserId ?? null }))
+      (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))
     ) {
       if (!entry.registering_self) {
         throw new HttpError(
@@ -1234,10 +1237,10 @@ export async function joinTeamEntry(
   );
   if (issues.length > 0) throw eligibilityError(issues);
 
-  // T20: as at submit — no Lichess link is demanded while the club is not offered online chess.
+  // T20: as at submit — no Lichess link is demanded while the club is not offered online chess, asked as the club (M7).
   if (
     readOnlinePlay(divCtx.config) === "lichess" &&
-    (await onlineChessOffered({ orgId: divCtx.org_id, userId: ctx.sessionUserId ?? null }))
+    (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))
   ) {
     await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
   }
