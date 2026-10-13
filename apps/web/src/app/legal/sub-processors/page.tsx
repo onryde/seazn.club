@@ -38,6 +38,12 @@ const SUB_PROCESSORS = [
     url: "https://resend.com/privacy",
   },
   {
+    name: "Cloudflare",
+    purpose: "Live camera video in online chess match rooms (RealtimeKit); live-stream video ingest and playback (Stream)",
+    location: "Global (edge network)",
+    url: "https://www.cloudflare.com/privacypolicy/",
+  },
+  {
     name: "Anthropic",
     purpose: "AI scheduling — generates schedule and officials proposals (Claude)",
     location: "US",
@@ -69,7 +75,7 @@ export default function SubProcessorsPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Sub-processors</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 22 July 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 14 October 2026</p>
         <p className="mb-8 text-sm text-slate-600">
           Seazn Club uses the following sub-processors to provide the
           service. All sub-processors are bound by data processing agreements
