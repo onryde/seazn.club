@@ -191,10 +191,49 @@ async function tappable(page: Page, control: ReturnType<Page["getByTestId"]>, na
   expect(hit, `${name}: a tap at its centre lands on it`).toBe(true);
 }
 
-/** A fresh context: no session — a stranger opening a shared link. */
-async function cold(browser: Browser): Promise<BrowserContext> {
+/** Each line of the "Your board" card that is fully on screen, hit-tested at its left, centre and right: a hit that
+ *  lands anywhere but the line is a line something hides — and the hit is named (tag, nearest test id, classes), so a
+ *  red says WHAT covers it. Also the sticky header's and the card's tops, for the scroll premises. */
+async function readYourBoardLines(p: Page) {
+  return p.evaluate(() => {
+    const header = document.querySelector("header.sticky")!.getBoundingClientRect();
+    const cardEl = document.querySelector('[data-testid="your-board"]')!;
+    const lines = [...cardEl.querySelectorAll("p"), ...cardEl.querySelectorAll('[data-testid="your-board-link"]')];
+    let checked = 0;
+    const hidden: string[] = [];
+    const what = (el: Element | null) => {
+      if (el === null) return "nothing";
+      const tid = el.closest("[data-testid]")?.getAttribute("data-testid");
+      const cls = typeof el.className === "string" ? el.className.slice(0, 60) : "";
+      return `<${el.tagName.toLowerCase()}${tid ? ` in [${tid}]` : ""}${cls ? ` .${cls}` : ""}>`;
+    };
+    for (const line of lines) {
+      const r = line.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) continue;
+      for (const x of [r.left + 4, r.left + r.width / 2, r.right - 4]) {
+        const top = document.elementFromPoint(x, r.top + r.height / 2);
+        if (top === null || !(top === line || line.contains(top))) hidden.push(`${line.textContent} at x=${Math.round(x)} hit ${what(top)}`);
+        checked += 1;
+      }
+    }
+    return {
+      headerTop: Math.round(header.top),
+      headerBottom: Math.round(header.bottom),
+      cardTop: Math.round(cardEl.getBoundingClientRect().top),
+      lines: lines.length,
+      checked,
+      hidden,
+    };
+  });
+}
+
+/** A fresh context: no session — a stranger opening a shared link. `consented: true` pre-answers the site's cookie
+ *  notice, for a test about something else that the notice (pinned to the bottom of a cold context) would otherwise
+ *  cover; `false` never does, even in a capture run — what the notice covers on a first visit is its own test ("a
+ *  first visit at 320"). Unset, only a capture run pre-answers it. */
+async function cold(browser: Browser, o: { consented?: boolean } = {}): Promise<BrowserContext> {
   const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: test.info().project.use.baseURL });
-  if (SHOTS) {
+  if (o.consented ?? !!SHOTS) {
     // A capture run draws the surface, not the site's cookie notice.
     await ctx.addInitScript(
       (a: { k: string; vk: string; v: string }) => {
@@ -585,38 +624,19 @@ test.describe("online chess — the public fixture page", () => {
 
   // T17 round B, D: a full-page capture draws the site's sticky header wherever the capture's viewport ended, which
   // put it across the "Your board" card in a 320 shot. This reads the live page instead: what a tap at each of the
-  // card's lines meets, at rest and with the card scrolled up to the header.
+  // card's lines meets, at rest and with the card scrolled up to the header. Consented: this is about the header, and
+  // the cookie notice is the next test's.
   test("D: at 320 the site's sticky header sits over no line of Your board — at rest, and scrolled up to it", async ({ browser, request }) => {
     test.setTimeout(180_000);
     const room = await seedMatchRoom(request, { names: [longName(), "Bo Lindqvist"] });
-    const ctx = await cold(browser);
+    const ctx = await cold(browser, { consented: true });
     const p = await ctx.newPage();
     await p.setViewportSize({ width: 320, height: 700 });
     await loginUi(p, room.white.email, room.fixturePath);
     await p.waitForURL((u) => u.pathname === room.fixturePath);
     const card = p.getByTestId("your-board");
     await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
-    /** Each line of the card that is fully on screen, hit-tested at its left, centre and right: a hit that lands in
-     *  the sticky header is a line the header hides. */
-    const read = () =>
-      p.evaluate(() => {
-        const header = document.querySelector("header.sticky")!.getBoundingClientRect();
-        const cardEl = document.querySelector('[data-testid="your-board"]')!;
-        const lines = [...cardEl.querySelectorAll("p"), ...cardEl.querySelectorAll('[data-testid="your-board-link"]')];
-        let checked = 0;
-        const hidden: string[] = [];
-        for (const line of lines) {
-          const r = line.getBoundingClientRect();
-          if (r.top < 0 || r.bottom > window.innerHeight) continue;
-          for (const x of [r.left + 4, r.left + r.width / 2, r.right - 4]) {
-            const top = document.elementFromPoint(x, r.top + r.height / 2);
-            if (top === null || !(top === line || line.contains(top))) hidden.push(`${line.textContent} at x=${Math.round(x)}`);
-            checked += 1;
-          }
-        }
-        return { headerTop: Math.round(header.top), headerBottom: Math.round(header.bottom), cardTop: Math.round(cardEl.getBoundingClientRect().top), lines: lines.length, checked, hidden };
-      });
-
+    const read = () => readYourBoardLines(p);
     await p.evaluate(() => window.scrollTo(0, 0));
     const rest = await read();
     expect(rest.lines, "anti-vacuity: title, state and the link").toBe(3);
@@ -642,6 +662,41 @@ test.describe("online chess — the public fixture page", () => {
     await p.evaluate(() => window.scrollBy(0, 24));
     const under = await read();
     expect(under.hidden.some((h) => h.startsWith(uiEn["externalPlay.yourBoard.title"]!)), JSON.stringify(under.hidden)).toBe(true);
+    await ctx.close();
+  });
+
+  // A player's first visit IS a cold one: the invite mail is the way in, so the site's cookie notice (fixed to the
+  // bottom, ~240px tall at 320) is up when the card arrives. CI's 320x700 run caught the notice over "Go to your board"
+  // (e2e run 38481554563). The card is the player's reason to be on the page, so it sits above the notice at rest on
+  // the shortest phone too — with the notice still up, unanswered.
+  test("a first visit at 320: the cookie notice covers no line of Your board — 568 and 700 tall, and at 1280", async ({ browser, request }) => {
+    test.setTimeout(180_000);
+    const room = await seedMatchRoom(request, { names: [longName(), "Bo Lindqvist"] });
+    const ctx = await cold(browser, { consented: false });
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width: 320, height: 568 });
+    await loginUi(p, room.white.email, room.fixturePath);
+    await p.waitForURL((u) => u.pathname === room.fixturePath);
+    const card = p.getByTestId("your-board");
+    await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
+    let checked = 0;
+    for (const [width, height] of [[320, 568], [320, 700], [1280, 900]] as const) {
+      await p.setViewportSize({ width, height });
+      await p.evaluate(() => window.scrollTo(0, 0));
+      await expect(p.getByTestId("cookie-consent"), `${width}x${height}: premise — a first visit, the notice is up`).toBeVisible();
+      const rest = await readYourBoardLines(p);
+      expect(rest.checked, `${width}x${height}: every line on screen at rest`).toBe(9);
+      expect(rest.hidden, `${width}x${height}`).toEqual([]);
+      if (SHOTS) await p.screenshot({ path: join(SHOTS, `first-visit-your-board-${width}x${height}.png`), caret: "initial" });
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    // The positive pair: a screen too short for both (320x420, a phone on its side) — the probe sees the notice over
+    // the card, so its silence above is the notice's absence, not the probe's blindness.
+    await p.setViewportSize({ width: 320, height: 420 });
+    await p.evaluate(() => window.scrollTo(0, 0));
+    const short = await readYourBoardLines(p);
+    expect(short.hidden.some((h) => h.includes("[cookie-consent]")), JSON.stringify(short.hidden)).toBe(true);
     await ctx.close();
   });
 

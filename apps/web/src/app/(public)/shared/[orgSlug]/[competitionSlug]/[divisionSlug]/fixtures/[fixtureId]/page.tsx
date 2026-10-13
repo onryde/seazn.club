@@ -317,6 +317,14 @@ export default async function FixturePage({ params }: Props) {
           </Link>
         </nav>
 
+        {/* T16 — a player's door into their match room. This HTML is shared (ISR), so it carries no door: the
+            island asks the lobby route after hydration, and only one of the two players gets an answer. ABOVE the
+            headline, not under it: a player's first visit is a cold one (the invite mail), so the site's cookie notice
+            — fixed to the bottom, ~240px tall at 320 — is up when the card arrives, and under the headline it sat over
+            "Go to your board" (e2e run 38481554563, 320x700). Here it clears the notice at 320x568. A spectator gets
+            nothing, so their page does not move. */}
+        {onlineBoard ? <YourBoard fixtureId={fixture.id} /> : null}
+
         <div className="mb-1 flex flex-wrap items-start justify-between gap-3">
           <h1 className="font-display text-2xl font-semibold text-ink">
             {home} <span className="text-ink-muted">{msgFn("schedule.vs")}</span> {away}
@@ -420,10 +428,6 @@ export default async function FixturePage({ params }: Props) {
             </p>
           ) : null;
         })()}
-
-        {/* T16 — a player's door into their match room. This HTML is shared (ISR), so it carries no door: the
-            island asks the lobby route after hydration, and only one of the two players gets an answer. */}
-        {onlineBoard ? <YourBoard fixtureId={fixture.id} /> : null}
 
         {/* T16 — the online board, watched here (D3: one venue, no Lichess link). The server's doc paints
             first; the island keeps it live (its poll, and the moves pushed through the match centre's channel). */}
