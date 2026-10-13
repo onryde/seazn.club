@@ -699,8 +699,11 @@ export interface RuleKeyFact {
   /** Which stage kinds ("format") and which engine variants the key applies to. Absent = every one. A null kind or
    *  variant at the call site (the division level, or no variant) is never narrowed. */
   readonly appliesTo?: { readonly stageKinds?: readonly StageKind[]; readonly variants?: readonly string[] };
-  /** X-SR-2: a match may only switch this key off or shorten it (RB2B-3, football extra time). */
-  readonly matchBound?: "off_or_shorter";
+  /** X-SR-2 (signed): "a decider may only be switched off or shortened for one match". Carried by every decider key —
+   *  the declaration IS what makes a key a decider — and only by match keys: `off` a switch a match may only turn off
+   *  (cricket's super over); `shorter` a length or count a match may only lower (overtime minutes, shoot-out
+   *  attempts); `off_or_shorter` an `{enabled, halfMinutes}` decider, off or a shorter half (RB2B-3, football ET). */
+  readonly matchBound?: "off" | "shorter" | "off_or_shorter";
 }
 /** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
 export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;

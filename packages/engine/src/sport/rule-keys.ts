@@ -48,20 +48,22 @@ export const stageDefaultsFor = (m: AnySportModule, kind: StageKind, variant: st
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** One changed leaf: where it is, and what the stage holds there. A list, or a value that changes shape, is ONE
- *  leaf; only an object on BOTH sides is descended. */
-interface Leaf { readonly path: readonly string[]; readonly before: unknown }
-function changedLeaves(before: unknown, after: unknown, path: readonly string[]): Leaf[] {
+/** The paths of the leaves that differ. A list, or a value that changes shape, is ONE leaf; only an object on BOTH
+ *  sides is descended. */
+function changedLeaves(before: unknown, after: unknown, path: readonly string[]): (readonly string[])[] {
   if (isObj(before) && isObj(after)) {
     const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
     return [...keys].flatMap((k) => changedLeaves(before[k], after[k], [...path, k]));
   }
-  return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ path, before }];
+  return JSON.stringify(before) === JSON.stringify(after) ? [] : [path];
 }
 /** The value at a declared key's path. Every prefix of a changed leaf is an object on both sides (`changedLeaves`
  *  only descends through objects), so no step can land on a non-object. */
 const valueAt = (o: Record<string, unknown>, key: string): unknown =>
   key.split(".").reduce<unknown>((acc, k) => (acc as Record<string, unknown>)[k], o);
+
+const OFF_AT_STAGE = "it is off for this stage";
+const NOT_LONGER = "it can only be shorter than the stage's";
 
 /** RB2B-3 (X-SR-2): a match may switch the key off or shorten it, never switch it on or lengthen it. Reads the
  *  `{enabled, halfMinutes}` shape — the X-SR-1 sweep proves every `off_or_shorter` key has it. */
@@ -69,8 +71,17 @@ function offOrShorter(o: unknown, s: unknown): string | null {
   const ov = isObj(o) ? o : {};
   const st = isObj(s) ? s : {};
   if (ov.enabled !== true) return null;
-  if (st.enabled !== true) return "it is off for this stage";
-  return Number(ov.halfMinutes) <= Number(st.halfMinutes) ? null : "it can only be shorter than the stage's";
+  if (st.enabled !== true) return OFF_AT_STAGE;
+  return Number(ov.halfMinutes) <= Number(st.halfMinutes) ? null : NOT_LONGER;
+}
+
+/** X-SR-2 (signed): a decider may only be switched off or shortened for one match. `o` and `s` are the override's and
+ *  the stage's values at the decider's key; the X-SR-1 sweep proves each bound's shape. */
+function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown, s: unknown): string | null {
+  if (bound === "off_or_shorter") return offOrShorter(o, s);
+  if (bound === "off") return o === false ? null : s === true ? "it can only be switched off for one match" : OFF_AT_STAGE;
+  if (typeof s !== "number") return OFF_AT_STAGE;
+  return typeof o === "number" && o <= s ? null : NOT_LONGER;
 }
 
 export type OverrideCheck =
@@ -82,9 +93,10 @@ const notSettable = (path: string, reason: string): OverrideCheck => ({ ok: fals
 /**
  * X-SR-2 — may this match differ from its stage by `override`? `override` carries whole top-level values (the
  * resolver lays it over the stage's); `stageResolved` is the cfg the stage resolves to. Every leaf that differs must
- * be owned by a `match`-scope key that applies to this kind and variant; a bounded key may only go off or shorter,
- * and any other match key must already be on (present) at the stage. A key the sport never declares is
- * `UNKNOWN_RULE_KEY`, checked first. `changed` lists the dotted leaves that differ, in override order.
+ * be owned by a `match`-scope key that applies to this kind and variant, and a decider (a key with a `matchBound`) may
+ * only go off or shorter — never on where its stage has it off. Any other match key is a FORMAT key and may differ
+ * even where the stage carries none (cricket's bowler limit). A key the sport never declares is `UNKNOWN_RULE_KEY`,
+ * checked first. `changed` lists the dotted leaves that differ, in override order.
  */
 export function checkFixtureOverride(
   m: AnySportModule, kind: StageKind | null, variant: string | null,
@@ -96,15 +108,13 @@ export function checkFixtureOverride(
   const changed: string[] = [];
   for (const top of Object.keys(override))
     for (const leaf of changedLeaves(stageResolved[top], override[top], [top])) {
-      const path = leaf.path.join(".");
-      const owner = ruleKeyOwning(m, leaf.path);
+      const path = leaf.join(".");
+      const owner = ruleKeyOwning(m, leaf);
       if (owner === null || owner.fact.scope !== "match" || !ruleKeyApplies(owner.fact, kind, variant))
         return notSettable(path, "it can be set per stage, not per match");
-      if (owner.fact.matchBound === "off_or_shorter") {
-        const why = offOrShorter(valueAt(override, owner.key), valueAt(stageResolved, owner.key));
+      if (owner.fact.matchBound !== undefined) {
+        const why = deciderBound(owner.fact.matchBound, valueAt(override, owner.key), valueAt(stageResolved, owner.key));
         if (why !== null) return notSettable(owner.key, why);
-      } else if (leaf.before === undefined) {
-        return notSettable(path, "it is off for this stage");
       }
       changed.push(path);
     }

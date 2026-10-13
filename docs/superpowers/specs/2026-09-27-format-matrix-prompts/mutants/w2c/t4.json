@@ -70,11 +70,46 @@
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a match key outside its declared kinds is refused" }]
   },
   {
-    "id": "t4-stage-off",
+    "id": "t4-format-key-not-off",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "} else if (leaf.before === undefined) {",
-    "replace": "} else if (false) {",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "one the stage does not carry is off" }]
+    "find": "      changed.push(path);",
+    "replace": "      if (valueAt(stageResolved, path) === undefined) return notSettable(path, OFF_AT_STAGE);\n      changed.push(path);",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 a format key may differ where the stage has none" }]
+  },
+  {
+    "id": "t4-decider-shorter",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "typeof o === \"number\" && o <= s ? null",
+    "replace": "typeof o === \"number\" ? null",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
+  },
+  {
+    "id": "t4-decider-off",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "return o === false ? null",
+    "replace": "return true ? null",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
+  },
+  {
+    "id": "t4-decider-bound-dispatch",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "      if (owner.fact.matchBound !== undefined) {",
+    "replace": "      if (owner.fact.matchBound === \"off_or_shorter\") {",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
+  },
+  {
+    "id": "t4-decider-stage-lacks-length",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "  if (typeof s !== \"number\") return OFF_AT_STAGE;\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a decider's bound reads the stage" }]
+  },
+  {
+    "id": "t4-decider-cricket-declared",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "superOver: { scope: \"match\", matchBound: \"off\" },",
+    "replace": "superOver: { scope: \"match\" },",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 a format key may differ where the stage has none" }]
   },
   {
     "id": "t4-bound",
@@ -86,7 +121,7 @@
   {
     "id": "t4-bound-switch-on",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "if (st.enabled !== true) return \"it is off for this stage\";",
+    "find": "if (st.enabled !== true) return OFF_AT_STAGE;",
     "replace": "",
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
   },

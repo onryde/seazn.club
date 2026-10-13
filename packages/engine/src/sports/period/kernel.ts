@@ -1790,14 +1790,14 @@ export function periodKeeperStatsFold(
 
 /**
  * W2c (spec §4.1 Q5; plan finding 3) — the period kernel's rule keys, declared once. The deciders are stage objects
- * (`overtime`, `shootout`) whose LENGTH leaves a match may change; the most specific declaration wins, so
- * `overtime.minutes` is a match key inside the stage-only `overtime`. A sport whose rules lack a decider narrows it
- * out (hockey has no overtime). Table points and the walkover score are the stage's points (D11).
+ * (`overtime`, `shootout`) whose LENGTH leaves a match may only lower (X-SR-2, signed); the most specific declaration
+ * wins, so `overtime.minutes` is a match key inside the stage-only `overtime`. A sport whose rules lack a decider
+ * narrows it out (hockey has no overtime). Table points and the walkover score are the stage's points (D11).
  */
 export const PERIOD_RULE_KEYS: RuleKeys = {
   "periods.minutes": { scope: "match" },
-  "overtime.minutes": { scope: "match" },
-  "shootout.attempts": { scope: "match" },
+  "overtime.minutes": { scope: "match", matchBound: "shorter" },
+  "shootout.attempts": { scope: "match", matchBound: "shorter" },
   overtime: { scope: "stage" },
   shootout: { scope: "stage" },
   points: { scope: "points" },
