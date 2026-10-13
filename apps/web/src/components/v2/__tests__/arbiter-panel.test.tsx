@@ -783,6 +783,9 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "settle_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.settleOwnBoard"]!],
       // I-3's 409 — No result on a knockout board (a panel loaded before its stage became one still offered it).
       [{ boardId: "f3", kind: "settle_failed", code: "KNOCKOUT_NEEDS_WINNER" }, EN["arbiter.notice.knockoutNeedsWinner"]!],
+      [{ boardId: "f3", kind: "settle_failed", code: "SWISS_NEEDS_RESULT" }, EN["arbiter.notice.swissNeedsResult"]!],
+      // M-7, fix round 4: who turned up changed under the screen — No result and the double walkover swapped places.
+      [{ boardId: "f3", kind: "settle_failed", code: "NO_RESULT_CHANGED" }, EN["arbiter.notice.noResultChanged"]!],
       [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
       [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
       [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
@@ -797,9 +800,9 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    // 24 notices; "failed" is the shared fallback sentence (2 rows), so 23.
-    expect(notices.length).toBe(24);
-    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(23);
+    // 26 notices; "failed" is the shared fallback sentence (2 rows), so 25.
+    expect(notices.length).toBe(26);
+    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(25);
   });
 
   // R4 (T16 fix round 1): on a FINISHED board the close is a review, not a go-on — so is its answer (the queue's words).

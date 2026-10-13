@@ -462,11 +462,11 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(checked).toBe(2);
   });
 
-  it("I7 + I-3: both players absent — No result is W2b's double walkover, read as NO RESULT for both, as the engine folds it, never a draw", async () => {
+  it("I7 + I-3: both players absent — the organiser's double walkover (W2b's, asked for by name: M-7) is read as NO RESULT for both, as the engine folds it, never a draw", async () => {
     const s = await seed();
     await gameOnFile(s, { status: "live", moves: [] });
     await holdRefusedNoShow({ fixtureId: s.fixtureId, absent: "both", detail: "sweep: refused 3 passes running (TEST)" });
-    expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
+    expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "double_walkover")).toEqual({ status: "finished" });
     const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq`;
     expect(ledger, "premise: the double walkover is the ledger's one event").toEqual([{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
     // The expected card, from the engine's own fold of that event (home is White here).

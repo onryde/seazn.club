@@ -6229,6 +6229,7 @@
   "arbiter.notice.needsWinner": "Una partida eliminatoria en tablas necesita un ganador. Elige quién pasa.",
   "arbiter.notice.knockoutNeedsWinner": "Una partida eliminatoria necesita un ganador: adjudícala o concédela.",
   "arbiter.notice.swissNeedsResult": "Una ronda suiza necesita todas las partidas decididas: adjudícala o concédela.",
+  "arbiter.notice.noResultChanged": "Cambió quién se presentó a este tablero mientras decidías — recarga para ver tus opciones ahora.",
   "arbiter.notice.settleOwnBoard": "Juegas en este tablero, así que otro organizador debe decidir su resultado.",
   "arbiter.notice.overridden": "Este tablero ahora se juega sin vídeo. Consta en el registro de auditoría.",
   "arbiter.notice.notPlayable": "Este tablero ya no se está jugando.",

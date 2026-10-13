@@ -6229,6 +6229,7 @@
   "arbiter.notice.needsWinner": "A drawn knockout game needs a winner. Pick who goes through.",
   "arbiter.notice.knockoutNeedsWinner": "A knockout game needs a winner — adjudicate it or award it.",
   "arbiter.notice.swissNeedsResult": "A Swiss round needs every game decided — adjudicate it or award it.",
+  "arbiter.notice.noResultChanged": "Who turned up on this board changed while you were deciding — reload to see your choices now.",
   "arbiter.notice.settleOwnBoard": "You play on this board, so another organiser must settle it.",
   "arbiter.notice.overridden": "This board now plays without video. It's in the audit log.",
   "arbiter.notice.notPlayable": "This board is no longer being played.",
