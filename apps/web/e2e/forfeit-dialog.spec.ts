@@ -542,6 +542,8 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       expect(posts1(), "the page sent one forfeit for a double tap").toBe(1);
       await d2.getByTestId("forfeit-confirm").click();
       await stale.release();
+      // Informational only (design review M-5): how many reads the stale page had parked. The race is proven by the
+      // assertions below — the second page's refusal and ONE forfeit on the ledger — not by this count.
       console.log(`Review Focus 4: page 2 reads held while stale: ${stale.held()}`);
       await expect(dialogOf(second), "the refusal closed the second dialog").toHaveCount(0, { timeout: 20_000 });
       await expect(second.getByTestId("forfeit-refusal")).toHaveText(ui("score.seqConflict"));

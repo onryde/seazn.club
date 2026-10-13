@@ -304,7 +304,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       await page.goto(`${base}/fixtures/${dw!.id}`);
       await dismissCookieBanner(page);
       await expect(page.getByTestId("mc-status-line"), `${w}: the match centre`).toHaveText(withNext);
-      // Audit 3.1: the court card carries no score lines over "Neither side showed up" — its own no-score dash, never
+      // Audit 3.1: the court card carries no score lines over "Neither side turned up" — its own no-score dash, never
       // the summary's 0 / 0.
       for (const i of [0, 1]) await expect(page.getByTestId(`mc-score-${i}`), `${w}: the court card's score ${i}`).toHaveText("—");
       await expectNoHorizontalScroll(page);

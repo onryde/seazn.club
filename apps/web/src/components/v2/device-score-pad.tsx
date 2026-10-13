@@ -358,6 +358,10 @@ export function DeviceScorePad({
             msg,
             "device.failed",
             err instanceof ApiV1Error ? err.extra : null,
+            // `locale` formats one refusal only — FORFEIT_REASON_WRONG_PHASE's list of admitted reasons — and that is a
+            // refusal of `core.forfeit`, which this pad never sends (design review M-8): it is organiser-only, the
+            // pad's tile grid drops any tile dispatching it and no padSpec declares it (`scorepad/v3/__tests__/
+            // authority-only-tiles.test.ts` pins all three). Passed so the call reads as the console's does.
             locale,
           ));
         }
