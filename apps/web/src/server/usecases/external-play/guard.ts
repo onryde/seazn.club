@@ -8,6 +8,7 @@ import { mapBoardgameClockToLichess, type BoardgameClockInput } from "@/server/e
 import type { ExternalPlayStatus, LichessClock, NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "@/server/usecases/fixtures";
 import { roundOpenFor } from "@/server/external-play/round-open";
+import { whiteSideOfFold } from "@/server/external-play/colours";
 import { mintOrgOwnerAuth } from "./auth";
 
 export type Side = "home" | "away";
@@ -447,25 +448,10 @@ export async function loadSides(
   return { home, away };
 }
 
-type FoldedBoardgameState = { colorOfHome?: "W" | "B" | null };
-
-/** `colorOfHome` off the folded `match_states.state` (same cache
- *  `getFixtureState` reads for the pad) — `undefined`/`null`/no fold at all
- *  reads as White-on-home, because that is Swiss's own default (chess.md
- *  §2, `packages/engine/src/scheduling/swiss.ts:42`: "home: EntrantId //
- *  chess: White") and the boardgame module's `init` agrees (`colorOfHome:
- *  cfg.colors ? "W" : null` — colours-on is itself the schema default, so a
- *  fresh fold before any pairing card already reads "W", never null). */
-function asColorOfHome(state: unknown): "W" | "B" | null {
-  if (state === null || typeof state !== "object") return null;
-  const value = (state as FoldedBoardgameState).colorOfHome;
-  return value === "W" || value === "B" ? value : null;
-}
-
 /** Which side has White — home unless a `boardgame.pairing` card recorded
- *  Black on home. */
+ *  Black on home (`whiteSideOfFold`, the rule the public page reads too). */
 export async function whiteSideOf(f: Pick<OnlinePlayFixture, "orgId" | "fixtureId">): Promise<Side> {
   const auth = await mintOrgOwnerAuth(f.orgId);
   const state = await getFixtureState(auth, f.fixtureId);
-  return asColorOfHome(state.state) === "B" ? "away" : "home";
+  return whiteSideOfFold(state.state);
 }

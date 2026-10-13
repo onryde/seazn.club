@@ -428,6 +428,7 @@ export default async function FixturePage({ params }: Props) {
             initial={watchDoc}
             names={{ home, away }}
             details={{ scheduledAt: fixture.scheduled_at ?? null, clock: watchClockOf(division.config), timeZone: data.venueTz }}
+            pairedWhiteSide={data.pairedWhiteSide}
           />
         ) : null}
 

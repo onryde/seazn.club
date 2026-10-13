@@ -14,8 +14,18 @@ import type { PublicWatchDoc } from "@/server/external-play/public-view";
 import { subscribeBoardPush } from "./live-board-channel";
 import { POLL_MS } from "./use-live-fixture";
 import { WatchBoard } from "./watch-board";
-import { WatchDetails, WatchMoves, WatchNote, WatchResult, formatWatchTime, moveLabel, type WatchDetailsFacts } from "./watch-parts";
-import { holdOf, initialWatch, nextWatch, pollsAgain, watchView } from "./watch-state";
+import {
+  WatchDetails,
+  WatchMoves,
+  WatchNote,
+  WatchResult,
+  WatchStatus,
+  formatWatchTime,
+  moveLabel,
+  type WatchDetailsFacts,
+  type WatchStatusKind,
+} from "./watch-parts";
+import { holdOf, initialWatch, nextWatch, pollsAgain, startBoard, watchView } from "./watch-state";
 
 export async function fetchPublicBoard(fixtureId: string): Promise<PublicWatchDoc> {
   // Never a browser-cached answer: the route's Cache-Control is for the edge.
@@ -29,6 +39,9 @@ type Props = {
   names: { home: string; away: string };
   /** The page's own public facts for Match details (the round's open comes from the doc). */
   details: Omit<WatchDetailsFacts, "roundOpenedAt" | "locale">;
+  /** Which entrant plays White as the pairing stands — the names on the start position before a game is on file
+   *  (a game's own White wins once there is one); null when it could not be read. */
+  pairedWhiteSide: "home" | "away" | null;
   fetchBoard?: (fixtureId: string) => Promise<PublicWatchDoc>;
 };
 
@@ -38,7 +51,7 @@ export function WatchPanel(props: Props) {
   return <WatchPanelInner key={props.fixtureId} {...props} />;
 }
 
-export function WatchPanelInner({ fixtureId, initial, names, details, fetchBoard = fetchPublicBoard }: Props) {
+export function WatchPanelInner({ fixtureId, initial, names, details, pairedWhiteSide, fetchBoard = fetchPublicBoard }: Props) {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
@@ -101,14 +114,20 @@ export function WatchPanelInner({ fixtureId, initial, names, details, fetchBoard
   const hold = holdOf(model);
   const play = model.play;
   // A board whenever a game with a move is on file and the view is about the game (live, held, finished): a
-  // knockout draw keeps its final position on the board (canvas WatchStates B), and so does any other hold.
+  // knockout draw keeps its final position on the board (canvas WatchStates B), and so does any other hold. From the
+  // round's open until the first move, the start position (owner ruling 2026-10-13, option B) — in the same place,
+  // so the first move changes the pieces and the line above them, and nothing else.
   const watch = play?.watch ?? null;
-  const board = watch !== null && watch.ply > 0 && (view === "live" || view === "held" || view === "finished") ? watch : null;
+  const gameBoard = watch !== null && watch.ply > 0 && (view === "live" || view === "held" || view === "finished") ? watch : null;
+  const initialMs = details.clock === null ? null : details.clock.limitSeconds * 1000;
+  const board = gameBoard ?? (view === "not_started" ? startBoard(watch, pairedWhiteSide, initialMs) : null);
+  const status: WatchStatusKind | null =
+    view === "not_started" ? "waiting" : view === "live" && board !== null && !board.over ? board.turn : null;
   const side = board?.whiteSide ?? null;
   const boardNames =
     side === null ? null : side === "home" ? { white: names.home, black: names.away } : { white: names.away, black: names.home };
   const note =
-    view === "not_opened" || view === "not_started" ? (
+    view === "not_opened" ? (
       <WatchNote kind={view} t={t} />
     ) : hold !== null ? (
       <WatchNote kind={hold} t={t} />
@@ -130,6 +149,7 @@ export function WatchPanelInner({ fixtureId, initial, names, details, fetchBoard
       <div className={`grid min-w-0 gap-4 ${board !== null ? "lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)] lg:gap-6" : ""}`}>
         {board !== null ? (
           <div className="flex min-w-0 flex-col gap-3">
+            {status !== null ? <WatchStatus kind={status} t={t} /> : null}
             <WatchBoard watch={board} names={boardNames} nowMs={nowMs} t={t} />
             {finished && lastSan !== null ? (
               <p data-testid="watch-final-line" className="m-0 text-[13px] text-[#4a3a6b]">
@@ -150,7 +170,9 @@ export function WatchPanelInner({ fixtureId, initial, names, details, fetchBoard
               </span>
             ) : null}
           </div>
-          {view === "live" ? <p className="m-0 text-sm leading-relaxed text-[#4a3a6b]">{t("externalPlay.watch.intro")}</p> : null}
+          {view === "live" || view === "not_started" ? (
+            <p className="m-0 text-sm leading-relaxed text-[#4a3a6b]">{t("externalPlay.watch.intro")}</p>
+          ) : null}
           {finished ? (
             <p data-testid="watch-recorded" className="m-0 text-xs leading-relaxed text-[#6b5b8a]">
               {result?.recordedAt

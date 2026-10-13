@@ -82,6 +82,7 @@ const baseData = (
     externalPlay: null,
     roundOpened: false,
     roundOpenedAt: null,
+    pairedWhiteSide: null,
     venueTz: "UTC",
   };
 };
@@ -784,9 +785,9 @@ describe("FixturePage — the 'Your board' island (T16)", () => {
     findAll((node.props as { children?: unknown }).children, type, out);
     return out;
   }
-  const renderDivision = async (division: Record<string, unknown>) => {
+  const renderDivision = async (division: Record<string, unknown>, over: Record<string, unknown> = {}) => {
     const data = baseData("en");
-    getPublicFixture.mockResolvedValue({ ...data, division: { ...data.division, ...division } });
+    getPublicFixture.mockResolvedValue({ ...data, ...over, division: { ...data.division, ...division } });
     useSearchParams.mockReturnValue(new URLSearchParams());
     const { default: FixturePage } = await import("../page");
     return FixturePage({
@@ -821,6 +822,13 @@ describe("FixturePage — the 'Your board' island (T16)", () => {
     const watch = findAll(tree, WatchPanel);
     expect(watch).toHaveLength(1);
     expect(watch[0]!.props).toMatchObject({ fixtureId: "f1", initial: { roundOpened: false, externalPlay: null } });
+    // Option B: the start position's colours come from the page's own read of the pairing.
+    expect(watch[0]!.props.pairedWhiteSide, "no read here").toBeNull();
+    const paired = findAll(
+      await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } }, { pairedWhiteSide: "away" }),
+      WatchPanel,
+    );
+    expect(paired[0]!.props.pairedWhiteSide, "the pairing's White reaches the panel").toBe("away");
     const html = renderToStaticMarkup(tree);
     expect(html).not.toMatch(/="[^"]*\/fixtures\/f1\/play/);
     expect(html).not.toContain("lichess.org");

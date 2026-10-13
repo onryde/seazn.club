@@ -35,7 +35,7 @@ import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
-import { loadPublicExternalPlay, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
+import { loadPublicExternalPlay, loadPublicPairedWhiteSide, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
@@ -1153,6 +1153,9 @@ export async function getPublicFixture(
   roundOpened: boolean;
   /** When it was opened (Match details), or null — the same read. */
   roundOpenedAt: string | null;
+  /** Option B (owner ruling 2026-10-13) — which entrant plays White as the pairing stands: the names on the start
+   *  position before a game is on file. Null for a division that does not play online (no read is made for it). */
+  pairedWhiteSide: "home" | "away" | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1297,11 +1300,11 @@ export async function getPublicFixture(
         stageName: stageRow?.name ?? null,
         externalPlay: await loadPublicExternalPlay(fixtureId),
         ...(await (async () => {
-          const at =
-            supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
-              ? await loadPublicRoundOpenedAt(fixtureId)
-              : null;
-          return { roundOpened: at !== null, roundOpenedAt: at };
+          if (!(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess")) {
+            return { roundOpened: false, roundOpenedAt: null, pairedWhiteSide: null };
+          }
+          const [at, pairedWhiteSide] = await Promise.all([loadPublicRoundOpenedAt(fixtureId), loadPublicPairedWhiteSide(fixtureId)]);
+          return { roundOpened: at !== null, roundOpenedAt: at, pairedWhiteSide };
         })()),
       };
     },
@@ -1336,7 +1339,10 @@ export async function getPublicFixture(
     // v7 (chess T16 fix round 1, 2026-10-13): `externalPlay` gained `decided`,
     // `hold`, `result` and `watch.moves`. A `-v6` entry has none, so a fixture
     // decided on the pad would read its stale hold under the printed result.
-    ["pub-fixture-v7", fixtureId],
+    //
+    // v8 (chess T17 round B, 2026-10-13): `pairedWhiteSide`, the start position's colours (option B). A `-v7` entry
+    // has none, so the board before the first move would name each side by its colour only.
+    ["pub-fixture-v8", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

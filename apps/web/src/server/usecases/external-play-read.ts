@@ -10,6 +10,7 @@ import {
   type PublicWatchLink,
 } from "@/server/external-play/public-view";
 import { roundOpenFor } from "@/server/external-play/round-open";
+import { whiteSideOfFold } from "@/server/external-play/colours";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { isPlayableFixtureStatus } from "./external-play/preflight";
 import { fenAfter } from "./external-play/play";
@@ -215,6 +216,14 @@ export async function loadPublicRoundOpened(fixtureId: string): Promise<boolean>
 /** When this fixture's round was opened (D12), as the stamp says, or null. */
 export async function loadPublicRoundOpenedAt(fixtureId: string): Promise<string | null> {
   return (await roundOpenFor(sql, fixtureId))?.roundOpenedAt.toISOString() ?? null;
+}
+
+/** Option B (owner ruling 2026-10-13): which entrant plays White as the pairing stands, for the start position the
+ *  public page draws from the round's open — before a game, and its own `white_side`, exist. The same fold the game's
+ *  creation reads (`whiteSideOf`); no fold yet reads home, as it does there. */
+export async function loadPublicPairedWhiteSide(fixtureId: string): Promise<"home" | "away"> {
+  const [row] = await sql<{ state: unknown }[]>`select state from match_states where fixture_id = ${fixtureId}`;
+  return whiteSideOfFold(row?.state ?? null);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

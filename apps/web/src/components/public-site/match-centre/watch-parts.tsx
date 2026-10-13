@@ -1,8 +1,9 @@
 // T16 fix round 1, I4 — the watch panel's pieces around the board, built to
 // the approved canvas (WatchDesktop, WatchStatesDesktop, WatchFinishedPhone):
-// the move list, Match details, the finished board's result header, and the
-// cards that say why there is no live board (a hold, an unopened round, a game
-// not started). Hookless and `t`-driven, so each renders bare in a node test.
+// the move list, Match details, the finished board's result header, the
+// status line above the board (owner ruling 2026-10-13, option B: the start
+// position from the round's open, "Waiting for White's first move"), and the
+// cards that say why there is no live board (a hold, an unopened round). Hookless and `t`-driven, so each renders bare in a node test.
 // Spectator-safe by construction: they read the public doc and the page's own
 // public facts — no token, no room path, no Lichess link.
 import type { ReactNode } from "react";
@@ -45,7 +46,6 @@ const NOTE_ICON: Record<NoteKind, { stroke: string; path: ReactNode }> = {
       </>
     ),
   },
-  not_started: { stroke: "#7c3aed", path: <path d="M12 3a9 9 0 1 1-9 9" /> },
   tiebreak: {
     stroke: "#b45309",
     path: (
@@ -66,14 +66,46 @@ const NOTE_ICON: Record<NoteKind, { stroke: string; path: ReactNode }> = {
   },
 };
 
-type NoteKind = "not_opened" | "not_started" | PublicHold;
+type NoteKind = "not_opened" | PublicHold;
 
 const NOTE_COPY: Record<NoteKind, { title: string; body: string; testid: string }> = {
   not_opened: { title: "externalPlay.watch.notOpenedTitle", body: "externalPlay.watch.notOpened", testid: "watch-not-opened" },
-  not_started: { title: "externalPlay.watch.notStartedTitle", body: "externalPlay.watch.notStarted", testid: "watch-not-started" },
   tiebreak: { title: "externalPlay.watch.hold.tiebreakTitle", body: "externalPlay.watch.hold.tiebreakBody", testid: "watch-hold" },
   confirm: { title: "externalPlay.watch.hold.confirmTitle", body: "externalPlay.needsOrganiser", testid: "watch-hold" },
 };
+
+/** What the board is waiting for: the first move (from the round's open), then whose move it is. */
+export type WatchStatusKind = "waiting" | "white" | "black";
+
+const STATUS_COPY: Record<WatchStatusKind, string> = {
+  waiting: "externalPlay.watch.status.waiting",
+  white: "externalPlay.watch.status.whiteToMove",
+  black: "externalPlay.watch.status.blackToMove",
+};
+
+/** The one line above the board while the game is to be played. One slot for every kind, one line high, so the
+ *  first move swaps its words and nothing below it moves; as wide as the board's column (WatchBoard's own
+ *  `max-w-[560px]`, centred below lg), so it starts where the board starts. The marker is the colour to move — a hollow disc for
+ *  White, a filled one for Black — and, while it waits for the first move, it pulses (motion-safe only). */
+export function WatchStatus({ kind, t }: { kind: WatchStatusKind; t: RoomT }) {
+  const black = kind === "black";
+  return (
+    <p
+      data-testid="watch-status"
+      data-kind={kind}
+      aria-live="polite"
+      className="mx-auto my-0 flex min-h-6 w-full min-w-0 max-w-[560px] items-center gap-2 text-sm font-semibold leading-6 text-[#2e1065] lg:mx-0"
+    >
+      <span
+        aria-hidden="true"
+        className={`size-2.5 shrink-0 rounded-full border-2 border-[#2e1065] ${black ? "bg-[#2e1065]" : "bg-white"} ${
+          kind === "waiting" ? "motion-safe:animate-pulse" : ""
+        }`}
+      />
+      <span className="min-w-0 truncate">{t(STATUS_COPY[kind] as never)}</span>
+    </p>
+  );
+}
 
 /** The card that says why there is no live board to watch — never an empty board. */
 export function WatchNote({ kind, t }: { kind: NoteKind; t: RoomT }) {

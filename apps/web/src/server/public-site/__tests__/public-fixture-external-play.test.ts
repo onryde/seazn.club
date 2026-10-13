@@ -27,6 +27,7 @@ import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { publicFixture } from "@/server/usecases/public";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
+import { appendEvent } from "@/server/engine-db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -212,6 +213,29 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
       insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
       select ${s.stageId}, ${s.orgId}, 1, now() - interval '1 minute', ${s.home.userId}`;
     expect((await read())!.roundOpened, "opened").toBe(true);
+  });
+  // Option B (owner ruling 2026-10-13): from the round's open the page draws the start position with each player on
+  // their side, BEFORE any game exists — so White is read from the pairing, the same fold whiteSideOf reads to make
+  // the game (create-game: "colour is READ from the pairing").
+  it("option B: the page reads White's side from the pairing before a game exists — home by default, away after a card making home Black", async () => {
+    const s = await seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: true, linked: true, scheduledAt: new Date() });
+    seeded.push(s.orgId);
+    const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div
+        from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id
+       where d.id = ${s.divisionId}`;
+    const read = async () => (await getPublicFixture(slugs!.org, slugs!.comp, slugs!.div, s.fixtureId))!;
+    const before = await read();
+    expect(before.externalPlay, "premise: no game on file").toBeNull();
+    expect(before.pairedWhiteSide, "Swiss's own default: home is White").toBe("home");
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "boardgame.pairing", payload: { white: s.away.entrantId } });
+    expect((await read()).pairedWhiteSide, "the card makes the AWAY entrant White").toBe("away");
+  });
+
+  it("option B, the empty case: a division that does not play online makes no colour read", async () => {
+    const f = await seedPublicFixture();
+    seeded.push(f.orgId);
+    expect((await getPublicFixture(f.orgSlug, f.compSlug, f.divSlug, f.fixtureId))!.pairedWhiteSide).toBeNull();
   });
 });
 
