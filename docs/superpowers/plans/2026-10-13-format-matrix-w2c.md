@@ -3431,6 +3431,8 @@ The mutant re-inserts the deleted overlay. The first assertion of the D3 case ki
 
 ### Task 14: The one override writer and the live correction (Q11) (server; Opus)
 
+> **Carried from Task 10 review.** (M2) `fixture-cfg.ts:107` copies a `null` from the override over the lower layer while `stage-cfg.ts:30-34` treats `null` as "inherit": decide (recommend: `null` = inherit, i.e. the writer never stores nulls and the resolver drops them), pin it with a test and a doc-comment line. (Gap) Regenerate (`stages.ts:643`) and history undo (`history.ts:572`) delete unplayed fixtures, so an organiser's match override disappears silently: refuse or warn by name ("Match 3 has its own format") and test it.
+
 > **Carried from Task 4 (c).** `writeFixtureRulesOverride` stores only the CHANGED leaves of a fragment (deep diff against the stage-resolved cfg), never a whole resolved sub-object — otherwise a stored override hides later stage edits to neighbouring keys. Test: override `bestOf` only, then change the stage's `setTo`; the fixture resolves the new `setTo`. Mutate once.
 
 > **Carried from batch-1 Opus review (I-A, one layer up).** A division or stage save must not invalidate an unstarted fixture's `rules_override`: reuse Task 11's merged-parse helper to check `{division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override}` for every unstarted fixture with an override when the division or stage rules change, refusing 422 naming the match. Red-first test + one mutant.
@@ -5068,6 +5070,8 @@ Spec §10 MD-1. See "MD-1 mutation ownership" below.
 ---
 
 ### Task 23: Ship gates, PR, e2e dispatch, and the cross-programme P8 (orchestrator)
+
+> **Carried from Task 10 review.** Merge-order dependency: W2c's migration is V443 because the chess branch (`feat/chess-lichess-external-play`) holds V439–V442 and deploys them to staging first; Flyway runs no out-of-order migrations, so chess must merge (and reach prod) before W2c, or W2c is renumbered above chess's final number. Confirm with the chess session before opening the PR.
 
 > **Carried (mutation session, 2026-10-13).** A post-W2b Stryker re-measure PR (stryker-measured.json, stryker-timeouts.json, possibly stryker.groups.mjs cut anchors) is expected to merge BEFORE W2c. Before the PR: rebase onto it, run the engine `stryker-sizing` and `stryker-cuts` tests, and re-measure (CI dispatch per leg) any leg W2c pushes past 10% drift — W2c adds mutants in core/errors.ts (core-2 leg), points.ts, sport/*, period kernel, boardgame and every module's `ruleKeys`. Edit groups/measured files only on top of that PR.
 
