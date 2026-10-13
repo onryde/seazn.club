@@ -1465,6 +1465,8 @@ If `src/sport/module.test.ts` does not exist, the implementer names the suite th
 
 ### Task 5: Web — fields name their engine key; per-sport contract tests; `rule-scope.ts`
 
+> **Carried from Task 4 review (G2).** Six declared stage keys have no web field today: `rollingSubs`, `concussionSubs`, `superOverStillTied`, `minOversForResult`, `pointsPerCoin`, chess `tiebreak` (superseded by `tiebreakRungs` in Task 8). The "every settable key has a web field" contract must not go red silently: either add the field in the owning sport file (preferred where the organiser plausibly sets it) or list it in an explicit, counted `NO_WEB_FIELD_YET` map with the owning task/reason, and report which. Stage-level deciders are read from the engine's `decider: true` fact (Task 4 fix round 1), never from `bracketDeciders`.
+
 > **Carried from batch-1 Opus review (M-b).** `rule-locks.ts:64-81`'s "inherits" check ignores stage kind: a started knockout locks `points`/`pointsMap`/`tiebreakers` (it has no table) and keys forced by `bracketDeciders` or top-level `STAGE_DECIDER_KEYS`. Once `ruleKeys` carry `appliesTo`, a stage only inherits a key that applies to its kind; add a knockout case (division `pointsMap` edit saves while only a knockout stage has started) + one mutant.
 
 > **Carried from build (orchestrator, Task 1/2 reviews).** (a) Add `tools/matrix/__tests__/boundary.test.ts` (run with the ENGINE's vitest) to Step 4's verify: it guards the `.ts` sibling imports plain Node needs, and web `vitest related` never runs it. (b) Task 2 review M-4: `division-locks.test.ts` covers badminton + generic only; once `TABLE_RULE_KEYS` derives from `pointsKeysFor`, add a builtinModules sweep that every sport's table/format classification matches the engine declaration (counted, zero checked = failure).
@@ -2191,6 +2193,8 @@ If `period/kernel.ts` does not take the sport's option list in a form the third 
 ---
 
 ### Task 8: Engine — chess tie-break rungs and Armageddon colours (lane E2)
+
+> **Carried from Task 4 review (G1).** Under the resolver order (`division ⊕ stage.rules ⊕ bracketDeciders(kind) ⊕ override`), boardgame `bracketDeciders` → `{tiebreak:true}` (`boardgame.ts:~986`) always overwrites the stage's `tiebreak` key, so a stage can never switch it off. With `tiebreakRungs`, make the stage's list authoritative (empty list = held for the organiser, BG-KO-3/X-SR-6): `bracketDeciders` must not resurrect a rung or a decider the stage turned off. Red-first test through `resolveFixtureCfg` with a stage whose list is empty; coordinate with Task 13b, which owns the overlay.
 
 Spec item 13; BG-KO-3, BG-KO-2 (enforced); D7, D8; P8 engine half.
 
@@ -3349,6 +3353,8 @@ The badminton `short` and generic `score` variants are re-confirmed as in Task 2
 
 ### Task 13b: Delete the top-level decider overlay — resolver code (Opus; after Tasks 12+13, same batch)
 
+> **Carried from Task 4 review (G1).** Confirm after the overlay deletion that NO sport's `bracketDeciders` overwrites a decider the stage stored as off (Q7 "B": all deciders off allowed, X-SR-6: held for the organiser). Sweep every sport × bracket kind with every decider off in `stage.rules`: the resolved cfg has them off. Count the cells; zero = fail.
+
 D3 (greenfield); spec §4.4. Re-review IMP-R3: deleting `STAGE_DECIDER_KEYS` from `stageScopedCfg` changes what `resolveFixtureCfg` returns for every caller. That is resolver code, so it belongs to the owner's Opus item (1), not to Sonnet Task 11. It runs AFTER Tasks 12+13. By then Task 12 has moved every writer of a top-level stage `shootout`/`extraTime` into `config.rules`, so deleting the read cannot strand a stored value written by current code.
 
 **Files:**
@@ -3430,6 +3436,8 @@ The mutant re-inserts the deleted overlay. The first assertion of the D3 case ki
 ---
 
 ### Task 14: The one override writer and the live correction (Q11) (server; Opus)
+
+> **Carried from Task 4 review (M2, M3).** `checkFixtureOverride` must receive the SCHEMA-PARSED stage cfg (`resolveFixtureCfg` returns unparsed; an unparsed `{}` stage wrongly refuses an ice-hockey OT shortening). Parse the stage-resolved cfg first, then check. Store the PARSED override (unknown nested leaves like `set.bogus` are accepted by the check and stripped by the schema — never store them). Tests for both.
 
 > **Carried from Task 10 review.** (M2) `fixture-cfg.ts:107` copies a `null` from the override over the lower layer while `stage-cfg.ts:30-34` treats `null` as "inherit": decide (recommend: `null` = inherit, i.e. the writer never stores nulls and the resolver drops them), pin it with a test and a doc-comment line. (Gap) Regenerate (`stages.ts:643`) and history undo (`history.ts:572`) delete unplayed fixtures, so an organiser's match override disappears silently: refuse or warn by name ("Match 3 has its own format") and test it.
 
