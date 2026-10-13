@@ -3365,6 +3365,8 @@ The badminton `short` and generic `score` variants are re-confirmed as in Task 2
 
 ### Task 13b: Delete the top-level decider overlay — resolver code (Opus; after Tasks 12+13, same batch)
 
+> **Carried from Task 8 re-review.** Chess's decider is the ARRAY `tiebreakRungs` (`decider: true`); its off value is `[]`. The "every decider off" sweep and the X-SR-6 notice must treat an array decider as off only when `Array.isArray(v) && v.length === 0` — a falsy/`enabled` test reads `[]` as on. Include chess in the sweep with that predicate, and a mutant that uses a truthiness test.
+
 > **Carried from the batch-2 re-review.** The overlay grep `config\??\.(shootout|extraTime)` misses computed reads like `cfg[key]` (`rule-locks.ts`); also grep `deciderKeysFor` call sites and every `[key]` read of a stage config.
 
 > **Carried from Task 4 review (G1).** Confirm after the overlay deletion that NO sport's `bracketDeciders` overwrites a decider the stage stored as off (Q7 "B": all deciders off allowed, X-SR-6: held for the organiser). Sweep every sport × bracket kind with every decider off in `stage.rules`: the resolved cfg has them off. Count the cells; zero = fail.
