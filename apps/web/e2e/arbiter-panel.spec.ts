@@ -57,7 +57,13 @@ type Round = {
   boards: [Board, Board];
 };
 
-async function seedRound(request: import("@playwright/test").APIRequestContext, names: string[]): Promise<Round> {
+/** `stage`: the stage the generator builds (a league unless named — I-4 builds a real knockout, its next match wired
+ *  by the generator itself). */
+async function seedRound(
+  request: import("@playwright/test").APIRequestContext,
+  names: string[],
+  stage?: { kind: string; name: string },
+): Promise<Round> {
   const people: Player[] = [];
   for (const name of names) {
     const { userId, email } = await seedUser(name);
@@ -99,7 +105,7 @@ async function seedRound(request: import("@playwright/test").APIRequestContext, 
   expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
   const byEntrant = new Map(ents.data!.map((e, i) => [e.id, people[i]!]));
 
-  const { stageId } = await createStageAndGenerate(request, divisionId);
+  const { stageId } = await createStageAndGenerate(request, divisionId, stage);
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
   const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
@@ -403,8 +409,10 @@ test.describe("arbiter panel", () => {
   // I-3 (controller ruling, fix round 2): "No result" is VOID — an abandon, no points, no absence — and in ANY knockout
   // the server refuses it (a knockout game needs a winner), so it is not offered there — on the panel or on the
   // division's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the
-  // knockout's, not a final's. The pairs: a league board offers it, and settling it reads back as No result; a winner
-  // still settles the knockout board, through the real server.
+  // knockout's, not a final's. The pairs: a league board offers it, and settling it reads back as No result; both
+  // players absent, the double walkover is offered and written. Here the knockout is a league stage switched by SQL;
+  // the knockout's own positive pair — a winner clicked on the panel, and the next match seating that winner — is the
+  // I-4 test below, on a REAL knockout the generator wired.
   test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line No result is hidden and the settle says why, panel and queue; both players absent, a knockout line that feeds a next match offers W2b's double walkover by name and writes it, a final hides it; no sideways scroll at 320, 768 or 1280", async ({
     page,
     request,
@@ -545,6 +553,56 @@ test.describe("arbiter panel", () => {
     });
     expect(walkedOver.fixture, "W2b's double walkover").toEqual({ status: "forfeited", kind: "double_walkover" });
     expect(walkedOver.ledger).toEqual([{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
+  });
+
+  // I-4 (fix round 4): in a knockout the winner is the organiser's settle (No result is refused there), so its positive
+  // pair runs through the real panel — the click, the route, resolveExternalPlay, and W2b's seat resolver — on a REAL
+  // knockout: the stage created as one through the API, its next match and that match's seat wired by the generator.
+  test("I-4: on a real knockout, a winner clicked on the panel settles the board for that player, and the next match seats them", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const r = await seedRound(request, ["Amara Osei", "Bo Lindqvist", longName(), "Chen Wei"], { kind: "knockout", name: "Knockout" });
+    const [, b2] = r.boards;
+    await gameOn(b2, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    const read = () =>
+      withDb(async (sql) => {
+        const [f] = await sql<{ status: string; home: string; away: string; outcome: Record<string, unknown> | null; next: string | null; slot: number | null }[]>`
+          select status, home_entrant_id as home, away_entrant_id as away, outcome, winner_to_fixture as next, winner_to_slot as slot
+            from fixtures where id = ${b2.fixtureId}`;
+        const [n] = f!.next === null ? [] : await sql<{ home: string | null; away: string | null }[]>`
+          select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${f!.next}`;
+        return { board: f!, next: n ?? null };
+      });
+    const before = await read();
+    expect(before.board.next, "premise: the generator wired this semi-final to a next match").not.toBeNull();
+    expect([1, 2], "premise: and to one of its two seats").toContain(before.board.slot);
+    // Slot 1 is the home seat, 2 the away (the schema's feed edge, as fed-seats.ts reads it).
+    const seat = before.board.slot === 1 ? "home" : "away";
+    expect(before.next![seat], "premise: that seat waits for this board's winner").toBeNull();
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${r.arbiterPath}?fixture=${b2.fixtureId}`);
+    const open = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+    await open.click();
+    await expect(open).toHaveAttribute("aria-expanded", "true");
+    const choices = page.getByTestId("arbiter-settle").getByRole("button");
+    // White is the home player (gameOn): the panel names White first. No result is not offered in a knockout.
+    const blackWins = fill("externalPlay.settle.wins", { name: b2.away.name });
+    await expect(choices).toHaveText([fill("externalPlay.settle.wins", { name: b2.home.name }), blackWins, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
+    // Black — the away player (White, at home, carries a 43-character name) — wins: the side the panel sends is the
+    // one it names.
+    await choices.filter({ hasText: blackWins }).click();
+    await expect(status(page)).toHaveText(uiEn["arbiter.notice.settled"]);
+
+    const after = await read();
+    expect(after.board.status, "decided").toBe("decided");
+    expect(after.board.outcome, "for the player the organiser named").toMatchObject({ kind: "win", winner: before.board.away, loser: before.board.home });
+    expect(after.next![seat], "the next match seats the winner").toBe(before.board.away);
+    expect(after.next![seat === "home" ? "away" : "home"], "and only that seat: the other semi-final is still to play").toBe(before.next![seat === "home" ? "away" : "home"]);
+    await shoot(page, "arbiter-knockout-winner-settled");
   });
 
   test("I2: the panel hands each watch back — on a board switch, and when the tab goes away", async ({ page, request }) => {
