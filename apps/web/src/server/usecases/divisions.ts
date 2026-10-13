@@ -24,6 +24,8 @@ import { isValidCutoffDay } from "@/lib/registration-rules";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
+import { divisionRefusals, type RefusedField } from "./rule-locks";
+import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import {
   slugify,
   withUniqueSlug,
@@ -655,9 +657,39 @@ function canonicalJson(value: unknown): string {
   );
 }
 
-function withoutEntrants(config: Record<string, unknown>): Record<string, unknown> {
-  return withoutDivisionMetaKeys(config);
+// The top-level config keys whose value differs between two configs — the unit the W2c lock reasons in (X-SR-4). A key
+// either side lacks reads as `undefined`, so an added or a dropped key is a change. The division meta keys never count
+// (`withoutDivisionMetaKeys`, the format lock's two doors): the entrant-shape override is not format, and its own guard
+// (ENTRANT_KIND_IN_USE) covers the dangerous narrowing; online play is a division setting with its own gates (the
+// online-chess flag and the clock, below).
+function changedConfigKeys(next: Record<string, unknown>, current: Record<string, unknown>): string[] {
+  const a = withoutDivisionMetaKeys(next);
+  const b = withoutDivisionMetaKeys(current);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...keys].filter((k) => canonicalJson(a[k]) !== canonicalJson(b[k]));
 }
+
+// Put `key` back to what `from` holds: a key `from` lacks is removed from `target` rather than set to undefined.
+function restoreKey(target: Record<string, unknown>, from: Record<string, unknown>, key: string): void {
+  if (Object.hasOwn(from, key)) target[key] = from[key];
+  else delete target[key];
+}
+
+// What a variant's preset contributes once the schema has filled in its defaults. A preset may be partial — badminton's
+// `bwf` is `{}` and every value it brings comes from the schema — and a delta over the preset's own keys would see
+// nothing. A preset the schema cannot parse alone (a sport whose required keys the preset leaves out) falls back to its
+// own keys, which is all it can be said to set.
+function completedPreset(
+  configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } },
+  preset: Record<string, unknown>,
+): Record<string, unknown> {
+  const parsed = configSchema.safeParse(preset);
+  return parsed.success ? (parsed.data as Record<string, unknown>) : preset;
+}
+
+/** What a division save answers: the stored row, plus every field the save did NOT apply and the started stage that
+ *  depends on it (`[]` when nothing was refused). */
+export type PatchDivisionResult = DivisionRow & { refused: RefusedField[] };
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
 // also carries divisions_category_check, which shares the code but means a
@@ -707,7 +739,7 @@ export async function patchDivision(
   auth: AuthCtx,
   id: string,
   patch: PatchDivision,
-): Promise<DivisionRow> {
+): Promise<PatchDivisionResult> {
   // Both gates below resolve against THIS division's competition, so one
   // lookup serves them: `formats.advanced` has always been pass-lifted, and
   // V396 made `news.auto` pass-lifted too (false on Free, granted on both
@@ -778,6 +810,9 @@ export async function patchDivision(
   // The stored name a rename replaces: a changed name moves the division in the
   // public competition shell (`expireCompetitionShell`), a re-sent one does not.
   let nameBefore: string | undefined;
+  // W2c X-SR-4: the fields this save did not apply because a started stage depends on them. Assigned inside the
+  // transaction and returned beside the row; `[]` when nothing was refused.
+  let refused: RefusedField[] = [];
   const cameraGate = async (ptx: Tx) => {
     await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
     roundOpened = await anyRoundOpened(ptx, id, new Date());
@@ -941,128 +976,184 @@ export async function patchDivision(
         throw new HttpError(422, AGE_CUTOFF_DAY_INVALID_FOR_MONTH);
       }
     }
-    // Format edits (v8 spec §2): allowed only while no stage owns fixtures,
-    // then re-validated exactly like create — variant preset merged with the
-    // override and parsed by the PINNED module's schema.
-    if (patch.variant_key !== undefined || patch.config !== undefined) {
+    // Format edits (v8 spec §2) and the standings cascade, re-validated exactly like create — variant preset merged
+    // with the override and parsed by the PINNED module's schema.
+    //
+    // W2c X-SR-4 (owner P-2 "A", 2026-10-13): the lock is no longer "any fixture exists". A field is refused only while
+    // a STARTED stage that INHERITS it exists (rule-locks.ts `divisionRefusals`), and it is refused BY NAME — the save
+    // still applies every other field. Three things follow:
+    //   1. the config is built as before, then every refused key is put back to its stored value;
+    //   2. because that restore can produce a mix nobody validated (a restored `setTo` beside a saved `cap`), the config
+    //      left over is parsed AGAIN, and an invalid mix is the same 422 CONFIG_INVALID, with nothing written;
+    //   3. tiebreakers join the lock — they were never locked before W2c (Q3).
+    // An unparseable config is 422 whether or not anything has started: the old "409 beats 422 while locked" order
+    // belonged to the division-wide lock, which is gone.
+    const formatEdit = patch.variant_key !== undefined || patch.config !== undefined;
+    if (formatEdit || patch.tiebreakers !== undefined) {
       const [current] = await tx<
         {
           sport_key: string;
           module_version: string;
           variant_key: string;
           config: Record<string, unknown> | null;
+          tiebreakers: string[] | null;
         }[]
-      >`select sport_key, module_version, variant_key, config from divisions where id = ${id}`;
+      >`select sport_key, module_version, variant_key, config, tiebreakers from divisions where id = ${id}`;
       if (!current) throw new HttpError(404, "division not found");
-      const variantKey = patch.variant_key ?? current.variant_key;
-      const [variant] = await tx<{ config: Record<string, unknown> }[]>`
-        select config from sport_variants
-        where sport_key = ${current.sport_key} and key = ${variantKey}
-        order by org_id nulls last limit 1`;
-      if (!variant) {
-        throw new HttpError(422, `unknown variant '${variantKey}' for ${current.sport_key}`);
-      }
-      // Format lock (v8 spec §2): once a stage owns fixtures the format is
-      // immutable — the ONE exception is an entrants-only settings save
-      // (entrant shapes are not format; the ENTRANT_KIND_IN_USE guard below
-      // covers the dangerous narrowing). The lock keeps its original
-      // precedence: any variant_key touch, any config that doesn't parse, or
-      // any non-entrants config change 409s BEFORE other validation — the v8
-      // contract tests assert 409, never 422, while locked.
-      const [{ locked }] = await tx<{ locked: boolean }[]>`
-        select exists(
-          select 1 from fixtures f
-          join stages s on s.id = f.stage_id
-          where s.division_id = ${id}
-        ) as locked`;
-      const formatLocked = () =>
-        new HttpError(409, "Format is locked — fixtures exist", "FORMAT_LOCKED");
-      // ANY variant_key in the patch is format intent — even re-sending the
-      // current one resets config to the preset, and a "no-op" that only holds
-      // because schema defaults reconstruct the stored config must not soften
-      // the contract. The entrants-only door is config-shaped saves alone.
-      if (locked && patch.variant_key !== undefined) throw formatLocked();
-      const sportModule = resolveModule(current.sport_key, current.module_version);
-      const merged = { ...variant.config, ...(patch.config ?? {}) };
-      const parsed = sportModule.configSchema.safeParse(merged);
-      if (!parsed.success) {
-        if (locked) throw formatLocked();
-        throw new EngineError("CONFIG_INVALID", `invalid ${current.sport_key} config`, {
-          issues: parsed.error.issues,
-        });
-      }
-      // The entrant-shape override (spec 2026-07-18) rides in `config.entrants`
-      // but is NOT part of the sport's configSchema, which strips unknown keys —
-      // so carry it through the parse explicitly. Absent from the incoming
-      // config → the override is cleared back to the module default.
-      const finalConfig = parsed.data as Record<string, unknown>;
-      const incomingEntrants = (patch.config as { entrants?: unknown } | undefined)?.entrants;
-      if (incomingEntrants != null && typeof incomingEntrants === "object") {
-        finalConfig.entrants = incomingEntrants;
-      }
-      const patchCfg = patch.config as Record<string, unknown> | undefined;
-      if (patchCfg && "onlinePlay" in patchCfg) {
-        applyOnlinePlayToConfig(
-          finalConfig,
-          assertOnlinePlayValue(current.sport_key, patchCfg.onlinePlay),
-        );
-      } else {
-        applyOnlinePlayToConfig(finalConfig, readOnlinePlay(current.config));
-      }
-      if (locked) {
-        const nonEntrantsChanged =
-          canonicalJson(withoutEntrants(finalConfig)) !==
-          canonicalJson(withoutEntrants((current.config ?? {}) as Record<string, unknown>));
-        if (nonEntrantsChanged) throw formatLocked();
-      }
-      // T5-I1/T6 (M12): the setup gate for an online clock, as on create.
-      // AFTER the lock so a locked division keeps answering 409 for any
-      // format change, never 400. Judged on the FINAL config, and only when
-      // the clock or online play CHANGES against the stored row: a save that
-      // re-sends both as stored (the Entrants save re-sends the whole config
-      // through one of the format lock's two doors — withoutDivisionMetaKeys
-      // lets `entrants` AND `onlinePlay` change on a locked division) must not
-      // be refused for a clock saved before this gate existed: on a locked
-      // division the only repair, changing the clock, is itself 409, so that
-      // save would be refused for good (review T6-I1). The other door is why
-      // this is not simply `!locked`: online play switched ON over a stored
-      // pre-gate clock on a locked division must still be judged (N-1).
-      const storedConfig = (current.config ?? {}) as Record<string, unknown>;
-      // T20: only the off → lichess transition starts online play. A re-send of a stored 'lichess' (every Entrants
-      // and format save re-sends the whole config) and turning it off are never gated, so a club whose flag goes
-      // off can still save, and switch online play off, on a division already online. After the lock (409 keeps
-      // its precedence for a format change), before the clock (the feature is not offered at all).
-      if (
-        readOnlinePlay(finalConfig) === "lichess" &&
-        readOnlinePlay(storedConfig) !== "lichess" &&
-        onlineOffered !== true
-      ) {
-        throw onlineChessDisabled();
-      }
-      const clockOrOnlineChanged =
-        canonicalJson(finalConfig.clock ?? null) !== canonicalJson(storedConfig.clock ?? null) ||
-        readOnlinePlay(finalConfig) !== readOnlinePlay(storedConfig);
-      if (clockOrOnlineChanged && readOnlinePlay(finalConfig) === "lichess") {
-        assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
-      }
-      // Narrowing the allowed kinds must not orphan entrants that already exist:
-      // an active entrant of a kind the new model no longer accepts would become
-      // unschedulable. Reject with 422 ENTRANT_KIND_IN_USE — withdraw first.
-      const nextModel = effectiveEntrantModel(sportModule.entrantModel ?? null, finalConfig);
-      const inUse = await tx<{ kind: string }[]>`
-        select distinct kind from entrants
-        where division_id = ${id} and status not in ('withdrawn', 'disqualified')`;
-      for (const { kind } of inUse) {
-        if (!nextModel.kinds.includes(kind as EntrantKind)) {
-          throw new HttpError(
-            422,
-            `entrants of kind '${kind}' already exist — withdraw them first`,
-            "ENTRANT_KIND_IN_USE",
-          );
+      const currentConfig = (current.config ?? {}) as Record<string, unknown>;
+
+      let nextConfig: Record<string, unknown> | undefined;
+      let sportModule: ReturnType<typeof resolveModule> | undefined;
+      let requestedPreset: Record<string, unknown> = {};
+      let configKeys: string[] = [];
+      // Only a DIFFERENT variant key is a variant change. Re-sending the current one still resets the config to the
+      // preset, but the keys that reset moves are `configKeys` below — they are refused (or not) as config keys.
+      const variantChanged = patch.variant_key !== undefined && patch.variant_key !== current.variant_key;
+      if (formatEdit) {
+        const variantKey = patch.variant_key ?? current.variant_key;
+        const [variant] = await tx<{ config: Record<string, unknown> }[]>`
+          select config from sport_variants
+          where sport_key = ${current.sport_key} and key = ${variantKey}
+          order by org_id nulls last limit 1`;
+        if (!variant) {
+          throw new HttpError(422, `unknown variant '${variantKey}' for ${current.sport_key}`);
         }
+        sportModule = resolveModule(current.sport_key, current.module_version);
+        const merged = { ...variant.config, ...(patch.config ?? {}) };
+        const parsed = sportModule.configSchema.safeParse(merged);
+        if (!parsed.success) {
+          throw new EngineError("CONFIG_INVALID", `invalid ${current.sport_key} config`, {
+            issues: parsed.error.issues,
+          });
+        }
+        // The entrant-shape override (spec 2026-07-18) rides in `config.entrants`
+        // but is NOT part of the sport's configSchema, which strips unknown keys —
+        // so carry it through the parse explicitly. Absent from the incoming
+        // config → the override is cleared back to the module default.
+        nextConfig = parsed.data as Record<string, unknown>;
+        const incomingEntrants = (patch.config as { entrants?: unknown } | undefined)?.entrants;
+        if (incomingEntrants != null && typeof incomingEntrants === "object") {
+          nextConfig.entrants = incomingEntrants;
+        }
+        // Online play rides in config too and the parse strips it: the patch's value when it names one, else the
+        // stored one (a save that does not mention it never switches it).
+        const patchCfg = patch.config as Record<string, unknown> | undefined;
+        if (patchCfg && "onlinePlay" in patchCfg) {
+          applyOnlinePlayToConfig(
+            nextConfig,
+            assertOnlinePlayValue(current.sport_key, patchCfg.onlinePlay),
+          );
+        } else {
+          applyOnlinePlayToConfig(nextConfig, readOnlinePlay(current.config));
+        }
+        configKeys = changedConfigKeys(nextConfig, currentConfig);
+        requestedPreset = completedPreset(sportModule.configSchema, variant.config);
       }
-      effective.variant_key = variantKey;
-      effective.config = tx.json(finalConfig as never);
+      const tiebreakersChanged =
+        patch.tiebreakers !== undefined && canonicalJson(patch.tiebreakers) !== canonicalJson(current.tiebreakers);
+
+      refused = await divisionRefusals(tx, id, { configKeys, variant: variantChanged, tiebreakers: tiebreakersChanged });
+      const refusedFields = new Set(refused.map((r) => r.field));
+      const variantRefusal = refused.find((r) => r.field === "variant_key");
+
+      let configApplied = false;
+      if (nextConfig !== undefined && sportModule !== undefined) {
+        const finalConfig = nextConfig;
+        for (const k of configKeys) if (refusedFields.has(k)) restoreKey(finalConfig, currentConfig, k);
+        if (variantRefusal) {
+          // The variant stays as stored, so nothing the requested variant would have changed may land either (review
+          // I1): a preset applied without its variant is a config that belongs to no variant. Keys the patch sets
+          // ITSELF are not the preset's to drop — they were judged above, one by one.
+          const explicit = (patch.config ?? {}) as Record<string, unknown>;
+          const presetDelta = Object.keys(requestedPreset).filter((k) => !Object.hasOwn(explicit, k) && canonicalJson(requestedPreset[k]) !== canonicalJson(currentConfig[k]));
+          for (const k of presetDelta) {
+            restoreKey(finalConfig, currentConfig, k);
+            if (!refusedFields.has(k)) {
+              refusedFields.add(k);
+              refused.push({ field: k, code: "DIVISION_FORMAT_LOCKED", stageId: variantRefusal.stageId, stageName: variantRefusal.stageName });
+            }
+          }
+          // A variant-only patch carries no entrants, which the parse above reads as "clear the override" — not a
+          // thing a refused variant may do.
+          if (patch.config === undefined) restoreKey(finalConfig, currentConfig, "entrants");
+        }
+        if (refused.length > 0) {
+          const reparsed = sportModule.configSchema.safeParse(finalConfig);
+          if (!reparsed.success) throw new HttpError(422, reparsed.error.issues[0]?.message ?? "Invalid config", "CONFIG_INVALID");
+        }
+        configApplied = canonicalJson(finalConfig) !== canonicalJson(currentConfig);
+      }
+
+      // Nothing the save can apply is left, and something was refused: that is a refusal, not a success that did
+      // nothing. A save that also renames, or keeps part of its config, still lands with `refused` beside the row.
+      //
+      // Only `otherColumn` and `configApplied` can be what survives. Every refusal needs a started stage, and a started
+      // stage refuses a CHANGED variant and CHANGED tiebreakers outright (`divisionRefusals` answers both with the first
+      // started stage) — so once anything is refused, neither of those two was applied, and there is nothing to ask.
+      const lockable = new Set(["variant_key", "config", "tiebreakers"]);
+      const otherColumn = Object.entries(patch).some(([k, v]) => v !== undefined && !lockable.has(k));
+      if (refused.length > 0 && !otherColumn && !configApplied) {
+        const first = refused[0]!;
+        throw new HttpError(
+          RULE_ERROR_STATUS[first.code],
+          ruleErrorMessage(first.code, { stage: first.stageName, field: first.field }),
+          first.code,
+          { refused },
+        );
+      }
+
+      if (nextConfig !== undefined && sportModule !== undefined) {
+        // T5-I1/T6 (M12): the setup gate for an online clock, as on create.
+        // AFTER the lock so a locked division keeps answering 409 for any
+        // format change, never 400. Judged on the FINAL config, and only when
+        // the clock or online play CHANGES against the stored row: a save that
+        // re-sends both as stored (the Entrants save re-sends the whole config
+        // through one of the format lock's two doors — withoutDivisionMetaKeys
+        // lets `entrants` AND `onlinePlay` change on a locked division) must not
+        // be refused for a clock saved before this gate existed: on a locked
+        // division the only repair, changing the clock, is itself 409, so that
+        // save would be refused for good (review T6-I1). The other door is why
+        // this is not simply `!locked`: online play switched ON over a stored
+        // pre-gate clock on a locked division must still be judged (N-1).
+        // Under W2c's per-field lock (X-SR-4), "after the lock" is after the refusals: the config judged here is the one
+        // left once every refused key is back to its stored value.
+        // T20: only the off → lichess transition starts online play. A re-send of a stored 'lichess' (every Entrants
+        // and format save re-sends the whole config) and turning it off are never gated, so a club whose flag goes
+        // off can still save, and switch online play off, on a division already online. After the lock (409 keeps
+        // its precedence for a format change), before the clock (the feature is not offered at all).
+        if (
+          readOnlinePlay(nextConfig) === "lichess" &&
+          readOnlinePlay(currentConfig) !== "lichess" &&
+          onlineOffered !== true
+        ) {
+          throw onlineChessDisabled();
+        }
+        const clockOrOnlineChanged =
+          canonicalJson(nextConfig.clock ?? null) !== canonicalJson(currentConfig.clock ?? null) ||
+          readOnlinePlay(nextConfig) !== readOnlinePlay(currentConfig);
+        if (clockOrOnlineChanged && readOnlinePlay(nextConfig) === "lichess") {
+          assertTimeControl(nextConfig.clock as BoardgameClockInput | undefined);
+        }
+        // Narrowing the allowed kinds must not orphan entrants that already exist:
+        // an active entrant of a kind the new model no longer accepts would become
+        // unschedulable. Reject with 422 ENTRANT_KIND_IN_USE — withdraw first.
+        const nextModel = effectiveEntrantModel(sportModule.entrantModel ?? null, nextConfig);
+        const inUse = await tx<{ kind: string }[]>`
+          select distinct kind from entrants
+          where division_id = ${id} and status not in ('withdrawn', 'disqualified')`;
+        for (const { kind } of inUse) {
+          if (!nextModel.kinds.includes(kind as EntrantKind)) {
+            throw new HttpError(
+              422,
+              `entrants of kind '${kind}' already exist — withdraw them first`,
+              "ENTRANT_KIND_IN_USE",
+            );
+          }
+        }
+        effective.variant_key = variantRefusal ? current.variant_key : (patch.variant_key ?? current.variant_key);
+        effective.config = tx.json(nextConfig as never);
+      }
+      if (refusedFields.has("tiebreakers")) delete effective.tiebreakers;
     }
     // Rename regenerates the slug (v3/01 §2); old slug keeps redirecting.
     let before: { name: string; slug: string; competition_id: string } | undefined;
@@ -1086,9 +1177,16 @@ export async function patchDivision(
         previousCompetitionId = before.competition_id;
       }
       const cols = Object.keys(eff);
+      if (cols.length === 0) {
+        // An empty save (or one whose every field was refused alongside nothing else, which throws above before
+        // reaching here) has no column to SET — `update … set  where` is a syntax error. Answer with the stored row.
+        const [stored] = await q<DivisionRow[]>`select ${q(COLS)} from divisions where id = ${id}`;
+        if (!stored) throw new HttpError(404, "division not found");
+        return stored;
+      }
       const values = {
         ...eff,
-        ...(patch.tiebreakers ? { tiebreakers: q.json(patch.tiebreakers as never) } : {}),
+        ...(eff.tiebreakers ? { tiebreakers: q.json(eff.tiebreakers as never) } : {}),
         // `required_court_tags` is a real `text[]` column (V367, not jsonb —
         // q.array, not q.json), normalised on write with the SAME helper the
         // courts path uses. Truthy-checked like tiebreakers above: an
@@ -1214,5 +1312,5 @@ export async function patchDivision(
       peersExpired,
     );
   }
-  return row;
+  return { ...row, refused };
 }

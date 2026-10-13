@@ -13,39 +13,15 @@ import "server-only";
 // import returns real functions.
 import { EngineError } from "@seazn/engine/core";
 import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
-import { withTenant, type Tx } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-
-/**
- * "Which of these stages have already started?" — THE format-lock predicate,
- * stated ONCE and interpolated by both halves of the lock: the single-stage
- * guard in `putStageRules` below, which REFUSES the write, and
- * `formatLockedStageIds`, which the division page reads so the fixtures panel
- * knows whether to OFFER the editor at all. Two copies of this expression
- * would drift, and the shape of that drift is an organiser shown an Edit
- * button whose Save comes back 409. Change it here and both change.
- *
- * D1 — the predicate is MONOTONIC. Deliberately not `fixtures.status`:
- * `fixtureStatusFromFold` returns `in_play` only while an active `core.start`
- * exists, so voiding a start moves a fixture back to `scheduled` and a status
- * predicate would re-open a stage that has already been played. A frozen
- * `config_snapshot` and a score event both only ever appear; neither goes
- * away. The `score_events` half also covers the JSON-`null`-config carve-out,
- * where a fixture records events and never takes a snapshot at all.
- */
-async function lockedStageIdsAmong(tx: Tx, stageIds: readonly string[]): Promise<Set<string>> {
-  if (stageIds.length === 0) return new Set();
-  const rows = await tx<{ stage_id: string }[]>`
-    select distinct f.stage_id from fixtures f
-     where f.stage_id = any(${stageIds as string[]}::uuid[])
-       and (f.config_snapshot is not null
-            or exists(select 1 from score_events e where e.fixture_id = f.id))`;
-  return new Set(rows.map((r) => r.stage_id));
-}
+// The format-lock predicate lives in rule-locks.ts (moved from here, W2c Task 2): the division PATCH asks the same
+// question per stage, and both halves must read one definition of "started".
+import { lockedStageIdsAmong } from "./rule-locks";
 
 /**
  * The stages of one division whose match format is locked — the READ half of
@@ -55,7 +31,7 @@ async function lockedStageIdsAmong(tx: Tx, stageIds: readonly string[]): Promise
  * `config_snapshot` (and `stages.ts:147-162` records a payload-budget ruling
  * against widening it), and `score_events` reaches no page prop at all. The
  * only client-visible signal is `fixtures.status`, which is exactly the
- * non-monotonic predicate the comment above rejects.
+ * non-monotonic predicate `lockedStageIdsAmong`'s comment (rule-locks.ts) rejects.
  *
  * Call it only for a sport in `STAGE_RULES_SPORTS` — the panel renders no row
  * for any other sport, so the page should not pay for the query.

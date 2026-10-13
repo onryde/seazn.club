@@ -1,12 +1,16 @@
 // v8 (spec 2026-07-13): division settings tab server contracts — logo
 // columns round-trip through patch/get (V274), and the format becomes
-// immutable once any stage owns fixtures (409 FORMAT_LOCKED), while
-// non-format fields keep patching. Real Postgres; skipped without
-// DATABASE_URL (same convention as registrations.test.ts).
+// immutable once a stage that inherits it has STARTED (W2c X-SR-4: 409
+// DIVISION_FORMAT_LOCKED / DIVISION_TABLE_RULES_LOCKED, by stage name; before
+// W2c it was "once any stage owns fixtures", 409 FORMAT_LOCKED — which
+// `replaceStages` still is), while non-format fields keep patching. Real
+// Postgres; skipped without DATABASE_URL (same convention as
+// registrations.test.ts).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
@@ -50,6 +54,13 @@ async function seedOwner(plan: "pro" | "community" = "pro"): Promise<AuthCtx> {
     role: "owner",
     keyId: null,
   } as AuthCtx;
+}
+
+/** A stage STARTS when its first fixture takes an event (W2c X-SR-4's lock; generation alone no longer locks). */
+async function startFirstFixture(owner: AuthCtx, stageId: string): Promise<void> {
+  const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stageId} order by id limit 1`;
+  expect(f, "the stage has a generated fixture to start").toBeDefined();
+  await appendEvent(owner.orgId, f!.id, 0, { type: "core.start", payload: {} });
 }
 
 async function rig(owner: AuthCtx) {
@@ -401,7 +412,7 @@ describe.skipIf(!HAS_DB)("createDivision persists eligibility columns (RS007 wiz
 });
 
 describe.skipIf(!HAS_DB)("format lock (v8)", () => {
-  it("variant/config edits work until fixtures exist, then 409 FORMAT_LOCKED", async () => {
+  it("variant/config edits work until a stage starts, then 409 DIVISION_FORMAT_LOCKED (X-SR-4; generation alone no longer locks)", async () => {
     const owner = await seedOwner();
     const { division } = await rig(owner);
 
@@ -426,9 +437,17 @@ describe.skipIf(!HAS_DB)("format lock (v8)", () => {
     });
     await generateStageFixtures(owner, stage!.id);
 
-    await expect(patchDivision(owner, division.id, { variant_key: "score" })).rejects.toMatchObject(
-      { status: 409, code: "FORMAT_LOCKED" },
+    // Generated is not started: the variant still changes (the old division-wide lock, narrowed — P-2 "A").
+    const back = await patchDivision(owner, division.id, { variant_key: "score" });
+    expect(back.variant_key).toBe("score");
+    expect(back.refused).toEqual([]);
+
+    // Started: the format is history.
+    await startFirstFixture(owner, stage!.id);
+    await expect(patchDivision(owner, division.id, { variant_key: "sets" })).rejects.toMatchObject(
+      { status: 409, code: "DIVISION_FORMAT_LOCKED", extra: { refused: [{ field: "variant_key", stageName: "L" }] } },
     );
+    expect((await getDivision(owner, division.id)).variant_key, "the refused variant was not written").toBe("score");
 
     // Non-format fields still patch while locked.
     const renamed = await patchDivision(owner, division.id, {
@@ -584,24 +603,20 @@ describe.skipIf(!HAS_DB)("replaceStages — format structure swap (v8)", () => {
   });
 });
 
-// F2b (P7 follow-up, 2026-08-14) — KNOWN LIMITATION, deliberately NOT fixed.
-// The FORMAT_LOCKED guard (replaceStages, stages.ts:276-278; patchDivision
-// runs the identical check, divisions.ts:556-563) is
+// F2b (P7 follow-up, 2026-08-14), narrowed by W2c X-SR-4 (owner P-2 "A", 2026-10-13).
+// `replaceStages`' FORMAT_LOCKED is still division-WIDE
 //   select 1 from fixtures f join stages s on s.id = f.stage_id
 //   where s.division_id = $1 limit 1
-// — division-WIDE, with no per-stage predicate. Generating stage 1's
-// fixtures therefore freezes the rules of every later, still-unplayed stage
-// too, and blocks patchDivision's variant/config edits even though they
-// don't touch the stage graph at all. Narrowing the guard to a per-stage
-// check is deliberately DEFERRED: replaceStages/patchDivision are a shared
-// release-2 surface and this is past this follow-up's blast radius (escalate
-// rather than silently widen scope). This test pins the CURRENT behaviour so
-// a future session doesn't need to rediscover it, and so any accidental
-// narrowing shows up as a red test here rather than a silent scope change.
+// — generating stage 1's fixtures freezes the stage graph, untouched later
+// stages included (spec §4.3: W2c leaves that door alone, and the first half
+// of the test below keeps pinning it). `patchDivision` used to run the
+// identical check; it no longer does. It refuses a field only while a STARTED
+// stage that inherits it exists, and names that stage (division-locks.test.ts
+// holds the full table; this block is the F2b regression home for the pair).
 describe.skipIf(!HAS_DB)(
-  "FORMAT_LOCKED is division-wide, not per-stage (F2b — known limitation, not fixed)",
+  "F2b — replaceStages stays division-wide; patchDivision narrowed to started inheriting stages (W2c X-SR-4)",
   () => {
-    it("generating stage 1's fixtures 409s a later, untouched stage's replaceStages AND the division's patchDivision", async () => {
+    it("generating stage 1's fixtures 409s a later, untouched stage's replaceStages, but locks patchDivision only once a stage STARTS — and then names it, never the untouched stage", async () => {
       const owner = await seedOwner();
       const { division } = await rig(owner);
 
@@ -630,11 +645,18 @@ describe.skipIf(!HAS_DB)(
         ]),
       ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
 
-      // patchDivision's variant/config guard runs the identical division-wide
-      // check — also 409s, even though it isn't touching any stage at all.
-      await expect(patchDivision(owner, division.id, { variant_key: "sets" })).rejects.toMatchObject({
+      // patchDivision: generation alone no longer locks the division's format.
+      const generated = await patchDivision(owner, division.id, { variant_key: "sets" });
+      expect(generated.variant_key).toBe("sets");
+      expect(generated.refused).toEqual([]);
+
+      // Stage 1 starts: the format is locked on stage 1's account, by its name.
+      // Stage 2 has no fixtures at all and is never the one named.
+      await startFirstFixture(owner, stage1.id);
+      await expect(patchDivision(owner, division.id, { variant_key: "score" })).rejects.toMatchObject({
         status: 409,
-        code: "FORMAT_LOCKED",
+        code: "DIVISION_FORMAT_LOCKED",
+        extra: { refused: [{ field: "variant_key", stageId: stage1.id, stageName: "L1" }] },
       });
     });
   },
@@ -678,12 +700,12 @@ describe.skipIf(!HAS_DB)("entrant-kind guard (spec 2026-07-18)", () => {
 describe.skipIf(!HAS_DB)(
   "entrants-only config PATCH bypasses the format lock (spec 2026-07-18)",
   () => {
-    it("allows an entrants-only change while locked, but 409s if a real config field also changes", async () => {
+    it("allows an entrants-only change while locked; a real config field in the same save is refused by name, and 409s when nothing else is left (X-SR-4)", async () => {
       const owner = await seedOwner();
       const { division } = await rig(owner);
 
-      // Lock the format the same way the format-lock suite does: entrants + a
-      // league stage + generated fixtures.
+      // Lock the format: entrants + a league stage + generated fixtures, and
+      // (X-SR-4: generation alone no longer locks) its first fixture STARTED.
       await createEntrants(owner, division.id, [
         { kind: "individual", display_name: "A", seed: 1, members: [] },
         { kind: "individual", display_name: "B", seed: 2, members: [] },
@@ -695,6 +717,7 @@ describe.skipIf(!HAS_DB)(
         config: {},
       });
       await generateStageFixtures(owner, stage!.id);
+      await startFirstFixture(owner, stage!.id);
 
       // The settings UI sends the FULL stored config plus the override, so mirror
       // that: base off the stored snapshot and set only `entrants`.
@@ -723,19 +746,41 @@ describe.skipIf(!HAS_DB)(
       expect(savedEntrants?.kinds).toEqual(["individual", "team"]);
       expect(savedEntrants?.captain).toBe(true);
 
-      // (b) Entrants change PLUS a real config field (points) → still locked.
+      // (b) Entrants change PLUS a real config field (points, a TABLE rule): the
+      // entrants part still lands; points is refused BY NAME and stays as stored.
+      const mixed = await patchDivision(owner, division.id, {
+        config: {
+          ...storedConfig,
+          points: { w: 5, d: 5, l: 5 },
+          entrants: {
+            kinds: ["individual", "team"],
+            defaultKind: "individual",
+          },
+        },
+      });
+      expect(mixed.refused).toEqual([
+        { field: "points", code: "DIVISION_TABLE_RULES_LOCKED", stageId: stage!.id, stageName: "L" },
+      ]);
+      expect((mixed.config as { points: unknown }).points).toEqual(
+        (storedConfig as { points: unknown }).points,
+      );
+      expect(
+        (mixed.config as { entrants?: { captain?: boolean } }).entrants?.captain,
+        "the entrants change in the same save was applied",
+      ).toBeUndefined();
+
+      // (c) The real field alone (entrants re-sent exactly as stored): nothing is
+      // left to apply, so the save is refused outright — 409 with the named code.
+      const stored = (await getDivision(owner, division.id)).config as Record<string, unknown>;
       await expect(
         patchDivision(owner, division.id, {
-          config: {
-            ...storedConfig,
-            points: { w: 5, d: 5, l: 5 },
-            entrants: {
-              kinds: ["individual", "team"],
-              defaultKind: "individual",
-            },
-          },
+          config: { ...stored, points: { w: 7, d: 7, l: 7 } },
         }),
-      ).rejects.toMatchObject({ status: 409, code: "FORMAT_LOCKED" });
+      ).rejects.toMatchObject({
+        status: 409,
+        code: "DIVISION_TABLE_RULES_LOCKED",
+        extra: { refused: [{ field: "points", stageName: "L" }] },
+      });
     });
   },
 );
