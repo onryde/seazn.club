@@ -13,8 +13,12 @@ import "server-only";
 // What the organiser's choice means on the ledger (FIDE Laws: a player absent
 // at the start of play loses by default, Art. 6.7; any other decision of an
 // arbiter is an adjudication):
-//   - "X wins"  — `boardgame.result {winner: X}`, method `forfeit` when the
-//                 LOSER is a recorded no-show, `adjudication` otherwise;
+//   - "X wins"  — when the LOSER is a recorded no-show, a default:
+//                 `core.forfeit {by: the loser, reason: "walkover"}` with no
+//                 Start (RB4; W2b spec §5.2 — the sweep's own no-show shape;
+//                 W2b D15 refuses `boardgame.result{method: forfeit}`).
+//                 Otherwise an adjudication, `boardgame.result {winner: X,
+//                 method: adjudication}` after a Start;
 //   - "Draw"    — `boardgame.result {winner: null, method: adjudication}`. In
 //                 a bracket the engine opens the tie-break, and the board is
 //                 held `tiebreak_owed` by the same rule as a game's draw (R2):
@@ -213,18 +217,28 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     return { status: "finished" };
   }
 
-  let payload: { winner: string | null; method: "forfeit" | "adjudication" };
-  if (kind === "draw") payload = { winner: null, method: "adjudication" };
-  else {
+  if (kind === "home_wins" || kind === "away_wins") {
     const absent = reason === null ? undefined : ABSENT_BY_REASON[reason];
+    const loserSide: Side = kind === "home_wins" ? "away" : "home";
     let loserAbsent = absent === "both";
     if (absent === "white" || absent === "black") {
       const whiteSide = b.whiteSide ?? (await whiteSideOf({ fixtureId, orgId: b.orgId }));
-      const loserSide: Side = kind === "home_wins" ? "away" : "home";
       loserAbsent = (loserSide === whiteSide) === (absent === "white");
     }
-    payload = { winner: winnerOf(kind), method: loserAbsent ? "forfeit" : "adjudication" };
+    if (loserAbsent) {
+      // RB4: a default is a walkover by the absent loser — the sweep's own no-show write (spec §3.6) — admitted
+      // before the game and, for chess, after the Start (ruling 118). No Start is written for it.
+      await settleWrite(auth, fixtureId, {
+        expected_seq: fs.last_seq,
+        type: "core.forfeit",
+        payload: { by: loserSide === "home" ? b.homeEntrantId : b.awayEntrantId, reason: "walkover" },
+        idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
+      });
+      await closeBridge(fixtureId);
+      return { status: "finished" };
+    }
   }
+  const payload = { winner: winnerOf(kind), method: "adjudication" as const };
 
   // boardgame refuses a result before the game starts (decideResult): start
   // the fold first, as T12's writer does.
