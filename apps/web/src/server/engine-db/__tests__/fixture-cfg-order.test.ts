@@ -114,6 +114,18 @@ describe("BG-KO-3 (G1): the stage's tie-break rungs survive the bracket overlay"
     expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })])), "rapid is not in the list").toBe("TIEBREAK_NOT_APPLICABLE");
     expect(fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "blitz", winner: A })]).outcome, "a listed rung is played").toMatchObject({ kind: "win", winner: A });
   });
+  it("BG-KO-1: the rung list IS the decider - [] holds a drawn game, ['rapid'] plays rapid and only rapid", () => {
+    const rapidOnly = resolved(none, ["rapid"]);
+    expect(rapidOnly.tiebreakRungs).toEqual(["rapid"]);
+    expect(fold(rapidOnly).phase, "a drawn game with a rung to play awaits it").toBe("tiebreak");
+    expect(fold(rapidOnly, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: A })]).outcome).toMatchObject({ kind: "win", winner: A, method: "tiebreak_rapid" });
+    for (const body of [{ rung: "blitz", winner: A }, { rung: "armageddon", black: A, result: "black" }])
+      expect(codeOf(() => fold(rapidOnly, [...drawn, ev(3, "boardgame.tiebreak", body)])), body.rung).toBe("TIEBREAK_NOT_APPLICABLE");
+    // The pair, through the same resolver: the empty list is held (the other half of the decider).
+    const held = fold(resolved(none, []));
+    expect(held.phase).toBe("done");
+    expect(boardgame.outcome(held)).toEqual({ kind: "draw" });
+  });
   it("the positive pair: a stage that sets no list adds none (the key stays absent) and every rung is played", () => {
     const cfg = resolved(none);
     expect(Object.hasOwn(cfg, "tiebreakRungs")).toBe(false);

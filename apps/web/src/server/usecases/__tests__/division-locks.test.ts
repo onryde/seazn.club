@@ -822,7 +822,10 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // says so. A key a stage truly ignores is the FORCED one (`bracketDeciders`), not the unlisted one.
   it("I-1 a started chess LEAGUE inherits the division's tiebreak: the engine lists it for bracket kinds only, but the fold reads it in every kind", async () => {
     const bg = resolveLatestModule("boardgame");
-    expect(ruleKeyApplies(bg.ruleKeys!.tiebreak!, "league", "classical"), "precondition: the engine's appliesTo does not list a league").toBe(false);
+    // W2c BG-KO-1/3: the organiser's chess decider is the rung list, not `tiebreak` (which the bracket overlay forces and the
+    // engine no longer declares as a stage key). The league still folds to the tie-break phase when the division says so.
+    expect(bg.ruleKeys!.tiebreak, "precondition: the engine declares no stage key for the forced switch").toBeUndefined();
+    expect(ruleKeyApplies(bg.ruleKeys!.tiebreakRungs!, "league", "classical"), "precondition: the engine's appliesTo does not list a league").toBe(false);
     const r = await rig("boardgame", "classical");
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
@@ -841,6 +844,33 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     const out = await patchDivision(r.auth, r.divisionId, { config: { ...before, tiebreak: true } });
     expect(out.refused).toEqual([]);
     expect((out.config as { tiebreak?: boolean }).tiebreak).toBe(true);
+  });
+
+  // W2c BG-KO-3 (fix round 1, I3): the rung list is the chess decider, and an EMPTY list is the organiser's choice ("no
+  // tie-break games": a drawn game is held). A started knockout stage whose own rules carry it - `[]` included - does not
+  // inherit the division's list, so a division save that changes it lands; a stage that carries none inherits it, and the
+  // save is refused. The empty list must count as "carried" (a truthiness or length test would call it inherited).
+  it("BG-KO-3 a started chess knockout whose stage rules carry their own rung list - the EMPTY list too - does not inherit the division's; one that carries none does", async () => {
+    const bg = resolveLatestModule("boardgame");
+    expect(deciderKeysFor(bg, "knockout", "classical"), "precondition: the engine declares the rung list the chess decider").toEqual(["tiebreakRungs"]);
+    let checked = 0;
+    for (const own of [[], ["rapid"], ["armageddon", "blitz"]] as string[][]) {
+      const r = await rigBracket("boardgame", "classical");
+      await sql`update stages set config = config || ${sql.json({ rules: { tiebreakRungs: own } } as never)} where id = ${r.ko.id}`;
+      await start(r.auth, r.fixtureId);
+      const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+      const out = await patchDivision(r.auth, r.divisionId, { config: { ...before, tiebreakRungs: ["blitz"] } });
+      expect(out.refused, `stage carries ${JSON.stringify(own)}`).toEqual([]);
+      expect((out.config as { tiebreakRungs?: string[] }).tiebreakRungs).toEqual(["blitz"]);
+      checked++;
+    }
+    const inherits = await rigBracket("boardgame", "classical");
+    await start(inherits.auth, inherits.fixtureId);
+    const b = (await getDivision(inherits.auth, inherits.divisionId)).config as Record<string, unknown>;
+    const refused = await patchDivision(inherits.auth, inherits.divisionId, { name: "Renamed", config: { ...b, tiebreakRungs: ["blitz"] } });
+    expect(refused.refused).toEqual([{ field: "tiebreakRungs", code: "DIVISION_FORMAT_LOCKED", stageId: inherits.ko.id, stageName: "Final" }]);
+    expect((refused.config as { tiebreakRungs?: string[] }).tiebreakRungs, "nothing refused was written").toBeUndefined();
+    expect(checked).toBe(3);
   });
 
   // Fix round 2, I-2. A stage PointsRule re-derives `points` and nothing else (engine competition/points.ts,
