@@ -1389,3 +1389,89 @@ describe("loop R M7(c): the step header keeps Back beside its title, and never s
   });
 });
 
+
+// --- W2c Task 21: SheetConfirmStep — a read-back sentence and ONE Confirm ---------------------------------------------
+// The step the chess Armageddon sheet ends on (S5, BG-KO-2): the scorer has recorded facts (who had Black, how it ended)
+// and the pad states what that makes true BEFORE it is written. The chassis proves the mechanism with a sport-agnostic
+// spec, as it does for the number step; the chess wording is proved in boardgame-tiebreak.test.ts.
+
+const confirmSpec: GuidedSheetSpec = {
+  event: "x.event",
+  steps: [
+    { id: "pick", kind: "choice", title: K("pick.title"), options: [{ id: "a", label: "opt.a" }, { id: "b", label: "opt.b" }] },
+    { id: "ok", kind: "confirm", title: K("ok.title"), summary: (answers) => `you picked ${answers.pick}` },
+  ],
+  buildPayload: (answers) => ({ pick: answers.pick }),
+};
+const summaryOf = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el)["data-testid"] === "pad-sheet-summary");
+const confirmOf = (tree: ReturnType<typeof walk>) => tree.find((el) => propsOf(el)["data-testid"] === "pad-sheet-confirm");
+
+describe("GuidedSheet — SheetConfirmStep (W2c Task 21)", () => {
+  it("the step machine: answering the choice lands ON the confirm step (not done), and confirming it completes with the earlier answers only", () => {
+    const afterPick = answerStep(confirmSpec, initialSheetState(), "b");
+    if (afterPick.done) throw new Error("the confirm step must come before completion");
+    expect(currentStep(confirmSpec, afterPick.state)?.id).toBe("ok");
+    const done = answerStep(confirmSpec, afterPick.state, "ok");
+    expect(done).toEqual({ done: true, event: { type: "x.event", payload: { pick: "b" } } });
+  });
+
+  it("renders the sentence the skin derives from the answers so far, ONE 44px Confirm, Back, Cancel, and no choice option", () => {
+    const island = renderIsland(GuidedSheet, { spec: confirmSpec, views: numberViews, personNames: {}, t, onComplete: () => {} });
+    click(findByText(buttonsOf(island.tree()), "opt.b"));
+    const tree = island.tree();
+    expect(summaryOf(tree), "the read-back sentence renders").toBeDefined();
+    expect(textOf(summaryOf(tree)!)).toBe("you picked b");
+    const confirm = confirmOf(tree);
+    expect(confirm, "a Confirm control renders").toBeDefined();
+    expect(confirm!.type).toBe("button");
+    expect(propsOf(confirm!).style).toMatchObject({ minHeight: 44 });
+    expect(textOf(confirm!)).toBe("scorepad.action.confirm");
+    expect(propsOf(confirm!)["data-choice-option-id"], "Confirm is not a choice option").toBeUndefined();
+    expect(tree.filter((el) => propsOf(el)["data-choice-option-id"] !== undefined)).toEqual([]);
+    expect(buttonsOf(tree).map((b) => textOf(b)).sort()).toEqual(["pad.sheet.back", "pad.sheet.cancel", "scorepad.action.confirm"]);
+    expect(island.text()).toContain("ok.title");
+  });
+
+  it("tapping Confirm completes exactly once, with the event built from the answers; nothing is sent before it", () => {
+    const completed: unknown[] = [];
+    const island = renderIsland(GuidedSheet, { spec: confirmSpec, views: numberViews, personNames: {}, t, onComplete: (e) => completed.push(e) });
+    click(findByText(buttonsOf(island.tree()), "opt.a"));
+    expect(completed, "picking the choice sends nothing: the sentence is read first").toEqual([]);
+    click(confirmOf(island.tree())!);
+    expect(completed).toEqual([{ type: "x.event", payload: { pick: "a" } }]);
+  });
+
+  it("Back from the confirm step re-opens the choice, and a different answer rewrites the sentence (the sequence, not one state)", () => {
+    const completed: unknown[] = [];
+    const island = renderIsland(GuidedSheet, { spec: confirmSpec, views: numberViews, personNames: {}, t, onComplete: (e) => completed.push(e) });
+    click(findByText(buttonsOf(island.tree()), "opt.a"));
+    expect(textOf(summaryOf(island.tree())!)).toBe("you picked a");
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.back"));
+    expect(summaryOf(island.tree()), "back on the choice: no sentence").toBeUndefined();
+    click(findByText(buttonsOf(island.tree()), "opt.b"));
+    expect(textOf(summaryOf(island.tree())!)).toBe("you picked b");
+    click(confirmOf(island.tree())!);
+    expect(completed).toEqual([{ type: "x.event", payload: { pick: "b" } }]);
+  });
+
+  it("Cancel from the confirm step emits nothing, and the reopened sheet starts on step 1", () => {
+    const completed: unknown[] = [];
+    let cancelled = 0;
+    const island = renderIsland(GuidedSheet, { spec: confirmSpec, views: numberViews, personNames: {}, t, onComplete: (e) => completed.push(e), onCancel: () => cancelled++ });
+    click(findByText(buttonsOf(island.tree()), "opt.a"));
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.cancel"));
+    expect({ completed, cancelled }).toEqual({ completed: [], cancelled: 1 });
+    expect(summaryOf(island.tree())).toBeUndefined();
+    expect(findByText(buttonsOf(island.tree()), "opt.a")).toBeDefined();
+  });
+
+  it("a confirm step the answers gate off (`when`) is skipped without a tap, and a spec with none still completes on its last choice", () => {
+    const gated: GuidedSheetSpec = {
+      ...confirmSpec,
+      steps: [confirmSpec.steps[0]!, { ...confirmSpec.steps[1]!, when: (a: Readonly<Record<string, string>>) => a.pick === "b" }],
+    };
+    expect(answerStep(gated, initialSheetState(), "a")).toEqual({ done: true, event: { type: "x.event", payload: { pick: "a" } } });
+    const b = answerStep(gated, initialSheetState(), "b");
+    expect(b.done, "b opens the confirm step").toBe(false);
+  });
+});
