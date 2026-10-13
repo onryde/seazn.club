@@ -18,11 +18,11 @@
 // A disagreement is never resolved by editing the reference to match the engine (the rule row decides): this file
 // fails and prints both answers, and the orchestrator routes the loser to its own loop.
 import { forfeitStatsRole } from "@seazn/engine/stats";
-import { resolveVoids, type AwardReason, type MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
+import { DRAW_KINDS, resolveVoids, type AwardReason, type MatchOutcome, type StageKind, type StandingsDelta } from "@seazn/engine/core";
 import { CarromBoardSummary } from "@seazn/engine/sports/carrom";
 import { declaredCfgs } from "@seazn/engine/testkit";
 import * as reference from "@seazn/reference";
-import { CreditRefused, WALKOVER_CREDIT_DATA, enumerateCreditCases, walkoverCredit, walkoverCreditFamily, type CreditAnswer, type CreditCase } from "@seazn/reference";
+import { CREDIT_METRIC_RULES, CREDIT_SPORTS, CreditRefused, WALKOVER_CREDIT_DATA, enumerateCreditCases, walkoverCredit, walkoverCreditFamily, type CreditAnswer, type CreditCase } from "@seazn/reference";
 import { describe, expect, it } from "vitest";
 import { envelopes, foldStream } from "../lib/fold.ts";
 import { forfeitPoints } from "../lib/scenarios/w2b-checks.ts";
@@ -224,6 +224,8 @@ interface EngineAnswer {
   excluded: readonly string[];
   points: { winner: number; loser: number };
   statsMatch: boolean;
+  /** Every metric key the module declares (its table's columns) — the keys `compare` owes a judgement (Loop R M-16). */
+  declared: readonly string[];
 }
 
 interface Judgement {
@@ -254,6 +256,25 @@ function rowsOf(c: CreditCase): string[] {
   return [credit, ...cross, c.reason === "retired" || (c.reason === "disqualified" && something) ? "X-PS-2" : "X-PS-1"];
 }
 
+/** Loop R M-16: the credit is the same in every table (X-WO-1) — every stage kind the engine declares a table for
+ *  (DRAW_KINDS, its own split), not the league alone. The league's answer is the one compared with the reference. */
+function tableKindMismatches(
+  m: { standingsDelta(o: MatchOutcome, cfg: Cfg, ctx: { kind: StageKind }, state: unknown): readonly StandingsDelta[] },
+  o: MatchOutcome,
+  cfg: Cfg,
+  state: unknown,
+  league: readonly StandingsDelta[],
+): string[] {
+  const shape = (d: readonly StandingsDelta[]) => JSON.stringify(d.map((x) => ({ points: x.points, metrics: x.metrics })));
+  const out: string[] = [];
+  for (const kind of DRAW_KINDS) {
+    if (kind === LEAGUE.kind) continue;
+    const other_ = m.standingsDelta(o, cfg, { kind }, state);
+    if (shape(other_) !== shape(league)) out.push(`standings (${kind}): ${shape(other_)}, the league's ${shape(league)}`);
+  }
+  return out;
+}
+
 function engineAnswer(item: Item, cfg: Cfg, mismatches: string[]): EngineAnswer | string {
   const m = sportModule(item.c.sport);
   const before = foldStream(m, cfg, H, A, item.prefix);
@@ -266,6 +287,7 @@ function engineAnswer(item: Item, cfg: Cfg, mismatches: string[]): EngineAnswer 
   if (JSON.stringify(o) !== JSON.stringify(want)) mismatches.push(`outcome: the forfeit should decide it as ${JSON.stringify(want)}, the engine folds ${JSON.stringify(o)}`);
   if (o === null || (o.kind !== "award" && o.kind !== "double_walkover")) return `the engine's fold decides no forfeit: ${JSON.stringify(o)}`;
   const [dh, da] = m.standingsDelta(o, cfg, LEAGUE, f.state) as [StandingsDelta, StandingsDelta];
+  mismatches.push(...tableKindMismatches(m, o, cfg, f.state, [dh, da]));
   const winnerSide: Side = item.offender === "both" ? "home" : other(item.offender);
   const [w, l] = winnerSide === "home" ? [dh, da] : [da, dh];
   // A double walkover is the module's walkover by "both" (D9), as its own standingsDelta asks it.
@@ -275,7 +297,7 @@ function engineAnswer(item: Item, cfg: Cfg, mismatches: string[]): EngineAnswer 
   const role = forfeitStatsRole(active);
   if (role === null) mismatches.push("players' stats: the engine reads no active forfeit in the ledger (forfeitStatsRole null)");
   const unplayed = m.playerStats?.unplayed !== undefined ? m.playerStats.unplayed(active) : role === "unplayed";
-  return { outcome: o, winner: w.metrics, loser: l.metrics, excluded: [...credit.excluded], points: { winner: w.points, loser: l.points }, statsMatch: !unplayed };
+  return { outcome: o, winner: w.metrics, loser: l.metrics, excluded: [...credit.excluded], points: { winner: w.points, loser: l.points }, statsMatch: !unplayed, declared: m.metrics.map((x) => x.key) };
 }
 
 function judge(item: Item): Judgement {
@@ -298,14 +320,56 @@ function judge(item: Item): Judgement {
     return { label: item.label, rows, mismatches: [`the engine refused it: ${e instanceof Error ? `${e.name} ${e.message}` : String(e)}`], reference: ref, engine: "refused" };
   }
   if (typeof eng === "string") return { label: item.label, rows, mismatches: [...mismatches, eng], reference: ref, engine: eng };
-  return { label: item.label, rows, mismatches: [...mismatches, ...compare(ref, eng, cfg)], reference: ref, engine: eng };
+  return { label: item.label, rows, mismatches: [...mismatches, ...compare(ref, eng, cfg, item)], reference: ref, engine: eng };
 }
 
-/** The field-by-field comparison of one reference answer with the engine's (the header's five fields). */
-function compare(ref: CreditAnswer, eng: EngineAnswer, cfg: Cfg): string[] {
+/** The event types the sheet builder writes (sheetEvents) and the forfeit and void around them: a stream of these
+ *  records play and its score, never a card, a penalty, a goal's kind or a set piece. */
+const SHEET_VOCABULARY = new Set([
+  "core.start", "core.forfeit", "core.void", "cricket.toss", "cricket.innings.summary", "football.goal", "football.period",
+  "hockey.goal", "hockey.period.advance", "icehockey.goal", "icehockey.period.advance", "volleyball.rally", "tabletennis.rally",
+  "badminton.rally", "tennis.point", "carrom.board.summary", "generic.score",
+]);
+
+/** Loop R M-16 — a side's own record of an "as-played" column in this stream: what the play recorded, read from the
+ *  stream's events (the cross-check built them), never from the module. Points and boards are counted; every other
+ *  as-played column (cards, penalty minutes, goal kinds, set pieces, fair play) is a record the sheet's vocabulary
+ *  cannot write, so it is 0 — the premise is asserted on the stream, not assumed. */
+function playedRecord(item: Item, key: string, side: Side): number | string {
+  const active = resolveVoids(envelopes("as-played", item.events)).map((e) => ({ type: e.type, payload: e.payload as Record<string, unknown> }));
+  const foreign = active.filter((e) => !SHEET_VOCABULARY.has(e.type) || (e.type.endsWith(".goal") && Object.keys(e.payload).some((k) => k !== "by")));
+  if (foreign.length > 0) return `the stream records ${JSON.stringify(foreign.map((e) => e.type))}, which this reader does not count`;
+  const id = idOf(side);
+  const count = (type: string, mine: (p: Record<string, unknown>) => boolean) => active.filter((e) => e.type === type && mine(e.payload)).length;
+  if (item.c.sport === "tennis" && key === "points_won") return count("tennis.point", (p) => p.by === id);
+  if (item.c.sport === "carrom" && key === "boards_won") return count("carrom.board.summary", (p) => p.winner === id);
+  if (item.c.sport === "carrom" && key === "boards_lost") return count("carrom.board.summary", (p) => p.winner === idOf(other(side)));
+  return 0;
+}
+
+/** The field-by-field comparison of one reference answer with the engine's (the header's five fields), and (Loop R
+ *  M-16) every column the module declares under the reference's rule for it — a column the answer leaves out is
+ *  judged by that rule, never skipped. */
+function compare(ref: CreditAnswer, eng: EngineAnswer, cfg: Cfg, item: Item): string[] {
   const out: string[] = [];
   for (const [side, want, got] of [["winner", ref.winner, eng.winner], ["loser", ref.loser, eng.loser]] as const) {
     for (const [k, v] of Object.entries(want)) if (got[k] !== v) out.push(`${side}.${k}: reference ${v}, engine ${String(got[k])}`);
+  }
+  const rules = CREDIT_METRIC_RULES[item.c.sport] ?? {};
+  const winnerSide: Side = item.offender === "both" ? "home" : other(item.offender);
+  for (const k of eng.declared) {
+    const rule = rules[k];
+    if (rule === undefined) { out.push(`${k}: the reference states no rule for a column the engine declares`); continue; }
+    const named = k in ref.winner && k in ref.loser;
+    if (rule === "credited") { if (!named) out.push(`${k}: credited by the reference's rule, but its answer names no value`); continue; }
+    if (named) continue; // the answer's own value (a double walkover's X-DW-4 zero) was compared above
+    for (const [side, seat, got] of [["winner", winnerSide, eng.winner[k]], ["loser", other(winnerSide), eng.loser[k]]] as const) {
+      const want = rule === "none" ? 0 : playedRecord(item, k, seat);
+      if (typeof want === "string") { out.push(`${side}.${k} (${rule}): ${want}`); continue; }
+      // Nothing recorded may be no key at all: the period kernel emits a set piece's three counters only once one was
+      // recorded. Absent reads as nothing recorded — never as a value — so it agrees with 0 and with nothing else.
+      if (!(got === want || (got === undefined && want === 0))) out.push(`${side}.${k} (${rule}): the stream records ${want}, engine ${String(got)}`);
+    }
   }
   for (const k of ref.excluded) if (!eng.excluded.includes(k)) out.push(`excluded: the reference excludes "${k}", the engine's forfeitCredit does not`);
   const pts = forfeitPoints(cfg, ref.points, ref.winner);
@@ -513,6 +577,75 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
   });
 });
 
+describe("Loop R M-16: every column a sport's table declares is judged under a rule the reference states", () => {
+  it("full key coverage: each sport's rule set is exactly the columns its module declares — none missing, none stale", () => {
+    let columns = 0;
+    const missing: string[] = [];
+    const stale: string[] = [];
+    for (const sport of CREDIT_SPORTS) {
+      const declared = sportModule(sport).metrics.map((x) => x.key);
+      const rules = CREDIT_METRIC_RULES[sport] ?? {};
+      for (const k of declared) if (rules[k] === undefined) missing.push(`${sport}.${k}`);
+      for (const k of Object.keys(rules)) if (!declared.includes(k)) stale.push(`${sport}.${k}`);
+      columns += declared.length;
+    }
+    expect([missing, stale], "a column with no rule / a rule for no column").toEqual([[], []]);
+    expect(Object.keys(CREDIT_METRIC_RULES).sort(), "a rule set for every credited sport").toEqual([...CREDIT_SPORTS].sort());
+    // Counted from the engine's declarations (11 sports' metrics), never from the rules under test.
+    expect(columns).toBe(CREDIT_SPORTS.reduce((n, sport) => n + sportModule(sport).metrics.length, 0));
+    expect(columns, "columns covered").toBeGreaterThan(CREDIT_SPORTS.length * 3);
+  });
+
+  it("every enumerated item judges every declared column: the credited ones on the answer, the rest by their rule — and all three rules are reached", () => {
+    const { items } = itemsOrUnbuildable(CASES);
+    const judged = { credited: 0, "as-played": 0, none: 0 };
+    let owed = 0;
+    for (const item of items) {
+      const declared = sportModule(item.c.sport).metrics.map((x) => x.key);
+      owed += declared.length;
+      for (const k of declared) {
+        const rule = CREDIT_METRIC_RULES[item.c.sport]?.[k];
+        if (rule !== undefined) judged[rule]++;
+      }
+    }
+    expect(judged.credited + judged["as-played"] + judged.none, "every column of every item has a rule").toBe(owed);
+    expect(owed, "columns over the 300 items").toBeGreaterThan(300 * 3);
+    expect(judged["as-played"], "as-played columns reached").toBeGreaterThan(0);
+    expect(judged.none, "none columns reached").toBeGreaterThan(0);
+    // The as-played reader counts real play somewhere (a carrom board, a tennis point), not only zeros.
+    const counted = items.filter((i) => i.c.played !== undefined && (i.c.sport === "tennis" || i.c.sport === "carrom"))
+      .filter((i) => [playedRecord(i, i.c.sport === "tennis" ? "points_won" : "boards_won", "home"), playedRecord(i, i.c.sport === "tennis" ? "points_won" : "boards_won", "away")].some((n) => typeof n === "number" && n > 0));
+    expect(counted.length, "items whose as-played record is counted from real play").toBeGreaterThan(0);
+  });
+
+  it("negative: a column with no rule, an as-played column the engine credits, a table kind that reads the forfeit differently, and a stream the as-played reader cannot count each red on that column", () => {
+    // single-sport: a carrom retirement carries every rule's shape — credited games, as-played boards from real play.
+    const c = CASES.find((x) => x.sport === "carrom" && x.reason === "retired");
+    expect(c, "the enumeration holds a carrom retirement").toBeDefined();
+    const [item] = itemsOf(c!);
+    const cfg = engineCfgOf(c!);
+    const eng = engineAnswer(item!, cfg, []);
+    if (typeof eng === "string") throw new Error(eng);
+    const real = walkoverCredit(c!);
+    expect(compare(real, eng, cfg, item!), "the unmoved answer agrees").toEqual([]);
+    expect(eng.winner.boards_won, "premise: boards were played").toBeGreaterThan(0);
+    expect(compare(real, { ...eng, declared: [...eng.declared, "boards_drawn"] }, cfg, item!)).toEqual(["boards_drawn: the reference states no rule for a column the engine declares"]);
+    expect(compare(real, { ...eng, winner: { ...eng.winner, boards_won: eng.winner.boards_won! + 1 } }, cfg, item!)).toEqual([
+      `winner.boards_won (as-played): the stream records ${eng.winner.boards_won}, engine ${eng.winner.boards_won! + 1}`,
+    ]);
+    // A module whose swiss table reads the forfeit differently from its league: the sweep over the table kinds names it.
+    const m = sportModule("carrom");
+    const f = foldStream(m, cfg, H, A, item!.events);
+    const league = m.standingsDelta(f.outcome!, cfg, LEAGUE, f.state);
+    const skewed = { standingsDelta: (o: MatchOutcome, c: Cfg, ctx: { kind: StageKind }, st: unknown) => m.standingsDelta(o, c, ctx, st as never).map((d) => (ctx.kind === "swiss" ? { ...d, points: d.points + 1 } : d)) };
+    expect(tableKindMismatches(m as never, f.outcome!, cfg, f.state, league), "the real module: every table alike").toEqual([]);
+    expect(tableKindMismatches(skewed, f.outcome!, cfg, f.state, league).map((x) => x.split(":")[0])).toEqual(["standings (swiss)"]);
+    const carded = { ...item!, events: [...item!.events.slice(0, -1), { type: "carrom.foul", payload: { by: H } }, item!.events.at(-1)!] };
+    expect(compare(real, eng, cfg, carded).every((x) => x.includes("which this reader does not count")), "the unreadable stream").toBe(true);
+    expect(compare(real, eng, cfg, carded).length).toBe(2 * 2); // boards_won and boards_lost, both sides
+  });
+});
+
 describe("the cross-check's own reading of the engine is not vacuous", () => {
   it("each sport's stream builder reaches the engine: every enumerated scoresheet folds with its play applied (more events than START), except where the sheet holds no score", () => {
     let withPlay = 0;
@@ -538,7 +671,7 @@ describe("the cross-check's own reading of the engine is not vacuous", () => {
     expect(mismatches).toEqual([]);
     if (typeof eng === "string") throw new Error(eng);
     const real = walkoverCredit(c!);
-    expect(compare(real, eng, cfg), "the unmoved answer agrees").toEqual([]);
+    expect(compare(real, eng, cfg, item!), "the unmoved answer agrees").toEqual([]);
     const moved: readonly [string, CreditAnswer, RegExp][] = [
       ["a winner's credit", { ...real, winner: { ...real.winner, sets_won: (real.winner.sets_won ?? 0) + 1 } }, /^winner\.sets_won: reference \d+, engine \d+$/],
       ["a loser's credit", { ...real, loser: { ...real.loser, games_lost: 1 } }, /^loser\.games_lost: reference 1, engine 0$/],
@@ -548,7 +681,7 @@ describe("the cross-check's own reading of the engine is not vacuous", () => {
     ];
     let reds = 0;
     for (const [what, answer, why] of moved) {
-      const got = compare(answer, eng, cfg);
+      const got = compare(answer, eng, cfg, item!);
       expect(got, what).toHaveLength(1);
       expect(got[0], what).toMatch(why);
       reds++;

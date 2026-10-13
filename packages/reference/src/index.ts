@@ -41,6 +41,7 @@ export type {
 } from "./families/bracket-finish.ts";
 
 export {
+  CREDIT_METRIC_RULES,
   CREDIT_REASONS,
   CREDIT_REFUSALS,
   CREDIT_SPORTS,
@@ -49,7 +50,7 @@ export {
   walkoverCredit,
   walkoverCreditFamily,
 } from "./families/walkover-credit.ts";
-export type { CreditAnswer, CreditCase, CreditReason, CreditRefusal, WalkoverCreditFamily } from "./families/walkover-credit.ts";
+export type { CreditAnswer, CreditCase, CreditMetricRule, CreditReason, CreditRefusal, WalkoverCreditFamily } from "./families/walkover-credit.ts";
 export { WALKOVER_CREDIT_DATA } from "./families/walkover-credit-cfgs.ts";
 export type { CreditCfgEntry, PlayedScenario, SportCreditData } from "./families/walkover-credit-cfgs.ts";
 

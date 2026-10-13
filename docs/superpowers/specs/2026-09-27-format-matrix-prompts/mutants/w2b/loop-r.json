@@ -1117,5 +1117,102 @@
     "name": "the strip keeps the set the retirement stopped"
    }
   ]
+ },
+ {
+  "id": "lr-m16-compare-named-only",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  for (const k of eng.declared) {\n",
+  "replace": "  for (const k of [] as string[]) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-played-boards-uncounted",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  if (item.c.sport === \"carrom\" && key === \"boards_won\") return count(\"carrom.board.summary\", (p) => p.winner === id);\n",
+  "replace": "  if (false) return count(\"carrom.board.summary\", (p) => p.winner === id);\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-standings-league-only",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  for (const kind of DRAW_KINDS) {\n",
+  "replace": "  for (const kind of [] as string[]) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-engine-carrom-boards-credited",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "      metrics: creditedMetrics(sideLedger(state, side), credit, side),\n",
+  "replace": "      metrics: { ...creditedMetrics(sideLedger(state, side), credit, side), boards_won: 0, boards_lost: 0 },\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-engine-generic-group-points",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "        const winner = build(winnerSide, 1, 0, 0, points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));\n",
+  "replace": "        const winner = build(winnerSide, 1, 0, 0, _ctx.kind === \"group\" ? 0 : points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-rule-points-won-credited",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "...ruled(\"as-played\", [\"points_won\"]) },",
+  "replace": "...ruled(\"credited\", [\"points_won\"]) },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "packages/reference/src/families/walkover-credit.test.ts"
+    ],
+    "name": "the rules name exactly each sport"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
  }
 ]

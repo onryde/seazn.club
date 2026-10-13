@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { declaredCfgs, forEachSport } from "@seazn/engine/testkit";
 import {
+  CREDIT_METRIC_RULES,
   CREDIT_REASONS,
   CREDIT_REFUSALS,
   CREDIT_SPORTS,
@@ -730,5 +731,37 @@ describe("walkover-credit's rows (Appendix A)", () => {
   it("the orchestrator rulings the family encodes are named in a test title (PF-6, PF-7)", () => {
     for (const r of walkoverCreditFamily.rulings) expect(OWN_TITLES.some((t) => t.includes(r)), r).toBe(true);
     expect(walkoverCreditFamily.rulings.length).toBe(2);
+  });
+});
+
+// Loop R M-16: the rule set is the family's own statement about every column, so it must agree with its answers — a
+// "credited" column the answer forgets to name, or a named column the rules call as-played, would let a consumer judge
+// the wrong value. The engine is touched for its declared metric KEYS only (the header's rule), never a value.
+describe("walkover-credit: every column of every sport has one stated rule (Loop R M-16)", () => {
+  it("the rules name exactly each sport's declared columns, every enumerated answer names every credited one, and nothing it names is ruled none", () => {
+    let columns = 0;
+    const sports = forEachSport(({ key, module: m }) => {
+      const rules = CREDIT_METRIC_RULES[key];
+      expect(rules, `${key}: a rule set`).toBeDefined();
+      expect(Object.keys(rules!).sort(), `${key}: one rule per declared column`).toEqual(m.metrics.map((x) => x.key).sort());
+      columns += Object.keys(rules!).length;
+    });
+    expect(sports).toBe(CREDIT_SPORTS.length);
+    expect(Object.isFrozen(CREDIT_METRIC_RULES)).toBe(true);
+    let judged = 0;
+    for (const c of enumerateCreditCases()) {
+      const a = walkoverCredit(c);
+      const rules = CREDIT_METRIC_RULES[c.sport]!;
+      for (const [k, rule] of Object.entries(rules)) {
+        if (rule === "credited") expect([k in a.winner, k in a.loser], `${c.label}: credited ${k} named for both sides`).toEqual([true, true]);
+        judged++;
+      }
+      for (const k of [...Object.keys(a.winner), ...Object.keys(a.loser), ...a.excluded]) {
+        expect(rules[k], `${c.label}: ${k} has a rule`).toBeDefined();
+        expect(rules[k], `${c.label}: ${k} is named, so it is not ruled none`).not.toBe("none");
+      }
+    }
+    expect(columns, "columns over the 11 sports").toBeGreaterThan(40);
+    expect(judged, "column judgements over the 212 cases").toBeGreaterThan(212 * 3);
   });
 });

@@ -10,9 +10,9 @@
 // and, after play started, the scoresheet so far — answered as what the table credits each side: the metric values,
 // the metric keys no ratio tie-break may read, the table points, and whether players' stats count it as a match.
 //
-// The answer names only the metric keys a rule row decides; a key it leaves out is not judged (a consumer compares
-// the keys present, and reads an absent key as "no rule"). It never guesses: an input the rows cannot answer throws a
-// `CreditRefused` naming why.
+// The answer names only the metric keys a rule row decides; every other column of the sport's table answers to the
+// rule `CREDIT_METRIC_RULES` states for it (Loop R M-16: as played, or none), so a consumer judges every column. It
+// never guesses: an input the rows cannot answer throws a `CreditRefused` naming why.
 import { WALKOVER_CREDIT_DATA, type CreditCfgEntry, type PlayedScenario } from "./walkover-credit-cfgs.ts";
 
 export type Side = "home" | "away";
@@ -118,6 +118,46 @@ const SCORE_KEYS: Readonly<Record<string, readonly string[]>> = {
   tennis: RATIO_OPERANDS.tennis ?? [],
   cricket: RATIO_OPERANDS.cricket ?? [],
 };
+
+/**
+ * Loop R M-16 — the rule each column of a sport's table answers to after a forfeit, so a consumer judges EVERY column:
+ * an answer names only the keys a credit row decides, and a key it left out used to read as "no rule" and go unjudged.
+ *   - "credited": the sport's WO/RT row decides it (X-DW-4 for a double walkover), and `walkoverCredit` names its
+ *     value for both sides.
+ *   - "as-played": no row credits it. It records what happened in the match, not its score — a card shown, a penalty
+ *     minute, a goal's kind, a set piece, a board or a point played — and it stands as played (X-PS-2: "events
+ *     already played stay credited"). Before play nothing is recorded. A double walkover's X-DW-4 zero names a few of
+ *     them (carrom's boards, as ratio operands); that named value is what is judged then.
+ *   - "none": a forfeit records none of it, for either side. That is cricket's tie and no-result columns (a forfeit
+ *     decides the match, X-RS-1, and a double walkover is lost by both, X-DW-1) and its run difference (CK-WO-1 credits
+ *     no runs to either side; the defaulter's charge is its quota of balls).
+ * The columns are the rulebooks' tables (rulebook-W2-goals-boards.md, rulebook-W2-sets-cricket.md), in each sport's
+ * own key names.
+ */
+export type CreditMetricRule = "credited" | "as-played" | "none";
+const ruled = (rule: CreditMetricRule, keys: readonly string[]): Record<string, CreditMetricRule> => Object.fromEntries(keys.map((k) => [k, rule]));
+const SET_COLUMNS = ruled("credited", ["sets_won", "sets_lost", "points_won", "points_lost"]);
+export const CREDIT_METRIC_RULES: Readonly<Record<string, Readonly<Record<string, CreditMetricRule>>>> = Object.freeze({
+  // §1: GD and goals are the score (FB-WO-1/FB-RT-1); the cards and the fair-play count they make are the disciplinary record.
+  football: { ...ruled("credited", ["gf", "ga", "gd"]), ...ruled("as-played", ["yellow", "red", "fair_play"]) },
+  // §2 (FIH): the score; the goal kinds, the cards and the set-piece conversion are records of the match.
+  hockey: {
+    ...ruled("credited", ["gf", "ga", "gd"]),
+    ...ruled("as-played", ["goals_pc", "goals_stroke", "cards_green", "cards_yellow", "cards_red", "sp_pc_awarded", "sp_pc_scored", "sp_pc_resolved", "sp_stroke_awarded", "sp_stroke_scored", "sp_stroke_resolved"]),
+  },
+  // §3 (IIHF): the score; penalty minutes, power-play and short-handed goals and penalty shots are records of the match.
+  icehockey: { ...ruled("credited", ["gf", "ga", "gd"]), ...ruled("as-played", ["pim", "goals_pp", "goals_sh", "sp_ps_awarded", "sp_ps_scored", "sp_ps_resolved"]) },
+  boardgame: ruled("credited", ["wins", "white", "black"]), // §4: BG-WO-1
+  // §5: games and points are credited (CA-WO-1/CA-RT-1); no board is played in the games a forfeit awards, so the boards stand as played.
+  carrom: { ...SET_COLUMNS, ...ruled("as-played", ["boards_won", "boards_lost"]) },
+  generic: ruled("credited", ["for", "against", "diff"]), // §6: GN-WO-1/GN-RT-1
+  volleyball: SET_COLUMNS, // VB-WO-1/VB-RT-1
+  badminton: SET_COLUMNS, // BD-WO-1/BD-RT-1
+  tabletennis: SET_COLUMNS, // TT-WO-1/TT-RT-1
+  // TN-WO-1/TN-RT-1 credit the sets and exclude the games (ATP 4.01 C.4); the points played are a record of the match.
+  tennis: { ...ruled("credited", ["sets_won", "sets_lost", "games_won", "games_lost"]), ...ruled("as-played", ["points_won"]) },
+  cricket: { ...ruled("credited", ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff"]), ...ruled("none", ["run_diff", "ties", "no_results"]) },
+});
 
 type Metrics = Record<string, number>;
 interface Credit { winner: Metrics; loser: Metrics; excluded: string[] }
@@ -274,7 +314,7 @@ function carromCredit(cfg: Record<string, unknown>, p: Played | null): Credit {
   }
   // CA-WO-1 / CA-RT-1: "games needed to win, each 25-0" / "remaining games 25-0" (the stage's own gameTo, X-WO-1).
   while (gW < need) { win.push(to); off.push(0); gW++; }
-  // Boards are not credited by either row (no board was played in the games it awards): not judged.
+  // Boards are not credited by either row (no board was played in the games it awards): they stand as played (CREDIT_METRIC_RULES).
   const W = { sets_won: gW, sets_lost: gO, points_won: sum(win), points_lost: sum(off) };
   return { winner: W, loser: { sets_won: gO, sets_lost: gW, points_won: W.points_lost, points_lost: W.points_won }, excluded: [] };
 }
