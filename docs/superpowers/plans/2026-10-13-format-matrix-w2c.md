@@ -4055,6 +4055,8 @@ test("X-SR-7 P5: remote pad open on a live match; the organiser corrects the for
 ---
 ### Task 16: Public labels say the rules for every sport
 
+> **Carried from Task 9 fix round (X-WO-1, overnight ruling).** Under a stage points rule carrying `forfeit.awardScore`, the table credits the RULE's score (e.g. football 5-0) while the match headline still reads the division `awardScore` (3-0). One number everywhere: wherever a walkover's score is shown for a fixture in such a stage (match headline on the console/public match page, results list, stage format line), show the rule's awarded score; test football + generic with a rule 5-0 vs division 3-0, every surface that renders the walkover score (grep the headline/summary readers).
+
 Spec item 15, plus the public half of items 10, 12 and 13; X-SR-1 (public), X-PT-1 (public line).
 
 **Files:**
