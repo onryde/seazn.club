@@ -7,6 +7,7 @@ import {
   type PublicGameResult,
   type PublicWatch,
   type PublicWatchDoc,
+  type PublicWatchLink,
 } from "@/server/external-play/public-view";
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
@@ -143,6 +144,51 @@ export function publicPlayOf(row: PublicFixtureRow): PublicExternalPlay {
     hold,
     result: publicResultOf(row),
   };
+}
+
+/** A fixture row as the division Fixtures list reads it: the bridge's columns are null with no bridge row. */
+export type WatchLinkRow = Omit<PublicFixtureRow, "status" | "moves_uci" | "white_ms" | "black_ms" | "last_move_at"> & {
+  status: PublicExternalPlay["status"] | null;
+  round_opened: boolean;
+};
+
+/** The Fixtures list's link for one online board (I4), or null when there is nothing to watch — a bye, a no-show,
+ *  a game not begun; the row says the rest. Before the round opens: "Round not opened yet" (D12). A game being
+ *  played — a held seat whose game goes on (a revoked token) included — is "Watch live". A game over — the fixture
+ *  out of play, the bridge closed, or a knockout draw held for its winner — is its final position, with the score.
+ *  A board held for the organiser mid-question offers nothing: the fixture page says why. */
+export function watchLinkOf(row: WatchLinkRow): PublicWatchLink | null {
+  const open = isPlayableFixtureStatus(row.fixture_status);
+  if (open && !row.round_opened) return { kind: "not_opened" };
+  const hasGame = row.status !== null && row.challenge_id !== null && row.move_count > 0;
+  if (!hasGame) return null;
+  const hold = row.status === "needs_organiser" ? publicHoldOf(row.needs_reason) : null;
+  if (!open || row.status === "finished" || hold === "tiebreak") {
+    return { kind: "final", score: publicResultOf(row)?.score ?? "" };
+  }
+  if ((row.status === "live" || row.status === "needs_organiser") && hold === null) return { kind: "live" };
+  return null;
+}
+
+/** Every online board's link on the division Fixtures list, in ONE read (a public read: `public_fixtures_v` decides
+ *  which fixtures exist). Keyed by fixture id; a board with nothing to offer is absent. The caller asks only for a
+ *  division that plays online. Never a challenge id, a Lichess id or a hold reason — only the link's kind and score. */
+export async function loadDivisionWatchLinks(divisionId: string): Promise<Record<string, PublicWatchLink>> {
+  const rows = await sql<(WatchLinkRow & { fixture_id: string })[]>`
+    select v.id as fixture_id, f.status as fixture_status, f.home_entrant_id, f.away_entrant_id, f.outcome, v.summary,
+           f.finished_at, ep.status, ep.challenge_id, ep.white_side, coalesce(ep.move_count, 0)::int as move_count,
+           ep.needs_reason,
+           exists(select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no) as round_opened
+      from public_fixtures_v v
+      join fixtures f on f.id = v.id
+      left join fixture_external_play ep on ep.fixture_id = v.id
+     where v.division_id = ${divisionId}`;
+  const out: Record<string, PublicWatchLink> = {};
+  for (const r of rows) {
+    const l = watchLinkOf(r);
+    if (l !== null) out[r.fixture_id] = l;
+  }
+  return out;
 }
 
 /** Has this fixture's round been opened (D12)? Opening (T19's openRound)
