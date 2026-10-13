@@ -561,7 +561,7 @@ describe("Loop R I-1: a walkover STORED before W2b ranks as the walkover it was,
         if (unlimitedOvers(m.key, c)) { unlimited++; continue; } // CK-WO-2: no quota to charge, its own tests
         for (const winnerSide of ["home", "away"] as const) {
           const { outcome, state } = storedPreW2b(m.key, c, winnerSide);
-          const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state as never);
+          const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state);
           const [w, l] = winnerSide === "home" ? [home, away] : [away, home];
           const want = EXPECTED_WALKOVER[m.key]!(c);
           expect(w.metrics, `${m.key}/${name} winner ${winnerSide}`).toMatchObject(want.winner);
@@ -582,13 +582,13 @@ describe("Loop R I-1: a walkover STORED before W2b ranks as the walkover it was,
     for (const key of ["badminton", "volleyball", "tennis", "carrom", "football"]) {
       const cfg = parsed(key);
       const { m, outcome, state } = storedPreW2b(key, cfg, "home");
-      const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state as never);
+      const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state);
       const want = EXPECTED_WALKOVER[key]!(cfg);
       expect(home.metrics, `${key}: the walkover's credit`).toMatchObject(want.winner);
       expect(away.metrics, `${key}: the walkover's charge`).toMatchObject(want.loser);
       // The reading this replaces: the same stored row ranked as a bye (no loser, reason "bye").
       const bye = { kind: "award", winner: H, loser: null, reason: "bye" };
-      const [byeHome] = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye } as never);
+      const [byeHome] = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye });
       const asBye = Object.entries(want.winner).some(([k, v]) => byeHome.metrics[k] !== v);
       if (asBye) n.differs++;
       else n.same++;
@@ -609,9 +609,9 @@ describe("Loop R I-1: a walkover STORED before W2b ranks as the walkover it was,
       if (unlimitedOvers(m.key, c)) return;
       const { state } = storedPreW2b(m.key, c, "home");
       const bye = { kind: "award", winner: H, loser: null, reason: "bye" };
-      const byeDeltas = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye } as never);
+      const byeDeltas = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye });
       for (const legacy of [{ kind: "award", winner: H }, { kind: "award", winner: H, method: "bye" }, { kind: "award", winner: H, method: "no-show" }]) {
-        expect(m.standingsDelta(legacy as never, cfg, { kind: "league" } as never, { ...state, outcome: legacy } as never), `${m.key}/${name} ${JSON.stringify(legacy)}`).toEqual(byeDeltas);
+        expect(m.standingsDelta(legacy as never, cfg, { kind: "league" } as never, { ...state, outcome: legacy }), `${m.key}/${name} ${JSON.stringify(legacy)}`).toEqual(byeDeltas);
         checked++;
       }
     });

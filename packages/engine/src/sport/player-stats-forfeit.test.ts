@@ -68,7 +68,6 @@ const statOf = (rows: PlayerStatRow[], person: string, key: string) => rows.find
 /** Every unplayed stream a sport can record (spec §5.1 phases): before start, after start, both sides. */
 function unplayedStreams(key: string): Array<[string, Spec]> {
   const pre = PRE[key] ?? [];
-  const played = PLAYED[key]!;
   const streams: Array<[string, Spec]> = [
     ["walkover", [...pre, ["core.forfeit", { by: A, reason: "walkover" }]]],
     ["withdrew before start", [...pre, ["core.forfeit", { by: A, reason: "withdrew" }]]],
