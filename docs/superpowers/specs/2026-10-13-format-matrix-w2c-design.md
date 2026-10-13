@@ -69,7 +69,7 @@ table is never re-ordered and a played match never re-scored by a settings chang
 |---|---|---|---|
 | 1 | Stage-level rules for **every** sport, every rule field, scope-tagged and extensible per sport / stage kind / variant | FX-G23, SC-O8, ruling 12, RB2A-23 | Q5, §1 amendment |
 | 2 | Fixture-level match-format override `fixtures.rules_override` through every caller | O4, X3, DES §5 | Q2 |
-| 3 | Organiser correction of a **started** (not finalized) match's format, refold-checked and audited | M11, RB2B-3 | Q11 (amends Q2) |
+| 3 | Organiser correction of a **started** (not finalized) match's format, refold-checked and audited; open pads (console and remote scoring) reload the corrected rules, and a stale tap is refused | M11, RB2B-3 | Q11 (amends Q2); remote-pad follow-up approved 2026-10-13 |
 | 4 | Division locks: table points/tie-breaks (O8) and match format, refused by name per started inheriting stage | O8, M11, RB2A-27, RB2B-31 | Q3, Q4 |
 | 5 | Stage deciders with a screen; division value is the default for new stages; API validation | SC-X2, SC-P1, RB2B-2, SC-P8 | routing (b), Q7 |
 | 6 | Knockout stages created with deciders preselected; all-off allowed with a notice (amends ruling 74's refusal) | RB2B-1, ruling 74 | Q7 |
@@ -203,6 +203,13 @@ The public stage label (`public-site/stage-format-lines.ts:46`) switches to the 
    finalized/cancelled (Q11) → refold the recorded events under the corrected cfg; if the fold refuses or ends in a
    state the recorded play contradicts, refuse `FORMAT_DOES_NOT_FIT_PLAY` with the engine's reason; else write and
    re-freeze the snapshot. Finalized/cancelled → `FIXTURE_FORMAT_LOCKED`. The future bulk action calls it unchanged.
+   **Open pads follow a correction (owner "approve", 2026-10-13).** The re-freeze advances the fixture's rules version
+   (`config_snapshot_at`, existing column — no new one). Every pad (console pad and remote scoring `/score/[token]`,
+   both loaded through `loadFixturePadCfg`, `usecases/fixtures.ts:124`) sends the version it loaded with each append;
+   a mismatch is refused `FIXTURE_RULES_CHANGED` before any event is written. On that refusal, or on its next refresh,
+   the pad reloads its rules and shows "The organiser changed this match's format: {format}". A tap sent under the old
+   rules is never applied under the new ones. (Whether an open pad refreshes rules today is unverified; the plan
+   drives it before building.)
 3. **Division save** — refuses, by name, table points/tie-breaks (Q3) and match-format fields (Q4) while any stage
    inheriting them has started; other fields still save and the response lists what was refused.
 
@@ -280,6 +287,7 @@ One code, one wording, screen and API, all 4 locales.
 | `DIVISION_FORMAT_LOCKED` (Q4) | division match format, inheriting stage started | "{stage} has started; its match format is locked. Change individual unstarted matches instead." |
 | `FIXTURE_FORMAT_LOCKED` | override on a finalized/cancelled match | "This match is finished — its format is locked." |
 | `FORMAT_DOES_NOT_FIT_PLAY` (Q11) | correction the recorded play contradicts | engine reason, e.g. "2 sets already played" |
+| `FIXTURE_RULES_CHANGED` | a pad appends with a rules version older than the fixture's | "The organiser changed this match's format: {format}" (scorer) |
 | `RULE_NOT_SETTABLE` | key outside the sport/kind/variant allowlist at that level | names the field and where it can be set |
 | `POINTS_RULE_INEXPRESSIBLE` (Q1) | stage points would drop OT/SO points | "These points can't be set per stage yet…" + reason |
 | `TIEBREAK_COLOUR_REQUIRED` | Armageddon without `black` | "Record who had Black." |
@@ -308,7 +316,10 @@ expected values from rulebook rows or engine declarations; anti-vacuity counts.
 - **P3 order differential:** division, stage, bracket decider and override each give a different value.
 - **P4 lock sequences:** before start / first event / second edit / after a void / another sport — for stage, division
   table rules, division format and match override, each with its positive pair.
-- **P5 correction (Q11):** per-sport fits / does-not-fit table; audit row.
+- **P5 correction (Q11):** per-sport fits / does-not-fit table; audit row. Plus e2e: a remote scoring pad
+  (`/score/[token]`) open on a live match; the organiser corrects the format from the console; the pad shows the
+  banner and the new format, and a tap sent with the old version is refused `FIXTURE_RULES_CHANGED` with no event
+  written (read back from `score_events`). Positive pair: a tap with the current version is accepted.
 - **P6 points (Q9):** walkover vs retired/DQ/withdrew, `awardScore` replacing; inexpressible refusal; after W2b rebase.
 - **P7 KO defaults (Q7/Q8):** create writes deciders; all-off → level result → `needs_decision` → settle.
 - **P8 Armageddon:** colour + result → advancer; draw → Black; missing colour refused; empty rung list → hold. Cross-
@@ -326,6 +337,10 @@ edits — expected: `competition/points.ts` (Q9 moves it from W2d to W2c), `spor
 session's no-wave list. Decided from the plan's file list.
 
 ## 11. Delivery
+
+**No live users (owner, 2026-10-13: "nobody is using our product for now").** Greenfield stance: no backward-compat
+shims, no backfill of existing rows, and API v1 shapes (stage decider keys, rules endpoints) may change without a
+deprecation window. Existing tests that pin old shapes are updated, not worked around.
 
 Spec → plan (owner approves plan and execution method) → build on `feat/format-matrix-w2c` after rebasing onto main
 with W2b merged → reviewer pass per task → PR. Smoke is PR-only; e2e runs on push to main or `workflow_dispatch`
