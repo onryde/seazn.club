@@ -494,7 +494,8 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
           continue;
         }
         expect(error, label).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: (caught as EngineError).message, phase, allowed, both: false, played });
-        const words = allowed.map((r) => enM(`forfeit.reason.${r}`)).join(", ");
+        // Design audit 1.5: the reasons are a list in the reader's language — the platform's own English list, not ", ".
+        const words = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(allowed.map((r) => enM(`forfeit.reason.${r}`)));
         expect(scoringErrorText(error.code as string, error.message as string, enM as never, "score.failed", error), label).toBe(
           enM("engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named", { phase: enM(phaseWord(phase, played)), allowed: words }),
         );
