@@ -1920,13 +1920,21 @@ const toUci = (m: { from: string; to: string; promotion?: string }) => `${m.from
 describe.runIf(HAS_DB)("act — property: interleavings against a lila model", () => {
   // Every prefix runs the same number of times — drawing one at random
   // left a path's counter at 0 in ~4% of suites (measured: abort, 1 in 3).
-  const RUNS_PER_PREFIX = 3;
-  const NUM_RUNS = RUNS_PER_PREFIX * PREFIXES.length;
+  // K rounds, each its own test under the repo-wide timeout (no inline pin —
+  // inline-timeout-truth.test.ts): the K×prefixes runs in ONE test took 20.1 s
+  // of the 30 s default in a loaded DB shard (fix round 4, M-6). Every round
+  // runs every prefix exactly once (the run counter carries across rounds); the
+  // closing test checks, across the rounds, the run total and every path.
+  const K = 3;
+  const NUM_RUNS = K * PREFIXES.length;
   const totals: Record<string, number> = {};
   const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
+  const TITLE = "the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'";
+  let runs = 0;
 
-  it("the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'", async () => {
-    let runs = 0;
+  for (let round = 0; round < K; round++) {
+  it(`${TITLE} — every prefix once, round ${round + 1} of ${K}`, async () => {
+    const before = runs;
     for (const prefix of PREFIXES) await fc.assert(
       fc.asyncProperty(tailArb.map((tail) => [...prefix, ...tail]), async (ops) => {
         runs++;
@@ -2203,9 +2211,14 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
         bump("reoffer_blocked", lila.reofferBlocked);
         await Promise.all(pending);
       }),
-      { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
+      { numRuns: 1, endOnFailure: true },
     );
-    expect(runs, "anti-vacuity: the property ran").toBe(NUM_RUNS);
+    expect(runs - before, `anti-vacuity: round ${round + 1} ran every prefix once`).toBe(PREFIXES.length);
+  });
+  }
+
+  it(`${TITLE} — across the ${K} rounds, every path reached`, () => {
+    expect(runs, "anti-vacuity: the property ran K × prefixes times").toBe(NUM_RUNS);
     console.info(`[T10 property] runs=${runs} ${JSON.stringify(totals)}`);
     // R1: every refused move reached the no-op stand-ins, never the real reconcile.
     expect(totals.noop_reconcile_reached ?? 0, "anti-vacuity: the no-op reconcile was reached").toBeGreaterThan(0);
@@ -2309,13 +2322,17 @@ const RAW_PREFIXES: RawOp[][] = [
 ];
 
 describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's move lookup", () => {
-  const RUNS_PER_PREFIX = 3;
+  // K rounds, each its own test, as the interleavings property above (M-6).
+  const K = 3;
   const totals: Record<string, number> = {};
   const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
+  const TITLE = "whatever string lila would play is recorded in lila's notation, replays, and is broadcast once; a suffix-less promotion is refused unsent; a retap in any form is absorbed";
+  const tailArb = fc.array(rawOpArb, { minLength: 0, maxLength: 16, size: "max" });
+  let runs = 0;
 
-  it("whatever string lila would play is recorded in lila's notation, replays, and is broadcast once; a suffix-less promotion is refused unsent; a retap in any form is absorbed", async () => {
-    let runs = 0;
-    const tailArb = fc.array(rawOpArb, { minLength: 0, maxLength: 16, size: "max" });
+  for (let round = 0; round < K; round++) {
+  it(`${TITLE} — every prefix once, round ${round + 1} of ${K}`, async () => {
+    const before = runs;
     for (const prefix of RAW_PREFIXES) await fc.assert(
       fc.asyncProperty(tailArb.map((tail) => [...prefix, ...tail]), async (ops) => {
         runs++;
@@ -2419,9 +2436,14 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
         }
         await Promise.all(pending);
       }),
-      { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
+      { numRuns: 1, endOnFailure: true },
     );
-    expect(runs, "anti-vacuity: the property ran").toBe(RUNS_PER_PREFIX * RAW_PREFIXES.length);
+    expect(runs - before, `anti-vacuity: round ${round + 1} ran every prefix once`).toBe(RAW_PREFIXES.length);
+  });
+  }
+
+  it(`${TITLE} — across the ${K} rounds, every path reached`, () => {
+    expect(runs, "anti-vacuity: the property ran K × prefixes times").toBe(K * RAW_PREFIXES.length);
     console.info(`[T10 raw-UCI property] runs=${runs} ${JSON.stringify(totals)}`);
     // R1: every refused move reached the no-op stand-ins, never the real reconcile.
     expect(totals.noop_reconcile_reached ?? 0, "anti-vacuity: the no-op reconcile was reached").toBeGreaterThan(0);
