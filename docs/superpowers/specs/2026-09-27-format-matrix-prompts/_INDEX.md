@@ -1416,6 +1416,10 @@ Elsewhere the text is the controller's record.
      (amended), BG-KO-3, CK-SO-1, HK-AB-2, CA-AB-2, GN-AB-2 (with the P-5 sentence), IH-KO-1, FB-SO-1, as worded in the
      W2c plan Appendix A (`docs/superpowers/plans/2026-10-13-format-matrix-w2c.md`). Written to
      `packages/engine/rules/` in W2c Task 3; each cites `signed 129 2026-10-13`.
+130. **Swiss abandon is settled by the organiser** (2026-10-13, owner P-7 "Ok A,"; rule row signed "sign"):
+     **X-AB-5** "An abandoned match in a Swiss stage holds the next round until the organiser settles it." Found by the
+     chess session on main (`stages.ts` DECIDED omits `abandoned` → STAGE_NOT_READY; settle refused SETTLE_NOT_APPLICABLE).
+     Built in W2c Task 7; the row is written at the batch-3 proof commit, citing `signed 130 2026-10-13`.
 
 ## Recommendations (mine — not rulings)
 
