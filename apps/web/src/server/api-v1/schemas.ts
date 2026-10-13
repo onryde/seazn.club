@@ -1249,6 +1249,27 @@ export const StageRules = z.object({
   rules: z.record(z.string(), z.unknown()).nullable(),
 });
 
+/** W2c (X-SR-2, X-SR-5) — one match's own format over its stage's. Values unconstrained HERE for the same openapi-gen
+ *  reason as `PutStageRules`; `usecases/fixture-rules.ts` enforces the sport's declared keys (400 UNKNOWN_RULE_KEY),
+ *  the match scope and its bounds (400 RULE_NOT_SETTABLE), the merged parse (422 CONFIG_INVALID), the finished lock
+ *  (409 FIXTURE_FORMAT_LOCKED) and, for a started match, the fit with the recorded play (409 FORMAT_DOES_NOT_FIT_PLAY). */
+export const PutFixtureRules = z.object({
+  rules: z.record(z.string(), z.unknown()).nullable(),
+});
+export type PutFixtureRules = z.infer<typeof PutFixtureRules>;
+
+export const FixtureRulesResult = z.object({
+  fixtures: z.array(
+    z.object({
+      id: Uuid,
+      /** The match had a frozen config: the write was a live correction. */
+      started: z.boolean(),
+      /** Bumped by a correction that changed the frozen config (and by a staff re-freeze) — an open pad compares it. */
+      rules_version: z.number().int().min(0),
+    }),
+  ),
+});
+
 export const AddFixture = z
   .object({
     home_entrant_id: Uuid,

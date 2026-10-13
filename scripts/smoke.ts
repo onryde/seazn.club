@@ -7209,7 +7209,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
   // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
   // so any accepted key is a change.
-  const { divisionId } = await w2cSeedStartedPool(owner);
+  const { divisionId, fixtureId } = await w2cSeedStartedPool(owner);
   const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: ["h2h_points"] });
   const tableLocked =
     r.status === 409 && r.json.error?.code === "DIVISION_TABLE_RULES_LOCKED" && JSON.stringify(r.json).includes("Pool A");
@@ -7217,6 +7217,47 @@ async function w2cStageRulesSuite(): Promise<void> {
     "w2c: division table rules lock names the started stage" +
       (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
     tableLocked,
+  );
+  await w2cFixtureRulesChecks(owner, fixtureId);
+}
+
+/**
+ * W2c Task 14 (X-SR-2, X-SR-5) — `PUT /fixtures/{id}/rules`, the one override writer, on the seed's STARTED match (only
+ * a `core.start` recorded, so any format fits): a live correction to best of 5 answers `started` with a bumped
+ * `rules_version`, and the state every reader serves was refolded under it. Then the match is walked over and
+ * finalized, and the same PUT is 409 FIXTURE_FORMAT_LOCKED.
+ */
+async function w2cFixtureRulesChecks(owner: Session, fixtureId: string): Promise<void> {
+  const put = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`, "PUT", { rules: { bestOf: 5 } });
+  const wrote = put.json.data as { fixtures?: { id: string; started: boolean; rules_version: number }[] } | undefined;
+  const state = v1data<{ state: { cfg?: { bestOf?: unknown } } | null; last_seq: number }>(
+    await v1(owner, `/api/v1/fixtures/${fixtureId}/state`),
+  );
+  const saved =
+    put.status === 200 && wrote?.fixtures?.[0]?.started === true && wrote.fixtures[0].rules_version === 1 && state.state?.cfg?.bestOf === 5;
+  check(
+    "w2c: a match override saves and the pad cfg shows it" +
+      (saved ? "" : ` — got ${put.status} ${JSON.stringify(put.json.error ?? put.json.data)}, state cfg bestOf ${String(state.state?.cfg?.bestOf)}`),
+    saved,
+  );
+
+  // `expected_seq` is the last seq the caller has seen (the state's `last_seq`), as every v1 append in this file sends.
+  const fx = v1data<{ away_entrant_id: string }>(await v1(owner, `/api/v1/fixtures/${fixtureId}`));
+  const forfeit = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.last_seq,
+    type: "core.forfeit",
+    payload: { by: fx.away_entrant_id, reason: "walkover" },
+  });
+  const lastSeq = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
+  const finalize = await v1(owner, `/api/v1/fixtures/${fixtureId}/finalize`, "POST", { expected_seq: lastSeq });
+  const locked = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`, "PUT", { rules: { bestOf: 3 } });
+  const refused = finalize.status === 201 && locked.status === 409 && locked.json.error?.code === "FIXTURE_FORMAT_LOCKED";
+  check(
+    "w2c: a finished match's format is locked" +
+      (refused
+        ? ""
+        : ` — forfeit ${forfeit.status}, finalize ${finalize.status}, PUT ${locked.status} ${JSON.stringify(locked.json.error ?? locked.json.data)}`),
+    refused,
   );
 }
 

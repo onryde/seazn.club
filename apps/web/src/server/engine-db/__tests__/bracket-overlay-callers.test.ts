@@ -8,9 +8,16 @@
 // `rules_override` — but tsc cannot read the SQL text, and a select that forgot the column hands the resolver
 // `undefined`, which it reads as "no override" and says nothing. So every case below seeds an override on its
 // fixture BEFORE invoking the entry and asserts that every call the entry made carried it, and — where the fixture
-// has no frozen snapshot — that the cfg handed back carries it last. All 12 sites are driven from THIS file, the
+// has no frozen snapshot — that the cfg handed back carries it last. All the sites are driven from THIS file, the
 // three whose W2a overlay case lives in their own suite (match-centre-load-feeder-read, event-import-dryrun,
-// org-posts-enrichment-sources) included. Task 14 re-points the seeding to the real writer (the §8 seam).
+// org-posts-enrichment-sources) included.
+//
+// W2c Task 14 (the §8 seam). The writer (`usecases/fixture-rules.ts` `writeFixtureRulesOverride`) is now the only
+// production producer of the column. The W2a cases below ride BOARDGAME, whose bracket overlay is observable — and
+// boardgame declares no match-scoped key, so the writer refuses every override on it (RULE_NOT_SETTABLE); their raw
+// seeding stays a plumbing witness of the readers. The badminton describe at the end drives the REAL producer: the
+// writer's own stored override, through the pad, the fold, the freeze and a live correction. Task 14 also adds a
+// 13th site (`fixture-override-guards.ts`, a division save re-checking every unstarted match's own format).
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -46,6 +53,8 @@ import { loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { draftPostsForDecidedFixture } from "@/server/usecases/org-posts";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
+import { patchDivision } from "@/server/usecases/divisions";
+import { writeFixtureRulesOverride } from "@/server/usecases/fixture-rules";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
 
@@ -131,10 +140,12 @@ const SITES: readonly { file: string; count: number; case: string }[] = [
   { file: "apps/web/src/server/usecases/org-posts.ts", count: 1, case: "org-posts.ts draftPostsForDecidedFixture" },
   // R116-2 (W2b Task 16): the score of ruling 116's walkover, which no event records.
   { file: "apps/web/src/server/engine-db/awarded-state.ts", count: 1, case: "awarded-state.ts writeAwardedMatchState" },
+  // W2c Task 14 (I-A one layer up): a division save re-resolves every unstarted match's own format.
+  { file: "apps/web/src/server/usecases/fixture-override-guards.ts", count: 1, case: "fixture-override-guards.ts refuseInvalidatedOverrides" },
 ];
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 12 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 13 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -153,7 +164,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(12);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(13);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -380,11 +391,22 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expectOverrideArg();
   });
 
-  // M3 (review): the ledger above pins the 12 sites in the SOURCE; this pins that the cases DROVE all 12 with the
+  it.skipIf(!HAS_DB)("fixture-override-guards.ts refuseInvalidatedOverrides: a division save re-resolves the match's own format", async () => {
+    // Raw seeding (boardgame: see the header); the save changes a key the boardgame schema reads, so the guard runs.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await seedOverride({ fixtureId: s.fixtureIds[0]! });
+    spy.mockClear();
+    await patchDivision(s.auth, s.divisionId, { config: { ...(builtinModules.find((m) => m.key === "boardgame")!.variants.classical as object) } });
+    expectOverlay("knockout");
+    expectOverrideOut("knockout");
+    expectOverrideArg();
+  });
+
+  // M3 (review): the ledger above pins the 13 sites in the SOURCE; this pins that the cases DROVE all 13 with the
   // override. Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 12 call sites was driven with the override, per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 13 call sites was driven with the override, per the spy's caller frames", () => {
     const byFile = new Map<string, number>();
     for (const site of DRIVEN) {
       const file = site.replace(/:\d+:\d+$/, "");
@@ -395,7 +417,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     );
     expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN].sort())})`).toEqual([]);
     expect([...byFile.keys()].sort(), "and nothing outside the ledger").toEqual(SITES.map((s) => s.file).sort());
-    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(12);
+    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(13);
   });
 });
 
@@ -414,12 +436,22 @@ describe("W2c: a match override through the real read and write folds (spec §4.
       ((await withTenant(s.auth.orgId, (tx) => loadFoldInputs(tx, id)))!.cfg as { bestOf?: unknown }).bestOf;
 
     expect(await padBestOf(), "1. empty case: no override reads the division's value").toBe(declared);
-    await seedOverride({ fixtureId: id });
+    // Task 14 (§8): the REAL producer — the one writer — and what it stored, read back off the row.
+    await writeFixtureRulesOverride(s.auth, [id], { ...OVERRIDE });
+    const [stored] = await sql<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${id}`;
+    expect(stored!.rules_override, "2. the writer stored the override").toEqual(OVERRIDE);
     expect(await padBestOf(), "2. the override").toBe(OVERRIDE.bestOf);
     expect(await padBestOf(), "3. a second read agrees").toBe(OVERRIDE.bestOf);
     const start = await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
     const [frozen] = await sql<{ config_snapshot: { bestOf?: unknown } }[]>`select config_snapshot from fixtures where id = ${id}`;
     expect(frozen!.config_snapshot.bestOf, "4. the first event froze the override").toBe(OVERRIDE.bestOf);
+    // Task 14: a live correction through the writer (only a start recorded, so any format fits) re-freezes, and the
+    // pad and the read fold both read it; then back to the override for the steps below.
+    await writeFixtureRulesOverride(s.auth, [id], { bestOf: declared });
+    expect(await padBestOf(), "4b. a correction re-froze the match's format").toBe(declared);
+    expect(await foldBestOf(), "4b. and the read fold reads it").toBe(declared);
+    await writeFixtureRulesOverride(s.auth, [id], { ...OVERRIDE });
+    expect(await padBestOf(), "4c. and back").toBe(OVERRIDE.bestOf);
     // A raw column write after the freeze is not a correction (Task 14's writer refolds); the snapshot wins.
     await sql`update fixtures set rules_override = null where id = ${id}`;
     expect(await padBestOf(), "5. a cleared override moves the pad nothing").toBe(OVERRIDE.bestOf);

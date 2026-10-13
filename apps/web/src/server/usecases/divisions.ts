@@ -25,6 +25,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
+import { refuseInvalidatedOverrides } from "./fixture-override-guards";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
   slugify,
@@ -1164,6 +1165,8 @@ export async function patchDivision(
         }
         effective.variant_key = variantRefusal ? current.variant_key : (patch.variant_key ?? current.variant_key);
         effective.config = tx.json(nextConfig as never);
+        // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
+        await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule);
       }
       if (refusedFields.has("tiebreakers")) delete effective.tiebreakers;
     }

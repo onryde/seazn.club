@@ -133,6 +133,7 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
+import { refuseOwnFormatLoss } from "./fixture-override-guards";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -3245,6 +3246,8 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
     ).map((r) => r.id);
     await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
+    // W2c Task 14: a match's own format would be regenerated away with its row — refused by name instead.
+    await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);
     const deleted = await tx<{ id: string }[]>`
       delete from fixtures where stage_id = ${stageId} returning id`;
     return {

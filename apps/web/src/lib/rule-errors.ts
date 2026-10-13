@@ -15,6 +15,15 @@ export const RULE_ERROR_STATUS = {
   POINTS_RULE_INEXPRESSIBLE: 422,
 } as const;
 
+/** X-SR-5 (owner P-4 "A") — why a correction does not fit the recorded play when the engine's fold did NOT refuse it:
+ *  the corrected fold must keep the outcome and the score as shown. `ends` is the owner's sentence (P-4). When the fold
+ *  itself refuses, the engine's own reason is the message instead. */
+export const FORMAT_FIT_REASONS = {
+  ends: "This format would end the match as it stands",
+  result: "This format would change the result as it stands",
+  score: "This format would change the score as it stands",
+} as const;
+
 export type RuleErrorCode = keyof typeof RULE_ERROR_STATUS;
 
 /** One field a division save did not apply, and the first started stage that depends on it. Lives here, not beside

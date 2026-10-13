@@ -183,6 +183,7 @@ const RULES: RouteRule[] = [
   { method: "GET", path: "/fixtures/:id", scope: "read", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id", scope: "manage", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/stream", scope: "manage", pin: "fixture" },
+  { method: "PUT", path: "/fixtures/:id/rules", scope: "manage", pin: "fixture" },
   { method: "GET", path: "/fixtures/:id/events", scope: "read", pin: "fixture" },
   { method: "GET", path: "/fixtures/:id/audit", scope: "read", pin: "fixture" },
   { method: "POST", path: "/fixtures/:id/events", scope: "score", pin: "fixture" },

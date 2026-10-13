@@ -6,14 +6,12 @@ import { HttpError } from "@/lib/http";
 import { EngineError } from "@seazn/engine/core";
 import {
   LOCKED_FIXTURE_STATUSES,
-  fixtureStatusFromFold,
   hasFrozenCfg,
   recomputeStandings,
   resolveFixtureCfg,
   resolveModule,
 } from "@/server/engine-db";
-import { foldFixture } from "@/server/engine-db/fold";
-import { releaseFedSeats } from "@/server/engine-db/fed-seats";
+import { RefreezeFoldError, refreezeFixture } from "@/server/engine-db/refreeze";
 import { log } from "@/server/logger";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
@@ -219,10 +217,8 @@ export async function resnapshotFixtureConfig(
       { kind: row.stage_kind, config: row.stage_config },
       resolveModule(row.sport_key, row.module_version),
     );
-    await tx`
-      update fixtures
-      set config_snapshot = ${tx.json(live as never)}, config_snapshot_at = now()
-      where id = ${fixtureId}`;
+    // W2c (Task 14, owner P-1): the write, the refold and every cache below are ONE function shared with the organiser's
+    // live correction (`refreezeFixture`) — which also bumps `rules_version`, so an open pad learns its cfg moved.
     // PREFLIGHT, inside the transaction and AFTER the write so it reads the new
     // snapshot through the ordinary read path. Live config is not guaranteed to
     // be compatible with history that was recorded under something else — the
@@ -285,10 +281,14 @@ export async function resnapshotFixtureConfig(
     // by `admin-fixture-config.test.ts` ("does not leave the fixture in a state
     // where every future write is refused"); the third is not, and is the one to
     // re-derive if a module's draw policy changes.
-    let folded;
+    let released: string[];
     try {
-      folded = await foldFixture(tx, fixtureId);
-    } catch (err) {
+      ({ released } = await refreezeFixture(tx, fixtureId, live));
+    } catch (thrown) {
+      // `refreezeFixture` wraps a fold throw (and only that) in `RefreezeFoldError`; a seat release refusal
+      // (NEXT_MATCH_STARTED) and a database failure propagate as themselves, as they always did here.
+      if (!(thrown instanceof RefreezeFoldError)) throw thrown;
+      const err = thrown.foldError;
       // Only a refusal FROM THE FOLD is evidence about the config. A dropped
       // connection, a data defect (a fixture whose entrant went missing) or a
       // module version the registry does not have are all failures the
@@ -339,26 +339,12 @@ export async function resnapshotFixtureConfig(
     // and writes no audit row. This hatch runs no fill afterwards (it never
     // has: a re-snapshot that DECIDES a line seats nobody either), so a flip
     // here leaves the seat empty and labelled rather than holding a name the
-    // result no longer gives it.
-    const released = folded ? await releaseFedSeats(tx, fixtureId, row.outcome, folded.outcome) : [];
-    if (folded) {
-      await tx`
-        insert into match_states (fixture_id, last_seq, state, summary)
-        values (${fixtureId}, ${folded.lastSeq}, ${tx.json(folded.state as never)},
-                ${tx.json(folded.summary as never)})
-        on conflict (fixture_id) do update set
-          last_seq = excluded.last_seq, state = excluded.state,
-          summary = excluded.summary, updated_at = now()`;
-      // Unconditionally, in BOTH directions: a corrected config can just as
-      // easily un-decide a fixture (tennis at bestOf 5 is not over after two
-      // sets) as decide one, and a stale non-null outcome beside a null fold is
-      // what feeds the standings table.
-      await tx`
-        update fixtures set
-          outcome = ${folded.outcome === null ? null : tx.json(folded.outcome as never)},
-          status = ${fixtureStatusFromFold(folded.outcome, folded.active, row.stage_kind)}
-        where id = ${fixtureId}`;
-    }
+    // result no longer gives it. `match_states`, `fixtures.outcome` and
+    // `fixtures.status` are rewritten unconditionally, in BOTH directions: a
+    // corrected config can just as easily un-decide a fixture (tennis at bestOf 5
+    // is not over after two sets) as decide one, and a stale non-null outcome
+    // beside a null fold is what feeds the standings table. All of it is
+    // `refreezeFixture` (engine-db/refreeze.ts), above.
     // Mirror logStaffAction's columns (lib/admin.ts) on THIS tx — never call
     // logStaffAction itself inside the tx, it opens its own connection.
     await tx`

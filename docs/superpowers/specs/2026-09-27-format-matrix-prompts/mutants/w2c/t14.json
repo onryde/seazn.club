@@ -1,0 +1,308 @@
+[
+ {
+  "id": "t14-fits-outcome",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (outcomesDiffer(before.outcome, after.outcome))",
+  "replace": "if (false && outcomesDiffer(before.outcome, after.outcome))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "P-4: a correction that would END the match is refused"
+   }
+  ]
+ },
+ {
+  "id": "t14-fits-headline",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "else if (before.summary.headline !== after.summary.headline) reason",
+  "replace": "else if (false) reason",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "after a withdrawal: the walkover"
+   }
+  ]
+ },
+ {
+  "id": "t14-fits-throw",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "after = foldFrom(row.id, { ...inputs, cfg: corrected });",
+  "replace": "after = foldFrom(row.id, inputs);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "does not fit: football extra time switched off"
+   }
+  ]
+ },
+ {
+  "id": "t14-locked",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (LOCKED_FIXTURE_STATUSES.has(row.status))",
+  "replace": "if (false && LOCKED_FIXTURE_STATUSES.has(row.status))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "finalized → FIXTURE_FORMAT_LOCKED"
+   }
+  ]
+ },
+ {
+  "id": "t14-replace",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "const next = stored === null || Object.keys(stored).length === 0 ? null : stored;",
+  "replace": "const next = { ...(row.rules_override ?? {}), ...(stored ?? {}) };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "REPLACES"
+   }
+  ]
+ },
+ {
+  "id": "t14-leaf-diff",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (d !== SAME) put(leaves, k, d);",
+  "replace": "put(leaves, k, corrected[k]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "only the CHANGED leaves are stored"
+   }
+  ]
+ },
+ {
+  "id": "t14-parsed-stage",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "row.variant_key, stageCfg, sentWhole);",
+  "replace": "row.variant_key, stageResolved as Record<string, unknown>, sentWhole);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the check reads the PARSED stage"
+   }
+  ]
+ },
+ {
+  "id": "t14-check-refusal",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (!check.ok) {",
+  "replace": "if (false && !check.ok) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a stage-only key is refused RULE_NOT_SETTABLE"
+   }
+  ]
+ },
+ {
+  "id": "t14-unknown-as-sent",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (!known.has(key))",
+  "replace": "if (false && !known.has(key))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "M2: a null VALUE is inherit"
+   }
+  ]
+ },
+ {
+  "id": "t14-no-op",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (canonicalJson(cfg) !== canonicalJson(row.config_snapshot)) {",
+  "replace": "if (true) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a second identical correction neither re-freezes nor bumps"
+   }
+  ]
+ },
+ {
+  "id": "t14-version-bump",
+  "file": "apps/web/src/server/engine-db/refreeze.ts",
+  "find": "rules_version = rules_version + 1",
+  "replace": "rules_version = rules_version",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "version bumped once"
+   }
+  ]
+ },
+ {
+  "id": "t14-admin-refreeze",
+  "file": "apps/web/src/server/usecases/admin-fixture-config.ts",
+  "find": "({ released } = await refreezeFixture(tx, fixtureId, live));",
+  "replace": "released = [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a staff re-freeze"
+   }
+  ]
+ },
+ {
+  "id": "t14-ia-division-save",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "refused 422 naming the match"
+   }
+  ]
+ },
+ {
+  "id": "t14-loss-rebuild",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "await refuseOwnFormatLoss(tx, tx`stage_id = ${stageId}`);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "rebuild: refused naming the match"
+   }
+  ]
+ },
+ {
+  "id": "t14-loss-history",
+  "file": "apps/web/src/server/usecases/history.ts",
+  "find": "await refuseOwnFormatLoss(tx, tx`id in ${tx(ids)} and ${unplayed(tx)}`);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "Undo of a generation"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "pool clear: refused only for the pool"
+   }
+  ]
+ },
+ {
+  "id": "t14-loss-history-scope",
+  "file": "apps/web/src/server/usecases/history.ts",
+  "find": "await refuseOwnFormatLoss(tx, tx`id in ${tx(ids)} and ${unplayed(tx)}`);",
+  "replace": "await refuseOwnFormatLoss(tx, tx`division_id = ${divisionId}`);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "pool clear: refused only for the pool"
+   }
+  ]
+ },
+ {
+  "id": "t14-merge-shape",
+  "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+  "find": "if (!Object.keys(ov).every((k) => Object.hasOwn(base, k))) return ov;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/fixture-cfg-order.test.ts"
+    ],
+    "name": "different shape and REPLACES it"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a different shape of a strict union"
+   }
+  ]
+ },
+ {
+  "id": "t14-merge-leaf",
+  "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+  "find": "put(out, k, mergeValue(decided[k], v));",
+  "replace": "put(out, k, v);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/fixture-cfg-order.test.ts"
+    ],
+    "name": "a nested override of one leaf keeps"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a shortened overtime stores the leaf"
+   }
+  ]
+ },
+ {
+  "id": "t14-merge-null-inherit",
+  "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+  "find": "if (v === null || v === undefined) continue;",
+  "replace": "if (v === undefined) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/fixture-cfg-order.test.ts"
+    ],
+    "name": "M2 empty case: an override of only nulls"
+   }
+  ]
+ }
+]

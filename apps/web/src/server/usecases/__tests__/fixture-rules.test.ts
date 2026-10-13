@@ -60,8 +60,6 @@ const padCfg = async (b: SeededBracket, id: string) => (await loadFixturePadCfg(
 const sides = async (id: string) =>
   (await sql<{ home: string; away: string }[]>`
     select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${id}`)[0]!;
-const fixtureNo = async (id: string) =>
-  (await sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${id}`)[0]!.fixture_no;
 
 // I8 — a real ledger: badminton sets played with the module's own rally event (`badminton.rally {wonBy}`, the shape
 // public-player-matches.test.ts uses). The rally count is the variant's own `setTo` read from the module, so a preset

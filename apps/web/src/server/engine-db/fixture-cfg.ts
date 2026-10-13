@@ -79,7 +79,8 @@ export interface FixtureCfgSource {
  * so one match can switch a decider off or shorten its format (X-SR-2), and a
  * later stage edit still moves every key the match did not override (Review
  * Focus 2). Order: `snapshot ?? (division ⊕ stage.rules ⊕ bracketDeciders(kind)
- * ⊕ rules_override)`. The snapshot still wins outright: at the first event the
+ * ⊕ rules_override)`, the last `⊕` a leaf merge in which null means inherit
+ * (`mergeRulesOverride`, below). The snapshot still wins outright: at the first event the
  * override is frozen into it with everything else, and only the Q11 correction
  * (Task 14) re-freezes a started match. A cfg that is not an object (the JSON
  * null division carve-out above) takes no override either: rebuilding it from
@@ -103,15 +104,54 @@ export function resolveFixtureCfg(
   if (hasFrozenCfg(fixture.config_snapshot)) return fixture.config_snapshot;
   const decided = liveCfg(divisionCfg, stage, module);
   if (!isCfgObject(decided)) return decided;
-  const ov = fixture.rules_override;
-  return typeof ov === "object" && ov !== null && !Array.isArray(ov) ? { ...decided, ...(ov as object) } : decided;
+  return mergeRulesOverride(decided, fixture.rules_override);
 }
 
 const isCfgObject = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v);
 
-/** `division ⊕ stage.rules ⊕ bracketDeciders(kind)`: the cfg a fixture with no snapshot and no override folds. */
-function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null | undefined, module: DeciderSource): unknown {
+/** A key written as an own data property, whatever its name (`__proto__` included): never through a setter. */
+function put(o: Record<string, unknown>, k: string, v: unknown): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+}
+
+/** One override value over the cfg's own. An object whose every key the cfg's object also has is a CHANGE to that
+ *  object, merged leaf by leaf, so a stage edit to a leaf the match did not touch still reaches it (carry (c)). An
+ *  object naming a key the cfg's lacks is a different SHAPE — tennis's `finalSet` switching from `{tiebreakTo}` to
+ *  `{matchTiebreakTo}` (a union of strict objects) — and replaces it whole; so does anything that is not an object on
+ *  both sides. Never mutates either input. */
+function mergeValue(base: unknown, ov: unknown): unknown {
+  if (!isCfgObject(base) || !isCfgObject(ov)) return ov;
+  if (!Object.keys(ov).every((k) => Object.hasOwn(base, k))) return ov;
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(ov)) put(out, k, mergeValue(base[k], v));
+  return out;
+}
+
+/**
+ * W2c (Task 14) — a match's own format over the cfg its stage resolves: `rules_override` holds only the LEAVES the
+ * match changed (the one writer, `usecases/fixture-rules.ts`, stores a diff), merged per `mergeValue`.
+ *
+ * NULL = INHERIT (Task 10 M2), as in a stage's `rules` (`stageScopedCfg`): a top-level key whose value is null or
+ * undefined is skipped, never copied — a copied null would BLANK the stage's value. The writer never stores one; this
+ * is the second half of that contract. A consequence: a match cannot set a nullable top-level key (badminton's `cap`)
+ * to null on its own.
+ */
+export function mergeRulesOverride(decided: Record<string, unknown>, ov: unknown): Record<string, unknown> {
+  if (!isCfgObject(ov)) return decided;
+  const out: Record<string, unknown> = { ...decided };
+  for (const [k, v] of Object.entries(ov)) {
+    if (v === null || v === undefined) continue;
+    put(out, k, mergeValue(decided[k], v));
+  }
+  return out;
+}
+
+/** `division ⊕ stage.rules ⊕ bracketDeciders(kind)`: the cfg a fixture with no snapshot and no override folds — its
+ *  STAGE's format. Exported for the one override writer (`usecases/fixture-rules.ts`), which validates a match's own
+ *  format against it and builds the corrected cfg as `mergeRulesOverride(liveCfg(…), override)`, exactly the last
+ *  step below. It reads no fixture row, so it is not a `resolveFixtureCfg` site. */
+export function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null | undefined, module: DeciderSource): unknown {
   const scoped = stageScopedCfg(divisionCfg, stage?.config);
   if (!forbidsLevelResult(stage?.kind)) return scoped;
   if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is
