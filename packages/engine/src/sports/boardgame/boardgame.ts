@@ -442,7 +442,10 @@ function armageddonAdvancer(black: Side, result: (typeof ARMAGEDDON_RESULTS)[num
   return result === "white" ? opponent(black) : black;
 }
 
-/** BG-KO-3: a rung the stage does not list is not played, whatever else the event says. */
+/** BG-KO-3: a rung the stage does not list is not played, whatever else the event says. Which of the LISTED rungs may be
+ *  recorded first is not decided here: the engine is only ever given the rung that decided the game (it has no "this rung
+ *  ended level" fact), so "the next rung after the last drawn one" has nothing to read. See the order test in
+ *  tiebreak.test.ts (open ruling). */
 function refuseUnlistedRung(state: BoardgameState, rung: TiebreakRung): void {
   const listed = effectiveRungs(state.cfg);
   if (!listed.includes(rung)) {
@@ -456,7 +459,9 @@ function refuseUnlistedRung(state: BoardgameState, rung: TiebreakRung): void {
 function requireArmageddonColour(state: BoardgameState, payload: unknown): void {
   if (typeof payload !== "object" || payload === null) return;
   const { rung, black } = payload as { rung?: unknown; black?: unknown };
-  if (rung === "armageddon" && black === undefined) {
+  // Missing is anything that names no entrant: absent, null, "" or a non-string (an API client that clears the field sends
+  // null or ""). A non-empty string no one owns is not missing; the schema and the lineup lookup refuse that one.
+  if (rung === "armageddon" && (typeof black !== "string" || black === "")) {
     refuseUnlistedRung(state, rung);
     throw new EngineError("TIEBREAK_COLOUR_REQUIRED", "an Armageddon must record who had Black", { rung });
   }
@@ -870,9 +875,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   ruleKeys: {
     variant: { scope: "stage" },
     clock: { scope: "stage" },
-    tiebreak: { scope: "stage", decider: true, appliesTo: { stageKinds: [...BRACKET_KINDS] } },
-    // W2c BG-KO-3 (item 13): the stage's tie-break rungs, in order; empty = the organiser decides. Stage-only (Q5).
-    tiebreakRungs: { scope: "stage", appliesTo: { stageKinds: [...BRACKET_KINDS] } },
+    // W2c BG-KO-1, BG-KO-3 (item 13): the stage's tie-break rungs, in order, ARE the chess decider; their off state is the
+    // EMPTY list, which holds a drawn game for the organiser (ruling 79). Stage-only (Q5). The bare `tiebreak` switch is no
+    // organiser key: `bracketDeciders` forces it on, and the rung list now decides whether anything is played.
+    tiebreakRungs: { scope: "stage", decider: true, appliesTo: { stageKinds: [...BRACKET_KINDS] } },
     scoring: { scope: "points" },
     byeScore: { scope: "points" },
   },

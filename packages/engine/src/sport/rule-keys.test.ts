@@ -97,7 +97,10 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   icehockey: PERIOD_UNSET,
   hockey: { ...PERIOD_UNSET, overtime: "hockey has no overtime (FIH); the kernel key exists, hockey narrows it out" },
-  boardgame: { colors: "home = White (chess.md §2); the in-page chess contract owns colours (do not touch colorOfHome)" },
+  boardgame: {
+    colors: "home = White (chess.md §2); the in-page chess contract owns colours (do not touch colorOfHome)",
+    tiebreak: "forced on for every bracket stage by bracketDeciders; the organiser's decider is the tiebreakRungs list, whose EMPTY list is \"no tie-break games\" (BG-KO-1, BG-KO-3)",
+  },
   carrom: {},
   generic: { progressScore: "a pad display switch, not a result rule" },
 };
@@ -147,7 +150,7 @@ const PLAN_ONLY: Readonly<Record<string, Partial<Record<RuleScope, readonly stri
   cricket: { stage: ["superOverStillTied", "minOversForResult"], points: ["points"] },
   icehockey: { points: ["awardScore"] },
   hockey: { points: ["awardScore"] },
-  boardgame: { stage: ["tiebreak"], points: ["scoring", "byeScore"] },
+  boardgame: { points: ["scoring", "byeScore"] },
   carrom: { stage: ["pointsPerCoin"], points: ["points"] },
   generic: { points: ["points"] },
 };
@@ -157,9 +160,11 @@ const Q5_MATCH_BOUNDS: Readonly<Record<string, RuleKeyFact["matchBound"]>> = {
   extraTime: "off_or_shorter", overtimeMinutes: "shorter", shootoutAttempts: "shorter",
 };
 /** The WHOLE deciders (spec §4.1 "plus the existing decider keys"; X-SR-6): Q5's decider names, plus the chess bracket
- *  tie-break games the plan's table declares (BG-KO-1), which no Q5 name covers. */
+ *  tie-break games, which no Q5 name covers as a decider. For chess the decider is the ordered RUNG LIST
+ *  (`tiebreakRungs`, BG-KO-1, BG-KO-3): its off state is the EMPTY list, which holds a drawn game for the organiser. The
+ *  bare `tiebreak` switch is not a decider any more (UNSETTABLE above: bracketDeciders forces it on). */
 const Q5_WHOLE_DECIDERS = ["extraTime", "shootout", "overtime", "superOver", "tieBoard"] as const;
-const PLAN_ONLY_DECIDERS: Readonly<Record<string, readonly string[]>> = { boardgame: ["tiebreak"] };
+const PLAN_ONLY_DECIDERS: Readonly<Record<string, readonly string[]>> = { boardgame: ["tiebreakRungs"] };
 const whereOf = (m: AnySportModule, name: string): Where => Q5_WHERE_BY_SPORT[m.key]?.[name] ?? Q5_WHERE[name] ?? { path: name };
 /** The declared key a Q5 name maps to in this sport, or null where its schema holds no such path (or holds it only
  *  under a top-level key the UNSETTABLE table keeps out). */
@@ -314,7 +319,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(whole).toBeGreaterThan(0);
   });
 
-  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreak and tiebreakRungs (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
+  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreakRungs (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
     const ck = sport("cricket");
     const ckVariants = ck.variants as Record<string, object>;
     const variantsWhere = (on: Record<string, unknown>): string[] =>
@@ -324,7 +329,6 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       // W2c Task 7 (CA-AB-2, GN-AB-2): sharing the points on an abandon is a table stage's choice.
       "carrom.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
       "generic.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
-      "boardgame.tiebreak": { stageKinds: sorted(BRACKET_KINDS) },
       "boardgame.tiebreakRungs": { stageKinds: sorted(BRACKET_KINDS) }, // W2c BG-KO-3: the rung list is a bracket stage's, like the tie-break it orders
       "cricket.superOver": { variants: variantsWhere({ superOver: true }) },
       "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
@@ -504,24 +508,29 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(stageKeysFor(carrom, null, null)).toContain("tieBoard"); // division level: not narrowed
   });
 
-  it("BG-KO-3: chess tiebreak and tiebreakRungs apply to bracket kinds only", () => {
+  it("BG-KO-3: the chess rung list is the bracket-only decider, and the forced tiebreak switch is no organiser key", () => {
     // Single-sport: the tie-break games exist only where someone must advance (boardgame's bracketDeciders), and the
     // rung list (W2c BG-KO-3, spec §4.1 Q5) orders exactly those games.
     const chess = sport("boardgame");
-    for (const key of ["tiebreak", "tiebreakRungs"]) {
-      let shown = 0;
-      for (const k of KINDS) {
-        const has = stageKeysFor(chess, k, null).includes(key);
-        expect(has, `${key} @ ${k}`).toBe(BRACKET_KINDS.has(k));
-        if (has) shown++;
-      }
-      expect(shown, key).toBe(BRACKET_KINDS.size);
-      expect(stageKeysFor(chess, null, null), `${key} @ division`).toContain(key); // not narrowed before a stage exists
+    let shown = 0;
+    for (const k of KINDS) {
+      const has = stageKeysFor(chess, k, null).includes("tiebreakRungs");
+      expect(has, `tiebreakRungs @ ${k}`).toBe(BRACKET_KINDS.has(k));
+      if (has) shown++;
     }
-    // The rung list is stage-scope only: never a per-match key, never a decider (the stage's list is authoritative, and
-    // an EMPTY list is the organiser's choice that bracketDeciders must not overwrite).
-    expect(chess.ruleKeys!.tiebreakRungs).toEqual({ scope: "stage", appliesTo: { stageKinds: [...BRACKET_KINDS] } });
+    expect(shown).toBe(BRACKET_KINDS.size);
+    expect(stageKeysFor(chess, null, null), "tiebreakRungs @ division").toContain("tiebreakRungs"); // not narrowed before a stage exists
+    // The rung list is stage-scope only (never a per-match key) and IS the chess decider (BG-KO-1, BG-KO-3): an EMPTY
+    // list is "no tie-break games" and holds a drawn game for the organiser, so the stage's list is authoritative and
+    // bracketDeciders must not write it.
+    expect(chess.ruleKeys!.tiebreakRungs).toEqual({ scope: "stage", decider: true, appliesTo: { stageKinds: [...BRACKET_KINDS] } });
     expect(Object.hasOwn(chess.bracketDeciders(chess.configSchema.parse({})) as object, "tiebreakRungs")).toBe(false);
+    // `tiebreak` is the bracket overlay's own switch, forced on: the organiser sets no such key, in any kind or at the
+    // division, and it is no decider (the list is). The schema still carries it, so the overlay can force it.
+    expect(Object.hasOwn(chess.ruleKeys!, "tiebreak")).toBe(false);
+    for (const k of [...KINDS, null]) expect(stageKeysFor(chess, k, null), `tiebreak @ ${k}`).not.toContain("tiebreak");
+    expect(chess.bracketDeciders(chess.configSchema.parse({}))).toEqual({ tiebreak: true });
+    expect(schemaHasPath(chess.configSchema, ["tiebreak"])).toBe(true);
   });
 
   it("ruleKeyApplies narrows by variant too; a null kind or variant is not narrowed", () => {
@@ -772,7 +781,8 @@ describe("G3 deciderKeysFor — the whole deciders a stage carries", () => {
   });
   it("the engine's own deciders: football ET and penalties; chess tie-breaks in a bracket only; a test match has no super over", () => {
     expect(sorted(deciderKeysFor(sport("football"), "knockout", null))).toEqual(["extraTime", "shootout"]);
-    expect(deciderKeysFor(sport("boardgame"), "knockout", null)).toEqual(["tiebreak"]);
+    // BG-KO-3: the rung list IS the chess decider (an empty list is "off"); the forced `tiebreak` switch is not one.
+    expect(deciderKeysFor(sport("boardgame"), "knockout", null)).toEqual(["tiebreakRungs"]);
     expect(deciderKeysFor(sport("boardgame"), "league", null)).toEqual([]);
     expect(deciderKeysFor(sport("cricket"), "knockout", "t20")).toEqual(["superOver"]);
     expect(deciderKeysFor(sport("cricket"), "knockout", "test")).toEqual([]);

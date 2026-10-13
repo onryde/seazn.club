@@ -1,9 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
 import { CoreSettle, deciderPending, foldMatch, foldMatchWithStoppage, outcomeOf, settleApplies, type EventEnvelope } from "../../core/events.ts";
 import { mulberry32 } from "../../core/rng.ts";
-import { evalPadGate } from "../../sport/module.ts";
+import { evalPadGate, isPathRequired } from "../../sport/module.ts";
 import { aggregatePlayerStats, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { generic } from "../generic/index.ts";
@@ -494,7 +495,7 @@ describe("BG-KO-3 a stage chooses its tie-break rungs and their order", () => {
     expect(Object.hasOwn(boardgame.configSchema.parse({}), "tiebreakRungs")).toBe(false); // absent, never defaulted (finding 12)
     expect(fold(ko, drawn).phase).toBe("tiebreak");
   });
-  it("empty list: a drawn bracket game is level, not awaiting a decider (ruling 79 hold applies)", () => {
+  it("empty list: a drawn bracket game stays a draw and awaits no decider (the ruling-79 hold itself is the server's, asserted in fixture-cfg-order)", () => {
     const s = fold(koWith([]), drawn);
     expect(s.phase).not.toBe("tiebreak");
     expect(boardgame.awaitingDecider!(s as never)).toBe(false);
@@ -532,7 +533,14 @@ describe("BG-KO-3 a stage chooses its tie-break rungs and their order", () => {
     expect(codeOf(() => fold(cfg, refusedFirst))).toBe("TIEBREAK_NOT_APPLICABLE");
     expect(fold(cfg, [...drawn, tieBreak(3, "blitz", A)]).outcome).toMatchObject({ kind: "win", winner: A, method: "tiebreak_blitz" });
   });
-  it("the list is a menu in the stage's order, not a gate: a later-listed rung may decide the game on its own", () => {
+  // OPEN RULING (W2c Task 8 fix round 1, "rung ORDER"): BG-KO-1 says a drawn game goes to the stage's rungs IN ORDER, and the
+  // controller ruled the fold must refuse a rung that is not the next one. That cannot be built on the facts the engine is
+  // given: a rapid/blitz event always names the winner and an Armageddon always advances Black, so the only rung ever
+  // RECORDED is the one that decided the game, and there is no "rung ended level" fact from which "the next rung after the
+  // last drawn one" could be read. Enforced as written, only the FIRST listed rung could ever be accepted and every later
+  // rung (blitz, Armageddon) would be unreachable. Until the controller rules (add a level-rung fact, or keep the list as an
+  // ordered menu), this pins what the fold does today.
+  it("TODAY (order not enforced, ruling open): any listed rung may decide the game on its own, whatever its place in the list", () => {
     expect(fold(koWith(["rapid", "blitz", "armageddon"]), [...drawn, tieBreak(3, "armageddon", H)]).outcome).toMatchObject({ kind: "win", winner: H, method: "tiebreak_armageddon" });
   });
   it("duplicates are refused by the schema; order is kept", () => {
@@ -562,17 +570,45 @@ describe("BG-KO-3 a stage chooses its tie-break rungs and their order", () => {
     expect(effectiveRungs(koWith([]))).toEqual([]);
     expect(effectiveRungs(boardgame.configSchema.parse({}))).toEqual([...TIEBREAK_RUNGS]);
   });
-  it("tiebreakRungs is boardgame's alone: no other sport declares the key or reads a decider's winner", () => {
+  it("tiebreakRungs is boardgame's alone: no other sport declares the key", () => {
     let others = 0;
     for (const m of builtinModules) {
       if (m.key === "boardgame") continue;
       expect(Object.hasOwn(m.ruleKeys ?? {}, "tiebreakRungs"), m.key).toBe(false);
-      expect((m as { deciderWinner?: unknown }).deciderWinner, m.key).toBeUndefined();
       others++;
     }
     expect(others).toBe(builtinModules.length - 1);
     expect(others).toBeGreaterThan(0);
-    expect(boardgame.ruleKeys?.tiebreakRungs).toMatchObject({ scope: "stage" });
+    expect(boardgame.ruleKeys?.tiebreakRungs).toMatchObject({ scope: "stage", decider: true });
+  });
+  // The server's withdrawn-entrant guard (apps/web append-event.ts) asks `deciderWinner` for who a decider event
+  // advances, and falls back to the payload's own `winner` for a module without the hook. That fallback is safe only
+  // while every such module's decider events name a winner; this is the rule it relies on, stated once for any module.
+  // `isPathRequired` throws for a schema that declares no `winner` at all; for this question that is simply "no".
+  const requiresWinner = (schema: unknown): boolean => { try { return isPathRequired(schema as never, "winner"); } catch { return false; } };
+  const carriesItsWinner = (m: { deciderTypes?: readonly string[]; deciderWinner?: unknown; eventSchemas?: Readonly<Record<string, unknown>> }): boolean =>
+    (m.deciderTypes ?? []).length === 0 ||
+    m.deciderWinner !== undefined ||
+    (m.deciderTypes ?? []).every((type) => requiresWinner(m.eventSchemas?.[type]));
+  it("a module that declares deciderTypes either answers deciderWinner or names a required `winner` in every decider event (the server's fallback relies on it)", () => {
+    let withDeciders = 0;
+    let viaHook = 0;
+    for (const m of builtinModules) {
+      if ((m.deciderTypes ?? []).length === 0) continue;
+      expect(carriesItsWinner(m as never), `${m.key}: a decider event no guard can read the winner of`).toBe(true);
+      withDeciders++;
+      if ((m as { deciderWinner?: unknown }).deciderWinner !== undefined) viaHook++;
+    }
+    expect(withDeciders).toBeGreaterThan(0); // boardgame at least
+    expect(viaHook).toBeGreaterThan(0); // and the hook is what boardgame relies on: its Armageddon names no winner
+    // The rule has teeth (it can say no): a module with a decider type whose payload names no winner and no hook fails it, and
+    // either remedy passes it.
+    const noWinner = { deciderTypes: ["x.decide"], eventSchemas: { "x.decide": z.strictObject({ black: z.string() }) } };
+    expect(carriesItsWinner(noWinner)).toBe(false);
+    expect(carriesItsWinner({ ...noWinner, eventSchemas: { "x.decide": z.strictObject({ winner: z.string().optional() }) } })).toBe(false); // optional is not "names"
+    expect(carriesItsWinner({ ...noWinner, eventSchemas: { "x.decide": z.strictObject({ winner: z.string() }) } })).toBe(true);
+    expect(carriesItsWinner({ ...noWinner, deciderWinner: () => undefined })).toBe(true);
+    expect(carriesItsWinner({ deciderTypes: [] })).toBe(true); // empty case: a module with no decider type has nothing to read
   });
 });
 
@@ -611,6 +647,20 @@ describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine hal
   });
   it("an Armageddon without black is refused TIEBREAK_COLOUR_REQUIRED", () => {
     expect(codeOf(() => fold(koWith(["armageddon"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", result: "draw" })]))).toBe("TIEBREAK_COLOUR_REQUIRED");
+  });
+  it("M1: a black that is null, empty or not a string is MISSING, not an invalid payload: the scorer is told to record who had Black", () => {
+    // An API client that clears the field sends null or "" rather than omitting it; a number or a boolean is no entrant id.
+    let checked = 0;
+    for (const black of [null, "", 7, false, {}, []]) {
+      const refused = errOf(() => fold(koWith(["armageddon"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", black, result: "draw" })]));
+      expect(refused.code, JSON.stringify(black)).toBe("TIEBREAK_COLOUR_REQUIRED");
+      checked++;
+    }
+    expect(checked).toBe(6);
+    // The positive pair: a real entrant id is accepted, and a stranger (a non-empty string no one owns) is still the
+    // schema's / fold's refusal, not "missing".
+    expect(fold(koWith(["armageddon"]), [...drawn, arm(3, A, "draw")]).outcome).toMatchObject({ winner: A });
+    expect(errOf(() => fold(koWith(["armageddon"]), [...drawn, arm(3, "nobody", "draw")])).code).not.toBe("TIEBREAK_COLOUR_REQUIRED");
   });
   it("the two named refusals say what they are about: an unlisted rung names the rung and what the stage plays; a colourless Armageddon says Black", () => {
     // Through the module's own apply (the kernel wraps the fold's refusal with the event's id), from the state a drawn game leaves.
