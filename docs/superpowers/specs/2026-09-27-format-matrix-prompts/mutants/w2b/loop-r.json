@@ -502,5 +502,20 @@
     "name": "X-WD-4 on a table"
    }
   ]
+ },
+ {
+  "id": "lr-m9-dw-serves-nothing",
+  "file": "apps/web/src/server/usecases/discipline.ts",
+  "find": " || f.outcome?.kind === \"double_walkover\")) served++;",
+  "replace": ")) served++;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/discipline.test.ts"
+    ],
+    "name": "ruling 126"
+   }
+  ]
  }
 ]

@@ -352,8 +352,11 @@ function groupByPerson<T extends { personId: string }>(cards: T[]): Map<string, 
 // Serving — matches_served is derived, stored and monotonic (SPEC-1). No lineup
 // entity exists, so a match is "served" per decided/finalized fixture of the
 // suspended entrant that elapsed after the ban's decided_at. A forfeit BY the
-// suspended entrant counts; abandoned/cancelled and forfeits by anyone else
-// never do. A fixture's elapsed time = its latest recorded event.
+// suspended entrant counts, and so does a double walkover (owner ruling 126,
+// 2026-10-13: `by: "both"` includes her — read off the stored outcome, so the
+// legacy chess `boardgame.result{double_forfeit}`, which carries no core.forfeit,
+// counts too); abandoned/cancelled and forfeits by anyone else never do. A
+// fixture's elapsed time = its latest recorded event.
 async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<ServedFlip[]> {
   const active = await tx<
     { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number }[]
@@ -363,9 +366,9 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
   if (active.length === 0) return [];
 
   const fixtures = await tx<
-    { id: string; status: string; home_entrant_id: string | null; away_entrant_id: string | null }[]
+    { id: string; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: { kind?: string } | null }[]
   >`
-    select id, status, home_entrant_id, away_entrant_id from fixtures where division_id = ${divisionId}`;
+    select id, status, home_entrant_id, away_entrant_id, outcome from fixtures where division_id = ${divisionId}`;
 
   const elapsedAt = new Map<string, Date>();
   const forfeitBy = new Map<string, string>();
@@ -387,7 +390,7 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
       const when = elapsedAt.get(f.id);
       if (!when || when <= s.decided_at) continue;
       if (f.status === "decided" || f.status === "finalized") served++;
-      else if (f.status === "forfeited" && forfeitBy.get(f.id) === s.entrant_id) served++;
+      else if (f.status === "forfeited" && (forfeitBy.get(f.id) === s.entrant_id || f.outcome?.kind === "double_walkover")) served++;
     }
     const capped = Math.min(served, s.matches_total);
     const status = capped >= s.matches_total ? "served" : "active";
