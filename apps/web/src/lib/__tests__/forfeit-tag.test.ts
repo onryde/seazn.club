@@ -316,6 +316,36 @@ describe("the abandon tags, swept over every sport's own abandon (the engine's, 
     }
     expect(sports).toBe(builtinModules.length);
   });
+
+  it("Loop R I-1: a forfeit STORED before W2b ({kind, winner, method}, no loser, no reason) over both seats reads the tag its method names, the other seat its loser; one seat, no seats, a stranger winner or a method outside the vocabulary stays untagged", () => {
+    const seats = { home_entrant_id: "h", away_entrant_id: "a" };
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      for (const [winner, loser] of [["h", "a"], ["a", "h"]] as const) {
+        // The expected answer is the TYPED award's (D2): the same forfeit, as W2b stores it.
+        const typed = forfeitTag({ kind: "award", winner, loser, reason }, NO_LEDGER);
+        expect(typed, `premise: the typed ${reason} is tagged`).not.toBeNull();
+        expect(forfeitTag({ kind: "award", winner, method: reason }, NO_LEDGER, seats), `${reason}, ${winner} won`).toEqual(typed);
+        checked++;
+      }
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length * 2);
+    // The production row's shape (badminton: the set kernel stored no score) and the staging one's (football: with it).
+    const badminton = forfeitTag({ kind: "award", winner: "h", method: "walkover" }, NO_LEDGER, seats)!;
+    const football = forfeitTag({ kind: "award", winner: "a", score: { home: 0, away: 3 }, method: "walkover" }, NO_LEDGER, seats)!;
+    expect([en(badminton.tagKey), badminton.params], "X-RS-2: w/o, naming the side that did not show").toEqual(["w/o", { winner: "h", loser: "a" }]);
+    expect([en(football.tagKey), football.params]).toEqual(["w/o", { winner: "a", loser: "h" }]);
+    // The negative pairs, each against a reading that WOULD tag: a one-seat award with no reason is a bye…
+    const legacy = { kind: "award", winner: "h", method: "walkover" };
+    expect(forfeitTag(legacy, NO_LEDGER, { home_entrant_id: "h", away_entrant_id: null }), "one seat: a bye").toBeNull();
+    expect(forfeitTag(legacy, NO_LEDGER), "no seats handed over: no loser to name").toBeNull();
+    expect(forfeitTag({ ...legacy, winner: "x" }, NO_LEDGER, seats), "a winner who holds neither seat").toBeNull();
+    expect(forfeitTag(legacy, NO_LEDGER, { home_entrant_id: "h", away_entrant_id: "h" }), "a fixture facing itself: the winner is never its own loser").toBeNull();
+    expect(forfeitTag(legacy, NO_LEDGER, { home_entrant_id: null, away_entrant_id: "h" }), "one seat, the other way round").toBeNull();
+    expect(forfeitTag({ kind: "award", winner: "h", method: "no-show" }, NO_LEDGER, seats), "a method the vocabulary never had").toBeNull();
+    expect(forfeitTag({ kind: "award", winner: "h", method: "bye" }, NO_LEDGER, seats), "a bye is no forfeit").toBeNull();
+    expect(forfeitTag({ kind: "award", winner: "h" }, NO_LEDGER, seats), "the pre-W2b bye writers' shape").toBeNull();
+  });
 });
 
 describe("every tag and sentence key, in all four locales", () => {

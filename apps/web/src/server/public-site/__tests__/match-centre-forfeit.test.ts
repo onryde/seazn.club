@@ -70,7 +70,7 @@ function centre(s: Scene, over: Partial<MatchCentreInput> = {}) {
     resolveMsg: (msg) => t(EN, msg.key, msg.params),
     ...over,
   };
-  return { doc: buildMatchCentre(input), l, outcome, state: f.state };
+  return { doc: buildMatchCentre(input), l, outcome, state: f.state, input };
 }
 
 const GENERIC = mod("generic");
@@ -138,6 +138,16 @@ describe("match centre — a forfeit says which forfeit, naming the side (X-RS-2
     expect(credit.perSide[0].gf, "premise: the credit is not 0–0").toBeGreaterThan(0);
     expect(FOOTBALL.summary(state as never).perSide.map((p) => p.line)).toEqual(doc.header.scoreLines);
     expect(words(doc.header.statusLine)).toBe("Harbour United didn't turn up — walkover");
+  });
+
+  // Loop R I-1: the row a walkover left before W2b holds `{kind: "award", winner, method: "walkover"}` (no loser, no
+  // reason) and the stored summary; the header names the loser from the fixture's seats, as for the typed walkover.
+  it("Loop R I-1: a walkover STORED before W2b reads the walkover's sentence, naming the side from the seats", () => {
+    const { doc, input } = centre({ m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: forfeit("walkover") });
+    const legacy = { kind: "award", winner: input.fixture.home_entrant_id, method: "walkover" };
+    const read = buildMatchCentre({ ...input, fixture: { ...input.fixture, outcome: legacy as PublicFixture["outcome"] } });
+    expect(read.header.statusLine).toEqual(doc.header.statusLine);
+    expect(words(read.header.statusLine)).toBe("Harbour United didn't turn up — walkover");
   });
 });
 

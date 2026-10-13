@@ -179,7 +179,7 @@ export function hubForfeit(
     resultSentence: () => string | null;
   },
 ): ForfeitWords | null {
-  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));
+  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
   if (tag === null) return null;
   const nameOf = (id: string) => ctx.names[id] ?? "?";
   const nextWinner =

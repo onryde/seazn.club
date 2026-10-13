@@ -1,950 +1,950 @@
 [
-  {
-    "id": "tag-withdrew-ret",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "  withdrew: \"forfeit.tag.walkover\",",
-    "replace": "  withdrew: \"forfeit.tag.retired\",",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "X-RS-2: walkover, withdrew"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "X-RS-2: every reason, its tag"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "each forfeit reason carries its tag"
-      }
-    ]
-  },
-  {
-    "id": "tag-dw-null",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "    return kind === \"double_walkover\" ? tagOf(kind, {}) : null;",
-    "replace": "    return null;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "X-DW-1: a double walkover"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "X-DW-1"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "X-DW-1: the next-round clause"
-      }
-    ]
-  },
-  {
-    "id": "abandon-tag-from-status",
-    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})\n                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n                    or (${f}.outcome is null and ${f}.status = 'abandoned') then (",
-    "replace": "  return tx`(case when ${f}.status = 'abandoned' then (",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
-        ],
-        "name": "a DLS abandon is stored decided"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
-        ],
-        "name": "every outcome kind an abandon can leave"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/competition-hub-db.test.ts"
-        ],
-        "name": "W2b Task 13"
-      }
-    ]
-  },
-  {
-    "id": "abandon-tag-ignores-ledger",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "  if (ledger.abandon === null) return null;\n",
-    "replace": "  if (ledger.abandon === null) ledger = { abandon: { reason: \"\" } };\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "X-AB-2: the abandon tag reads the LEDGER"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "X-AB-2: the ledger, not the status"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "X-AB-2: an abandon's words read the ledger column"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
-        ],
-        "name": "a decided DLS row carries the abandon tag only"
-      }
-    ]
-  },
-  {
-    "id": "qualification-played",
-    "file": "apps/web/src/server/public-site/qualification-view.ts",
-    "find": "    credit = module_.forfeitCredit(parsed.data, module_.init(parsed.data, NO_ONE), \"walkover\", \"away\");",
-    "replace": "    credit = { perSide: [{ gf: 0, ga: 0 }, { gf: 0, ga: 0 }], excluded: [] } as unknown as ForfeitCredit; // the played 0-0 ledger",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/qualification-view.test.ts"
-        ],
-        "name": "X-WO-1: the qualification view"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/qualification-view.test.ts"
-        ],
-        "name": "divisionAwardAddsToLedger: exactly the modules"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/qualification-view.test.ts"
-        ],
-        "name": "credits its sets"
-      }
-    ]
-  },
-  {
-    "id": "qualification-refusal-adds",
-    "file": "apps/web/src/server/public-site/qualification-view.ts",
-    "find": "  } catch {\n    return false;\n  }\n  const excluded = new Set(credit.excluded);",
-    "replace": "  } catch {\n    return true;\n  }\n  const excluded = new Set(credit.excluded);",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/qualification-view.test.ts"
-        ],
-        "name": "divisionAwardAddsToLedger: exactly the modules"
-      }
-    ]
-  },
-  {
-    "id": "dw-next-ignores-feeds",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "  if (!feeds || next == null",
-    "replace": "  if (next == null",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "X-DW-1"
-      }
-    ]
-  },
-  {
-    "id": "hub-dw-next-ignores-feeds",
-    "file": "apps/web/src/server/public-site/competition-hub.ts",
-    "find": "          feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),",
-    "replace": "          true,",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "X-DW-1: the next-round clause"
-      }
-    ]
-  },
-  {
-    "id": "forfeit-without-loser-tagged",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "    if (ids.loser === undefined) return null;\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "a bye keeps today"
-      }
-    ]
-  },
-  {
-    "id": "abandon-settle-tagged",
-    "file": "apps/web/src/lib/forfeit-tag.ts",
-    "find": "  if (typeof o.method !== \"string\" || !ABANDON_METHODS.has(o.method)) return null;\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/forfeit-tag.test.ts"
-        ],
-        "name": "an abandon decided another way"
-      }
-    ]
-  },
-  {
-    "id": "mc-live-tagged",
-    "file": "apps/web/src/server/public-site/match-centre.ts",
-    "find": "  const tag = status === \"scheduled\" || status === \"in_play\" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
-    "replace": "  const tag = forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "the sentence is a finished match"
-      }
-    ]
-  },
-  {
-    "id": "knockout-retired-unplayed",
-    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\"]);",
-    "replace": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\", \"retired\"]);",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/knockout-tab.test.tsx"
-        ],
-        "name": "a RETIREMENT or a disqualification was played"
-      }
-    ]
-  },
-  {
-    "id": "chip-name-is-tag",
-    "file": "apps/web/src/components/public-site/forfeit-tag-chip.tsx",
-    "find": "      aria-label={sentence}",
-    "replace": "      aria-label={tag}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "the tag is shown, its accessible name"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "the forfeit tile shows the credited score"
-      }
-    ]
-  },
-  {
-    "id": "run-sheet-no-ledger",
-    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
-    "find": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason))",
-    "replace": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(null))",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
-        ],
-        "name": "a decided DLS row carries the abandon tag only"
-      }
-    ]
-  },
-  {
-    "id": "loader-dict-always",
-    "file": "apps/web/src/server/public-site/match-centre-load.ts",
-    "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
-    "replace": "  const publicDict = true ? await getDictionary",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-load-feeder-read.test.ts"
-        ],
-        "name": "a fixture whose two entrants are set"
-      }
-    ]
-  },
-  {
-    "id": "loader-dict-never",
-    "file": "apps/web/src/server/public-site/match-centre-load.ts",
-    "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
-    "replace": "  const publicDict = false ? await getDictionary",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
-        ],
-        "name": "X-AB-2"
-      }
-    ]
-  },
-  {
-    "id": "loader-dw-next-skipped",
-    "file": "apps/web/src/server/public-site/match-centre-load.ts",
-    "find": "    (fixture.outcome as { kind?: string } | null)?.kind === \"double_walkover\"\n",
-    "replace": "    false\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
-        ],
-        "name": "X-DW-1"
-      }
-    ]
-  },
-  {
-    "id": "c1-setbased-summary-played-sets",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "const sets = displayedSets(state);",
-    "replace": "const sets = state.setsWon;",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "either seat at fault: the summary is the credit"
-      },
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "the summary is the credit, and the retiree never leads"
-      }
-    ]
-  },
-  {
-    "id": "c1-setbased-summary-seat-swap",
-    "file": "packages/engine/src/sports/setbased/kernel.ts",
-    "find": "home: credit.perSide[0].sets_won ?? state.setsWon.home",
-    "replace": "home: credit.perSide[1].sets_won ?? state.setsWon.home",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "either seat at fault: the summary is the credit"
-      }
-    ]
-  },
-  {
-    "id": "c1-nested-summary-played-sets",
-    "file": "packages/engine/src/sports/nested/kernel.ts",
-    "find": "const sets = displayedSets(state);",
-    "replace": "const sets = state.setsWon;",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "either seat at fault: the summary is the credit"
-      },
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "the summary is the credit, and the retiree never leads"
-      }
-    ]
-  },
-  {
-    "id": "c1-carrom-summary-played-games",
-    "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "const won = displayedGames(state);",
-    "replace": "const won = state.gamesWon;",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "either seat at fault: the summary is the credit"
-      },
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "src/sport/forfeit-credit.test.ts"
-        ],
-        "name": "the summary is the credit, and the retiree never leads"
-      }
-    ]
-  },
-  {
-    "id": "c3-every-unstarted-status-will-start",
-    "file": "apps/web/src/components/public-site/live-score.tsx",
-    "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
-    "replace": "const willStart = !inPlay;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/live-score.test.tsx"
-        ],
-        "name": "forfeited: noDetail, and no other empty-state sentence"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/live-score.test.tsx"
-        ],
-        "name": "needs_decision: noDetail, and no other empty-state sentence"
-      }
-    ]
-  },
-  {
-    "id": "c3-postponed-dropped",
-    "file": "apps/web/src/components/public-site/live-score.tsx",
-    "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
-    "replace": "const willStart = data.status === \"scheduled\";",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/live-score.test.tsx"
-        ],
-        "name": "postponed: beforeStart, and no other empty-state sentence"
-      }
-    ]
-  },
-  {
-    "id": "i1-draw-chip-first-row",
-    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
-    "replace": "{match.forfeit && i === 0 ? (",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/knockout-tab.test.tsx"
-        ],
-        "name": "a walkover: the tag is on the WINNER's row"
-      }
-    ]
-  },
-  {
-    "id": "i1-draw-chip-both-rows",
-    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
-    "replace": "{match.forfeit ? (",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/knockout-tab.test.tsx"
-        ],
-        "name": "a double walkover \\(nobody won\\): the tag is on the first row, once"
-      }
-    ]
-  },
-  {
-    "id": "i1-draw-node-undescribed",
-    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "aria-describedby={match.forfeit ? `mh-knockout-forfeit-${match.fixtureId}` : undefined}",
-    "replace": "aria-describedby={undefined}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/knockout-tab.test.tsx"
-        ],
-        "name": "a walkover: the tag is on the WINNER's row"
-      }
-    ]
-  },
-  {
-    "id": "i2-schedule-forfeited-not-ended",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "|| f.status === \"needs_decision\" || f.status === \"forfeited\";",
-    "replace": "|| f.status === \"needs_decision\";",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "every forfeit reason, either seat winning"
-      }
-    ]
-  },
-  {
-    "id": "i2-schedule-dw-shows-lines",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "const doubleWalkover = forfeit?.kind === \"double_walkover\";",
-    "replace": "const doubleWalkover = false;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "a double walkover reads Ended and its 2× w/o tag"
-      }
-    ]
-  },
-  {
-    "id": "i2-schedule-chip-first-row",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "(winner === null ? first : id === winner)",
-    "replace": "(first)",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "every forfeit reason, either seat winning"
-      }
-    ]
-  },
-  {
-    "id": "i2-schedule-no-words",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "forfeit={forfeitWords.get(f.id)}",
-    "replace": "forfeit={undefined}",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "every forfeit reason, either seat winning"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
-        ],
-        "name": "the walked-over semi reads its Spanish sentence"
-      }
-    ]
-  },
-  {
-    "id": "i2-matrix-dw-headline",
-    "file": "apps/web/src/components/public-site/results-matrix.tsx",
-    "find": "words.kind !== \"double_walkover\" && f.summary?.headline",
-    "replace": "f.summary?.headline",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "a double walkover's cell: the 2× w/o tag, never an unplayed 0 — 0"
-      }
-    ]
-  },
-  {
-    "id": "i2-matrix-no-words",
-    "file": "apps/web/src/components/public-site/results-matrix.tsx",
-    "find": "const words = DONE.has(f.status) ? forfeitOf(f) : null;",
-    "replace": "const words = null as ReturnType<typeof forfeitOf>;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "a walkover's cell: the credited headline and the w/o tag"
-      }
-    ]
-  },
-  {
-    "id": "i2-embed-no-forfeit-copy",
-    "file": "apps/web/src/app/embed/divisions/[id]/[widget]/page.tsx",
-    "find": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };",
-    "replace": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup) };",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
-        ],
-        "name": "the walked-over semi reads its Spanish sentence"
-      }
-    ]
-  },
-  {
-    "id": "m1-redis-fixture-key-v2",
-    "file": "apps/web/src/server/public-site/fixture-doc-cache-key.ts",
-    "find": "return `pub:v1:fixture:v3:${fixtureId}`;",
-    "replace": "return `pub:v1:fixture:v2:${fixtureId}`;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
-        ],
-        "name": "publicFixture reads Redis under pub:v1:fixture:v3"
-      }
-    ]
-  },
-  {
-    "id": "m1-next-fixture-key-v3",
-    "file": "apps/web/src/server/public-site/data.ts",
-    "find": "[\"pub-fixture-v4\", fixtureId],",
-    "replace": "[\"pub-fixture-v3\", fixtureId],",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
-        ],
-        "name": "getPublicFixture caches the page's document under \\[pub-fixture-v4, id\\]"
-      }
-    ]
-  },
-  {
-    "id": "m2-centre-held-never",
-    "file": "apps/web/src/server/public-site/match-centre.ts",
-    "find": "const held = fixture.status === \"abandoned\";",
-    "replace": "const held = false;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "M-2: a HELD washout"
-      }
-    ]
-  },
-  {
-    "id": "m2-centre-held-always",
-    "file": "apps/web/src/server/public-site/match-centre.ts",
-    "find": "const held = fixture.status === \"abandoned\";",
-    "replace": "const held = true;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "a washout: \"Abandoned \\(rain\\) — No result"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "X-AB-2: \"Abandoned \\(rain\\) — Eagles won by N runs"
-      }
-    ]
-  },
-  {
-    "id": "m2-hub-held-ignored",
-    "file": "apps/web/src/server/public-site/competition-hub.ts",
-    "find": "result: tag.kind.startsWith(\"abandoned\") && f.status !== \"abandoned\" ? ctx.resultSentence() : null,",
-    "replace": "result: tag.kind.startsWith(\"abandoned\") ? ctx.resultSentence() : null,",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
-        ],
-        "name": "M-2: a HELD abandon"
-      }
-    ]
-  },
-  {
-    "id": "m3-every-win-probed",
-    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "(${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})",
-    "replace": "(${f}.outcome ->> 'kind' = 'win')",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
-        ],
-        "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
-      }
-    ]
-  },
-  {
-    "id": "m3-level-kinds-dropped",
-    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
-    "find": "or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n",
-    "replace": "or false\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
-        ],
-        "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
-        ],
-        "name": "every outcome kind an abandon can leave reads it"
-      }
-    ]
-  },
-  {
-    "id": "m4-page-sentence-ignored",
-    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
-    "find": "if (line !== null && (FORFEIT_SENTENCE_KEYS as readonly string[]).includes(line.key)) {",
-    "replace": "if (false) {",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
-        ],
-        "name": "a walkover: the description and the title carry the sentence"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
-        ],
-        "name": "a double walkover says so — and never prints"
-      }
-    ]
-  },
-  {
-    "id": "m4-page-forfeited-not-a-result",
-    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
-    "find": "new Set([\"decided\", \"finalized\", \"forfeited\"])",
-    "replace": "new Set([\"decided\", \"finalized\"])",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
-        ],
-        "name": "a walkover's share text is a result's"
-      }
-    ]
-  },
-  {
-    "id": "m4-page-dw-prints-score",
-    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
-    "find": "  return outcomeCreditsNobody(fixture.outcome);",
-    "replace": "  return false;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
-        ],
-        "name": "a double walkover says so — and never prints"
-      }
-    ]
-  },
-  {
-    "id": "m4-overlay-model-no-tag",
-    "file": "apps/web/src/lib/overlay-model.ts",
-    "find": "forfeitTag(data.outcome, NO_LEDGER);",
-    "replace": "null;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/overlay-model.test.ts"
-        ],
-        "name": "every forfeit reason, the AWAY side at fault"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/overlay-model.test.ts"
-        ],
-        "name": "a double walkover says so \\(it said nothing\\)"
-      }
-    ]
-  },
-  {
-    "id": "m4-overlay-model-short-uses-full-names",
-    "file": "apps/web/src/lib/overlay-model.ts",
-    "find": "forfeitLine({ [sides[0].id]: codes[0], [sides[1].id]: codes[1] }) ??",
-    "replace": "forfeitLine({ [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name }) ??",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/overlay-model.test.ts"
-        ],
-        "name": "every forfeit reason, the AWAY side at fault"
-      }
-    ]
-  },
-  {
-    "id": "m4-overlay-stage-no-copy",
-    "file": "apps/web/src/components/overlay/overlay-stage.tsx",
-    "find": "    forfeitCopy: forfeitCopyOf((key) => props.dict[key] ?? key),\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
-        ],
-        "name": "a walkover: the sentence naming the side that did not show"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
-        ],
-        "name": "a double walkover says so"
-      }
-    ]
-  },
-  {
-    "id": "m5-centre-score-lines-swapped",
-    "file": "apps/web/src/server/public-site/match-centre.ts",
-    "find": "    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,",
-    "replace": "    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
-        ],
-        "name": "every builtin sport: the header shows the engine's credited lines"
-      }
-    ]
-  },
-  {
-    "id": "m5-whatif-ignores-credit",
-    "file": "apps/web/src/server/public-site/qualification-view.ts",
-    "find": "  return isOneSidedAwardBye(f) || !awardAddsToLedger;",
-    "replace": "  return isOneSidedAwardBye(f) || awardAddsToLedger;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/public-site/__tests__/qualification-view.test.ts"
-        ],
-        "name": "X-WO-1 \\(review M-5\\): every sport whose walkover credits GOALS"
-      }
-    ]
-  },
-  {
-    "id": "b-banner-chip-dropped",
-    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-    "find": "            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
-    "replace": "            {false ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/public-site/__tests__/knockout-tab.test.tsx"
-        ],
-        "name": "a final won on a retirement or a disqualification"
-      }
-    ]
-  },
-  {
-    "id": "cg-client-schedule-imports-bracket",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
-    "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"./bracket\";\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
-        ],
-        "name": "every client root's value-import graph stays clear of the barrel"
-      }
-    ]
-  },
-  {
-    "id": "n1-preview-dict-drops-forfeit-copy",
-    "file": "apps/web/src/lib/overlay-dict.ts",
-    "find": "k.startsWith(\"overlay.\") || FORFEIT_COPY_KEYS.has(k)",
-    "replace": "k.startsWith(\"overlay.\")",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
-        ],
-        "name": "every key the forfeit copy reads survives the slice"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
-        ],
-        "name": "a walkover and a double walkover read their sentences on air"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/__tests__/stream-panel-context.test.ts"
-        ],
-        "name": "no panel \\(overlay switched off\\)"
-      }
-    ]
-  },
-  {
-    "id": "n2-client-imports-placement-client-subpath",
-    "file": "apps/web/src/components/public-site/schedule.tsx",
-    "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
-    "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"@seazn/engine/scheduling/placement-client\";\n",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
-        ],
-        "name": "every client root's value-import graph stays clear of the barrel"
-      }
-    ]
-  }
+ {
+  "id": "tag-withdrew-ret",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  withdrew: \"forfeit.tag.walkover\",",
+  "replace": "  withdrew: \"forfeit.tag.retired\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "X-RS-2: walkover, withdrew"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "X-RS-2: every reason, its tag"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "each forfeit reason carries its tag"
+   }
+  ]
+ },
+ {
+  "id": "tag-dw-null",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "    return kind === \"double_walkover\" ? tagOf(kind, {}) : null;",
+  "replace": "    return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "X-DW-1: a double walkover"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "X-DW-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "X-DW-1: the next-round clause"
+   }
+  ]
+ },
+ {
+  "id": "abandon-tag-from-status",
+  "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+  "find": "  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})\n                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n                    or (${f}.outcome is null and ${f}.status = 'abandoned') then (",
+  "replace": "  return tx`(case when ${f}.status = 'abandoned' then (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+    ],
+    "name": "a DLS abandon is stored decided"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+    ],
+    "name": "every outcome kind an abandon can leave"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/competition-hub-db.test.ts"
+    ],
+    "name": "W2b Task 13"
+   }
+  ]
+ },
+ {
+  "id": "abandon-tag-ignores-ledger",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  if (ledger.abandon === null) return null;\n",
+  "replace": "  if (ledger.abandon === null) ledger = { abandon: { reason: \"\" } };\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "X-AB-2: the abandon tag reads the LEDGER"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "X-AB-2: the ledger, not the status"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "X-AB-2: an abandon's words read the ledger column"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "a decided DLS row carries the abandon tag only"
+   }
+  ]
+ },
+ {
+  "id": "qualification-played",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "    credit = module_.forfeitCredit(parsed.data, module_.init(parsed.data, NO_ONE), \"walkover\", \"away\");",
+  "replace": "    credit = { perSide: [{ gf: 0, ga: 0 }, { gf: 0, ga: 0 }], excluded: [] } as unknown as ForfeitCredit; // the played 0-0 ledger",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "X-WO-1: the qualification view"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "divisionAwardAddsToLedger: exactly the modules"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "credits its sets"
+   }
+  ]
+ },
+ {
+  "id": "qualification-refusal-adds",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "  } catch {\n    return false;\n  }\n  const excluded = new Set(credit.excluded);",
+  "replace": "  } catch {\n    return true;\n  }\n  const excluded = new Set(credit.excluded);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "divisionAwardAddsToLedger: exactly the modules"
+   }
+  ]
+ },
+ {
+  "id": "dw-next-ignores-feeds",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  if (!feeds || next == null",
+  "replace": "  if (next == null",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "X-DW-1"
+   }
+  ]
+ },
+ {
+  "id": "hub-dw-next-ignores-feeds",
+  "file": "apps/web/src/server/public-site/competition-hub.ts",
+  "find": "          feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),",
+  "replace": "          true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "X-DW-1: the next-round clause"
+   }
+  ]
+ },
+ {
+  "id": "forfeit-without-loser-tagged",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "    if (ids.loser === undefined) return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "a bye keeps today"
+   }
+  ]
+ },
+ {
+  "id": "abandon-settle-tagged",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  if (typeof o.method !== \"string\" || !ABANDON_METHODS.has(o.method)) return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "an abandon decided another way"
+   }
+  ]
+ },
+ {
+  "id": "mc-live-tagged",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "  const tag = status === \"scheduled\" || status === \"in_play\" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);",
+  "replace": "  const tag = forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "the sentence is a finished match"
+   }
+  ]
+ },
+ {
+  "id": "knockout-retired-unplayed",
+  "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+  "find": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\"]);",
+  "replace": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\", \"retired\"]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/knockout-tab.test.tsx"
+    ],
+    "name": "a RETIREMENT or a disqualification was played"
+   }
+  ]
+ },
+ {
+  "id": "chip-name-is-tag",
+  "file": "apps/web/src/components/public-site/forfeit-tag-chip.tsx",
+  "find": "      aria-label={sentence}",
+  "replace": "      aria-label={tag}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "the tag is shown, its accessible name"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "the forfeit tile shows the credited score"
+   }
+  ]
+ },
+ {
+  "id": "run-sheet-no-ledger",
+  "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+  "find": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture)",
+  "replace": "outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(null), fixture)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "a decided DLS row carries the abandon tag only"
+   }
+  ]
+ },
+ {
+  "id": "loader-dict-always",
+  "file": "apps/web/src/server/public-site/match-centre-load.ts",
+  "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
+  "replace": "  const publicDict = true ? await getDictionary",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-load-feeder-read.test.ts"
+    ],
+    "name": "a fixture whose two entrants are set"
+   }
+  ]
+ },
+ {
+  "id": "loader-dict-never",
+  "file": "apps/web/src/server/public-site/match-centre-load.ts",
+  "find": "  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary",
+  "replace": "  const publicDict = false ? await getDictionary",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
+    ],
+    "name": "X-AB-2"
+   }
+  ]
+ },
+ {
+  "id": "loader-dw-next-skipped",
+  "file": "apps/web/src/server/public-site/match-centre-load.ts",
+  "find": "    (fixture.outcome as { kind?: string } | null)?.kind === \"double_walkover\"\n",
+  "replace": "    false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts"
+    ],
+    "name": "X-DW-1"
+   }
+  ]
+ },
+ {
+  "id": "c1-setbased-summary-played-sets",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "const sets = displayedSets(state);",
+  "replace": "const sets = state.setsWon;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "either seat at fault: the summary is the credit"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the summary is the credit, and the retiree never leads"
+   }
+  ]
+ },
+ {
+  "id": "c1-setbased-summary-seat-swap",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "home: credit.perSide[0].sets_won ?? state.setsWon.home",
+  "replace": "home: credit.perSide[1].sets_won ?? state.setsWon.home",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "either seat at fault: the summary is the credit"
+   }
+  ]
+ },
+ {
+  "id": "c1-nested-summary-played-sets",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "const sets = displayedSets(state);",
+  "replace": "const sets = state.setsWon;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "either seat at fault: the summary is the credit"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the summary is the credit, and the retiree never leads"
+   }
+  ]
+ },
+ {
+  "id": "c1-carrom-summary-played-games",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "const won = displayedGames(state);",
+  "replace": "const won = state.gamesWon;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "either seat at fault: the summary is the credit"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the summary is the credit, and the retiree never leads"
+   }
+  ]
+ },
+ {
+  "id": "c3-every-unstarted-status-will-start",
+  "file": "apps/web/src/components/public-site/live-score.tsx",
+  "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
+  "replace": "const willStart = !inPlay;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/live-score.test.tsx"
+    ],
+    "name": "forfeited: noDetail, and no other empty-state sentence"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/live-score.test.tsx"
+    ],
+    "name": "needs_decision: noDetail, and no other empty-state sentence"
+   }
+  ]
+ },
+ {
+  "id": "c3-postponed-dropped",
+  "file": "apps/web/src/components/public-site/live-score.tsx",
+  "find": "const willStart = data.status === \"scheduled\" || data.status === \"postponed\";",
+  "replace": "const willStart = data.status === \"scheduled\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/live-score.test.tsx"
+    ],
+    "name": "postponed: beforeStart, and no other empty-state sentence"
+   }
+  ]
+ },
+ {
+  "id": "i1-draw-chip-first-row",
+  "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+  "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
+  "replace": "{match.forfeit && i === 0 ? (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/knockout-tab.test.tsx"
+    ],
+    "name": "a walkover: the tag is on the WINNER's row"
+   }
+  ]
+ },
+ {
+  "id": "i1-draw-chip-both-rows",
+  "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+  "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
+  "replace": "{match.forfeit ? (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/knockout-tab.test.tsx"
+    ],
+    "name": "a double walkover \\(nobody won\\): the tag is on the first row, once"
+   }
+  ]
+ },
+ {
+  "id": "i1-draw-node-undescribed",
+  "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+  "find": "aria-describedby={match.forfeit ? `mh-knockout-forfeit-${match.fixtureId}` : undefined}",
+  "replace": "aria-describedby={undefined}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/knockout-tab.test.tsx"
+    ],
+    "name": "a walkover: the tag is on the WINNER's row"
+   }
+  ]
+ },
+ {
+  "id": "i2-schedule-forfeited-not-ended",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "|| f.status === \"needs_decision\" || f.status === \"forfeited\";",
+  "replace": "|| f.status === \"needs_decision\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "every forfeit reason, either seat winning"
+   }
+  ]
+ },
+ {
+  "id": "i2-schedule-dw-shows-lines",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "const doubleWalkover = forfeit?.kind === \"double_walkover\";",
+  "replace": "const doubleWalkover = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "a double walkover reads Ended and its 2× w/o tag"
+   }
+  ]
+ },
+ {
+  "id": "i2-schedule-chip-first-row",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "(winner === null ? first : id === winner)",
+  "replace": "(first)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "every forfeit reason, either seat winning"
+   }
+  ]
+ },
+ {
+  "id": "i2-schedule-no-words",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "forfeit={forfeitWords.get(f.id)}",
+  "replace": "forfeit={undefined}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "every forfeit reason, either seat winning"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
+    ],
+    "name": "the walked-over semi reads its Spanish sentence"
+   }
+  ]
+ },
+ {
+  "id": "i2-matrix-dw-headline",
+  "file": "apps/web/src/components/public-site/results-matrix.tsx",
+  "find": "words.kind !== \"double_walkover\" && f.summary?.headline",
+  "replace": "f.summary?.headline",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "a double walkover's cell: the 2× w/o tag, never an unplayed 0 — 0"
+   }
+  ]
+ },
+ {
+  "id": "i2-matrix-no-words",
+  "file": "apps/web/src/components/public-site/results-matrix.tsx",
+  "find": "const words = DONE.has(f.status) ? forfeitOf(f) : null;",
+  "replace": "const words = null as ReturnType<typeof forfeitOf>;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "a walkover's cell: the credited headline and the w/o tag"
+   }
+  ]
+ },
+ {
+  "id": "i2-embed-no-forfeit-copy",
+  "file": "apps/web/src/app/embed/divisions/[id]/[widget]/page.tsx",
+  "find": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup), forfeit: forfeitCopyOf((k) => t(dict, k)) };",
+  "replace": "const scheduleCopy = { ...publicScheduleCopy(dict, lookup) };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/embed/divisions/[id]/[widget]/__tests__/page-schedule-copy.test.ts"
+    ],
+    "name": "the walked-over semi reads its Spanish sentence"
+   }
+  ]
+ },
+ {
+  "id": "m1-redis-fixture-key-v2",
+  "file": "apps/web/src/server/public-site/fixture-doc-cache-key.ts",
+  "find": "return `pub:v1:fixture:v3:${fixtureId}`;",
+  "replace": "return `pub:v1:fixture:v2:${fixtureId}`;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
+    ],
+    "name": "publicFixture reads Redis under pub:v1:fixture:v3"
+   }
+  ]
+ },
+ {
+  "id": "m1-next-fixture-key-v3",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "[\"pub-fixture-v4\", fixtureId],",
+  "replace": "[\"pub-fixture-v3\", fixtureId],",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts"
+    ],
+    "name": "getPublicFixture caches the page's document under \\[pub-fixture-v4, id\\]"
+   }
+  ]
+ },
+ {
+  "id": "m2-centre-held-never",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "const held = fixture.status === \"abandoned\";",
+  "replace": "const held = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "M-2: a HELD washout"
+   }
+  ]
+ },
+ {
+  "id": "m2-centre-held-always",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "const held = fixture.status === \"abandoned\";",
+  "replace": "const held = true;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "a washout: \"Abandoned \\(rain\\) — No result"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "X-AB-2: \"Abandoned \\(rain\\) — Eagles won by N runs"
+   }
+  ]
+ },
+ {
+  "id": "m2-hub-held-ignored",
+  "file": "apps/web/src/server/public-site/competition-hub.ts",
+  "find": "result: tag.kind.startsWith(\"abandoned\") && f.status !== \"abandoned\" ? ctx.resultSentence() : null,",
+  "replace": "result: tag.kind.startsWith(\"abandoned\") ? ctx.resultSentence() : null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "M-2: a HELD abandon"
+   }
+  ]
+ },
+ {
+  "id": "m3-every-win-probed",
+  "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+  "find": "(${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})",
+  "replace": "(${f}.outcome ->> 'kind' = 'win')",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+    ],
+    "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
+   }
+  ]
+ },
+ {
+  "id": "m3-level-kinds-dropped",
+  "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+  "find": "or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}\n",
+  "replace": "or false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+    ],
+    "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+    ],
+    "name": "every outcome kind an abandon can leave reads it"
+   }
+  ]
+ },
+ {
+  "id": "m4-page-sentence-ignored",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+  "find": "if (line !== null && (FORFEIT_SENTENCE_KEYS as readonly string[]).includes(line.key)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+    ],
+    "name": "a walkover: the description and the title carry the sentence"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+    ],
+    "name": "a double walkover says so — and never prints"
+   }
+  ]
+ },
+ {
+  "id": "m4-page-forfeited-not-a-result",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+  "find": "new Set([\"decided\", \"finalized\", \"forfeited\"])",
+  "replace": "new Set([\"decided\", \"finalized\"])",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+    ],
+    "name": "a walkover's share text is a result's"
+   }
+  ]
+ },
+ {
+  "id": "m4-page-dw-prints-score",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+  "find": "  return outcomeCreditsNobody(fixture.outcome);",
+  "replace": "  return false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+    ],
+    "name": "a double walkover says so — and never prints"
+   }
+  ]
+ },
+ {
+  "id": "m4-overlay-model-no-tag",
+  "file": "apps/web/src/lib/overlay-model.ts",
+  "find": "forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });",
+  "replace": "null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/overlay-model.test.ts"
+    ],
+    "name": "every forfeit reason, the AWAY side at fault"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/overlay-model.test.ts"
+    ],
+    "name": "a double walkover says so \\(it said nothing\\)"
+   }
+  ]
+ },
+ {
+  "id": "m4-overlay-model-short-uses-full-names",
+  "file": "apps/web/src/lib/overlay-model.ts",
+  "find": "forfeitLine({ [sides[0].id]: codes[0], [sides[1].id]: codes[1] }) ??",
+  "replace": "forfeitLine({ [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name }) ??",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/overlay-model.test.ts"
+    ],
+    "name": "every forfeit reason, the AWAY side at fault"
+   }
+  ]
+ },
+ {
+  "id": "m4-overlay-stage-no-copy",
+  "file": "apps/web/src/components/overlay/overlay-stage.tsx",
+  "find": "    forfeitCopy: forfeitCopyOf((key) => props.dict[key] ?? key),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
+    ],
+    "name": "a walkover: the sentence naming the side that did not show"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/overlay/__tests__/overlay-forfeit-sentence-render.test.tsx"
+    ],
+    "name": "a double walkover says so"
+   }
+  ]
+ },
+ {
+  "id": "m5-centre-score-lines-swapped",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,",
+  "replace": "    perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,\n    perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "every builtin sport: the header shows the engine's credited lines"
+   }
+  ]
+ },
+ {
+  "id": "m5-whatif-ignores-credit",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "  return isOneSidedAwardBye(f) || !awardAddsToLedger;",
+  "replace": "  return isOneSidedAwardBye(f) || awardAddsToLedger;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "X-WO-1 \\(review M-5\\): every sport whose walkover credits GOALS"
+   }
+  ]
+ },
+ {
+  "id": "b-banner-chip-dropped",
+  "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+  "find": "            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+  "replace": "            {false ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/knockout-tab.test.tsx"
+    ],
+    "name": "a final won on a retirement or a disqualification"
+   }
+  ]
+ },
+ {
+  "id": "cg-client-schedule-imports-bracket",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
+  "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"./bracket\";\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
+    ],
+    "name": "every client root's value-import graph stays clear of the barrel"
+   }
+  ]
+ },
+ {
+  "id": "n1-preview-dict-drops-forfeit-copy",
+  "file": "apps/web/src/lib/overlay-dict.ts",
+  "find": "k.startsWith(\"overlay.\") || FORFEIT_COPY_KEYS.has(k)",
+  "replace": "k.startsWith(\"overlay.\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
+    ],
+    "name": "every key the forfeit copy reads survives the slice"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/overlay/__tests__/overlay-console-preview-dict.test.tsx"
+    ],
+    "name": "a walkover and a double walkover read their sentences on air"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/stream-panel-context.test.ts"
+    ],
+    "name": "no panel \\(overlay switched off\\)"
+   }
+  ]
+ },
+ {
+  "id": "n2-client-imports-placement-client-subpath",
+  "file": "apps/web/src/components/public-site/schedule.tsx",
+  "find": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\n",
+  "replace": "import { bracketForfeitWords } from \"@/lib/bracket-forfeit-words\";\nimport \"@seazn/engine/scheduling/placement-client\";\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/client-graph-no-server-barrel.test.ts"
+    ],
+    "name": "every client root's value-import graph stays clear of the barrel"
+   }
+  ]
+ }
 ]

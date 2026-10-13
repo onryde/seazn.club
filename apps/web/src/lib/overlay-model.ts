@@ -656,7 +656,10 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // W2b T13 review M-4 — a credited result (a forfeit, a double walkover) reads `forfeitTag`'s sentence, never the
   // result templates' "{winner} won" (and a double walkover, which they word not at all, says so). The overlay's
   // payload carries no ledger, so an abandon keeps its result sentence here (as the live score's fallback does).
-  const forfeit = input.forfeitCopy === undefined ? null : forfeitTag(data.outcome, NO_LEDGER);
+  const forfeit =
+    input.forfeitCopy === undefined
+      ? null
+      : forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });
   const forfeitLine = (names: Record<string, string>): string | null =>
     forfeit === null || input.forfeitCopy === undefined
       ? null

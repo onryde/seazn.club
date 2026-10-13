@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RunSheetRow, SCHEDULE_ERROR_FALLBACK_KEY, scheduleErrorKey } from "@/components/v2/desk/run-sheet-row";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
@@ -152,6 +153,29 @@ describe("a voided row says WHY it is struck through", () => {
     // ...and it is still routed to "Result", i.e. the fix restores the missing
     // text without disturbing the ladder Task 2 pinned.
     expect(rowAction(html)).toBe("result");
+  });
+
+  // Loop R I-1: a walkover stored before W2b (no loser, no reason; the reason in `method`) reads its w/o from the
+  // row's two seats; the same shape with one seat empty is the bye it always was.
+  it("Loop R I-1: a walkover STORED before W2b reads its w/o; a one-seat one is still the bye", () => {
+    // The bye's own copy is "{name} won (w/o)" too, so the text cannot tell them apart: the walkover's tag is the named
+    // symbol (audit 4.3), in both copies of the line, and the bye is the bye row with no symbol.
+    const legacy = { kind: "award", winner: "e1", method: "walkover" };
+    const full = msg("forfeit.tagFull.walkover" as never);
+    const symbol = `<span role="img" aria-label="${full}" title="${full}">${msg("forfeit.tag.walkover" as never)}</span>`;
+    const html = rowHtml(fx({ status: "forfeited", outcome: legacy, scheduled_at: null }));
+    expect(html.split(symbol).length - 1, "the desktop sub-line and the phone tail").toBe(2);
+    // Every reason: the legacy row renders exactly the typed one (a retirement's "ret." is not the bye's "w/o").
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      const typed = rowHtml(fx({ status: "forfeited", outcome: { kind: "award", winner: "e1", loser: "e2", reason }, scheduled_at: null }));
+      expect(rowHtml(fx({ status: "forfeited", outcome: { ...legacy, method: reason }, scheduled_at: null })), reason).toBe(typed);
+      checked++;
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length);
+    const bye = rowHtml(fx({ status: "forfeited", outcome: legacy, away_entrant_id: null, scheduled_at: null }));
+    expect(bye).toContain('data-testid="run-sheet-bye"');
+    expect(bye).not.toContain('role="img"');
   });
 
   it("a voided fixture with no recorded outcome still names its status", () => {

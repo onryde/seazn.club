@@ -143,7 +143,12 @@ export function LiveScoreBody({
   // W2b Task 13 (spec §5.5): a forfeit or a double walkover says which, naming the side, in the sentence the match
   // centre's court card says it in (`forfeitTag`, the one reader). This fallback holds no ledger, so it never shows
   // an abandon's words — those need the active `core.abandon`, which only the document's own header carries.
-  const forfeit = forfeitTag(data.outcome, NO_LEDGER);
+  // The summary's perSide is [home, away] (above): the seats a forfeit stored before W2b names its loser from.
+  const forfeit = forfeitTag(
+    data.outcome,
+    NO_LEDGER,
+    sideIds.length === 2 ? { home_entrant_id: sideIds[0]!, away_entrant_id: sideIds[1]! } : undefined,
+  );
   const forfeitLine = forfeit
     ? forfeitWords(forfeit, (key, vars) => t(activeDict, key, vars), (id) => entrantNames[id] ?? "?").sentence
     : null;

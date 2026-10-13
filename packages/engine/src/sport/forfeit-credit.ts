@@ -2,20 +2,22 @@
 // owns its RULE (what a walkover or a retirement credits, Appendix A); this file owns only how a credit is laid over a
 // side's played ledger, so eleven modules cannot each get that part slightly different.
 import { EngineError } from "../core/errors.ts";
-import type { AwardReason, ForfeitCredit, MatchOutcome } from "../core/types.ts";
+import { legacyAwardForfeitReason, type AwardReason, type ForfeitCredit, type MatchOutcome } from "../core/types.ts";
 
 export type CreditSide = "home" | "away";
 type Ledger = Readonly<Record<string, number>>;
 
-/** The reason an `award` is ranked under. A legacy award written before W2b carries no `reason` and no `loser` (the
- *  server's bye writers, C-5) — it is read as the bye it was, so its delta stays exactly the pre-W2b one.
- *  Reading every reason-less award as a bye is safe only because no forfeit was ever stored: ruling 104 (owner,
- *  2026-10-09) — zero `core.forfeit` events and zero chess forfeit results on staging or production — so the only
- *  reason-less awards in existence are the bye writers' (review M-5). Task 7 moves those writers to the typed
- *  `{loser: null, reason: "bye"}`; once it has, this fallback should tighten to refuse a reason-less award. */
+/** The reason an `award` is ranked under: its typed `reason` (D2), a bye wherever it names no loser (C-5).
+ *  An award STORED before W2b carries neither `reason` nor `loser` (Loop R I-1): it is the forfeit its `method` names
+ *  when that is a forfeit reason (`legacyAwardForfeitReason`; only a pre-W2b `core.forfeit` wrote a `method`, and a
+ *  forfeit was recorded on a seated fixture, so such a row holds both seats), and otherwise the bye it was (the server's
+ *  pre-W2b bye writers stored `{kind, winner}` alone). The old comment here read every reason-less award as a bye on the
+ *  premise that ruling 104 found no stored forfeit; ruling 112 disproved it — production and staging each hold one
+ *  pre-W2b walkover — so that reading credited them the bye's 0-0 instead of their walkover credit. */
 export function awardReasonOf(outcome: Extract<MatchOutcome, { kind: "award" }>): AwardReason {
-  const legacy = outcome as { reason?: AwardReason; loser?: string | null };
-  return legacy.reason === undefined || legacy.loser == null ? "bye" : legacy.reason;
+  const stored = outcome as { reason?: AwardReason; loser?: string | null };
+  if (stored.reason !== undefined) return stored.loser == null ? "bye" : stored.reason;
+  return legacyAwardForfeitReason(outcome) ?? "bye";
 }
 
 /** Review M-4 — the seat an award is charged to: its typed `loser` (D9), read through the module's own `sideOf`, so a

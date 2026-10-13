@@ -31,7 +31,7 @@ export function bracketForfeitWords(
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const nameOf = (id: string) => entrantNames[id] ?? "?";
   for (const f of fixtures) {
-    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
     if (tag === null) continue;
     const next =
       tag.kind === "double_walkover"

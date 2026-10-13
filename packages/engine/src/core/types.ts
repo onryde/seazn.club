@@ -140,6 +140,24 @@ export type ForfeitReason = (typeof FORFEIT_REASONS)[number];
 export const AWARD_REASONS = [...FORFEIT_REASONS, "bye"] as const;
 export type AwardReason = (typeof AWARD_REASONS)[number];
 
+/**
+ * Loop R I-1 — the forfeit reason of an award STORED before W2b, or null. The kernels before W2b stored a walkover (and
+ * every other forfeit) as `{kind: "award", winner, method: <core.forfeit's then free-text reason>}` — football and the
+ * period kernel added the awarded `score` — with no `loser` and no `reason`, and `fixtures.outcome` / `match_states`
+ * keep that shape until a refold (ruling 112 made no data migration; the one production walkover, 069dbf22, and the
+ * staging one, d26fca49, are such rows). A `method` from the closed vocabulary IS that forfeit's reason. Anything else —
+ * a typed award, the server's pre-W2b bye writers' `{kind, winner}`, a free-text method the vocabulary never had —
+ * answers null, and the caller keeps its own reading (a bye). The SEATS are the caller's to check: an award decided
+ * over a fixture's two seats (the engine's `sideOf`; the web reader's both-seats test) — a one-seat award is a bye.
+ * The one legacy reader, shared by the engine's `awardReasonOf` and the web's `forfeitTag`.
+ */
+export function legacyAwardForfeitReason(outcome: unknown): ForfeitReason | null {
+  if (typeof outcome !== "object" || outcome === null) return null;
+  const o = outcome as { kind?: unknown; reason?: unknown; loser?: unknown; method?: unknown };
+  if (o.kind !== "award" || o.reason !== undefined || o.loser !== undefined) return null;
+  return typeof o.method === "string" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;
+}
+
 // W2b (plan D2) — the outcome set, pinned by core/outcome-set.test.ts (none was pinned before W2b). `MatchOutcome`
 // below is the discriminated union over exactly these, in this order.
 export const OUTCOME_KINDS = ["win", "draw", "tie", "no_result", "award", "double_walkover"] as const;

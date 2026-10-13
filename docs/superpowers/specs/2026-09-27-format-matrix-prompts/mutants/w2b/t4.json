@@ -661,8 +661,8 @@
  {
   "id": "bye-reads-walkover",
   "file": "packages/engine/src/sport/forfeit-credit.ts",
-  "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
-  "replace": "return \"walkover\";",
+  "find": "if (stored.reason !== undefined) return stored.loser == null ? \"bye\" : stored.reason;",
+  "replace": "if (stored.reason !== undefined) return \"walkover\";",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -676,8 +676,8 @@
  {
   "id": "legacy-award-not-bye",
   "file": "packages/engine/src/sport/forfeit-credit.ts",
-  "find": "return legacy.reason === undefined || legacy.loser == null ? \"bye\" : legacy.reason;",
-  "replace": "return legacy.loser === null ? \"bye\" : (legacy.reason ?? \"walkover\");",
+  "find": "return legacyAwardForfeitReason(outcome) ?? \"bye\";",
+  "replace": "return legacyAwardForfeitReason(outcome) ?? \"walkover\";",
   "killers": [
    {
     "cwd": "packages/engine",

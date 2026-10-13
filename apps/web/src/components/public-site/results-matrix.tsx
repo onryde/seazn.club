@@ -50,7 +50,7 @@ export function ResultsMatrix({
   // feeds no next match, so a double walkover's sentence has no next-round clause here.
   const nameOf = (id: string) => entrantNames[id] ?? "?";
   const forfeitOf = (f: PublicFixture): ForfeitWords | null => {
-    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
     return tag === null ? null : forfeitWords(tag, (key, vars) => t(dict, key, vars), nameOf);
   };
   const initials = (id: string) =>

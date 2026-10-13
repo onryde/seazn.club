@@ -1,0 +1,382 @@
+[
+ {
+  "id": "lr-i1-legacy-reader-null",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  return typeof o.method === \"string\" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;\n",
+  "replace": "  return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-any-method",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  return typeof o.method === \"string\" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;\n",
+  "replace": "  return typeof o.method === \"string\" ? (o.method as ForfeitReason) : null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-kind",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-reason",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.kind !== \"award\" || o.loser !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-loser",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.kind !== \"award\" || o.reason !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-award-reason-legacy-bye",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "  return legacyAwardForfeitReason(outcome) ?? \"bye\";\n",
+  "replace": "  return \"bye\";\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-tag-legacy-null",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "      return loser === null ? null : tagOf(legacy, { winner: ids.winner!, loser });\n",
+  "replace": "      return null;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-loser-self",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  if (home === away) return null;\n  return winner === home",
+  "replace": "  return winner === home",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-loser-swapped",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  return winner === home ? away : winner === away ? home : null;\n",
+  "replace": "  return winner === home ? home : winner === away ? away : null;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-results-matrix",
+  "file": "apps/web/src/components/public-site/results-matrix.tsx",
+  "find": "forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-bracket-words",
+  "file": "apps/web/src/lib/bracket-forfeit-words.ts",
+  "find": "forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-hub-card",
+  "file": "apps/web/src/server/public-site/competition-hub.ts",
+  "find": "  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-match-centre",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);",
+  "replace": "forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-live-score",
+  "file": "apps/web/src/components/public-site/live-score.tsx",
+  "find": "    sideIds.length === 2 ? { home_entrant_id: sideIds[0]!, away_entrant_id: sideIds[1]! } : undefined,\n",
+  "replace": "    undefined,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-overlay",
+  "file": "apps/web/src/lib/overlay-model.ts",
+  "find": "forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });",
+  "replace": "forfeitTag(data.outcome, NO_LEDGER);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/overlay-model.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-run-sheet-parts",
+  "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+  "find": "entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture);",
+  "replace": "entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-run-sheet-tag",
+  "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+  "find": "outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason), fixture);",
+  "replace": "outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-tag",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "outcomeTagWords(msg, outcome, forfeitLedger, seatsOf);",
+  "replace": "outcomeTagWords(msg, outcome, forfeitLedger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-gate",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "    forfeitTag(outcome, forfeitLedger, seatsOf) !== null\n",
+  "replace": "    forfeitTag(outcome, forfeitLedger) !== null\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-text",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "outcomeText(msg, outcome, entrantNames, forfeitLedger, seatsOf)",
+  "replace": "outcomeText(msg, outcome, entrantNames, forfeitLedger)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-text",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "  const tag = forfeitTag(outcome, ledger, seats);\n  if (tag !== null) {\n    const word = msg(tag.tagKey);",
+  "replace": "  const tag = forfeitTag(outcome, ledger);\n  if (tag !== null) {\n    const word = msg(tag.tagKey);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-parts",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "[key]: NAME_MARK }, ledger, seats);",
+  "replace": "[key]: NAME_MARK }, ledger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-tag-words",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "  seats?: ForfeitSeats,\n): { word: string; full: string } | null {\n  const tag = forfeitTag(outcome, ledger, seats);",
+  "replace": "  seats?: ForfeitSeats,\n): { word: string; full: string } | null {\n  const tag = forfeitTag(outcome, ledger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ }
+]

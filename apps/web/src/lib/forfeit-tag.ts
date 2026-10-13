@@ -16,7 +16,7 @@
 //  - A bye keeps today's copy: no tag (the vocabulary is total over the engine's award reasons, and a bye maps to none).
 //
 // Client-safe (no `server-only`): the hub's islands and the live score render it in the browser.
-import type { OutcomeKind } from "@seazn/engine/core";
+import { legacyAwardForfeitReason, type OutcomeKind } from "@seazn/engine/core";
 import { forfeitCopyKind, type ForfeitCopyKind } from "./forfeit-copy-kind";
 import { interpolate } from "./i18n-runtime";
 
@@ -105,6 +105,24 @@ export const FORFEIT_SENTENCE_KEYS: readonly ForfeitSentenceKey[] = [
   ...new Set<ForfeitSentenceKey>([...Object.values(FORFEIT_SENTENCE_KEY), DOUBLE_WALKOVER_NEXT_KEY, ABANDONED_BARE_KEY]),
 ];
 
+/** A fixture's two seats, as every fixture row carries them. Handed to `forfeitTag` so an award STORED before W2b — which
+ *  names its winner and nothing else — can name its loser: the other seat (Loop R I-1). */
+export interface ForfeitSeats {
+  readonly home_entrant_id: string | null;
+  readonly away_entrant_id: string | null;
+}
+
+/** The loser of an award stored before W2b: the seat facing its winner, when the fixture holds both and the winner is
+ *  one of them. Anything else (one seat — a bye; no seats handed over; a winner in neither) has no loser to name. */
+function legacyLoser(winner: string | undefined, seats: ForfeitSeats | undefined): string | null {
+  if (seats === undefined) return null;
+  const { home_entrant_id: home, away_entrant_id: away } = seats;
+  // No schema check keeps a fixture from facing itself: the winner is never named its own loser. An empty seat answers
+  // null below — a one-seat award with no reason is the bye it always was.
+  if (home === away) return null;
+  return winner === home ? away : winner === away ? home : null;
+}
+
 export interface ForfeitTag {
   readonly kind: ForfeitTagKind;
   readonly tagKey: ForfeitTagKey;
@@ -133,12 +151,18 @@ function abandonKindOf(o: { kind?: unknown; method?: unknown }): AbandonTagKind 
  * The tag and sentence for a fixture's outcome, or null — a played result, a bye, no outcome with no abandon, or an
  * abandon the ledger does not hold. `outcome` is the stored `MatchOutcome` as any surface holds it (loose JSON is fine).
  *
+ * `seats` (optional): the fixture's two seats. Only an award stored before W2b needs them — `{kind: "award", winner,
+ * method}` with a forfeit reason as its `method` (`legacyAwardForfeitReason`, the engine's one legacy reader, which
+ * `awardReasonOf` ranks it by too) reads as that forfeit, its loser the seat facing the winner (Loop R I-1: the
+ * production and staging walkovers recorded before W2b otherwise lose their "w/o"). Without seats, or with one, such an
+ * award stays untagged: it names no loser, and a one-seat award is a bye.
+ *
  * T16 review m3 (X-AB-1): NO outcome beside an active abandon is an abandon that decided nobody — out of the table,
  * flagged for replay or settle (a replay-policy abandon; R16-3's level abandon where the cfg refuses a draw) — and reads
  * "abandoned" with its reason, as a level one does. Before, it read nothing, so R16-3 took the public "Abandoned
  * (reason)" off a no-draw cfg's bracket abandon, which had been a (tagged) draw.
  */
-export function forfeitTag(outcome: unknown, ledger: ForfeitLedger): ForfeitTag | null {
+export function forfeitTag(outcome: unknown, ledger: ForfeitLedger, seats?: ForfeitSeats): ForfeitTag | null {
   if (outcome === null || outcome === undefined) return ledger.abandon === null ? null : tagOf("abandoned", { reason: ledger.abandon.reason });
   if (typeof outcome !== "object") return null;
   const o = outcome as { kind?: unknown; winner?: unknown; loser?: unknown; reason?: unknown; method?: unknown };
@@ -147,8 +171,13 @@ export function forfeitTag(outcome: unknown, ledger: ForfeitLedger): ForfeitTag 
     ...(typeof o.loser === "string" ? { loser: o.loser } : {}),
   };
   if (o.kind === "award") {
+    const legacy = legacyAwardForfeitReason(o);
+    if (legacy !== null) {
+      const loser = legacyLoser(ids.winner, seats);
+      return loser === null ? null : tagOf(legacy, { winner: ids.winner!, loser });
+    }
     const kind = forfeitCopyKind({ reason: o.reason });
-    // A bye (and a reason-less legacy award, which is the bye it always was — C-5) keeps today's copy.
+    // A bye (and a reason-less legacy award with no forfeit `method`, the bye it always was — C-5) keeps today's copy.
     if (kind === null || kind === "bye") return null;
     // Every forfeit award the engine writes names its loser (D9); one that does not is not a forfeit we can word —
     // the sentence names the offending side, and there is none to name.

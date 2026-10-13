@@ -12,6 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { messages } from "@/lib/messages";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { FORFEIT_TAG_KEY } from "@/lib/forfeit-tag";
 
 vi.mock("next/navigation", () => ({
@@ -42,8 +43,8 @@ const ev = (id: string, seq: number, type: string, payload: unknown, voids: stri
 });
 const ABANDON = [ev("ev-1", 1, "core.start", {}), ev("ev-2", 2, "core.abandon", { reason: "rain" })];
 
-/** The decided line's text, tags stripped — or null when the console prints none. */
-function decidedLine(status: string, outcome: unknown, events: EventIn[] = []): string | null {
+/** The decided line's markup — or null when the console prints none. */
+function decidedLineHtml(status: string, outcome: unknown, events: EventIn[] = []): string | null {
   const live: LiveState = { status, last_seq: events.length, summary: null, state: null, outcome };
   const html = renderToStaticMarkup(
     <FixtureConsole
@@ -62,7 +63,13 @@ function decidedLine(status: string, outcome: unknown, events: EventIn[] = []): 
     />,
   );
   const m = /<p[^>]*data-testid="console-decided-line"[^>]*>([\s\S]*?)<\/p>/.exec(html);
-  return m === null ? null : m[1]!.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
+  return m === null ? null : m[1]!;
+}
+
+/** The decided line's text, tags stripped — or null when the console prints none. */
+function decidedLine(status: string, outcome: unknown, events: EventIn[] = []): string | null {
+  const line = decidedLineHtml(status, outcome, events);
+  return line === null ? null : line.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
 }
 
 describe("the console's decided line names a credited result as the run sheet does (loop H F2)", () => {
@@ -118,6 +125,21 @@ describe("the console's decided line names a credited result as the run sheet do
     expect(line).toBe(word("fixture.decidedBy.plain").replace("{winner}", HOME.name));
     // An abandon that decided nobody (a replay): no result, so no decided line at all — the run sheet prints none either.
     expect(decidedLine("abandoned", null, ABANDON)).toBeNull();
+  });
+
+  // Loop R I-1: a walkover stored before W2b (`{kind: "award", winner, method}` — no loser, no reason) reads its tag
+  // from the console's two seats, as the run sheet does; a one-seat award of that shape is still the bye.
+  it("Loop R I-1: a forfeit STORED before W2b names its tag from the seats, symbol and all; the typed one reads the same", () => {
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      const legacy = { kind: "award", winner: AWAY.id, method: reason };
+      const typed = { kind: "award", winner: AWAY.id, loser: HOME.id, reason };
+      expect(decidedLine("forfeited", legacy), reason).toBe(tagged(AWAY.name, FORFEIT_TAG_KEY[reason]));
+      expect(decidedLineHtml("forfeited", legacy), `${reason}: the markup, the named symbol included`).toBe(decidedLineHtml("forfeited", typed));
+      expect(decidedLineHtml("forfeited", typed), `${reason}: premise — the typed line carries the symbol`).toContain('role="img"');
+      checked++;
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length);
   });
 });
 

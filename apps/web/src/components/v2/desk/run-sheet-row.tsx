@@ -308,9 +308,9 @@ export function RunSheetRow({
     );
   // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
   // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
-  const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));
+  const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
   // Design audit 4.3: the tag in that result, with its expansion — both copies below render it as a named symbol.
-  const decidedTag = outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason));
+  const decidedTag = outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
   const decided = decidedParts === null ? null : decidedParts.lead + decidedParts.tail;
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,

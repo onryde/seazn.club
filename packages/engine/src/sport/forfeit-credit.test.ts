@@ -4,7 +4,7 @@
 // from `standingsDelta`. A rule that cannot be stated without the module's code is a finding, not a test.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, resolveVoids, summaryOf, type EventEnvelope } from "../core/events.ts";
-import type { StandingsDelta } from "../core/types.ts";
+import { FORFEIT_REASONS, legacyAwardForfeitReason, type StandingsDelta } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forfeitStatsRole } from "../stats/stats.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -510,6 +510,127 @@ function expectRetirement(r: RetirementRow, reason = "retired") {
   expect(away.metrics, `${r.id} ${reason} winner`).toMatchObject(wantA);
   expect([home.won, home.lost, away.won, away.lost], `${r.id} ${reason}`).toEqual([0, 1, 1, 0]);
 }
+
+/** Loop R I-1 — the award each sport's kernel STORED for a walkover before W2b (merge-base 55ac34d5d, each kernel's
+ *  `applyForfeit`): the winner, and `core.forfeit`'s then free-text reason as `method` — no `loser`, no `reason`.
+ *  Football and the period kernel (hockey, ice hockey) also stored the awarded `score`. Chess stored no award at all (its
+ *  forfeit was a `boardgame.result` card), so it has no such row to read. `fixtures.outcome` and `match_states` keep this
+ *  shape until a refold (ruling 112: no data migration), and the table reads the STORED outcome. */
+const PRE_W2B_SCORED_AWARD = new Set(["football", "hockey", "icehockey"]);
+const PRE_W2B_NO_AWARD = new Set(["boardgame"]);
+function preW2bWalkover(key: string, cfg: Record<string, unknown>, winnerSide: "home" | "away"): Record<string, unknown> {
+  const winner = winnerSide === "home" ? H : A;
+  if (!PRE_W2B_SCORED_AWARD.has(key)) return { kind: "award", winner, method: "walkover" };
+  const g = (cfg.awardScore as { goals: number }).goals;
+  return { kind: "award", winner, score: winnerSide === "home" ? { home: g, away: 0 } : { home: 0, away: g }, method: "walkover" };
+}
+/** The stored row as the table reads it: the walkover's fold with what the pre-W2b `applyForfeit` left in the state —
+ *  the outcome it stored and, in football and the period kernel, the awarded `score` written into `goals` too. */
+function storedPreW2b(key: string, cfg: Record<string, unknown>, winnerSide: "home" | "away") {
+  const m = mod(key);
+  const l = defaultLineupPair(m.positions);
+  const f = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: winnerSide === "home" ? A : H, reason: "walkover" })]);
+  const outcome = preW2bWalkover(key, cfg, winnerSide);
+  const goals = (outcome as { score?: unknown }).score;
+  return { m, outcome, state: { ...(f.state as Record<string, unknown>), outcome, ...(goals === undefined ? {} : { goals }) } };
+}
+
+describe("Loop R I-1: a walkover STORED before W2b ranks as the walkover it was, never as a bye", () => {
+  it("every sport that stored one, every declared cfg, the winner in either seat: the Appendix A walkover credit and W/L", () => {
+    let checked = 0;
+    let unlimited = 0;
+    const sports = new Set<string>();
+    forEachSport(({ module: m }) => {
+      if (PRE_W2B_NO_AWARD.has(m.key)) return;
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const c = cfg as Record<string, unknown>;
+        if (unlimitedOvers(m.key, c)) { unlimited++; continue; } // CK-WO-2: no quota to charge, its own tests
+        for (const winnerSide of ["home", "away"] as const) {
+          const { outcome, state } = storedPreW2b(m.key, c, winnerSide);
+          const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state as never);
+          const [w, l] = winnerSide === "home" ? [home, away] : [away, home];
+          const want = EXPECTED_WALKOVER[m.key]!(c);
+          expect(w.metrics, `${m.key}/${name} winner ${winnerSide}`).toMatchObject(want.winner);
+          expect(l.metrics, `${m.key}/${name} loser`).toMatchObject(want.loser);
+          expect([w.won, w.lost, l.won, l.lost], `${m.key}/${name} ${winnerSide}`).toEqual([1, 0, 0, 1]);
+          checked++;
+        }
+        sports.add(m.key);
+      }
+    });
+    expect(sports.size, "every sport whose kernel stored an award").toBe(builtinModules.length - PRE_W2B_NO_AWARD.size);
+    expect(unlimited).toBeGreaterThanOrEqual(1);
+    expect(checked).toBeGreaterThanOrEqual(2 * sports.size);
+  });
+
+  it("the case the fix exists for: badminton 2-0/42-0, volleyball 3-0/75-0, tennis and carrom read their walkover credit — the bye reading credited them 0-0; football reads 3-0 as before", () => {
+    const n = { differs: 0, same: 0 };
+    for (const key of ["badminton", "volleyball", "tennis", "carrom", "football"]) {
+      const cfg = parsed(key);
+      const { m, outcome, state } = storedPreW2b(key, cfg, "home");
+      const [home, away] = m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state as never);
+      const want = EXPECTED_WALKOVER[key]!(cfg);
+      expect(home.metrics, `${key}: the walkover's credit`).toMatchObject(want.winner);
+      expect(away.metrics, `${key}: the walkover's charge`).toMatchObject(want.loser);
+      // The reading this replaces: the same stored row ranked as a bye (no loser, reason "bye").
+      const bye = { kind: "award", winner: H, loser: null, reason: "bye" };
+      const [byeHome] = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye } as never);
+      const asBye = Object.entries(want.winner).some(([k, v]) => byeHome.metrics[k] !== v);
+      if (asBye) n.differs++;
+      else n.same++;
+      expect(asBye, `${key}: does the bye reading differ from the walkover's credit?`).toBe(key !== "football");
+    }
+    // The pins in the title, off the default cfgs: badminton best of 3 to 21, volleyball best of 5 to 25.
+    expect(EXPECTED_WALKOVER.badminton!(parsed("badminton")).winner).toMatchObject({ sets_won: 2, points_won: 42 });
+    expect(EXPECTED_WALKOVER.volleyball!(parsed("volleyball")).winner).toMatchObject({ sets_won: 3, points_won: 75 });
+    expect(n).toEqual({ differs: 4, same: 1 });
+  });
+
+  it("a reason-less award whose `method` is no forfeit reason — the server's bye writers' {kind, winner}, or a method the closed vocabulary never had — still ranks as the bye", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      if (PRE_W2B_NO_AWARD.has(m.key)) return;
+      const { name, cfg } = declaredCfgs(m as never)[0]!;
+      const c = cfg as Record<string, unknown>;
+      if (unlimitedOvers(m.key, c)) return;
+      const { state } = storedPreW2b(m.key, c, "home");
+      const bye = { kind: "award", winner: H, loser: null, reason: "bye" };
+      const byeDeltas = m.standingsDelta(bye as never, cfg, { kind: "league" } as never, { ...state, outcome: bye } as never);
+      for (const legacy of [{ kind: "award", winner: H }, { kind: "award", winner: H, method: "bye" }, { kind: "award", winner: H, method: "no-show" }]) {
+        expect(m.standingsDelta(legacy as never, cfg, { kind: "league" } as never, { ...state, outcome: legacy } as never), `${m.key}/${name} ${JSON.stringify(legacy)}`).toEqual(byeDeltas);
+        checked++;
+      }
+    });
+    expect(checked).toBe(3 * (builtinModules.length - PRE_W2B_NO_AWARD.size));
+  });
+
+  it("the reader answers for the pre-W2b shape alone: a reason in `method` on an award with no typed reason and no loser", () => {
+    // Each row's expected answer is the shape's meaning: the four forfeit reasons the vocabulary declares (FORFEIT_REASONS)
+    // read as themselves; anything typed (a `reason`), anything carrying a loser, anything not an award, and any method
+    // outside the vocabulary is not this shape.
+    const ROWS: [name: string, outcome: unknown, want: string | null][] = [
+      ...FORFEIT_REASONS.map((r) => [`pre-W2b ${r}`, { kind: "award", winner: H, method: r }, r] as [string, unknown, string]),
+      ["pre-W2b football, with its score", { kind: "award", winner: H, score: { home: 3, away: 0 }, method: "walkover" }, "walkover"],
+      ["typed walkover", { kind: "award", winner: H, loser: A, reason: "walkover" }, null],
+      ["typed bye", { kind: "award", winner: H, loser: null, reason: "bye" }, null],
+      ["a reason beside the method", { kind: "award", winner: H, reason: "walkover", method: "walkover" }, null],
+      ["a loser beside the method", { kind: "award", winner: H, loser: A, method: "walkover" }, null],
+      ["the pre-W2b bye writers", { kind: "award", winner: H }, null],
+      ["method bye", { kind: "award", winner: H, method: "bye" }, null],
+      ["a method never in the vocabulary", { kind: "award", winner: H, method: "no-show" }, null],
+      ["a win's method", { kind: "win", winner: H, method: "walkover" }, null],
+      ["no result, with a method", { kind: "no_result", method: "walkover" }, null],
+      ["no outcome", null, null],
+      ["not an object", "walkover", null],
+    ];
+    let checked = 0;
+    for (const [name, outcome, want] of ROWS) {
+      expect(legacyAwardForfeitReason(outcome), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length + 12);
+  });
+});
 
 describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
   it("empty case first: every row's played prefix folds undecided — the forfeit is what decides it", () => {

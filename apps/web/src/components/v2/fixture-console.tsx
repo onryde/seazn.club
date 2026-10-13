@@ -1054,10 +1054,10 @@ export function FixtureConsole({
   const voidedIds = new Set(events.flatMap((e) => (e.type === "core.void" && e.voids_event_id !== null ? [e.voids_event_id] : [])));
   const forfeitLedger = forfeitLedgerOf(events.filter((e) => e.type !== "core.void" && !voidedIds.has(e.id)));
   // Design audit 4.3: the tag in that line, with its expansion (accessible name and tooltip).
-  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger);
+  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger, seatsOf);
   const decidedLine =
-    forfeitTag(outcome, forfeitLedger) !== null
-      ? outcomeText(msg, outcome, entrantNames, forfeitLedger)
+    forfeitTag(outcome, forfeitLedger, seatsOf) !== null
+      ? outcomeText(msg, outcome, entrantNames, forfeitLedger, seatsOf)
       : decidedOutcomeText(
           outcome,
           entrantNames,

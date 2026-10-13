@@ -964,6 +964,14 @@ describe("overlayModel — a credited result reads its forfeit sentence (W2b T13
     expect(checked).toBe(4);
   });
 
+  // Loop R I-1: a walkover stored before W2b (`{kind: "award", winner, method}` — no loser, no reason) names the
+  // loser from the band's two sides, as the typed one does.
+  it("Loop R I-1: a walkover STORED before W2b reads its sentence on air, as the typed one", () => {
+    const legacy = onAir({ kind: "award", winner: "H", method: "walkover" } as never);
+    expect(legacy.result).toBe(t(UI, "forfeit.sentence.walkover", { loser: "Northbridge Athletic" }));
+    expect(legacy.header.period).toBe(onAir({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never).header.period);
+  });
+
   it("a double walkover says so (it said nothing)", () => {
     const model = onAir({ kind: "double_walkover" } as never);
     expect(model.result).toBe(t(UI, "forfeit.sentence.doubleWalkover"));

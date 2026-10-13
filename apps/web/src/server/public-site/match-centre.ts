@@ -950,7 +950,7 @@ function buildHeader(
   const status = statusOf(fixture.status);
   // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one (the status line, below) — `forfeitTag` is the one
   // reader, answering only for a decided outcome, so a live or scheduled match is untouched.
-  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events));
+  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);
 
   // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 is not a score, so the court card carries no
   // score lines (the schedule's rule, `schedule.tsx`, read through the same tag), and its sentence says what happened.

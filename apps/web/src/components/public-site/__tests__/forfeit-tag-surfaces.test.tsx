@@ -563,3 +563,50 @@ describe("ForfeitTagChip — the house pill (audit 3.2)", () => {
     for (const token of ["rounded", "px-1", "py-px"]) expect(cls.has(token), `no one-off ${token}`).toBe(false);
   });
 });
+
+// Loop R I-1 (reader tolerance; no data write): a walkover stored before W2b is `{kind: "award", winner, method:
+// "walkover"}` — no loser, no reason (each pre-W2b kernel's `applyForfeit`). Every surface that holds the fixture's two
+// seats names the loser from them and reads the walkover's tag and sentence; the empty case first — a one-seat award
+// with no reason stays the bye it always was. The words are the dictionary's.
+describe("Loop R I-1: a forfeit STORED before W2b reads w/o on every surface that holds the seats", () => {
+  const LEGACY = { kind: "award", winner: "h", method: "walkover" };
+  const SEATS = { home_entrant_id: "h", away_entrant_id: "a" };
+  const sentence = tr("forfeit.sentence.walkover", { loser: "Harbour United" });
+  it("empty case first: a one-seat award with no reason is still the bye (hub, results matrix, run-sheet line)", () => {
+    const bye = fixture({ away_entrant_id: null, outcome: { kind: "award", winner: "h", method: "walkover" } as never });
+    expect(hubForfeit(bye, ctx())).toBeNull();
+    const ui = (key: string, vars?: Record<string, string | number>) => msg(key as never, vars);
+    expect(outcomeText(ui, LEGACY, NAMES, undefined, { home_entrant_id: "h", away_entrant_id: null })).toBe(
+      UI["schedule.outcome.wonWo"]!.replace("{name}", "Riverside FC"),
+    );
+  });
+  it("hub card, results matrix, run-sheet line and the live score's fallback: the walkover's tag and its sentence", () => {
+    const f = fixture({ outcome: LEGACY as never });
+    const w = hubForfeit(f, ctx())!;
+    expect({ tag: w.tag, kind: w.kind }).toEqual({ tag: "w/o", kind: "walkover" });
+    expect(w.sentence).toContain("Harbour United");
+    const cell = renderToStaticMarkup(
+      createElement(ResultsMatrix, { entrantIds: ["h", "a"], entrantNames: NAMES, fixtures: [f], fixtureHref: (id: string) => `/f/${id}`, dict: DICT }),
+    );
+    expect(cell).toContain(`aria-label="${html(sentence)}"`);
+    expect(cell).toMatch(/role="img"[^>]*>w\/o</);
+    const ui = (key: string, vars?: Record<string, string | number>) => msg(key as never, vars);
+    let reasons = 0;
+    for (const reason of FORFEIT_REASONS) {
+      expect(outcomeText(ui, { ...LEGACY, method: reason }, NAMES, undefined, SEATS), reason).toBe(`Riverside FC won (${TAG[reason]})`);
+      reasons++;
+    }
+    expect(reasons).toBe(4);
+    const live = renderToStaticMarkup(
+      createElement(LiveScoreBody, {
+        data: {
+          status: "forfeited",
+          summary: { headline: "2 – 0", perSide: [{ entrantId: "h", line: "2" }, { entrantId: "a", line: "0" }] },
+          outcome: LEGACY,
+        },
+        entrantNames: NAMES, sportKey: "badminton", decidedTemplates: { tie: "", plain: "{winner} won", shootoutPlain: "", byMethod: {} }, dict: DICT,
+      }),
+    );
+    expect(live).toContain(html(sentence));
+  });
+});

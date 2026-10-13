@@ -2,7 +2,7 @@
 // console read it from here, so the two cannot word one result two ways (W2b loop H F2). Moved verbatim from
 // `components/v2/stages-panel.tsx`, which re-exports it for its existing importers. Client-safe: no `server-only`.
 import type { MessageKey } from "@/lib/messages";
-import { NO_LEDGER, forfeitTag, type ForfeitLedger, type ForfeitTagKind } from "@/lib/forfeit-tag";
+import { NO_LEDGER, forfeitTag, type ForfeitLedger, type ForfeitSeats, type ForfeitTagKind } from "@/lib/forfeit-tag";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -14,17 +14,19 @@ type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 // reads "{name} won (w/o)" / "(ret.)" / "(DQ)" / "(Aband. · DLS)"; a double walkover, which has no winner, reads its
 // tag alone ("2× w/o" — before W2b it read nothing); a level abandon its level word and the tag. A bye keeps today's
 // "won (w/o)" (no tag: `schedule.outcome.wonWo` below). The tags are ui.json's copies of public.json's, word for word
-// (forfeit-tag.test.ts), so the organiser and the spectator read one abbreviation.
+// (forfeit-tag.test.ts), so the organiser and the spectator read one abbreviation. `seats`: the fixture's two seats, so a
+// forfeit stored before W2b reads its tag too (`forfeitTag`, Loop R I-1).
 export function outcomeText(
   msg: Msg,
   outcome: unknown,
   entrantNames: Record<string, string>,
   ledger: ForfeitLedger = NO_LEDGER,
+  seats?: ForfeitSeats,
 ): string | null {
   const o = outcome as { kind?: string; winner?: string } | null;
   if (!o?.kind) return null;
   const winner = entrantNames[o.winner ?? ""] ?? "?";
-  const tag = forfeitTag(outcome, ledger);
+  const tag = forfeitTag(outcome, ledger, seats);
   if (tag !== null) {
     const word = msg(tag.tagKey);
     if (tag.kind === "double_walkover") return word;
@@ -64,10 +66,11 @@ export function outcomeTextParts(
   outcome: unknown,
   entrantNames: Record<string, string>,
   ledger: ForfeitLedger = NO_LEDGER,
+  seats?: ForfeitSeats,
 ): { lead: string; tail: string } | null {
   const winnerId = (outcome as { winner?: unknown } | null)?.winner;
   const key = typeof winnerId === "string" ? winnerId : "";
-  const marked = outcomeText(msg, outcome, { ...entrantNames, [key]: NAME_MARK }, ledger);
+  const marked = outcomeText(msg, outcome, { ...entrantNames, [key]: NAME_MARK }, ledger, seats);
   if (marked === null) return null;
   const at = marked.indexOf(NAME_MARK);
   if (at === -1) return { lead: "", tail: marked };
@@ -103,7 +106,12 @@ export const FORFEIT_TAG_FULL_KEY = {
 
 /** The tag `outcomeText` prints for this result and its expansion, or null when it prints none (a bye, a played
  *  result, no result). Read through `forfeitTag`, the one reader, with the same ledger the line was built with. */
-export function outcomeTagWords(msg: Msg, outcome: unknown, ledger: ForfeitLedger = NO_LEDGER): { word: string; full: string } | null {
-  const tag = forfeitTag(outcome, ledger);
+export function outcomeTagWords(
+  msg: Msg,
+  outcome: unknown,
+  ledger: ForfeitLedger = NO_LEDGER,
+  seats?: ForfeitSeats,
+): { word: string; full: string } | null {
+  const tag = forfeitTag(outcome, ledger, seats);
   return tag === null ? null : { word: msg(tag.tagKey), full: msg(FORFEIT_TAG_FULL_KEY[tag.kind]) };
 }
