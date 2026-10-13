@@ -13,7 +13,9 @@ import "server-only";
 // the privileged `sql`, and only after the caller's organisation has been
 // proven to own the division or fixture.
 import type postgres from "postgres";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { sql } from "@/lib/db";
+import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import {
@@ -77,6 +79,10 @@ type BoardRow = {
   hasMeeting: boolean;
   meetingEndedAt: Date | null;
   evidenceAt: Date | null;
+  /** D19's inputs: the stage kind and the two feed edges. */
+  stageKind: string | null;
+  winnerToFixture: string | null;
+  loserToFixture: string | null;
 };
 
 type FlagRow = {
@@ -235,7 +241,8 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            ep.last_move_at as "lastMoveAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
            m.fixture_id is not null as "hasMeeting", m.ended_at as "meetingEndedAt",
-           m.camera_evidence_at as "evidenceAt"
+           m.camera_evidence_at as "evidenceAt",
+           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
@@ -339,6 +346,8 @@ async function boardOf(
     canSettle: playable && r.bridgeStatus !== null,
     whiteSide,
     tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
+    // W2b D19 — the append guard's own reading, so the settle never offers a No result the server refuses.
+    noNextMatch: doubleWalkoverRefused(r.stageKind, feedsNextMatch({ winner_to_fixture: r.winnerToFixture, loser_to_fixture: r.loserToFixture })),
     flags,
   };
 }

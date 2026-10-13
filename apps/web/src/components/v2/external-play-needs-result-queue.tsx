@@ -28,12 +28,12 @@ import { routes } from "@/lib/routes";
 import type { FlaggedBoard } from "@/server/usecases/external-play/arbiter";
 import type { NeedsOrganiserExternalPlayRow } from "@/server/usecases/external-play/queue";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type ArbiterNotice } from "./arbiter-decision";
-import { boardStateWord, BUTTON_QUIET, FlagCard, MUTED, noticeSentence, settleChoices, SOFT, useFmt, type Fmt } from "./arbiter-flag-cards";
+import { boardStateWord, BUTTON_QUIET, FlagCard, MUTED, noticeSentence, settleChoices, settleNoNextMatchGuidance, SOFT, useFmt, type Fmt } from "./arbiter-flag-cards";
 import { HELD_TITLE_KEYS, heldBody, namesByColour, queueRowAnchor } from "./external-play-held-copy";
 
 export type HeldRow = Pick<
   NeedsOrganiserExternalPlayRow,
-  "fixtureId" | "homeName" | "awayName" | "reason" | "whiteSide" | "revokedSeat" | "roundNo" | "boardNo" | "stageName" | "canResync" | "seated"
+  "fixtureId" | "homeName" | "awayName" | "reason" | "whiteSide" | "revokedSeat" | "roundNo" | "boardNo" | "stageName" | "canResync" | "seated" | "noNextMatch"
 >;
 
 export type ExternalPlayQueueProps = {
@@ -145,7 +145,7 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
           {tiebreak ? f.t("externalPlay.settle.pickLegend") : f.t("externalPlay.settle.legend")}
         </legend>
         <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
-          {settleChoices({ whiteSide: row.whiteSide, whiteName, blackName, tiebreakOwed: tiebreak }, f).map((c) => (
+          {settleChoices({ whiteSide: row.whiteSide, whiteName, blackName, tiebreakOwed: tiebreak, noNextMatch: row.noNextMatch }, f).map((c) => (
             <button
               key={c.choice}
               type="button"
@@ -163,6 +163,11 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
             </button>
           ))}
         </div>
+        {settleNoNextMatchGuidance({ tiebreakOwed: tiebreak, noNextMatch: row.noNextMatch }) && (
+          <p data-testid="external-play-settle-no-next-match" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+            {f.t("arbiter.decide.noNextMatch")}
+          </p>
+        )}
       </fieldset>
     );
     return (

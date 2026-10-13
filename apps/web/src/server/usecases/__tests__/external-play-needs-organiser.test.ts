@@ -71,6 +71,9 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
         stageName: at!.name,
         canResync: false,
         seated: false,
+        // A league board: W2b D19 never refuses No result here (the shape-by-shape differential against the server's
+        // own refusal lives in external-play-resolve.test.ts).
+        noNextMatch: false,
       },
     ]);
   });

@@ -39,6 +39,7 @@ function held(over: Partial<HeldRow> & Pick<HeldRow, "fixtureId" | "reason">): H
     stageName: "Open Swiss",
     canResync: false,
     seated: false,
+    noNextMatch: false,
     ...over,
   };
 }
@@ -140,6 +141,31 @@ describe("a held card", () => {
     expect(text(one)).toContain("Mei Lin Chu wins");
     expect(testIds(one, "external-play-resync"), "no game on file").toBe(0);
     expect(testIds(card(h, "f2"), "external-play-resync"), "a game may be on file").toBe(1);
+  });
+
+  // W2b D19: on a bracket line that feeds no next match the server refuses No result (a double walkover) — the
+  // row's `noNextMatch` is the server's own reading, and the queue offers exactly what the server takes.
+  it("a line that feeds no next match: No result is not offered and the guidance says why — every locale, both ways, counted", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const dict = LOCALES[locale] as Record<string, string>;
+      const h = render({ held: [held({ fixtureId: "f1", reason: "not_started", noNextMatch: true }), held({ fixtureId: "f2", reason: "not_started" })] }, locale);
+      const refused = card(h, "f1");
+      expect([...refused.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1]), locale).toEqual(["home_wins", "away_wins", "draw"]);
+      const guide = refused.match(/<p[^>]*data-testid="external-play-settle-no-next-match"[^>]*>(.*?)<\/p>/);
+      expect(guide, `${locale}: the guidance renders`).not.toBeNull();
+      expect(text(guide![1]!), locale).toBe(dict["arbiter.decide.noNextMatch"]);
+      // The pair: a line that feeds a next match keeps all four, and no guidance.
+      const offered = card(h, "f2");
+      expect([...offered.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1]), locale).toEqual(["home_wins", "away_wins", "draw", "no_result"]);
+      expect(offered).not.toContain("external-play-settle-no-next-match");
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // A drawn knockout held for its tie-break on such a line: a winner only, no guidance.
+    const owed = card(render({ held: [held({ fixtureId: "f1", reason: "tiebreak_owed", noNextMatch: true })] }), "f1");
+    expect([...owed.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["home_wins", "away_wins"]);
+    expect(owed).not.toContain("external-play-settle-no-next-match");
   });
 
   it("the settle buttons send a SIDE by colour: White's name sends White's side, both ways", () => {

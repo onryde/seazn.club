@@ -79,6 +79,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     canSettle: true,
     whiteSide: "home",
     tiebreakOwed: false,
+    noNextMatch: false,
     flags: [],
     ...over,
   };
@@ -617,6 +618,7 @@ describe("your decision", () => {
       expect(h).toMatch(new RegExp(`<legend[^>]*>${EN["externalPlay.settle.legend"]}</legend>`));
       expect(text(h)).toContain(EN["arbiter.decide.settleBody"]);
       expect(settleButtons(h), whiteSide).toEqual(expected);
+      expect(h, "a line that feeds a next match: no D19 guidance").not.toContain('data-testid="arbiter-settle-no-next-match"');
       expect(h, "no way off to the match page any more").not.toContain('href="/o/club/c/autumn/d/open/f/13"');
       checked++;
     }
@@ -632,6 +634,28 @@ describe("your decision", () => {
       ["away_wins", "Jonah Mbeki goes through"],
       ["home_wins", "Elif Demirtaş goes through"],
     ]);
+  });
+
+  // W2b D19: a double walkover is refused on a bracket line that feeds no next match (a final, a last rung, a
+  // third-place match, a reset grand final) — the server's own reading arrives as `noNextMatch`, so the settle never
+  // offers the "No result" W2b would refuse with a 409, and says why in its place, in every locale.
+  it("a line that feeds no next match: No result is not offered and the guidance says why — every locale, counted", () => {
+    const b = { ...ROUND.boards[2]!, noNextMatch: true, whiteSide: "away" as const };
+    let locales = 0;
+    for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const dict = LOCALES[loc] as Record<string, string>;
+      const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
+      expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw"]);
+      const guide = h.match(/<p[^>]*data-testid="arbiter-settle-no-next-match"[^>]*>(.*?)<\/p>/);
+      expect(guide, `${loc}: the guidance renders`).not.toBeNull();
+      expect(text(guide![1]!), loc).toBe(dict["arbiter.decide.noNextMatch"]);
+      locales++;
+    }
+    expect(locales).toBe(4);
+    // A drawn knockout on such a line: a winner only, as before — No result is never offered there, so no guidance.
+    const owed = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed: true }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(settleButtons(owed).map(([c]) => c)).toEqual(["away_wins", "home_wins"]);
+    expect(owed).not.toContain('data-testid="arbiter-settle-no-next-match"');
   });
 
   it("a board nobody reached (no online game on file) keeps T15's way to its match page — no settle buttons; closed, the disclosure paints none", () => {
@@ -683,6 +707,8 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "settle_failed", code: "ONLINE_GAME_OVER" }, EN["arbiter.notice.onlineGameOver"]!],
       [{ boardId: "f3", kind: "settle_failed", code: "TIEBREAK_NEEDS_WINNER" }, EN["arbiter.notice.needsWinner"]!],
       [{ boardId: "f3", kind: "settle_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.settleOwnBoard"]!],
+      // W2b D19's 409 — a panel loaded before the bracket was wired past this line still offered No result.
+      [{ boardId: "f3", kind: "settle_failed", code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" }, EN["arbiter.notice.noNextMatch"]!],
       [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
       [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
       [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
@@ -697,9 +723,9 @@ describe("your decision", () => {
       expect(text(h), JSON.stringify(notice)).toContain(sentence);
       seen.add(sentence);
     }
-    // 23 notices; "failed" is the shared fallback sentence (2 rows), so 22.
-    expect(notices.length).toBe(23);
-    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(22);
+    // 24 notices; "failed" is the shared fallback sentence (2 rows), so 23.
+    expect(notices.length).toBe(24);
+    expect(seen.size, "every notice paints its own sentence, the fallback once").toBe(23);
   });
 
   // R4 (T16 fix round 1): on a FINISHED board the close is a review, not a go-on — so is its answer (the queue's words).
