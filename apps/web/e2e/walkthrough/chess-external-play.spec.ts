@@ -254,7 +254,7 @@ async function expectLichessReached(calls: () => number, fixtureId: string, time
 /** T17 review M5: the bridge row and the stub hold the same clocks, both as at the last move, each stamped on its own
  *  side of one local HTTP hop. A charged move's elapsed time differs by at most the difference of two such hops, and
  *  each side has paid two moves by ply 6 — 2.5 s covers that under load, and stays under the 3 s increment, so a lost
- *  increment or a centisecond/millisecond slip (x10) still reds. Measured 2026-10-13: 0-2 ms apart over two runs (the
+ *  increment or a centisecond/millisecond slip (x10) still reds. Measured 2026-10-13: 0-10 ms apart over three runs (the
  *  pages' reads re-take Lichess's clocks, T11). */
 const CLOCK_TOLERANCE_MS = 2_500;
 
