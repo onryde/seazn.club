@@ -62,15 +62,20 @@ import {
   kernelOwnsEvent,
   reduceLineupEvent,
   resolveVoids,
+  summaryOf,
   type EventEnvelope,
+  type LevelWithdrawal,
   type LineupPair,
   type ScoreSummary,
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { admittedLevelWithdrawal } from "@/lib/level-withdrawal";
 import { matchPhase, periodBreakdown, servingSide, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import {
+  TIMELINE_EXPUNGE_KEY,
+  TIMELINE_FORFEIT_KEY,
   TIMELINE_GAME_BROKEN_KEY,
   TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
@@ -78,6 +83,7 @@ import {
   TIMELINE_PERIOD_END_KEY,
   TIMELINE_SET_WON_KEY,
 } from "@/lib/timeline-keys";
+import { forfeitCopyKind, isExpungeAbandon } from "@/lib/forfeit-copy-kind";
 import type { MsgT, PersonT, SetsViewT, SideT, TimelineLineT } from "./match-centre-schema";
 
 export interface TimelineArgs {
@@ -482,6 +488,14 @@ const KEY_OVERRIDE: Readonly<
     payload.method === "lot" || payload.method === "higher_seed" || payload.method === "organiser"
       ? `timeline.core.settle.${payload.method}`
       : null,
+  // W2b Task 12: the forfeit's reason (or a double walkover) is the sentence; a pre-D3 row with no reason the engine
+  // declares keeps the table's reason-free line. A bye is never a core.forfeit (`CoreForfeit` refuses it).
+  "core.forfeit": (payload) => {
+    const kind = forfeitCopyKind(payload);
+    return kind === null || kind === "bye" ? null : TIMELINE_FORFEIT_KEY[kind];
+  },
+  // W2b D5: the withdrawal cascade's expunge is not a plain abandon — the match left the table.
+  "core.abandon": (payload) => (isExpungeAbandon(payload) ? TIMELINE_EXPUNGE_KEY : null),
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share
@@ -664,7 +678,9 @@ function derivedLines(
  *  - the RECORDED pass turns each surviving envelope into exactly one line and
  *    cannot throw — it never touches the module;
  *  - the DERIVED pass replays `init` / `apply` the way `foldMatch` does and
- *    diffs `module.summary(state)` for closed sets and periods. A ledger the
+ *    diffs the fold's summary (`summaryOf`, so a withdrawal the kernel admitted
+ *    over a held level result reads as the award it is — W2b PF-1) for closed
+ *    sets and periods. A ledger the
  *    module refuses part-way (a stale config, an event beyond a decided match)
  *    stops the derivation THERE and keeps whatever it had — a spectator page
  *    must not 500 because the eleventh event of a hundred is unfoldable, and
@@ -721,8 +737,10 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
     let state = module.init(cfg, lineups);
     let squads: SquadState = initSquads(lineups);
     if (module.onLineup !== undefined) state = module.onLineup(state, squads);
-    let previous: ScoreSummary | null = module.summary(state);
     let settled = false;
+    let levelWithdrawal: LevelWithdrawal | null = null;
+    const summarise = () => summaryOf(module, { state, settlement: null, levelWithdrawal });
+    let previous: ScoreSummary | null = summarise();
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
@@ -740,10 +758,19 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
             if (module.onLineup !== undefined) state = module.onLineup(state, squads);
           }
         }
+        // W2b PF-1: the one kernel-owned event that changes the RESULT. Its summary is diffed like any other.
+        const admitted = admittedLevelWithdrawal(event, lineups);
+        if (admitted !== null) {
+          levelWithdrawal = admitted;
+          const summary = summarise();
+          const extra = derivedLines(previous, summary, event, sportKey, sides);
+          if (extra.length > 0) derivedAfter.set(i, extra);
+          previous = summary;
+        }
         continue;
       }
       state = module.apply(state, event, { strict: false, squads });
-      const summary = module.summary(state);
+      const summary = summarise();
       const extra = derivedLines(previous, summary, event, sportKey, sides);
       if (extra.length > 0) derivedAfter.set(i, extra);
       previous = summary;

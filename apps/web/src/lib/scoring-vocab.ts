@@ -30,9 +30,11 @@
 // different keys than the engine ships.
 import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import { forfeitPhaseRefusalOf, type RefusalPhase, type WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
+import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { NEXT_MATCH_STARTED_CODE, ROUND_CODE_KEYS, nextMatchLabel, nextMatchRefOf } from "@/lib/next-match-started";
@@ -633,6 +635,11 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   TIEBREAK_NOT_APPLICABLE: "engineError.TIEBREAK_NOT_APPLICABLE",
   LEVEL_RESULT_IN_BRACKET: "engineError.LEVEL_RESULT_IN_BRACKET",
   LEVEL_RESULT_SEATED: "engineError.LEVEL_RESULT_SEATED",
+  // W2b (spec §7).
+  FORFEIT_REASON_WRONG_PHASE: "engineError.FORFEIT_REASON_WRONG_PHASE",
+  ABANDONED_SETTLE_OR_VOID: "engineError.ABANDONED_SETTLE_OR_VOID",
+  DOUBLE_WALKOVER_NO_NEXT_MATCH: "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH",
+  STAGE_SEAT_DEPARTED: "engineError.STAGE_SEAT_DEPARTED",
 };
 
 /**
@@ -1317,6 +1324,29 @@ export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<R
   },
 };
 
+/** W2b D11: STAGE_SEAT_DEPARTED's named sentence. Not in ENGINE_ERROR_REASON_KEY: it carries {entrant} and {match},
+ *  which only `scoringErrorText` fills — a reason-keyed reader with no params would print the placeholders. */
+const SEAT_DEPARTED_KEY: MessageKey = "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed";
+
+/** W2b loop-F M-4: FORFEIT_REASON_WRONG_PHASE's named sentences and their words. Exhaustive Records, so a phase or a
+ *  reason the engine adds is a tsc red here, never a raw key on screen. The reasons are the WRITER's (loop-F R-3): the
+ *  refusal never names PF-2's cascade-only `withdrew` (`forfeitPhaseRefusalOf` subtracts it), so it has no word. */
+export const FORFEIT_PHASE_KEY: Record<RefusalPhase, MessageKey> = {
+  pre: "forfeit.phase.pre",
+  play: "forfeit.phase.play",
+  tiebreak: "forfeit.phase.tiebreak",
+};
+export const FORFEIT_REASON_KEY: Record<WriterForfeitReason, MessageKey> = {
+  walkover: "forfeit.reason.walkover",
+  retired: "forfeit.reason.retired",
+  disqualified: "forfeit.reason.disqualified",
+};
+/** Ruling 113: the phase reads "play" from the Start, but with nothing played a refused retirement is explained as
+ *  "before anything has been played" — "once play has started" would contradict the refusal. */
+export const FORFEIT_NOTHING_PLAYED_KEY: MessageKey = "forfeit.phase.nothingPlayed";
+const FORFEIT_WRONG_PHASE_NAMED_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named";
+const FORFEIT_WRONG_PHASE_BOTH_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak";
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
 export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
   if (!(code in ENGINE_ERROR_KEY)) return null;
@@ -1591,6 +1621,10 @@ export function tiebreakScoreFromDetail(detail: unknown): string | null {
  * does not code): `nextMatchLabel`, over `matchRef`'s own composition in the
  * dictionary-free `lib/match-ref.ts`. Without a ref it is still localized,
  * never the server's English.
+ *
+ * `locale` is the reader's: a list the sentence names (the reasons a refused forfeit could have recorded) is that
+ * language's own list (design audit 1.5 — `Intl.ListFormat`, as stages-panel's roster-drift sentence), never English
+ * ", " punctuation. Absent ⇒ English, the same default `useLocaleOrDefault` gives a bare island.
  */
 export function scoringErrorText(
   code: string | null | undefined,
@@ -1598,7 +1632,29 @@ export function scoringErrorText(
   m: MsgFn,
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
+  locale: Locale = DEFAULT_LOCALE,
 ): string {
+  // W2b D11: STAGE_SEAT_DEPARTED names the entrant (by name) and the match (by the board's label) in the reader's
+  // language. Without both on the wire it reads the code's own copy, never an id.
+  if (code === "STAGE_SEAT_DEPARTED" && extra?.reason === "seat_departed") {
+    const ref = nextMatchRefOf({ next_match: extra.match });
+    if (typeof extra.entrant === "string" && extra.entrant.length > 0 && ref) {
+      return m(SEAT_DEPARTED_KEY, { entrant: extra.entrant, match: nextMatchLabel(ref, m) });
+    }
+    return m(ENGINE_ERROR_KEY.STAGE_SEAT_DEPARTED);
+  }
+  // W2b loop-F M-4 (plan D3): the phase the guard judged and the reasons it admits there, in the engine's order. A
+  // double walkover in a tie-break is its own sentence (R3: the game was played). Unreadable → the code's own copy.
+  if (code === "FORFEIT_REASON_WRONG_PHASE") {
+    const named = forfeitPhaseRefusalOf(extra);
+    if (named) {
+      const allowed = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(named.allowed.map((r) => m(FORFEIT_REASON_KEY[r])));
+      const phase = named.phase === "play" && named.played === false ? FORFEIT_NOTHING_PLAYED_KEY : FORFEIT_PHASE_KEY[named.phase];
+      return named.both && named.phase === "tiebreak"
+        ? m(FORFEIT_WRONG_PHASE_BOTH_KEY, { allowed })
+        : m(FORFEIT_WRONG_PHASE_NAMED_KEY, { phase: m(phase), allowed });
+    }
+  }
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
   if (code === NEXT_MATCH_STARTED_CODE) {
@@ -1615,7 +1671,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(WICKET_KEY), ...Object.values(EXTRA_KEY),
   ...Object.values(SPORT_KEY), ...Object.values(SWATCH_KEY),
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
-  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})),
+  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})), SEAT_DEPARTED_KEY,
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),

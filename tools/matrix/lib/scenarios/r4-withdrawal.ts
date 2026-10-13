@@ -35,11 +35,12 @@
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
+import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, X_WD_2_KINDS, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
 import { routeTo } from "../routing.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
+import { BRACKET_KINDS, type BracketKind } from "./terminal-finals.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -48,34 +49,57 @@ const ENTRANTS = 8;
 /** withdrawal.ts applyUpdate: these are reported as skipped, never touched. */
 const LOCKED = new Set(["finalized", "cancelled"]);
 
-/** One pending fixture judged under a walkover: its item, and whether the
- *  cascade forfeited or voided (abandoned) it. */
+/** One pending fixture judged under a walkover: its item, and whether it is one of the cascade's own walkovers
+ *  (`forfeited`: a forfeit, or — loop F — a TBD seat it departed) or it voided (abandoned) it. */
 interface WalkoverJudgement { readonly item: Item; readonly forfeited: boolean; readonly voided: boolean }
-type WalkoverModel = (b: FixtureSnap, a: ObservedFixture, w: string) => WalkoverJudgement;
+/** `tbd`: the fixture's opponent seat was still empty when the withdrawal answered (W2b X-WD-3). */
+type WalkoverModel = (b: FixtureSnap, a: ObservedFixture, w: string, tbd: boolean) => WalkoverJudgement;
 /** A fixture the cascade itself abandoned (withdrawal.ts applyUpdate counts
  *  `voided` once per core.abandon it posts, so one already abandoned before
  *  the withdrawal is not one of them). */
 const voidedBy = (b: FixtureSnap, a: ObservedFixture) => a.status === "abandoned" && b.status !== "abandoned";
 
-/** W1-driving Task 7 (false premise 16): how a walkover treats a pending
- *  fixture, by family.
- *  - forfeit (table and bracket kinds): forfeited to the OPPONENT, or voided
- *    (abandoned) when that seat is still TBD;
- *  - abandon (every other kind — ladder, page playoff, americano: the
- *    open-format branch, withdrawal.ts:213-217): voided, never forfeited. */
+/** W1-driving Task 7 (false premise 16), re-keyed by W2b (X-WD-2, X-WD-3): how a walkover treats a pending fixture,
+ *  by family.
+ *  - forfeit (table and bracket kinds, and — X-WD-2 — page playoff and ladder): forfeited to the OPPONENT. A seat whose
+ *    opponent was still TBD is never voided (X-WD-3): the cascade empties the withdrawn entrant's seat and stamps it
+ *    dead (withdrawal.ts departSeat "tbd"), and counts that departure as one of its walkovers; the opponent who ARRIVES
+ *    there is walked over, and one who never arrived leaves the fixture pending. Her seat still held is the cascade not
+ *    departing her (W2b post-F re-check 4);
+ *  - abandon (every other kind — americano: the open-format branch): voided, never forfeited.
+ *  A chess fixture not started is a pending one like any other: walked over (BG-WO-2), never refused. */
 export const WALKOVER_MODEL: Readonly<Record<"forfeit" | "abandon", WalkoverModel>> = Object.freeze({
-  forfeit: (b, a, w) => {
-    const opponent = a.home === w ? a.away : a.home;
-    if (opponent === null) {
-      return { item: { ok: a.status === "abandoned", note: `${b.id}: ${a.status} after walkover with a TBD opponent, expected abandoned` }, forfeited: false, voided: voidedBy(b, a) };
+  forfeit: (b, a, w, tbd) => {
+    // The side that is not the withdrawn entrant — the product may clear a dead seat, so w need not still be seated.
+    const opponent = [a.home, a.away].find((s) => s !== null && s !== w) ?? null;
+    // Review M-1: a fixture whose opponent WAS seated when the withdrawal answered has someone to forfeit to — seats
+    // cleared after it are the product losing that opponent, never "a TBD that never arrived" (that reading failed open).
+    if (!tbd && opponent === null) return { item: { ok: false, note: `${b.id}: ${a.status} after walkover with its opponent's seat cleared — it was seated when the withdrawal answered, expected forfeited to it` }, forfeited: false, voided: voidedBy(b, a) };
+    if (tbd || opponent === null) {
+      if (a.home === w || a.away === w) return { item: { ok: false, note: `${b.id}: ${a.status} after walkover with a TBD opponent and ${w} still seated — the cascade empties her seat (departSeat, X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
+      if (opponent === null) return { item: { ok: PENDING_STATUSES.includes(a.status), note: `${b.id}: ${a.status} after walkover with a TBD opponent that never arrived, expected still pending — the dead seat is never voided (X-WD-3)` }, forfeited: true, voided: voidedBy(b, a) };
+      const arrived = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
+      return { item: { ok: arrived, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover with a TBD opponent, expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: true, voided: voidedBy(b, a) };
     }
     const ok = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
     return { item: { ok, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover, expected forfeited/${opponent}` }, forfeited: ok, voided: false };
   },
   abandon: (b, a) => ({ item: { ok: a.status === "abandoned", note: `${b.id}: ${a.status} after an open-format walkover, expected abandoned` }, forfeited: false, voided: voidedBy(b, a) }),
 });
-/** The walkover model a stage kind's withdrawal takes. */
-export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (FORFEIT_MODEL_KINDS.includes(kind) ? "forfeit" : "abandon");
+/** The walkover model a stage kind's withdrawal takes (W2b: X-WD-2's open formats walk over as knockout does). */
+export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (FORFEIT_MODEL_KINDS.includes(kind) || X_WD_2_KINDS.includes(kind) ? "forfeit" : "abandon");
+/** C-2 (loop F): the HELD status a bracket-path withdrawal walks over beside the pending ones (a level result waiting
+ *  for the organiser's settle). */
+const HELD = "needs_decision";
+/** The bracket path of a withdrawal (withdrawal.ts WITHDRAWAL_WALKOVER_KINDS): the bracket kinds, and X-WD-2's page
+ *  playoff and ladder. */
+const onBracketPath = (kind: string): boolean => BRACKET_KINDS.includes(kind as BracketKind) || X_WD_2_KINDS.includes(kind);
+/** Which POLICY rule a kind's withdrawal answers by. "table": the product's table branch (the forfeit family less the
+ *  bracket kinds: withdrawTableEntrant names a policy for every entrant with fixtures in the stage, never "none").
+ *  "pending": every other kind's policy is DERIVED from what the entrant had pending — the bracket path (owner rulings
+ *  53 + 106, loop F: a withdrawal on any bracket kind, a ladder or a page_playoff with nothing pending answers "none";
+ *  106 extends 53 to every bracket kind), and americano's open-format rule (T15-R6). */
+export const policyFamilyFor = (kind: string): "table" | "pending" => (FORFEIT_MODEL_KINDS.includes(kind) && !onBracketPath(kind) ? "table" : "pending");
 
 /** What each policy implies for the withdrawn entrant's fixtures
  *  (withdrawal.ts:1-17 and 130-232, engine stage.ts withdrawTableEntrant):
@@ -85,7 +109,7 @@ export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (
  *  and the reported walkover count equals the forfeits observed, and the
  *  reported voided count equals the fixtures the cascade itself abandoned.
  *  `kind`: the stage kind the fixtures belong to. */
-export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number, voidedReported: number, kind: string): Item[] {
+export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number, voidedReported: number, kind: string, tbd: ReadonlySet<string> = new Set()): Item[] {
   const items: Item[] = [];
   let forfeitedByCascade = 0;
   let voidedByCascade = 0;
@@ -94,7 +118,7 @@ export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before:
     const a = after.find((x) => x.id === b.id);
     if (a === undefined) { items.push({ ok: false, note: `${b.id}: vanished` }); continue; }
     if (policy === "walkover" && PENDING_STATUSES.includes(b.status)) {
-      const j = walkover(b, a, w);
+      const j = walkover(b, a, w, tbd.has(b.id));
       if (j.forfeited) forfeitedByCascade++;
       if (j.voided) voidedByCascade++;
       items.push(j.item);
@@ -133,10 +157,17 @@ export const R4_TRIGGER: Readonly<Record<R4Family, (round: number, batch: readon
   ladder: (_round, batch, seed3) => batch.some((f) => f.home_entrant_id === seed3 || f.away_entrant_id === seed3),
 });
 
-/** Ruling 53: the open-format branch's policy (withdrawal.ts:213-217) —
- *  "walkover" only when the entrant had something pending, else "none". */
-export function expectedPolicy(before: readonly FixtureSnap[]): "walkover" | "none" {
-  return before.some((f) => PENDING_STATUSES.includes(f.status)) ? "walkover" : "none";
+/** Owner rulings 53 + 106 (loop F): the policy a bracket-path withdrawal owes — "walkover" only when the entrant had something
+ *  pending, else "none". Pending is PENDING_STATUSES and a HELD line (C-2: a needs_decision line walks over too); an
+ *  abandoned line walks over only while its abandon is active, which a snapshot does not show, so it abstains by name.
+ *  A kind off the bracket path is refused: a table kind answers by its own branch, americano by
+ *  americanoPolicyExpectation. */
+export function expectedPolicy(before: readonly FixtureSnap[], kind: string): AmericanoPolicyExpectation {
+  if (!onBracketPath(kind)) throw new Error(`expectedPolicy: ${kind} takes no bracket-path withdrawal`);
+  const abandoned = before.find((f) => f.status === "abandoned");
+  if (abandoned !== undefined) return { abstain: `cannot derive the policy: ${abandoned.id} is abandoned, and whether its abandon is still active is not observed` };
+  const pending = before.filter((f) => PENDING_STATUSES.includes(f.status) || f.status === HELD).length;
+  return { want: pending > 0 ? "walkover" : "none", pending };
 }
 
 /** Ruling 53: a withdrawn player's ladder finalRanks rung is a rulebook
@@ -349,30 +380,33 @@ export const r4Withdrawal: Scenario = {
       const note = keptPlayingNote(w, setup.persons.get(w.entrantId) ?? [], observed.stages[0]);
       if (note !== null) rec.notes.push(note);
     }
-    const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
+    // Every fixture of the stage, looked up by id: a dead seat the product cleared (X-WD-3) no longer seats w.
+    const stageRows = observed.stages[0].fixtures;
+    // W2b X-WD-3: the fixtures whose opponent seat was still empty when the withdrawal answered.
+    const tbd = new Set(atWithdrawal.filter((f) => (f.home === w.entrantId && f.away === null) || (f.away === w.entrantId && f.home === null)).map((f) => f.id));
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
-    // Ruling 53: on every open-format kind (the abandon family — ladder, page playoff, americano; withdrawal.ts's last
-    // branch) the policy is the open-format rule over what was pending; the canary also judges the other one. Final
-    // review m-2: page_playoff took the fixed "not none" before. The forfeit family keeps it: the product's table and
-    // bracket branches never answer "none" for an entrant with fixtures in the stage.
-    // T15-R6: on americano the same rule over what the withdrawn PLAYER had pending, or an abstain by name.
-    const derived: AmericanoPolicyExpectation = kind === "americano"
+    // Owner rulings 53 + 106 (loop F): on every kind off the table branch the policy is DERIVED from what was pending;
+    // the canary also judges the other one. The bracket path (the bracket kinds, page playoff, ladder) by its own rule —
+    // final review m-2 moved page_playoff off the fixed "not none", and ruling 106 the bracket kinds. The table kinds
+    // keep it: withdrawTableEntrant never answers "none" for an entrant with fixtures in the stage.
+    // T15-R6: on americano the open-format rule over what the withdrawn PLAYER had pending, or an abstain by name.
+    const derived: AmericanoPolicyExpectation | null = policyFamilyFor(kind) === "table" ? null : kind === "americano"
       ? americanoPolicyExpectation(w, setup.persons.get(w.entrantId) ?? [], atWithdrawal, observed.stages[0])
-      : { want: expectedPolicy(w.before), pending: w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length };
-    const policyAbstain = "abstain" in derived ? derived.abstain : null;
-    const policyItems: Item[] = "abstain" in derived ? []
-      : walkoverModelFor(kind) === "abandon"
-        ? withCanary(
+      : expectedPolicy(w.before, kind);
+    const policyAbstain = derived !== null && "abstain" in derived ? derived.abstain : null;
+    const policyItems: Item[] = derived === null
+      ? [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }]
+      : "abstain" in derived ? []
+        : withCanary(
           [{ ok: w.policy === derived.want, note: kind === "americano"
             // W1d item 24: the persons' COUNT, never their ids (a team's roster is its persons, every one of them).
             ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of the withdrawn entrant (${personsLabel((setup.persons.get(w.entrantId) ?? []).length)}) at withdrawal, through any entrant; withdrawal.ts open-format rule)`
-            : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; withdrawal.ts open-format rule)` }],
+            : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; the bracket branch's rule, rulings 53 + 106)` }],
           [{ ok: w.policy === (derived.want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${derived.want === "none" ? "walkover" : "none"}` }],
           ctx.spec.canary,
-        )
-        : [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }];
+        );
     const challenged = family === "ladder"
       ? notChallengedLater({
         kind, seed3: w.entrantId, heldAt,
@@ -391,8 +425,8 @@ export const r4Withdrawal: Scenario = {
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", policyItems, policyAbstain),
         assertion("r4-cascade-consistent", withCanary(
-          [...cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(w.policy, w.before, w.skippedFinalized)],
-          [...cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(opposite, w.before, w.skippedFinalized)],
+          [...cascadeItems(w.policy, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(w.policy, w.before, w.skippedFinalized)],
+          [...cascadeItems(opposite, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(opposite, w.before, w.skippedFinalized)],
           ctx.spec.canary,
         )),
         assertion("r4-not-paired-later",

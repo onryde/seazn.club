@@ -27,10 +27,15 @@
 import Link from "next/link";
 import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import { ScoreSentence } from "@/components/score-sentence";
+import { ForfeitTagChip } from "../forfeit-tag-chip";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import type { HubMatchT } from "@/server/public-site/competition-hub-schema";
+
+/** Design audit 3.7: the abandon tags that carry the result's method ("Aband. · DLS", "Aband. · NR"). Beside a result
+ *  line, which names that method itself ("… (DLS)", "No result"), the tag is the bare abandon word. */
+const ABANDON_METHOD_TAG_KINDS: ReadonlySet<string> = new Set(["abandoned_dls", "abandoned_no_result"]);
 
 export interface MatchCardProps {
   match: HubMatchT;
@@ -239,6 +244,9 @@ export function MatchCard({
       // `match-card.test.tsx` asserts the RENDERED attribute rather than the
       // call, because the call was already right.
       aria-label={t(dict, "matchesHub.card.label", { home: s0.name, away: s1.name })}
+      // W2b Task 13: the label above REPLACES the card's content for a screen reader, so a credited result's sentence
+      // is attached as the link's description — the tag below is its visible abbreviation.
+      aria-describedby={m.forfeit ? `mh-forfeit-${m.fixtureId}` : undefined}
       className="block rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm transition hover:border-accent-line"
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-ink-muted">
@@ -273,7 +281,14 @@ export function MatchCard({
               {t(dict, "matchesHub.live")}
             </span>
           ) : m.bucket === "completed" ? (
-            t(dict, "matchesHub.ended")
+            // W2b loop H F4: an abandon that left no winner — flagged for replay, held for a settle, level, no result —
+            // is not "Ended". Read from the card's own tag (`hubForfeit` → `forfeitTag`: the outcome and the LEDGER,
+            // never the status, X-AB-2), in the match centre's word for it; an abandon that decided a winner ended.
+            m.forfeit?.kind.startsWith("abandoned") && m.winnerIndex === null ? (
+              t(dict, "matchCentre.status.abandoned")
+            ) : (
+              t(dict, "matchesHub.ended")
+            )
           ) : m.scheduledAt ? (
             fmtPublicTime(locale, m.tz, m.scheduledAt)
           ) : (
@@ -292,8 +307,27 @@ export function MatchCard({
           venue-less card keeps its result right-aligned exactly as it was. */}
       <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs text-ink-muted">
         <span className="min-w-0 truncate">{[m.venueName, m.courtName].filter(Boolean).join(" · ")}</span>
-        {m.resultLine ? (
-          <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
+        {m.forfeit ? (
+          // W2b Task 13 (UI-2 option A): a credited result — a forfeit, a double walkover, an abandon with a result —
+          // shows its tag, the sentence its tooltip and accessible name. An abandon keeps its result sentence beside
+          // the tag ("Eagles won by 12 runs (DLS)" · "Aband. · DLS"); a forfeit's tag replaces the bare "Forfeited".
+          // Design audit 3.8: the slot and its sentence shrink and WRAP inside the card (a long result at 320 painted
+          // past the card's edge); only the tag keeps `shrink-0`, and a score inside the sentence stays `nowrap`.
+          <span data-testid="mh-match-forfeit" className="flex min-w-0 items-baseline gap-1.5 font-medium text-ink">
+            {m.resultLine ? (
+              <span className="min-w-0 break-words">
+                <ScoreSentence text={m.resultLine} />
+              </span>
+            ) : null}
+            <ForfeitTagChip
+              id={`mh-forfeit-${m.fixtureId}`}
+              tag={m.resultLine && ABANDON_METHOD_TAG_KINDS.has(m.forfeit.kind) ? t(dict, "forfeit.tag.abandoned") : m.forfeit.tag}
+              sentence={m.forfeit.sentence}
+              testId="mh-match-forfeit-tag"
+            />
+          </span>
+        ) : m.resultLine ? (
+          <span data-testid="mh-match-result" className="min-w-0 break-words font-medium text-ink">
             <ScoreSentence text={m.resultLine} />
           </span>
         ) : m.header.statusLine ? (

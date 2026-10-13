@@ -8,13 +8,13 @@
 // `GET /api/v1/divisions/{id}/fixtures` carries no score field at all. It
 // returns `outcome` (jsonb, typed `z.unknown().nullable()` on the wire) plus
 // `status` and `round_no`, and the engine's `MatchOutcome` is a discriminated
-// union on `kind` — win/draw/tie/no_result/award. Scorelines exist only where
+// union on `kind` — win/draw/tie/no_result/award/double_walkover. Scorelines exist only where
 // a pack declares `perSide`, and come from the fixture STATE route.
 import { describe, expect, it } from "vitest";
 import { compareMatches, outcomeLoserOf } from "../oracle.ts";
 import type { PackExpectedOutcome } from "../pack-schema.ts";
 import { resolveExpectedOutcome } from "../suites/run-suite.ts";
-import type { MatchOutcome } from "@seazn/engine/core";
+import { AWARD_REASONS, type AwardReason, type MatchOutcome } from "@seazn/engine/core";
 
 const won = (winner: string, loser: string, method?: string) =>
   ({ kind: "win" as const, winner, loser, ...(method === undefined ? {} : { method }) });
@@ -149,12 +149,20 @@ describe("compareMatches", () => {
 // pair passed. B06's D4 said the bench asserts its own draw; nothing read
 // round-0 pairings back, and the loser is the cheapest true check on one.
 //
-// Per the ENGINE's union (`packages/engine/src/core/types.ts:115`), `loser`
-// lives on the `win` variant ALONE, while `method` is declared by BOTH `win`
-// and `award` — so the method comparison, which fired only for `win`, was
-// blind to a walkover recorded as a disqualification.
-const awarded = (winner: string, method?: string) =>
+// The method comparison once fired only for `win`, so it was blind to a
+// walkover recorded as a disqualification. Since W2b the two sides of an award
+// have DIFFERENT shapes, and these helpers keep them apart:
+//
+//  - `packAward` is the EXPECTED side — the pack's `award` — which keeps the
+//    name `method` (packs are frozen), has no `loser`, and may state no method;
+//  - `engineAward` is the LIVE side — the engine's `award` — which has a typed
+//    `reason` and a `loser` (null only for a bye) and NO `method`.
+//
+// `compareMatches` compares the pack's `method` against the engine's `reason`.
+const packAward = (winner: string, method?: string) =>
   ({ kind: "award" as const, winner, ...(method === undefined ? {} : { method }) });
+const engineAward = (winner: string, loser: string | null, reason: AwardReason): MatchOutcome =>
+  ({ kind: "award", winner, loser, reason });
 
 describe("compareMatches — the losing side", () => {
   const expected = [{ fixtureExtKey: "se-r0-i0", outcome: won("en-more", "en-lenus") }];
@@ -190,31 +198,37 @@ describe("compareMatches — the losing side", () => {
   });
 
   it("asserts no loser for an outcome shape that has none — never reports `(none)`", () => {
-    // A draw, a tie, a no_result and an award carry no losing side at all.
-    // Reading the field off them regardless would report `(none)` against
-    // every one of these, turning four correct results into four mismatches.
+    // A draw, a tie, a no_result, a double walkover and the PACK's award
+    // declare no losing side. Reading the field off them regardless would
+    // report `(none)` against every one of these, turning five correct results
+    // into five mismatches. (The engine's award does carry a `loser` since W2b,
+    // so the live side of that pair is engine-shaped; the pack cannot state one.)
     //
     // This loop alone kills NOTHING (Minors row 10 / task-2-review.md Minor
-    // 2, honestly labelled by the report as such): `expected` and `actual`
-    // are the exact same `outcome` reference, so any DETERMINISTIC function
-    // of it — including a broken `outcomeLoserOf` — produces the same value
-    // on both sides and the comparator's `expectedLoser !== actualLoser`
-    // guard never fires either way. Kept as an integration smoke check (it
+    // 2, honestly labelled by the report as such): for the kinds shared by
+    // both sides `expected` and `actual` are the exact same `outcome`
+    // reference, so any DETERMINISTIC function of it — including a broken
+    // `outcomeLoserOf` — produces the same value on both sides and the
+    // comparator's `expectedLoser !== actualLoser` guard never fires either
+    // way. Kept as an integration smoke check (it
     // does still prove the winner/method/line checks don't false-positive
     // on these shapes), but the loser-specific claim needs the direct call
     // below to actually be falsifiable.
-    for (const outcome of [
-      { kind: "draw" as const },
-      { kind: "tie" as const },
-      { kind: "no_result" as const },
-      awarded("en-more"),
-    ]) {
+    const pairs = [
+      { expected: { kind: "draw" as const }, live: { kind: "draw" as const } },
+      { expected: { kind: "tie" as const }, live: { kind: "tie" as const } },
+      { expected: { kind: "no_result" as const }, live: { kind: "no_result" as const } },
+      { expected: { kind: "double_walkover" as const }, live: { kind: "double_walkover" as const } },
+      { expected: packAward("en-more"), live: engineAward("en-more", "en-lenus", "walkover") },
+    ];
+    for (const { expected: outcome, live } of pairs) {
       const result = compareMatches(
         [{ fixtureExtKey: "se-r0-i0", outcome }],
-        [{ extKey: "se-r0-i0", status: "finalized", roundNo: 0, outcome }],
+        [{ extKey: "se-r0-i0", status: "finalized", roundNo: 0, outcome: live }],
       );
-      expect(result.mismatches).toEqual([]);
+      expect(result.mismatches, outcome.kind).toEqual([]);
     }
+    expect(pairs.length).toBe(5);
   });
 
   // Minors row 10 fix: a genuinely differential case. `MatchOutcome`'s zod
@@ -279,34 +293,15 @@ describe("compareMatches — the losing side", () => {
 });
 
 describe("compareMatches — an award's method", () => {
-  it("reds when a walkover is recorded with a different reason", () => {
+  it("passes when the pack's `method` walkover meets the engine's `reason` walkover — the positive pair", () => {
     const result = compareMatches(
-      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
+      [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", "walkover") }],
       [
         {
           extKey: "se-r1-i0",
           status: "forfeited",
           roundNo: 1,
-          outcome: awarded("en-more", "disqualification"),
-        },
-      ],
-    );
-    expect(result.mismatches[0]).toMatchObject({
-      field: "method",
-      expected: "walkover",
-      actual: "disqualification",
-    });
-  });
-
-  it("passes when the award's reason matches — the positive pair", () => {
-    const result = compareMatches(
-      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
-      [
-        {
-          extKey: "se-r1-i0",
-          status: "forfeited",
-          roundNo: 1,
-          outcome: awarded("en-more", "walkover"),
+          outcome: engineAward("en-more", "en-lenus", "walkover"),
         },
       ],
     );
@@ -314,19 +309,87 @@ describe("compareMatches — an award's method", () => {
     expect(result.checked).toBe(1);
   });
 
-  it("reds when the live award carries no reason at all", () => {
-    // The shape suite 11's walkover had to work around before the engine's
-    // award variant declared `method`: an award with no reason is not a
-    // satisfied assertion, it is an absent one.
+  it("reds when the pack says walkover and the engine's reason is retired", () => {
     const result = compareMatches(
-      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
-      [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: awarded("en-more") }],
+      [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", "walkover") }],
+      [
+        {
+          extKey: "se-r1-i0",
+          status: "forfeited",
+          roundNo: 1,
+          outcome: engineAward("en-more", "en-lenus", "retired"),
+        },
+      ],
     );
-    expect(result.mismatches[0]).toMatchObject({
-      field: "method",
-      expected: "walkover",
-      actual: "(absent)",
-    });
+    expect(result.mismatches).toEqual([
+      { fixtureExtKey: "se-r1-i0", field: "method", expected: "walkover", actual: "retired" },
+    ]);
+  });
+
+  it("reds when the pack says retired and the engine's reason is walkover — the other direction", () => {
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", "retired") }],
+      [
+        {
+          extKey: "se-r1-i0",
+          status: "forfeited",
+          roundNo: 1,
+          outcome: engineAward("en-more", "en-lenus", "walkover"),
+        },
+      ],
+    );
+    expect(result.mismatches).toEqual([
+      { fixtureExtKey: "se-r1-i0", field: "method", expected: "retired", actual: "walkover" },
+    ]);
+  });
+
+  it("holds every reason the engine declares against itself, and reds it against every other", () => {
+    // The vocabulary is the ENGINE's `AWARD_REASONS`, never typed here, so a
+    // reason the engine adds is swept without this test being edited. A bye
+    // names no loser; every other reason names one.
+    const live = (reason: AwardReason) =>
+      engineAward("en-more", reason === "bye" ? null : "en-lenus", reason);
+    let same = 0;
+    let different = 0;
+    for (const declared of AWARD_REASONS) {
+      for (const recorded of AWARD_REASONS) {
+        const result = compareMatches(
+          [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", declared) }],
+          [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: live(recorded) }],
+        );
+        if (declared === recorded) {
+          expect(result.mismatches, `${declared} vs ${recorded}`).toEqual([]);
+          same += 1;
+        } else {
+          expect(result.mismatches, `${declared} vs ${recorded}`).toEqual([
+            { fixtureExtKey: "se-r1-i0", field: "method", expected: declared, actual: recorded },
+          ]);
+          different += 1;
+        }
+      }
+    }
+    // Anti-vacuity: n matching pairs and n*(n-1) mismatching ones, n >= 5.
+    expect(same).toBe(AWARD_REASONS.length);
+    expect(different).toBe(AWARD_REASONS.length * (AWARD_REASONS.length - 1));
+    expect(AWARD_REASONS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("reds an award in the pre-W2b shape — a `method`, no `reason` — as unparseable, never as a pass", () => {
+    // The shape a stale server (or a stale fixture) would still send. It must
+    // not satisfy a pack's `method`: the engine's union refuses it, so the
+    // oracle reports the OUTCOME, not a method that went missing.
+    for (const stale of [
+      { kind: "award", winner: "en-more", method: "walkover" },
+      { kind: "award", winner: "en-more", loser: "en-lenus" },
+    ]) {
+      const result = compareMatches(
+        [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", "walkover") }],
+        [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: stale }],
+      );
+      expect(result.mismatches).toEqual([
+        { fixtureExtKey: "se-r1-i0", field: "outcome", expected: "award", actual: "(unparseable)" },
+      ]);
+    }
   });
 
   it("lets any live reason stand where the pack declares none", () => {
@@ -334,13 +397,13 @@ describe("compareMatches — an award's method", () => {
     // method is not asserting one. Without this guard the comparator would
     // red every award whose reason the pack simply declined to pin.
     const result = compareMatches(
-      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more") }],
+      [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more") }],
       [
         {
           extKey: "se-r1-i0",
           status: "forfeited",
           roundNo: 1,
-          outcome: awarded("en-more", "walkover"),
+          outcome: engineAward("en-more", "en-lenus", "walkover"),
         },
       ],
     );
@@ -389,14 +452,14 @@ describe("resolveExpectedOutcome → compareMatches — the real producer into t
           extKey: "se-r0-i19",
           status: "forfeited",
           roundNo: 0,
-          outcome: awarded("en-more", "disqualification"),
+          outcome: engineAward("en-more", "en-lenus", "disqualified"),
         },
       ],
     );
     expect(result.mismatches[0]).toMatchObject({
       field: "method",
       expected: "walkover",
-      actual: "disqualification",
+      actual: "disqualified",
     });
   });
 
@@ -413,7 +476,7 @@ describe("resolveExpectedOutcome → compareMatches — the real producer into t
           extKey: "se-r0-i19",
           status: "forfeited",
           roundNo: 0,
-          outcome: awarded("en-more", "walkover"),
+          outcome: engineAward("en-more", "en-lenus", "walkover"),
         },
       ],
     );
@@ -447,6 +510,34 @@ describe("resolveExpectedOutcome → compareMatches — the real producer into t
     expect(result.mismatches[0]).toMatchObject({ field: "loser", expected: "en-lenus", actual: "en-azmeen" });
   });
 
+  it("keeps an award that states no method method-less — it asserts no reason", () => {
+    // The pack's `method` is optional and the engine's `reason` is not, which is
+    // why the resolved expectation stays pack-shaped: an engine-shaped award
+    // would have to invent a reason for a pack that declined to pin one.
+    const outcome = resolve({ kind: "award", winner: "ref-more" });
+    expect(outcome).toEqual({ kind: "award", winner: "en-more" });
+    expect("method" in outcome).toBe(false);
+
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r0-i19", outcome }],
+      [
+        {
+          extKey: "se-r0-i19",
+          status: "forfeited",
+          roundNo: 0,
+          outcome: engineAward("en-more", "en-lenus", "retired"),
+        },
+      ],
+    );
+    expect(result.mismatches).toEqual([]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("passes a declared double walkover through the rebuild unchanged", () => {
+    const outcome = resolve({ kind: "double_walkover" });
+    expect(outcome).toEqual({ kind: "double_walkover" });
+  });
+
   it("reports an unresolvable ref rather than resolving it to nothing", () => {
     const unresolved: string[] = [];
     const resolved = resolveExpectedOutcome(
@@ -456,6 +547,41 @@ describe("resolveExpectedOutcome → compareMatches — the real producer into t
     );
     expect(resolved).toBeUndefined();
     expect(unresolved).toEqual(["ref-nobody"]);
+  });
+});
+
+// W2b — the engine's sixth outcome kind. A double walkover is both sides absent:
+// no winner, no loser, no method, so the comparison is on the KIND alone — and a
+// live `award` (one side absent) must never satisfy it, nor the reverse.
+describe("compareMatches — a double walkover", () => {
+  const dw = { kind: "double_walkover" as const };
+
+  it("passes when the pack declares a double walkover and the board served one", () => {
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: dw }],
+      [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: dw }],
+    );
+    expect(result.mismatches).toEqual([]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("reds a live award where a double walkover was declared — and the reverse", () => {
+    const award = engineAward("en-more", "en-lenus", "walkover");
+    const declaredDw = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: dw }],
+      [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: award }],
+    );
+    expect(declaredDw.mismatches).toEqual([
+      { fixtureExtKey: "se-r1-i0", field: "outcome", expected: "double_walkover", actual: "award" },
+    ]);
+
+    const declaredAward = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: packAward("en-more", "walkover") }],
+      [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: dw }],
+    );
+    expect(declaredAward.mismatches).toEqual([
+      { fixtureExtKey: "se-r1-i0", field: "outcome", expected: "award", actual: "double_walkover" },
+    ]);
   });
 });
 

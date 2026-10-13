@@ -210,9 +210,10 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a played mat
     // No phantom point for the absent H: H's opponent is a round-1 LOSER.
     const hOpponent = hBoard.home_entrant_id === H ? hBoard.away_entrant_id : hBoard.home_entrant_id;
     expect(["S4", "S5"], "H pairs in the 0-point group").toContain(rig.name(hOpponent));
-    // Winners S1, S2, A on 1; S4, S5, H on 0. A, the lowest-ranked winner,
-    // floats down to the top of the 0 group.
-    expect(shape(rig, r2)).toEqual(["S1 v S2", "S3 v S4", "S5 v S6"]);
+    // Winners S1, S2, A on 1; S4, S5, H on 0. W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
+    // credited score breaks ties — so A (S3, +42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
+    // rank_adjacent pairs 1v2, 3v4, 5v6 over [A, S1, S2, S4, S5, H].
+    expect(shape(rig, r2)).toEqual(["S3 v S1", "S2 v S4", "S5 v S6"]);
     expect(r2.every((f) => f.outcome === null), "an even field: no bye row in round 2").toBe(true);
   });
 

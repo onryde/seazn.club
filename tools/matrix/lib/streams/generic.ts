@@ -30,4 +30,11 @@ export const genericGenerator: SportStreamGenerator = {
       },
     ];
   },
+  // W2b (GN-RT-1): a point each — generic.score {by, points}, which scores without deciding.
+  partial(req) {
+    return [
+      { type: "generic.score", payload: { by: req.home, points: 1 } },
+      { type: "generic.score", payload: { by: req.away, points: 1 } },
+    ];
+  },
 };

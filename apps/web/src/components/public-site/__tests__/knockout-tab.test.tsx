@@ -831,37 +831,160 @@ describe("KnockoutTab — the champion banner", () => {
     }
   });
 
-  it("a final won by FORFEIT says so — 'Won the Final by walkover against Dev', never 'Beat Dev'", () => {
-    // The builder's own forfeited final carries exactly this status line
-    // (`competition-hub.test.ts` witnesses it on the real producer).
-    const forfeited = DONE_MATCHES.map((x) =>
-      x.fixtureId === "f1"
-        ? {
-            ...x,
-            header: {
-              ...x.header,
-              status: "other" as const,
-              statusLine: { key: "matchCentre.status.forfeited" },
-            },
-          }
-        : x,
-    );
-    const h = render(
-      hubDoc({
-        matches: forfeited,
-        knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
-      }),
-    );
+  // W2b Task 13, Loop R M-10: the banner reads whether the final was PLAYED (`HubMatch.forfeit.played`, the producer's
+  // `fixturesStatsReading` over the final's ledger: the engine's one "played" reader, rulings 112/115/118/127), never
+  // the forfeit's kind. The status cannot tell a walkover from a retirement, and the kind cannot tell a disqualification
+  // after a bare Start (ruling 115: a walkover) from one after real play. Absent (`played` unknown: a document cached
+  // before the field, or a sport the hub cannot resolve) makes no walkover claim: the plain line, the tag beside it.
+  const forfeitFinal = (kind: string, played?: boolean) =>
+    hubDoc({
+      matches: DONE_MATCHES.map((x) =>
+        x.fixtureId === "f1"
+          ? {
+              ...x,
+              header: { ...x.header, status: "other" as const, statusLine: { key: "matchCentre.status.forfeited" } },
+              forfeit: {
+                kind,
+                tag: kind === "retired" ? "ret." : kind === "disqualified" ? "DQ" : "w/o",
+                sentence: "Dev — the sentence",
+                ...(played === undefined ? {} : { played }),
+              },
+            }
+          : x,
+      ),
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
+    });
+  const bannerOf = (h: string) => {
     const at = h.indexOf(`data-testid="mh-knockout-champion-${VIEW}"`);
     expect(at).toBeGreaterThan(-1);
-    const banner = h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
-    expect(banner).toContain(">Eli<");
-    expect(banner).toContain(">Won the Final by walkover against Dev<");
-    expect(banner).not.toContain("Beat Dev");
+    return h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
+  };
+  /** Every forfeit the engine can leave on a final with nothing played before it (ruling 112: a walkover; 115: a
+   *  disqualification; 127: a withdrawal), and with play before it (113: a retirement needs play; 115, 127). */
+  const UNPLAYED = ["walkover", "disqualified", "withdrew"] as const;
+  const PLAYED = ["retired", "disqualified", "withdrew"] as const;
+  it("a final nothing was played in says so — 'Won the Final by walkover against Dev', never 'Beat Dev' (a DQ after a bare Start too, ruling 115)", () => {
+    let checked = 0;
+    for (const kind of UNPLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, false)));
+      expect(banner).toContain(">Eli<");
+      expect(banner, kind).toContain(">Won the Final by walkover against Dev<");
+      expect(banner, kind).not.toContain("Beat Dev");
+      checked++;
+    }
+    expect(checked).toBe(UNPLAYED.length);
+  });
+  it("…a final PLAYED before its forfeit (a retirement, a disqualification or a withdrawal after play): 'Beat Dev', not the walkover line", () => {
+    let checked = 0;
+    for (const kind of PLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, true)));
+      expect(banner, kind).toContain(">Beat Dev in the Final<");
+      expect(banner, kind).not.toContain("walkover");
+      checked++;
+    }
+    expect(checked).toBe(PLAYED.length);
+  });
+  it("the same disqualification reads both ways — the played fact decides, never the reason (M-10's pair)", () => {
+    expect(bannerOf(render(forfeitFinal("disqualified", false)))).toContain(">Won the Final by walkover against Dev<");
+    expect(bannerOf(render(forfeitFinal("disqualified", true)))).toContain(">Beat Dev in the Final<");
+  });
+  it("`played` unknown makes no walkover claim: the plain line and the final's tag, whatever the kind", () => {
+    let checked = 0;
+    for (const kind of ["walkover", "withdrew", "retired", "disqualified"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      expect(banner, kind).toContain(">Beat Dev in the Final<");
+      expect(banner, `${kind}: the tag says what the line does not`).toContain("mh-knockout-champion-forfeit");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // W2b T13 fix round 1 (review (b)) — the line keeps no reason ("Beat Dev" is right for a retirement, and the walkover
+  // line does not say "withdrew"), so the final's own tag rides beside it: the same chip, named by the same sentence.
+  const BANNER_CHIP = /<span role="img" aria-label="([^"]*)" title="([^"]*)" data-testid="mh-knockout-champion-forfeit"[^>]*>([^<]*)<\/span>/;
+  it("empty case first: a played final's banner carries no tag", () => {
+    expect(bannerOf(render(doneDoc("f1")))).not.toContain("mh-knockout-champion-forfeit");
+  });
+  // Design audit 3.6: (a) the tag rides only beside a line that names no reason — "Beat Dev" (a retirement, a
+  // disqualification, a withdrawal after play). The walkover line already says "by walkover", so its "w/o" said it
+  // twice. (b) The banner is the dark court: the chip wears the on-court idiom (the court card's translucent amber),
+  // never the light pill. Both sides of (a) are counted.
+  it("a final played before its forfeit: the final's tag beside 'Beat Dev', named by its sentence, once, on-court", () => {
+    let checked = 0;
+    for (const kind of PLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, true)));
+      const chip = BANNER_CHIP.exec(banner);
+      expect(chip, `${kind}: the banner's chip`).not.toBeNull();
+      const tag = kind === "retired" ? "ret." : kind === "disqualified" ? "DQ" : "w/o";
+      expect([chip![1], chip![2], chip![3]], kind).toEqual([esc("Dev — the sentence"), esc("Dev — the sentence"), tag]);
+      expect(banner.split("mh-knockout-champion-forfeit").length - 1, `${kind}: once`).toBe(1);
+      const cls = new Set((/data-testid="mh-knockout-champion-forfeit" class="([^"]*)"/.exec(banner)?.[1] ?? "").split(/\s+/u));
+      for (const token of ["rounded-full", "bg-amber-400/20", "text-amber-300"]) expect(cls.has(token), `${kind}: the on-court ${token}`).toBe(true);
+      for (const token of ["bg-zinc-100", "text-ink-muted"]) expect(cls.has(token), `${kind}: not the light pill's ${token}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(PLAYED.length);
+  });
+  it("a final nothing was played in: the line says 'by walkover', and no tag repeats it", () => {
+    let checked = 0;
+    for (const kind of UNPLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, false)));
+      expect(banner, `${kind}: the walkover line`).toContain("by walkover");
+      expect(banner, `${kind}: no tag beside it`).not.toContain("mh-knockout-champion-forfeit");
+      checked++;
+    }
+    expect(checked).toBe(UNPLAYED.length);
   });
 
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {
     expect(render(doneDoc(null))).not.toContain(`data-testid="mh-knockout-champion-`);
+  });
+});
+
+// W2b Task 13 fix round 1 (review I-1) — the Draw node's tag. It rides the WINNER's row (the first, when nobody won: a
+// double walkover), its accessible name and tooltip are the sentence, and the node is described by it. The final's
+// winner is Eli on the SECOND row, so a chip pinned to the first row reads differently from the right one.
+describe("KnockoutTab — the Draw node's forfeit tag (T13 review I-1)", () => {
+  const SENTENCE = "Dev didn't turn up — walkover.";
+  const drawWith = (forfeit: { kind: string; tag: string; sentence: string } | null, winnerIndex: 0 | 1 | null) =>
+    hubDoc({
+      matches: DONE_MATCHES.map((x) => (x.fixtureId === "f1" ? { ...x, winnerIndex, ...(forfeit ? { forfeit } : {}) } : x)),
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: null })],
+    });
+  /** The final's node split into its two side rows. */
+  const rowsOf = (h: string): string[] => {
+    const at = h.indexOf(`data-testid="mh-knockout-node-f1"`);
+    expect(at, "the final's node").toBeGreaterThan(-1);
+    const node = h.slice(at, h.indexOf("</a>", at));
+    const rows = node.split(`<span class="flex h-[22px]`).slice(1);
+    expect(rows.length, "two side rows").toBe(2);
+    return rows;
+  };
+  const CHIP = `data-testid="mh-knockout-node-forfeit"`;
+
+  it("empty case first: a played final's node carries no tag and no description", () => {
+    url.view = "draw";
+    const h = render(drawWith(null, 1));
+    expect(rowsOf(h).filter((r) => r.includes(CHIP))).toHaveLength(0);
+    expect(h).not.toContain(`aria-describedby="mh-knockout-forfeit-f1"`);
+  });
+
+  it("a walkover: the tag is on the WINNER's row (Eli, the second), named and titled by the sentence; the node is described by it", () => {
+    url.view = "draw";
+    const h = render(drawWith({ kind: "walkover", tag: "w/o", sentence: SENTENCE }, 1));
+    const rows = rowsOf(h);
+    expect(rows[0], "the loser's row").not.toContain(CHIP);
+    expect(rows[1], "the winner's row").toContain(CHIP);
+    const chip = /<span id="mh-knockout-forfeit-f1" role="img" aria-label="([^"]*)" title="([^"]*)"[^>]*>([^<]*)<\/span>/.exec(rows[1]!);
+    expect(chip, "the chip is an img named by the sentence").not.toBeNull();
+    expect([chip![1], chip![2], chip![3]]).toEqual([esc(SENTENCE), esc(SENTENCE), "w/o"]);
+    expect(h).toContain(`aria-describedby="mh-knockout-forfeit-f1"`);
+  });
+
+  it("a double walkover (nobody won): the tag is on the first row, once", () => {
+    url.view = "draw";
+    const rows = rowsOf(render(drawWith({ kind: "double_walkover", tag: "2× w/o", sentence: "Neither side showed up." }, null)));
+    expect(rows.map((r) => r.split(CHIP).length - 1)).toEqual([1, 0]);
   });
 });
 

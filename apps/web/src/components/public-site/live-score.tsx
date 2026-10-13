@@ -27,6 +27,7 @@ import {
   stripLiveSetPoints,
 } from "@/lib/public-site";
 import { type LiveFixtureData } from "./live-score-data";
+import { NO_LEDGER, creditsNobody, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
@@ -121,11 +122,15 @@ export function LiveScoreBody({
   const breakdown = setBreakdown(data.summary, sportKey);
   // Kernel perSide order is [home, away]; row labels come from it.
   const sideIds = data.summary?.perSide?.map((s) => s.entrantId) ?? [];
-  const showBreakdown = breakdown !== null && sideIds.length === 2;
+  // Design review M-1 (audit 3.1): a double walkover credits nobody — its summary's headline, side lines, set and period tables
+  // are a 0 — 0 that reads as an unplayed match. None is drawn; the tag takes the headline's place, muted, and the
+  // sentence below says what happened.
+  const noScore = creditsNobody(data.outcome);
+  const showBreakdown = breakdown !== null && sideIds.length === 2 && !noScore;
   // Period-kernel surfaces (v6/00 §5): power-play strength while live,
   // goals-by-period once periods exist, the discipline list, tennis serve dot.
   const strength = inPlay ? matchStrength(data.summary) : null;
-  const periods = periodBreakdown(data.summary);
+  const periods = noScore ? null : periodBreakdown(data.summary); // M-1: a period table of a double walkover is a 0–0 too
   const discipline = disciplineList(data.summary);
   const serving = inPlay ? servingSide(data.summary) : null;
   // R3.5/Task O — recomputed from `data` on every render, so a live poll or
@@ -135,13 +140,26 @@ export function LiveScoreBody({
   // (R3.5/Task G) — correct at first paint but frozen after that, since a
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
-  const decidedLine = renderDecidedOutcome(
+  // W2b Task 13 (spec §5.5): a forfeit or a double walkover says which, naming the side, in the sentence the match
+  // centre's court card says it in (`forfeitTag`, the one reader). This fallback holds no ledger, so it never shows
+  // an abandon's words — those need the active `core.abandon`, which only the document's own header carries.
+  // The summary's perSide is [home, away] (above): the seats a forfeit stored before W2b names its loser from.
+  const forfeit = forfeitTag(
+    data.outcome,
+    NO_LEDGER,
+    sideIds.length === 2 ? { home_entrant_id: sideIds[0]!, away_entrant_id: sideIds[1]! } : undefined,
+  );
+  const forfeitLine = forfeit
+    ? forfeitWords(forfeit, (key, vars) => t(activeDict, key, vars), (id) => entrantNames[id] ?? "?").sentence
+    : null;
+  const outcomeLine = renderDecidedOutcome(
     data.outcome,
     entrantNames,
     decidedTemplates,
     shootoutScore,
     tiebreakScoreFromDetail(data.summary?.detail),
   );
+  const decidedLine = forfeitLine ?? outcomeLine;
 
   // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
   // `suppressScorebug` for every non-cricket sport so the court slab is not
@@ -182,15 +200,21 @@ export function LiveScoreBody({
   // locales); `beforeStart` is untouched and still serves genuinely
   // not-started fixtures. Three facts, three sentences: this will fill in and
   // has not begun / this will fill in and is happening now / this never will.
+  //
+  // W2b T13 review C3 — the not-started sentence is for a match that WILL start. The ladder used to send every status
+  // that was neither in play nor decided to it, so a walked-over, abandoned, cancelled or held match centre promised
+  // "…once the match starts" under a sentence saying it never would. Only scheduled (and the hub's legacy postponed)
+  // will start; every other status is over, or held, and gets `noDetail`.
   const hasSecondaryContent =
     (showBreakdown && sideIds.length === 2) || periods !== null || discipline !== null;
+  const willStart = data.status === "scheduled" || data.status === "postponed";
   const emptyStateKey = hasSecondaryContent
     ? null
-    : decided || data.status === "finalized"
-      ? "matchCentre.empty.noDetail"
-      : inPlay
-        ? "matchCentre.empty.inPlay"
-        : "matchCentre.empty.beforeStart";
+    : inPlay
+      ? "matchCentre.empty.inPlay"
+      : willStart
+        ? "matchCentre.empty.beforeStart"
+        : "matchCentre.empty.noDetail";
 
   return (
     <div className="space-y-4">
@@ -238,8 +262,10 @@ export function LiveScoreBody({
               above and this HEADLINE are two different pieces of copy that
               happen to describe the same moment; they keep two different
               keys on purpose now. */}
-          <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
-            {data.summary?.headline
+          <p className={`font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl${noScore ? " text-court-muted" : ""}`}>
+            {noScore
+              ? t(activeDict, "forfeit.tag.doubleWalkover")
+              : data.summary?.headline
               ? showBreakdown
                 ? stripLiveSetPoints(data.summary.headline)
                 : data.summary.headline
@@ -263,9 +289,11 @@ export function LiveScoreBody({
                       ) : null}
                       {entrantNames[side.entrantId] ?? "—"}
                     </span>
-                    <span className="shrink-0 font-display text-xl font-bold sm:text-2xl">
-                      {side.line}
-                    </span>
+                    {noScore ? null : (
+                      <span className="shrink-0 font-display text-xl font-bold sm:text-2xl">
+                        {side.line}
+                      </span>
+                    )}
                   </li>
                 );
               })}

@@ -97,6 +97,7 @@ import {
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
 import { intlLocaleFor } from "@/lib/public-date-locale";
+import { forfeitLedgerOf, forfeitSentence, forfeitTag } from "@/lib/forfeit-tag";
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
@@ -143,6 +144,19 @@ export interface MatchCentreInput {
    *  label text directly; Task 9 fills it from the division's variant/
    *  format. `null` omits the row entirely — never a blank one. */
   formatLabel: string | null;
+  /** W2b Task 13 (X-AB-2) — a Msg in words, in the document's locale. An abandon's sentence carries the match's own
+   *  result sentence ("Abandoned (rain) — Eagles won by 12 runs (DLS)."), and a `Msg`'s params are flat strings
+   *  (match-centre-schema.ts), so the result is put into words here. The loader passes `t` over the public
+   *  dictionary; absent, the abandon line names its reason without the result (`forfeit.sentence.abandonedBare`). */
+  resolveMsg?: (msg: MsgT) => string;
+  /** W2b Task 13 (X-DW-1) — the name of the side a double walkover's next match was walked over to, read by the
+   *  loader off the next fixture (`doubleWalkoverNextWinner`). Absent, null or empty: the sentence has no clause. */
+  doubleWalkoverNext?: string | null;
+  /** Owner ruling 116 (W2b Task 16) — the forfeit's LOSER when she holds no seat here: a winner who withdrew before
+   *  this tie, its seat dead, so the arriving side walked over her (`awardSeededByes`). The sides name only who is
+   *  seated, so the loader reads her name (masked as it masks a side) and the sentence names her. Absent or null for
+   *  every other fixture: a seated loser is named by the sides. */
+  unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
 }
 
 // --------------------------------------------------------------- constants
@@ -924,10 +938,23 @@ function buildHeader(
   // "8-over match · Round 1 · Garon Park" had no source.
   formatLabel: string | null,
   stage: { name: string; roundLabel: string | null } | null,
+  // W2b Task 13: the ACTIVE ledger (voids resolved by the loader) — an abandon's tag reads it, never the status — and
+  // the two words the forfeit sentence needs from outside the fixture (see `MatchCentreInput`).
+  events: readonly EventEnvelope[],
+  forfeitExtra: {
+    resolveMsg?: (msg: MsgT) => string;
+    doubleWalkoverNext?: string | null;
+    unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
+  },
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
+  // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one (the status line, below) — `forfeitTag` is the one
+  // reader, answering only for a decided outcome, so a live or scheduled match is untouched.
+  const tag = status === "scheduled" || status === "in_play" ? null : forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);
 
-  const perSide = fixture.summary?.perSide ?? [];
+  // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 is not a score, so the court card carries no
+  // score lines (the schedule's rule, `schedule.tsx`, read through the same tag), and its sentence says what happened.
+  const perSide = tag?.kind === "double_walkover" ? [] : (fixture.summary?.perSide ?? []);
   const scoreLines: [string | null, string | null] = [
     perSide.find((p) => p.entrantId === sides[0].entrantId)?.line ?? null,
     perSide.find((p) => p.entrantId === sides[1].entrantId)?.line ?? null,
@@ -1018,6 +1045,45 @@ function buildHeader(
       };
     }
     rateLine = rateLineOf(live);
+  }
+
+  // W2b Task 13 (spec §5.5, UI-2): a credited result says WHICH one, in one sentence — the forfeit naming the side that
+  // did not play on (X-RS-2), a double walkover (X-DW-1), an abandon with its reason and the result it left (X-AB-2).
+  // `forfeitTag` is the one reader; it answers only for a decided outcome, so a live or scheduled match is untouched.
+  // It outranks the status word on purpose: a double walkover stored under the pre-W2b `needs_decision` must never
+  // read "Level — winner to be decided" (spec §5.5), and a `forfeited` row now says more than "Forfeited".
+  if (tag !== null) {
+    const resolve = forfeitExtra.resolveMsg;
+    // An abandon's result is the SAME sentence the decided branch above words (the same margins, by method), so the
+    // match cannot read one result two ways; a level abandon's ("Draw", "No result") comes from the same switch.
+    const shootout = shootoutScoreFromDetail(fixture.summary?.detail);
+    // Review M-2: a HELD abandon — status `abandoned` with a result, which `fixtureStatusFromFold` leaves only for a
+    // level result where one is forbidden (a bracket), owed the organiser's settle — has no result yet: who advances
+    // is still to be decided, so the line names the abandon and its reason alone (`abandonedBare`), never a finished
+    // "— No result." / "— Match drawn.".
+    const held = fixture.status === "abandoned";
+    const result =
+      tag.kind.startsWith("abandoned") && resolve !== undefined && !held
+        ? resultMsg(
+            fixture.outcome,
+            {
+              shootoutTally: shootout !== null ? `${shootout.home}–${shootout.away}` : null,
+              cricket: card?.result?.margin ?? null,
+              tiebreakScore: tiebreakScoreFromDetail(fixture.summary?.detail),
+            },
+            card?.result?.winner ?? null,
+            sides,
+            sportKey,
+            locale,
+          )
+        : null;
+    const unseated = forfeitExtra.unseatedForfeitLoser ?? null;
+    const nameOf = (id: string) => (unseated !== null && unseated.id === id ? unseated.name : sideNameOf(sides, id));
+    const sentence = forfeitSentence(tag, nameOf, {
+      result: result !== null && resolve !== undefined ? resolve(result) : null,
+      next: forfeitExtra.doubleWalkoverNext ?? null,
+    });
+    statusLine = sentence.params === undefined ? { key: sentence.key } : { key: sentence.key, params: sentence.params };
   }
 
   // Both read through the SHARED readers in `lib/public-site.ts` — the same
@@ -1342,6 +1408,8 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     sportKey,
     input.formatLabel,
     input.stage,
+    input.events,
+    { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext, unseatedForfeitLoser: input.unseatedForfeitLoser },
   );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 

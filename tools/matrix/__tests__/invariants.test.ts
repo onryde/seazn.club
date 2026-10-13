@@ -199,6 +199,69 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
     drawn.fixtures = drawn.fixtures.map((f) => (f.roundNo === 2 ? { ...f, outcome: { kind: "draw" as const } } : f));
     expect(evaluateInvariant(I2, run([drawn])).evidence.join(" ")).toMatch(/bracket fixture ended draw/);
   });
+  // W2b Task 16, controller ruling R16-1: a double walkover the product STORED (outcome kind double_walkover, read
+  // from the fixture, never from the scenario's intent) beats both its sides. Before the fix both read as unbeaten
+  // and the fixture was flagged "ended double_walkover", so every DW-ALL / WD-CASC knockout red on I2.
+  const BYE: ObservedOutcome = { kind: "award", winner: "a", loser: null, reason: "bye" };
+  const dwBracket = (finalRanks: string[], opener: ObservedOutcome | null = win("a"), final: { away: string | null; outcome: ObservedOutcome | null } = { away: null, outcome: BYE }) => stage({
+    kind: "knockout", field: ["a", "b", "c", "d"],
+    fixtures: [
+      fx({ roundNo: 1, home: "a", away: "d", status: opener === null ? "scheduled" : "decided", outcome: opener }),
+      fx({ roundNo: 1, home: "b", away: "c", status: "forfeited", outcome: { kind: "double_walkover" } }),
+      fx({ roundNo: 2, home: "a", away: final.away, status: final.outcome === null ? "scheduled" : "forfeited", outcome: final.outcome }),
+    ],
+    complete: { status: 200, code: null, completed: true, finalRanks },
+  });
+  it("R16-1: an observed double walkover beats both its sides and is not flagged — the champion is the one unbeaten", () => {
+    const v = evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"])]));
+    expect(v.evidence.join(" ")).not.toMatch(/ended double_walkover|unbeaten entrants/);
+    expect(v).toMatchObject({ verdict: "pass", checked: 5 });
+  });
+  it("R16-1: I2 still reds on a real violation beside a double walkover — a wrong rank 1, a drawn final, an unplayed opener", () => {
+    expect(evaluateInvariant(I2, run([dwBracket(["d", "a", "b", "c"])])).evidence.join(" ")).toMatch(/rank 1 is d, unbeaten is a/);
+    expect(evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"], win("a"), { away: "d", outcome: { kind: "draw" } })])).evidence.join(" ")).toMatch(/bracket fixture ended draw/);
+    expect(evaluateInvariant(I2, run([dwBracket(["a", "d", "b", "c"], null)])).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,d/);
+  });
+  it("R16-1: a double walkover in the FINAL leaves nobody unbeaten — 0 unbeaten fails (a vacant final has no champion)", () => {
+    const vacant = stage({
+      kind: "knockout", field: ["a", "b", "c", "d"],
+      fixtures: [fx({ roundNo: 1, home: "a", away: "d", outcome: win("a") }), fx({ roundNo: 1, home: "b", away: "c", outcome: win("b") }), fx({ roundNo: 2, home: "a", away: "b", status: "forfeited", outcome: { kind: "double_walkover" } })],
+      complete: { status: 200, code: null, completed: true, finalRanks: ["a", "b", "c", "d"] },
+    });
+    expect(evaluateInvariant(I2, run([vacant])).evidence.join(" ")).toMatch(/0 unbeaten entrants/);
+  });
+  // W2b Task 16, controller ruling R16-5 (X-WD-3, X-WD-5): a withdrawn entrant's seat is dead and never seated again, so
+  // "never loses a stored fixture" is the design — I2 counts an entrant the product STORES as departed (its entrant
+  // status, the run's `departed`, never the scenario's intent) as eliminated. Here b wins its opener and withdraws; its
+  // final seat dies and a walks over by bye. Before the ruling b read as unbeaten beside the champion (WD-CASC's "3
+  // unbeaten" in all 11 cells).
+  const wdBracket = (finalRanks: string[]) => stage({
+    kind: "knockout", field: ["a", "b", "c", "d"],
+    fixtures: [
+      fx({ roundNo: 1, home: "a", away: "d", outcome: win("a") }),
+      fx({ roundNo: 1, home: "b", away: "c", outcome: win("b") }),
+      fx({ roundNo: 2, home: "a", away: null, status: "forfeited", outcome: BYE }),
+    ],
+    complete: { status: 200, code: null, completed: true, finalRanks },
+  });
+  it("R16-5: an entrant stored as departed counts as eliminated — the champion is the one unbeaten, and the departure is reported", () => {
+    const v = evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["b"] }));
+    expect(v).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(v.evidence).toEqual(["1 departed entrant(s) counted eliminated (stored status): b"]);
+  });
+  it("R16-5: I2 still reds an unbeaten entrant who has NOT withdrawn — none departed, another departed, or the departed one crowned", () => {
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { departed: [] })).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,b/);
+    // c departed, but c had already lost: b is still unbeaten and never withdrew.
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["c"] })).evidence.join(" ")).toMatch(/2 unbeaten entrants: a,b/);
+    expect(evaluateInvariant(I2, run([wdBracket(["b", "a", "d", "c"])], { facts: facts("withdrawn"), departed: ["b"] })).evidence.join(" ")).toMatch(/rank 1 is b, unbeaten is a/);
+    // Everyone left in departed: nobody is unbeaten, which is no champion (a vacant title fails, as R16-1's does).
+    expect(evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn"), departed: ["a", "b"] })).evidence.join(" ")).toMatch(/0 unbeaten entrants/);
+  });
+  it("R16-5: a withdrawn run whose stored departures were never read fails by name, never reads as none departed", () => {
+    const v = evaluateInvariant(I2, run([wdBracket(["a", "b", "d", "c"])], { facts: facts("withdrawn") }));
+    expect(v.verdict).toBe("fail");
+    expect(v.evidence.join(" ")).toMatch(/withdrawn case whose stored departures were never read/);
+  });
   it("abstain: stage not completed; shared place declared", () => {
     expect(evaluateInvariant(I2, run([bracket(null, false)])).verdict).toBe("abstain");
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"])], { facts: facts("shared_place_declared") })).verdict).toBe("abstain");
@@ -441,7 +504,7 @@ describe("I3 table-points-equal-declared", () => {
       expect(r.evidence).toEqual(["flip: stored decided win b, but the harness posted win a"]);
     });
     it("a changed result with NO withdrawal recorded fails, naming what was stored and what was posted", () => {
-      const changed = fx({ id: "chg", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b" }, declared: { home: 3, away: 0, forOutcome: win("a") } });
+      const changed = fx({ id: "chg", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b", loser: null, reason: "walkover" }, declared: { home: 3, away: 0, forOutcome: win("a") } });
       const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [changed, ca()], standings: table(0, 3, 3) })]));
       expect(r).toMatchObject({ verdict: "fail", checked: 3 });
       expect(r.evidence).toEqual(["chg: stored forfeited award b, but the harness posted win a"]);
@@ -453,7 +516,7 @@ describe("I3 table-points-equal-declared", () => {
       expect(r.evidence).toEqual(["own: decided win b that the harness never posted, and no bye or recorded cascade explains"]);
     });
     it("a walkover the RECORDED cascade wrote (pending before it, forfeited to the opponent after) is skipped and counted", () => {
-      const wo = fx({ id: "wo", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b" }, declared: null });
+      const wo = fx({ id: "wo", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b", loser: null, reason: "walkover" }, declared: null });
       const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 1, voided: 0, skippedFinalized: 0, before: [{ id: "wo", status: "scheduled", outcome: null }] };
       const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { facts: facts("withdrawn"), withdrawal: w }));
       expect(r).toMatchObject({ verdict: "pass", checked: 1 });
@@ -477,11 +540,11 @@ describe("I3 table-points-equal-declared", () => {
       expect(sides({ status: "decided", outcome: win("a") })).toMatchObject({ verdict: "fail", evidence: ["one: one-sided decided win a that the harness never posted, and no bye or recorded cascade explains"] });
       expect(sides({ status: "abandoned", outcome: null })).toMatchObject({ verdict: "fail", evidence: ["one: one-sided abandoned no outcome that the harness never posted, and no bye or recorded cascade explains"] });
       // An award to the EMPTY seat is not a bye either.
-      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "z" } }).verdict).toBe("fail");
+      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "z", loser: null, reason: "walkover" } }).verdict).toBe("fail");
       // Nor an award row that is not forfeited.
-      expect(sides({ status: "decided", outcome: { kind: "award", winner: "a" } }).verdict).toBe("fail");
+      expect(sides({ status: "decided", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } }).verdict).toBe("fail");
       // The bye itself is the one shape that is skipped (declared by the harness in practice — snapshot's byeDeclared).
-      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "a" } })).toMatchObject({ verdict: "pass", checked: 2 });
+      expect(sides({ status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } })).toMatchObject({ verdict: "pass", checked: 2 });
     });
     it("a walkover cascade's void of a TBD opponent (one-sided, abandoned, pending before) is the cascade's, skipped", () => {
       const tbd = fx({ id: "tbd", home: "a", away: null, status: "abandoned", outcome: { kind: "no_result" }, declared: null });
@@ -581,13 +644,13 @@ describe("I3 table-points-equal-declared", () => {
   // server-written result: the recipient is skipped and counted, never judged
   // against a Σ that omits the bye.
   it("an odd-field Swiss bye row (forfeited award, other seat null) reaches the skip — no false red on the bye credit", () => {
-    const bye = fx({ home: "c", away: null, status: "forfeited", outcome: { kind: "award", winner: "c" }, declared: null });
+    const bye = fx({ home: "c", away: null, status: "forfeited", outcome: { kind: "award", winner: "c", loser: null, reason: "bye" }, declared: null });
     const table = (c: number) => [{ poolId: null, rows: [{ entrantId: "a", rank: 1, points: 3 }, { entrantId: "c", rank: 2, points: c }, { entrantId: "b", rank: 3, points: 0 }] }];
     const r = evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, bye], standings: table(3) })]));
     expect(r).toMatchObject({ verdict: "pass", checked: 2 });
     expect(r.evidence.join(" ")).toMatch(/skipped 1/);
     // If the harness DOES declare the bye's award, the recipient is judged against it.
-    const declaredBye = { ...bye, declared: { home: 3, away: 0, forOutcome: { kind: "award" as const, winner: "c" } } };
+    const declaredBye = { ...bye, declared: { home: 3, away: 0, forOutcome: { kind: "award" as const, winner: "c", loser: null, reason: "bye" } } };
     expect(evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, declaredBye], standings: table(3) })]))).toMatchObject({ verdict: "pass", checked: 3 });
     expect(evaluateInvariant(I3, run([stage({ kind: "swiss", field: ["a", "b", "c"], fixtures: [decided, declaredBye], standings: table(0) })])).evidence.join(" ")).toMatch(/c: table 0, declared Σ 3/);
   });
@@ -785,14 +848,16 @@ describe("evaluateInvariants + observed helpers", () => {
     expect(sameResult(a, { status: "decided", outcome: win("a") })).toBe(true);
     expect(sameResult(a, { status: "forfeited", outcome: win("a") })).toBe(false);
     expect(sameResult(a, { status: "decided", outcome: win("b") })).toBe(false);
-    expect(sameResult(a, { status: "decided", outcome: { kind: "award", winner: "a" } })).toBe(false);
+    expect(sameResult(a, { status: "decided", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } })).toBe(false);
     expect(sameResult({ status: "abandoned", outcome: null }, { status: "abandoned", outcome: null })).toBe(true);
   });
-  it("toObservedOutcome: junk → null; win/award keep winner; draw/tie/no_result keep kind", () => {
+  it("toObservedOutcome: junk → null; win/award keep winner; draw/tie/no_result keep kind; an award is D2's shape (winner, loser, reason)", () => {
     expect(toObservedOutcome(null)).toBeNull();
     expect(toObservedOutcome({ kind: "win" })).toBeNull();
     expect(toObservedOutcome({ kind: "win", winner: "a", loser: "b" })).toEqual({ kind: "win", winner: "a" });
-    expect(toObservedOutcome({ kind: "award", winner: "a", method: "walkover" })).toEqual({ kind: "award", winner: "a", method: "walkover" });
+    expect(toObservedOutcome({ kind: "award", winner: "a", loser: "b", reason: "walkover" })).toEqual({ kind: "award", winner: "a", loser: "b", reason: "walkover" });
+    // A row stored before W2b (D2) carries the reason as `method` and no loser: read as its reason, the loser unknown.
+    expect(toObservedOutcome({ kind: "award", winner: "a", method: "walkover" })).toEqual({ kind: "award", winner: "a", loser: null, reason: "walkover" });
     expect(toObservedOutcome({ kind: "tie" })).toEqual({ kind: "tie" });
   });
 });
@@ -965,7 +1030,7 @@ describe("I9 ladder", () => {
   });
   it("a drawn challenge and a walked-over challenge are decided challenges (both move nobody)", () => {
     expect(evaluateInvariant(I9, run([ladder(["a", "b", "c", "d"], ["a", "b", "c", "d"], [fx({ home: "d", away: "c", outcome: { kind: "draw" } })])])).verdict).toBe("pass");
-    expect(evaluateInvariant(I9, run([ladder(["a", "b", "c", "d"], ["a", "b", "c", "d"], [fx({ home: "d", away: "c", status: "forfeited", outcome: { kind: "award", winner: "c" } })])])).verdict).toBe("pass");
+    expect(evaluateInvariant(I9, run([ladder(["a", "b", "c", "d"], ["a", "b", "c", "d"], [fx({ home: "d", away: "c", status: "forfeited", outcome: { kind: "award", winner: "c", loser: null, reason: "walkover" } })])])).verdict).toBe("pass");
   });
   it("finalRanks = ladder_order over the active field passes; missing, duplicate, outsider and ranks ≠ order each fail by name", () => {
     expect(evaluateInvariant(I9, run([ladder(["a", "b", "d", "c"], ["a", "b", "d", "c"])]))).toMatchObject({ verdict: "pass", checked: 4 });

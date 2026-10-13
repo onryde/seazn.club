@@ -47,6 +47,7 @@ import type {
   KnockoutViewT,
 } from "@/server/public-site/competition-hub-schema";
 import { BRACKET_CREST_CLASS } from "./bracket-crest";
+import { ForfeitTagChip } from "../forfeit-tag-chip";
 import { MatchCard } from "./match-card";
 import { divisionChoices, HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { useSearchParam, writeDivisionParam, writeSearchParam } from "../use-tab-param";
@@ -70,9 +71,11 @@ export interface KnockoutTabProps {
  *  `import type`, so a value cannot cross that boundary. */
 const THIRD_PLACE_KEY = "third-place";
 
-/** The status line `hubHeader` gives a forfeited fixture: `forfeited` is an
- *  `other` status, and `STATUS_LINE_KEYS` keeps its own name for it. */
-const FORFEITED_STATUS_KEY = "matchCentre.status.forfeited";
+/** W2b Task 13, Loop R M-10: a final won by a forfeit with NOTHING played before it was not "beaten" in — the
+ *  producer's `HubMatch.forfeit.played`, the engine's one "played" reader over the final's ledger, never the kind (a
+ *  disqualification after a bare Start is a walkover, ruling 115; one after play is not). Only an explicit `false`
+ *  claims the walkover line: unknown makes no claim, and the final's tag beside the plain line says what it was. */
+const finalUnplayed = (match: Pick<HubMatchT, "forfeit">): boolean => match.forfeit?.played === false;
 
 /** A round-0 cell in the Draw, in px; round k is this times 2^k, so every node
  *  sits centred between the two that feed it. */
@@ -451,13 +454,28 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
           <p className="text-[13px] text-court-muted">
             {t(
               dict,
-              // A final won by forfeit was never played, so "Beat X" would
-              // report a match that did not happen.
-              final.header.statusLine?.key === FORFEITED_STATUS_KEY
+              // A final won by a forfeit with nothing played before it was
+              // never played, so "Beat X" would report a match that did not happen.
+              finalUnplayed(final)
                 ? "knockout.championLineWalkover"
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
             )}
+            {/* W2b T13 review (b): where the line names no reason ("Beat Dev" stands for a retirement too), the final's
+                own tag rides beside it — the same chip and sentence as its card. No id: the card's chip owns that.
+                Design audit 3.6: (a) only there — the walkover line already says "by walkover", and its "w/o" tag
+                beside it said it twice (a withdrawal shares that tag, X-RS-2; the final's card keeps its sentence);
+                (b) in the on-court tone, the banner being the dark court. */}
+            {final.forfeit && !finalUnplayed(final) ? (
+              <span className="ml-1.5 inline-block align-middle">
+                <ForfeitTagChip
+                  tag={final.forfeit.tag}
+                  sentence={final.forfeit.sentence}
+                  testId="mh-knockout-champion-forfeit"
+                  tone="court"
+                />
+              </span>
+            ) : null}
           </p>
         ) : null}
       </div>
@@ -475,6 +493,7 @@ function drawNode(match: HubMatchT, dict: PublicDict): ReactNode {
         home: match.header.sides[0].name,
         away: match.header.sides[1].name,
       })}
+      aria-describedby={match.forfeit ? `mh-knockout-forfeit-${match.fixtureId}` : undefined}
       className={`relative z-10 block w-full min-w-0 rounded-lg border bg-surface px-2 py-1 shadow-sm transition hover:border-accent-line ${live ? "border-emerald-400" : "border-zinc-200"}`}
     >
       {([0, 1] as const).map((i) => {
@@ -510,6 +529,16 @@ function drawNode(match: HubMatchT, dict: PublicDict): ReactNode {
             <span className="shrink-0 font-display text-[15px] tabular-nums text-ink">
               {match.header.scoreLines[i] ?? ""}
             </span>
+            {/* W2b Task 13 (UI-2 option A): the tag rides the winner's row (the first, when nobody won — a double
+                walkover), beside the score, so the tile never grows a line. */}
+            {match.forfeit && i === (match.winnerIndex ?? 0) ? (
+              <ForfeitTagChip
+                id={`mh-knockout-forfeit-${match.fixtureId}`}
+                tag={match.forfeit.tag}
+                sentence={match.forfeit.sentence}
+                testId="mh-knockout-node-forfeit"
+              />
+            ) : null}
           </span>
         );
       })}

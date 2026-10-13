@@ -25,7 +25,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, archiveDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { createPerson } from "../persons";
 import { divisionPlayerStats } from "../player-stats";
 import { putLineup } from "../fixtures";
@@ -125,6 +125,16 @@ async function makeEntrant(
 }
 
 let roundCounter = 0;
+/** R115-1: a settled status is only ever the fold's (append-event's `fixtureStatusFromFold`), so a decided or
+ *  finalized fixture always has a ledger — and the matches count asks the engine's `playedInStats` of it, which reads
+ *  an EMPTY ledger as no match played (X-PS-1: the byes and double walkovers stages.ts settles without an event). A raw
+ *  settled fixture therefore carries the one row a real one always opens with; no forfeit, so it is played. */
+async function withLedger(fixtureId: string): Promise<string> {
+  await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+            values (gen_random_uuid(), ${fixtureId}, 1, 'core.start', '{}', now())`;
+  return fixtureId;
+}
+
 async function insertFinalizedFixture(
   stageId: string,
   divisionId: string,
@@ -136,7 +146,7 @@ async function insertFinalizedFixture(
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
     values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'finalized')
     returning id`;
-  return id;
+  return withLedger(id);
 }
 
 /** Same raw insert as insertFinalizedFixture, but left 'decided' — the
@@ -159,7 +169,7 @@ async function insertDecidedFixture(
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
     values (${stageId}, ${divisionId}, ${roundCounter}, 1, ${homeEntrantId}, ${awayEntrantId}, 'decided')
     returning id`;
-  return id;
+  return withLedger(id);
 }
 
 async function insertSnapshot(
@@ -182,7 +192,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
-  it("ASYMMETRIC: 2 sports, 3 divisions (1 football + 2 badminton), real cross-division summation, variants != divisions, matches summed, team-entrant sport produces NO phantom row", async () => {
+  it("ASYMMETRIC: 3 sports, 4 divisions (1 football + 2 badminton + 1 volleyball), real cross-division summation, variants != divisions, matches summed; a team-entrant sport with no snapshot row is carded by its count, with no figure", async () => {
     const { auth } = await seedOrg();
     const person = await createPerson(auth, {
       full_name: "Robin Career",
@@ -235,9 +245,17 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
 
     const result = await personCareerStats(auth, person.id);
 
-    // Volleyball must be COMPLETELY absent — no phantom card despite a real
-    // roster membership and a real finalized fixture.
-    expect(result.sports.map((s) => s.sport_key).sort()).toEqual(["badminton", "football"]);
+    // W2b ruling 120 follow-up (coordinator, 2026-10-12): the listing and the
+    // match count read ONE division set. Volleyball holds no snapshot row (a
+    // team entrant's fact credits nobody, S8/#417 — that guard is the fold's
+    // and is unchanged), but the count finds a finalized fixture the person's
+    // team played, so the career cards it: one division, one match, no figure
+    // tile. Before the follow-up this asserted volleyball ABSENT — the very
+    // disagreement (a count of 1 the listing hid) the follow-up removes.
+    expect(result.sports.map((s) => s.sport_key).sort()).toEqual(["badminton", "football", "volleyball"]);
+    const vbCard = result.sports.find((s) => s.sport_key === "volleyball")!;
+    expect([vbCard.divisions, vbCard.variants, vbCard.matches], "volleyball: carded by the count").toEqual([1, 1, 1]);
+    expect(vbCard.metrics, "volleyball: no figure — no snapshot row, no phantom tile").toEqual([]);
 
     const fbCard = result.sports.find((s) => s.sport_key === "football")!;
     expect(fbCard.divisions).toBe(1);
@@ -259,6 +277,38 @@ describe.skipIf(!HAS_DB)("personCareerStats (S9/#418)", () => {
     expect(bdByKey.points_won).toBe(23); // 15 + 8 — real summation, not first-row-wins (15) or last (8)
     expect(bdByKey.sets_won).toBe(3); // 2 + 1
     expect(bdByKey.sets_lost).toBe(1); // 0 (absent in Spring) + 1 (Summer)
+  });
+
+  it("ruling 122: volleyball — the roster's coach is listed with no match; a player added after the lineup-less fixture is still listed with it (accepted residue: no join date is stored)", async () => {
+    // The reviewer's scene from 30284f140's review: a volleyball coach and a member added after the fixture were each
+    // listed with 1 match. Ruling 122: a person gets a match only with the player role (a coach never does); with no
+    // lineup recorded, the roster's players get it — and a player added later is among them, because the roster
+    // stores no join date.
+    const { auth } = await seedOrg();
+    const named = async (full_name: string, lane: "player" | "coach") =>
+      createPerson(auth, { full_name, consent: {}, dob: null, gender: null, external_ref: null, lane } as never);
+    const player = await named("VB Player", "player");
+    const coach = await named("VB Coach", "coach");
+    const late = await named("VB Late", "player");
+    const opp = await named("VB Opp", "player");
+    const vb = await seedDivisionWithStage(auth, "volleyball", "default", "Rec");
+    const mine = await makeEntrant(auth, vb.divisionId, "team", "Team Robin", [player.id, coach.id]);
+    const theirs = await makeEntrant(auth, vb.divisionId, "team", "Team Opponent", [opp.id]);
+    await insertFinalizedFixture(vb.stageId, vb.divisionId, mine, theirs);
+    await patchEntrant(auth, mine, {
+      members: [player.id, coach.id, late.id].map((person_id) => ({
+        person_id,
+        squad_number: null,
+        default_position_key: null,
+        is_captain: false,
+        roles: [],
+      })),
+    } as never);
+
+    const card = async (personId: string) => (await personCareerStats(auth, personId)).sports.map((s) => [s.sport_key, s.divisions, s.matches]);
+    expect(await card(player.id), "the roster's player").toEqual([["volleyball", 1, 1]]);
+    expect(await card(coach.id), "the roster's coach: no match, so no card").toEqual([]);
+    expect(await card(late.id), "added after the fixture: still credited (ruling 122's accepted residue)").toEqual([["volleyball", 1, 1]]);
   });
 
   it("a person with zero snapshots gets an empty sports list, not a 404", async () => {

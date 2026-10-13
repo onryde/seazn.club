@@ -383,9 +383,13 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
+    // W2b ruling 113 (2026-10-11): nobody retires from a match never played, so Bravo retires hurt after the first
+    // point — one unattributed generic.score (no `person`, so TINY_LEADERBOARDS, rr-r2-c1's three attributed scores,
+    // does not move). The retirement special below needs play before it.
     events: [
       { type: "core.start" },
-      { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired hurt" } },
+      { type: "generic.score", payload: { by: "@e-alpha", points: 1 } },
+      { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired" } },
     ],
   },
   // B05 T3 — the playoff final. `home`/`away` are declared here exactly as
@@ -436,8 +440,10 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r3-c1",
     outcome: { kind: "award", winner: "e-alpha" },
+    // W2b Loop R M-2: Bravo RETIRED, so Alpha won the game — "W", not the walkover's "W/O" (generic's sideLine marks a
+    // walked-over side "W/O" only for a walkover, a withdrawal or a bye).
     perSide: [
-      { entrant: "e-alpha", line: "W/O" },
+      { entrant: "e-alpha", line: "W" },
       { entrant: "e-bravo", line: "L" },
     ],
   },

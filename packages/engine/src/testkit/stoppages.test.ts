@@ -83,7 +83,10 @@ const enders = (c: Case) => [
   { type: "core.abandon", payload: { reason: "storm" } },
   {
     type: "core.forfeit",
-    payload: { by: c.lineups.home.entrantId, reason: "walkover" },
+    // W2b D3: a stoppage reads as the phase it interrupted (play), where a walkover is refused once something is played
+    // (R2, ruling 112) — a disqualification is the forfeit that is legal there in every sport (review M-1: "walkover"
+    // was refused in 10/11 and swallowed below; ruling 113: a retirement too wherever nothing was played, as in chess).
+    payload: { by: c.lineups.home.entrantId, reason: "disqualified" },
   },
 ];
 
@@ -192,6 +195,9 @@ describe("generated stoppages — fold guarantee 5", () => {
     // not a post-decision type, so a stoppage left open here could never be
     // cleared again.
     let checked = 0;
+    let replays = 0;
+    const replayedBy = new Set<string>();
+    const forfeitCheckedBy = new Map<string, number>();
     for (const c of unresumed) {
       for (const ender of enders(c)) {
         const abandoned = [
@@ -212,15 +218,31 @@ describe("generated stoppages — fold guarantee 5", () => {
         // `abandonPolicy: "replay"` leaves the fixture UNDECIDED on purpose, so
         // there is nothing for the stoppage to have outlived: the match is still
         // live and can still be resumed. The guarantee is about the step that
-        // flips `decided`.
-        if (c.module.outcome(result.state as never) === null) continue;
+        // flips `decided`. Since W2b (CA-AB-1, GN-AB-1) carrom's and generic's
+        // abandon is a replay too, so their abandons land here as well.
+        if (c.module.outcome(result.state as never) === null) {
+          replays += 1;
+          if (ender.type === "core.abandon") replayedBy.add(c.module.key);
+          continue;
+        }
         expect(
           result.stoppage,
           `${label(c)} stoppage outlived ${ender.type}`,
         ).toBeNull();
         checked += 1;
+        if (ender.type === "core.forfeit") forfeitCheckedBy.set(c.module.key, (forfeitCheckedBy.get(c.module.key) ?? 0) + 1);
       }
     }
-    expect(checked, "cases that reached an abandon").toBeGreaterThan(30);
+    // The floor is over every ender case (unchanged by W2b); the decided share fell when carrom's and generic's abandon
+    // became replays, so it is pinned to have those two among the replays rather than lowered to a measured count.
+    expect(checked + replays, "cases that reached an abandon").toBeGreaterThan(30);
+    expect(checked, "decided cases whose stoppage was checked").toBeGreaterThan(0);
+    expect([...replayedBy].filter((key) => key === "carrom" || key === "generic").sort()).toEqual(["carrom", "generic"]);
+    // M-1: the forfeit ender reaches the assertion in EVERY sport — a refused ender is swallowed by the catch above,
+    // so without this count a guard that refused every mid-stoppage forfeit would leave this test green.
+    expect([...forfeitCheckedBy.keys()].sort(), `forfeit enders checked per sport: ${JSON.stringify([...forfeitCheckedBy])}`).toEqual(
+      builtinModules.map((m) => m.key).sort(),
+    );
+    expect(forfeitCheckedBy.size).toBe(11);
   });
 });

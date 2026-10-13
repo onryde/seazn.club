@@ -16,7 +16,7 @@
       },
       "awardScore": {
         "default": {
-          "goals": 3
+          "goals": 5
         },
         "properties": {
           "goals": {
@@ -898,11 +898,8 @@
       "outcome.method": [
         "string"
       ],
-      "outcome.score": [
-        "object"
-      ],
-      "outcome.score[]": [
-        "number"
+      "outcome.reason": [
+        "string"
       ],
       "outcome.winner": [
         "string"

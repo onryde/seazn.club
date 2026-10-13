@@ -67,11 +67,32 @@ describe("groupCareerStatsBySport", () => {
     expect(out[0]!.variants).toBe(2);
   });
 
+  // W2b ruling 120 follow-up: the listing and the count read one division set. A division the count found the person
+  // played in is carded even with no snapshot row (a fold credits only the keys a fact applies to: a footballer who
+  // scored nothing, a played abandon that decided nobody); a count of 0 cards nothing on its own.
+  it("cards a division the count found with no snapshot row — and adds its division and variant to a sport's rows", () => {
+    const played = new Map([
+      ["d1", { sport_key: "football", variant_key: "default", matches: 2 }],
+      ["d2", { sport_key: "generic", variant_key: "score", matches: 1 }],
+      ["d3", { sport_key: "badminton", variant_key: "bwf", matches: 0 }],
+    ]);
+    const rows = [row({ division_id: "d4", sport_key: "football", variant_key: "five", stats: { goals: 1 } })];
+    const out = groupCareerStatsBySport(rows, played, en);
+    expect(out.map((c) => [c.sport_key, c.divisions, c.variants, c.matches]).sort()).toEqual([
+      ["football", 2, 2, 2],
+      ["generic", 1, 1, 1],
+    ]);
+    expect(out.find((c) => c.sport_key === "football")!.metrics.find((x) => x.key === "goals")?.value).toBe(1);
+    // A division that is both counted and holds a row is carded once.
+    const both = groupCareerStatsBySport([row({ division_id: "d1", stats: { goals: 3 } })], played, en);
+    expect(both.find((c) => c.sport_key === "football")).toMatchObject({ divisions: 1, matches: 2 });
+  });
+
   it("sums matches from the per-division lookup, defaulting an absent division to 0", () => {
     const rows = [row({ division_id: "d1" }), row({ division_id: "d2" }), row({ division_id: "d3" })];
     const matches = new Map([
-      ["d1", 4],
-      ["d2", 6],
+      ["d1", { sport_key: "football", variant_key: "default", matches: 4 }],
+      ["d2", { sport_key: "football", variant_key: "default", matches: 6 }],
       // d3 deliberately absent — must not throw, must count as 0
     ]);
     const out = groupCareerStatsBySport(rows, matches, en);
@@ -88,7 +109,7 @@ describe("groupCareerStatsBySport", () => {
   // way, because the meta count is the one that exists for all eleven sports.
   it("drops a folded `matches` tile — the meta count is the card's only match number", () => {
     const rows = [row({ sport_key: "badminton", division_id: "d1", stats: { matches: 1, points_won: 7 } })];
-    const out = groupCareerStatsBySport(rows, new Map([["d1", 0]]), en);
+    const out = groupCareerStatsBySport(rows, new Map([["d1", { sport_key: "badminton", variant_key: "default", matches: 0 }]]), en);
     expect(out[0]!.matches).toBe(0);
     expect(out[0]!.metrics.map((x) => x.key)).not.toContain("matches");
     // …and only that key goes — the sport's real metrics are untouched.

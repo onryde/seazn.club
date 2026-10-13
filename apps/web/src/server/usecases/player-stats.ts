@@ -5,6 +5,9 @@ import "server-only";
 import type postgres from "postgres";
 import {
   aggregatePlayerStatsWithDiagnostics,
+  playedInStats,
+  resultInStats,
+  STATS_FOLD_VERSION,
   sumPlayerStats,
   type PlayerStatRow,
 } from "@seazn/engine/stats";
@@ -18,7 +21,8 @@ import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForDivision } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
-import { groupCareerStatsBySport, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
+import { groupCareerStatsBySport, type CareerPlayedDivision, type CareerSnapshotRow, type CareerSportStats } from "@/server/player-stats";
+import { appearanceSide, appearedFixtureIds } from "@/server/appearances";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -34,6 +38,18 @@ interface EventRow {
   payload: unknown;
   recorded_at: Date;
   voids_event_id: string | null;
+}
+
+/** A stored `score_events` row as the engine reads it — the fold below and `fixturesPlayedInStats` share it. */
+function eventEnvelope(e: EventRow): EventEnvelope {
+  return {
+    id: e.id,
+    seq: e.seq,
+    type: e.type,
+    payload: e.payload,
+    recordedAt: e.recorded_at.toISOString(),
+    ...(e.voids_event_id !== null ? { voids: e.voids_event_id } : {}),
+  } as EventEnvelope;
 }
 
 /** Follow `persons.merged_into` to a person who is not themselves a tombstone
@@ -105,10 +121,22 @@ export async function tryLockPlayerStats(tx: Tx, divisionId: string): Promise<bo
  *  unmerge changes every division's md5 once, so each division reads as owed
  *  once and refolds at its next refresh or stats read. Narrowing them to the
  *  persons a division's events and rosters name would need the event payloads
- *  read here, which costs every check more than one refold wave per merge. */
-export async function playerStatsInputsMd5(tx: Tx, divisionId: string): Promise<string> {
+ *  read here, which costs every check more than one refold wave per merge.
+ *
+ *  R115-2: the md5 opens with the engine's `STATS_FOLD_VERSION`, so a snapshot
+ *  folded by older fold rules reads as owed once and refolds on its first
+ *  folding read (no migration). `foldVersion` exists for the test that writes a
+ *  record the way older code did: `null` drops the version, and since
+ *  `concat_ws` skips a NULL argument that is byte for byte the md5 every record
+ *  folded before R115-2 holds. Production passes nothing. */
+export async function playerStatsInputsMd5(
+  tx: Tx,
+  divisionId: string,
+  foldVersion: number | null = STATS_FOLD_VERSION,
+): Promise<string> {
   const [row] = await tx<{ md5: string }[]>`
     select md5(concat_ws('|',
+      ${foldVersion === null ? null : String(foldVersion)}::text,
       (select concat_ws(':', d.sport_key, d.module_version, md5(coalesce(d.config::text, '-')))
          from divisions d where d.id = ${divisionId}),
       (select string_agg(concat_ws(':', f.id, f.stage_id, coalesce(f.home_entrant_id::text, '-'),
@@ -387,15 +415,7 @@ async function foldDivision(
     throughSeq += 1;
     const seen = ledgerMap[e.fixture_id];
     ledgerMap[e.fixture_id] = [(seen?.[0] ?? 0) + 1, Math.max(seen?.[1] ?? 0, Number(e.seq))];
-    const envelope = {
-      id: e.id,
-      seq: e.seq,
-      type: e.type,
-      payload: e.payload,
-      recordedAt: e.recorded_at.toISOString(),
-      ...(e.voids_event_id !== null ? { voids: e.voids_event_id } : {}),
-    } as EventEnvelope;
-    (byFixture.get(e.fixture_id) ?? byFixture.set(e.fixture_id, []).get(e.fixture_id)!).push(envelope);
+    (byFixture.get(e.fixture_id) ?? byFixture.set(e.fixture_id, []).get(e.fixture_id)!).push(eventEnvelope(e));
   }
   // S4 (#428) review round 1, finding 1 — the person-role discriminator:
   // a card/goal credited to a non-player (coach/staff, S3 ruling 3) must not
@@ -627,10 +647,7 @@ async function personDivisionScope(
     select d.id as division_id, d.competition_id
     from divisions d
     where d.org_id = ${orgId}
-      and (exists (
-            select 1 from entrant_members em
-            join entrants e on e.id = em.entrant_id
-            where em.person_id = ${personId} and e.division_id = d.id)
+      and (d.id in (${placedDivisions(sql, { by: "person", personId })})
         or exists (
             select 1 from player_stat_snapshots ps
             where ps.person_id = ${personId} and ps.division_id = d.id))`;
@@ -894,6 +911,15 @@ export async function personStats(
  *  player's card could read "5 goals · 0 matches". */
 export const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
 
+/** The settled statuses a match played in players' stats can hold: the completed ones, and `abandoned` — an abandon
+ *  that decided nobody keeps that status (append-event.ts `fixtureStatusFromFold`), and ruling 120 makes it a match
+ *  played whenever something was played before it. Which of these fixtures WERE played is the engine's reader's to
+ *  say (`fixturesPlayedInStats` below), never the status's: an abandon with nothing played before it is no match
+ *  whatever its status, and the snapshot fold — which reads every settled status — already counts a played one, so a
+ *  career count without `abandoned` read "1 match" on the tile and 0 in the career. The career count and the public
+ *  player's match lines read this set. */
+export const STATS_MATCH_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES, "abandoned"];
+
 /** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
  *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).
  *  `countMatchesByDivision` below is called both ways: inside `withTenant`
@@ -909,6 +935,101 @@ type Queryable = postgres.ISql;
  *  defect was duplicated three times because the query itself was). */
 export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPersons"; userId: string };
 
+/** The `persons p` rows an owner resolves to, as a join condition: the person, or every live person the user claimed. */
+function ownedPersons(q: Queryable, owner: MatchesOwner) {
+  return owner.by === "person" ? q`p.id = ${owner.personId}` : q`p.user_id = ${owner.userId} and p.merged_into is null`;
+}
+
+/** The divisions an owner's person is PLACED in — a roster row, or a `player` row on a fixture's sheet — as a
+ *  subquery of `division_id`s: the career count's candidate divisions (`personDivisionScope`, me.ts
+ *  `listMyCareerStats`). Ruling 122, round 1: a sheet player since removed from the roster still played there, and
+ *  the count credits it (`appearanceSide`), so the scope must reach the division. */
+export function placedDivisions(q: Queryable, owner: MatchesOwner) {
+  return q`
+    select e.division_id
+    from entrant_members em
+    join entrants e on e.id = em.entrant_id
+    join persons p on p.id = em.person_id and ${ownedPersons(q, owner)}
+    union
+    select f.division_id
+    from lineups l
+    join fixtures f on f.id = l.fixture_id
+    join persons p on p.id = l.person_id and ${ownedPersons(q, owner)}
+    where l.role = 'player'`;
+}
+
+/** A settled fixture, with what `fixturesPlayedInStats` needs to ask the engine about it. */
+export interface StatsFixture {
+  id: string;
+  sport_key: string;
+  module_version: string;
+}
+
+/**
+ * W2b (X-PS-1, X-PS-2; rulings 115, 120, R115-1) — which of these fixtures are a match played in players' stats. The
+ * engine's one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored
+ * ledger: a walkover, a double walkover, and a disqualification, a withdrawal (ruling 127) or an abandon with nothing
+ * played before it (whatever its result or settle) are not; a retirement, an in-match disqualification, a withdrawal
+ * after play and an abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles without an
+ * event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot figures
+ * cannot disagree about which fixtures were played.
+ *
+ * Cost: the reader answers any non-empty ledger holding no `core.forfeit`, no `core.abandon` and no `core.void` row as
+ * played without reading it (its documented steps 1 and 2), so only those ledgers — and the absent ones — are read in
+ * full. A career
+ * spans every fixture a person ever played; loading every ledger to re-derive "played" for each decided match would
+ * multiply this read by the events per match.
+ */
+export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly StatsFixture[]): Promise<Set<string>> {
+  const reading = await fixturesStatsReading(db, fixtures);
+  return new Set([...reading].filter(([, r]) => r.played).map(([id]) => id));
+}
+
+/** The engine's two players'-stats answers for one fixture: a match played (`playedInStats`), and a PERSONAL result
+ *  (`resultInStats` — ruling 127: a withdrawal after play is a match its players appeared in, with no win or loss). */
+export interface StatsReading {
+  played: boolean;
+  result: boolean;
+}
+
+/** `fixturesPlayedInStats`'s read, with both answers per fixture (same cost: the same ledgers are read). A forfeit-,
+ *  abandon- and void-free ledger is played with its result; an absent one neither. */
+export async function fixturesStatsReading(db: Queryable, fixtures: readonly StatsFixture[]): Promise<Map<string, StatsReading>> {
+  const out = new Map<string, StatsReading>();
+  if (fixtures.length === 0) return out;
+  const ids = [...new Set(fixtures.map((f) => f.id))];
+  const shapes = await db<{ fixture_id: string; read: boolean }[]>`
+    select se.fixture_id, bool_or(se.type in ('core.forfeit', 'core.abandon', 'core.void')) as read
+    from score_events se
+    where se.fixture_id in ${db(ids)}
+    group by se.fixture_id`;
+  const toRead = shapes.filter((r) => r.read).map((r) => r.fixture_id);
+  const ledgers = new Map<string, EventEnvelope[]>(toRead.map((id) => [id, []]));
+  if (toRead.length > 0) {
+    const events = await db<EventRow[]>`
+      select se.fixture_id, se.id, se.seq, se.type, se.payload, se.recorded_at, se.voids_event_id
+      from score_events se
+      where se.fixture_id in ${db(toRead)}
+      order by se.fixture_id, se.seq`;
+    for (const e of events) ledgers.get(e.fixture_id)!.push(eventEnvelope(e));
+  }
+  const hasLedger = new Set(shapes.map((r) => r.fixture_id));
+  for (const f of fixtures) {
+    const ledger = ledgers.get(f.id);
+    // Steps 1 and 2 of the reader, answered from the row shapes: no ledger is unplayed, a forfeit-, abandon- and
+    // void-free one is played. `playedInStats([], …)` is asked rather than assumed, so the empty answer stays the
+    // engine's. The reader takes the module itself (ruling 120 reads its `startIsPlay`), never a part of it.
+    const sportModule = resolveModule(f.sport_key, f.module_version);
+    if (ledger !== undefined) {
+      out.set(f.id, { played: playedInStats(ledger, sportModule), result: resultInStats(ledger, sportModule) });
+    } else {
+      const isPlayed = hasLedger.has(f.id) || playedInStats([], sportModule);
+      out.set(f.id, { played: isPlayed, result: isPlayed });
+    }
+  }
+  return out;
+}
+
 /** Completed fixtures a person — or, for a signed-in player, ANY of their
  *  claimed persons (`MatchesOwner`'s "claimedPersons" branch: there is no
  *  single personId to scope by there, a user can hold one claimed `persons`
@@ -920,6 +1041,13 @@ export type MatchesOwner = { by: "person"; personId: string } | { by: "claimedPe
  *  declare one at all, so a metric-based count would read zero for
  *  football/cricket/hockey/…
  *
+ *  "Played" is the engine's (R115-1): of the settled fixtures the person is on
+ *  (`STATS_MATCH_STATUSES`: the completed ones and an abandoned one), those
+ *  `fixturesPlayedInStats` keeps — never a walkover, a withdrawal, a double
+ *  walkover, a disqualification with nothing played (X-PS-1, ruling 115) or an
+ *  abandon with nothing played before it (ruling 120); an abandon after play
+ *  is a match (X-PS-2, ruling 120).
+ *
  *  Guards the empty-array case itself (S8/#417 pattern, postgres.js's
  *  `sql([])` renders `(null)` and an empty `in ()` matches nothing, not
  *  everything) rather than trusting every caller to remember it. */
@@ -928,26 +1056,45 @@ export async function countMatchesByDivision(
   owner: MatchesOwner,
   divisionIds: readonly string[],
 ): Promise<Map<string, number>> {
+  const played = await careerMatchesByDivision(db, owner, divisionIds);
+  return new Map([...played].map(([divisionId, d]) => [divisionId, d.matches]));
+}
+
+/** `countMatchesByDivision`, with each played division's sport and variant: what a career LISTING needs to card a
+ *  division the count found and no snapshot row holds (`groupCareerStatsBySport`). The one query both read, so the
+ *  listing and the count cannot disagree about which divisions a person played in. Only divisions with a match
+ *  played are in the map. */
+export async function careerMatchesByDivision(
+  db: Queryable,
+  owner: MatchesOwner,
+  divisionIds: readonly string[],
+): Promise<Map<string, CareerPlayedDivision>> {
   if (divisionIds.length === 0) return new Map();
-  const rows =
-    owner.by === "person"
-      ? await db<{ division_id: string; matches: number }[]>`
-          select f.division_id, count(distinct f.id)::int as matches
-          from fixtures f
-          join entrant_members em on em.person_id = ${owner.personId}
-            and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-          where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
-          group by f.division_id`
-      : await db<{ division_id: string; matches: number }[]>`
-          select f.division_id, count(distinct f.id)::int as matches
-          from fixtures f
-          join entrant_members em on em.entrant_id in (f.home_entrant_id, f.away_entrant_id)
-          join persons p on p.id = em.person_id and p.user_id = ${owner.userId} and p.merged_into is null
-          where f.division_id in ${db(divisionIds as string[])}
-            and f.status in ${db(COMPLETED_FIXTURE_STATUSES as string[])}
-          group by f.division_id`;
-  return new Map(rows.map((r) => [r.division_id, r.matches]));
+  // Who appeared in which settled fixture is the ONE appearance rule (`@/server/appearances`, ruling 122 and its
+  // round-1 review) the public match lines read too: its relational half here, one side per fixture and owned person,
+  // then its bench half. Which of those matches were played is the engine's (`fixturesPlayedInStats`).
+  const sides = await db<(StatsFixture & { division_id: string; variant_key: string; slot: string | null; person_id: string })[]>`
+    select f.id, f.division_id, d.sport_key, d.module_version, d.variant_key, mine.slot, p.id as person_id
+    from fixtures f
+    join divisions d on d.id = f.division_id
+    join persons p on ${ownedPersons(db, owner)}
+    join lateral (${appearanceSide(db)}) mine on true
+    where f.division_id in ${db(divisionIds as string[])}
+      and f.status in ${db(STATS_MATCH_STATUSES as string[])}`;
+  const appeared = await appearedFixtureIds(
+    db,
+    sides.map((r) => ({ fixtureId: r.id, slot: r.slot, sportKey: r.sport_key, personId: r.person_id })),
+  );
+  const rows = [...new Map(sides.filter((r) => appeared.has(r.id)).map((r) => [r.id, r])).values()];
+  const played = await fixturesPlayedInStats(db, rows);
+  const matches = new Map<string, CareerPlayedDivision>();
+  for (const r of rows) {
+    if (!played.has(r.id)) continue;
+    const d = matches.get(r.division_id);
+    if (d === undefined) matches.set(r.division_id, { sport_key: r.sport_key, variant_key: r.variant_key, matches: 1 });
+    else d.matches++;
+  }
+  return matches;
 }
 
 /** GET /persons/{id}/stats?group=sport — the S9/#418 career rollup: every
@@ -1009,13 +1156,13 @@ export async function personCareerStats(
       where ps.person_id = ${personId}
         and ps.division_id = any(${readable})
       order by d.slug`;
-    if (rows.length === 0) return { sports: [] };
-
-    const matchesByDivision = await countMatchesByDivision(
-      tx,
-      { by: "person", personId },
-      [...new Set(rows.map((r) => r.division_id))],
-    );
+    // W2b ruling 120 follow-up: the count runs over every readable, unarchived division — not only those holding a
+    // snapshot row — and the listing cards every division it found (`groupCareerStatsBySport`), so a sport the person
+    // played without a credited figure is still in their career.
+    const scope = await tx<{ id: string }[]>`
+      select id from divisions where id = any(${readable}) and archived_at is null`;
+    const played = await careerMatchesByDivision(tx, { by: "person", personId }, scope.map((d) => d.id));
+    if (rows.length === 0 && played.size === 0) return { sports: [] };
     // The persons-stats route is already dynamic (auth'd, per-request), so
     // resolving the request locale here costs no rendering mode — mirrors
     // listMyPlayerStats's own discipline (me.ts). The catch is for callers
@@ -1023,7 +1170,7 @@ export async function personCareerStats(
     // is the right answer there, not a crash.
     const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
     const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-    return { sports: groupCareerStatsBySport(rows, matchesByDivision, m) };
+    return { sports: groupCareerStatsBySport(rows, played, m) };
   });
 }
 

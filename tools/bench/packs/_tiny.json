@@ -520,10 +520,17 @@
           "type": "core.start"
         },
         {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-alpha",
+            "points": 1
+          }
+        },
+        {
           "type": "core.forfeit",
           "payload": {
             "by": "@e-bravo",
-            "reason": "retired hurt"
+            "reason": "retired"
           }
         }
       ]
@@ -1233,7 +1240,7 @@
         "perSide": [
           {
             "entrant": "e-alpha",
-            "line": "W/O"
+            "line": "W"
           },
           {
             "entrant": "e-bravo",

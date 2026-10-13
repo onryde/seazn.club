@@ -497,7 +497,7 @@ describe("deriveCricketScorecard — core.void", () => {
   it("a core.forfeit, which the kernel DOES forward, still reaches cricket and decides the match", () => {
     const events = [
       ...ledger.events,
-      makeEnvelope(ledger.events.length, { type: "core.forfeit", payload: { by: "away", reason: "walked off" } }),
+      makeEnvelope(ledger.events.length, { type: "core.forfeit", payload: { by: "away", reason: "retired" } }),
     ];
     const kernel = foldMatch(cricket, ledger.cfg, ledger.lineups, events, STRICT_ALL);
     expect(kernel.outcome).not.toBeNull();

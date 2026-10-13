@@ -136,14 +136,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
@@ -158,14 +151,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "X-ST-2 / D-O1: a chess result with an ORDINARY method still passes for every non-organiser authority \\(the payload arm is not type-wide\\)"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
@@ -180,15 +166,15 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
   {
-    "id": "table-drop-double-forfeit",
+    "id": "table-gains-a-retired-row",
     "file": "apps/web/src/lib/organiser-only-events.ts",
-    "find": "values: [\"forfeit\", \"double_forfeit\"]",
-    "replace": "values: [\"forfeit\"]",
+    "find": "readonly values: readonly string[] }>> = {};",
+    "replace": "readonly values: readonly string[] }>> = { \"boardgame.result\": { field: \"method\", values: [\"forfeit\"] } };",
     "killers": [
       {
         "cwd": "apps/web",
@@ -203,21 +189,6 @@
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
         "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
-      }
-    ]
-  },
-  {
-    "id": "pad-payload-clause",
-    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
-    "find": "    if (\"event\" in tile.action && isOrganiserOnlyEvent(tile.action.event.type, tile.action.event.payload)) return false;\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts"
-        ],
-        "name": "D-O1: drops a direct tile whose PAYLOAD records a sport forfeit \\(the server's predicate\\), and keeps the same type with an ordinary method"
       }
     ]
   },
@@ -247,7 +218,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
@@ -262,21 +233,7 @@
         "files": [
           "src/server/usecases/__tests__/organiser-only-events.test.ts"
         ],
-        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/organiser-only-events.test.ts"
-        ],
-        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+        "name": "X-ST-2 / X-RS-3: a CONFIGURED sport row is gated by the values it lists"
       }
     ]
   },
@@ -291,7 +248,7 @@
         "files": [
           "tools/bench/lib/__tests__/scorer-driver.test.ts"
         ],
-        "name": "a sport event is the console's exactly when its declared field carries a forfeit value"
+        "name": "D-O1 witness: a CONFIGURED sport row routes by the value it lists"
       }
     ]
   }

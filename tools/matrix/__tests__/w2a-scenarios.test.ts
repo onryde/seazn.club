@@ -252,7 +252,7 @@ describe("each scenario, run on the knockout fake of the sport whose rule it is"
 describe("the scenarios' own checks, on hand-built drives (a wrong product is named, an empty run fails)", () => {
   const drive = (over: Partial<BracketDrive> = {}): BracketDrive => ({
     fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", asked: { kind: "settle", then: "home", method: "lot", after: "level" },
-    levelAs: "draw", status: "decided", outcome: { kind: "win", winner: "a", method: "settled_lot" }, loser: { line: "none" }, ...over,
+    levelAs: "draw", status: "decided", outcome: { kind: "win", winner: "a", method: "settled_lot" }, loser: { line: "none" }, next: { line: "next", target: "f-next" }, forfeitPlay: null, refusal: null, ...over,
   });
   const recOf = (...drives: BracketDrive[]) => { const r = new Recorder(); r.bracketDrives.push(...drives); return r; };
 

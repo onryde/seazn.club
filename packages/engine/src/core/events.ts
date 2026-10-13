@@ -17,7 +17,16 @@ import {
   type SquadState,
 } from "./lineup.ts";
 import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
-import { EntrantId, isLevelOutcome, type LineupPair, type MatchOutcome } from "./types.ts";
+import {
+  EntrantId,
+  FORFEIT_REASONS,
+  isLevelOutcome,
+  type ForfeitPhase,
+  type ForfeitReason,
+  type LineupPair,
+  type MatchOutcome,
+  type ScoreSummary,
+} from "./types.ts";
 
 // spec 03 §2 — ids and time are injected (uuid in prod, `e-${n}` in tests);
 // seq is gapless per fixture, assigned by persistence.
@@ -49,8 +58,18 @@ export const EventEnvelopeSchema = z.object({
 
 export const CoreStart = z.strictObject({}); // scheduled → in_play
 export const CoreVoid = z.strictObject({}); // target id travels in envelope.voids
-export const CoreForfeit = z.strictObject({ by: EntrantId, reason: z.string().min(1) });
-export const CoreAbandon = z.strictObject({ reason: z.string().min(1) });
+// W2b (spec §5.1, plan D1/D3 R1). `by` is the forfeiting entrant, or "both" for a double walkover; `reason` is the
+// closed vocabulary (never free text, never the system-only "bye"). "both" is only ever a walkover — both sides
+// absent — so the schema refuses it with any other reason (INVALID_EVENT, before any phase is judged).
+export const CoreForfeit = z
+  .strictObject({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })
+  .refine((p) => p.by !== "both" || p.reason === "walkover", {
+    message: 'a forfeit by "both" sides is a double walkover: its reason is "walkover"',
+    path: ["reason"],
+  });
+// W2b (plan D5): `expunge: true` marks an abandon written by the withdrawal cascade — the match leaves the table
+// entirely (`outcomeOf` reads null while it is active). `true` or absent; never `false`.
+export const CoreAbandon = z.strictObject({ reason: z.string().min(1), expunge: z.literal(true).optional() });
 
 /** The one reader for a `core.forfeit` payload. Every sport module used to cast
  *  it inline as `{ by: string }`, which is why the REQUIRED `reason` was
@@ -65,8 +84,15 @@ export const CoreAbandon = z.strictObject({ reason: z.string().min(1) });
  *  exact schema has been failing INVALID_EVENT on every fold since long before
  *  this helper existed. By the time a module's reducer runs, the payload is
  *  known good; parsing again is belt-and-braces, not a new gate. */
-export function forfeitOf(payload: unknown): { by: string; reason: string } {
+export function forfeitOf(payload: unknown): { by: string; reason: ForfeitReason } {
   return CoreForfeit.parse(payload);
+}
+
+/** The reason of a `core.forfeit` payload, or null when the payload is not one — the non-throwing read the
+ *  kernel-ownership predicate needs (it is called on events the fold has not validated yet). */
+function forfeitReasonOf(payload: unknown): ForfeitReason | null {
+  const parsed = CoreForfeit.safeParse(payload);
+  return parsed.success ? parsed.data.reason : null;
 }
 export const CoreFinalize = z.strictObject({}); // locks ledger
 export const CoreNote = z.strictObject({ text: z.string().min(1) }); // no state effect
@@ -118,6 +144,27 @@ export interface Settlement {
   readonly eventId: string;
 }
 
+/** W2b PF-1 (X-WD-1) — a `core.forfeit{reason:"withdrew"}` the kernel admitted over a held LEVEL result. Kept beside
+ *  module state like a settle (the module, already decided, would refuse it): `outcomeOf` reads it as
+ *  `award{winner, loser, reason:"withdrew"}`, and the module's level state is what `forfeitCredit` credits from —
+ *  retirement credit, the played score standing. */
+export interface LevelWithdrawal {
+  readonly winner: string;
+  readonly loser: string;
+  readonly eventId: string;
+}
+
+/** What `outcomeOf` reads from a fold. `expunged` and `levelWithdrawal` are optional so a caller holding only
+ *  `{state, settlement}` (a pad re-deriving its settle) still compiles; every fold result carries both. */
+export interface FoldedOutcomeFacts<State> {
+  readonly state: State;
+  readonly settlement: Settlement | null;
+  /** W2b D5 — an active abandon carries `expunge: true`: the match is out of the table, no outcome at all. */
+  readonly expunged?: boolean;
+  /** W2b PF-1 — the admitted withdrawal over a held level result, if any. */
+  readonly levelWithdrawal?: LevelWithdrawal | null;
+}
+
 /** THE settle precondition (spec §5.1 as amended by controller ruling C12). One predicate for the kernel and the
  *  console (through the server's `settle_applies`): a level outcome, or nothing decided while the match is abandoned
  *  or a module-declared decider is pending (chess phase "tiebreak": lots is the organiser's settle, ruling 73).
@@ -134,17 +181,45 @@ export function settleApplies(module: { awaitingDecider?(state: never): boolean 
   return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);
 }
 
-/** THE outcome of a fold. A settlement outranks the module's own outcome (a
- *  draw it settled, or the null of an abandon); otherwise it is exactly
- *  `module.outcome(state)`. Every reader of a fold's outcome calls this
- *  (apps/web outcome-readers.test.ts pins the list). */
+/** THE outcome of a fold. An expunge abandon (W2b D5) outranks everything — the match left the table, so there is
+ *  no outcome. Then a settlement outranks the module's own outcome (a draw it settled, the null of an abandon, a
+ *  legacy settled double walkover, D6), then a withdrawal admitted over a held level result (PF-1); otherwise it is
+ *  exactly `module.outcome(state)`. Every reader of a fold's outcome calls this (apps/web outcome-readers.test.ts
+ *  pins the list). */
 export function outcomeOf<Cfg, State>(
   module: Pick<FoldableModule<Cfg, State>, "outcome">,
-  folded: { readonly state: State; readonly settlement: Settlement | null },
+  folded: FoldedOutcomeFacts<State>,
 ): MatchOutcome | null {
+  if (folded.expunged === true) return null;
   const s = folded.settlement;
   if (s !== null) return { kind: "win", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };
+  const w = folded.levelWithdrawal;
+  if (w != null) return { kind: "award", winner: w.winner, loser: w.loser, reason: "withdrew" };
   return module.outcome(folded.state);
+}
+
+/** THE summary of a fold (W2b PF-1, review I-1; X-WO-1's one-score rule). Exactly `module.summary(state)`, except
+ *  when the kernel admitted a withdrawal over a held level result: the module never saw that event, so its state
+ *  still reads the draw while `outcomeOf` reads the award. The overlay hands the module its own state with the
+ *  effective award in `outcome`, so the module renders the credit it renders for any award. Each module's summary
+ *  reads a non-bye award's score from its own `forfeitCredit` — the one its `standingsDelta` lays over the table:
+ *  football `displayedGoals`, the period kernel's `officialScore` (hockey, ice hockey), the set kernel's and the
+ *  nested kernel's `displayedSets` (volleyball, badminton, table tennis; tennis), carrom's `displayedGames`, and
+ *  boardgame's award line. Cricket's summary is its innings scorecard and generic's its W/O marker, neither a
+ *  scoreline. So the headline and the table cannot disagree; `forfeit-credit.test.ts` sweeps every module for a
+ *  walkover and a retirement (Task 13 review C1, which found the three set kernels reading played sets).
+ *  Every module keeps its decision in `state.outcome`; a state without that field is refused rather than silently
+ *  left on the draw. A settlement is deliberately NOT overlaid: a settled level game shows the score that was played. */
+export function summaryOf<State>(
+  module: { summary(state: State): ScoreSummary; outcome(state: State): MatchOutcome | null },
+  folded: FoldedOutcomeFacts<State>,
+): ScoreSummary {
+  if (folded.levelWithdrawal == null) return module.summary(folded.state);
+  const state: unknown = folded.state;
+  if (typeof state !== "object" || state === null || !("outcome" in state)) {
+    throw new Error("summaryOf: the module's state has no `outcome` field, so a withdrawal over its level result cannot be shown");
+  }
+  return module.summary({ ...state, outcome: outcomeOf(module, folded) } as State);
 }
 
 /** Ruling D-C5 — a module-declared decider is still OWED: the module's hook says one is pending AND the fold is not
@@ -152,7 +227,7 @@ export function outcomeOf<Cfg, State>(
  *  on THIS, never on the module phase alone: a settle in phase "tiebreak" leaves the module state as it was. */
 export function deciderPending<Cfg, State>(
   module: Pick<FoldableModule<Cfg, State>, "outcome" | "awaitingDecider">,
-  folded: { readonly state: State; readonly settlement: Settlement | null },
+  folded: FoldedOutcomeFacts<State>,
 ): boolean {
   // P1 follow-up: the same null guard as settleApplies — no fold (a scheduled fixture's state is null), no decider.
   return folded.state != null && module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;
@@ -235,17 +310,122 @@ export function isKernelOwnedEventType(type: string): boolean {
   return KERNEL_OWNED_CORE.includes(type) || isLineupEventType(type);
 }
 
-/** `isKernelOwnedEventType`, plus its one CONDITIONAL member: `core.finalize` on a
- *  settled fixture the module has not decided (a settled abandon, a settled pending
- *  tie-break), which the module would refuse (plan finding 21). `settled` = an active
- *  `core.settle` precedes the event; an accepted ledger holds at most one. */
+/** `isKernelOwnedEventType`, plus its two CONDITIONAL members, each an event the module would refuse:
+ *  - `core.finalize` on a settled fixture the module has not decided (a settled abandon, a settled pending
+ *    tie-break; plan finding 21);
+ *  - W2b PF-1: `core.forfeit{reason:"withdrew"}` over an unsettled LEVEL result (X-WD-1) — the module is already
+ *    decided, so the kernel folds it beside module state (`LevelWithdrawal`).
+ *  `settled` = an active `core.settle` precedes the event; an accepted ledger holds at most one, and at most one
+ *  admitted withdrawal (the fold refuses a second: the outcome is no longer level). */
 export function kernelOwnsEvent<State>(
   module: { outcome(state: State): MatchOutcome | null },
-  event: { readonly type: string },
+  event: { readonly type: string; readonly payload?: unknown },
   folded: { readonly state: State; readonly settled: boolean },
 ): boolean {
   if (isKernelOwnedEventType(event.type)) return true;
-  return event.type === "core.finalize" && folded.settled && module.outcome(folded.state) === null;
+  const forfeit = event.type === "core.forfeit";
+  if (!forfeit && event.type !== "core.finalize") return false;
+  // ONE module read serves both conditional members (apps/web outcome-readers.test.ts counts the bare reads here).
+  const moduleOutcome = module.outcome(folded.state);
+  return forfeit
+    ? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === "withdrew"
+    : folded.settled && moduleOutcome === null;
+}
+
+/** W2b (plan D3) — a module that declares no `walkoverPhases` records a walkover only before play (Appendix A
+ *  X-RS-1; ruling 112: a Start with nothing played after it is still before play). */
+const DEFAULT_WALKOVER_PHASES: readonly ForfeitPhase[] = ["pre"];
+
+/**
+ * W2b ruling 112 (amends Appendix A X-RS-1) — has anything been PLAYED: an active module-owned (sport) event after an
+ * active `core.start`. THE one reading: the fold's phase guard asks it of the active ledger before each forfeit, and the
+ * console's forfeit dialog asks it of the fixture's ledger through `forfeitAdmission`'s `playRecorded`.
+ *  - Every type the kernel registers (CORE_EVENT_SCHEMAS: start, void, forfeit, abandon, finalize, note, award,
+ *    suspend, resume, settle and the five `core.lineup.*` types) is the kernel's own or an annotation — never play. Any
+ *    other type is the module's namespace (`<sport>.*`, validated by its own schema) and is play.
+ *  - A sport event BEFORE the start (a pre-kick-off card, a hockey suspension, a generic score) is not play: the ruling
+ *    counts what follows Start, as every module's own phase does (each still reads "pre" there).
+ *  - A voided event never counts. `ledger` is in seq order; a `core.void` names its target in `voids` (an envelope's
+ *    field; the console maps its `voids_event_id` onto it). Voids are not themselves voidable (`resolveVoids`).
+ *  - Ruling 118: `module` is the fixture's sport module, REQUIRED so no caller can forget it. A module declaring
+ *    `startIsPlay` (chess: Seazn records no moves) is played from an active `core.start`; every other module from its
+ *    first sport event after it.
+ */
+export function playRecorded(
+  ledger: readonly { readonly id: string; readonly type: string; readonly voids?: string | null }[],
+  module: { readonly startIsPlay?: boolean },
+): boolean {
+  const voided = new Set<string>();
+  for (const e of ledger) if (e.type === "core.void" && typeof e.voids === "string") voided.add(e.voids);
+  let started = false;
+  for (const e of ledger) {
+    if (voided.has(e.id)) continue;
+    if (e.type === "core.start") {
+      // Ruling 118: where the sport records nothing between the Start and its result (chess), the Start is play.
+      if (module.startIsPlay === true) return true;
+      started = true;
+    } else if (started && !isCoreEventType(e.type)) return true;
+  }
+  return false;
+}
+
+/** W2b (plan D3 R2, R4, R5; rulings 112, 113) — the forfeit reasons a phase admits, in FORFEIT_REASONS order. `played`
+ *  is `playRecorded` of the ledger ("nothing played means not started, for every forfeit reason", ruling 113):
+ *  - a walkover only in the module's walkover phases (R2), judged in "pre" while nothing is played (ruling 112: a Start
+ *    with no sport event after it), else in the module's phase;
+ *  - a retirement only once something is played (ruling 113: nobody retires from a match never played);
+ *  - a disqualification once play started (R4: the module's phase, so from the Start on — misconduct before play is
+ *    real, ruling 113);
+ *  - a withdrawal in any phase (R5).
+ *  Never asked of "over" (the type says so): the module's own done/final guard and guarantee 4 answer for it (R0). The
+ *  one list the guard judges by AND the refusal names, so the copy can never offer a reason the guard refuses. */
+function forfeitReasonsAllowed(phase: Exclude<ForfeitPhase, "over">, walkoverPhases: readonly ForfeitPhase[], played: boolean): ForfeitReason[] {
+  const walkoverPhase = played ? phase : "pre";
+  return FORFEIT_REASONS.filter((reason) => {
+    if (reason === "walkover") return walkoverPhases.includes(walkoverPhase);
+    if (reason === "withdrew") return true;
+    if (reason === "retired") return played && phase !== "pre";
+    return phase !== "pre";
+  });
+}
+
+/** W2b (C17) — the phase the D3 guard judges a forfeit in. A SportModule must declare `forfeitPhase`; a hand-built
+ *  FoldableModule (the core tests' fakes) that does not is judged from the stream itself — pre until an active
+ *  `core.start`, play after, over once decided — so no fake escapes the guard. */
+function forfeitPhaseOf<State>(
+  module: { forfeitPhase?(state: State): ForfeitPhase },
+  state: State,
+  started: boolean,
+  decided: boolean,
+): ForfeitPhase {
+  if (module.forfeitPhase !== undefined) return module.forfeitPhase(state);
+  return decided ? "over" : started ? "play" : "pre";
+}
+
+/** W2b (plan D3 R1–R3) — a double walkover ("both") is a walkover, so only where the phase admits one, and never in a
+ *  tie-break: the classical game was played (W2b-R14). */
+function doubleWalkoverAdmitted(phase: Exclude<ForfeitPhase, "over">, allowed: readonly ForfeitReason[]): boolean {
+  return allowed.includes("walkover") && phase !== "tiebreak";
+}
+
+/**
+ * W2b Task 11 (UI-1; spec §5.5) — what the D3 phase guard admits for a forfeit recorded against `state` NOW: the
+ * module's own phase, the reasons that phase admits (`forfeitReasonsAllowed`, the list the guard judges by) and whether
+ * a double walkover is admitted. "over" admits nothing (R0: the module's own guard refuses there). The organiser
+ * console's forfeit dialog offers exactly this — less PF-2's cascade-only reasons, which the SERVER refuses — so it can
+ * never offer what the guard refuses (core/forfeit-admission.test.ts runs the guard to prove the two agree).
+ * Ruling 112: `playRecorded` is `playRecorded(ledger)` of the ledger `state` was folded from — the fact the guard reads
+ * beside the state, since no module keeps it — so a walkover stays offered after a Start until something is played.
+ */
+export function forfeitAdmission<State>(
+  module: { forfeitPhase(state: State): ForfeitPhase; walkoverPhases?: readonly ForfeitPhase[] },
+  state: State,
+  facts: { readonly playRecorded: boolean },
+): { phase: ForfeitPhase; reasons: ForfeitReason[]; both: boolean } {
+  const phase = module.forfeitPhase(state);
+  if (phase === "over") return { phase, reasons: [], both: false };
+  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);
+  return { phase, reasons, both: doubleWalkoverAdmitted(phase, reasons) };
 }
 
 // Core events are owned by the kernel, so the kernel — not the sport module —
@@ -451,6 +631,21 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // 4, so a decided fixture answers with the decider's own refusal, never
   // ALREADY_DECIDED. Optional; absent reads as "no decider types".
   deciderTypes?: readonly string[];
+  // W2b (plan D3) — where in the match a forfeit is being recorded, read from the module's own phase union: "pre"
+  // before play, "play" while it runs (a shoot-out and a super over included, ruling 102 Q5), "tiebreak" for a
+  // pending decider (chess), "over" once done/final/abandoned. The kernel's phase guard judges every
+  // `core.forfeit` against it, BEFORE the module sees the event. Required on SportModule; optional here only for
+  // hand-built fakes, which are judged from the stream (forfeitPhaseOf).
+  forfeitPhase?(state: State): ForfeitPhase;
+  // W2b (plan D3 R2) — the phases a walkover (one side or both) may be recorded in. Absent ⇒ ["pre"]. Only
+  // boardgame widens it (FIDE Laws 6.7.1: a no-show after the session starts; R14: a tie-break no-show). Ruling 112:
+  // the kernel judges a walkover in "pre" while nothing is played after the start (`playRecorded`), whatever the phase.
+  walkoverPhases?: readonly ForfeitPhase[];
+  // W2b ruling 118 — the sport records no play between the Start and the result (chess: Seazn records no moves), so
+  // an active `core.start` is itself play (`playRecorded`): after it a retirement is recordable, and a retirement or
+  // a disqualification is a game both players played (X-PS-2). Absent ⇒ false: "nothing played means not started"
+  // (rulings 113–115). Only boardgame declares it.
+  startIsPlay?: boolean;
   // W4a (#425) §7 — every phase in which a STAMPED event may legally occur, in
   // the order they occur, for this cfg. Wider than "the phases where play is
   // running": a card before the opening whistle and a card in the shootout are
@@ -625,14 +820,24 @@ export function foldMatch<Cfg, State>(
 
 /** foldMatch plus guarantee 5: the open stoppage, if play is suspended right
  *  now. Same fold, same errors — the state is byte-for-byte what foldMatch
- *  returns, because core.suspend / core.resume never reach the module. */
+ *  returns, because core.suspend / core.resume never reach the module.
+ *
+ *  W2b adds two facts beside the state, both read by `outcomeOf`: `expunged` (D5 — an active abandon carries
+ *  `expunge: true`) and `levelWithdrawal` (PF-1 — a withdrawal the kernel admitted over a held level result). */
 export function foldMatchWithStoppage<Cfg, State>(
   module: FoldableModule<Cfg, State>,
   cfg: Cfg,
   lineups: LineupPair,
   events: readonly EventEnvelope[],
   opts?: FoldOptions<State>,
-): { state: State; stoppage: MatchStoppage | null; squads: SquadState; settlement: Settlement | null } {
+): {
+  state: State;
+  stoppage: MatchStoppage | null;
+  squads: SquadState;
+  settlement: Settlement | null;
+  expunged: boolean;
+  levelWithdrawal: LevelWithdrawal | null;
+} {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
   const onFolded = opts?.onFolded;
@@ -647,6 +852,13 @@ export function foldMatchWithStoppage<Cfg, State>(
   // it), and whether an accepted core.abandon is in the active ledger.
   let settlement: Settlement | null = null;
   let abandonActive = false;
+  // W2b. `expunged`: the active abandon carries `expunge: true` (D5). `started`: an active core.start was folded —
+  // the phase a hook-less fake is judged in (C17). `levelWithdrawal`: PF-1's admission. All three come from the
+  // ACTIVE ledger (`resolveVoids` ran first), so a void of the abandon, the start or the withdrawal clears them.
+  let expunged = false;
+  let started = false;
+  let levelWithdrawal: LevelWithdrawal | null = null;
+  const walkoverPhases = module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES;
 
   // S3/W4b (#426) — the squads start as the team sheets declared them, with
   // positions intact, and the module is offered the snapshot immediately so its
@@ -692,7 +904,7 @@ export function foldMatchWithStoppage<Cfg, State>(
   const phaseOrder: string[] = declaredPhases === undefined ? [] : [...declaredPhases];
   let highWater: GameTime | null = null;
 
-  for (const event of active) {
+  for (const [index, event] of active.entries()) {
     // §3.3 seam. Everything below whose verdict a cfg edit can move is gated on
     // this. `validateCoreEvent` is not: it is a payload-schema check on the
     // stream alone, and no config edit can change its answer.
@@ -714,14 +926,36 @@ export function foldMatchWithStoppage<Cfg, State>(
     // an abandon or a finalize — is the decider's own refusal, checked ABOVE
     // guarantee 4 so a decided fixture never answers ALREADY_DECIDED for it.
     // Not gated on `strict`, like guarantee 4 and the settle precondition.
-    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {
+    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {
       throw new EngineError(
         "TIEBREAK_NOT_APPLICABLE",
         `event "${event.type}" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,
-        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },
+        { eventId: event.id, outcome: outcomeOf(module, { state, settlement, expunged, levelWithdrawal }) },
       );
     }
-    if (decided && !postDecision.has(event.type)) {
+    // W2b D4 (X-AB-4) — a forfeit while an unvoided abandon is active. ABOVE guarantee 4 on purpose: a football
+    // award-policy abandon DECIDES the match, so guarantee 4 would answer ALREADY_DECIDED first and hide the guidance
+    // the organiser needs (settle to decide; void the abandon to replay). Voids resolve first, so void-then-forfeit
+    // reaches the phase guard below instead (play started: retired, disqualified or withdrew — and a walkover while
+    // nothing was played, ruling 112: an abandon is the kernel's, not play). Once a settle decided
+    // the abandoned match there is nothing left to settle or replay, so it falls to guarantee 4: ALREADY_DECIDED
+    // (review M-6).
+    if (event.type === "core.forfeit" && abandonActive && settlement === null) {
+      throw new EngineError(
+        "ABANDONED_SETTLE_OR_VOID",
+        "this match was abandoned — settle it to decide it, or void the abandon first if it is being replayed",
+        { eventId: event.id },
+      );
+    }
+    // W2b PF-1 (X-WD-1) — the one forfeit guarantee 4 admits: a withdrawal over a held LEVEL result that nothing has
+    // settled (the effective outcome is still level). Walkover, retired and disqualified there stay ALREADY_DECIDED.
+    // One-shot: once admitted the effective outcome is an award, so a second one answers ALREADY_DECIDED.
+    const withdrawalOverLevel =
+      decided &&
+      event.type === "core.forfeit" &&
+      forfeitReasonOf(event.payload) === "withdrew" &&
+      isLevelOutcome(outcomeOf(module, { state, settlement, expunged, levelWithdrawal }));
+    if (decided && !postDecision.has(event.type) && !withdrawalOverLevel) {
       throw new EngineError(
         "ALREADY_DECIDED",
         `event "${event.type}" rejected: match outcome already decided`,
@@ -734,6 +968,33 @@ export function foldMatchWithStoppage<Cfg, State>(
         `event "${event.type}" rejected: play is suspended — resume or abandon first`,
         { eventId: event.id, stoppage },
       );
+    }
+    // W2b D3 (X-RS-1) — the phase guard, before the module sees the event, on every fold (strict or not: recorded
+    // streams are migrated, Task 5). The phase is the module's own reading of its state, so a stoppage reads as the
+    // phase it interrupted: retired, disqualified and withdrew stay admitted there, a walkover follows R2. R0: in
+    // phase "over" nothing is judged here — the module's done/final guard and guarantee 4 answer as before.
+    // Ruling 112: a walkover is judged in "pre" while nothing is played — `playRecorded` of the active ledger before
+    // this event (`active` is void-resolved, so a voided sport event never counts).
+    if (event.type === "core.forfeit") {
+      const phase = forfeitPhaseOf(module, state, started, decided);
+      if (phase !== "over") {
+        const { by, reason } = forfeitOf(event.payload);
+        const played = playRecorded(active.slice(0, index), module);
+        const allowed = forfeitReasonsAllowed(phase, walkoverPhases, played);
+        // R3 (W2b-R14): never both sides in a tie-break — the classical game was played.
+        const bothRefused = by === "both" && phase === "tiebreak";
+        if (!allowed.includes(reason) || bothRefused) {
+          throw new EngineError(
+            "FORFEIT_REASON_WRONG_PHASE",
+            bothRefused
+              ? `a double walkover is not recordable in phase "${phase}": the game was played — record one side's walkover or withdrawal`
+              : `forfeit reason "${reason}" is not recordable in phase "${phase}" — allowed here: ${allowed.join(", ")}`,
+            // `played` (ruling 113): the phase reads "play" from the Start, but a retirement waits for play — the copy
+            // names "nothing played yet" rather than "once play has started" for that refusal.
+            { eventId: event.id, phase, reason, both: by === "both", allowed, bothAllowed: doubleWalkoverAdmitted(phase, allowed), played },
+          );
+        }
+      }
     }
     // The time guard runs ABOVE the kernel-owned branches below, so a
     // core.suspend / core.resume stamp is checked and counted like any other.
@@ -806,16 +1067,28 @@ export function foldMatchWithStoppage<Cfg, State>(
       // candidate, the one event whose order a scorer can still fix.
       if (!backwards) highWater = at;
     }
-    // W2a I-1: ONE gate decides what the module sees — `kernelOwnsEvent`,
-    // the same predicate every replay loop outside the engine must skip on.
-    if (!kernelOwnsEvent(module, event, { state, settled: settlement !== null })) {
+    if (withdrawalOverLevel) {
+      // W2b PF-1 — kernel-owned, folded beside module state like a settle; the module never sees it.
+      const { by } = forfeitOf(event.payload);
+      const { home, away } = { home: lineups.home.entrantId, away: lineups.away.entrantId };
+      if (by !== home && by !== away) {
+        throw new EngineError("INVALID_EVENT", `core.forfeit by "${by}" is neither side of this fixture`, { eventId: event.id });
+      }
+      levelWithdrawal = { winner: by === home ? away : home, loser: by, eventId: event.id };
+    } else if (!kernelOwnsEvent(module, event, { state, settled: settlement !== null })) {
+      // W2a I-1: ONE gate decides what the module sees — `kernelOwnsEvent`,
+      // the same predicate every replay loop outside the engine must skip on.
       // The seam reaches the module too. Three of the eleven re-validate the
       // stamp inside apply() — not redundantly, because the testkit calls
       // apply() directly — and nested/kernel refuses an interruption against a
       // cfg allowance. Each is the same fixture-bricking shape as the guard
       // above and needs the same signal; the other eight ignore the argument.
       state = module.apply(state, event, { strict, squads });
-      if (event.type === "core.abandon") abandonActive = true;
+      if (event.type === "core.start") started = true;
+      if (event.type === "core.abandon") {
+        abandonActive = true;
+        expunged = (event.payload as z.infer<typeof CoreAbandon>).expunge === true;
+      }
       if (!decided) {
         decided = module.outcome(state) !== null;
         // A decided match is not awaiting resumption. core.abandon and
@@ -829,14 +1102,23 @@ export function foldMatchWithStoppage<Cfg, State>(
       // X-ST-1 precondition (spec §5.1). Not gated on `strict` (D2): the
       // module outcome it reads is folded against the frozen cfg, and the
       // shape "level, or abandoned with nothing" does not move with cfg.
-      const effective = outcomeOf(module, { state, settlement });
-      if (!settleApplies(module, { outcome: effective, abandoned: abandonActive, state })) {
+      const effective = outcomeOf(module, { state, settlement, expunged, levelWithdrawal });
+      // W2b D5: an expunged match left the table — there is nothing to settle (void the abandon first). Without this
+      // the settle would be accepted and read as nothing, since `outcomeOf` answers null while expunged.
+      const applies = !expunged && settleApplies(module, { outcome: effective, abandoned: abandonActive, state });
+      // W2b D6 (finding 4): a settle recorded before W2b over a chess double forfeit — then a held no_result, now a
+      // double walkover — still REPLAYS, and the settlement wins. A new write of it is refused like any other.
+      const legacySettle = !strict && effective?.kind === "double_walkover";
+      if (!applies && !legacySettle) {
         throw new EngineError(
           "SETTLE_NOT_APPLICABLE",
           settlement !== null
             ? "this fixture is already settled — void the settle first"
-            : "settle applies only to a level result, an abandoned match with no result, or a pending tie-break",
-          { eventId: event.id, outcome: effective, abandoned: abandonActive },
+            : expunged
+              ? "this match was expunged by a withdrawal — void the abandon first"
+              : "settle applies only to a level result, an abandoned match with no result, or a pending tie-break",
+          // `expunged` only when true, so the refusal every pre-W2b reader parses keeps its shape.
+          { eventId: event.id, outcome: effective, abandoned: abandonActive, ...(expunged ? { expunged } : {}) },
         );
       }
       const p = event.payload as z.infer<typeof CoreSettle>;
@@ -923,5 +1205,5 @@ export function foldMatchWithStoppage<Cfg, State>(
     // exactly like a module event — see `FoldOptions.onFolded`.
     onFolded?.(state, event, squads);
   }
-  return { state, stoppage, squads, settlement };
+  return { state, stoppage, squads, settlement, expunged, levelWithdrawal };
 }

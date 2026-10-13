@@ -39,4 +39,26 @@ describe("fixtureStatusFromFold — D3, in the product's order", () => {
     expect(fixtureStatusFromFold(null, ev("core.start", "core.abandon"), "knockout")).toBe("abandoned");
     expect(fixtureStatusFromFold({ kind: "draw" }, ev("core.start", "core.abandon"), "knockout")).toBe("abandoned");
   });
+
+  it("W2b D7: an abandon with a RESULT is decided (X-AB-2: football award policy — leader wins), a level abandon in a draw kind is decided, and in a bracket stays abandoned", () => {
+    const AWARDED = { kind: "win", winner: "a", loser: "b", method: "abandoned" }; // D8: the award-policy abandon
+    expect(fixtureStatusFromFold(AWARDED, ev("core.start", "core.abandon"), "league")).toBe("decided");
+    expect(fixtureStatusFromFold(AWARDED, ev("core.start", "core.abandon"), "knockout")).toBe("decided");
+    expect(fixtureStatusFromFold({ kind: "draw" }, ev("core.start", "core.abandon"), "league")).toBe("decided");
+    // No outcome: a replay (carrom, generic) — still abandoned, in every kind.
+    let checked = 0;
+    for (const kind of StageKind.options) { expect(fixtureStatusFromFold(null, ev("core.start", "core.abandon"), kind), kind).toBe("abandoned"); checked++; }
+    expect(checked).toBe(StageKind.options.length);
+  });
+
+  it("W2b D7: a double walkover is forfeited in every kind — with its core.forfeit, and without one (a chess double_forfeit result, BG-DW-1); an award is forfeited only with its forfeit", () => {
+    let checked = 0;
+    for (const kind of StageKind.options) {
+      expect(fixtureStatusFromFold({ kind: "double_walkover" }, ev("core.forfeit"), kind), kind).toBe("forfeited");
+      expect(fixtureStatusFromFold({ kind: "double_walkover" }, ev("core.start", "boardgame.result"), kind), kind).toBe("forfeited");
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
+    expect(fixtureStatusFromFold({ kind: "award", winner: "a", loser: "b", reason: "walkover" }, ev("core.forfeit"), "league")).toBe("forfeited");
+  });
 });

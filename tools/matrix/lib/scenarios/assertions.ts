@@ -163,6 +163,11 @@ export function resultsAsPosted(rec: Recorder, observed: ObservedRun): CheckResu
       items.push(same || !cascadeWrote(f, w)
         ? { ok: same, note: `${stored}, the harness posted and folded ${text(p.local)}` }
         : { ok: true, note: `${stored}: struck by the recorded ${w!.policy} after the harness posted it` });
+    } else if (p !== undefined && p.finishedBefore === null && p.foreign === 0 && p.request === "unasserted") {
+      // An abandon whose fold leaves no result (X-AB-1: the replay policy, or a level award-policy abandon where the
+      // stage refuses a draw, ruling R16-3) asserts no outcome, so the stored row carries none and stays abandoned —
+      // the two nulls foldParity accepts for an unasserted request (m-4), and no others.
+      items.push({ ok: f.status === "abandoned" && f.outcome === null, note: `${stored}, the harness posted an abandon its fold leaves without a result` });
     } else if (p !== undefined) {
       const why = p.finishedBefore !== null ? `already ${p.finishedBefore} before it posted` : p.foreign !== 0 ? `${p.foreign} foreign event(s)` : "its local fold has no outcome";
       items.push({ ok: false, note: `${stored} over a stream the harness cannot fold (${why})` });
@@ -257,10 +262,15 @@ export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): C
 
 /** W2a (ruling T15-R3): every bracket match the harness drove is judged against the reference family `bracket-finish`
  *  (reference-bracket.ts): the oracle is given the actions driven, and its status, advancing winner and method must be
- *  the product's. One item per judged drive. A drive the oracle does not cover (a walkover, or the oracle's own
- *  OutOfScope / RuledOut) is NOT judged: counted and named in the verdict's reason, never silent. A run with a bracket
- *  stage that judged nothing fails (R25); a run with no bracket stage abstains by name. */
-export function referenceBracketFinish(rec: Recorder, observed: ObservedRun): CheckResult {
+ *  the product's. One item per judged drive. A drive the oracle does not cover (its own OutOfScope / RuledOut, or a
+ *  double walkover whose next-match line is unread) is NOT judged: counted and named in the verdict's reason, never
+ *  silent. A run with a bracket stage that judged nothing fails (R25); a run with no bracket stage abstains by name.
+ *
+ *  W2b (I-3): the forfeits and double walkovers among the drives are counted — "N of M judged" in the reason — and a
+ *  run that drove any and judged none fails, by name. `forfeitsOwed`: the scenario's own forfeits land on a bracket
+ *  stage (a W2b scenario whose root, where its hooks drive (D12), is a bracket kind), so zero driven is zero judged,
+ *  a failure too. */
+export function referenceBracketFinish(rec: Recorder, observed: ObservedRun, opts: { readonly forfeitsOwed?: boolean } = {}): CheckResult {
   const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
   if (brackets.length === 0) return assertion("life-reference-bracket-finish", [], "no bracket stage in this run: the bracket-finish oracle says nothing about it");
   const judgements = rec.bracketDrives.map(judgeDrive);
@@ -268,13 +278,19 @@ export function referenceBracketFinish(rec: Recorder, observed: ObservedRun): Ch
   const skipped = judgements.flatMap((j) => (j.judged ? [] : [j.why]));
   // A judged drive whose loser line could not be read is judged on everything else: counted and named too.
   const loserSkipped = judgements.flatMap((j) => (j.judged && j.loserNotJudged !== null ? [j.loserNotJudged] : []));
+  const isForfeit = rec.bracketDrives.map((d) => d.asked.kind === "forfeit" || d.asked.kind === "double_walkover");
+  const forfeitsDriven = isForfeit.filter(Boolean).length;
+  const forfeitsJudged = judgements.filter((j, i) => j.judged && isForfeit[i]).length;
+  const forfeitLine = forfeitsDriven > 0 || opts.forfeitsOwed === true ? `forfeits and double walkovers: ${forfeitsJudged} of ${forfeitsDriven} judged` : null;
+  if (forfeitLine !== null && forfeitsJudged === 0) items.push({ ok: false, note: `${forfeitLine} — zero judged is a failure (R25)` });
   const verdict = assertion("life-reference-bracket-finish", items);
-  if (verdict.verdict !== "pass" || (skipped.length === 0 && loserSkipped.length === 0)) return verdict;
+  if (verdict.verdict !== "pass") return verdict;
   const parts = [
+    ...(forfeitLine === null ? [] : [forfeitLine]),
     ...(skipped.length === 0 ? [] : [`${skipped.length} drive(s) not judged (${[...new Set(skipped)].join("; ")})`]),
     ...(loserSkipped.length === 0 ? [] : [`loser seat not judged on ${loserSkipped.length} drive(s) (${[...new Set(loserSkipped)].join("; ")})`]),
   ];
-  return { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
+  return parts.length === 0 ? verdict : { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
 }
 
 /** The format lock's answer: usecases/divisions.ts `formatLocked()` throws

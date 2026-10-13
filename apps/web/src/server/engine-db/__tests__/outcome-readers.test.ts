@@ -16,6 +16,7 @@ const BARE = /\b[A-Za-z_$][\w$]*\.outcome\(/g;
 const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
   "packages/engine/src/core/events.ts": { calls: 3, reason: "the kernel itself: the decided flag, outcomeOf, and kernelOwnsEvent's settled-finalize test" },
   "apps/web/src/server/overlay/recent.ts": { calls: 2, reason: "a point-state PROBE over a stored module state, not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)" },
+  "apps/web/src/server/public-site/public-player-matches.ts": { calls: 1, reason: "W2b PF-1 off STORED rows (no fold): whether the module's own stored state held the level result a stored withdrawal award was admitted over (storedLevelWithdrawal); a settled fixture's outcome is a win and returns before the read" },
   "packages/engine/src/testkit/stoppages.ts": { calls: 1, reason: "testkit: module-level conformance, no settle in its streams" },
   "packages/engine/src/testkit/conformance.ts": { calls: 5, reason: "testkit: module-level conformance, no settle in its streams" },
   "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
@@ -31,6 +32,37 @@ function walk(dir: string, out: string[]): string[] {
   }
   return out;
 }
+
+describe("W2b PF-1 (loop D carry-in): every summary reader in apps/web goes through summaryOf", () => {
+  // The headline twin of finding 1: a withdrawal admitted over a held level result lives beside module state
+  // (`levelWithdrawal`), so a bare `<module>.summary(state)` keeps showing the draw the table no longer credits.
+  // apps/web only — the engine's own summaryOf is the one place that may call it.
+  const BARE_SUMMARY = /\b[A-Za-z_$][\w$]*\.summary\(/g;
+  it("no bare <module>.summary( in apps/web/src, and summaryOf's web readers are exactly these", () => {
+    const files = walk(join(REPO, "apps/web/src"), []);
+    expect(files.length).toBeGreaterThan(100);
+    const bare: string[] = [];
+    const readers: string[] = [];
+    for (const f of files) {
+      const rel = relative(REPO, f);
+      const text = stripComments(readFileSync(f, "utf8"));
+      for (const m of text.matchAll(BARE_SUMMARY)) bare.push(`${rel}: ${text.slice(m.index, text.indexOf(")", m.index) + 1)}`);
+      if (/\bsummaryOf\(/.test(text)) readers.push(rel);
+    }
+    expect(bare, `${files.length} files scanned`).toEqual([]);
+    expect(readers.sort()).toEqual([
+      "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+      "apps/web/src/server/engine-db/append-event.ts",
+      // R116-2: the module's own summary of an award no event recorded (ruling 116's walkover) — the fold of an empty
+      // ledger holding the award, so a bare module.summary( is never needed.
+      "apps/web/src/server/engine-db/awarded-state.ts",
+      "apps/web/src/server/engine-db/fold.ts",
+      "apps/web/src/server/overlay/recent.ts",
+      "apps/web/src/server/public-site/public-player-matches.ts",
+      "apps/web/src/server/public-site/timeline.ts",
+    ]);
+  });
+});
 
 describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
   it("no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers", () => {
@@ -54,14 +86,21 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     expect(allowedSeen).toEqual(Object.fromEntries(Object.entries(ALLOWED).map(([rel, { calls }]) => [rel, calls])));
     expect(scanned).toBeGreaterThan(0);
     // Exactly the six fold readers Step 8 moves (preflight C8), plus the two module player-stat folds
-    // (ruling D-C3). A later task that adds a reader adds it here by name.
+    // (ruling D-C3). A later task that adds a reader adds it here by name. W2b ruling 112: the testkit's
+    // `onePlayEvent` refuses a drawn event that decides the match, through outcomeOf (settle-aware like every reader).
+    // R116-2: `awardedMatchState` refuses a walkover whose fold decides other than the stored award. Ruling 120: the
+    // testkit's `afterStartEvents` keeps only a sport event that leaves the match undecided after a Start, through
+    // outcomeOf (shared by the ruling-114 and ruling-120 sweeps).
     expect(readers.sort()).toEqual([
       "apps/web/src/server/engine-db/append-event.ts",
+      "apps/web/src/server/engine-db/awarded-state.ts",
       "apps/web/src/server/engine-db/fold.ts",
       "apps/web/src/server/usecases/event-import.ts",
       "packages/engine/src/sports/carrom/carrom.ts",
       "packages/engine/src/sports/cricket/scorecard.ts",
       "packages/engine/src/sports/generic/generic.ts",
+      "packages/engine/src/testkit/after-start-events.ts",
+      "packages/engine/src/testkit/play-event.ts",
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
     ]);

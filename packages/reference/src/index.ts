@@ -4,12 +4,15 @@
 // families its signed rulebooks cover, before fixing anything. Imports:
 // relative within src, and `import type { … } from "@seazn/engine/core"`
 // statements only (ruling 27) — scripts/reference-boundary.ts.
-// W2a adds the first family, bracket-finish (packages/engine/rules/*.md).
+// W2a adds the first family, bracket-finish (packages/engine/rules/*.md). W2b extends it with the forfeit and the
+// double walkover, and adds walkover-credit — exported here, not held in FAMILIES: its domain is a forfeited match,
+// not a stage kind × sport pair, so it is never resolved by requireFamily (T15-R5 keeps one oracle per pair).
 import type { StageKind } from "@seazn/engine/core";
 import { bracketFinish, type BracketFinishFamily } from "./families/bracket-finish.ts";
 
 export {
   BRACKET_STAGE_KINDS,
+  FORFEIT_REASONS,
   LEVEL_KINDS,
   OUT_OF_SCOPE,
   OutOfScope,
@@ -24,6 +27,7 @@ export type {
   BracketCase,
   BracketExpect,
   BracketFinishFamily,
+  ForfeitReason,
   LevelKind,
   OutOfScopeReason,
   PlayResult,
@@ -35,6 +39,20 @@ export type {
   Status,
   WinMethod,
 } from "./families/bracket-finish.ts";
+
+export {
+  CREDIT_METRIC_RULES,
+  CREDIT_REASONS,
+  CREDIT_REFUSALS,
+  CREDIT_SPORTS,
+  CreditRefused,
+  enumerateCreditCases,
+  walkoverCredit,
+  walkoverCreditFamily,
+} from "./families/walkover-credit.ts";
+export type { CreditAnswer, CreditCase, CreditMetricRule, CreditReason, CreditRefusal, WalkoverCreditFamily } from "./families/walkover-credit.ts";
+export { WALKOVER_CREDIT_DATA } from "./families/walkover-credit-cfgs.ts";
+export type { CreditCfgEntry, PlayedScenario, SportCreditData } from "./families/walkover-credit-cfgs.ts";
 
 export type StageKindName = StageKind;
 

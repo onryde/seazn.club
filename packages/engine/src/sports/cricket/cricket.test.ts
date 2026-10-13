@@ -522,7 +522,7 @@ describe("cricket ledger: every delta records run_diff = runs_for − runs_again
   });
 
   it("a forfeit (award) records it too, at 0, beside its zero runs", () => {
-    const state = fold(t20, stream(["core.start"], ["core.forfeit", { by: "A", reason: "no_show" }]));
+    const state = fold(t20, stream(["core.forfeit", { by: "A", reason: "walkover" }])); // W2b: a walkover is pre-start
     expect(state.outcome).toMatchObject({ kind: "award" });
     for (const side of cricket.standingsDelta(state.outcome!, t20, league, state)) {
       expect(side.metrics).toMatchObject({ runs_for: 0, runs_against: 0, run_diff: 0 });
@@ -1348,7 +1348,7 @@ describe("cricket: the decided margin is structured data (kind + number)", () =>
     const live = fold(t20, stream(["core.start"], ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }]));
     expect(live.outcome).toBeNull();
     expect(live.margin).toBeNull();
-    const forfeited = fold(t20, stream(["core.start"], ["core.forfeit", { by: "A", reason: "no_show" }]));
+    const forfeited = fold(t20, stream(["core.forfeit", { by: "A", reason: "walkover" }])); // W2b: a walkover is pre-start
     expect(forfeited.outcome).toMatchObject({ kind: "award", winner: "H" });
     expect(forfeited.margin).toBeNull();
   });

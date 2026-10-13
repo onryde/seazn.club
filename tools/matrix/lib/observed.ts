@@ -7,9 +7,12 @@ import type { Verdict } from "./results.ts";
 
 export type { CheckResult, Verdict } from "./results.ts";
 
+/** W2b (D2): an award carries who lost (null for a bye) and WHY — the forfeit reason, or "bye" — and no method; a
+ *  double walkover is its own outcome, with no winner (X-DW-1). */
 export type ObservedOutcome =
-  | { kind: "win" | "award"; winner: string; method?: string }
-  | { kind: "draw" | "tie" | "no_result" };
+  | { kind: "win"; winner: string; method?: string }
+  | { kind: "award"; winner: string; loser: string | null; reason: string }
+  | { kind: "draw" | "tie" | "no_result" | "double_walkover" };
 
 export interface ObservedDeclared { home: number; away: number; forOutcome: ObservedOutcome }
 
@@ -126,6 +129,11 @@ export interface ObservedRun {
   stages: ObservedStage[];
   withdrawal: WithdrawalObs | null;
   configEdit: ConfigEditObs | null;
+  /** W2b Task 16 (ruling R16-5): the division's entrants the product STORES as departed (DEPARTED_STATUSES) when the
+   *  run was observed — read from the entrants' status (scenarios/common.ts snapshot), never from the scenario's own
+   *  record. Absent where nothing read it (the fast-check model's step runs, a denied case); I2 refuses a withdrawn
+   *  case without it by name rather than read it as nobody departed. */
+  departed?: readonly string[];
 }
 
 export interface InvariantResult { verdict: Verdict; checked: number; evidence: string[] }
@@ -160,16 +168,24 @@ export function twoSided(f: ObservedFixture): boolean {
   return f.home !== null && f.away !== null;
 }
 
+/** The product's outcome as the harness reads it; null for no outcome or a shape it does not know. An award's reason
+ *  is the W2b field; a row written before W2b carried it as `method` (MatchOutcome's old award doc), so that is read
+ *  when `reason` is absent, and a row with neither (a legacy bye) reads "" — never a guessed reason. */
 export function toObservedOutcome(raw: unknown): ObservedOutcome | null {
   if (raw === null || typeof raw !== "object") return null;
-  const o = raw as { kind?: unknown; winner?: unknown; method?: unknown };
-  if ((o.kind === "win" || o.kind === "award") && typeof o.winner === "string") {
+  const o = raw as { kind?: unknown; winner?: unknown; loser?: unknown; method?: unknown; reason?: unknown };
+  if (o.kind === "win" && typeof o.winner === "string") {
     return typeof o.method === "string" ? { kind: o.kind, winner: o.winner, method: o.method } : { kind: o.kind, winner: o.winner };
   }
-  if (o.kind === "draw" || o.kind === "tie" || o.kind === "no_result") return { kind: o.kind };
+  if (o.kind === "award" && typeof o.winner === "string") {
+    const reason = typeof o.reason === "string" ? o.reason : typeof o.method === "string" ? o.method : "";
+    return { kind: "award", winner: o.winner, loser: typeof o.loser === "string" ? o.loser : null, reason };
+  }
+  if (o.kind === "draw" || o.kind === "tie" || o.kind === "no_result" || o.kind === "double_walkover") return { kind: o.kind };
   return null;
 }
 
+/** Who the outcome advances: a win's or an award's winner; nobody for a level result or a double walkover. */
 export function winnerOf(o: ObservedOutcome | null): string | null {
   return o !== null && (o.kind === "win" || o.kind === "award") ? o.winner : null;
 }
@@ -201,6 +217,9 @@ export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "c
  *  (withdrawal.ts:213-217): pending fixtures are voided, nothing forfeited.
  *  ladder-loop.test.ts holds it equal to the product's two sets, read as text. */
 export const FORFEIT_MODEL_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "knockout", "double_elim", "stepladder"]);
+/** W2b X-WD-2 (ruling 90): the open formats whose withdrawal walks the remaining fixtures over as knockout does, never
+ *  voiding them — named by the rule row, so the harness expects it before the product's kind sets move (loop F). */
+export const X_WD_2_KINDS: readonly string[] = Object.freeze(["page_playoff", "ladder"]);
 /** W1-driving Task 7: entrant statuses that have LEFT the field (stages.ts
  *  departedEntrantIds) — off the live ladder, refused as a challenge side. */
 export const DEPARTED_STATUSES: readonly string[] = Object.freeze(["withdrawn", "disqualified"]);

@@ -288,7 +288,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
             const act = acts[round - 1] ?? "none";
             const f = batch[0];
             if (f === undefined || act === "none") return;
-            if (act === "forfeit") await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover" });
+            if (act === "forfeit") await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
             if (act === "void") await driver.abandonFixture(driver.fixtures.find((x) => x.id === f.id)!);
             if (act === "withdraw") {
               const e = driver.entrants.find((x) => x.status !== "withdrawn");

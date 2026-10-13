@@ -158,6 +158,8 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
     const ctx = await seedOrg();
     const div = await seedDivision(ctx);
 
+    // W2b core (64c1a2881): a walkover is refused once something is played — round 3 below retires instead. Rounds 1-2
+    // play nothing, so they stay walkovers, recorded before the start (legal before and after ruling 112).
     // Rounds 1-2: Alice's entrant wins by forfeit (no rally credit) — a real
     // 2-win streak by round 2, checked below on round 2's OWN draft.
     const roundFixtures: string[] = [];
@@ -167,9 +169,8 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
           home_entrant_id, away_entrant_id, status)
         values (${div.stageId}, ${div.divisionId}, ${ctx.orgId}, ${round}, 1,
           ${div.entrantA}, ${div.entrantB}, 'scheduled') returning id`;
-      await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.start", payload: {} });
       await scoreEvent(ctx.auth, fx, {
-        expected_seq: 1,
+        expected_seq: 0,
         type: "core.forfeit",
         payload: { by: div.entrantB, reason: "walkover" },
       });
@@ -198,7 +199,7 @@ describe.skipIf(!HAS_DB)("assembleResultEnrichment — DB-integration (P3 review
     await scoreEvent(ctx.auth, fx3, {
       expected_seq: seq,
       type: "core.forfeit",
-      payload: { by: div.entrantA, reason: "walkover" },
+      payload: { by: div.entrantA, reason: "retired" },
     });
 
     const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");

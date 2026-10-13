@@ -158,6 +158,11 @@ const REST = [
   // W2a (format matrix, #931): every settle method's and tie-break rung's decided sentence on the match centre.
   // Begins with "m", so it belongs here rather than in C_GLOBBED.
   "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts",
+  // W2b (format matrix, #945): the forfeit / double-walkover score lines on the match centre and the public
+  // fixture loader's forfeit read. None begins with "c", so all three belong here rather than in C_GLOBBED.
+  "src/server/public-site/__tests__/double-walkover-score-lines.test.ts",
+  "src/server/public-site/__tests__/match-centre-forfeit.test.ts",
+  "src/server/public-site/__tests__/match-centre-load-forfeit-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

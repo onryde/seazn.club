@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 0,
+  "layer": "L3",
+  "runs": [
+    "ci-38362040946-1-l3"
+  ],
+  "plannedNotRun": null,
+  "compared": 937,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [],
+  "absent": []
+}

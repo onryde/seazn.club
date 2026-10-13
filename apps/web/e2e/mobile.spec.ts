@@ -4938,6 +4938,72 @@ test("chess tie-break (W2a): every step of the knockout tie-break sheet is reach
   expect(events.data!.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
 });
 
+// W2b Task 11 (UI-1): the organiser console's forfeit dialog at THIS width. A bottom sheet on phones: every choice is
+// reachable and holds the 44px floor, the page never scrolls sideways, Confirm is the element a tap at its edges lands
+// on, and the control set — membership and order — is the one 1280 shows (a branch, not a shrink). Long realistic
+// names, because a short one hides the wrap (AGENTS.md phone composition: `truncate` / `min-w-0`).
+test("forfeit dialog (W2b T11): every choice reachable, 44px floor, no horizontal scroll, Confirm hit-testable; the control set matches 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2b mobile forfeit ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "League",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const names = [`Alexandria Konstantinopoulou-Vanderbilt ${TAG}`, `Maximiliano Wolfeschlegelsteinhausen ${TAG}`];
+  const added = await addEntrantsViaApi(request, div.data!.id, names, "individual");
+  expect(added.ids).toHaveLength(2);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  const fixtureId = fixtureIds[0]!;
+  const projectWidth = page.viewportSize()!.width;
+
+  await page.goto(await fixturePath(page.request, fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const dialog = page.getByTestId("forfeit-dialog");
+  const controls = () =>
+    dialog
+      .locator('[data-testid^="forfeit-who-"], [data-testid^="forfeit-why-"], [data-testid="forfeit-confirm"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  const open = async () => {
+    await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await dialog.getByTestId("forfeit-who-away").click();
+    await dialog.getByTestId("forfeit-why-walkover").check();
+    await expect(dialog.getByTestId("forfeit-preview")).toBeVisible();
+  };
+  await open();
+  for (const w of ["home", "away", "both"]) await assertTapFloor(dialog.getByTestId(`forfeit-who-${w}`), `forfeit side ${w}`);
+  // A radio's tap target is its label (the whole row), not the 16px dot.
+  await assertTapFloor(dialog.locator("label", { has: page.getByTestId("forfeit-why-walkover") }), "forfeit reason walkover");
+  await assertTapFloor(dialog.getByTestId("forfeit-confirm"), "forfeit Confirm");
+  await expectNoHorizontalScroll(page);
+  const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(widths.scroll, `${projectWidth}: scrollWidth ${widths.scroll} within clientWidth ${widths.client}`).toBeLessThanOrEqual(widths.client);
+  const here = await controls();
+  expect(here.length, "the dialog's controls were read").toBeGreaterThan(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open();
+  expect(here, `the dialog's controls at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await controls());
+  await page.keyboard.press("Escape");
+  // Nothing was confirmed: walking the dialog wrote nothing.
+  const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events`);
+  expect(events.data!.map((e) => e.type)).toEqual([]);
+});
+
 // 2048 mobile swipe: on a real touchscreen the browser decides whether a
 // gesture is page-scroll/pan or app-handled AT touchstart, using whatever
 // `touch-action` value is ALREADY in effect at that instant -- not a value a

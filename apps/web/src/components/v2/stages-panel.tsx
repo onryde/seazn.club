@@ -21,6 +21,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
+import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -1802,6 +1803,12 @@ export function classifyActError(
   ) {
     return { tone: "warning", text: msg("schedule.pairing.error.roundOneOnly"), refresh: true };
   }
+  // W2b D11 (spec §5.4 corner 3): Complete refused because a departed entrant still holds a seat in a line that
+  // decided nobody. Amber — one match to record — named in the reader's language (`scoringErrorText`), never the
+  // server's English sentence with its ids.
+  if (err instanceof ApiV1Error && err.code === "STAGE_SEAT_DEPARTED") {
+    return { tone: "warning", text: scoringErrorText(err.code, err.message, msg, "schedule.error.failed", err.extra), refresh: false };
+  }
   const precondition = generatePreconditionMessage(err, msg, stageName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
@@ -1988,27 +1995,9 @@ function stageStatusLabel(msg: Msg, status: string): string {
   return status;
 }
 
-// EXPORTED (Competition Desk W2, Task 4/R13) — `run-sheet-row.tsx` reuses
-// this same derivation rather than a second copy.
-export function outcomeText(msg: Msg, outcome: unknown, entrantNames: Record<string, string>): string | null {
-  const o = outcome as { kind?: string; winner?: string } | null;
-  if (!o?.kind) return null;
-  const winner = entrantNames[o.winner ?? ""] ?? "?";
-  switch (o.kind) {
-    case "win":
-      return msg("schedule.outcome.won", { name: winner });
-    case "award":
-      return msg("schedule.outcome.wonWo", { name: winner });
-    case "draw":
-      return msg("schedule.outcome.draw");
-    case "tie":
-      return msg("schedule.outcome.tie");
-    case "no_result":
-      return msg("schedule.outcome.noResult");
-    default:
-      return null;
-  }
-}
+// W2b loop H F2: moved to `lib/outcome-text.ts`, so the fixture console reads the run sheet's words; re-exported here
+// for this module's existing importers (`run-sheet-row.tsx`, the tests).
+export { outcomeText } from "@/lib/outcome-text";
 
 // PROMPT-66 — inline ad-hoc match form. Two entrant selects + an optional
 // datetime; POSTs /stages/{id}/fixtures and refreshes. The server enforces the

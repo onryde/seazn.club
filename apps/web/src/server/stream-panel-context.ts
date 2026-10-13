@@ -14,6 +14,7 @@ import { preferredCurrency } from "@/lib/currency-server";
 import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
+import { overlayDictOf } from "@/lib/overlay-dict";
 import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, tunable } from "@/server/relay/config";
 import { relayUnavailable } from "@/server/relay/drivers";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -155,10 +156,6 @@ export async function loadStreamPanelContext(args: {
     // `overlayDict` travels because it has to: the console layout provides the `ui` namespace, the overlay's own copy is
     // `public.overlay.*`, and `getDictionary` is `server-only` so the client island cannot load it. Sliced to that
     // prefix, so the flight carries ~20 strings and not the whole public catalogue.
-    overlayDict: entitled
-      ? (Object.fromEntries(
-          Object.entries(await getDictionary(args.locale, "public")).filter(([k]) => k.startsWith("overlay.")),
-        ) as Record<string, string>)
-      : {},
+    overlayDict: entitled ? overlayDictOf((await getDictionary(args.locale, "public")) as Record<string, string>) : {},
   };
 }

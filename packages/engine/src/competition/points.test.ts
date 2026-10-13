@@ -204,10 +204,12 @@ function ruleCorpus(): { outcome: MatchOutcome; pair: FixtureResult }[] {
   corpus.push(
     { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
     { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
-    { outcome: { kind: "award", winner: "H" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "award", winner: "H", loser: "A", reason: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
     { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
     { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
     { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
+    // W2b X-DW-4: a double walkover — both sides played 1, lost 1, nothing credited (every module, double-walkover.test.ts).
+    { outcome: { kind: "double_walkover" }, pair: [blank("H", 0, 0, 1), blank("A", 0, 0, 1)] },
   );
   return corpus;
 }

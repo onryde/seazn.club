@@ -1,7 +1,7 @@
 // Generic module goldens + conformance — spec 04 §8, PROMPT-03 §3/§5.
 import { describe, expect, it } from "vitest";
 import { foldMatch, SETTLE_METHODS, type EventEnvelope } from "../../core/events.ts";
-import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
+import { AWARD_REASONS, DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import { evalPadGate } from "../../sport/module.ts";
 import {
   aggregatePlayerStats,
@@ -115,18 +115,43 @@ describe("generic — score mode (v1 parity)", () => {
 
 describe("generic — core event mapping (spec 03 §2 table)", () => {
   it("maps core.forfeit to an award for the other side", () => {
-    const state = fold(winLossCfg, stream(["core.start"], ["core.forfeit", { by: "H", reason: "no-show" }]));
-    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
+    // Ruling 113: a retirement needs something played — one score on the tally first.
+    const state = fold(winLossCfg, stream(["core.start"], ["generic.score", { by: "A", points: 1 }], ["core.forfeit", { by: "H", reason: "retired" }]));
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "retired" });
     const [home, away] = generic.standingsDelta(state.outcome!, winLossCfg, league, state);
     expect(home).toMatchObject({ lost: 1, points: 0 });
     expect(away).toMatchObject({ won: 1, points: 3 });
-    expect(generic.summary(state).headline).toBe("L — W/O");
+    // Loop R M-2: a retirement is a win over a game the opponent left, not a walkover — "W", beside the result's "ret.".
+    expect(generic.summary(state).headline).toBe("L — W");
   });
 
-  it("maps core.abandon to no_result with shared points and no draw counted", () => {
+  // Loop R M-2: generic's summary writes result letters, and an award's winner read "W/O" whatever the award was — so a
+  // retirement or a disqualification printed "W/O" beside its own "ret." / "DQ" chip. "W/O" names a side that walked
+  // over: a walkover, a withdrawal, a bye. A side whose opponent retired or was disqualified won the game: "W". The
+  // loser reads "L" either way. Every award reason the engine declares, both seats — a reason added owes its row here.
+  it("an award's winner reads W/O only where it walked over (walkover, withdrawal, bye) and W where it won (retired, DQ)", () => {
+    const WINNER_MARK: Record<(typeof AWARD_REASONS)[number], string> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
+    expect(Object.keys(WINNER_MARK).sort(), "a row for every declared award reason").toEqual([...AWARD_REASONS].sort());
+    let checked = 0;
+    for (const reason of AWARD_REASONS) {
+      for (const [winner, loser] of [["H", "A"], ["A", "H"]] as const) {
+        const outcome = { kind: "award" as const, winner, loser: reason === "bye" ? null : loser, reason };
+        const state = { ...generic.init(winLossCfg, lineups), phase: "done" as const, outcome };
+        const lines = generic.summary(state).perSide.map((p) => p.line);
+        expect(lines, `${reason} to ${winner}`).toEqual(winner === "H" ? [WINNER_MARK[reason], "L"] : ["L", WINNER_MARK[reason]]);
+        checked++;
+      }
+    }
+    expect(checked, "award reasons × seats").toBe(AWARD_REASONS.length * 2);
+  });
+
+  // W2b GN-AB-1 (product rule W2b-R6): until W2b this mapped core.abandon to no_result with shared points. An abandon
+  // is now a replay — no result, phase "abandoned" — and a legacy no_result (folded before W2b) still ranks as it did.
+  it("maps core.abandon to a replay (GN-AB-1); a legacy no_result keeps shared points and no draw counted", () => {
     const state = fold(scoreCfg, stream(["core.start"], ["core.abandon", { reason: "rain" }]));
-    expect(state.outcome).toEqual({ kind: "no_result" });
-    const [home, away] = generic.standingsDelta(state.outcome!, scoreCfg, league, state);
+    expect(state.outcome).toBeNull();
+    expect(state.phase).toBe("abandoned");
+    const [home, away] = generic.standingsDelta({ kind: "no_result" }, scoreCfg, league, state);
     expect(home).toMatchObject({ played: 1, won: 0, drawn: 0, lost: 0, points: 1 });
     expect(away).toMatchObject({ played: 1, won: 0, drawn: 0, lost: 0, points: 1 });
   });
@@ -213,9 +238,10 @@ describe("generic — running tally (W4)", () => {
   it("never lets the tally override a recorded result", () => {
     const state = fold(
       scoreCfg,
-      stream(["generic.score", { by: "H", points: 4 }], ["core.forfeit", { by: "H", reason: "no-show" }]),
+      // No core.start: generic's phase is still "pre" (a tally alone does not start play), so the reason is a walkover.
+      stream(["generic.score", { by: "H", points: 4 }], ["core.forfeit", { by: "H", reason: "walkover" }]),
     );
-    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "walkover" });
     expect(generic.summary(state).headline).toBe("L — W/O");
   });
 

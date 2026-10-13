@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 3,
+  "runId": "w2b-repro-3",
+  "harnessCommit": "46251836c",
+  "startedAt": "2026-10-09T19:10:30.823Z",
+  "finishedAt": "2026-10-09T19:10:32.133Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L3",
+  "driver": "http",
+  "plan": "--set w1-driving --only knockout|boardgame --scenario R4",
+  "cases": [
+    {
+      "caseId": "knockout|boardgame|blitz|R4",
+      "row": "knockout",
+      "sport": "boardgame",
+      "variant": "blitz",
+      "scenario": "R4",
+      "canary": false,
+      "state": "red",
+      "reason": "error: RefusedCall: POST /api/v1/entrants/c8f480ca-fc53-4e08-a276-3c48a790527b/withdraw → HTTP 422 WRONG_PHASE: forfeit not allowed in phase \"pre\"",
+      "checks": [],
+      "counts": {
+        "calls": 33,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 1249,
+      "notes": [],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    }
+  ]
+}

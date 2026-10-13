@@ -167,7 +167,9 @@
 import {
   EngineError,
   foldMatchWithStoppage,
+  summaryOf,
   type EventEnvelope,
+  type FoldedOutcomeFacts,
   type Lineup,
   type LineupPair,
   type LineupSlot,
@@ -191,6 +193,7 @@ import {
   entrantsOfDivision,
   fixtureKey,
   PackSchema,
+  packMethodOf,
   roundRobinFixtureCount,
   type Pack,
   type PackClaim,
@@ -1588,6 +1591,7 @@ export function validatePack(
 
     let state: unknown;
     let squads: SquadState;
+    let facts: FoldedOutcomeFacts<unknown>;
     try {
       const result = foldMatchWithStoppage(
         sportModule,
@@ -1598,6 +1602,7 @@ export function validatePack(
       );
       state = result.state;
       squads = result.squads;
+      facts = result;
     } catch (err) {
       // The product turns this into `import.fold_rejected` with the offending
       // event's index (event-import.ts:306-321). Same information, same
@@ -1654,7 +1659,9 @@ export function validatePack(
       state,
       squads,
       outcome,
-      summary: sportModule.summary(state),
+      // The engine's one summary (W2b PF-1): `module.summary(state)` would still read a held level result the kernel
+      // turned into a withdrawal award. apps/web reads the same function (loop F).
+      summary: summaryOf(sportModule, facts),
     });
   });
 
@@ -2044,7 +2051,7 @@ function firstMatchDivergence(
   // `got = "x" in outcome ? outcome.x : undefined`, the same shape
   // `claimDivergence` uses — NOT `"x" in want && "x" in outcome && ...`. The
   // conjunction reads as a guard and is structurally always true (the two
-  // unions are discriminated on the same five kinds, and Task 1's
+  // unions are discriminated on the same six kinds, and Task 1's
   // `OUTCOME_KINDS_ARE_EXHAUSTIVE` proves the kind sets are equal), so it
   // cannot fail open today — but two shapes answering one question in one file
   // is how a later reader picks the one that can.
@@ -2067,9 +2074,12 @@ function firstMatchDivergence(
     }
   }
   // `method` is asserted only when the pack states one — a pack that does not
-  // care which method decided a fixture must not be forced to guess.
+  // care which method decided a fixture must not be forced to guess. The fold's
+  // side is read through `packMethodOf`: a win's `method`, an award's `reason`
+  // (W2b renamed it, and `"method" in outcome` reads `undefined` off every
+  // award — which tsc cannot see).
   if ("method" in want && want.method !== undefined) {
-    const got = "method" in outcome ? outcome.method : undefined;
+    const got = packMethodOf(outcome);
     if (got !== want.method) {
       return {
         code: "match.outcome_method",
@@ -2371,7 +2381,7 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
       return `outcome kind: claim expects "${claim.kind}", the fold produced "${outcome.kind}"`;
     }
     if (claim.method !== undefined) {
-      const got = "method" in outcome ? outcome.method : undefined;
+      const got = packMethodOf(outcome);
       if (got !== claim.method) {
         return `outcome method: claim expects "${claim.method}", the fold produced ${show(got)}`;
       }

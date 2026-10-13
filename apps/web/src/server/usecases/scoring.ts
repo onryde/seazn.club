@@ -13,9 +13,10 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
+import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
-import { advancingSides } from "@/server/engine-db/fed-seats";
-import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
+import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
+import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -34,7 +35,9 @@ import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
-import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
+import { DEPARTED_STATUSES } from "./entrants";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
@@ -141,6 +144,9 @@ export async function scoreEvent(
   auth: AuthCtx,
   fixtureId: string,
   input: AppendEventRequest,
+  /** Server-internal, never a request field (W2b PF-2): the withdrawal cascade names itself here, and only it may
+   *  record the cascade-only events (append-event.ts `assertW2bWriteGuards`). */
+  opts: { writer?: CascadeWriter } = {},
 ): Promise<ScoreOutcome> {
   // A FAST PATH, no longer the guarantee (W2, design §6). Until this wave the
   // cache was the ONLY thing standing between a retry and a second write, so a
@@ -200,6 +206,7 @@ export async function scoreEvent(
       // or past its 24h TTL. The column is nullable and NULLs are distinct in
       // a unique index, so un-keyed callers are entirely unaffected.
       idempotencyKey: input.idempotency_key ?? null,
+      ...(opts.writer !== undefined ? { writer: opts.writer } : {}),
       ...(input.type === "core.void" &&
       typeof (input.payload as { event_id?: unknown })?.event_id === "string"
         ? { voids: (input.payload as { event_id: string }).event_id }
@@ -356,7 +363,7 @@ async function invalidateAndPush(
   // settled, whichever way it went), never before, and without holding this
   // response. Both channels have public receivers that refetch a Redis-cached
   // document on a push: `fixture:{id}` → the match centre and overlay
-  // (`pub:v1:fixture:v2:{id}`), `division:{id}` → the hub
+  // (`pub:v1:fixture:v3:{id}`), `division:{id}` → the hub
   // (`pub:v1:hub:{competitionId}`). A refetch that beat the delete read the old
   // copy, and a subscribed page only polls as a slow safety net.
   //
@@ -723,6 +730,16 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
+    // Loop R I-2 / R2 N-1: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's
+    // stored decision — so first the stage lock a double walkover's void holds while it revives (`lockStageSeats`), and
+    // it comes BEFORE this fixture's own lock: the one order (stage, then fixtures), so a void holding the stage while
+    // it asks for this fixture's lock never waits on a decision that holds this fixture's lock while it asks for the
+    // stage. Read without a lock: a fixture never changes stage. A line that feeds nothing (a league, a group, a final)
+    // never waits.
+    const [pre] = await tx<{ stage_id: string; feeds: boolean }[]>`
+      select stage_id, (winner_to_fixture is not null or loser_to_fixture is not null) as feeds
+        from fixtures where id = ${fixtureId}`;
+    if (pre?.feeds) await lockStageSeats(tx, pre.stage_id);
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
     const [fixture] = await tx<
       {
@@ -730,6 +747,8 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         status: string;
         stage_id: string;
         pool_id: string | null;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
         winner_to_fixture: string | null;
         winner_to_slot: number | null;
         loser_to_fixture: string | null;
@@ -740,23 +759,64 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         division_id: string;
       }[]
     >`
-      select f.outcome, f.status, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
+      select f.outcome, f.status, f.stage_id, f.pool_id, f.home_entrant_id, f.away_entrant_id,
+             f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
              s.config as stage_config, s.division_id
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
+    // An edge wired between the two reads (`wireCrossFeeds` runs when a later stage is generated, play or no play): the
+    // stage lock late, behind this fixture's — the one window the old order survives in, and still better than a
+    // cascade that reads its feeders unserialised.
+    if (!pre?.feeds && (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null)) await lockStageSeats(tx, fixture.stage_id);
     // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
     assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
+    // W2b D20: a double walkover advances nobody, so a seat it feeds holding one of its entrants is the bug shape.
+    const fed = new Map<string, readonly [string | null, string | null]>();
+    for (const target of [fixture.winner_to_fixture, fixture.loser_to_fixture]) {
+      if (target === null || fed.has(target)) continue;
+      const [t] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where id = ${target}`;
+      if (t) fed.set(target, [t.home_entrant_id, t.away_entrant_id]);
+    }
+    assertAdvancingSeat({
+      fixtureId,
+      stageKind: fixture.kind,
+      status: fixture.status,
+      outcome: fixture.outcome,
+      seatedEntrant: fedSeatOccupant(fixture, (id) => fed.get(id) ?? null),
+    });
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
     const { winner, loser } = advancingSides(fixture.outcome);
+    // Loop-F I-1: a DEPARTED winner (a void re-opened her line after she left, and she won it again) is never seated;
+    // her seat is stamped dead as her withdrawal stamped it, and the cascade below walks her opponent over it.
+    const winnerDeparted =
+      winner !== undefined &&
+      (await tx<{ id: string }[]>`select id from entrants where id = ${winner} and status in ${tx([...DEPARTED_STATUSES])}`)
+        .length > 0;
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
-      const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      const filled = winnerDeparted
+        ? await stampDepartedSeat(tx, fixture.winner_to_fixture, fixture.winner_to_slot)
+        : await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
       if (filled !== null) advanced.push(filled);
     }
+    // W2b X-WD-5: a departed entrant (`DEPARTED_STATUSES`: withdrawn or disqualified) is never seated on a loser
+    // edge. A decision that names her as its loser — a settle on a LEGACY held line (plan PF-8a), or a line she lost
+    // after a disqualification (a status change, no cascade) — leaves her seat empty, and the cascade below reads it
+    // dead (`loserFeederIsDead`) and walks her opponent over it. Loop-F R-1: the seat is STAMPED dead as well, as a
+    // departed winner's is (I-1), so a void of this line finds the stamp and revives whatever the dead seat settled — a
+    // third-place line voided because both its loser feeds were dead stays void otherwise, and the side re-deciding
+    // this line would be seated into the abandoned row.
+    const loserDeparted =
+      loser !== undefined &&
+      (await tx<{ id: string }[]>`select id from entrants where id = ${loser} and status in ${tx([...DEPARTED_STATUSES])}`)
+        .length > 0;
     if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
-      const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+      const filled = loserDeparted
+        ? await stampDepartedSeat(tx, fixture.loser_to_fixture, fixture.loser_to_slot)
+        : await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
       if (filled !== null) advanced.push(filled);
     }
     // The cascade (owner ruling 2026-09-21, resolveBracketSeats). Gated on this
@@ -796,12 +856,19 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         update stages set config = config || ${tx.json({ rank_overrides: overrides } as never)}
         where id = ${fixture.stage_id}`;
     }
-    // Ladder (Jul3/08 §6): the challenger taking the game takes the position.
-    if (fixture.kind === "ladder" && winner !== undefined && loser !== undefined) {
+    // Ladder (Jul3/08 §6): the challenger taking the game takes the position — a walkover too. `advancingSides`
+    // sends no loser on for an `award` (a forfeit loser is out of a BRACKET, X-DE-1), but a ladder moves nobody to a
+    // seat: it swaps the two positions the award names. W2b X-WD-2: a holder who withdraws from a pending challenge
+    // is walked over, and without this she kept the top of the ladder — a withdrawn champion. A bye names no loser.
+    const ladderLoser =
+      loser ?? ((fixture.outcome as { kind?: string; loser?: string | null } | null)?.kind === "award"
+        ? ((fixture.outcome as { loser?: string | null }).loser ?? undefined)
+        : undefined);
+    if (fixture.kind === "ladder" && winner !== undefined && ladderLoser !== undefined) {
       const cfg = fixture.stage_config as { ladder_order?: string[] };
       const order = [...(cfg.ladder_order ?? [])];
       const wi = order.indexOf(winner);
-      const li = order.indexOf(loser);
+      const li = order.indexOf(ladderLoser);
       if (wi >= 0 && li >= 0 && wi > li) {
         [order[wi], order[li]] = [order[li]!, order[wi]!];
         // Server-side merge (design §T2) — see the rank_overrides write above.
@@ -840,8 +907,14 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
     const [stage] = await tx<{ status: string }[]>`
       select status from stages where id = ${stageId}`;
     if (stage?.status === "complete") return false;
+    // W2b D18 (spec §13 premise 9): the FINISHED statuses — a result (decided, forfeited), a locked result
+    // (finalized: an organiser who finalizes as they go must still advance) and a cancelled fixture. Everything else
+    // (scheduled, in_play, needs_decision, abandoned) is still owed something — except (owner ruling 105, loop-F M-10)
+    // an abandoned fixture whose active abandon is a withdrawal's EXPUNGE (D5): the match left the table, nothing is
+    // owed on it. A plain recorded abandon still holds (W2a: it is not a dead feeder, and it awaits the organiser).
     const [{ open }] = await tx<{ open: number }[]>`
-      select count(*) filter (where status <> 'decided' and status <> 'forfeited')::int as open
+      select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled')
+                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })})::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
   });

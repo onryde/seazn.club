@@ -12,7 +12,11 @@
 // a test in `__tests__/suite11.test.ts`.
 //
 // 1. THE ENGINE DERIVES THE SCORE, NOT THE PACK. A stream is `core.start`, one
-//    `generic.score` per set (or leg) won, then an EMPTY `generic.result`.
+//    `generic.score` per set (or leg) won, then an EMPTY `generic.result` —
+//    except the walkover, which is a lone `core.forfeit` with no `core.start`
+//    (a match nobody played; ruling 112 also accepts a walkover after a bare
+//    `core.start` with nothing played, so leaving the Start out is a choice,
+//    not a requirement).
 //    `applyResult` (generic.ts:110-114) settles from the running tally when the
 //    card carries no scores. Putting p1Score/p2Score on that card would hand
 //    the engine the answer and make `expected.matches` compare the pack
@@ -359,8 +363,10 @@ function scoreEvents(
 }
 
 /** Div A's event stream. Every match is `core.start` + one `generic.score` per
- *  set won + an empty `generic.result` — EXCEPT the walkover, which is
- *  `core.start` + `core.forfeit` and no result card at all.
+ *  set won + an empty `generic.result` — EXCEPT the walkover, which is a
+ *  lone `core.forfeit` (no `core.start`: a match nobody played — ruling 112
+ *  also accepts a walkover after a bare `core.start` with nothing played) and
+ *  no result card at all.
  *
  *  The first version of this pack encoded the walkover as an administrative
  *  1-0 and recorded "there is no route to forfeit an existing fixture" as a
@@ -371,16 +377,20 @@ function scoreEvents(
  *  `withdrawal.ts:102` already relies on. It folds to `{kind: "award"}`
  *  carrying NO score, which is precisely what a walkover is.
  *
- *  `reason` is REQUIRED by `CoreForfeit` and is carried verbatim onto the
- *  outcome's `method` by every module but boardgame, so "walkover" here is
- *  what the expectation below asserts — the pack can now state WHY the award
- *  happened instead of asserting a played 1-0. */
+ *  `reason` is REQUIRED by `CoreForfeit` (a closed vocabulary since W2b) and is
+ *  carried onto the award's `reason`, which the pack's `method` is compared
+ *  against, so "walkover" here is what the expectation below asserts — the pack
+ *  can now state WHY the award happened instead of asserting a played 1-0. */
 function worldsEvents(m: WorldsMatch): NonNullable<PackInput["streams"]>[number]["events"] {
   if (m.setScores === null) {
     const winner = worldsWinner(m);
     const loser = winner === m.p1 ? m.p2 : m.p1;
+    // NO `core.start` before the walkover: a match nobody played, so the
+    // stream is the forfeit alone. Not a requirement — since ruling 112 the
+    // phase guard (D3) reads a bare `core.start` with nothing played as "pre",
+    // and accepts a walkover after it; it refuses one only once play is
+    // recorded (a `generic.score` here).
     return [
-      { type: "core.start" },
       // A PAYLOAD ref, so it carries the `@` sigil (header note 6). Without it
       // PackSchema reads the string as a literal and only stage 0 catches it.
       { type: "core.forfeit", payload: { by: sigil(entrantRef("a", loser)), reason: "walkover" } },
@@ -843,8 +853,9 @@ function expectedMatches(): ExpectedMatchInput[] {
     const loser = winner === m.p1 ? m.p2 : m.p1;
     const units = worldsUnits(m);
     if (m.setScores === null) {
-      // THE WALKOVER. `core.forfeit` folds to an award, and since 2026-09-11
-      // the award carries the forfeit's `reason` as its `method` — so the
+      // THE WALKOVER. `core.forfeit` folds to an award, and the award carries
+      // the forfeit's `reason` (W2b: a typed `reason`, which the pack still
+      // names `method` and which is compared against it) — so the
       // pack asserts "walkover" against a fold that really produces it,
       // rather than the "regulation" it used to assert against a fabricated
       // 1-0. No score exists, and `sideLine` answers from the OUTCOME rather

@@ -91,8 +91,8 @@
   {
     "id": "console-organiser-gate",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
-    "find": "const offerOrganiserActions = !decided && !held && canOrganise;",
-    "replace": "const offerOrganiserActions = !decided && !held;",
+    "find": "  const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;\n  const offerAbandon = !decided && !held && canOrganise;",
+    "replace": "  const offerForfeit = !decided && (!held || tiebreakPending) && (forfeitModel?.who.length ?? 0) > 0;\n  const offerAbandon = !decided && !held;",
     "killers": [
       {
         "cwd": "apps/web",
@@ -195,15 +195,15 @@
   {
     "id": "r1-i1-held-hides-organiser-actions",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
-    "find": "  const offerOrganiserActions = !decided && !held && canOrganise;",
-    "replace": "  const offerOrganiserActions = !decided && canOrganise;",
+    "find": "  const offerAbandon = !decided && !held && canOrganise;",
+    "replace": "  const offerAbandon = !decided && canOrganise;",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
         ],
-        "name": "I1: a chess knockout in its tie-break is HELD"
+        "name": "W2b-R14 \\(BG-WO-3\\): a chess knockout in its tie-break is HELD"
       }
     ]
   },
@@ -308,7 +308,7 @@
         "files": [
           "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
         ],
-        "name": "I1: a chess knockout in its tie-break is HELD"
+        "name": "W2b-R14 \\(BG-WO-3\\): a chess knockout in its tie-break is HELD"
       }
     ]
   },

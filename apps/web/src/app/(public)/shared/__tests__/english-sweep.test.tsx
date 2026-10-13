@@ -879,7 +879,7 @@ async function playerData() {
       sport_key: s.sport_key,
       metrics: labelPlayerStats(s.sport_key, s.module_version, s.stats, statMsg),
     })),
-    career: groupCareerStatsBySport(snapshots, new Map([["d-a", 4], ["d-b", 2]]), statMsg).map((c) => ({
+    career: groupCareerStatsBySport(snapshots, new Map([["d-a", { sport_key: "football", variant_key: "11-a-side", matches: 4 }], ["d-b", { sport_key: "football", variant_key: "7-a-side", matches: 2 }]]), statMsg).map((c) => ({
       ...c,
       meta: [plural("career.divisions", c.divisions), plural("career.variants", c.variants), plural("career.matches", c.matches)].join(" · "),
     })),

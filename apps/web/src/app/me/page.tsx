@@ -27,6 +27,11 @@ import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
+import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
+import type { Dict } from "@/lib/i18n-constants";
+import type { ReactNode } from "react";
+import { headlineFrom } from "@/lib/headline-from";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
@@ -151,7 +156,7 @@ export default async function MePage({
               <div className="min-w-0">
                 <p className="app-display text-2xl font-bold leading-tight text-cream sm:text-3xl">
                   {next.entrant_name ?? t(ui, "me.tbd")}{" "}
-                  <span className="text-cream/50">vs</span>{" "}
+                  <span className="text-cream/50">{t(ui, "schedule.vs")}</span>{" "}
                   {next.opponent_name ?? t(ui, "me.tbd")}
                 </p>
                 <p className="mt-1.5 text-sm text-cream/70">
@@ -204,7 +209,7 @@ export default async function MePage({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-800">
-                        {f.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">vs</span>{" "}
+                        {f.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
                         {f.opponent_name ?? t(ui, "me.tbd")}
                       </p>
                       <p className="mt-0.5 text-xs text-slate-400">
@@ -272,16 +277,32 @@ export default async function MePage({
                 <li key={r.id} className="card flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-800">
-                      {r.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">vs</span>{" "}
-                      {r.opponent_name ?? t(ui, "me.tbd")}
+                      {sidesOf(r)[0] ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
+                      {sidesOf(r)[1] ?? t(ui, "me.tbd")}
                     </p>
                     <p className="mt-0.5 text-xs text-slate-400">
                       {r.competition_name} · {r.division_name} · {r.org_name}
                     </p>
                   </div>
-                  <span className="app-display text-lg font-bold text-slate-700">
-                    {headline(r) ?? "—"}
-                  </span>
+                  {creditsNobody(r.outcome) ? (
+                    // Design re-review N-1 — a double walkover credits nobody, but its stored summary carries 0 — 0
+                    // (the console can finalize one): the line prints the house tag, muted, as a symbol named by the
+                    // full words (`components/v2/outcome-tag-text.tsx`). The tag keeps its case on an INNER span:
+                    // `.app-display` (globals.css) is unlayered and uppercases, so it beats a `normal-case` utility on
+                    // the same element ("2× W/O" in the browser); on a child it is only inherited, and overridden.
+                    <span className="app-display text-lg font-bold text-slate-500">
+                      <span
+                        role="img"
+                        aria-label={t(ui, "forfeit.tagFull.doubleWalkover")}
+                        title={t(ui, "forfeit.tagFull.doubleWalkover")}
+                        className="normal-case"
+                      >
+                        {t(ui, "forfeit.tag.doubleWalkover")}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="app-display text-lg font-bold text-slate-700">{scoreLine(r, ui)}</span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -339,18 +360,27 @@ export default async function MePage({
                     {" · "}
                     {plural(ui, "career.matches", c.matches, locale)}
                   </p>
-                  <dl className="flex flex-wrap gap-x-6 gap-y-2">
-                    {c.metrics.map((m) => (
-                      <div key={m.key} className="min-w-16">
-                        <dt className="text-[11px] uppercase tracking-wide text-slate-400">
-                          {m.label}
-                        </dt>
-                        <dd className="font-display text-2xl font-bold tabular-nums text-slate-900">
-                          {m.value}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
+                  {/* Audit 5.1: a played sport with no figure (a footballer who scored nothing, ruling 120; badminton,
+                      whose one figure is the match count above) says so in the empty-state words — never an empty
+                      list. The section's own empty state is the pattern (`me-career-empty`, muted small text). */}
+                  {c.metrics.length > 0 ? (
+                    <dl className="flex flex-wrap gap-x-6 gap-y-2">
+                      {c.metrics.map((m) => (
+                        <div key={m.key} className="min-w-16">
+                          <dt className="text-[11px] uppercase tracking-wide text-slate-400">
+                            {m.label}
+                          </dt>
+                          <dd className="font-display text-2xl font-bold tabular-nums text-slate-900">
+                            {m.value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="text-sm text-slate-500" data-testid="career-sport-no-stats">
+                      {t(ui, "me.career.noStats")}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>
@@ -436,7 +466,51 @@ function publicHref(f: MyFixture): string | null {
   return routes.sharedFixture(f.org_slug, f.competition_slug, f.division_slug, f.id);
 }
 
-function headline(r: MyResult): string | null {
+/** The stored headline, home first. */
+function storedHeadline(r: MyResult): string | null {
   const s = r.summary as { headline?: string } | null;
   return s?.headline ?? null;
+}
+
+/** Fix round 3 — the line names the player's side first, so its score is read from her side (`headlineFrom`): a
+ *  walkover she won away from home reads "2 — 0", never the stored "0 — 2". A stored headline in no shape it can turn
+ *  keeps the stored order, and the names follow it instead (`sidesOf`), so the line never pairs the two orders. */
+function headline(r: MyResult): string | null {
+  const stored = storedHeadline(r);
+  if (stored === null) return null;
+  return headlineFrom(stored, r.player_home ? "home" : "away") ?? stored;
+}
+
+/** Loop R M-11 — a credited result keeps its score and says why after it: the house tag ("w/o", "ret.", "Aband. ·
+ *  DLS", UI-2) from `outcomeTagWords`, the one reader, over the row's outcome, its active abandon's reason and its
+ *  seats, in the page's locale; nothing for a played result. Muted, a symbol named by the full words, its case kept on
+ *  its own span (`.app-display` uppercases and is unlayered, re-review N-1). */
+function resultTag(r: MyResult, ui: Dict): ReactNode {
+  const tag = outcomeTagWords((key, vars) => t(ui, key, vars), r.outcome, forfeitLedgerOfReason(r.abandon_reason), r);
+  if (tag === null) return null;
+  return (
+    <span role="img" aria-label={tag.full} title={tag.full} className="ml-1.5 normal-case text-slate-500">
+      {tag.word}
+    </span>
+  );
+}
+
+/** Loop R2 N-5 — the score cell: the headline, then its house tag (`resultTag`); a line with no stored headline prints
+ *  the dash alone, since a tag beside nothing ("— w/o") gives a reason with no score for it to explain. */
+function scoreLine(r: MyResult, ui: Dict): ReactNode {
+  const score = headline(r);
+  if (score === null) return "—";
+  return (
+    <>
+      {score}
+      {resultTag(r, ui)}
+    </>
+  );
+}
+
+/** The line's two names in the order its score reads: hers first, unless her away score could not be turned. */
+function sidesOf(r: MyResult): [string | null, string | null] {
+  const stored = storedHeadline(r);
+  const kept = !r.player_home && stored !== null && !creditsNobody(r.outcome) && headlineFrom(stored, "away") === null;
+  return kept ? [r.opponent_name, r.entrant_name] : [r.entrant_name, r.opponent_name];
 }

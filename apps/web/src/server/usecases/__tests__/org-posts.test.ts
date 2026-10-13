@@ -23,6 +23,7 @@ import {
   shouldFirePostPublished,
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
+import { msgFor } from "@/lib/messages-i18n";
 import { putLineup, getLineup } from "../fixtures";
 import { createVenue } from "../venues";
 
@@ -610,6 +611,79 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(recap[0]!.bodyMd).toContain("Riverside");
   });
 
+  it("loop-F tidy (ruling 105's sibling): an EXPUNGED abandon and a cancelled line close the round — the recap drafts and lists only the result; a plain abandon, or an expunge since voided, still holds it", async () => {
+    // single-sport: football, this file's rig; the probe reads fixture status and the ledger, never the sport.
+    const resultLines = (body: string) => body.split("\n").filter((l) => l.startsWith("- Riverside ")).length;
+    async function scene(abandon: "expunge" | "plain" | "expunge-voided") {
+      const ctx = await seedOrg();
+      const div = await seedDivision(ctx, { autoPosts: true });
+      const gone = await seedDecidedFixture(ctx, div, { round: 1 });
+      const cancelled = await seedDecidedFixture(ctx, div, { round: 1 });
+      await sql`update fixtures set status = 'abandoned', outcome = null where id = ${gone}`;
+      await sql`update fixtures set status = 'cancelled', outcome = null where id = ${cancelled}`;
+      // The withdrawal cascade's own expunge shape (withdrawal.ts: core.abandon{reason: "withdrew", expunge: true}).
+      const payload = abandon === "plain" ? { reason: "rain" } : { reason: "withdrew", expunge: true };
+      const [ab] = await sql<{ id: string }[]>`
+        insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+        values (${randomUUID()}, ${gone}, 1, 'core.abandon', ${sql.json(payload)}, now()) returning id`;
+      if (abandon === "expunge-voided") {
+        await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at, voids_event_id)
+                  values (${randomUUID()}, ${gone}, 2, 'core.void', ${sql.json({ event_id: ab!.id })}, now(), ${ab!.id})`;
+      }
+      const last = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "4", awayLine: "2" });
+      await draft(ctx, last);
+      return (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "round_recap");
+    }
+    const closed = await scene("expunge");
+    expect(closed, "expunged + cancelled: the round is complete").toHaveLength(1);
+    expect(closed[0]!.autoSource).toMatchObject({ trigger: "round_complete", round_no: 1 });
+    expect(resultLines(closed[0]!.bodyMd), "only the DECIDED line is a result").toBe(1);
+    expect(closed[0]!.bodyMd).toContain("- Riverside 4–2 Northside");
+    expect(await scene("plain"), "a plain recorded abandon holds the round").toHaveLength(0);
+    expect(await scene("expunge-voided"), "an expunge that was voided is no longer active: it holds the round").toHaveLength(0);
+  });
+
+  // Loop R M-11 — a credited result's recap line says which: a walkover keeps its credited score and adds its tag, an
+  // abandon decided by the award policy names it, and a double walkover's tag stands in the score's place (its summary's
+  // 0–0 is a score nobody played). The words are the dictionary's (org locale en), the tag read by the one reader over
+  // the stored outcome and the ledger's active abandon. Single-sport: football, this file's rig; the line reads stored
+  // rows, never the sport.
+  it("Loop R M-11: the round recap tags a walkover and an award-policy abandon, and draws a double walkover's tag in the score's place", async () => {
+    const ctx = await seedOrg();
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const played = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "3", awayLine: "1" });
+    const wo = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "3", awayLine: "0", status: "forfeited" });
+    const ab = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "1", awayLine: "0" });
+    const dw = await seedDecidedFixture(ctx, div, { round: 1, homeLine: "0", awayLine: "0", status: "forfeited" });
+    await sql`update fixtures set outcome = ${sql.json({ kind: "award", winner: div.entrantA, loser: div.entrantB, reason: "walkover" })} where id = ${wo}`;
+    await sql`update fixtures set outcome = ${sql.json({ kind: "win", winner: div.entrantA, loser: div.entrantB, method: "abandoned" })} where id = ${ab}`;
+    await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+              values (${randomUUID()}, ${ab}, 1, 'core.start', ${sql.json({})}, now()),
+                     (${randomUUID()}, ${ab}, 2, 'core.abandon', ${sql.json({ reason: "floodlights" })}, now())`;
+    await sql`update fixtures set outcome = ${sql.json({ kind: "double_walkover" })} where id = ${dw}`;
+    void played;
+    await draft(ctx, dw);
+    const recap = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "round_recap");
+    expect(recap, "the round is complete").toHaveLength(1);
+    const lines = recap[0]!.bodyMd.split("\n").filter((l) => l.startsWith("- Riverside "));
+    const tag = (k: Parameters<typeof msgFor>[1]) => msgFor("en", k);
+    expect(lines.sort()).toEqual(
+      [
+        "- Riverside 3–1 Northside",
+        `- Riverside 3–0 Northside (${tag("forfeit.tag.walkover")})`,
+        `- Riverside 1–0 Northside (${tag("forfeit.tag.abandoned")})`,
+        `- Riverside ${tag("forfeit.tag.doubleWalkover")} Northside`,
+      ].sort(),
+    );
+    expect(recap[0]!.bodyMd, "never the double walkover's 0–0").not.toContain("Riverside 0–0 Northside");
+    // A double walkover drafts no result post (audit 3.1); the walkover's is titled with its tag.
+    const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
+    expect(results, "the double walkover drafted none").toEqual([]);
+    await draft(ctx, wo);
+    const woPost = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
+    expect(woPost.map((p) => p.title)).toEqual([`Riverside 3–0 Northside (${tag("forfeit.tag.walkover")})`]);
+  });
+
   it("round recaps are stage-scoped: a sibling stage's open round 1 neither blocks the recap nor shares its auto-once key", async () => {
     const ctx = await seedOrg();
     const div = await seedDivision(ctx, { autoPosts: true }); // stage A: kind 'league', round numbers restart per stage
@@ -788,7 +862,9 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     await scoreEvent(ctx.auth, fx, {
       expected_seq: 3,
       type: "core.forfeit",
-      payload: { by: entrantB, reason: "walkover" },
+      // W2b D3 R2/R4: once play has started a walkover is refused outside the sport's walkover phases (default
+      // pre-start); a retirement is the in-play forfeit (loop-F tidy: red since the engine wave).
+      payload: { by: entrantB, reason: "retired" },
     });
 
     const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");
@@ -859,7 +935,9 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     await scoreEvent(ctx.auth, fx, {
       expected_seq: 2,
       type: "core.forfeit",
-      payload: { by: entrantB, reason: "walkover" },
+      // W2b D3 R2/R4: once play has started a walkover is refused outside the sport's walkover phases (default
+      // pre-start); a retirement is the in-play forfeit (loop-F tidy: red since the engine wave).
+      payload: { by: entrantB, reason: "retired" },
     });
 
     const results = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "result");

@@ -283,7 +283,7 @@ describe.runIf(HAS_DB)("swiss — a mid-tournament withdrawal reconciles the nex
     const bye = inRound(rows, 2).find((f) => f.ext_key === "sw-r2-bye")!;
     expect(bye.away_entrant_id).toBeNull();
     expect(bye.home_entrant_id).toBeTruthy();
-    expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id });
+    expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id, loser: null, reason: "bye" }); // W2b C-5
 
     // Exactly the five survivors, once each, and never the withdrawn player.
     const seated = seatedIn(rows, 2);

@@ -9,6 +9,7 @@ import "server-only";
 // `revalidateTag('division:{id}')` for instant refresh (see usecases/scoring.ts).
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
+import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
@@ -20,7 +21,7 @@ import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from
 // different file). Shared with personCareerStats/countMatchesByDivision
 // (usecases/player-stats.ts) and me.ts's listMyCareerStats, review round 2
 // finding 2.
-import { countMatchesByDivision } from "@/server/usecases/player-stats";
+import { careerMatchesByDivision } from "@/server/usecases/player-stats";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -368,6 +369,16 @@ export interface PublicFixture {
   winner_to_slot?: number | null;
   loser_to_fixture?: string | null;
   loser_to_slot?: number | null;
+  /** W2b D5 / loop-F I-2: the match was EXPUNGED by a withdrawal — `abandoned` with an active
+   *  `core.abandon{expunge: true}` (`hasActiveAbandonSql`'s expunge probe; the ledger is not a public column, so it is
+   *  read on the same fenced LATERAL as the feed edges). The qualification view reads it (F2). Optional and absent
+   *  from older cached documents, where it reads as "not expunged" — the fail-closed answer. */
+  expunged?: boolean;
+  /** W2b Task 13 (X-AB-2): the reason of the row's ACTIVE `core.abandon`, or null — what the public abandon tag reads
+   *  (`forfeitLedgerOfReason`; the ledger, never the status). Read on the same fenced LATERAL as `expunged`
+   *  (`activeAbandonReasonSql`). Optional: absent from older cached documents and from the reads that do not list it,
+   *  where it reads as no abandon — the tag is then simply not shown. */
+  abandon_reason?: string | null;
   /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
@@ -985,10 +996,13 @@ export async function readPublicDivisionDetail(
                  v.scheduled_at, v.venue, v.court_label,
                  v.status, v.outcome, v.summary, v.last_seq,
                  v.lane, v.is_final, v.third_place, v.conditional,
-                 e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+                 e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged,
+                 e.abandon_reason
           from public_fixtures_v v
           left join lateral (
-            select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+            select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot,
+                   ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged,
+                   ${activeAbandonReasonSql(sql, "x")} as abandon_reason
             from fixtures x where x.id = v.id
             offset 0
           ) e on true
@@ -1267,7 +1281,11 @@ export async function getPublicFixture(
     // the unversioned key to `-v2` for its own change, so a `-v2` entry
     // written by either one lacks the other's. The merged document retires
     // both rather than serve one for a REVALIDATE_FAST window.
-    ["pub-fixture-v3", fixtureId],
+    //
+    // v4 (W2b Task 13, review M-1): the document gained the forfeit tag and
+    // sentence and the set sports' credited summary; a v3 entry would show a
+    // walkover as a bare "Forfeited" over a played 0 — 0.
+    ["pub-fixture-v4", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;
@@ -1505,15 +1523,39 @@ export async function getPublicPlayer(
   // or a lineup seats them there), then the rest by id. An entry holds at most
   // 128 tags (`playerCardTags`), so in a competition with more divisions than
   // that, the ones dropped are divisions this person plays no match in.
-  const competitionDivisions = await sql<{ id: string }[]>`
-    select d.id from divisions d
-    where d.competition_id = ${shell.competition.id}
-    order by (
+  const competitionDivisions = await sql<{ id: string; mine: boolean }[]>`
+    select d.id, (
       exists (select 1 from entrant_members em join entrants e on e.id = em.entrant_id
               where e.division_id = d.id and em.person_id = ${personId})
       or exists (select 1 from lineups l join fixtures f on f.id = l.fixture_id
                  where f.division_id = d.id and l.person_id = ${personId})
-    ) desc, d.id`;
+    ) as mine
+    from divisions d
+    where d.competition_id = ${shell.competition.id}
+    order by mine desc, d.id`;
+
+  // R115-4: the card's per-division tiles are `player_stat_snapshots` as they
+  // stand (inside the entry below). So the card asks the same bounded
+  // read-side check the public stats route asks (`reconcilePlayerStatsOnRead`)
+  // of the divisions this person plays in: the ones a roster or a lineup seats
+  // them in, the only ones a snapshot row of theirs can come from. Read off the
+  // list above, so no statement is added. The check runs after the response,
+  // at most once a minute per division and within a share of the DB pool; a
+  // background regeneration registers it but never runs it, which claims no
+  // throttle slot (R115 review M1, `reconcilePlayerStatsOnRead`'s card
+  // exception). It never folds on this request: a snapshot that is behind (an older
+  // `STATS_FOLD_VERSION`, R115-2) is refolded in the background. The refold
+  // this card's own check runs cannot clear the ISR tags (it runs inside this
+  // page's cache scope; the refresh logs "the ISR tags could not be cleared
+  // from here"), so the CARD shows the refold once its own `revalidate` window
+  // lapses: measured fresh at 305 s, the first regenerating visit after 300 s
+  // (e2e/player-stats-stale-version.spec.ts). Lazy import: the refresh module
+  // reaches back into public-site.
+  const { reconcilePlayerStatsOnRead } = await import("@/server/usecases/player-stats-refresh");
+  reconcilePlayerStatsOnRead(
+    shell.org.id,
+    competitionDivisions.filter((d) => d.mine).map((d) => d.id),
+  );
 
   const detail = await unstable_cache(
     async () => {
@@ -1652,10 +1694,10 @@ export async function getPublicPlayer(
       // STRUCTURALLY scoped to this one competition — summing across
       // competitions (or orgs) here would leak a spectator a total the
       // consent gate never agreed to show them. Matches count is the SAME
-      // shared countMatchesByDivision personCareerStats/listMyCareerStats
+      // shared careerMatchesByDivision personCareerStats/listMyCareerStats
       // use (review round 2 finding 2) — no tenant/user scoping needed here
-      // because the caller already restricts divisionIds to exactly the
-      // division ids this competition's own snapshots named.
+      // because the caller restricts divisionIds to this competition's own
+      // public divisions.
       // A competition-scoped rollup EARNS its place only where it aggregates
       // something. With one division in a sport it restates that sport's own
       // row in the `stats` list above, word for word — so those sports are
@@ -1663,18 +1705,28 @@ export async function getPublicPlayer(
       // holds for a MIXED competition: gating the whole section on "some
       // sport has >1 division" still rendered the single-division sports
       // beside the one that tripped the gate, which is the duplication this
-      // rule exists to remove. Dropping them here also means a competition
-      // with nothing to aggregate never pays for the query below.
+      // rule exists to remove.
+      // W2b ruling 120 follow-up: the divisions a sport spans are the snapshot rows' AND the career count's — the count
+      // runs over every public division of this competition, and a division the person played in with no credited
+      // figure (a played abandon that decided nobody, a footballer who scored nothing) holds no snapshot row. The
+      // listing reads the same set (`groupCareerStatsBySport`), so it cannot leave out a division the count found.
+      const competitionDivisions = await sql<{ id: string }[]>`
+        select id from public_divisions_v where competition_id = ${shell.competition.id}`;
+      const played = await careerMatchesByDivision(sql, { by: "person", personId }, competitionDivisions.map((d) => d.id));
       const divisionsPerSport = new Map<string, Set<string>>();
-      for (const s of snapshots) {
-        const seen = divisionsPerSport.get(s.sport_key) ?? new Set<string>();
-        seen.add(s.division_id);
-        divisionsPerSport.set(s.sport_key, seen);
+      const sportDivisions: [string, string][] = [
+        ...snapshots.map((s) => [s.sport_key, s.division_id] as [string, string]),
+        ...[...played].map(([divisionId, d]) => [d.sport_key, divisionId] as [string, string]),
+      ];
+      for (const [sportKey, divisionId] of sportDivisions) {
+        const seen = divisionsPerSport.get(sportKey) ?? new Set<string>();
+        seen.add(divisionId);
+        divisionsPerSport.set(sportKey, seen);
       }
-      const aggregating = snapshots.filter(
-        (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
-      );
-      if (aggregating.length === 0) {
+      const aggregatesSport = (sportKey: string) => (divisionsPerSport.get(sportKey)?.size ?? 0) > 1;
+      const aggregating = snapshots.filter((s) => aggregatesSport(s.sport_key));
+      const aggregatingPlayed = new Map([...played].filter(([, d]) => aggregatesSport(d.sport_key)));
+      if (aggregating.length === 0 && aggregatingPlayed.size === 0) {
         return {
           nameMask,
           memberships,
@@ -1685,8 +1737,7 @@ export async function getPublicPlayer(
           generatedAt,
         };
       }
-      const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
-      const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
+
       // This page has no Dict/locale pair to compose its own pluralized copy
       // with (see statMsg's own comment above) — so, like every metric
       // label already in this payload, the "N divisions · N variants · N
@@ -1694,7 +1745,7 @@ export async function getPublicPlayer(
       // shipped as raw numbers for the page to format.
       const career: PublicCareerSport[] = groupCareerStatsBySport(
         aggregating,
-        matchesByDivision,
+        aggregatingPlayed,
         statMsg,
       ).map((c) => ({
         ...c,

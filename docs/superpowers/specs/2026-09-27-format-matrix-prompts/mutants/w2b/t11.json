@@ -1,0 +1,696 @@
+[
+ {
+  "id": "dialog-both-after-start",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const both = admission.both && !f.noNextMatch;",
+  "replace": "const both = !f.noNextMatch;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "once the sport's own event is played — no Neither"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "tie-break is pending"
+   }
+  ]
+ },
+ {
+  "id": "dialog-both-ignores-no-next-match",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const both = admission.both && !f.noNextMatch;",
+  "replace": "const both = admission.both;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a final shows the guidance"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the guidance replaces Neither"
+   }
+  ]
+ },
+ {
+  "id": "dialog-retired-pre",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "return w === \"both\" ? [\"walkover\"] : sideReasons;",
+  "replace": "return w === \"both\" ? [\"walkover\"] : [...new Set<WriterForfeitReason>([...sideReasons, \"retired\"])];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "before play — Home, Away, Neither"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "rule 10"
+   }
+  ]
+ },
+ {
+  "id": "dialog-withdrew-offered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const sideReasons = admission.reasons.filter((r): r is WriterForfeitReason => !isCascadeOnlyForfeitReason(r));",
+  "replace": "const sideReasons = admission.reasons as WriterForfeitReason[];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "PF-2: no sport, in no phase"
+   }
+  ]
+ },
+ {
+  "id": "dialog-no-guidance",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "guidance: admission.both && f.noNextMatch ? \"noNextMatch\" : null,",
+  "replace": "guidance: null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a final shows the guidance"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the guidance replaces Neither"
+   }
+  ]
+ },
+ {
+  "id": "dialog-guidance-in-tiebreak",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "guidance: admission.both && f.noNextMatch ? \"noNextMatch\" : null,",
+  "replace": "guidance: f.noNextMatch ? \"noNextMatch\" : null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "tie-break is pending"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-played",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "replace": "const [h, a] = (module as unknown as { summary(s: unknown): { perSide: { line: string }[] } }).summary(state).perSide.map((s) => Number(s.line));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "never the played score itself"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "hockey walkover reads 5–0"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-sides-swapped",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const [h, a] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "replace": "const [a, h] = [credit.perSide[0][headline], credit.perSide[1][headline]];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "hockey walkover reads 5–0"
+   }
+  ]
+ },
+ {
+  "id": "dialog-confirm-generic",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "confirmKey: (w, reason) => (w === \"both\" ? \"forfeitDialog.confirm.doubleWalkover\" : CONFIRM_KEY[reason]),",
+  "replace": "confirmKey: () => \"forfeitDialog.confirm.walkover\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "one specific Confirm per reason"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "its own Confirm"
+   }
+  ]
+ },
+ {
+  "id": "dialog-double-submit",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "if (forfeitConfirmBlocked(model, sel, sendingRef.current)) return;",
+  "replace": "if (forfeitConfirmBlocked(model, sel, false)) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "Review Focus 4"
+   }
+  ]
+ },
+ {
+  "id": "console-tiebreak-closed",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && !held && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "W2b-R14"
+   }
+  ]
+ },
+ {
+  "id": "console-forfeit-held-level",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "status lags the ledger"
+   }
+  ]
+ },
+ {
+  "id": "console-forfeit-scorer",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;",
+  "replace": "const offerForfeit = !decided && (!held || tiebreakPending) && (forfeitModel?.who.length ?? 0) > 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+    ],
+    "name": "X-ST-2"
+   }
+  ]
+ },
+ {
+  "id": "console-refusal-dropped",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "            setForfeitOpen(null);\n            setForfeitRefusal(message);\n",
+  "replace": "            setForfeitOpen(null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "a refused forfeit closes the dialog"
+   }
+  ]
+ },
+ {
+  "id": "page-no-next-match-edges-only",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+  "find": "no_next_match: doubleWalkoverRefused(stageKind, feedsNext),",
+  "replace": "no_next_match: !feedsNext,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+    ],
+    "name": "D19's double-walkover reading"
+   }
+  ]
+ },
+ {
+  "id": "d19-ladder-refuses",
+  "file": "apps/web/src/lib/double-walkover-next-match.ts",
+  "find": "return forbidsLevelResult(stageKind) && stageKind !== \"ladder\";",
+  "replace": "return forbidsLevelResult(stageKind);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/double-walkover-next-match.test.ts"
+    ],
+    "name": "every stage kind the engine declares"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+    ],
+    "name": "D19's double-walkover reading"
+   }
+  ]
+ },
+ {
+  "id": "admission-both-in-tiebreak",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "return allowed.includes(\"walkover\") && phase !== \"tiebreak\";",
+  "replace": "return allowed.includes(\"walkover\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-admission.test.ts"
+    ],
+    "name": "BG-WO-3 / W2b-R14"
+   }
+  ]
+ },
+ {
+  "id": "admission-over-admits",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "  if (phase === \"over\") return { phase, reasons: [], both: false };\n  const reasons = forfeitReasonsAllowed(phase, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);",
+  "replace": "  const reasons = forfeitReasonsAllowed(phase as Exclude<ForfeitPhase, \"over\">, module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES, facts.playRecorded);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-admission.test.ts"
+    ],
+    "name": "empty case first"
+   }
+  ]
+ },
+ {
+  "id": "bench-cascade-reason-mapped",
+  "file": "tools/bench/lib/drivers/scorer.ts",
+  "find": "if (isCascadeOnlyForfeitReason(p.reason)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/bench/lib/__tests__/scorer-driver.test.ts"
+    ],
+    "name": "never a cascade-only reason"
+   }
+  ]
+ },
+ {
+  "id": "dialog-confirm-unoffered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "return sel.who === null || sel.reason === null || sending || !model.why(sel.who).includes(sel.reason);",
+  "replace": "return sel.who === null || sel.reason === null || sending;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "Confirm stays blocked on a side or reason the model no longer offers"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-unoffered",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "if (w === \"both\" || headline === undefined || !why(w).includes(reason as WriterForfeitReason)) return null;",
+  "replace": "if (w === \"both\" || headline === undefined) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "the preview of a choice the dialog does not offer is none"
+   }
+  ]
+ },
+ {
+  "id": "dialog-preview-snapshot",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "const preview = chosen ? forfeitPreviewNow(model, props.live ?? null, sel.who!, sel.reason!) : null;",
+  "replace": "const preview = chosen ? model.preview(sel.who!, sel.reason!) : null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the dialog's preview reads `live`"
+   }
+  ]
+ },
+ {
+  "id": "preview-now-ignores-live",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "  if (live !== null && live.why(who).includes(reason as WriterForfeitReason)) return live.preview(who, reason);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "a goal recorded on another device while the dialog is open"
+   }
+  ]
+ },
+ {
+  "id": "preview-now-unoffered-live",
+  "file": "apps/web/src/components/v2/forfeit-dialog.tsx",
+  "find": "  if (live !== null && live.why(who).includes(reason as WriterForfeitReason)) return live.preview(who, reason);\n",
+  "replace": "  if (live !== null) return live.preview(who, reason);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-model.test.ts"
+    ],
+    "name": "one that no longer offers the choice"
+   }
+  ]
+ },
+ {
+  "id": "console-live-dropped",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "          live={forfeitModel}\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the console hands the open dialog its CURRENT model"
+   }
+  ]
+ },
+ {
+  "id": "console-live-is-snapshot",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "          live={forfeitModel}\n",
+  "replace": "          live={forfeitOpen}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "the console hands the open dialog its CURRENT model"
+   }
+  ]
+ },
+ {
+  "id": "console-refusal-outlives-write",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "      setForfeitRefusal(null);\n      setPaywallFeature(null);\n",
+  "replace": "      setPaywallFeature(null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "a forfeit refusal clears on the console's next write"
+   }
+  ]
+ },
+ {
+  "id": "es-forfeit-reads-abandon",
+  "file": "apps/web/src/dictionaries/es/ui.json",
+  "find": "\"score.forfeit\": \"Dar por perdido…\",",
+  "replace": "\"score.forfeit\": \"Abandonar…\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/forfeit-dialog-labels.test.ts"
+    ],
+    "name": "Forfeit and Abandon never read alike"
+   }
+  ]
+ },
+ {
+  "id": "matrix-both-over-http",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted && by !== \"both\" && play.length === 0;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: the dialog records a walkover or Neither before Start"
+   }
+  ]
+ },
+ {
+  "id": "matrix-scheduled-over-http",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted && play.length === 0 && (await this.#http.fixtureState(fixtureId)).status !== \"scheduled\";\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: the dialog records a walkover or Neither before Start"
+   }
+  ]
+ },
+ {
+  "id": "matrix-play-on-console",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    const onConsole = wanted && play.length === 0;\n",
+  "replace": "    const onConsole = wanted;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "review I-1: generated play before a forfeit is the one http forfeit"
+   }
+  ]
+ },
+ {
+  "id": "matrix-cascade-not-subtracted",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "FORFEIT_REASONS.filter((r) => !(CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(r));",
+  "replace": "FORFEIT_REASONS.filter((r) => !([] as readonly string[]).includes(r));",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "every reason the engine declares routes to the console's Forfeit"
+   }
+  ]
+ },
+ {
+  "id": "matrix-po-refuses-scheduled",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: \"the console's Forfeit\" });\n",
+  "replace": "  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: \"the console's Forfeit\" });\n  if ((await page.getByTestId(\"score-start-match\").count()) > 0) throw new Error(\"console still offers Start\");\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "forfeitUi: the dialog's four taps on a console scheduled or under way"
+   }
+  ]
+ },
+ {
+  "id": "po-neither-not-counted",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await requireOffered(page, fixture.id, who);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "forfeitUi: the dialog's four taps on a console scheduled or under way .* re-review N-1: Neither withheld"
+   }
+  ]
+ },
+ {
+  "id": "po-reason-not-counted",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  await requireOffered(page, fixture.id, why);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "re-review N-1: a reason the phase does not admit"
+   }
+  ]
+ },
+ {
+  "id": "po-guidance-never-read",
+  "file": "tools/matrix/lib/browser/pages/fixture-console.ts",
+  "find": "  const guidance = (await page.getByTestId(FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID).count()) > 0;\n",
+  "replace": "  const guidance = false;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld"
+   }
+  ]
+ },
+ {
+  "id": "driver-neither-no-fallback",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-any-choice",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(e instanceof ConsoleChoiceNotOffered)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-ignores-guidance",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-ignores-testid",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;\n",
+  "replace": "      if (!(by === \"both\" && e instanceof ConsoleChoiceNotOffered && e.guidance)) throw e;\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: only Neither withheld WITH the no-next-match guidance"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-recorded-browser",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "      via = \"http\";\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
+ },
+ {
+  "id": "driver-fallback-not-exempt",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    this.#ledger.exempt(\"forfeit\", NEITHER_WITHHELD_ROUTE);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-1: Neither withheld at a match with no next match"
+   }
+  ]
+ },
+ {
+  "id": "driver-neither-accepted-passes",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "    throw new NeitherWithheldButAccepted(fixtureId, accepted);\n",
+  "replace": "    return { posted: accepted, via: \"http\" };\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "re-review N-3: a withheld Neither the server ACCEPTS"
+   }
+  ]
+ }
+]

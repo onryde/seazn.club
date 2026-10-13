@@ -217,8 +217,8 @@ async function state(s: Session, fixtureId: string) {
     // not just kind/winner. R3.5/Task N — both original decider defects (a
     // cricket super over and a football shoot-out) shipped past every gate
     // that only checked "it ended", so the smoke checks for both assert this
-    // field explicitly.
-    outcome: { kind?: string; winner?: string; method?: string } | null;
+    // field explicitly. An award (W2b) carries `loser` and `reason` instead.
+    outcome: { kind?: string; winner?: string; loser?: string | null; method?: string; reason?: string } | null;
     last_seq: number;
     // Raw engine fold state (row.state, FixtureStateOut.state) — cricket's
     // super-over ledger lives at `state.superOver.innings`, NEVER
@@ -770,28 +770,32 @@ async function runSport(s: Session, compId: string, d: SportDriver): Promise<voi
   // f1 — sport-specific edge cases.
   await d.edge(s, fx[1], label);
 
-  // f2 — forfeit: away forfeits → award to home.
+  // f2 — walkover: away never turns up → award to home. No START first: a
+  // walkover is recorded before play, and W2b refuses one once the match is
+  // live (X-RS-1).
   {
     await appendAll(
       s,
       fx[2].id,
       [
-        start,
         {
           type: "core.forfeit",
-          payload: { by: fx[2].away, reason: "no-show" },
+          payload: { by: fx[2].away, reason: "walkover" },
         },
       ],
       0,
     );
     const st = await state(s, fx[2].id);
-    // Modules map a forfeit to either an award or a win-by-forfeit; the
-    // fixture status is uniformly "forfeited" (engine-db nextStatus).
+    // Every module, chess included since W2b, maps a forfeit to the same
+    // award{winner, loser, reason}; the fixture status is uniformly
+    // "forfeited" (engine-db nextStatus).
     check(
-      `${label}: forfeit → opponent takes it, status forfeited`,
+      `${label}: walkover → award to the opponent with its reason, status forfeited`,
       st.status === "forfeited" &&
-        (st.outcome?.kind === "award" || st.outcome?.kind === "win") &&
-        st.outcome.winner === fx[2].home,
+        st.outcome?.kind === "award" &&
+        st.outcome.winner === fx[2].home &&
+        st.outcome.loser === fx[2].away &&
+        st.outcome.reason === "walkover",
       `status ${st.status} outcome ${JSON.stringify(st.outcome)}`,
     );
   }

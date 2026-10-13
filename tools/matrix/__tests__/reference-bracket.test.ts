@@ -3,7 +3,7 @@
 // BG-KO-1, CA-KO-1); the products are hand-built or a fake made wrong on purpose. Needs the reference lane merged
 // into this one (the family's exports): red until then.
 import { StageKind } from "@seazn/engine/core";
-import { LEVEL_KINDS, NoReferenceFamily, type LevelKind } from "@seazn/reference";
+import { FORFEIT_REASONS as REFERENCE_FORFEIT_REASONS, LEVEL_KINDS, NoReferenceFamily, type LevelKind, type PlayResult } from "@seazn/reference";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
@@ -12,12 +12,13 @@ import { Recorder, decideFixture, setUpDivision } from "../lib/scenarios/common.
 import { referenceBracketFinish } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { LevelKindUnread, bracketCaseOf, judgeDrive, levelKindOf, loserSeatOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
+import { ForfeitPlayUnread, LevelKindUnread, bracketCaseOf, forfeitPlayOf, judgeDrive, levelKindOf, loserSeatOf, nextLineOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
 import { drawsAllowed, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable } from "../lib/streams/index.ts";
-import type { FixtureRow } from "../lib/driver/types.ts";
+import { RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder } from "@seazn/engine/scheduling";
-import type { RequestedOutcome } from "../lib/streams/types.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, type RequestedOutcome } from "../lib/streams/types.ts";
+import { w2bCells } from "../lib/w2b-cells.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 
@@ -26,19 +27,33 @@ import { FakeKnockoutDriver } from "./fake-driver.ts";
  *  the kind (generic, cricket) say it. */
 const defaultLevel = (a: RequestedOutcome): LevelKind | null =>
   a.kind === "tie" ? "tie" : a.kind === "draw" || a.kind === "level" || a.kind === "tiebreak" || (a.kind === "settle" && a.after === "level") ? "draw" : null;
+/** The play a hand-built forfeit drive was recorded on when a test does not say: a walkover and a double walkover
+ *  bare, before START; a forfeit `after_start` on a match under way (forfeitPlayOf reads it from a real stream). */
+const defaultForfeitPlay = (a: RequestedOutcome): PlayResult | null =>
+  a.kind === "double_walkover" ? { kind: "none" } : a.kind === "forfeit" ? (a.at === "before_start" ? { kind: "none" } : { kind: "in_progress" }) : null;
 const drive = (over: Partial<BracketDrive> & { asked: RequestedOutcome }): BracketDrive =>
-  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, ...over });
+  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, next: { line: "next", target: "f-next" }, forfeitPlay: defaultForfeitPlay(over.asked), refusal: null, ...over });
+const award = (winner: string, loser: string, reason: string): ObservedOutcome => ({ kind: "award", winner, loser, reason });
 const win = (winner: string, method?: string): ObservedOutcome => ({ kind: "win", winner, ...(method === undefined ? {} : { method }) });
 
 describe("oracleMethod — the product's method as the oracle names it", () => {
   it("settled_* and tiebreak_* keep their names; every play win, named or not, is `play`", () => {
     for (const m of ["settled_lot", "settled_higher_seed", "settled_organiser", "tiebreak_rapid", "tiebreak_blitz", "tiebreak_armageddon"]) expect(oracleMethod(m), m).toBe(m);
-    for (const m of [undefined, "checkmate", "resign", "points", "walkover", "settled", "tiebreak"]) expect(oracleMethod(m), String(m)).toBe("play");
+    for (const m of [undefined, "checkmate", "resign", "points", "forfeit", "settled", "tiebreak", "bye"]) expect(oracleMethod(m), String(m)).toBe("play");
+  });
+
+  it("I-3: every X-RS-1 forfeit reason keeps its name (the oracle's forfeit method IS the reason), counted over the rulebook's list", () => {
+    let checked = 0;
+    for (const reason of REFERENCE_FORFEIT_REASONS) {
+      expect(oracleMethod(reason), reason).toBe(reason);
+      checked++;
+    }
+    expect(checked).toBe(4); // X-RS-1: walkover, retired, disqualified, withdrew
   });
 });
 
 describe("bracketCaseOf — the harness's drive, in the rulebook's terms", () => {
-  it("each request kind maps to its play result and actions, and a walkover has no oracle vocabulary", () => {
+  it("each request kind maps to its play result and actions", () => {
     const of = (asked: RequestedOutcome, over: Partial<BracketDrive> = {}) => bracketCaseOf(drive({ asked, ...over }));
     expect(of({ kind: "win", winner: "away" })).toMatchObject({ play: { kind: "win", winner: "away" }, actions: [] });
     for (const kind of ["level", "draw", "tie"] as const) expect(of({ kind }, { levelAs: kind === "tie" ? "tie" : "draw" }), kind).toMatchObject({ play: { kind: "level" }, actions: [] });
@@ -46,7 +61,6 @@ describe("bracketCaseOf — the harness's drive, in the rulebook's terms", () =>
     expect(of({ kind: "settle", then: "away", method: "organiser", after: "abandon" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "abandon" }, { kind: "settle", winner: "away", method: "organiser", by: "organiser" }] });
     expect(of({ kind: "tiebreak", rung: "blitz", winner: "home" }, { sport: "boardgame" })).toMatchObject({ play: { kind: "level" }, actions: [{ kind: "tiebreak", rung: "blitz", winner: "home" }] });
     expect(of({ kind: "abandon" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "abandon" }] });
-    expect(of({ kind: "forfeit", by: "home", reason: "walkover" })).toEqual({ notJudged: expect.stringMatching(/walkover is not one of the oracle's actions/) });
     // The stage kind and the sport go through as the drive's own.
     expect(of({ kind: "win", winner: "home" }, { stageKind: "double_elim", sport: "carrom" })).toMatchObject({ stageKind: "double_elim", sport: "carrom" });
   });
@@ -103,8 +117,8 @@ describe("judgeDrive — the product agrees with the oracle on every way a brack
     expect(reds).toBeGreaterThan(0);
   });
 
-  it("not judged, named: a walkover, a driver that answered no status, and the oracle's own RuledOut; a stage kind with no family is the LOUD NoReferenceFamily", () => {
-    expect(judgeDrive(drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") }))).toEqual({ judged: false, why: expect.stringMatching(/forfeit/) });
+  it("not judged, named: a double walkover whose next-match line could not be read, a driver that answered no status, and the oracle's own RuledOut; a stage kind with no family is the LOUD NoReferenceFamily", () => {
+    expect(judgeDrive(drive({ asked: { kind: "double_walkover" }, next: { line: "unresolved", why: "fixture f1 carries no ext_key" }, status: "forfeited", outcome: { kind: "double_walkover" } }))).toEqual({ judged: false, why: expect.stringMatching(/double_walkover: whether f1 feeds a next match could not be read \(fixture f1 carries no ext_key\)/) });
     expect(judgeDrive(drive({ asked: { kind: "win", winner: "home" }, status: null }))).toEqual({ judged: false, why: expect.stringMatching(/no status/) });
     // CA-KO-1: a carrom bracket match never ends level; BG-KO-1: only chess records a tie-break.
     expect(judgeDrive(drive({ asked: { kind: "level" }, sport: "carrom", status: "needs_decision", outcome: { kind: "draw" } }))).toEqual({ judged: false, why: expect.stringMatching(/rules it out \(carrom-level\)/) });
@@ -211,7 +225,7 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
     expect([...kindOf].filter(([, k]) => k === "tie").map(([sport]) => sport)).toEqual(["cricket"]);
     expect(levelKindOf("football", {}, "h", "a", { kind: "draw" }, [])).toBe("draw");
     expect(levelKindOf("football", {}, "h", "a", { kind: "tie" }, [])).toBe("tie");
-    for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover" }] as const) {
+    for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }] as const) {
       expect(levelKindOf("football", {}, "h", "a", asked, []), asked.kind).toBeNull();
     }
   });
@@ -366,22 +380,310 @@ describe("life-reference-bracket-finish — the counted assertion", () => {
   };
   const good = drive({ asked: { kind: "win", winner: "home" }, outcome: win("a") });
 
+  /** A double walkover the oracle cannot judge (its next-match line is unread): counted and named, never judged. */
+  const unreadDw = drive({ fixtureId: "f7", asked: { kind: "double_walkover" }, next: { line: "unresolved", why: "fixture f7 carries no ext_key" }, status: "forfeited", outcome: { kind: "double_walkover" } });
+  const walkover = drive({ fixtureId: "f8", asked: { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }, status: "forfeited", outcome: award("b", "a", "walkover") });
+
   it("empty case first: no bracket stage abstains BY NAME; a bracket stage with nothing judged FAILS (R25), even with drives that were all not judged", () => {
     expect(referenceBracketFinish(new Recorder(), run("league"))).toMatchObject({ id: "life-reference-bracket-finish", verdict: "abstain", checked: 0 });
     expect(referenceBracketFinish(new Recorder(), run("knockout"))).toMatchObject({ verdict: "fail", checked: 0 });
-    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") });
-    expect(referenceBracketFinish(recWith(walkover), run("knockout"))).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(referenceBracketFinish(recWith(unreadDw), run("knockout"))).toMatchObject({ verdict: "fail" });
   });
 
   it("agreement passes with the judged count; the not-judged drives are counted and named in the reason; one disagreement fails with its note", () => {
     expect(referenceBracketFinish(recWith(good, { ...good, fixtureId: "f2" }), run("knockout"))).toMatchObject({ verdict: "pass", checked: 2 });
-    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") });
-    const mixed = referenceBracketFinish(recWith(good, walkover), run("knockout"));
-    expect(mixed).toMatchObject({ verdict: "pass", checked: 1 });
-    expect(mixed.reason).toMatch(/1 drive\(s\) not judged \(forfeit: a walkover/);
+    const mixed = referenceBracketFinish(recWith(good, walkover, unreadDw, { ...unreadDw, fixtureId: "f6", next: { line: "next", target: "f-next" } }), run("knockout"));
+    expect(mixed).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(mixed.reason).toMatch(/1 drive\(s\) not judged \(double_walkover: whether f7 feeds a next match could not be read/);
     const bad = referenceBracketFinish(recWith(good, drive({ fixtureId: "f9", asked: { kind: "level" }, status: "decided", outcome: { kind: "draw" } })), run("knockout"));
     expect(bad).toMatchObject({ verdict: "fail", checked: 2 });
     expect(bad.evidence[0]).toMatch(/^f9 \(knockout x football, asked level\): status: oracle needs_decision, product decided/);
+  });
+});
+
+// I-3 (Task 15 review): the W2b forfeit is one of the oracle's actions. Every expected answer below is the rulebook's
+// (X-RS-1 reasons and phases, X-RS-3 / PF-2 writers, X-DW-1 / X-DW-3 double walkovers, X-DE-1 the forfeit loser,
+// BG-WO-2 chess, plan D3 R2-R4 and D19), never the family's code.
+describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfeit action, and the comparison counts them", () => {
+  const fw = (by: "home" | "away", reason: (typeof REFERENCE_FORFEIT_REASONS)[number], at: "before_start" | "after_start"): RequestedOutcome => ({ kind: "forfeit", by, reason, at });
+
+  it("a forfeit is the forfeit action — offender, reason and writer (the harness posts as the organiser) — on the play the drive recorded; a double walkover is offender `both`, a walkover; the next-match line goes through", () => {
+    const of = (asked: RequestedOutcome, over: Partial<BracketDrive> = {}) => bracketCaseOf(drive({ asked, ...over }));
+    let checked = 0;
+    for (const reason of REFERENCE_FORFEIT_REASONS) {
+      for (const by of ["home", "away"] as const) {
+        expect(of(fw(by, reason, "after_start")), `${by} ${reason}`).toMatchObject({ play: { kind: "in_progress" }, actions: [{ kind: "forfeit", offender: by, reason, by: "organiser" }], hasNextMatch: true });
+        checked++;
+      }
+    }
+    expect(checked).toBe(REFERENCE_FORFEIT_REASONS.length * 2);
+    expect(of(fw("away", "walkover", "before_start"))).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "forfeit", offender: "away", reason: "walkover", by: "organiser" }] });
+    expect(of({ kind: "double_walkover" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "forfeit", offender: "both", reason: "walkover", by: "organiser" }], hasNextMatch: true });
+    expect(of({ kind: "double_walkover" }, { next: { line: "none" } })).toMatchObject({ hasNextMatch: false });
+    // X-DW-3's line is a double walkover's alone: a one-sided forfeit whose line is unread is still judged.
+    expect(of(fw("home", "walkover", "before_start"), { next: { line: "unresolved", why: "x" } })).toMatchObject({ actions: [{ kind: "forfeit", offender: "home" }] });
+    // The play is the drive's own record, never a default.
+    expect(() => of(fw("home", "retired", "after_start"), { forfeitPlay: null })).toThrow(ForfeitPlayUnread);
+    expect(() => of({ kind: "double_walkover" }, { forfeitPlay: null })).toThrow(ForfeitPlayUnread);
+  });
+
+  const page = (seated: string | null): Partial<BracketDrive> => ({ stageKind: "page_playoff", loser: { line: "seat", target: "pp-q2", slot: "home", seated } });
+  const AGREE: readonly [string, BracketDrive][] = [
+    ["a walkover before play (X-RS-1, X-WO-1): forfeited, the opponent advances by walkover", drive({ asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("a", "b", "walkover") })],
+    ["a retirement in play (X-RT-1)", drive({ asked: fw("home", "retired", "after_start"), status: "forfeited", outcome: award("b", "a", "retired") })],
+    ["a disqualification in play (X-RS-1)", drive({ asked: fw("away", "disqualified", "after_start"), status: "forfeited", outcome: award("a", "b", "disqualified") })],
+    ["a chess walkover with the game under way (BG-WO-2)", drive({ sport: "boardgame", asked: fw("home", "walkover", "after_start"), status: "forfeited", outcome: award("b", "a", "walkover") })],
+    ["a double walkover with a next match (X-DW-1): forfeited, nobody advances", drive({ asked: { kind: "double_walkover" }, status: "forfeited", outcome: { kind: "double_walkover" } })],
+    ["a ladder double walkover (D19: a ladder wires no feed edge)", drive({ stageKind: "ladder", asked: { kind: "double_walkover" }, next: { line: "none" }, status: "forfeited", outcome: { kind: "double_walkover" } })],
+    ["a forfeit's loser is not seated on the loser line (X-DE-1)", drive({ ...page(null), asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("a", "b", "walkover") })],
+    ["a double walkover seats nobody on the loser line (X-DW-1)", drive({ ...page(null), asked: { kind: "double_walkover" }, status: "forfeited", outcome: { kind: "double_walkover" } })],
+  ];
+
+  it("positive: every rulebook-correct forfeit answer agrees, counted (a forfeit's method is its reason, so the old `play` reading reds every row here)", () => {
+    let judged = 0;
+    for (const [label, d] of AGREE) {
+      expect(judgeDrive(d), label).toMatchObject({ judged: true, ok: true });
+      judged++;
+    }
+    expect(judged).toBe(AGREE.length);
+  });
+
+  it("negative: a wrong product, or a forfeit the rules refuse, reds on exactly what is wrong", () => {
+    const wrong: readonly [string, BracketDrive, RegExp][] = [
+      ["a walkover left decided", drive({ asked: fw("away", "walkover", "before_start"), status: "decided", outcome: award("a", "b", "walkover") }), /status: oracle forfeited, product decided/],
+      ["the award to the offender", drive({ asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("b", "a", "walkover") }), /oracle says home advances, product advanced away/],
+      ["a walkover recorded as a retirement", drive({ asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("a", "b", "retired") }), /method: oracle walkover, product retired/],
+      ["a walkover recorded as a play win", drive({ asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: win("a") }), /method: oracle walkover, product play/],
+      ["a forfeit that advanced nobody", drive({ asked: fw("home", "retired", "after_start"), status: "forfeited", outcome: null }), /product advanced nobody/],
+      ["a double walkover that advanced somebody", drive({ asked: { kind: "double_walkover" }, status: "forfeited", outcome: win("a") }), /oracle says nobody advances, product advanced a/],
+      ["a double walkover accepted on a final (X-DW-3)", drive({ asked: { kind: "double_walkover" }, next: { line: "none" }, status: "forfeited", outcome: { kind: "double_walkover" } }), /refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH/],
+      ["a retirement accepted before play (D3 R4)", drive({ asked: fw("home", "retired", "before_start"), status: "forfeited", outcome: award("b", "a", "retired") }), /refuses action 0 with FORFEIT_REASON_WRONG_PHASE/],
+      ["a football walkover accepted with the match under way (D3 R2)", drive({ asked: fw("home", "walkover", "after_start"), status: "forfeited", outcome: award("b", "a", "walkover") }), /refuses action 0 with FORFEIT_REASON_WRONG_PHASE/],
+      ["`withdrew` accepted from the organiser (PF-2)", drive({ asked: fw("home", "withdrew", "before_start"), status: "forfeited", outcome: award("b", "a", "withdrew") }), /refuses action 0 with INVALID_EVENT/],
+      ["a forfeit's loser seated on the loser line (X-DE-1)", drive({ ...page("b"), asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("a", "b", "walkover") }), /loser: oracle seats nobody on pp-q2 home \(a forfeit's loser\), product seated b/],
+    ];
+    let reds = 0;
+    for (const [label, d, why] of wrong) {
+      const j = judgeDrive(d);
+      expect(j, label).toMatchObject({ judged: true, ok: false });
+      expect(j.judged ? j.note : "", label).toMatch(why);
+      reds++;
+    }
+    expect(reds).toBe(wrong.length);
+  });
+
+  it("forfeitPlayOf reads the play from the stream the harness posted, over every sport: a walkover is bare (none), a retirement follows START (in_progress once a sport event is played, started on a bare START — ruling 112); a stream that is not a forfeit, or follows a result, is refused by name", () => {
+    let walkovers = 0;
+    let retirements = 0;
+    let unbuilt = 0;
+    for (const sport of SPORT_KEYS) {
+      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+      const gen = (outcome: RequestedOutcome) => generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome });
+      expect(forfeitPlayOf(sport, cfg, "h", "a", gen(fw("away", "walkover", "before_start"))), sport).toEqual({ kind: "none" });
+      expect(forfeitPlayOf(sport, cfg, "h", "a", gen({ kind: "double_walkover" })), sport).toEqual({ kind: "none" });
+      walkovers++;
+      let retired: ReturnType<typeof gen>;
+      try {
+        retired = gen(fw("home", "retired", "after_start"));
+      } catch (e) {
+        if (!(e instanceof OutcomeUnreachable) && !(e instanceof GeneratorUnsupported)) throw e;
+        unbuilt++;
+        continue;
+      }
+      const playedAny = retired.slice(retired.findIndex((e) => e.type === "core.start") + 1, -1).some((e) => !e.type.startsWith("core."));
+      expect(forfeitPlayOf(sport, cfg, "h", "a", retired), sport).toEqual({ kind: playedAny ? "in_progress" : "started" });
+      // Ruling 112: the same forfeit on a bare START — nothing played — reads as started.
+      expect(forfeitPlayOf(sport, cfg, "h", "a", [{ type: "core.start", payload: {} }, retired.at(-1)!]), `${sport} bare start`).toEqual({ kind: "started" });
+      retirements++;
+    }
+    expect(walkovers).toBe(SPORT_KEYS.length);
+    expect(retirements).toBeGreaterThan(0);
+    expect(retirements + unbuilt).toBe(SPORT_KEYS.length);
+    const fcfg = resolveSportCfg("football", offlineBuilderDefault("football"));
+    const won = generateStream({ sportKey: "football", cfg: fcfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
+    expect(() => forfeitPlayOf("football", fcfg, "h", "a", won)).toThrow(/not its core\.forfeit/);
+    expect(() => forfeitPlayOf("football", fcfg, "h", "a", [...won, { type: "core.forfeit", payload: { by: "a", reason: "retired" } }])).toThrow(ForfeitPlayUnread);
+    const ccfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const drawn = generateStream({ sportKey: "boardgame", cfg: ccfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "tiebreak", rung: "rapid", winner: "home" } }).slice(0, 2);
+    expect(() => forfeitPlayOf("boardgame", ccfg, "h", "a", [...drawn, { type: "core.forfeit", payload: { by: "a", reason: "walkover" } }])).toThrow(/drawn chess game/);
+  });
+
+  it("nextLineOf: a final (both grand finals of a reset), a last rung, a third-place match and a match whose two sides meet again in one fixture feed no next match (X-DW-3, loop F I-5), every other bracket match does — read from the engine's wiring, swept over every bracket generator; a ladder feeds none (D19); an unreadable layout is unresolved by name", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    const rowsOf = (gen: { fixtures: readonly { id: string; home?: string; away?: string }[] }): FixtureRow[] =>
+      gen.fixtures.map((g, i) => ({ id: `row-${g.id}`, stage_id: "s", pool_id: null, round_no: 1, fixture_no: i + 1, home_entrant_id: g.home ?? null, away_entrant_id: g.away ?? null, status: "scheduled", outcome: null, ext_key: g.id }));
+    const shapes: readonly [string, Record<string, unknown>, ReturnType<typeof generateSingleElim>][] = [
+      ["knockout", { thirdPlace: true }, generateSingleElim({ entrants: ids(8), thirdPlace: true })],
+      ["knockout", {}, generateSingleElim({ entrants: ids(8), thirdPlace: false })],
+      ["page_playoff", {}, generatePagePlayoff({ entrants: ids(4) })],
+      ["stepladder", {}, generateStepladder({ entrants: ids(4) })],
+      ["double_elim", {}, generateDoubleElim({ entrants: ids(4) })],
+      ["double_elim", { bracketReset: true }, generateDoubleElim({ entrants: ids(4), bracketReset: true })],
+      ["double_elim", {}, generateDoubleElim({ entrants: ids(2) })],
+      ["double_elim", { bracketReset: true }, generateDoubleElim({ entrants: ids(2), bracketReset: true })],
+    ];
+    // The product's rule (apps/web bracket-next-match.ts, loop F I-5), read off the engine's own declarations: its isFinal
+    // and thirdPlace flags (both grand finals of a reset are isFinal), and a fixture fed from BOTH sides of one match —
+    // that match only replays its own two entrants (a reset's grand final, a two-entrant double elim's winners' match).
+    let none = 0;
+    let next = 0;
+    let rematches = 0;
+    for (const [kind, config, gen] of shapes) {
+      const rows = rowsOf(gen);
+      const fixtures = gen.fixtures as readonly { id: string; isFinal?: boolean; thirdPlace?: boolean; homeFrom?: { fixtureId: string }; awayFrom?: { fixtureId: string } }[];
+      const rematch = (id: string) => fixtures.some((h) => h.homeFrom?.fixtureId === id && h.awayFrom?.fixtureId === id);
+      for (const g of fixtures) {
+        const terminal = g.isFinal === true || g.thirdPlace === true || rematch(g.id);
+        const line = nextLineOf(kind, config, rows.find((r) => r.ext_key === g.id)!, rows);
+        expect(line.line, `${kind} ${JSON.stringify(config)} of ${gen.fixtures.length} ${g.id}`).toBe(terminal ? "none" : "next");
+        if (terminal) none++; else next++;
+        if (rematch(g.id)) rematches++;
+      }
+    }
+    // A reset's grand final at 4 and at 2, and the 2-entrant winners' match with and without a reset: four rematches.
+    expect(rematches).toBe(4);
+    expect(none).toBeGreaterThanOrEqual(shapes.length); // every shape has at least its final
+    expect(next).toBeGreaterThan(0);
+    const ko = rowsOf(generateSingleElim({ entrants: ids(4), thirdPlace: false }));
+    expect(nextLineOf("ladder", {}, ko[0]!, ko)).toEqual({ line: "none" });
+    expect(nextLineOf("knockout", {}, { ...ko[0]!, ext_key: null }, ko)).toEqual({ line: "unresolved", why: expect.stringMatching(/carries no ext_key/) });
+    expect(nextLineOf("league", {}, ko[0]!, ko)).toEqual({ line: "unresolved", why: expect.stringMatching(/no bracket generator for 'league'/) });
+    // The one-line-per-side guards, reached with an injected layout (loserSeatOf's rule): pp-q1's winner, then its
+    // loser, wired into two different fixtures is unresolved by name; the engine's own layout is the positive pair, and
+    // names the WINNER line's target (pp-final), not the loser's (pp-q2).
+    const pp = rowsOf(generatePagePlayoff({ entrants: ids(4) }));
+    const twice = (side: "winner" | "loser") => ({ page_playoff: () => ({ rounds: 3, fixtures: [
+      { id: "pp-q1", round: 0, home: "e1", away: "e2" }, { id: "pp-elim", round: 0, home: "e3", away: "e4" },
+      { id: "pp-q2", round: 1, homeFrom: { fixtureId: "pp-q1", side }, awayFrom: { fixtureId: "pp-elim", side: "winner" as const } },
+      { id: "pp-final", round: 2, isFinal: true, homeFrom: { fixtureId: "pp-q1", side }, awayFrom: { fixtureId: "pp-q2", side: "winner" as const } },
+    ] }) }) as unknown as Parameters<typeof nextLineOf>[4];
+    for (const side of ["winner", "loser"] as const) {
+      expect(nextLineOf("page_playoff", {}, pp[0]!, pp, twice(side)), side).toEqual({ line: "unresolved", why: expect.stringMatching(new RegExp(`wires 2 ${side} lines out of pp-q1`)) });
+    }
+    expect(nextLineOf("page_playoff", {}, pp[0]!, pp)).toEqual({ line: "next", target: "pp-final" });
+  });
+
+  it("the comparison counts the W2b forfeits it judged: N of M in its reason; forfeits driven and none judged FAILS, and so does a run that owed them and drove none (zero judged, R25)", () => {
+    const st: ObservedRun = { caseId: "c", facts: [], withdrawal: null, configEdit: null, stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: ["a", "b"], fieldSource: "division", fixtures: [], standings: [], generates: [], pairRounds: [], complete: null }] };
+    const rec = (...ds: BracketDrive[]) => { const r = new Recorder(); r.bracketDrives.push(...ds); return r; };
+    const good = drive({ asked: { kind: "win", winner: "home" }, outcome: win("a") });
+    const dw = drive({ fixtureId: "f3", asked: { kind: "double_walkover" }, status: "forfeited", outcome: { kind: "double_walkover" } });
+    const wo = drive({ fixtureId: "f4", asked: fw("away", "walkover", "before_start"), status: "forfeited", outcome: award("a", "b", "walkover") });
+    const unread = drive({ fixtureId: "f5", asked: { kind: "double_walkover" }, next: { line: "unresolved", why: "fixture f5 carries no ext_key" }, status: "forfeited", outcome: { kind: "double_walkover" } });
+    const both = referenceBracketFinish(rec(good, dw, wo), st);
+    expect(both).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(both.reason).toMatch(/forfeits and double walkovers: 2 of 2 judged/);
+    const none = referenceBracketFinish(rec(good, unread), st);
+    expect(none.verdict).toBe("fail");
+    expect(none.evidence.join("\n")).toMatch(/forfeits and double walkovers: 0 of 1 judged/);
+    // Owed: the scenario's own forfeits land on this bracket — zero driven is zero judged, a failure.
+    const owed = referenceBracketFinish(rec(good), st, { forfeitsOwed: true });
+    expect(owed.verdict).toBe("fail");
+    expect(owed.evidence.join("\n")).toMatch(/0 of 0 judged/);
+    // The positive pairs: owed and judged passes; not owed and none driven says nothing about forfeits.
+    expect(referenceBracketFinish(rec(good, wo), st, { forfeitsOwed: true })).toMatchObject({ verdict: "pass", checked: 2 });
+    const plain = referenceBracketFinish(rec(good), st);
+    expect(plain).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(plain.reason).not.toMatch(/forfeits and double walkovers/);
+  });
+
+  it("through a driver: WO-PRE and RT-PART on the knockout fake judge every forfeit they drove, over every sport, and the count is reported", async () => {
+    let cases = 0;
+    let judged = 0;
+    for (const key of ["WO-PRE", "RT-PART"] as const) {
+      for (const cell of w2bCells(key).filter((c) => c.row === "knockout")) {
+        const variant = offlineBuilderDefault(cell.sport);
+        const spec: CaseSpec = { caseId: `knockout|${cell.sport}|${variant}|${key}`, row: "knockout", sport: cell.sport, variant, scenario: key, canary: false };
+        const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(cell.sport, variant), tag: "t", denied: [] });
+        const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish");
+        expect(check, `${key} ${cell.sport}`).toBeDefined();
+        expect(`${check!.verdict}: ${check!.reason}`, `${key} ${cell.sport}`).toMatch(/^pass/);
+        const m = /forfeits and double walkovers: (\d+) of (\d+) judged/.exec(check!.reason);
+        expect(m, `${key} ${cell.sport}: ${check!.reason}`).not.toBeNull();
+        expect(Number(m![1]), `${key} ${cell.sport}`).toBe(Number(m![2]));
+        expect(Number(m![1]), `${key} ${cell.sport}`).toBeGreaterThan(0);
+        judged += Number(m![1]);
+        cases++;
+      }
+    }
+    expect(cases).toBeGreaterThan(SPORT_KEYS.length); // WO-PRE on every sport, RT-PART on those that build a retirement
+    expect(judged).toBeGreaterThanOrEqual(cases);
+    process.stderr.write(`I-3 judged: ${judged} W2b forfeit drive(s) over ${cases} knockout case(s)\n`);
+  });
+
+  it("through a driver: a product that refuses every walkover has each refusal JUDGED against the oracle (review I-1: a refused bare forfeit is a drive, never dropped) — the check fails by name, every walkover counted (the sweep above is its positive pair)", async () => {
+    class RefusesForfeits extends FakeKnockoutDriver {
+      override forfeit(id: string): Promise<never> { return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "FORFEIT_REASON_WRONG_PHASE", "refused on purpose")); }
+    }
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|WO-PRE`, row: "knockout", sport, variant, scenario: "WO-PRE", canary: false };
+    const out = await SCENARIOS["WO-PRE"].run({ driver: new RefusesForfeits(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
+    expect(check.verdict).toBe("fail");
+    const refused = check.evidence.filter((e) => /refusal: the product refused it 409 FORFEIT_REASON_WRONG_PHASE, the oracle accepts it/.test(e));
+    expect(refused.length, check.evidence.join("\n")).toBeGreaterThan(0);
+    // Every walkover the scenario asked for is among them: one a round of the knockout of 8 (three rounds).
+    expect(refused.length).toBe(3);
+  });
+
+  it("through a driver: a W2b scenario on a bracket OWES its forfeits — a product whose fixtures are already under way when the hook looks leaves it nothing to forfeit, and the check fails by name '0 of 0 judged' (the sweep above is its positive pair)", async () => {
+    // Since review I-1 a refused BARE forfeit is a drive, so refusing walkovers no longer empties the count, and a
+    // refused retirement throws out of RT-PART by name. Zero forfeit drives is now the hook finding no scheduled fixture
+    // in any round. The play loop still decides every match, so the run looks whole, and only the owed rule reds.
+    class StartsUnderWay extends FakeKnockoutDriver {
+      override rows() { return super.rows().map((r) => (r.status === "scheduled" ? { ...r, status: "in_play" } : r)); }
+    }
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|WO-PRE`, row: "knockout", sport, variant, scenario: "WO-PRE", canary: false };
+    const out = await SCENARIOS["WO-PRE"].run({ driver: new StartsUnderWay(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
+    expect(`${check.verdict}: ${check.evidence.join(" | ")}`).toMatch(/^fail: .*0 of 0 judged/);
+    // It is the forfeits that are missing, not the bracket: every decided match was still judged.
+    expect(check.checked).toBeGreaterThan(1);
+  });
+
+  it("judgeDrive (review I-1): a refused drive is judged against the oracle's refusal — the same code passes, another code or a refusal the oracle does not make fails by name, and an accepted write the oracle refuses still fails", () => {
+    const dwFinal = { asked: { kind: "double_walkover" } as const, next: { line: "none" } as const, status: "scheduled", outcome: null };
+    const agree = judgeDrive(drive({ ...dwFinal, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } }));
+    expect(agree).toMatchObject({ judged: true, ok: true });
+    const other = judgeDrive(drive({ ...dwFinal, refusal: { status: 422, code: "FORFEIT_REASON_WRONG_PHASE" } }));
+    expect(other).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/refusal: the oracle refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH, the product 422 FORFEIT_REASON_WRONG_PHASE/) });
+    const uncoded = judgeDrive(drive({ ...dwFinal, refusal: { status: 500, code: null } }));
+    expect(uncoded).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/the product 500 \(no code\)/) });
+    // A walkover the oracle accepts, refused by the product, the fixture left scheduled.
+    const wo = judgeDrive(drive({ asked: fw("away", "walkover", "before_start"), status: "scheduled", outcome: null, refusal: { status: 409, code: "FORFEIT_REASON_WRONG_PHASE" } }));
+    expect(wo).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/refusal: the product refused it 409 FORFEIT_REASON_WRONG_PHASE, the oracle accepts it/) });
+    // Accepted where the oracle refuses: the existing line, unchanged.
+    expect(judgeDrive(drive({ ...dwFinal, status: "forfeited", outcome: { kind: "double_walkover" } }))).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/the oracle refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH, which the harness drove as legal/) });
+  });
+
+  it("through a driver: a double walkover decided on the page-playoff fake carries the ENGINE's next line — pp-elim feeds pp-q2 and agrees; pp-final feeds nothing, so a product that accepted it there reds by X-DW-3", async () => {
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    const spec: CaseSpec = { caseId: "page_playoff_only|football|DW-ALL", row: "page_playoff_only", sport, variant, scenario: "DW-ALL", canary: false };
+    const ctx = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    await driver.start();
+    const row = (key: string) => driver.fixtures.find((f) => f.ext_key === key)!;
+    await decideFixture(ctx, rec, setup, row("pp-elim"), { kind: "double_walkover" }, setup.stage);
+    const elim = rec.bracketDrives.at(-1)!;
+    expect(elim.next).toEqual({ line: "next", target: "pp-q2" });
+    expect(elim.forfeitPlay).toEqual({ kind: "none" });
+    expect(judgeDrive(elim)).toMatchObject({ judged: true, ok: true });
+    // The final, seated by hand so it can be driven: a product that accepts a double walkover there is wrong (X-DW-3).
+    // The fake refuses one there, as the server does — so the wrong product is this fake with the rule switched off.
+    driver.feeds.set(row("pp-final").id, { to: "nowhere", slot: "home_entrant_id" });
+    const final = row("pp-final");
+    const [h, a] = setup.entrants.slice(0, 2).map((e) => e.id);
+    Object.assign(final, { home_entrant_id: h, away_entrant_id: a });
+    await decideFixture(ctx, rec, setup, final, { kind: "double_walkover" }, setup.stage);
+    const fin = rec.bracketDrives.at(-1)!;
+    expect(fin.next).toEqual({ line: "none" });
+    expect(judgeDrive(fin)).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH/) });
   });
 });
 

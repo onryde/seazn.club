@@ -168,7 +168,7 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
     ]);
     const d = drv(t);
     await d.postStream("f1", [START], "run-1:f1");
-    await d.forfeit("f1", "ent-b", "retired hurt", "run-1:f1");
+    await d.forfeit("f1", "ent-b", "retired", "run-1:f1");
     const keys = posts(calls).map((c) => (c.body as { idempotency_key: string }).idempotency_key);
     expect(keys).toEqual(["run-1:f1:s0", "run-1:f1:s1"]);
     expect(new Set(keys).size).toBe(keys.length);
@@ -200,26 +200,38 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
     expect([(e as RefusedCall).status, (e as RefusedCall).code]).toEqual([409, "UNDO_TARGET_MISSING"]);
     expect(posts(calls)).toHaveLength(1);
   });
-  it("forfeit on a scheduled fixture posts exactly the composed [core.start, core.forfeit]", async () => {
+  // W2b (D3, finding 10): the phase guard refuses a walkover once play started (R2) and a retirement before it (R4).
+  const scheduledDrive = () => {
     let seq = 0;
-    const { t, calls } = fake([
+    return fake([
       (c) => (c.path.endsWith("/state") ? ok({ status: "scheduled", last_seq: 0, outcome: null }) : undefined),
-      () => ok({ seq: ++seq, status: seq === 2 ? "forfeited" : "in_play", outcome: null, event_id: `e${seq}` }, 201),
+      () => ok({ seq: ++seq, status: "in_play", outcome: null, event_id: `e${seq}` }, 201),
     ]);
+  };
+  it("W2b: a walkover on a scheduled fixture posts the bare core.forfeit — no core.start before it (D3 R2)", async () => {
+    const { t, calls } = scheduledDrive();
     await drv(t).forfeit("f1", "ent-b", "walkover", "k");
-    const types = posts(calls).map((c) => c.body as { type: string; payload: unknown });
-    expect(types).toEqual([
-      expect.objectContaining({ type: "core.start", payload: {} }),
-      expect.objectContaining({ type: "core.forfeit", payload: { by: "ent-b", reason: "walkover" } }),
-    ]);
+    expect(posts(calls).map((c) => c.body as { type: string; payload: unknown })).toEqual([expect.objectContaining({ type: "core.forfeit", payload: { by: "ent-b", reason: "walkover" } })]);
+  });
+  it("W2b: a double walkover posts core.forfeit {by: both} alone (X-DW-1)", async () => {
+    const { t, calls } = scheduledDrive();
+    await drv(t).forfeit("f1", "both", "walkover", "k");
+    expect(posts(calls).map((c) => c.body as { type: string; payload: unknown })).toEqual([expect.objectContaining({ type: "core.forfeit", payload: { by: "both", reason: "walkover" } })]);
+  });
+  it("W2b: a retirement on a scheduled fixture posts its play first — core.start and the play given — then the forfeit (D3 R4)", async () => {
+    const { t, calls } = scheduledDrive();
+    const point = { type: "generic.score", payload: { by: "ent-a", points: 1 } };
+    await drv(t).forfeit("f1", "ent-b", "retired", "k", [START, point]);
+    expect(posts(calls).map((c) => (c.body as { type: string }).type)).toEqual(["core.start", "generic.score", "core.forfeit"]);
   });
   it("forfeit on a live fixture posts only core.forfeit (no second start)", async () => {
     const { t, calls } = fake([
       (c) => (c.path.endsWith("/state") ? ok({ status: "in_play", last_seq: 4, outcome: null }) : undefined),
       () => ok({ seq: 5, status: "forfeited", outcome: null, event_id: "e5" }, 201),
     ]);
-    await drv(t).forfeit("f1", "ent-a", "retired hurt", "k");
-    expect(posts(calls).map((c) => c.body)).toEqual([{ expected_seq: 4, type: "core.forfeit", payload: { by: "ent-a", reason: "retired hurt" }, idempotency_key: "k:s4" }]);
+    await drv(t).forfeit("f1", "ent-a", "retired", "k", [START, { type: "generic.score", payload: { by: "ent-a", points: 1 } }]);
+    // Under way: the play given is NOT posted again — the forfeit goes in bare.
+    expect(posts(calls).map((c) => c.body)).toEqual([{ expected_seq: 4, type: "core.forfeit", payload: { by: "ent-a", reason: "retired" }, idempotency_key: "k:s4" }]);
   });
 });
 

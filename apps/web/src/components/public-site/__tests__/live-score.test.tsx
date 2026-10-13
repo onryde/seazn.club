@@ -24,6 +24,7 @@ import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { LiveScoreBody } from "../live-score";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 const entrantNames = { W: "Riverside FC", L: "Oakdale United" };
 
@@ -614,6 +615,51 @@ describe("LiveScoreBody — suppressScorebug never leaves the panel completely e
     expect(inPlay.length).toBeGreaterThan(0);
     expect(inPlay).not.toEqual(scheduled);
   });
+});
+
+// W2b Task 13 fix round 1 (review C3) — the empty state's sentence, for EVERY fixture status. A walked-over match
+// centre used to say "Live scores and highlights appear here once the match starts." under its walkover sentence:
+// the ladder sent every status that was neither in play nor decided to `beforeStart`, so forfeited, abandoned,
+// cancelled and needs_decision all promised a start that will never come. The expected sentence per status is the
+// review's ruling (only a match that has not started yet will start), typed here, never read from the component.
+describe("LiveScoreBody — the empty state says what will happen, per status (T13 review C3)", () => {
+  const RULING: Record<string, string> = {
+    scheduled: "matchCentre.empty.beforeStart",
+    postponed: "matchCentre.empty.beforeStart", // a legacy status the hub still words (STATUS_LINE_KEYS); it will start
+    in_play: "matchCentre.empty.inPlay",
+    decided: "matchCentre.empty.noDetail",
+    finalized: "matchCentre.empty.noDetail",
+    abandoned: "matchCentre.empty.noDetail",
+    forfeited: "matchCentre.empty.noDetail",
+    cancelled: "matchCentre.empty.noDetail",
+    needs_decision: "matchCentre.empty.noDetail",
+  };
+  const render = (status: string): string =>
+    renderToStaticMarkup(
+      <LiveScoreBody
+        data={{ status, summary: null, outcome: null } as never}
+        entrantNames={{ home: "Riverside FC", away: "Oakdale United" }}
+        sportKey="football"
+        decidedTemplates={{ tie: "", plain: "", shootoutPlain: "", byMethod: {} }}
+        dict={en as Dict}
+        suppressScorebug
+      />,
+    );
+  const SENTENCES = ["matchCentre.empty.beforeStart", "matchCentre.empty.inPlay", "matchCentre.empty.noDetail"];
+
+  it("every fixture status has a ruling — a status added to the domain must be placed here", () => {
+    for (const status of FIXTURE_STATUSES) expect(RULING[status], status).toBeDefined();
+    expect(Object.keys(RULING).length).toBe(FIXTURE_STATUSES.length + 1);
+  });
+
+  for (const [status, key] of Object.entries(RULING)) {
+    it(`${status}: ${key.split(".").pop()}, and no other empty-state sentence`, () => {
+      const html = render(status);
+      expect(html).toContain('data-testid="mc-summary-empty"');
+      expect(html).toContain(en[key as keyof typeof en] as string);
+      for (const other of SENTENCES.filter((k) => k !== key)) expect(html, other).not.toContain(en[other as keyof typeof en] as string);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

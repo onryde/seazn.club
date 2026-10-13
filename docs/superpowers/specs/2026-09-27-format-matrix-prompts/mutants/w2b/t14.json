@@ -1,0 +1,227 @@
+[
+ {
+  "id": "w2b-id-dropped",
+  "file": "packages/engine/rules/hockey.md",
+  "find": "| HK-AB-1 | Same as FB-AB-1 for hockey. Amended by ruling 117 (2026-10-12): where the cfg refuses a draw (an overtime or a shoot-out configured, as fih-shootout does), a level abandon is accepted with no result, in every kind: it stays out of the table, flagged for the organiser to settle or replay (X-AB-1), never refused and never forced to a draw. | product rule W2b-R6; ruling 117 | signed 117 2026-10-12 | `packages/engine/src/sports/period/kernel.ts`<br>`apps/web/src/server/engine-db/append-event.ts` | `apps/web/src/server/engine-db/__tests__/award-abandon-status.test.ts`<br>`apps/web/src/server/engine-db/__tests__/award-abandon-no-draw.test.ts`<br>`packages/engine/src/sport/abandon-result.test.ts` |\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "x-br-1-old-text",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "decided only by a win or a double walkover (from play",
+  "replace": "decided only by a win (from play",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "x-wo-1-appendix-status",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "| signed 108 2026-10-11 | `packages/engine/src/sport/module.ts`",
+  "replace": "| signed 86 2026-10-08 | `packages/engine/src/sport/module.ts`",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "x-rs-1-pre-113-status",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11), 118 (2026-10-12) | signed 118 2026-10-12 |",
+  "replace": "| product rule W2b-R1; rulings 112, 113, 114 (2026-10-11), 118 (2026-10-12) | signed 112 2026-10-11 |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "fb-wo-1-five-nil",
+  "file": "packages/engine/rules/football.md",
+  "find": "| FB-WO-1 | Football walkover = 3-0. |",
+  "replace": "| FB-WO-1 | Football walkover = 5-0. |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "fb-ab-1-appendix-text",
+  "file": "packages/engine/rules/football.md",
+  "find": "level = draw with the real score in draw kinds; in brackets a level abandon stays abandoned for the desk to settle, never needs_decision.",
+  "replace": "level = draw with the real score in draw kinds, needs_decision in brackets.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "title-memo-path-only",
+  "file": "packages/engine/test/rules-reference.ts",
+  "find": "  if (hit !== undefined && hit.source === source) return [...hit.titles];",
+  "replace": "  if (hit !== undefined) return [...hit.titles];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "the title memo"
+   }
+  ]
+ },
+ {
+  "id": "title-memo-shared-list",
+  "file": "packages/engine/test/rules-reference.ts",
+  "find": "  if (hit !== undefined && hit.source === source) return [...hit.titles];",
+  "replace": "  if (hit !== undefined && hit.source === source) return hit.titles as string[];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "the title memo"
+   }
+  ]
+ },
+ {
+  "id": "rule-2-level-bracket-half-dropped",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";",
+  "replace": "  if (has(\"core.abandon\") && outcome === null) return \"abandoned\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/award-abandon-status.test.ts"
+    ],
+    "name": "FB-AB-1 / HK-AB-1 / IH-AB-1: a level award-policy abandon"
+   }
+  ]
+ },
+ {
+  "id": "x-wd-6-reopened",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "ruling 113 (2026-10-11) settles its wording | signed 113 2026-10-11 |",
+  "replace": "ruling 113 (2026-10-11) settles its wording | ⬜ open |",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: the 55 new ids"
+   }
+  ]
+ },
+ {
+  "id": "x-rt-1-dq-credit-stated",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "a disqualification with nothing played (no Start, or a Start with nothing played) is treated like a walkover: the sport's walkover credit, and no match in players' stats (X-PS-1).",
+  "replace": "a disqualification with nothing played (no Start, or a Start with nothing played) takes the sport's walkover credit and counts as a match in players' stats (X-PS-2).",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "x-rs-1-retired-from-start",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "a disqualification from the Start, a retirement only once something is played,",
+  "replace": "a disqualification and a retirement from the Start,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "x-wd-6-played-score-standing",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "the sport's retirement credit once something is played (a held level result included, X-WD-1).",
+  "replace": "the sport's retirement credit once something is played, the played score standing (a held level result included, X-WD-1).",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "x-rs-1-withdrawal-any-phase",
+  "file": "packages/engine/rules/cross-sport.md",
+  "find": "and a withdrawal in any phase until the match has a result, or over a held level result (PF-1).",
+  "replace": "and a withdrawal in any phase.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ },
+ {
+  "id": "spec-x-rt-1-dq-walkover-credit",
+  "file": "docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md",
+  "find": "a disqualification with nothing played (no Start, or a Start with nothing played) is treated like a walkover: the sport's walkover credit, and no match in players' stats (X-PS-1).",
+  "replace": "a disqualification with nothing played (no Start, or a Start with nothing played) takes the sport's walkover credit, a match in players' stats (X-PS-2).",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "test/rules-reference.test.ts"
+    ],
+    "name": "W2b: each row's text is Appendix A's"
+   }
+  ]
+ }
+]

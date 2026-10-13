@@ -128,7 +128,7 @@
   {
     "id": "settle-withdrawn",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "if (w?.status === \"withdrawn\") {",
+    "find": "if (w !== undefined && DEPARTED_STATUSES.has(w.status)) {",
     "replace": "if (false) {",
     "killers": [
       {
@@ -136,7 +136,7 @@
         "files": [
           "src/server/engine-db/__tests__/settle-seating.test.ts"
         ],
-        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\) on a LEGACY row"
       }
     ]
   },
@@ -395,8 +395,8 @@
   {
     "id": "seat-competition-kind",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "toBracketFixture(f, inputs.kind)",
-    "replace": "toBracketFixture(f, \"league\")",
+    "find": "toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null)",
+    "replace": "toBracketFixture(f, \"league\", (id) => seats.get(id) ?? null)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -455,7 +455,7 @@
         "files": [
           "src/server/usecases/__tests__/event-import-held.test.ts"
         ],
-        "name": "X-BR-2: an imported stream ending HELD \\(a chess double forfeit in a knockout\\) lands, and runs no decided side effect"
+        "name": "X-BR-2: an imported stream ending HELD \\(football 0-0 at full time in a knockout\\) lands, and runs no decided side effect"
       }
     ]
   },

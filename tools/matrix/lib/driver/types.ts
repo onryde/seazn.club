@@ -9,7 +9,7 @@
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { mapStrings, redact } from "../redact.ts";
-import type { StreamEvent } from "../streams/types.ts";
+import type { ForfeitReason, StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
 /** One roster member as the harness writes it (D2): a synthetic person
@@ -87,7 +87,10 @@ export interface SeedConfirmOut { readonly proposalId: string; readonly filled: 
  *  would re-run the progression, so the drivers record it as a completion.
  *  Pinned against the product's text by http-driver.test.ts. */
 export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
-export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number }
+export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number;
+  /** W2b (loop F, the plan's N1): of `walkovers`, the lines that were HELD when the entrant withdrew — a held level
+   *  result, a tie-break owed, an active abandon — each of which used to wait for the organiser's settle. */
+  walked_over_held: number }
 /** W1-driving T7 (D8): a ladder challenge's answer (route stages/[id]/challenges
  *  → 201 usecases/stages.ts issueChallenge). `ladder_order` is the RAW order
  *  as it stood when the challenge was ISSUED — before its result lands, and
@@ -99,7 +102,9 @@ export interface ChallengeOut { readonly fixture_id: string; readonly ladder_ord
  *  each match's team1/team2 are the fixture's home/away pair entrants. Only
  *  the fields the harness reads are typed. */
 export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; readonly rounds: readonly { round_no: number; matches: readonly { fixture_id: string; status: string; team1: { entrant_id: string }; team2: { entrant_id: string } }[] }[]; readonly leaderboard: readonly { person_id: string; points: number; games: number }[] }
-export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number }
+/** `won`/`drawn`/`lost`/`metrics` (W2b, X-WO-1): the row as the product's standings answer carries it (engine
+ *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them. */
+export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number> }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown }
@@ -210,7 +215,10 @@ export interface OrganiserDriver {
   listFixtures(divisionId: string): Promise<FixtureRow[]>;
   fixtureState(fixtureId: string): Promise<FixtureStateOut>;
   postStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]>;
-  forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
+  /** W2b: `by` is the entrant that forfeits, or "both" (a double walkover, X-DW-1). On a SCHEDULED fixture `play` goes
+   *  in first (streams/index.ts forfeitPosting): START and the sport's partial play for a retirement, nothing for a
+   *  walkover, which is recorded before START (D3, finding 10). On a fixture under way the forfeit goes in bare. */
+  forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play?: readonly StreamEvent[]): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
   /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { foldMatchWithStoppage } from "@seazn/engine/core";
+import { FORFEIT_REASONS, foldMatchWithStoppage } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { PackSchema, fixtureKey } from "../pack-schema.ts";
@@ -998,12 +998,12 @@ describe("validatePack — specials", () => {
   /**
    * Every claim below is posed against a fixture whose fold COULD satisfy it,
    * with a green control alongside. That distinction is not cosmetic: a claim
-   * naming `loser` or `method` on an AWARD outcome can never hold — the
-   * engine's award variant has neither field — so a "reds" assertion there
-   * proves nothing about the comparison. (PackSchema now refuses `method` on
-   * an award for the same reason; `PackClaim` is a flat union and still
-   * permits the shape, which is why the absence case below is kept and
-   * labelled rather than deleted.)
+   * naming a field the folded outcome does not carry can never hold, so a
+   * "reds" assertion there proves nothing about the comparison. (Before W2b
+   * that was every `loser` or `method` claim on an AWARD; the engine's award
+   * now carries a `loser` and a `reason`, which a `method` claim is compared
+   * against — see "an award's method is its reason" below. A DRAW is the
+   * fixture that still carries neither, so the absence case uses one.)
    *
    * `_tiny`'s rr-r1-c1 folds to `{win, winner: e-alpha, loser: e-bravo,
    * method: "regulation"}`, which carries all four fields.
@@ -1064,13 +1064,32 @@ describe("validatePack — specials", () => {
   });
 
   it("reds a claim on a field the folded outcome does not carry at all", () => {
-    // An `award` has no `loser`. The claim must red on the ABSENCE rather than
+    // A `draw` has no `loser`. The claim must red on the ABSENCE rather than
     // quietly pass because there is nothing to compare — the direction that
-    // `"loser" in outcome &&` guarding would have got wrong.
+    // `"loser" in outcome &&` guarding would have got wrong. (This used to be
+    // posed on the award fixture; W2b's award names its loser, so that claim
+    // now HOLDS — see the positive pair below.)
     const pack = tiny();
+    pack.expected.specials[0]!.fixtureExtKey = "rr-r2-c1";
     pack.expected.specials[0]!.claims = [{ on: "outcome", loser: "e-bravo" }];
     expect(onlyError(validatePack(pack, TINY).findings).message).toBe(
       'outcome loser: claim expects "e-bravo", the fold produced undefined',
+    );
+  });
+
+  it("holds a claim on the award's loser — the field W2b gave the award", () => {
+    // `_tiny`'s rr-r3-c1 folds `core.forfeit by @e-bravo` to an award whose
+    // loser is the offender. Stage 0's `"loser" in outcome` reads it as-is.
+    const pack = tiny();
+    pack.expected.specials[0]!.claims = [{ on: "outcome", kind: "award", loser: "e-bravo" }];
+    expectClean(validatePack(pack, TINY), TINY_NOT_DERIVED);
+
+    // And the wrong side reds with the fold's actual loser, so the claim above
+    // is not holding because the comparison is skipped.
+    const wrong = tiny();
+    wrong.expected.specials[0]!.claims = [{ on: "outcome", kind: "award", loser: "e-alpha" }];
+    expect(onlyError(validatePack(wrong, TINY).findings).message).toBe(
+      'outcome loser: claim expects "e-alpha", the fold produced "@e-bravo"',
     );
   });
 
@@ -1512,11 +1531,15 @@ describe("validatePack — the standings derivation mirrors the product's own", 
 
     const exact = tiny();
     // The real derived ledger for alpha, so the comparison has a green case
-    // and is not merely "any metrics block reds".
+    // and is not merely "any metrics block reds". Summed by hand from the
+    // pack's streams: rr-r1-c1 3-1, rr-r2-c1 2-2, and rr-r3-c1's retirement
+    // after alpha's one point (W2b ruling 113), credited at the recorded 1-0
+    // (generic GN-RT-1: a retirement credits the recorded score) — 6 for,
+    // 3 against.
     exact.expected.tables[0]!.rows[0]!.metrics = {
-      for: 5,
+      for: 6,
       against: 3,
-      diff: 2,
+      diff: 3,
     };
     expectClean(validatePack(exact, TINY), TINY_NOT_DERIVED);
 
@@ -1532,8 +1555,8 @@ describe("validatePack — the standings derivation mirrors the product's own", 
   // comparison — the subset trips the per-key walk, the superset only the key
   // COUNT — so a single case leaves one half of the check untested.
   const metricsCases: [string, Record<string, number>][] = [
-    ["a SUBSET of", { for: 5 }],
-    ["a SUPERSET of", { for: 5, against: 3, diff: 2, invented: 0 }],
+    ["a SUBSET of", { for: 6 }],
+    ["a SUPERSET of", { for: 6, against: 3, diff: 3, invented: 0 }],
   ];
   it.each(metricsCases)(
     "reds a metrics block that is %s the derived ledger",
@@ -1543,7 +1566,7 @@ describe("validatePack — the standings derivation mirrors the product's own", 
       const finding = onlyError(validatePack(pack, TINY).findings);
       expect(finding.code).toBe("standings.metrics");
       expect(finding.message).toContain(
-        'the fold produced {"for":5,"against":3,"diff":2}',
+        'the fold produced {"for":6,"against":3,"diff":3}',
       );
     },
   );
@@ -4957,5 +4980,147 @@ describe("validatePack — stage 1.6, a scheduled division must declare a schedu
     expect(offendingRefs(pack).length).toBeGreaterThan(0);
 
     expect(schedulingErrors(validatePack(pack, TINY))).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// W2b — an award's `method` is the fold's `reason`; a double walkover is a kind
+// ===========================================================================
+//
+// The pack keeps the name `method` (packs are frozen); the engine's award now
+// carries a typed `reason` and no `method`. Stage 0 compared `"method" in
+// outcome`, which tsc cannot flag and which reads `undefined` off every award —
+// so suite 11's declared walkover would have failed stage 0 for a reason that
+// has nothing to do with the pack. These drive a REAL fold per reason.
+describe("validatePack — an award's method is its reason (W2b)", () => {
+  /** A generic fixture decided by one forfeit. Where in the match a reason is
+   *  recordable is the ENGINE's rule (a walkover until something is played,
+   *  ruling 112; a disqualification from the Start; a retirement only once
+   *  something is played, ruling 113); the stream is shaped to it. */
+  const forfeitEvents = (reason: (typeof FORFEIT_REASONS)[number]) => [
+    ...(reason === "walkover" ? [] : [{ type: "core.start" }]),
+    ...(reason === "retired" ? [{ type: "generic.score", payload: { by: "@e1", points: 1 } }] : []),
+    { type: "core.forfeit", payload: { by: "@e2", reason } },
+  ];
+  const awardPack = (reason: (typeof FORFEIT_REASONS)[number], method: string | undefined) =>
+    genericPack({
+      events: forfeitEvents(reason),
+      outcome: { kind: "award", winner: "e1", ...(method === undefined ? {} : { method }) },
+    });
+
+  it("holds each declared reason against the fold of that very forfeit, and reds every other", () => {
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      // The expected value is the reason the STREAM posts — taken from the
+      // event, never read back off the fold under test.
+      expectClean(validatePack(awardPack(reason, reason), UNIT), UNIT_NO_TABLE);
+      for (const other of FORFEIT_REASONS) {
+        if (other === reason) continue;
+        const finding = onlyError(validatePack(awardPack(reason, other), UNIT).findings);
+        expect(finding.code, `${reason} declared as ${other}`).toBe("match.outcome_method");
+        expect(finding.message).toBe(`method: pack expects "${other}", the fold produced "${reason}"`);
+        checked += 1;
+      }
+    }
+    // Anti-vacuity: 4 reasons x 3 wrong declarations. A loop over an empty
+    // vocabulary would pass in silence.
+    expect(checked).toBe(FORFEIT_REASONS.length * (FORFEIT_REASONS.length - 1));
+    expect(checked).toBeGreaterThanOrEqual(12);
+  });
+
+  it("an award that declares no method asserts none", () => {
+    for (const reason of FORFEIT_REASONS) {
+      expectClean(validatePack(awardPack(reason, undefined), UNIT), UNIT_NO_TABLE);
+    }
+  });
+
+  it("an outcome CLAIM's method reads the same reason", () => {
+    const withClaim = (reason: (typeof FORFEIT_REASONS)[number], claimed: string) =>
+      genericPack({
+        events: forfeitEvents(reason),
+        outcome: { kind: "award", winner: "e1" },
+        specials: [
+          {
+            kind: "retirement",
+            divisionRef: "d1",
+            fixtureExtKey: "f1",
+            claims: [{ on: "outcome", kind: "award", method: claimed }],
+          },
+        ],
+      });
+    expectClean(validatePack(withClaim("retired", "retired"), UNIT), UNIT_NO_TABLE);
+    expect(onlyError(validatePack(withClaim("retired", "walkover"), UNIT).findings).message).toBe(
+      'outcome method: claim expects "walkover", the fold produced "retired"',
+    );
+  });
+
+  it("a walkover posted AFTER core.start is refused — the phase guard suite 11 had to be rebuilt around", () => {
+    // W2b ruling 112: the guard reads PLAY, not the Start — a walkover is
+    // refused once something is played. The bare-Start pair below is the
+    // other side of the same line.
+    const pack = genericPack({
+      events: [
+        { type: "core.start" },
+        { type: "generic.score", payload: { by: "@e1", points: 1 } },
+        { type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } },
+      ],
+      outcome: { kind: "award", winner: "e1", method: "walkover" },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("fold.rejected");
+    expect(finding.message).toContain("FORFEIT_REASON_WRONG_PHASE");
+    // Ruling 112's positive pair: after a bare Start (nothing played) the
+    // same walkover folds clean.
+    expectClean(
+      validatePack(
+        genericPack({
+          events: [{ type: "core.start" }, { type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } }],
+          outcome: { kind: "award", winner: "e1", method: "walkover" },
+        }),
+        UNIT,
+      ),
+      UNIT_NO_TABLE,
+    );
+  });
+
+  it("W2b ruling 113: a retirement after a bare core.start is refused — nobody retires from a match never played", () => {
+    const pack = genericPack({
+      events: [{ type: "core.start" }, { type: "core.forfeit", payload: { by: "@e2", reason: "retired" } }],
+      outcome: { kind: "award", winner: "e1", method: "retired" },
+    });
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("fold.rejected");
+    expect(finding.message).toContain("FORFEIT_REASON_WRONG_PHASE");
+  });
+});
+
+describe("validatePack — a double walkover (W2b)", () => {
+  const bothAbsent = [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }];
+
+  it("a pack that declares `double_walkover` holds against a fold of both sides absent", () => {
+    expectClean(
+      validatePack(genericPack({ events: bothAbsent, outcome: { kind: "double_walkover" } }), UNIT),
+      UNIT_NO_TABLE,
+    );
+  });
+
+  it("reds when the pack declares an award and the fold is a double walkover — and the reverse", () => {
+    const award = onlyError(
+      validatePack(genericPack({ events: bothAbsent, outcome: { kind: "award", winner: "e1" } }), UNIT).findings,
+    );
+    expect(award.code).toBe("match.outcome_kind");
+    expect(award.message).toBe('outcome kind: pack expects "award", the fold produced "double_walkover"');
+
+    const reverse = onlyError(
+      validatePack(
+        genericPack({
+          events: [{ type: "core.forfeit", payload: { by: "@e2", reason: "walkover" } }],
+          outcome: { kind: "double_walkover" },
+        }),
+        UNIT,
+      ).findings,
+    );
+    expect(reverse.code).toBe("match.outcome_kind");
+    expect(reverse.message).toBe('outcome kind: pack expects "double_walkover", the fold produced "award"');
   });
 });

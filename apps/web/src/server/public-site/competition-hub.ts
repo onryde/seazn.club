@@ -41,6 +41,8 @@ import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, unseatedForfeitLoser, type ForfeitWords } from "@/lib/forfeit-tag";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import {
   bucketFixture,
   deriveHubTabs,
@@ -49,6 +51,7 @@ import {
 } from "@/lib/matches-hub";
 import { resolveModule } from "@/server/engine-db";
 import { publicRegistrationInfo } from "@/server/usecases/registrations";
+import { fixturesStatsReading } from "@/server/usecases/player-stats";
 import { activePublicSuspensionEntries } from "@/server/usecases/discipline";
 import { log } from "@/server/logger";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -161,6 +164,74 @@ export const STATUS_LINE_KEYS: ReadonlySet<string> = new Set([
   "needs_decision",
 ]);
 
+/**
+ * W2b Task 13 (spec §5.5, UI-2 option A) — a hub card's tag and sentence for a credited result, in the ORG's locale,
+ * or null. `forfeitTag` is the one reader (lib/forfeit-tag.ts): the outcome, and the ledger as the division read
+ * carries it (`abandon_reason`, the active abandon's — never the status). An abandon's sentence carries the card's own
+ * result sentence (`resultLine`'s `decidedOutcomeText`); a double walkover's names the side its next match was walked
+ * over to, read off the division's own fixtures (`feedsNextMatch`, then `doubleWalkoverNextWinner`).
+ */
+export function hubForfeit(
+  f: PublicFixture,
+  ctx: {
+    byId: ReadonlyMap<string, PublicFixture>;
+    names: Readonly<Record<string, string>>;
+    msg: (key: TKey, vars?: Record<string, string | number>) => string;
+    resultSentence: () => string | null;
+    /** Loop R M-10: fixture id → was anything played before its forfeit (`forfeitPlayedById`, which asks of forfeit
+     *  tags only, never an abandon's). Absent where the hub could not ask, and the card then carries no `played`. */
+    played?: ReadonlyMap<string, boolean>;
+  },
+): (ForfeitWords & { played?: boolean }) | null {
+  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  if (tag === null) return null;
+  const played = ctx.played?.get(f.id);
+  const nameOf = (id: string) => ctx.names[id] ?? "?";
+  const nextWinner =
+    tag.kind === "double_walkover"
+      ? doubleWalkoverNextWinner(
+          feedsNextMatch({ winner_to_fixture: f.winner_to_fixture ?? null, loser_to_fixture: f.loser_to_fixture ?? null }),
+          f.winner_to_fixture ? ctx.byId.get(f.winner_to_fixture) : null,
+        )
+      : null;
+  const words = forfeitWords(tag, (key, vars) => ctx.msg(key, vars), nameOf, {
+    // Review M-2: a HELD abandon (status `abandoned` with a level result in a bracket, owed a settle) has no result
+    // yet — the match centre's rule — so the card never reads finished.
+    result: tag.kind.startsWith("abandoned") && f.status !== "abandoned" ? ctx.resultSentence() : null,
+    next: nextWinner === null ? null : nameOf(nextWinner),
+  });
+  return played === undefined ? words : { ...words, played };
+}
+
+/** A forfeit's tag, not an abandon's (`ForfeitTagKind`: the award reasons and the double walkover, or `abandoned*`). */
+const isForfeitTag = (kind: string): boolean => !kind.startsWith("abandoned");
+
+/**
+ * Loop R M-10 — for each of a division's forfeited fixtures, was anything PLAYED before the forfeit: the engine's one
+ * "played" reader (`fixturesStatsReading` → `playedInStats`, rulings 112/115/118/127) over the fixture's stored ledger,
+ * under the division's own module (ruling 118: chess's Start is play). A walkover, a double walkover and a
+ * disqualification or a withdrawal with nothing played are not; a retirement, and a disqualification or a withdrawal
+ * after play, are; a fixture with no ledger (an award stages.ts writes without an event) is not. Only forfeit-tagged
+ * fixtures are asked, so a division with none reads nothing. Empty when the module is unknown: no claim is made.
+ */
+async function forfeitPlayedById(
+  fixtures: readonly PublicFixture[],
+  division: { sport_key: string; module_version: string },
+  module_: AnySportModule | null,
+): Promise<ReadonlyMap<string, boolean>> {
+  if (module_ === null) return new Map();
+  const forfeited = fixtures.filter((f) => {
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+    return tag !== null && isForfeitTag(tag.kind);
+  });
+  if (forfeited.length === 0) return new Map();
+  const reading = await fixturesStatsReading(
+    sql,
+    forfeited.map((f) => ({ id: f.id, sport_key: division.sport_key, module_version: division.module_version })),
+  );
+  return new Map([...reading].map(([id, r]) => [id, r.played]));
+}
+
 // -------------------------------------------------------------------- sides
 
 export interface HubSideCtx {
@@ -198,11 +269,15 @@ type SidePre = SideT & { isPerson: boolean };
 export function hubSides(
   fixture: Pick<
     PublicFixture,
-    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label" | "outcome"
   >,
   ctx: HubSideCtx,
 ): [SideT, SideT] {
-  const pre = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
+  const pre = (seated: string | null, label: SlotLabel | null, seat: "home" | "away"): SidePre => {
+    // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) is HER side — her name, crest
+    // and colour, drawn the way any walkover draws the side that did not play — never its bye label or the
+    // waiting-slot look (`entrantId === ""`: the "?" crest and muted italic name).
+    const entrantId = seated ?? unseatedForfeitLoser(fixture, seat);
     if (entrantId === null) {
       return {
         entrantId: "",
@@ -253,14 +328,16 @@ const BYE_SLOT_KEY = "bracket.slot.bye";
 export function hubByeSides(
   fixture: Pick<
     PublicFixture,
-    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label" | "outcome"
   >,
 ): [boolean, boolean] {
-  const bye = (entrantId: string | null, label: SlotLabel | null) =>
-    entrantId === null && label?.key === BYE_SLOT_KEY;
+  // R116-1: a seat a walkover was won over (ruling 116's withdrawn winner) keeps the bye label it was stamped with when
+  // it died, but it is no bye — the tie reads as a walkover naming her (`hubSides`).
+  const bye = (entrantId: string | null, label: SlotLabel | null, seat: "home" | "away") =>
+    entrantId === null && label?.key === BYE_SLOT_KEY && unseatedForfeitLoser(fixture, seat) === null;
   return [
-    bye(fixture.home_entrant_id, fixture.home_slot_label),
-    bye(fixture.away_entrant_id, fixture.away_slot_label),
+    bye(fixture.home_entrant_id, fixture.home_slot_label, "home"),
+    bye(fixture.away_entrant_id, fixture.away_slot_label, "away"),
   ];
 }
 
@@ -353,7 +430,11 @@ export function hubHeader(
   generatedAt: string,
 ): MatchCentreHeaderT {
   const { status, live } = hubLiveness(fixture.status);
-  const perSide = fixture.summary?.perSide ?? [];
+  // Audit 3.1: a double walkover credits nobody — its summary's 0 / 0 would read as an unplayed (or a played 0–0)
+  // match, so the card and the draw node show its tag alone, as the schedule does (`schedule.tsx`), through the same
+  // reader (`forfeitTag`).
+  const creditsNobody = forfeitTag(fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason))?.kind === "double_walkover";
+  const perSide = creditsNobody ? [] : (fixture.summary?.perSide ?? []);
   const lineOf = (entrantId: string): string | null =>
     entrantId === "" ? null : (perSide.find((p) => p.entrantId === entrantId)?.line ?? null);
 
@@ -742,6 +823,8 @@ export async function loadCompetitionHub(
       fixtures,
       stageKind: (stageId) => stageById.get(stageId)?.kind,
     });
+    const fixtureById = new Map(fixtures.map((x) => [x.id, x]));
+    const forfeitPlayed = await forfeitPlayedById(fixtures, d, module_);
     for (const f of fixtures) {
       // `seat`, not `slot`: a sibling-fed seat of a `timing: "setup"` bracket
       // has NO stored label, and reading the stored label alone is what put
@@ -797,6 +880,21 @@ export async function loadCompetitionHub(
                 tiebreakScoreFromDetail(f.summary?.detail),
               )
             : null,
+        forfeit: hubForfeit(f, {
+          byId: fixtureById,
+          names,
+          msg,
+          played: forfeitPlayed,
+          resultSentence: () =>
+            decidedOutcomeText(
+              f.outcome,
+              names,
+              ui,
+              shootoutScoreFromDetail(f.summary?.detail),
+              d.sport_key,
+              tiebreakScoreFromDetail(f.summary?.detail),
+            ),
+        }),
       });
     }
 

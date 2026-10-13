@@ -174,13 +174,18 @@ export interface ResultDraftInput {
   /** P3 — optional. Absent (or every field within it absent) must produce
    *  BYTE-IDENTICAL output to a call with no `enrichment` key at all. */
   enrichment?: ResultEnrichment;
+  /** Loop R M-11 — a credited result's house tag in the org's locale ("w/o", "ret.", "Aband. · DLS"; UI-2, the caller
+   *  reads it through `outcomeTagWords`). The title then reads "Home s–s Away (tag)": the score is credited, the tag
+   *  says nobody played it out. Absent or null: byte-identical. */
+  tag?: string | null;
 }
 
-/** Result post: title "Home s–s Away", body = competition line, venue+date,
+/** Result post: title "Home s–s Away" (and its tag, when credited), body = competition line, venue+date,
  *  optional scorers list, optional standings-movement line. */
 export function resultDraft(input: ResultDraftInput): { title: string; bodyMd: string } {
   const s = STRINGS[input.locale];
-  const title = `${input.homeName} ${input.homeScore}${DASH}${input.awayScore} ${input.awayName}`;
+  const score = `${input.homeName} ${input.homeScore}${DASH}${input.awayScore} ${input.awayName}`;
+  const title = input.tag ? `${score} (${input.tag})` : score;
 
   const lines: string[] = [];
   lines.push(`**${input.competitionName}** · ${input.divisionName}`);
@@ -256,7 +261,10 @@ export interface RoundRecapDraftInput {
   divisionName: string;
   /** 1-based (v13 lesson). */
   roundNo: number;
-  results: { homeName: string; homeScore: string; awayName: string; awayScore: string }[];
+  /** Loop R M-11 — `tag`: a credited result's house tag in the org's locale, after its score ("A 3–0 B (w/o)");
+   *  `creditsNobody`: a double walkover, whose tag stands in the score's place ("A 2× w/o B") — its summary's 0–0 is a
+   *  score nobody played (the TV and the hub draw it the same way). Both absent: byte-identical. */
+  results: { homeName: string; homeScore: string; awayName: string; awayScore: string; tag?: string | null; creditsNobody?: boolean }[];
   /** Top of the table (caller slices top-N). */
   standings: { position: number; name: string; played: number; points: number }[];
   /** P3 — optional, same byte-identical-when-absent contract as
@@ -275,7 +283,8 @@ export function roundRecapDraft(input: RoundRecapDraftInput): { title: string; b
   lines.push("");
   lines.push(`**${s.results}**`);
   for (const r of input.results) {
-    lines.push(`- ${r.homeName} ${r.homeScore}${DASH}${r.awayScore} ${r.awayName}`);
+    if (r.creditsNobody && r.tag) lines.push(`- ${r.homeName} ${r.tag} ${r.awayName}`);
+    else lines.push(`- ${r.homeName} ${r.homeScore}${DASH}${r.awayScore} ${r.awayName}${r.tag ? ` (${r.tag})` : ""}`);
   }
   if (input.standings.length > 0) {
     lines.push("");

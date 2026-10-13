@@ -28,11 +28,14 @@ import {
   kernelOwnsEvent,
   reduceLineupEvent,
   resolveVoids,
+  summaryOf,
   type EventEnvelope,
+  type LevelWithdrawal,
   type LineupPair,
   type ScoreSummary,
   type SquadState,
 } from "@seazn/engine/core";
+import { admittedLevelWithdrawal } from "@/lib/level-withdrawal";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { activeInnings, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import {
@@ -321,7 +324,9 @@ function probePointState(args: {
   // point after the handshake.
   if (module.outcome(state) !== null) return undefined;
 
-  const now = module.summary(state);
+  // `summaryOf` like every summary reader: no outcome above means no level result for a withdrawal to be admitted
+  // over (PF-1), and a probe is a module-level hypothetical the kernel never folded — both carry no withdrawal.
+  const now = summaryOf(module, { state, settlement: null, levelWithdrawal: null });
   const closedNow = closedCount(now, sportKey);
   const serving = servingSide(now);
   const gamesNow = gamesOf(now);
@@ -351,7 +356,7 @@ function probePointState(args: {
       // game-award state, an expedite rule). Not a failure — just no answer.
       continue;
     }
-    const then = module.summary(next as never);
+    const then = summaryOf(module, { state: next as never, settlement: null, levelWithdrawal: null });
     let kind: PointState["kind"] | undefined;
     if (module.outcome(next as never)?.kind === "win") kind = "match";
     else if (closedCount(then, sportKey) > closedNow) kind = "set";
@@ -443,9 +448,12 @@ export function replayDerived(args: {
     let state: unknown = module.init(cfg as never, lineups);
     let squads: SquadState = initSquads(lineups);
     if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
-    let previous: ScoreSummary = module.summary(state as never);
     let prevPoint: PointState | undefined;
     let settled = false;
+    // W2b PF-1: a withdrawal the kernel admitted over a held level result is the RESULT from then on (`summaryOf`).
+    let levelWithdrawal: LevelWithdrawal | null = null;
+    const summarise = (): ScoreSummary => summaryOf(module, { state: state as never, settlement: null, levelWithdrawal });
+    let previous: ScoreSummary = summarise();
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
@@ -463,10 +471,18 @@ export function replayDerived(args: {
             if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
           }
         }
+        // W2b PF-1: the one kernel-owned event that changes the RESULT — every summary after it reads the award, and
+        // a decided match is at no point state.
+        const admitted = admittedLevelWithdrawal(event, lineups);
+        if (admitted !== null) {
+          levelWithdrawal = admitted;
+          previous = summarise();
+          prevPoint = undefined;
+        }
         continue;
       }
       state = module.apply(state as never, event as never, { strict: false, squads });
-      const summary = module.summary(state as never);
+      const summary = summarise();
 
       const point =
         i >= probeFrom

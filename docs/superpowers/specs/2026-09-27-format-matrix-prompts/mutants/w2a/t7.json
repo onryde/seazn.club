@@ -17,8 +17,8 @@
   {
     "id": "abandon-before-level",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "  if (has(\"core.abandon\")) return \"abandoned\";\n  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n",
-    "replace": "  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n  if (has(\"core.abandon\")) return \"abandoned\";\n",
+    "find": "  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";\n  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided, nobody seated, closed by a settle.\n  if (levelInBracket) return \"needs_decision\";\n",
+    "replace": "  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided, nobody seated, closed by a settle.\n  if (levelInBracket) return \"needs_decision\";\n  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";\n",
     "killers": [
       {
         "cwd": "apps/web",
@@ -32,8 +32,8 @@
   {
     "id": "level-draw",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"tie\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"tie\" || outcome.kind === \"no_result\");",
     "killers": [
       {
         "cwd": "apps/web",
@@ -47,8 +47,8 @@
   {
     "id": "level-tie",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"draw\" || outcome.kind === \"no_result\");",
     "killers": [
       {
         "cwd": "apps/web",
@@ -62,8 +62,8 @@
   {
     "id": "level-nr",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
-    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"tie\")) return \"needs_decision\";",
+    "find": "forbidsLevelResult(stageKind) && isLevelOutcome(outcome);",
+    "replace": "forbidsLevelResult(stageKind) && (outcome.kind === \"draw\" || outcome.kind === \"tie\");",
     "killers": [
       {
         "cwd": "apps/web",
@@ -465,29 +465,29 @@
   {
     "id": "withdrawal-held-named",
     "file": "apps/web/src/server/usecases/withdrawal.ts",
-    "find": "    case \"needs_decision\":\n      return \"void\";\n",
+    "find": "    case \"needs_decision\":\n      return \"scheduled\";\n",
     "replace": "",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
-          "src/server/engine-db/__tests__/settle-seating.test.ts"
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
         ],
-        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+        "name": "N4: every fixtures\\.status maps as ruled, with and without an active abandon"
       },
       {
         "cwd": "apps/web",
         "files": [
           "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
         ],
-        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+        "name": "X-WD-1 / R14: the W2a holds are walk-overs now"
       }
     ]
   },
   {
     "id": "withdrawal-ended-named",
     "file": "apps/web/src/server/usecases/withdrawal.ts",
-    "find": "    case \"abandoned\":\n    case \"cancelled\":\n      return \"void\";\n",
+    "find": "    case \"abandoned\":\n      return activeAbandon ? \"scheduled\" : \"void\";\n    case \"cancelled\":\n      return \"void\";\n",
     "replace": "",
     "killers": [
       {
@@ -495,7 +495,7 @@
         "files": [
           "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
         ],
-        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+        "name": "N4: every fixtures\\.status maps as ruled, with and without an active abandon"
       }
     ]
   },
@@ -515,50 +515,6 @@
     ]
   },
   {
-    "id": "withdrawal-decider-hold",
-    "file": "apps/web/src/server/usecases/withdrawal.ts",
-    "find": "    return \"void\";\n  }\n  if (SETTLED.has(status)) return \"decided\";",
-    "replace": "    return \"scheduled\";\n  }\n  if (SETTLED.has(status)) return \"decided\";",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
-        ],
-        "name": "D-R1: an in_play fixture whose decider is pending is a hold \\(\"void\"\\), not a pending fixture to walk over"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
-        ],
-        "name": "I-1: chess knockout — a drawn game in its tie-break HOLDS on a withdrawal: the entrant is withdrawn, nobody is walked over, and the organiser's settle seats the remaining entrant"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
-        ],
-        "name": "I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over \\(walkover kinds\\) or voided \\(the others\\); only a pending decider holds"
-      }
-    ]
-  },
-  {
-    "id": "withdrawal-decider-contradiction-throws",
-    "file": "apps/web/src/server/usecases/withdrawal.ts",
-    "find": "    if (status !== \"in_play\") throw new Error(`bracketWithdrawalStatus: a pending decider on a \"${status}\" fixture`);\n",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
-        ],
-        "name": "D-R1: a pending decider on any status but in_play is a contradiction \\(a decider owes no outcome yet and a started, unabandoned game\\) and throws"
-      }
-    ]
-  },
-  {
     "id": "withdrawal-decider-owed-unread",
     "file": "apps/web/src/server/usecases/withdrawal.ts",
     "find": "const owed = f.status === \"in_play\" && (await deciderOwed(auth, sportModule, f.id));",
@@ -569,21 +525,21 @@
         "files": [
           "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
         ],
-        "name": "I-1: chess knockout — a drawn game in its tie-break HOLDS on a withdrawal: the entrant is withdrawn, nobody is walked over, and the organiser's settle seats the remaining entrant"
+        "name": "R14: chess knockout — a drawn game in its tie-break is WALKED OVER on a withdrawal"
       },
       {
         "cwd": "apps/web",
         "files": [
           "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
         ],
-        "name": "I-1 \\(partial cascade\\): pending league games AND a drawn knockout decider — the whole cascade completes: the league games void, the decider holds, the entrant is withdrawn"
+        "name": "I-1 \\(partial cascade\\): pending league games AND a drawn knockout decider — the whole cascade completes"
       },
       {
         "cwd": "apps/web",
         "files": [
           "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
         ],
-        "name": "I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over \\(walkover kinds\\) or voided \\(the others\\); only a pending decider holds"
+        "name": "I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over, and so is a pending decider"
       }
     ]
   },

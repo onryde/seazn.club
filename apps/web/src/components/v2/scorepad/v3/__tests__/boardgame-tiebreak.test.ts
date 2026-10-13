@@ -45,7 +45,7 @@ const winnerKey = (rung: string) => (rung === "armageddon" ? "winner-armageddon"
 const shownFor = (step: GuidedSheetStep, answers: Record<string, string>) => step.when?.(answers) ?? true;
 
 describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-2 per ruling 82, D6)", () => {
-  it("the single-sport reasons in this file hold: of every registry sport, only boardgame declares a decider (awaitingDecider, deciderTypes) or an organiser-only result method", () => {
+  it("the single-sport reasons in this file hold: of every registry sport, only boardgame declares a decider (awaitingDecider, deciderTypes), and since W2b (D15) none declares an organiser-only result method", () => {
     const deciders: string[] = [];
     const organiserMethods: string[] = [];
     let swept = 0;
@@ -58,7 +58,10 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(swept).toBe(builtinModules.length);
     expect(swept, "the registry has more than the one sport").toBeGreaterThan(1);
     expect(deciders).toEqual(["boardgame"]);
-    expect(organiserMethods).toEqual(["boardgame"]);
+    // W2b D15 / W2b-R15: chess's forfeit methods are retired on write for every writer, so the payload-scoped table is
+    // empty and a chess forfeit is a core.forfeit like every other sport's.
+    expect(Object.keys(ORGANISER_ONLY_SPORT_EVENTS)).toEqual([]);
+    expect(organiserMethods).toEqual([]);
   });
 
   it("TIEBREAK_TYPE is the engine's own decider type, not a second spelling", () => {
@@ -329,28 +332,36 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
   const chipIds = (v: PadHostView, payload: Record<string, unknown>) =>
     dockFor(boardgameSkinV3(echo), RESULT_TYPE, v, payload)?.chips.map((c) => c.id) ?? [];
 
-  it("chess: a scorer's decisive dock has no forfeit and the drawn dock no double forfeit; the organiser's has both", () => {
-    // single-sport: only boardgame.result carries an organiser-only method (ORGANISER_ONLY_SPORT_EVENTS); every sport's dock is swept in the last test of this describe
+  it("chess (W2b D15): the organiser's and the scorer's docks are the same chips — no chess method is organiser-only any more, and neither dock offers forfeit or double forfeit", () => {
+    // single-sport: chess was the one sport with a payload-scoped organiser-only method (W2a D-O1); every sport's dock is swept in the last test of this describe
     const scorer = liveView("boardgame", { stageKind: "knockout", canOrganise: false });
     const organiser = liveView("boardgame", { stageKind: "knockout", canOrganise: true });
-    expect(chipIds(organiser, { winner: "H" })).toContain("method:forfeit");
-    expect(chipIds(organiser, { winner: null })).toContain("method:double_forfeit");
-    expect(chipIds(scorer, { winner: "H" })).not.toContain("method:forfeit");
-    expect(chipIds(scorer, { winner: null })).not.toContain("method:double_forfeit");
-    // Only the organiser-only chips go: every other method is still offered.
-    expect(chipIds(scorer, { winner: "H" })).toEqual(chipIds(organiser, { winner: "H" }).filter((id) => id !== "method:forfeit"));
-    expect(chipIds(scorer, { winner: null })).toEqual(chipIds(organiser, { winner: null }).filter((id) => id !== "method:double_forfeit"));
+    let docks = 0;
+    for (const payload of [{ winner: "H" }, { winner: null }]) {
+      const ids = chipIds(organiser, payload);
+      expect(ids.length, JSON.stringify(payload)).toBeGreaterThan(0);
+      expect(chipIds(scorer, payload), JSON.stringify(payload)).toEqual(ids);
+      expect(ids.filter((id) => id === "method:forfeit" || id === "method:double_forfeit"), JSON.stringify(payload)).toEqual([]);
+      docks++;
+    }
+    expect(docks).toBe(2);
   });
 
   it("the dock the host RENDERS is the filtered one (resolveDockSpec reads dockFor)", () => {
-    // single-sport: only boardgame.result carries an organiser-only method (ORGANISER_ONLY_SPORT_EVENTS); every sport's dock is swept in the last test of this describe
-    const skin = boardgameSkinV3(echo);
-    const held = { eventType: RESULT_TYPE, payload: { winner: "H" } };
+    // single-sport: a chassis witness — the sport only supplies a view; the dock under test is a stub (every sport's real dock is swept in the last test of this describe)
+    // W2b: no shipped skin's dock carries an organiser-only chip any more (the sweep below), so the chassis filter is
+    // witnessed on a skin built for it — a dock held over an organiser-only TYPE (core.settle, the server's predicate),
+    // whose every chip is that write. The filter must still drop them for a non-organiser and keep them for an organiser.
+    const base = boardgameSkinV3(echo);
+    const skin = {
+      ...base,
+      dock: () => ({ title: "t", chips: [{ id: "lot", label: "l", mutate: (p: Record<string, unknown>) => ({ ...p, method: "lot" }) }] }),
+    };
+    const held = { eventType: "core.settle", payload: { winner: "H" } };
     const ids = (canOrganise: boolean) =>
       resolveDockSpec(skin, held, liveView("boardgame", { stageKind: "knockout", canOrganise }))?.chips.map((c) => c.id) ?? [];
-    expect(ids(true)).toContain("method:forfeit");
-    expect(ids(false)).not.toContain("method:forfeit");
-    expect(ids(false).length).toBe(ids(true).length - 1);
+    expect(ids(true)).toEqual(["lot"]);
+    expect(ids(false)).toEqual([]);
   });
 
   it("the host builds its view from its props: the stage kind, organiser flag and entrant names reach every skin (source audit)", () => {
@@ -361,13 +372,15 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     expect(src).toContain("[props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
   });
 
-  it("D-P1: the organiser keeps Draw and the double-forfeit chip in every stage kind while live", () => {
+  it("D-P1: the organiser keeps Draw in every stage kind while live; its dock holds no double forfeit (W2b D15)", () => {
     // single-sport: D-P1 is a chess ruling — chess keeps its Draw in every stage kind (a generic bracket drops it: X-DR-1)
     let checked = 0;
     for (const stageKind of ["knockout", "league", "swiss", null]) {
       const organiser = liveView("boardgame", { stageKind, canOrganise: true });
       expect(buildTiles(organiser, echo).some((t) => t.id === DRAW_TILE_ID), String(stageKind)).toBe(true);
-      expect(chipIds(organiser, { winner: null }), String(stageKind)).toContain("method:double_forfeit");
+      const drawn = chipIds(organiser, { winner: null });
+      expect(drawn.length, String(stageKind)).toBeGreaterThan(0);
+      expect(drawn, String(stageKind)).not.toContain("method:double_forfeit");
       checked++;
     }
     expect(checked).toBe(4);
@@ -409,7 +422,9 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
       sports++;
     }
     expect(sports).toBeGreaterThanOrEqual(10);
-    expect(docks).toBeGreaterThan(0);
-    expect(removed, "chess's forfeit and double forfeit were actually removed").toBeGreaterThanOrEqual(2);
+    expect(docks, `docks judged: ${docks}`).toBeGreaterThan(0);
+    // W2b D15: chess's forfeit / double forfeit left the dock for everyone, so the filter removes nothing from any
+    // shipped skin — a chip it removes again is a new organiser-only dock write, and owes its own ruling.
+    expect(removed, "no shipped dock carries an organiser-only chip").toBe(0);
   });
 });

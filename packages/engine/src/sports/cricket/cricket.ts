@@ -18,6 +18,10 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
   type MatchOutcome,
   type ScoreSummary,
   type StageCtx,
@@ -26,6 +30,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -1136,6 +1141,16 @@ function applyRevise(
   // A shrunk quota or lowered target can resolve the match immediately.
   return autoClose(next);
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads cricket's phase through this Record (closed union, so a phase
+ *  added later cannot go unclassified). Cricket has no "abandoned" phase: an abandon decides (`done`). */
+const CRICKET_FORFEIT_PHASE: Record<CricketState["phase"], ForfeitPhase> = {
+  pre: "pre",
+  live: "play",
+  super_over: "play",
+  done: "over",
+  final: "over",
+};
 
 // core.abandon — spec §2.3: no_result below the minimum, DLS par decision
 // beyond it (method 'dls'); 2-innings matches are drawn.
@@ -3522,6 +3537,29 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   );
 }
 
+/** Cricket's ledger keys (`cricket.metrics`); the first five are the NRR operands and the run difference. */
+const CRICKET_LEDGER_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff", "ties", "no_results"] as const;
+const CRICKET_NRR_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff"] as const;
+const zeroCricketLedger = (): Record<string, number> => Object.fromEntries(CRICKET_LEDGER_KEYS.map((key) => [key, 0]));
+
+/**
+ * W2b (spec §5.2; CK-WO-1, PF-6) — every cricket forfeit (a walkover, a retirement or refusal to continue, an in-match
+ * disqualification, a withdrawal) credits the same, and none of what was played: full points to the winner (in
+ * `standingsDelta`), the defaulter charged its FULL quota (`ballsPerInnings × inningsPerSide`) at 0 runs, the winner's
+ * NRR untouched (nothing credited to it at all). Unlimited-overs cricket (`ballsPerInnings` null) has no quota, so NRR
+ * is undefined: the result and its points only, the match excluded from NRR (PF-6, rule CK-WO-2). A bye keeps today's
+ * zeroed ledgers (C-5).
+ */
+function cricketForfeitCredit(cfg: CricketCfg, _state: CricketState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  if (by === "both") return doubleWalkoverCredit(zeroCricketLedger(), zeroCricketLedger(), CRICKET_LEDGER_KEYS);
+  if (reason === "bye") return { perSide: [zeroCricketLedger(), zeroCricketLedger()], excluded: [] };
+  if (cfg.ballsPerInnings === null) {
+    return { perSide: [zeroCricketLedger(), zeroCricketLedger()], excluded: [...CRICKET_NRR_KEYS] };
+  }
+  const quota = cfg.ballsPerInnings * cfg.inningsPerSide;
+  return { perSide: creditFor(by, zeroCricketLedger(), { ...zeroCricketLedger(), balls_faced_eff: quota }), excluded: [] };
+}
+
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   key: "cricket",
   version: "1.0.0",
@@ -3775,11 +3813,15 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       case "core.forfeit": {
         if (state.phase === "done" || state.phase === "final") wrongPhase("match already over");
         const { by, reason } = forfeitOf(ev.payload);
-        const winner = opponent(sideOf(state, by));
+        // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the
+        // closed reason. The table's credit is `forfeitCredit`'s (W2b Task 4).
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" }, margin: null };
+        const loser = sideOf(state, by);
+        const winner = opponent(loser);
         return {
           ...state,
           phase: "done",
-          outcome: { kind: "award", winner: state.entrants[winner], method: reason },
+          outcome: { kind: "award", winner: state.entrants[winner], loser: state.entrants[loser], reason },
           margin: null,
         };
       }
@@ -3797,6 +3839,10 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   },
 
   outcome: (state) => state.outcome,
+  // W2b (plan D3) — see CRICKET_FORFEIT_PHASE. A super over is play (ruling 102 Q5).
+  forfeitPhase: (state) => CRICKET_FORFEIT_PHASE[state.phase],
+  // W2b (spec §5.2) — see cricketForfeitCredit.
+  forfeitCredit: cricketForfeitCredit,
 
   // W4a (#425) T6b — the cross-sport position axis (see `cricketPosition`).
   position: cricketPosition,
@@ -3915,11 +3961,22 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "award": {
-        // Forfeit: full points, no NRR contribution (ICC convention).
+        // Forfeit: full points; W2b (spec §5.2, CK-WO-1) the ledger is `cricketForfeitCredit`'s, never the played one —
+        // laid over a zeroed ledger, so no run that was played reaches NRR.
         const winnerSide = sideOf(state, outcome.winner);
-        const winner = build(winnerSide, 1, 0, 0, cfg.points.win, zeroLedger());
-        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.points.loss, zeroLedger());
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+        const credit = cricketForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+        const winner = build(winnerSide, 1, 0, 0, cfg.points.win, creditedMetrics(zeroLedger(), credit, winnerSide));
+        const loser = build(offender, 0, 0, 1, cfg.points.loss, creditedMetrics(zeroLedger(), credit, offender));
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "double_walkover": {
+        // X-DW-4: both played and lost, no points, no score, out of every ratio.
+        const credit = cricketForfeitCredit(cfg, state, "walkover", "both");
+        return [
+          build("home", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, "home")),
+          build("away", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, "away")),
+        ];
       }
       case "tie": {
         const metrics = (side: Side) => ({ ...ledger(side), ties: 1 });
@@ -3991,6 +4048,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
 
   // spec 03 §6 / PROMPT-05 §9 — generates only legal deliveries.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<CricketEv> | null {
     const pick = <T>(items: readonly T[]): T => items[Math.floor(rng() * items.length)] as T;
 
@@ -4112,7 +4170,13 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     if (roll < 0.006) {
       return {
         type: "core.forfeit",
-        payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: "walkover" },
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once an innings holds a ball,
+        // a run or a wicket (nobody retires from a match never played; before the Start this generator draws only the
+        // toss) — never a walkover, from the roll taken.
+        payload: {
+          by: rng() < 0.5 ? state.entrants.home : state.entrants.away,
+          reason: roll < 0.005 && state.innings.some((i) => i.legalBalls > 0 || i.runs > 0 || i.wickets > 0) ? "retired" : "disqualified",
+        },
       };
     }
     if (roll < 0.012 && state.quota !== null && state.cfg.inningsPerSide === 1) {
@@ -4243,6 +4307,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     }
     return { type: "cricket.ball", payload: generateBall(state, rng) };
   },
+  // Stryker restore all
 
   // §9.6 / spec §2.2 — coarsen: collapse ball runs into innings summaries.
   // cfg-free by design: it emits `partial` snapshots at every boundary and

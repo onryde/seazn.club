@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 1,
+  "layer": "L3",
+  "runs": [
+    "ci-38362040946-1-l3"
+  ],
+  "plannedNotRun": null,
+  "compared": 937,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [
+    {
+      "caseId": "swiss_knockout|football|11-a-side|R4",
+      "was": "works",
+      "now": "red",
+      "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks); life-loop-bounded: play loop exited empty_pair_round"
+    }
+  ],
+  "absent": []
+}

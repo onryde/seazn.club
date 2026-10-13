@@ -23,7 +23,7 @@ import {
   type SideInfo,
   type SportInfo,
 } from "@/components/v2/fixture-console";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this dispatcher
 // renders (S12/#421's flag has been removed entirely, along with the seven
@@ -135,6 +135,8 @@ export function DeviceScorePad({
   initialViewOnly = null,
 }: Props) {
   const msg = useMsg();
+  // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider.
+  const locale = useLocaleOrDefault();
   const [live, setLive] = useState<LiveState>(initialState);
   const [events, setEvents] = useState<PadEventIn[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
@@ -356,6 +358,11 @@ export function DeviceScorePad({
             msg,
             "device.failed",
             err instanceof ApiV1Error ? err.extra : null,
+            // `locale` formats one refusal only — FORFEIT_REASON_WRONG_PHASE's list of admitted reasons — and that is a
+            // refusal of `core.forfeit`, which this pad never sends (design review M-8): it is organiser-only, the
+            // pad's tile grid drops any tile dispatching it and no padSpec declares it (`scorepad/v3/__tests__/
+            // authority-only-tiles.test.ts` pins all three). Passed so the call reads as the console's does.
+            locale,
           ));
         }
         return false;
@@ -363,7 +370,7 @@ export function DeviceScorePad({
         setBusy(false);
       }
     },
-    [authed, fixture.id, live.last_seq, resync, enterCarriedForward],
+    [authed, fixture.id, live.last_seq, resync, enterCarriedForward, msg, locale],
   );
 
   // G1 — this pad's own freshness floor (`useTabReturn`, whose doc carries the

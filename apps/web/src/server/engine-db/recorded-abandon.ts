@@ -3,6 +3,7 @@ import type postgres from "postgres";
 import { isLevelOutcome } from "@seazn/engine/core";
 import type { FixtureStatus } from "@seazn/engine/competition";
 import { engineFixtureStatus } from "@/lib/fixture-engine-status";
+import { ABANDON_RESULT_KINDS, ABANDON_WIN_METHODS } from "@/lib/forfeit-tag";
 
 type Tx = postgres.TransactionSql;
 
@@ -19,13 +20,51 @@ type Tx = postgres.TransactionSql;
  *
  * As SQL: `on` names the `fixtures` row in the enclosing query (an alias, or the table itself). Gated on the status
  * first, so the ledger probe runs only for abandoned rows, not for every row of every pass.
+ *
+ * `{ expunge: true }` (W2b D5, owner ruling 105 / loop-F M-10): only an active abandon that carries `expunge: true` —
+ * a withdrawal's expunge (`withdrawal.ts` `expungeAbandon`), which took the match out of the table altogether, so
+ * nothing is owed on it. The same probe, one more clause: never a second copy of the ledger rule.
  */
-export function hasActiveAbandonSql(tx: Tx, on = "f") {
+/** `postgres.Sql` (a transaction is one too): the public loaders read it on the pool, outside a transaction. */
+export function hasActiveAbandonSql(tx: postgres.Sql | Tx, on = "f", opts: { expunge?: true } = {}) {
   const f = tx(on);
+  const expunged = opts.expunge === true ? tx`and a.payload ->> 'expunge' = 'true'` : tx``;
   return tx`(${f}.status = 'abandoned' and exists (
     select 1 from score_events a
-    where a.fixture_id = ${f}.id and a.type = 'core.abandon'
-      and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)))`;
+    where ${activeAbandonOf(tx, on)} ${expunged}))`;
+}
+
+/** The one ledger rule both probes share: `a` is a `core.abandon` of the row `f` that no `core.void` targets. */
+function activeAbandonOf(tx: postgres.Sql | Tx, on: string) {
+  return tx`a.fixture_id = ${tx(on)}.id and a.type = 'core.abandon'
+      and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)`;
+}
+
+/**
+ * W2b Task 13 (spec §5.4/§5.5, X-AB-2) — the REASON of the row's active `core.abandon`, or null: what the public tag
+ * reads (`forfeitLedgerOfReason` → `forfeitTag`, lib/forfeit-tag.ts). An abandon's tag reads the ledger, never the
+ * status — after ST-G1 an abandon with a result is `decided` like any other, and a rain-reduced chase played out to its
+ * DLS target is `decided` with the same outcome and no abandon at all. So, unlike `hasActiveAbandonSql`, this is NOT
+ * gated on the status. It IS gated on the outcome (review M-3) by the reader's own rule (`abandonKindOf`): a win only
+ * with an abandon's method (`ABANDON_WIN_METHODS`: DLS, the award policy's leader), or a level kind (draw, tie,
+ * no_result). So an ordinary played result — the commonest row on every division read and public cache miss — is never
+ * probed. The latest active abandon wins (the kernel refuses a second once one decided).
+ *
+ * T16 review m3 (X-AB-1): NO outcome is probed too, at status `abandoned` only — where an abandon that decided nobody
+ * lives (the replay policy; R16-3's level abandon where the cfg refuses a draw), and the reader now tags it. A null
+ * outcome at any other status (a scheduled row, the commonest of all) is never probed, and the generator's void at
+ * `abandoned` has no ledger, so it reads null. A withdrawal's EXPUNGE (`expunge: true`) reads null, as the reader's
+ * `forfeitLedgerOf` does: it took the match out of the table, so nothing is owed on it.
+ */
+const ABANDON_LEVEL_KINDS = ABANDON_RESULT_KINDS.filter((kind) => kind !== "win");
+export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
+  const f = tx(on);
+  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})
+                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)}
+                    or (${f}.outcome is null and ${f}.status = 'abandoned') then (
+    select case when a.payload ->> 'expunge' = 'true' then null else a.payload ->> 'reason' end from score_events a
+    where ${activeAbandonOf(tx, on)}
+    order by a.seq desc limit 1) end)`;
 }
 
 /**

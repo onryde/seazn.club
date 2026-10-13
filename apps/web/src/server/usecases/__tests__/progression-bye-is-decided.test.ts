@@ -198,7 +198,8 @@ describe.runIf(HAS_DB)("a progression-seeded bracket's byes are decided, not lef
     // `scheduled` / `null` / `false`, so the run sheet and the bracket panel
     // rendered "E1 vs TBD — awaiting draw" on a match nobody can ever play.
     expect(bye.status, "a bye is settled at generation, never playable").toBe("forfeited");
-    expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id });
+    // W2b C-5 (spec §5.1): a bye names its reason and no loser.
+    expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id, loser: null, reason: "bye" });
     expect(isBye(asRunSheetFixture(bye)), "the screens' own predicate must say bye").toBe(true);
 
     // The REAL match beside it must not have been swept up by the same fix.
@@ -228,7 +229,7 @@ describe.runIf(HAS_DB)("a progression-seeded bracket's byes are decided, not lef
     expect(byes.map((b) => rig.nameOf.get(b.home_entrant_id!)).sort()).toEqual(["E1", "E2", "E3"]);
     for (const bye of byes) {
       expect(bye.status, `bye for ${rig.nameOf.get(bye.home_entrant_id!)}`).toBe("forfeited");
-      expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id });
+      expect(bye.outcome).toEqual({ kind: "award", winner: bye.home_entrant_id, loser: null, reason: "bye" }); // W2b C-5
       expect(isBye(asRunSheetFixture(bye))).toBe(true);
     }
   });

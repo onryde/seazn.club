@@ -125,6 +125,28 @@ const SCOREABLE = new Set(["scheduled", "in_play", "needs_decision"]); // the li
  *  CTA (draft/submitted state chip) that opens the report form inline. */
 function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
   const msg = useMsg();
+  // Design audit 4.1: a side named in an empty seat that WITHDREW (ruling 116) is marked as a departed entrant is in the
+  // ladder (`ladder-panel.tsx`): her name muted, then the entrant status's own word in a chip (slate-600: the ladder's
+  // slate-500 measures 4.3:1 on slate-100). Such a card's names line is the run sheet's withdrawn composition
+  // (`desk/run-sheet-row.tsx`): each name a `min-w-0 truncate` span, the chips and "vs" `shrink-0`, so at 320 the names
+  // shorten and the chip stays whole — one truncating string would cut it and the opponent off.
+  const home = a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd");
+  const away = a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd");
+  const homeGone = a.home_withdrew === true && a.home_name !== null;
+  const awayGone = a.away_withdrew === true && a.away_name !== null;
+  const seatName = (label: string, withdrew: boolean) =>
+    withdrew ? (
+      <>
+        <span className="min-w-0 truncate text-slate-500">{label}</span>
+        <span className="shrink-0">
+          <span data-testid="me-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+            {msg("entrants.status.withdrawn")}
+          </span>
+        </span>
+      </>
+    ) : (
+      <span className="min-w-0 truncate">{label}</span>
+    );
   const [open, setOpen] = useState(false);
   const canReport = a.response === "accepted" && REPORTABLE.has(a.fixture_status);
   const ctaLabel =
@@ -136,14 +158,27 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
   return (
     <li className="card space-y-1 border-l-4 border-l-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-sm text-slate-700">
-          {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
-          <span className="text-slate-400">vs</span>{" "}
-          {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
-          <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
-            {msg("me.off.role", { role: a.role_key })}
-          </span>
-        </p>
+        {homeGone || awayGone ? (
+          <p className="flex min-w-0 items-baseline text-sm text-slate-700">
+            {seatName(home, homeGone)}
+            <span className="mx-1 shrink-0 text-slate-400">{msg("schedule.vs")}</span>
+            {seatName(away, awayGone)}
+            <span className="ml-1 shrink-0">
+              <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
+                {msg("me.off.role", { role: a.role_key })}
+              </span>
+            </span>
+          </p>
+        ) : (
+          <p className="min-w-0 truncate text-sm text-slate-700">
+            {home}{" "}
+            <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
+            {away}{" "}
+            <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
+              {msg("me.off.role", { role: a.role_key })}
+            </span>
+          </p>
+        )}
         {/* `normal-case`, not `.badge`'s `capitalize`: the word is the dictionary's own sentence-case copy now, and
             `capitalize` turned it into title case ("Needs A Decision", "Décision Requise") in every locale. */}
         <span className="badge bg-slate-100 normal-case text-slate-600">{scoreStatusLabel(msg, a.fixture_status)}</span>
@@ -285,7 +320,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-slate-800">
             {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
-            <span className="text-slate-400">vs</span>{" "}
+            <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
             {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
             <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
               {msg("me.off.role", { role: a.role_key })}

@@ -42,6 +42,7 @@ import {
 } from "@/server/api-v1/schemas";
 import { seedOrg as seedOfficialsOrg, seedFutureDivision } from "./_seed";
 import { createOfficial } from "../officials";
+import { msgFor } from "@/lib/messages-i18n";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -849,8 +850,10 @@ describe.skipIf(!HAS_DB)("official conflicts on the board", () => {
 // before the bracket fills in, so the notice must resolve the SAME slot
 // label every other surface already shows for it.
 describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slot labels (F5/Task 9)", () => {
-  it("uses the resolved slot label, not the bare TBD literal, for an unresolved fixture", async () => {
+  /** The notice's label for a day-one fixture moved in an org whose default locale is `locale`. */
+  async function noticeLabel(locale: "en" | "fr"): Promise<string> {
     const { auth } = await seedOfficialsOrg("pro");
+    await sql`update organizations set default_locale = ${locale} where id = ${auth.orgId}`;
     const { division, fixtures } = await seedFutureDivision(auth);
     const fixtureId = fixtures[0]!.id;
     // Day-one placeholder: null entrant ids with a real home_slot_label
@@ -884,9 +887,21 @@ describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slo
 
     const call = sendOfficialAssignmentChangedEmail.mock.calls.find((c) => c[0] === official.email);
     expect(call, "sendOfficialAssignmentChangedEmail was never called for this official").toBeTruthy();
-    const args = call![1] as { label: string };
-    expect(args.label).toBe("Round of 4 vs TBD");
-    expect(args.label).not.toBe("TBD vs TBD");
+    return (call![1] as { label: string }).label;
+  }
+
+  it("uses the resolved slot label, not the bare TBD literal, for an unresolved fixture", async () => {
+    const label = await noticeLabel("en");
+    expect(label).toBe("Round of 4 vs TBD");
+    expect(label).not.toBe("TBD vs TBD");
+  });
+
+  // Design review M-7: the join word was a typed " vs " — every other "A vs B" the product prints is the dictionary's
+  // `schedule.vs`. Only fr differs ("contre"; en, es and nl all say "vs"), so French is the case that can fail.
+  it("joins the two sides with the org locale's own word for vs (fr)", async () => {
+    const fr = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("fr", k, v);
+    expect(fr("schedule.vs"), "premise: French says it differently").not.toBe("vs");
+    expect(await noticeLabel("fr")).toBe(`${fr("bracket.round.roundOf", { n: 4 })} ${fr("schedule.vs")} ${fr("schedule.tbd")}`);
   });
 });
 

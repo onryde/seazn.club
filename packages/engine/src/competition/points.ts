@@ -70,6 +70,8 @@ function bonusesFor(
   outcome: MatchOutcome,
   rule: PointsRule,
 ): number {
+  // D14 (X-DW-4): a double walkover earns no bonus, `forfeit_loss` included — nobody forfeited TO anyone.
+  if (outcome.kind === "double_walkover") return 0;
   let extra = 0;
   const margin = marginOf(delta);
   const forfeit = isForfeit(outcome);
@@ -128,7 +130,8 @@ export function applyPointsRule(
   const forfeit = isForfeit(outcome);
   const mapped = pair.map((delta) => {
     let points: number;
-    if (outcome.kind === "no_result") {
+    // D14 (X-DW-4): a double walkover is a 0-point loss for both, whatever the rule pays a loss or a forfeit loser.
+    if (outcome.kind === "no_result" || outcome.kind === "double_walkover") {
       points = 0;
     } else if (forfeit && rule.forfeit !== undefined) {
       points = delta.won === 1 ? rule.forfeit.winnerPoints : rule.forfeit.loserPoints;
@@ -261,7 +264,8 @@ export function pointsRuleBounds(rule: PointsRule): MatchPointsBounds {
   const wins = [rule.base.win, ...(rule.forfeit ? [rule.forfeit.winnerPoints] : [])];
   const losses = [rule.base.loss, ...(rule.forfeit ? [rule.forfeit.loserPoints] : [])];
   const winFloor = Math.min(...wins) + sum("win", -1);
-  const lossCeil = Math.max(...losses) + sum("loss", 1);
+  // D14 (X-DW-4): a double walkover is a loss that pays 0 and no bonus, so a loss can always land on 0.
+  const lossCeil = Math.max(Math.max(...losses) + sum("loss", 1), 0);
   // Only wins pay, at one amount (MatchPointsBounds.winsOnly): a bonus that
   // can pay anything makes some outcome pay off-rate, so any one turns it off.
   const winsOnly =

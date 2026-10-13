@@ -1049,7 +1049,11 @@ export type PackHistoricalAssignment = z.infer<typeof PackHistoricalAssignment>;
  *  with `EntrantId` replaced by a pack ref. `method` stays a plain string
  *  because the engine's is: modules extend it (`regulation`, `extra_time`,
  *  `shootout`, `super_over`, `dls`, `walkover`, `timeout`, …), and a closed
- *  copy here would reject the next sport that adds one. */
+ *  copy here would reject the next sport that adds one.
+ *
+ *  W2b: the engine's `award` no longer has a `method` — it has a typed
+ *  `reason` and a `loser` — and there is a sixth kind, `double_walkover`. The
+ *  pack mirrors the kinds, NOT every field name: see the award arm. */
 export const PackExpectedOutcome = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("win"),
@@ -1060,41 +1064,53 @@ export const PackExpectedOutcome = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("draw") }),
   z.strictObject({ kind: z.literal("tie") }),
   z.strictObject({ kind: z.literal("no_result") }),
-  /** `method` IS writable here, since 2026-09-11 — and the note that used to
-   *  stand in this place said the opposite, for a good reason that stopped
-   *  being true.
+  /** `method` is writable here, and since W2b it is compared against the
+   *  ENGINE's `reason`.
    *
-   *  It said: the engine's `award` variant is `{kind, winner, score?}` with no
-   *  `method` at all, so a pack writing `{kind: "award", method: "walkover"}`
-   *  would parse and then be UNSATISFIABLE — the comparison reads `undefined`
-   *  from the fold and reds forever — and the fix is to make it unwritable.
-   *  That was correct against the engine of the day. It was also the reason
-   *  suite 11 encoded its walkover as an administrative 1-0, which credited a
-   *  set nobody threw to a real named player's stats.
+   *  History, because the field has changed meaning twice. Until 2026-09-11 the
+   *  engine's `award` was `{kind, winner, score?}` with no `method` at all, so a
+   *  pack writing one would parse and then be UNSATISFIABLE — the comparison read
+   *  `undefined` from the fold and reddened forever — and the field was
+   *  unwritable. Suite 11 therefore encoded its walkover as an administrative
+   *  1-0, which credited a set nobody threw to a real named player's stats. On
+   *  2026-09-11 the engine's award declared a free-text `method`, fed verbatim
+   *  from `core.forfeit`'s `reason`, and this field opened to match.
    *
-   *  `MatchOutcome`'s award variant now declares `method` (`types.ts`), fed
-   *  verbatim from `core.forfeit`'s required `reason` by every sport module
-   *  except boardgame (`packages/engine/src/core/forfeit-reason.test.ts`
-   *  sweeps them). So the field is satisfiable, and a pack that folds a
-   *  forfeit can assert WHY the award happened rather than only that it did.
+   *  W2b (plan D1, D2) replaced that free text. The engine's award is now
+   *  `{kind, winner, loser: EntrantId | null, reason}` with `reason` from the
+   *  closed `AWARD_REASONS` vocabulary (walkover, retired, disqualified,
+   *  withdrew, bye) and NO `method`. This arm keeps the name `method`: packs are
+   *  frozen (`_RULES.md` §4), so every committed pack that writes
+   *  `{kind: "award", method: "walkover"}` must keep parsing byte-identically. A
+   *  rename would be a breaking schema change; the mapping is one line instead.
+   *  Wherever a pack's `method` meets a folded or live outcome it is compared
+   *  against the engine's `reason` — through `packMethodOf`, the one reader — and
+   *  an award with no `method` here asserts no reason, as before.
    *
-   *  A POST-FREEZE SCHEMA CHANGE, declared rather than slipped in: `_RULES.md`
-   *  §4 freezes `PackSchema` at B06b's merge and this lands after it. It is
-   *  additive and optional — every pack written against the frozen shape still
-   *  parses byte-identically — and it exists to let a pack stop asserting
-   *  something false. */
+   *  No `loser` is declared: the pack cannot state one yet, and the award's
+   *  winner already fixes the other side of a two-sided fixture. An outcome
+   *  CLAIM (`PackClaim`) can assert the folded award's `loser` at stage 0.
+   *
+   *  A POST-FREEZE SCHEMA CHANGE, declared rather than slipped in: it is additive
+   *  and optional — every pack written against the frozen shape still parses
+   *  byte-identically. */
   z.strictObject({
     kind: z.literal("award"),
     winner: PackRef,
     method: z.string().min(1).optional(),
   }),
+  /** W2b (Appendix A X-DW-1) — both sides absent: no winner, no loser, no
+   *  method, so nothing to assert but the kind. Mirrors the engine's
+   *  `{kind: "double_walkover"}` exactly; strict, so a field naming a side is
+   *  refused rather than left unsatisfiable against every fold. */
+  z.strictObject({ kind: z.literal("double_walkover") }),
 ]);
 export type PackExpectedOutcome = z.infer<typeof PackExpectedOutcome>;
 
-// Compile-time: the five outcome kinds here are exactly the engine's five. A
-// sixth kind added to `MatchOutcome` reds `tsc` here rather than silently
-// becoming inexpressible in every pack. Non-test file for the same reason as
-// the tiebreaker check above.
+// Compile-time: the outcome kinds here are exactly the engine's (six since W2b's
+// `double_walkover`). A further kind added to `MatchOutcome` reds `tsc` here
+// rather than silently becoming inexpressible in every pack. Non-test file for
+// the same reason as the tiebreaker check above.
 type _OutcomeKindsAreExhaustive = Exclude<
   MatchOutcome["kind"],
   PackExpectedOutcome["kind"]
@@ -1106,6 +1122,19 @@ type _OutcomeKindsAreEngineKinds = PackExpectedOutcome["kind"] extends MatchOutc
   : never;
 export const OUTCOME_KINDS_ARE_EXHAUSTIVE: _OutcomeKindsAreExhaustive = true;
 export const OUTCOME_KINDS_ARE_ENGINE_KINDS: _OutcomeKindsAreEngineKinds = true;
+
+/** What a pack's `method` is compared against, read off an ENGINE outcome: a
+ *  win's `method`, an award's `reason` (W2b renamed it; see the award arm
+ *  above), and `undefined` for every kind that carries neither. THE one reader
+ *  of that mapping, shared by the live oracle (`oracle.ts`) and stage 0
+ *  (`validate-pack.ts`) — the stage-0 sites used to read `"method" in outcome`,
+ *  which tsc cannot flag when the field is renamed and which would have read
+ *  `undefined` off every award, reddening suite 11's walkover. */
+export function packMethodOf(o: MatchOutcome): string | undefined {
+  if (o.kind === "win") return o.method;
+  if (o.kind === "award") return o.reason;
+  return undefined;
+}
 
 /** One side's rendered score line, mirroring the engine's `SideSummary`. */
 export const PackExpectedSideLine = z.strictObject({
@@ -1265,7 +1294,7 @@ export const PackClaim = z.discriminatedUnion("on", [
   z
     .strictObject({
       on: z.literal("outcome"),
-      kind: z.enum(["win", "draw", "tie", "no_result", "award"]).optional(),
+      kind: z.enum(["win", "draw", "tie", "no_result", "award", "double_walkover"]).optional(),
       method: z.string().min(1).max(60).optional(),
       winner: PackRef.optional(),
       loser: PackRef.optional(),

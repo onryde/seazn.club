@@ -114,6 +114,43 @@ export function withdrawalPendingText(): string[] {
   return out;
 }
 
+/** withdrawal.ts bracketWithdrawalStatus, pure (W2b, loop F): the fixtures a BRACKET withdrawal walks over. `pending` is
+ *  every status the planner reads as "scheduled" whatever the ledger: the table's WITHDRAWAL_PENDING_STATUSES (which the
+ *  function reads as PENDING), plus each `case` that returns "scheduled". `ifAbandonActive` is each `case` that returns
+ *  "scheduled" only while an abandon is active (the cascade voids that abandon first). Refused by name when the function
+ *  is not in that shape. */
+export function bracketWithdrawalFrom(text: string, tablePending: readonly string[]): { pending: string[]; ifAbandonActive: string[] } {
+  const fn = /\nexport function bracketWithdrawalStatus\(status: string, activeAbandon: boolean\)[^{]*\{([\s\S]*?)\n\}/.exec(text);
+  if (fn === null) throw new Error("product-text: withdrawal.ts bracketWithdrawalStatus not found in the expected shape");
+  const body = fn[1];
+  if (!/\n {2}if \(PENDING\.has\(status\)\) return "scheduled";/.test(body)) throw new Error("product-text: bracketWithdrawalStatus no longer reads PENDING as scheduled");
+  if (tablePending.length === 0) throw new Error("product-text: bracketWithdrawalStatus — the table's pending set is empty");
+  const always = [...body.matchAll(/case "([a-z_]+)":\s*return "scheduled";/g)].map((x) => x[1]);
+  const ifAbandonActive = [...body.matchAll(/case "([a-z_]+)":\s*return activeAbandon \? "scheduled" : "void";/g)].map((x) => x[1]);
+  return { pending: [...tablePending, ...always], ifAbandonActive };
+}
+export function bracketWithdrawalText(): { pending: string[]; ifAbandonActive: string[] } {
+  return bracketWithdrawalFrom(read("apps/web/src/server/usecases/withdrawal.ts"), withdrawalPendingText());
+}
+
+/** When withdrawal.ts's BRACKET branch (WITHDRAWAL_WALKOVER_KINDS: the bracket kinds, page_playoff, ladder) moves a
+ *  `none` policy to `walkover`. `"acted"` (owner rulings 53 + 106, loop F): only when its planner acted on a line of the
+ *  entrant's (`result.updates` non-empty), so an entrant with nothing pending answers `none`. `"in-stage"` (the text
+ *  before ruling 53): whenever the entrant holds a fixture in the stage. */
+export type BracketPolicyRule = "acted" | "in-stage";
+/** withdrawEntrantCascade's bracket branch, pure: its policy line, read as a BracketPolicyRule. Refused by name when the
+ *  branch is not found, or its policy line is in neither shape — or in both. */
+export function bracketWithdrawalPolicyFrom(text: string): BracketPolicyRule {
+  const branch = /\n {6}\} else if \(WITHDRAWAL_WALKOVER_KINDS\.has\(stage\.kind\)\) \{\n([\s\S]*?)\n {6}\} else \{/.exec(text);
+  if (branch === null) throw new Error("product-text: withdrawal.ts withdrawEntrantCascade has no WITHDRAWAL_WALKOVER_KINDS branch in the expected shape");
+  const acted = /\n\s*if \(out\.policy === "none" && result\.updates\.length > 0\) out\.policy = "walkover";/.test(branch[1]);
+  const inStage = /\n\s*if \(out\.policy === "none"\) out\.policy = "walkover";/.test(branch[1]);
+  if (acted && inStage) throw new Error("product-text: withdrawal.ts's bracket branch moves the policy in both shapes — re-read it");
+  if (!acted && !inStage) throw new Error("product-text: withdrawal.ts's bracket branch moves the policy in no shape this reader knows — re-read it");
+  return acted ? "acted" : "in-stage";
+}
+export const bracketWithdrawalPolicyText = (): BracketPolicyRule => bracketWithdrawalPolicyFrom(read("apps/web/src/server/usecases/withdrawal.ts"));
+
 /** usecases/fixture-results-sql.ts fixtureHasResultSql's status clause, pure: the statuses a rebuild (and history) treat as
  *  PLAYED. Refused by name when the clause is not in the expected shape or names no status. */
 export function fixtureResultStatusesFrom(text: string): string[] {

@@ -2,6 +2,9 @@
 // (core/forfeit-reason.test.ts pins forfeit for all 11 modules), so they are
 // composed here; a sport generator builds a win or a draw (decided) and, where
 // its engine can end level, a tie (tied).
+// W2b (finding 10, D3): a walkover goes in BEFORE core.start — the phase guard refuses one after it — and a
+// retirement or disqualification AFTER core.start and some play (the sport's `partial`). forfeitPosting is the one
+// composition the stream builder and every driver share, so the two cannot drift.
 import { forbidsLevelResult, isLevelOutcome, type MatchOutcome } from "@seazn/engine/core";
 import { foldStream } from "../fold.ts";
 import { drawsAllowed, sportModule } from "../sport-cfg.ts";
@@ -20,6 +23,7 @@ import {
   idOf,
   outcomeLabel,
   type DecidedRequest,
+  type ForfeitReason,
   type SportStreamGenerator,
   type StreamEvent,
   type StreamRequest,
@@ -45,6 +49,70 @@ export const STREAM_GENERATORS = register(
 );
 
 const ABANDON: StreamEvent = Object.freeze({ type: "core.abandon", payload: { reason: "matrix: abandoned" } });
+
+/** W2b (X-DW-1): neither side turned up. The ONE double-walkover event, every sport (chess's double forfeit included,
+ *  BG-DW-1): recorded before START. */
+export const DOUBLE_WALKOVER: StreamEvent = Object.freeze({ type: "core.forfeit", payload: Object.freeze({ by: "both", reason: "walkover" }) });
+
+/** W2b (X-RT-1): `[START, ...partial]` for this request — some play, nothing decided — checked by folding it. A
+ *  partial stream that DECIDES the match is the generator's defect, refused by name rather than posted. */
+export function partialPlay(req: StreamRequest): StreamEvent[] {
+  const gen = STREAM_GENERATORS[req.sportKey];
+  if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "no generator registered");
+  const play = [START, ...gen.partial(req)];
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play).outcome;
+  if (folded !== null) throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the sport's partial play folds to '${folded.kind}' — it must leave the match undecided`);
+  return play;
+}
+
+/** A forfeit the harness would post in a shape the rule refuses on a scheduled fixture — refused by name BEFORE it is
+ *  posted, so the product's refusal is never mistaken for its verdict on a well-formed forfeit (review M-2). */
+export class ForfeitPostingRefused extends Error {
+  override readonly name = "ForfeitPostingRefused";
+  constructor(detail: string) {
+    super(`streams: forfeit posting refused — ${detail}`);
+  }
+}
+
+/** The reasons recorded only AFTER play began (D3 R4: the phase guard refuses one before START), and the ones recorded
+ *  only BEFORE it (D3 R2: a walkover, and a double walkover, after START is refused outside a chess game under way).
+ *  `withdrew` is neither: it is the withdrawal cascade's own reason, written in any phase, never posted by the harness. */
+const IN_PLAY_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
+const PRE_PLAY_REASONS: readonly ForfeitReason[] = ["walkover"];
+
+/** W2b ruling 113 (amends X-RS-1, X-RT-1): nobody retires from a match never played. "Played" is the engine's own
+ *  reading (core/events.ts playRecorded, ruling 112): a sport — non-`core.` — event after START; and (ruling 118) START
+ *  itself where the sport's module declares its Start play (`startIsPlay`: chess, which records no moves). A
+ *  disqualification needs only START; a retirement needs this. Exported for its own test: on the real registry the one
+ *  sport with no partial play is chess, which declares the flag, so generateStream's refusal is reached only here. */
+export function holdsPlay(play: readonly StreamEvent[], module: { readonly startIsPlay?: boolean }): boolean {
+  return play.some((e) => !e.type.startsWith("core.")) || (module.startIsPlay === true && play.some((e) => e.type === START.type));
+}
+
+/** The events a forfeit is posted as, given the fixture's status now — the ONE composition generateStream, the drivers
+ *  and decideFixture share (W2b D3, finding 10). On a fixture already under way the forfeit goes in bare. On a
+ *  SCHEDULED one, `play` goes in before it: START and the sport's partial play for a retirement or a disqualification
+ *  (partialPlay — the phase guard refuses one before play, D3 R4), and nothing for a walkover or a double walkover,
+ *  which are recorded before START (the guard refuses a walkover after it, R2). `by` is an entrant id, or "both".
+ *  On a scheduled fixture, a walkover (or double walkover) WITH play and a retirement or disqualification with NONE
+ *  are refused by name (ForfeitPostingRefused), as is play that does not open with START. Whether the play given is
+ *  enough for a RETIREMENT is the sport's (ruling 113, and ruling 118 for chess's Start): this composition is shared by
+ *  drivers that know no sport, so generateStream judges it (`holdsPlay` with the module) and the product's own guard
+ *  refuses a hand-composed one by name (FORFEIT_REASON_WRONG_PHASE). */
+export function forfeitPosting(status: string, forfeit: { readonly by: string; readonly reason: ForfeitReason }, play: readonly StreamEvent[]): StreamEvent[] {
+  const ev: StreamEvent = { type: "core.forfeit", payload: { by: forfeit.by, reason: forfeit.reason } };
+  if (status !== "scheduled") return [ev];
+  const what = forfeit.by === "both" ? "a double walkover" : `a ${forfeit.reason} forfeit`;
+  if ((forfeit.by === "both" || PRE_PLAY_REASONS.includes(forfeit.reason)) && play.length > 0) {
+    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded before ${START.type}, but ${play.length} event(s) of play were given (D3 R2)`);
+  }
+  if (forfeit.by !== "both" && IN_PLAY_REASONS.includes(forfeit.reason) && play.length === 0) {
+    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded after ${START.type} and some play, but none was given (D3 R4)`);
+  }
+  const first = play.at(0);
+  if (first !== undefined && first.type !== START.type) throw new ForfeitPostingRefused(`the play before a forfeit starts with ${START.type}, not ${first.type}`);
+  return [...play, ev];
+}
 
 /** W2a: where the sport's own win stream DECIDES — the index of the first event after which the real engine
  *  reports an outcome. Found by folding prefixes (never assumed to be the last event), so an abandon cut here
@@ -98,9 +166,16 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
   if (o.kind === "forfeit") {
-    return [START, { type: "core.forfeit", payload: { by: idOf(req, o.by), reason: o.reason } }];
+    const play = o.at === "before_start" ? [] : partialPlay(req);
+    // Ruling 113: a sport whose partial play holds nothing played cannot retire — named here, so a sweep reads it as the
+    // sport's, not the request's. Ruling 118: chess's partial play is START alone, and its Start is play, so it retires.
+    if (o.reason === "retired" && play.length > 0 && !holdsPlay(play, sportModule(req.sportKey))) {
+      throw new OutcomeUnreachable(req.sportKey, label, "ruling 113: nobody retires from a match never played, and the sport's partial play here is START alone (nothing is played short of its result)");
+    }
+    return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, play);
   }
-  if (o.kind === "abandon") return o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
+  if (o.kind === "double_walkover") return [DOUBLE_WALKOVER];
+  if (o.kind === "abandon") return o.afterPartial === true ? [...partialPlay(req), ABANDON] : o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
   if (o.kind === "level") return levelStream(req, gen);
   if (o.kind === "settle") {
     const base = o.after === "level" ? levelStream({ ...req, outcome: { kind: "level" } }, gen) : abandonedAtScore({ ...req, outcome: { kind: "abandon", atScore: true } }, gen);
@@ -155,6 +230,8 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null)
   if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
   if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
   if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
+  if (o.kind === "double_walkover") return outcome.kind === "double_walkover" ? "match" : "mismatch";
+  // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
   const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
-  return (outcome.kind === "award" || outcome.kind === "win") && outcome.winner === beneficiary ? "match" : "mismatch";
+  return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
 }

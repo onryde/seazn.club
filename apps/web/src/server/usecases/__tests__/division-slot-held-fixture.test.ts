@@ -72,7 +72,7 @@ const hasResults = async (divisionId: string) =>
 
 const DRAW = { kind: "draw" };
 const TIE = { kind: "tie" };
-const NO_RESULT = { kind: "no_result", method: "double_forfeit" };
+const NO_RESULT = { kind: "no_result", method: "double_forfeit" }; // legacy (V432) held shape
 
 describe.skipIf(!HAS_DB)("D-F3: a held fixture is a recorded result for division_has_results", () => {
   it("D-F3: a division whose only played fixture is HELD has results; the same division with it still scheduled has none", async () => {

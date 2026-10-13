@@ -84,7 +84,7 @@ function declaredEventTypes(): string[] {
  */
 const SAMPLES: Record<string, Record<string, unknown>> = {
   "core.note": { text: "Crowd noise" },
-  "core.forfeit": { by: "e1", reason: "weather" },
+  "core.forfeit": { by: "e1", reason: "walkover" },
   "core.abandon": { reason: "rain" },
   "core.award": { person: "p1", key: "motm" },
   "football.goal": { by: "p1", minute: 21, penalty: true },
@@ -213,7 +213,7 @@ describe("the activity feed authors no English of its own", () => {
     // Each of these used to be a hardcoded English literal in this module.
     const cases: [string, Record<string, unknown>][] = [
       ["core.void", {}],
-      ["core.forfeit", { by: "e1", reason: "weather" }],
+      ["core.forfeit", { by: "e1", reason: "walkover" }],
       ["core.abandon", { reason: "rain" }],
       ["football.period", { phase: "ET_H1" }],
       ["football.shootout.kick", { by: "p1", scored: false }],

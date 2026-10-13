@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { defaultLineupPair } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
 import { divisionQualification, type QualSnapshot, type QualStage } from "../division-qualification";
 import { divisionAwardAddsToLedger, type QualFixture } from "../qualification-view";
@@ -162,20 +163,22 @@ describe("divisionQualification — the walkover's ledger is the pinned sport's"
   // the walkover wrote goals: if it did not, D's 14 goals came from ONE match
   // (8 fits); if it did, from two (an average of 7, and it does not).
   //
-  // "Ice-hockey-shaped": the generic module with the REAL ice-hockey forfeit
-  // score in its parsed cfg — so the bounds (and every status) are the generic
-  // sport's, and the ONLY difference between the two runs is the flag the
-  // helper derives. The score is read off the ice-hockey module's own parse,
-  // never typed here.
-  const iceAward = (ICEHOCKEY.configSchema.parse({}) as { awardScore?: unknown }).awardScore;
+  // "Ice-hockey-shaped": the generic module with the REAL ice-hockey walkover
+  // CREDIT — so the bounds (and every status) are the generic sport's, and the
+  // ONLY difference between the two runs is the flag the helper derives. W2b
+  // Task 13 (X-WO-1): the helper asks the engine's `forfeitCredit` (what a
+  // walkover credits the table), so the shape carries ice hockey's own credit
+  // laid onto generic's ledger keys (gf/ga/gd → for/against/diff), read off
+  // the ice-hockey module, never typed here. (Before W2b the helper read
+  // `cfg.awardScore`, and this shape injected that into the parsed cfg.)
+  const iceCfg = ICEHOCKEY.configSchema.parse({});
+  const iceSeats = defaultLineupPair(ICEHOCKEY.positions);
   const ICE_SHAPED = {
     ...GENERIC,
-    configSchema: {
-      ...GENERIC.configSchema,
-      safeParse: (cfg: unknown) => {
-        const parsed = GENERIC.configSchema.safeParse(cfg);
-        return parsed.success ? { ...parsed, data: { ...(parsed.data as object), awardScore: iceAward } } : parsed;
-      },
+    forfeitCredit: (_cfg: unknown, _state: unknown, reason: never, by: never) => {
+      const ice = ICEHOCKEY.forfeitCredit(iceCfg, ICEHOCKEY.init(iceCfg, iceSeats), reason, by);
+      const generic = (m: Record<string, number>) => ({ for: m.gf ?? 0, against: m.ga ?? 0, diff: m.gd ?? 0 });
+      return { perSide: [generic(ice.perSide[0]), generic(ice.perSide[1])], excluded: [] };
     },
   } as unknown as AnySportModule;
   const fixtures = [
@@ -195,7 +198,7 @@ describe("divisionQualification — the walkover's ledger is the pinned sport's"
   // the rule reads as plain "difference" whatever module shapes the bounds.
   const RULE = "difference";
 
-  it("premise: ice hockey declares a forfeit score, the shaped module carries it, the generic sport does not", () => {
+  it("premise: ice hockey's walkover credits the table, the shaped module carries that credit, the generic sport's does not", () => {
     expect(divisionAwardAddsToLedger(ICEHOCKEY, {})).toBe(true);
     expect(divisionAwardAddsToLedger(ICE_SHAPED, CFG)).toBe(true);
     expect(divisionAwardAddsToLedger(GENERIC, CFG)).toBe(false);

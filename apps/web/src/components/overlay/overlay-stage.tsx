@@ -32,6 +32,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // must not touch this file, and an import here would be exactly that edit.
 import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "./theme-registry";
 import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
+import { forfeitCopyOf } from "@/lib/forfeit-tag";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -162,6 +163,8 @@ export function OverlayStage(props: OverlayStageProps) {
     clockLabel,
     msg,
     decidedTemplates: props.decidedTemplates,
+    // W2b T13 review M-4: the forfeit sentences come from the public dictionary this stage already holds.
+    forfeitCopy: forfeitCopyOf((key) => props.dict[key] ?? key),
     slateMeta: props.slateMeta,
   });
 

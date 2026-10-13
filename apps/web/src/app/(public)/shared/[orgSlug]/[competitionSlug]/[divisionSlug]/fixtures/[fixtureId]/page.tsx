@@ -37,6 +37,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import { decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { linkOnlyRobots } from "@/lib/competition-listing";
+import { FORFEIT_SENTENCE_KEYS, creditsNobody as outcomeCreditsNobody } from "@/lib/forfeit-tag";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -63,7 +64,19 @@ function decidedLineFor(
   // court card cannot describe one match two ways — which they did, briefly,
   // when only the court card was made sport-aware.
   sportKey: string,
+  // W2b T13 review M-4 — a credited result (a forfeit, a double walkover, an
+  // abandon with its reason) is described by the match centre's OWN status
+  // line, which its builder words from `forfeitTag` with the two facts this
+  // page does not hold (a double walkover's next round, an abandon's result).
+  // Re-deriving it here said "{winner} won" for a walkover and nothing for a
+  // double walkover.
+  matchCentre: MatchCentreDocT,
+  dict: Dict,
 ): string | null {
+  const line = matchCentre.header.statusLine;
+  if (line !== null && (FORFEIT_SENTENCE_KEYS as readonly string[]).includes(line.key)) {
+    return t(dict, line.key, line.params);
+  }
   return decidedOutcomeText(
     fixture.outcome,
     entrantNames,
@@ -72,6 +85,19 @@ function decidedLineFor(
     sportKey,
     tiebreakScoreFromDetail(fixture.summary?.detail),
   );
+}
+
+/** W2b T13 review M-4 — the statuses whose fixture HAS a result to share: a
+ *  forfeited one is over with a credited result (a walkover read "follow it
+ *  live" before). A held fixture (`needs_decision`, an abandon awaiting a
+ *  settle) has none yet. One list for the title and the share text. */
+const RESULT_STATUSES: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
+
+/** A double walkover credits nobody: its summary's 0 — 0 is not a score, so
+ *  no title or description prints it beside the sentence that says so. The
+ *  one predicate every host asks (design review M-1), read off the fixture. */
+function creditsNobody(fixture: { outcome: unknown }): boolean {
+  return outcomeCreditsNobody(fixture.outcome);
 }
 
 /** Appends the decided sentence onto a headline (metadata/share text share
@@ -91,8 +117,8 @@ function withDecidedLine(headline: string | undefined, decidedLine: string | nul
  * fixture the builder could not resolve a header for), so a title never
  * grows a bare "()".
  */
-function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | null {
-  const scoreParts = matchCentre.header.sides
+function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict, scoreless = false): string | null {
+  const scoreParts = (scoreless ? [] : matchCentre.header.sides)
     .map((side, i) => {
       const line = matchCentre.header.scoreLines[i];
       return line ? `${side.short || side.name} ${line}` : null;
@@ -166,12 +192,13 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   const dict = await getDictionary(locale, "public");
   const ui = await getDictionary(locale, "ui");
   const [home, away] = sideNamesFor(data, msgFn);
-  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key);
-  const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
+  const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key, data.matchCentre, dict);
+  const decided = RESULT_STATUSES.has(data.fixture.status);
+  const headline = creditsNobody(data.fixture) ? undefined : data.fixture.summary?.headline;
   // Task 14 acceptance (a) — a decided fixture's title carries both the raw
   // score lines and the result phrase, so a share/search preview shows the
   // final score without opening the page.
-  const scoreAndResult = decided ? scoreAndResultFor(data.matchCentre, dict) : null;
+  const scoreAndResult = decided ? scoreAndResultFor(data.matchCentre, dict, creditsNobody(data.fixture)) : null;
   // Task 14c (task-14b-review.md Remaining-English list) — the "vs"/"at"
   // glue words in this page's <title>/description were hardcoded English in
   // every locale; both are now whole-string templates (`fixture.meta.*`,
@@ -183,7 +210,7 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   return {
     title,
     description:
-      withDecidedLine(data.fixture.summary?.headline, decidedLine) ??
+      withDecidedLine(headline, decidedLine) ??
       t(ui, "fixture.meta.description", { home, away, competition: data.competition.name }),
     // Doc 09 §1: link-only = crawlers out, page up. Unlisted, and — owner
     // decision 2026-09-27 — a DRAFT, which is unlisted until published.
@@ -207,7 +234,7 @@ export default async function FixturePage({ params }: Props) {
 
   const [home, away] = sideNamesFor(data, msgFn);
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
-  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key);
+  const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
 
   const jsonLd = sportsEventJsonLd({
     name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),
@@ -302,12 +329,12 @@ export default async function FixturePage({ params }: Props) {
           <ShareButton
             title={`${home} ${msgFn("schedule.vs")} ${away}`}
             text={shareTextFor(
-              fixture.status === "decided" || fixture.status === "finalized",
+              RESULT_STATUSES.has(fixture.status),
               home,
               away,
               division.name,
               competition.name,
-              withDecidedLine(fixture.summary?.headline, decidedLine),
+              withDecidedLine(creditsNobody(fixture) ? undefined : fixture.summary?.headline, decidedLine),
               ui,
             )}
             url={`${basePath}/fixtures/${fixture.id}`}

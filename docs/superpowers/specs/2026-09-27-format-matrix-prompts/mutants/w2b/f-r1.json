@@ -1,0 +1,467 @@
+[
+ {
+  "id": "r1-i1-stamp-skipped",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "      if (!(leaverDeparted && stamped) && !deadLoserEdge) continue;\n",
+  "replace": "      continue;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-1: a void of the line she won lifts her stamp"
+   }
+  ]
+ },
+ {
+  "id": "r1-i1-started-not-refused",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "      } else if (hasStarted(t)) {\n        const ref = await boardRef(tx, t);",
+  "replace": "      } else if (false) {\n        const ref = await boardRef(tx, t);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-1 guard: a stamped seat whose OWN line was recorded"
+   }
+  ]
+ },
+ {
+  "id": "r1-i1-departure-dw-not-revived",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "      } else if (isCascadeVoid(t) || isDepartureDoubleWalkover(t)) {\n        plan.push({ ...lifted, reset: true });",
+  "replace": "      } else if (isCascadeVoid(t)) {\n        plan.push({ ...lifted, reset: true });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-1: a DEPARTURE double walkover her stamp helped make"
+   }
+  ]
+ },
+ {
+  "id": "r1-i1-departed-winner-seated",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "      const filled = winnerDeparted\n",
+  "replace": "      const filled = false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-1: the walkover her stamp gave is reset"
+   }
+  ]
+ },
+ {
+  "id": "r1-i5-append-old-check",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "doubleWalkoverRefused(stageKind, feedsNextMatch(fixture))",
+  "replace": "doubleWalkoverRefused(stageKind, !(fixture.winner_to_fixture === null && fixture.loser_to_fixture === null))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r1-i5-withdrawal-old-feeds",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "const feeds = feedsNextMatch(step.fixture) || step.bracket.kind === \"ladder\";",
+  "replace": "const feeds = step.fixture.winner_to_fixture !== null || step.fixture.loser_to_fixture !== null || step.bracket.kind === \"ladder\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r1-i5-resolver-old-skip",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "          if (!feedsNextMatch(f)) continue;",
+  "replace": "          if (f.winner_to_fixture === null && f.loser_to_fixture === null) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r1-i5-helper-true",
+  "file": "apps/web/src/lib/bracket-next-match.ts",
+  "find": "  return f.winner_to_fixture !== f.loser_to_fixture;",
+  "replace": "  return true;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-5: a double-elimination grand final WITH a bracket reset"
+   }
+  ]
+ },
+ {
+  "id": "r1-m1-sql-guard",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "            and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})\n            and not exists (select 1 from score_events e\n                            where e.fixture_id = fixtures.id and e.type <> 'core.void'\n                              and not exists (select 1 from score_events v\n                                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id))\n",
+  "replace": "            and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-1: a line with recorded play is never overwritten"
+   }
+  ]
+ },
+ {
+  "id": "r1-m1-live-play",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (false) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-1: a line with recorded play is never overwritten"
+   }
+  ]
+ },
+ {
+  "id": "r1-m2-withdrawal-gone",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": ".filter((e) => DEPARTED_STATUSES.has(e.status))",
+  "replace": ".filter((e) => e.status === \"withdrawn\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 / M-2: an opponent who left by ANY departed status"
+   }
+  ]
+ },
+ {
+  "id": "r1-m2-scoring-loser",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "select id from entrants where id = ${loser} and status in ${tx([...DEPARTED_STATUSES])}",
+  "replace": "select id from entrants where id = ${loser} and status = 'withdrawn'",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-5: a settle never seats a departed loser"
+   }
+  ]
+ },
+ {
+  "id": "r1-m2-stages-loser",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "where e.id::text = fixtures.outcome ->> 'loser' and e.status in ${tx([...DEPARTED_STATUSES])})",
+  "replace": "where e.id::text = fixtures.outcome ->> 'loser' and e.status = 'withdrawn')",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-5: a settle never seats a departed loser"
+   }
+  ]
+ },
+ {
+  "id": "r1-m7-cancelled-open",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled')\n",
+  "replace": "filter (where status not in ('decided', 'forfeited', 'finalized')\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/auto-advance-finished.test.ts"
+    ],
+    "name": "the same with one fixture CANCELLED"
+   }
+  ]
+ },
+ {
+  "id": "r1-m10-expunge-clause-dropped",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "\n                                and not ${hasActiveAbandonSql(tx, \"fixtures\", { expunge: true })})::int as open",
+  "replace": ")::int as open",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/auto-advance-finished.test.ts"
+    ],
+    "name": "an under-50% withdrawal expunges her group fixtures"
+   }
+  ]
+ },
+ {
+  "id": "r1-m10-any-abandon-closes",
+  "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+  "find": "opts.expunge === true ? tx`and a.payload ->> 'expunge' = 'true'` : tx``",
+  "replace": "tx``",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/auto-advance-finished.test.ts"
+    ],
+    "name": "the negative pair: a plain .organiser. abandon"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-never-skipped",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "    return mine.length > 0 && mine.every((f) => f.expunged === true);",
+  "replace": "    return false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view-db.test.ts"
+    ],
+    "name": "F2 on a real pooled stage: a leaver the snapshot FOLDED"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-loader-false",
+  "file": "apps/web/src/server/public-site/data.ts",
+  "find": "${hasActiveAbandonSql(sql, \"x\", { expunge: true })} as expunged",
+  "replace": "false as expunged",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view-db.test.ts"
+    ],
+    "name": "F2 on a real pooled stage: a leaver the snapshot FOLDED"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-in-field-skipped",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "    if (status === undefined || inTheField({ status })) return false;",
+  "replace": "    if (status === undefined) return false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "I-2 .W2b D5.: a DEPARTED member whose every line"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-unreadable-skipped",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "    if (status === undefined || inTheField({ status })) return false;",
+  "replace": "    if (status !== undefined && inTheField({ status })) return false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "I-2 .W2b D5.: a DEPARTED member whose every line"
+   }
+  ]
+ },
+ {
+  "id": "r1-i4-notice-fixture-ids",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "string_agg(distinct f.stage_id::text, ',' order by f.stage_id::text)",
+  "replace": "string_agg(distinct f.id::text, ',' order by f.id::text)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "M-6 fail closed"
+   }
+  ]
+ },
+ {
+  "id": "r1-m4-not-forwarded",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both, ...(named.played === undefined ? {} : { played: named.played }) };",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "every sport, before the start, after a bare start and once something is played"
+   }
+  ]
+ },
+ {
+  "id": "r1-m4-copy-static",
+  "file": "apps/web/src/lib/scoring-vocab.ts",
+  "find": "    const named = forfeitPhaseRefusalOf(extra);\n    if (named) {",
+  "replace": "    const named = forfeitPhaseRefusalOf(extra);\n    if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/scoring-vocab.test.ts"
+    ],
+    "name": "M-4: FORFEIT_REASON_WRONG_PHASE names the phase"
+   }
+  ]
+ },
+ {
+  "id": "r1-m4-both-sentence",
+  "file": "apps/web/src/lib/scoring-vocab.ts",
+  "find": "      return named.both && named.phase === \"tiebreak\"",
+  "replace": "      return false",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/scoring-vocab.test.ts"
+    ],
+    "name": "M-4: FORFEIT_REASON_WRONG_PHASE names the phase"
+   }
+  ]
+ },
+ {
+  "id": "r1-m4-shape-guard",
+  "file": "apps/web/src/lib/forfeit-phase-refusal.ts",
+  "find": "  if (typeof d.both !== \"boolean\") return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "the empty case: an unreadable shape forwards code"
+   }
+  ]
+ },
+ {
+  "id": "r1-m8-no-message",
+  "file": "apps/web/src/components/v2/needs-decision.tsx",
+  "find": "          {choices.length === 0 && (",
+  "replace": "          {false && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/needs-decision.test.tsx"
+    ],
+    "name": "M-8: both sides withdrawn"
+   }
+  ]
+ },
+ {
+  "id": "r1-m6-importer-admitted",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "  if ((cascadeOnlyForfeit || expunge) && writer !== \"withdrawal_cascade\") {",
+  "replace": "  if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/w2b-status.test.ts"
+    ],
+    "name": "PF-2 / M-6: the event importer"
+   }
+  ]
+ },
+ {
+  "id": "r1-r53-walkover-unconditional",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "        if (out.policy === \"none\" && result.updates.length > 0) out.policy = \"walkover\";",
+  "replace": "        if (out.policy === \"none\") out.policy = \"walkover\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "R53"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-embed-false",
+  "file": "apps/web/src/server/embed-data.ts",
+  "find": "${hasActiveAbandonSql(sql, \"x\", { expunge: true })} as expunged",
+  "replace": "false as expunged",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view-db.test.ts"
+    ],
+    "name": "F2 on a real pooled stage: a leaver the snapshot FOLDED"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-console-false",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "${hasActiveAbandonSql(tx, \"f\", { expunge: true })} as expunged",
+  "replace": "false as expunged",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view-db.test.ts"
+    ],
+    "name": "F2 on a real pooled stage: a leaver the snapshot FOLDED"
+   }
+  ]
+ },
+ {
+  "id": "r1-i2-v1-leak",
+  "file": "apps/web/src/app/api/v1/divisions/[id]/fixtures/route.ts",
+  "find": "        expunged: _expunged,\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/api/v1/divisions/[id]/fixtures/__tests__/route.test.ts"
+    ],
+    "name": "does not leak the internal bracket feed columns"
+   }
+  ]
+ }
+]

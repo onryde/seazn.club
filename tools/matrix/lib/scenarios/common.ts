@@ -18,9 +18,9 @@ import {
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
-import { generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
-import { START, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
-import { levelKindOf, loserSeatOf, type BracketDrive } from "../reference-bracket.ts";
+import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
+import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
@@ -550,13 +550,49 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     if (resumed.voidedType !== null && generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
   }
   const fresh = resumed === undefined ? generated : generated.slice(resumed.live);
-  // What the driver actually sends: a forfeit on a fixture already under way
-  // is the bare core.forfeit (http-driver.ts forfeit), so START only when the
-  // fixture is still scheduled.
-  const now = asked.kind === "forfeit" && state.status !== "scheduled" ? fresh.filter((e) => e.type !== START.type) : fresh;
-  const posted = asked.kind === "forfeit"
-    ? await ctx.driver.forfeit(f.id, asked.by === "home" ? home : away, asked.reason, `${ctx.tag}:${f.id}`)
-    : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
+  // W2b (D3, finding 10): a forfeit goes through the driver's forfeit, which composes it as streams/index.ts
+  // forfeitPosting does for the fixture's status NOW — the generated play first on a scheduled fixture (none for a
+  // walkover or a double walkover; START and the sport's partial play for a retirement), the bare forfeit on one under
+  // way. `now` is that same composition, so the local fold, the request match and the declared points are for exactly
+  // the events posted.
+  const forfeit = asked.kind === "forfeit" ? { by: asked.by === "home" ? home : away, reason: asked.reason } : asked.kind === "double_walkover" ? { by: "both", reason: "walkover" as const } : null;
+  // The generated forfeit stream is its play, then the forfeit: anything else is a generator defect, refused by name
+  // rather than split at the wrong event.
+  if (forfeit !== null && fresh.at(-1)?.type !== "core.forfeit") throw new Error(`scenario: ${f.id} — the ${outcomeLabel(asked)} stream ends with ${fresh.at(-1)?.type ?? "nothing"}, not its core.forfeit`);
+  const play = fresh.slice(0, -1);
+  const now = forfeit === null ? fresh : forfeitPosting(state.status, forfeit, play);
+  /** A bracket drive, judged by the bracket-finish oracle (referenceBracketFinish). Its loser and next lines are read
+   *  AFTER the post (the product seats them as it decides), from the stage's own rows. */
+  const bracketDrive = async (o: { status: string | null; outcome: ObservedOutcome | null; live: readonly StreamEvent[] | null; refusal: BracketDrive["refusal"] }): Promise<void> => {
+    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
+    const row = rows.find((r) => r.id === f.id);
+    const missing = { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } as const;
+    rec.bracketDrives.push({
+      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
+      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
+      status: o.status, outcome: o.outcome,
+      loser: row === undefined ? missing : loserSeatOf(stage.kind, stage.config, row, rows),
+      // W2b (I-3): the next-match line (X-DW-3) and the play the forfeit was recorded on, from what the product holds.
+      next: row === undefined ? missing : nextLineOf(stage.kind, stage.config, row, rows),
+      forfeitPlay: forfeit === null || o.live === null ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, o.live),
+      refusal: o.refusal,
+    });
+  };
+  let posted: PostedEvent[];
+  try {
+    posted = forfeit !== null
+      ? await ctx.driver.forfeit(f.id, forfeit.by, forfeit.reason, `${ctx.tag}:${f.id}`, play)
+      : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
+  } catch (e) {
+    // W2b (review I-1): a refused BARE forfeit (one event — a walkover or a double walkover before START — so the
+    // refusal wrote nothing) is still a bracket drive: its refusal is judged against the oracle's (X-DW-3's refusal at
+    // a fixture with no next match among them), the fixture as the product holds it after. Then it propagates.
+    if (forfeit !== null && now.length === 1 && e instanceof RefusedCall && forbidsLevelResult(stage.kind)) {
+      const after = await ctx.driver.fixtureState(f.id);
+      await bracketDrive({ status: after.status, outcome: toObservedOutcome(after.outcome), live: liveEvents([...prior, ...now]), refusal: { status: e.status, code: e.code } });
+    }
+    throw e;
+  }
   // W1c Task 7: the pad path answers each event with the ledger row the
   // product actually stored. Fold those rows, so a browser run is judged on
   // what the product holds and never on what the harness meant to send. A
@@ -576,17 +612,8 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // organiser through the API (X-ST-2); a tie-break is the scorer's, recorded on the pad.
   if (asked.kind === "settle") rec.settlesPosted++;
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
-  if (forbidsLevelResult(stage.kind)) {
-    // The loser line is read AFTER the post (the product seats it as it decides), from the stage's own rows.
-    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
-    const row = rows.find((r) => r.id === f.id);
-    rec.bracketDrives.push({
-      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
-      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
-      status: posted.at(-1)?.status ?? null, outcome: productOutcome,
-      loser: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : loserSeatOf(stage.kind, stage.config, row, rows),
-    });
-  }
+  // A driver that answered nothing leaves no status, and judgeDrive judges no such drive: no play to read.
+  if (forbidsLevelResult(stage.kind)) await bracketDrive({ status: posted.at(-1)?.status ?? null, outcome: productOutcome, live: posted.length === 0 ? null : liveEvents(whole), refusal: null });
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
@@ -884,7 +911,10 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   if (!seatedHome && f.away !== winner) return null;
   const m = sportModule(sport);
   const state: unknown = m.init(cfg, lineupsFor(seatedHome ? winner : BYE_PHANTOM, seatedHome ? BYE_PHANTOM : winner));
-  const award = { kind: "award", winner, ...(f.outcome.method !== undefined ? { method: f.outcome.method } : {}) } as MatchOutcome;
+  // The product's own synthesis (awardByeDelta, W2b C-5): the module is handed the TYPED bye whatever the stored row
+  // carries. A one-sided award's stored loser and reason never reach the delta: owner ruling 116 names a withdrawn
+  // winner as the loser of the tie her dead seat walked over, and she holds no seat in it (no lineup has her).
+  const award = { kind: "award", winner, loser: null, reason: "bye" } as unknown as MatchOutcome;
   const pair = m.standingsDelta(award, cfg, stageCtx(stageKind, { pool_id: f.poolId, round_no: f.roundNo }), state);
   const won = pair.find((d) => d.entrantId === winner);
   if (won === undefined) return null;
@@ -978,5 +1008,7 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     stages,
     withdrawal: extra.withdrawal,
     configEdit: extra.configEdit,
+    // Ruling R16-5: who the product holds as departed, from the entrants' stored status (I2 reads it).
+    departed: (await ctx.driver.listEntrants(setup.division.id)).filter((e) => DEPARTED_STATUSES.includes(e.status)).map((e) => e.id),
   };
 }

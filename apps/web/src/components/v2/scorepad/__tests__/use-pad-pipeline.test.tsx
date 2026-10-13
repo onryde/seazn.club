@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventEnvelope, LineupPair } from "@seazn/engine/core";
 import { defaultLineupPair } from "@seazn/engine/testkit";
+import { resolvePositions } from "@seazn/engine/sport";
 import type { CricketBallEv, CricketCfg, CricketState } from "@seazn/engine/sports/cricket";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { foldClient, resolveModuleClient } from "../module-client";
@@ -237,6 +238,38 @@ function mountPipeline(params: UsePadPipelineParams) {
 }
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+describe("usePadPipeline — W2b PF-1: the headline of a withdrawal over a held level result", () => {
+  // single-sport: football — a bracket's level result (0-0 FT) and a credited forfeit score (FB-WO-1:
+  // `awardScore.goals`–0 at 0-0) that differs from the draw, so the pad's headline can witness the overlay.
+  const env = (seq: number, type: string, payload: unknown): EventEnvelope => ({
+    id: `e-${seq}`,
+    fixtureId: "fx-1",
+    seq,
+    type,
+    payload,
+    recordedAt: `2026-08-12T00:00:0${seq}.000Z`,
+    recordedBy: "user-1",
+  });
+  const footballParams = (withdrawal: boolean) => {
+    const football = resolveModuleClient("football", "1.0.0");
+    const cfg = football.configSchema.parse({}) as { awardScore: { goals: number } };
+    const lineups = defaultLineupPair(resolvePositions(football, cfg));
+    const events = [env(1, "core.start", {}), env(2, "football.period", { phase: "HT" }), env(3, "football.period", { phase: "FT" })];
+    if (withdrawal) events.push(env(4, "core.forfeit", { by: lineups.away.entrantId, reason: "withdrew" }));
+    return { params: baseParams({ module: football, cfg, lineups, initialEvents: events }), goals: cfg.awardScore.goals, football };
+  };
+  it("the away side withdrew: the summary reads the award's credited score while the module state still reads the draw", () => {
+    const { params, goals, football } = footballParams(true);
+    const pad = mountPipeline(params);
+    expect(football.outcome(pad.current.state as never)?.kind, "rig: the module itself still holds the draw").toBe("draw");
+    expect((pad.current.summary as { headline: string }).headline).toBe(`${goals} — 0`);
+  });
+  it("the negative pair: the held draw with no withdrawal reads 0 — 0", () => {
+    const pad = mountPipeline(footballParams(false).params);
+    expect((pad.current.summary as { headline: string }).headline).toBe("0 — 0");
+  });
+});
 
 describe("usePadPipeline — mount", () => {
   it("folds initialEvents into the initial state+summary with an empty queue", () => {

@@ -426,7 +426,7 @@ test("the chrome's own undo, refused after the match ended elsewhere, lands on V
     const forfeit = await apiJson(page.request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
       expected_seq: state.data!.last_seq,
       type: "core.forfeit",
-      payload: { by: fx.homeEntrantId, reason: "no-show" },
+      payload: { by: fx.homeEntrantId, reason: "retired" }, // in play (the phone scored a rally): a retirement
       idempotency_key: crypto.randomUUID(),
     });
     expect(forfeit.status, `the organiser's forfeit: ${JSON.stringify(forfeit.error)}`).toBe(201);

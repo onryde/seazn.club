@@ -184,16 +184,18 @@ function allowsDraws(cfg: GenericCfgShape, stageKind: string | null): boolean {
 /** `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
  *  each accept either, so a fresh fixture is scoreable with no "Start match"
  *  tap and this pad must not pretend otherwise. */
-const POST_PHASES = new Set(["done", "final"]);
+const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 function readPhase(state: GenericStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
 
-/** G3 — the engine's own `pre|live|done|final` mapped DOWN onto `PadPhase`'s
- *  closed three. `core.abandon` folds to phase "done" (generic.ts), so an
- *  abandoned fixture reaches "post" through the same branch a decided one
- *  does, with no extra clause to go untested. */
+/** G3 — the engine's own `pre|live|done|final|abandoned` mapped DOWN onto `PadPhase`'s
+ *  closed three. W2b (D16): `core.abandon` folds to the module's own phase
+ *  "abandoned" (generic.ts), no longer "done" — so it is named in `POST_PHASES`
+ *  beside the decided phases, or an abandoned fixture fell to "live" and offered
+ *  live tiles. `generic.forfeitPhase` calls the same three phases "over"; the
+ *  test pins `post` to that declaration over every phase a real fold reaches. */
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";

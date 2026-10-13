@@ -1,0 +1,152 @@
+[
+  {
+    "id": "dw-points-one",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (outcome.kind === \"no_result\" || outcome.kind === \"double_walkover\") {",
+    "replace": "if (outcome.kind === \"no_result\") {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-4: in a league of 3 a double walkover is P\\+1, L\\+1, 0 points"
+      }
+    ]
+  },
+  {
+    "id": "dw-bonus-applied",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (outcome.kind === \"double_walkover\") return 0;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "D14: a double walkover earns no bonus"
+      }
+    ]
+  },
+  {
+    "id": "dw-loss-ceil-unbounded",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "const lossCeil = Math.max(Math.max(...losses) + sum(\"loss\", 1), 0);",
+    "replace": "const lossCeil = Math.max(...losses) + sum(\"loss\", 1);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points.test.ts"
+        ],
+        "name": "contains every value applyPointsRule awards, for any rule"
+      }
+    ]
+  },
+  {
+    "id": "ranks-dw-one-out",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "return [fixture.home, fixture.away];",
+    "replace": "return [fixture.home];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-2: E2 and E3 double-walk-over in the semi-final"
+      }
+    ]
+  },
+  {
+    "id": "de-forfeit-loser-drops",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "if (!SETTLED.has(fixture.status) || fixture.walkedOver === undefined) continue;",
+    "replace": "if (!SETTLED.has(fixture.status) || fixture.walkedOver !== \"both\") continue;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DE-1: and still in WB round 1 when a losers'-bracket row names it"
+      }
+    ]
+  },
+  {
+    "id": "de-pin-latest",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);",
+    "replace": "if (prev === undefined || fixture.round > prev) outAt.set(id, fixture.round);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DE-1: and still in WB round 1 when a losers'-bracket row names it"
+      }
+    ]
+  },
+  {
+    "id": "de-last-loss-first",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "outAt.get(id) ?? lastLossRound.get(id) ?? -1;",
+    "replace": "lastLossRound.get(id) ?? outAt.get(id) ?? -1;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DE-1: and still in WB round 1 when a losers'-bracket row names it"
+      }
+    ]
+  },
+  {
+    "id": "dw-named-unguarded",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "if (fixture.winner !== undefined || fixture.loser !== undefined) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-2: a double walkover row that names a winner or a loser"
+      }
+    ]
+  },
+  {
+    "id": "forfeit-no-loser-unguarded",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "  if (fixture.loser === undefined) {\n    throw new Error(`bracket fixture ${fixture.id}: a forfeit",
+    "replace": "  if (false) {\n    throw new Error(`bracket fixture ${fixture.id}: a forfeit",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-2: a double walkover row that names a winner or a loser"
+      }
+    ]
+  },
+  {
+    "id": "dw-missing-side-unguarded",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "if (fixture.home === undefined || fixture.away === undefined) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-2: a double walkover row that names a winner or a loser, or a forfeit row that names no loser, is refused"
+      }
+    ]
+  }
+]

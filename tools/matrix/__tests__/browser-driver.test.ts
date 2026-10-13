@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
+import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../apps/web/src/lib/forfeit-phase-refusal.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_NEITHER_TESTID } from "../lib/browser/pages/fixture-console.ts";
+import { FORFEIT_REASONS as ENGINE_FORFEIT_REASONS } from "@seazn/engine/core";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
@@ -23,7 +26,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -100,7 +103,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
       stages: builtFrom(input.row),
     }),
     addEntrantsUi: async (_c, _w, es) => es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind })),
-    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_finalized: 0 }),
+    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_finalized: 0, walked_over_held: 0 }),
     startUi: async (_c, w) => ({ division_id: w.divisionId, status: "active", started: true, generated: 0 }),
     generateUi: async () => ({ created: 0, existing: 0, fixtures: [] }),
     completeStageUi: async () => ({ completed: true, events: [] }),
@@ -2187,26 +2190,203 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 3 }); // score, abandon, settle
   });
 
-  it("both reasons the console's Forfeit authors route to it", async () => {
-    let checked = 0;
-    for (const reason of ["walkover", "retired hurt"] as const) {
+  it("every reason the engine declares routes to the console's Forfeit, except the product's cascade-only ones, which are refused by name (D1, PF-2; review I-1: both lists read, never retyped)", async () => {
+    const cascade: readonly string[] = CASCADE_ONLY_FORFEIT_REASONS;
+    let routed = 0;
+    let refused = 0;
+    for (const reason of ENGINE_FORFEIT_REASONS) {
       const ev: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason } };
       const seen: unknown[] = [];
       const { driver } = make({ http: orgHttp([asRow(3, ev)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push(a[3]); return [answer(3, "forfeited")]; } } });
       await built(driver, spec("knockout"));
+      if (cascade.includes(reason)) {
+        await expect(driver.postStream("f1", [ev], "p"), reason).rejects.toBeInstanceOf(NoOrganiserRoute);
+        expect(seen, reason).toEqual([]);
+        refused++;
+        continue;
+      }
       const posted = await driver.postStream("f1", [ev], "p");
       expect(seen, reason).toEqual([reason]);
       expect(posted.map((x) => x.stored), reason).toEqual([ev]);
-      checked++;
+      routed++;
     }
-    expect(checked).toBe(2);
+    // Anti-vacuity: every engine reason judged, each side of the subtraction non-empty.
+    expect(routed + refused).toBe(ENGINE_FORFEIT_REASONS.length);
+    expect(refused).toBe(cascade.length);
+    expect(routed).toBeGreaterThan(0);
+    expect(refused).toBeGreaterThan(0);
   });
 
-  it("a forfeit on a still-scheduled match answers core.start first: that row is stored too, and only the forfeit's row is compared", async () => {
-    const { driver } = make({ http: orgHttp([asRow(2, START), asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(2, "in_play"), answer(3, "forfeited")] } });
+  it("PF-2: a withdrew forfeit is no console route — the cascade's reason alone, so the browser names it and posts nothing", async () => {
+    const ev: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason: "withdrew" } };
+    const seen: unknown[] = [];
+    const { driver } = make({ http: orgHttp([asRow(3, ev)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push(a[3]); return [answer(3, "forfeited")]; } } });
     await built(driver, spec("knockout"));
-    const posted = await driver.postStream("f1", [FORFEIT], "p");
-    expect(posted.map((x) => x.stored)).toEqual([START, FORFEIT]);
+    await expect(driver.postStream("f1", [ev], "p")).rejects.toThrow(/reason is not one the console's Forfeit authors/);
+    expect(seen).toEqual([]);
+  });
+
+  it("review I-1: the dialog records a walkover or Neither before Start and a forfeit under way — each on the console, no http forfeit and nothing exempt", async () => {
+    const DOUBLE: StreamEvent = { type: "core.forfeit", payload: { by: "both", reason: "walkover" } };
+    const RETIRED: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason: "retired" } };
+    const cases: readonly { name: string; status: string; ev: StreamEvent; run: (d: BrowserDriver) => Promise<unknown> }[] = [
+      { name: "a walkover on a scheduled match, in a stream", status: "scheduled", ev: FORFEIT, run: (d) => d.postStream("f1", [FORFEIT], "a") },
+      { name: "a walkover on a scheduled match, direct", status: "scheduled", ev: FORFEIT, run: (d) => d.forfeit("f1", "e2", "walkover", "b") },
+      { name: "Neither on a scheduled match, in a stream", status: "scheduled", ev: DOUBLE, run: (d) => d.postStream("f1", [DOUBLE], "c") },
+      { name: "Neither on a scheduled match, direct", status: "scheduled", ev: DOUBLE, run: (d) => d.forfeit("f1", "both", "walkover", "d") },
+      { name: "a retirement under way, direct", status: "in_play", ev: RETIRED, run: (d) => d.forfeit("f1", "e2", "retired", "e") },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const forfeits: unknown[][] = [];
+      const seen: unknown[][] = [];
+      const h = stubHttp({
+        listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+        fixtureState: async () => ({ status: c.status, last_seq: 1, outcome: null }),
+        ledger: async (...a: never[]) => [asRow(3, c.ev)].filter((r) => r.seq > (a[1] as number)),
+        forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(2, "forfeited")]; },
+        listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+      });
+      const { driver, pageCalls } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push([a[2], a[3]]); return [answer(3, "forfeited")]; } } });
+      await built(driver, spec("knockout"));
+      expect(driver.paths.forfeit, c.name).toBeUndefined(); // the empty case first
+      await c.run(driver);
+      const p = c.ev.payload as { by: string; reason: string };
+      expect(seen, c.name).toEqual([[p.by, p.reason]]);
+      expect(pageCalls.slice(-2), c.name).toEqual(["openFixtureUi", "forfeitUi"]);
+      expect(forfeits, `${c.name}: no http forfeit`).toEqual([]);
+      expect(h.calls, c.name).not.toContain("postStream");
+      expect(driver.paths.forfeit, c.name).toEqual({ browser: 1, http: 0 });
+      const cov = only(driver, "mixed-driver-coverage");
+      expect(cov.verdict, c.name).toBe("pass");
+      expect(cov.evidence.join("\n"), c.name).not.toContain("forfeit: exempt");
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // Re-review N-1: DW-ALL's refusal probe asks for Neither at a match that feeds no next match (a final, a third-place
+  // match) while the console's turn is open. The dialog withholds Neither there by design (D19) and the page object says
+  // so by name; the driver answers that ONE request over http so the server's 409 is the scenario's RefusedCall.
+  const N1_REFUSAL = () => new RefusedCall("POST", "/api/v1/fixtures/f1/events", 409, "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a match with no next match can't be a double walkover");
+  const n1Http = (forfeits: unknown[][]) => stubHttp({
+    listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+    fixtureState: async () => ({ status: "scheduled", last_seq: 0, outcome: null }),
+    ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
+    forfeit: async (...a: never[]) => { forfeits.push(a); if (a[1] === "both") throw N1_REFUSAL(); return [answer(2, "forfeited")]; },
+    listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+  });
+
+  it("re-review N-1: Neither withheld at a match with no next match is ONE http forfeit, exempt by its own route — the server's 409 propagates as the RefusedCall, and the console's turn stays open", async () => {
+    const forfeits: unknown[][] = [];
+    const asked: string[] = [];
+    const h = n1Http(forfeits);
+    const { driver, pageCalls } = make({
+      http: h, pads: PADS, replay: replayOf([]).fn,
+      pages: { forfeitUi: async (_c, row, by) => { asked.push(by); if (by === "both") throw new ConsoleChoiceNotOffered(row.id, FORFEIT_NEITHER_TESTID, true); return [answer(3, "forfeited")]; } },
+    });
+    await built(driver, spec("knockout"));
+    expect(driver.paths.forfeit).toBeUndefined(); // the empty case first
+    // Two probes (a final and a third-place match): each is the dialog's first, then the server's refusal.
+    let refused = 0;
+    for (const prefix of ["final", "third"]) {
+      const e = await driver.forfeit("f1", "both", "walkover", prefix).then(() => null, (x: unknown) => x);
+      expect(e, prefix).toBeInstanceOf(RefusedCall);
+      expect([(e as RefusedCall).status, (e as RefusedCall).code], prefix).toEqual([409, "DOUBLE_WALKOVER_NO_NEXT_MATCH"]);
+      refused++;
+    }
+    expect(refused).toBe(2);
+    expect(asked, "the console was asked first, each time").toEqual(["both", "both"]);
+    expect(forfeits.map((a) => a.slice(0, 5)), "the same request over http, no play").toEqual([["f1", "both", "walkover", "final", []], ["f1", "both", "walkover", "third", []]]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 2 });
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence).toContain(`forfeit: exempt — → ${NEITHER_WITHHELD_ROUTE.wave}: ${NEITHER_WITHHELD_ROUTE.why}`);
+    // The turn was never used: the next forfeit the dialog offers is the console's.
+    await driver.forfeit("f1", "e2", "walkover", "next");
+    expect(asked).toEqual(["both", "both", "e2"]);
+    expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(3);
+    expect(driver.paths.forfeit).toEqual({ browser: 1, http: 2 });
+    expect(forfeits).toHaveLength(2);
+  });
+
+  it("re-review N-3: a withheld Neither the server ACCEPTS over http is NeitherWithheldButAccepted by name — the dialog hid a choice the product takes, so the case goes red", async () => {
+    const forfeits: unknown[][] = [];
+    const h = stubHttp({
+      listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "scheduled", last_seq: 0, outcome: null }),
+      ledger: async () => [],
+      // The page read "no next match" where the server does not: it takes the double walkover.
+      forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(1, "forfeited")]; },
+      listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+    });
+    const { driver } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (_c, row) => { throw new ConsoleChoiceNotOffered(row.id, FORFEIT_NEITHER_TESTID, true); } } });
+    await built(driver, spec("knockout"));
+    const e = await driver.forfeit("f1", "both", "walkover", "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(NeitherWithheldButAccepted);
+    expect((e as NeitherWithheldButAccepted).fixtureId).toBe("f1");
+    expect((e as Error).message).toMatch(/seq 1/);
+    expect(forfeits.map((a) => a.slice(0, 3)), "the one http forfeit was sent").toEqual([["f1", "both", "walkover"]]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 1 });
+  });
+
+  it("re-review N-1: only Neither withheld WITH the no-next-match guidance falls back — any other withheld choice is the product's finding and propagates by name, with nothing posted over http", async () => {
+    const cases: readonly { name: string; by: string; reason: "walkover" | "retired"; err: ConsoleChoiceNotOffered }[] = [
+      { name: "Neither withheld with no guidance", by: "both", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", FORFEIT_NEITHER_TESTID, false) },
+      { name: "a reason chip withheld beside the guidance", by: "both", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", "forfeit-why-walkover", true) },
+      { name: "a side withheld", by: "e2", reason: "walkover", err: new ConsoleChoiceNotOffered("f1", "forfeit-who-away", true) },
+      { name: "a reason the phase does not admit", by: "e2", reason: "retired", err: new ConsoleChoiceNotOffered("f1", "forfeit-why-retired", false) },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const forfeits: unknown[][] = [];
+      const { driver } = make({ http: n1Http(forfeits), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => { throw c.err; } } });
+      await built(driver, spec("knockout"));
+      await expect(driver.forfeit("f1", c.by, c.reason, "p"), c.name).rejects.toBe(c.err);
+      expect(forfeits, `${c.name}: nothing over http`).toEqual([]);
+      expect(driver.paths.forfeit, c.name).toEqual({ browser: 1, http: 0 });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("review I-1: generated play before a forfeit is the one http forfeit while the console's turn is open — exempt by its route, the play handed to HttpDriver.forfeit, and the turn left open for the next", async () => {
+    const forfeits: unknown[][] = [];
+    const h = stubHttp({
+      listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "in_play", last_seq: 1, outcome: null }),
+      ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
+      forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(1 + forfeits.length, "forfeited")]; },
+      listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+    });
+    const { driver, pageCalls } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    expect(driver.paths.forfeit).toBeUndefined(); // the empty case first
+    await driver.forfeit("f1", "e2", "retired", "c", [START, RESULT]);
+    expect(pageCalls).not.toContain("forfeitUi");
+    expect(forfeits.map((a) => a.slice(0, 3))).toEqual([["f1", "e2", "retired"]]);
+    expect(forfeits[0]![4], "the play reaches HttpDriver.forfeit's own composition").toEqual([START, RESULT]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 1 });
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence).toContain(`forfeit: exempt — → ${FORFEIT_DIALOG_ROUTE.wave}: ${FORFEIT_DIALOG_ROUTE.why}`);
+    // The route names only the play, never a dialog that is not built.
+    expect(FORFEIT_DIALOG_ROUTE.why).toMatch(/play/);
+    expect(FORFEIT_DIALOG_ROUTE.why).not.toMatch(/not built|double walkover|not yet started/);
+    // The next forfeit with no play is the dialog's: the browser's turn was never used up.
+    await driver.forfeit("f1", "e2", "walkover", "e");
+    expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(1);
+    expect(driver.paths.forfeit).toEqual({ browser: 1, http: 1 });
+    expect(h.calls).not.toContain("postStream");
+  });
+
+  it("review I-5: with no forfeit the console could not record, nothing is exempt — a forfeit that only ever ran over http after the browser's turn is not excused by the route", async () => {
+    const { driver } = make({ http: orgHttp([asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [FORFEIT], "a"); // needs_decision (orgHttp): the console's
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence.join("\n")).not.toContain("forfeit: exempt");
   });
 
   it("a forfeit in a stream is the console's Forfeit (the existing route), after the scorer's events", async () => {
@@ -2304,6 +2484,7 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     const forfeits: unknown[][] = [];
     const h = stubHttp({
       listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "in_play", last_seq: 2, outcome: null }),
       ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
       forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(9, "forfeited")]; },
       listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
@@ -2353,6 +2534,15 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     const e = await driver.postStream("f1", [FORFEIT], "p").then(() => null, (x: unknown) => x);
     expect(e).toBeInstanceOf(OrganiserWriteUnproven);
     expect((e as Error).message).toMatch(/answered no event/);
+  });
+
+  it("a console that answered MORE than one event is OrganiserWriteUnproven, never a second row stored uncompared", async () => {
+    // The console answers each act with one event (forfeitUi's one-element list); a page that answered two is named.
+    const { driver } = make({ http: orgHttp([asRow(3, FORFEIT), asRow(4, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited"), answer(4, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    const e = await driver.postStream("f1", [FORFEIT], "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+    expect((e as Error).message).toMatch(/answered 2 events \(seq 3, 4\), want exactly one/);
   });
 
   it("a scorer segment the pad answered only in part ends the stream: its finding is the headline and the organiser's act is not made on a half-played match", async () => {
@@ -2494,25 +2684,46 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     });
   });
 
-  // D-P3 (phase 3 review I-1): a sport's forfeit value (ORGANISER_ONLY_SPORT_EVENTS, D-O1) is organiser-only but is NOT
-  // a console control: the organiser's console mounts the pad with canOrganise, the dock then offers the sport's own
-  // forfeit chips (dockFor, skins/boardgame.tsx), and the harness's session IS the organiser. So it rides the pad with
-  // the scorer's events. The driver used to refuse it as `NoOrganiserRoute: no console control writes it`, a reason
-  // that is false. Expected values come from the product's declared list (every type and value, counted).
-  describe("a sport's forfeit value rides the organiser's pad (D-P3)", () => {
+  // D-P3 (phase 3 review I-1), re-pinned by W2b (spec C-4, ruling 101; D15). A sport's forfeit value the product declares
+  // organiser-only (ORGANISER_ONLY_SPORT_EVENTS, D-O1) is not a console control: the organiser's console mounts the pad
+  // with canOrganise, and the harness's session IS the organiser, so it rides the pad with the scorer's events. Since W2b
+  // the product declares NONE: chess's two forfeit methods are retired on write (refused for every writer, the
+  // organiser included), and a chess forfeit is a core.forfeit like every other sport's. A retired value is therefore
+  // not organiser-only at all. It is the scorer's event, it rides the pad, and the server's own refusal answers it,
+  // never a console control. Expected values: the ruled core types (X-ST-2) and the retired set (C-4), not the code
+  // under test. The items are the product's declared values plus the retired ones, so the sweep is never empty.
+  describe("a sport's forfeit value rides the pad, never a console control (D-P3, W2b C-4)", () => {
     const BG = "boardgame";
-    /** The winner each declared value is posted with: a forfeit has a winner, a double forfeit none. A value the product
-     *  gains owes an entry here, by name, rather than being driven with a guessed payload. */
+    /** X-ST-2 / D-O1: the core types an organiser alone may write, core.forfeit among them. */
+    const RULED_CORE = ["core.abandon", "core.forfeit", "core.settle"] as const;
+    /** W2b spec C-4 / D15: the chess forfeit methods, retired on write. */
+    const RETIRED: Readonly<Record<string, { field: string; values: readonly string[] }>> = { "boardgame.result": { field: "method", values: ["forfeit", "double_forfeit"] } };
+    /** The winner each value is posted with: a forfeit has a winner, a double forfeit none. A value the product gains owes
+     *  an entry here, by name, rather than being driven with a guessed payload. */
     const WINNER: Readonly<Record<string, string | null>> = { forfeit: "e1", double_forfeit: null };
-    const declared = Object.entries(ORGANISER_ONLY_SPORT_EVENTS).flatMap(([type, arm]) => arm.values.map((value) => ({ type, field: arm.field, value })));
+    const valuesOf = (table: typeof RETIRED, organiserOnly: boolean) => Object.entries(table).flatMap(([type, arm]) => arm.values.map((value) => ({ type, field: arm.field, value, organiserOnly })));
+    const declared = valuesOf(ORGANISER_ONLY_SPORT_EVENTS, true);
+    const items = [...declared, ...valuesOf(RETIRED, false)];
+    const eventOf = (i: (typeof items)[number]): StreamEvent => ({ type: i.type, payload: { winner: WINNER[i.value], [i.field]: i.value } });
+
+    it("the organiser-only list is the ruled core types plus the product's sport table, and the table holds no value C-4 retired", () => {
+      expect([...ORGANISER_ONLY_EVENT_TYPES].sort(), "the product's core organiser-only types").toEqual([...RULED_CORE]);
+      let checked = 0;
+      for (const i of valuesOf(RETIRED, false)) {
+        expect(ORGANISER_ONLY_SPORT_EVENTS[i.type]?.values ?? [], `${i.type} ${i.field}=${i.value} is retired on write (C-4), not an organiser privilege`).not.toContain(i.value);
+        expect(isOrganiserOnlyEvent(i.type, eventOf(i).payload), `${i.value}: the product's predicate`).toBe(false);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
 
     it("the pad replays the WHOLE stream, no console control is driven, nothing goes over http, and every answered event carries the row the product holds", async () => {
-      expect(declared.length, "the product declares sport forfeit values").toBeGreaterThan(1);
       let checked = 0;
-      for (const { type, field, value } of declared) {
-        expect(Object.hasOwn(WINNER, value), `${type} ${field}=${value} has no winner in this test's table`).toBe(true);
-        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
-        expect(isOrganiserOnlyEvent(ev.type, ev.payload), `${value} is organiser-only (the premise)`).toBe(true);
+      for (const i of items) {
+        const { type, value } = i;
+        expect(Object.hasOwn(WINNER, value), `${type} ${i.field}=${value} has no winner in this test's table`).toBe(true);
+        const ev = eventOf(i);
+        expect(isOrganiserOnlyEvent(ev.type, ev.payload), `${value}: organiser-only ${i.organiserOnly} (the premise)`).toBe(i.organiserOnly);
         const rows = [asRow(2, START), asRow(3, ev)];
         const r = replayOf(rows);
         const { driver, pageCalls, http } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn });
@@ -2527,35 +2738,69 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
         expect(only(driver, "mixed-driver-coverage"), value).toMatchObject({ verdict: "pass", checked: SETUP + 1 });
         checked++;
       }
-      expect(checked).toBe(declared.length);
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
+    });
+
+    it("a CONFIGURED sport row rides the pad too: a value the product lists as organiser-only is the scorer's event on the pad, never a console control (padAuthored reads the product's table)", async () => {
+      // The product's table is empty since W2b D15, so `items` holds no organiser-only value and never reaches
+      // padAuthored. A row is configured on the product's live table — the one padAuthored and isOrganiserOnlyEvent
+      // read — and removed in `finally`. Its value is deliberately not "forfeit".
+      const BOARDGAME_RESULT_TYPE = "boardgame.result";
+      const table = ORGANISER_ONLY_SPORT_EVENTS as Record<string, { field: string; values: readonly string[] }>;
+      expect(Object.hasOwn(table, BOARDGAME_RESULT_TYPE), "the rig: the type carries no row of its own").toBe(false);
+      const ev: StreamEvent = { type: BOARDGAME_RESULT_TYPE, payload: { winner: "e1", method: "resign" } };
+      table[BOARDGAME_RESULT_TYPE] = { field: "method", values: ["resign"] };
+      try {
+        expect(isOrganiserOnlyEvent(ev.type, ev.payload), "the premise: organiser-only by the configured row").toBe(true);
+        const rows = [asRow(2, START), asRow(3, ev)];
+        const r = replayOf(rows);
+        const { driver, pageCalls, http } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn });
+        await built(driver, spec("knockout", BG));
+        const posted = await driver.postStream("f1", [START, ev], "p");
+        expect(r.calls).toHaveLength(1);
+        expect(r.calls[0]![2]).toEqual([START, ev]);
+        for (const page of ["settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, page).not.toContain(page);
+        expect(http.calls).not.toContain("postStream");
+        expect(posted.map((x) => x.stored)).toEqual([START, ev]);
+      } finally {
+        delete table[BOARDGAME_RESULT_TYPE];
+      }
+      expect(Object.keys(ORGANISER_ONLY_SPORT_EVENTS), "the configured row is removed").toEqual([]);
     });
 
     it("a sport with no pad adapter takes the same event over http whole: the organiser's own session writes it, and no console is opened", async () => {
       let checked = 0;
-      for (const { type, field, value } of declared) {
-        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
+      for (const i of items) {
+        const ev = eventOf(i);
         const { driver, pageCalls } = make({ http: orgHttp([]), spec: spec("knockout", BG), pads: EMPTY_PADS, replay: replayOf([]).fn });
         await built(driver, spec("knockout", BG));
         await driver.postStream("f1", [START, ev], "p");
-        expect(sent.posts, value).toEqual([["core.start", type]]);
-        for (const page of ["openFixtureUi", "settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${value}: ${page}`).not.toContain(page);
+        expect(sent.posts, i.value).toEqual([["core.start", i.type]]);
+        for (const page of ["openFixtureUi", "settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${i.value}: ${page}`).not.toContain(page);
         checked++;
       }
-      expect(checked).toBe(declared.length);
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
     });
 
     it("beside a core.settle the sport forfeit stays with the scorer's events (the pad) and only the settle goes to the console", async () => {
-      const { type, field, value } = declared[0]!;
-      const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
-      const rows = [asRow(2, START), asRow(3, ev), asRow(4, SETTLE)];
-      const r = replayOf(rows.slice(0, 2));
-      const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn, pages: { settleUi: async () => answer(4) } });
-      await built(driver, spec("knockout", BG));
-      const posted = await driver.postStream("f1", [START, ev, SETTLE], "p");
-      expect(r.calls[0]![2]).toEqual([START, ev]);
-      expect(pageCalls).toContain("settleUi");
-      expect(pageCalls).not.toContain("forfeitUi");
-      expect(posted.map((x) => x.stored?.type)).toEqual(["core.start", type, "core.settle"]);
+      let checked = 0;
+      for (const i of items) {
+        const ev = eventOf(i);
+        const rows = [asRow(2, START), asRow(3, ev), asRow(4, SETTLE)];
+        const r = replayOf(rows.slice(0, 2));
+        const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn, pages: { settleUi: async () => answer(4) } });
+        await built(driver, spec("knockout", BG));
+        const posted = await driver.postStream("f1", [START, ev, SETTLE], "p");
+        expect(r.calls[0]![2], i.value).toEqual([START, ev]);
+        expect(pageCalls, i.value).toContain("settleUi");
+        expect(pageCalls, i.value).not.toContain("forfeitUi");
+        expect(posted.map((x) => x.stored?.type), i.value).toEqual(["core.start", i.type, "core.settle"]);
+        checked++;
+      }
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
     });
   });
 

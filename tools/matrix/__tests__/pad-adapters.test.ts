@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
+import { BoardgameMethod, TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -57,7 +57,7 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
   return [
     { kind: "win", winner: "home" }, { kind: "win", winner: "away" },
     ...(drawsAllowed(sport, cfg, "league") ? [{ kind: "draw" } as const] : []),
-    { kind: "forfeit", by: "away", reason: "walkover" },
+    { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" },
     { kind: "abandon" },
   ];
 }
@@ -1329,27 +1329,40 @@ describe("boardgame", () => {
     expect([...emitted].sort()).toEqual(["agreement", "checkmate"]);
   });
 
-  it("route cases (the PRODUCT's own organiser-only values, D-O1/D-P3): every declared forfeit value is tapped on the pad — the winner's half or the draw tile, then its `method:<value>` chip — equal on the ledger, organiser-only by the product's predicate, folded by the engine, and offered by the skin's own dock list", async () => {
+  // W2b (spec C-4, ruling 101; D15): the product's organiser-only boardgame.result values are EMPTY. Chess's two forfeit
+  // methods are retired on write, refused for every writer, and a chess forfeit is a core.forfeit. So the items are the
+  // values the product declares (each tapped on the pad, as D-P3 routes them) plus the values C-4 retired (the engine
+  // still declares them, the predicate no longer gates them, and a legacy stream holding one still folds). The sweep is
+  // never empty, and no retired value is demanded back. The retired half reads no skin list, because loop H's Task 12
+  // takes those chips out of the dock.
+  it("route cases (the PRODUCT's own organiser-only values, D-O1/D-P3, W2b C-4): every declared forfeit value is tapped on the pad — the winner's half or the draw tile, then its `method:<value>` chip — equal on the ledger, organiser-only by the product's predicate, folded by the engine, and offered by the skin's own dock list; every value C-4 retired is declared by the engine, organiser-only no longer, and still folds on replay", async () => {
     const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    /** W2b spec C-4 / D15: the chess forfeit methods, retired on write. */
+    const RETIRED = ["forfeit", "double_forfeit"] as const;
     const arm = ORGANISER_ONLY_SPORT_EVENTS[BOARDGAME_RESULT];
-    expect(arm, "the product declares no organiser-only boardgame.result values").toBeDefined();
-    expect(arm!.field).toBe("method");
+    if (arm !== undefined) expect(arm.field).toBe("method");
+    const declared = arm?.values ?? [];
     const outcomes = padOutcomes(outcomesFor("boardgame", cfg));
     const decisive = listOf("DECISIVE_METHODS");
     const drawn = listOf("DRAWN_METHODS");
     // Each value is offered by exactly one of the skin's docks: that dock decides which tile holds the result (a decisive
     // half, or the draw tile), and the engine decides what the stored row folds to.
-    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "no_result" } };
+    // W2b (spec §5.2 table, boardgame row): a legacy `double_forfeit` now folds to `double_walkover`, not `no_result`.
+    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "double_walkover" } };
+    const streamWith = (value: string, kind: "win" | "draw") => {
+      const base = outcomes.find((o) => o.kind === kind);
+      expect(base, `${value}: the generator builds no ${kind} to start from`).toBeDefined();
+      const r = req("boardgame", cfg, base!);
+      return { r, evs: generateStream(r).map((e) => (e.type === BOARDGAME_RESULT ? { ...e, payload: { ...(e.payload as object), method: value } } : e)) };
+    };
     let checked = 0;
-    for (const value of arm!.values) {
+    for (const value of declared) {
       expect(Object.hasOwn(FOLDS, value), `${value}: no expected fold in this test (a value the product gains owes one)`).toBe(true);
+      expect(RETIRED as readonly string[], `${value} is retired on write (C-4), not an organiser privilege`).not.toContain(value);
       const inDecisive = decisive.includes(value);
       const inDrawn = drawn.includes(value);
       expect(inDecisive !== inDrawn, `${value} must be offered by exactly one dock (decisive ${inDecisive}, drawn ${inDrawn})`).toBe(true);
-      const base = outcomes.find((o) => o.kind === (inDecisive ? "win" : "draw"));
-      expect(base, `${value}: the generator builds no ${inDecisive ? "win" : "draw"} to start from`).toBeDefined();
-      const r = req("boardgame", cfg, base!);
-      const evs = generateStream(r).map((e) => (e.type === BOARDGAME_RESULT ? { ...e, payload: { ...(e.payload as object), method: value } } : e));
+      const { r, evs } = streamWith(value, inDecisive ? "win" : "draw");
       const result = evs.find((e) => e.type === BOARDGAME_RESULT)!;
       expect(isOrganiserOnlyEvent(result.type, result.payload), `${value} is organiser-only (the premise of the route)`).toBe(true);
       const side = (result.payload as { winner: string | null }).winner === null ? null : (result.payload as { winner: string }).winner === HOME ? "home" : "away";
@@ -1363,7 +1376,17 @@ describe("boardgame", () => {
       expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome, value).toMatchObject(FOLDS[value]!);
       checked++;
     }
-    expect(checked).toBe(arm!.values.length);
+    for (const value of RETIRED) {
+      // The engine still declares it: the schema accepts it so a recorded stream replays (spec §5.2).
+      expect(BoardgameMethod.options as readonly string[], `${value}: the engine declares it`).toContain(value);
+      const { evs } = streamWith(value, value === "double_forfeit" ? "draw" : "win");
+      const result = evs.find((e) => e.type === BOARDGAME_RESULT)!;
+      if (value === "double_forfeit") expect((result.payload as { winner: string | null }).winner, value).toBeNull();
+      expect(isOrganiserOnlyEvent(result.type, result.payload), `${value}: retired for every writer, so organiser-only no longer`).toBe(false);
+      expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(evs)).outcome, `${value}: a legacy stream still folds`).toMatchObject(FOLDS[value]!);
+      checked++;
+    }
+    expect(checked).toBe(declared.length + RETIRED.length);
     expect(checked).toBeGreaterThan(1);
   });
 

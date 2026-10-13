@@ -194,9 +194,9 @@ describe.skipIf(!HAS_DB)("patchDivision — a name-policy change expires the org
       `pub:v1:hub:${competitionId}`,
       `pub:v1:div:${adult.id}:entrants-v2`,
       `pub:v1:div:${adult.id}:standings`,
-      ...fixtures.map((f) => `pub:v1:fixture:v2:${f.id}`),
+      ...fixtures.map((f) => `pub:v1:fixture:v3:${f.id}`),
     ];
-    const unrelated = [`pub:v1:div:${other.id}:entrants-v2`, `pub:v1:fixture:v2:00000000-0000-4000-8000-000000000000`];
+    const unrelated = [`pub:v1:div:${other.id}:entrants-v2`, `pub:v1:fixture:v3:00000000-0000-4000-8000-000000000000`];
     redis.clear();
     for (const key of [...named, ...unrelated]) redis.set(key, { cached: "Arun Kumar" });
 

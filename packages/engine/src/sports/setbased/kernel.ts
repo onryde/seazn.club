@@ -26,6 +26,11 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type MetricSpec,
   type ScoreSummary,
@@ -35,8 +40,11 @@ import {
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   personsForEntrant,
+  playedInStats,
+  type StatsPlayDeclaration,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -801,17 +809,25 @@ function applyExpedite(state: SetBasedState): SetBasedState {
 
 // Forfeit — spec 04 §3 / volleyball.md §7: award the match to the opponent;
 // completed sets already stand in the ledger.
-function applyForfeit(state: SetBasedState, by: string, reason: string): SetBasedState {
+function applyForfeit(state: SetBasedState, by: string, reason: ForfeitReason): SetBasedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  const winnerSide = opponent(sideOf(state, by));
+  // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
+  // reason. What the table credits is `forfeitCredit`'s (W2b Task 4), never a score written here.
+  if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads this module's phase through this Record (closed union, so a
+ *  phase added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<SetBasedState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 // Abandon — leave the fixture undecided and flagged for regeneration (mirrors
 // football's replay policy; a gym closure is re-scheduled, not awarded).
@@ -1953,10 +1969,12 @@ function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBas
  * not an exception, the same rule `checkExpedite`/`applyInterruption` follow
  * elsewhere in this file.
  *
- * `matches` needs no cfg at all: it is credited the moment EITHER entrant's
- * event TYPE (a rally or a set summary) appears anywhere in the ledger —
- * both sides of a fixture that was scored at all "played" it, independent of
- * whether either one specifically won a point (see the shutout note below).
+ * `matches` needs no cfg at all: it is `playedInStats` (R115 review M3), the
+ * one players'-stats reader, so both sides of a fixture it calls played are
+ * credited, independent of whether either one specifically won a point (see
+ * the shutout note below) — and of whether anything was scored at all (play
+ * that scores nothing is play, ruling 114; an abandon is a match only after
+ * play, ruling 120).
  *
  * Positional summaries (`{home, away}`, no entrant id) cannot bank a set
  * here: attributing one needs a true home/away label this function never has
@@ -1974,6 +1992,9 @@ function setBasedReplayState(cfg: SetBasedCfg, idX: string, idY: string): SetBas
 function setBasedMatchOutcomesFold(
   preset: SetBasedPreset,
   configSchema: ReturnType<typeof makeConfigSchema>,
+  /** The module this fold belongs to, read when the fold runs: `playedInStats` reads its own declarations (ruling
+   *  120), never a copy. */
+  play: () => StatsPlayDeclaration,
 ): NonNullable<PlayerStatsModel["folded"]> {
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
@@ -2001,11 +2022,9 @@ function setBasedMatchOutcomesFold(
       let state: SetBasedState | undefined = cfgParsed.success
         ? setBasedReplayState(cfgParsed.data, idX, idY)
         : undefined;
-      let played = false;
 
       for (const event of events) {
         if (event.type === rallyType) {
-          played = true;
           if (state === undefined) continue;
           const wonBy = (event.payload as Record<string, unknown>).wonBy;
           if (typeof wonBy !== "string" || (wonBy !== idX && wonBy !== idY)) continue;
@@ -2021,7 +2040,6 @@ function setBasedMatchOutcomesFold(
           continue;
         }
         if (event.type === summaryType) {
-          played = true;
           if (state === undefined) continue;
           const payload = event.payload as Record<string, unknown>;
           const by = payload.by;
@@ -2044,7 +2062,12 @@ function setBasedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      if (played) {
+      // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
+      // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
+      // walkover, a double walkover, and a disqualification, a withdrawal or an abandon with nothing played before it are
+      // none (rulings 115, 120, 127); a retirement, an in-match disqualification, a withdrawal after play (ruling 127) and
+      // an abandon after play are one, scored or not (X-PS-2, ruling 114).
+      if (playedInStats(events, play())) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -2146,7 +2169,14 @@ function mergePlayerStats(
 export type SetBasedModule = SportModule<SetBasedCfg, SetBasedEv, SetBasedState> &
   SetBasedServeSource;
 
-export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
+export function makeSetBasedModule(
+  preset: SetBasedPreset,
+  /** The module this call returns, as the caller's own binding (`makeSetBasedModule({...}, () => volleyball)`, as tennis
+   *  hands `() => tennis` to `makeNestedModule` and hockey hands `() => hockey` to its keeper fold): the matches fold reads
+   *  its declarations when it runs (ruling 120), never a copy. A thunk the caller owns lets the module stay the returned
+   *  object literal the Stryker split names (`makeSetBasedModule.onLineup`). */
+  self: () => StatsPlayDeclaration,
+): SetBasedModule {
   const configSchema = makeConfigSchema(preset.defaults);
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
@@ -2244,7 +2274,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
         }
       : undefined;
 
-  // Award/forfeit points = a clean-sweep win pair: "*" (or the first entry).
+  // A bye's points = a clean-sweep win pair: "*" (or the first entry). A forfeit pays its credited score (X-WO-1).
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
     cfg.pointsMap["*"] ?? Object.values(cfg.pointsMap)[0] ?? [1, 0];
 
@@ -2263,6 +2293,67 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     points_won: totalPoints(state, side),
     points_lost: totalPoints(state, opponent(side)),
   });
+
+  /**
+   * W2b (spec §5.2; VB/TT/BD-WO-1, VB/TT/BD-RT-1) — what a forfeit credits, from cfg and the sets in state.
+   *
+   * WALKOVER: the sets the winner needs (⌈bestOf/2⌉), each `setTo`-0 — FIVB 6.4.1 "0-25 every set", so `setTo` and
+   * never `finalSetTo`; ITTF and BWF likewise.
+   * RETIREMENT, in-match disqualification, a withdrawal (PF-7): every closed set stands; the open set completes for
+   * the winner at max(its target, the retiree's points + winBy), capped; every further set the winner still needs is
+   * credited at that set's own target, 0 (the deciding set's `finalSetTo`, FIVB 6.4.3); the retiree keeps everything
+   * it won. With no set in state (before the start, or after a Start with nothing played — ruling 112/113) this is the
+   * walkover credit, `setTo`-0 every set: a Best of 1's only set is the deciding one, so `setTarget` would read
+   * `finalSetTo` there (R112 review I-1: volleyball Bo1 credited 15-0 against the walkover's 25-0).
+   */
+  const setBasedForfeitCredit = (cfg: SetBasedCfg, state: SetBasedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
+    const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
+    if (by === "both") return doubleWalkoverCredit(played[0], played[1], makeMetrics(preset.unitLabel).map((m) => m.key));
+    if (reason === "bye") return { perSide: played, excluded: [] };
+    const winner = opponent(by);
+    const need = majority(cfg.bestOf);
+    const sets = { home: 0, away: 0 };
+    const points = { home: 0, away: 0 };
+    if (reason !== "walkover") {
+      sets.home = state.setsWon.home;
+      sets.away = state.setsWon.away;
+      state.sets.forEach((set, index) => {
+        points.home += set.home;
+        points.away += set.away;
+        if (set.closed) return;
+        const completed = Math.max(setTarget(cfg, index), set[by] + cfg.winBy);
+        points[winner] += (cfg.cap === null ? completed : Math.min(completed, cfg.cap)) - set[winner];
+        sets[winner] += 1;
+      });
+    }
+    // Every further set the winner still needs is credited at ITS OWN target (FIVB 6.4.3, review M-7): the deciding
+    // set at `finalSetTo` once the count reaches it. A walkover is 0-25 every set (FIVB 6.4.1), so it keeps `setTo`.
+    let next = reason === "walkover" || state.sets.length === 0 ? null : state.sets.length;
+    while (sets[winner] < need) {
+      sets[winner] += 1;
+      points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);
+    }
+    const record = (side: Side) => ({
+      sets_won: sets[side],
+      sets_lost: sets[opponent(side)],
+      points_won: points[side],
+      points_lost: points[opponent(side)],
+    });
+    return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };
+  };
+
+  /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
+   *  `setBasedForfeitCredit` `standingsDelta` lays over the table), the sets won otherwise. A bye needs no branch: its
+   *  credit IS the played tally (C-5). Mirrors football's `displayedGoals`: the headline and the table cannot
+   *  disagree, a walkover never reads 0–0, and a retiree who led on sets never reads as leading the match it lost. */
+  const displayedSets = (state: SetBasedState): { home: number; away: number } => {
+    const outcome = state.outcome;
+    if (outcome?.kind !== "award") return state.setsWon;
+    const reason = awardReasonOf(outcome);
+    const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+    const credit = setBasedForfeitCredit(state.cfg, state, reason, offender);
+    return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
+  };
 
   return {
     key: preset.key,
@@ -2287,7 +2378,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     playerStats: mergePlayerStats(
       {
         metrics: [setBasedPointsWonMetric(rallyType)],
-        folded: setBasedMatchOutcomesFold(preset, configSchema),
+        folded: setBasedMatchOutcomesFold(preset, configSchema, self),
       },
       preset.playerStats,
     ),
@@ -2376,6 +2467,9 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     },
 
     outcome: (state) => state.outcome,
+    forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+    // W2b (spec §5.2) — see setBasedForfeitCredit.
+    forfeitCredit: setBasedForfeitCredit,
 
     // W4a (#425) T6b — the cross-sport position axis (see `setBasedPosition`).
     position: setBasedPosition,
@@ -2396,11 +2490,13 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       // tally ("1 — 0 · 21–15 (14–11)") so rally scoring is visible too.
       const open = openSet(state);
       const inSet = open === null ? "" : ` (${open.set.home}–${open.set.away})`;
+      // A forfeit reads its credited sets (X-WO-1); the played strip and points beside them stay as played.
+      const sets = displayedSets(state);
       return {
-        headline: `${state.setsWon.home} — ${state.setsWon.away}${setLine}${inSet}`,
+        headline: `${sets.home} — ${sets.away}${setLine}${inSet}`,
         perSide: [
-          { entrantId: state.entrants.home, line: `${state.setsWon.home}` },
-          { entrantId: state.entrants.away, line: `${state.setsWon.away}` },
+          { entrantId: state.entrants.home, line: `${sets.home}` },
+          { entrantId: state.entrants.away, line: `${sets.away}` },
         ],
         detail: {
           sets: state.sets.map((set) => ({ home: set.home, away: set.away, closed: set.closed })),
@@ -2449,12 +2545,35 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
         }
         case "award": {
-          // Forfeit: clean-sweep pair to keep the total inside declaredPointsSets.
+          // W2b (spec §5.2) the CREDITED sets and points (`setBasedForfeitCredit`) over the played ledger, and X-WO-1
+          // ("the same credited score is used in the table…") the table points of that credited set score — FIVB 6.4.3:
+          // an incomplete team keeps its sets, so an indoor retirement credited 3-2 pays the 3-2 pair, as the `win`
+          // branch would. The credit always gives the winner exactly ⌈bestOf/2⌉ sets and the offender fewer, i.e. a
+          // decided score, so its pair is a pointsMap value (inside declaredPointsSets). A map that prices neither that
+          // score nor "*" refuses nothing at fold time: the forfeit folds and is recorded, and it is THIS standings read
+          // that throws (INVALID_EVENT, from matchPoints) — exactly as it throws for a played match ending on that score.
+          // A bye credits no score (C-5: exactly the pre-W2b bye delta) and keeps the clean-sweep pair.
           const winnerSide = sideOf(state, outcome.winner);
-          const [wp, lp] = cleanSweepPair(cfg);
-          const winner = build(winnerSide, 1, 0, wp);
-          const loser = build(opponent(winnerSide), 0, 1, lp);
+          const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+          const reason = awardReasonOf(outcome);
+          const credit = setBasedForfeitCredit(cfg, state, reason, offender);
+          // The table's own sets_won: the credit laid over the played ledger, exactly as `creditedMetrics` lays it.
+          const credited = (side: Side) => credit.perSide[side === "home" ? 0 : 1].sets_won ?? state.setsWon[side];
+          const [wp, lp] =
+            reason === "bye" ? cleanSweepPair(cfg) : matchPoints(cfg, credited(winnerSide), credited(offender));
+          const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+            ...build(side, w, l, pts),
+            metrics: creditedMetrics(sideMetrics(state, side), credit, side),
+          });
+          const winner = at(winnerSide, 1, 0, wp);
+          const loser = at(offender, 0, 1, lp);
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "double_walkover": {
+          // X-DW-4: both played and lost, no points, no score, out of every ratio.
+          const credit = setBasedForfeitCredit(cfg, state, "walkover", "both");
+          const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side), credit, side) });
+          return [at("home"), at("away")];
         }
         // Set-based sports always produce a winner (§3.3 supportsDraws = false);
         // abandon leaves the outcome null, so no draw/tie/no_result reaches here.
@@ -2473,8 +2592,8 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     // W2a: none — a set-based match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),
 
-    // §9.3 — every decided fixture pays a pointsMap value-sum (award reuses the
-    // clean-sweep pair, whose sum is already present).
+    // §9.3 — every decided fixture pays a pointsMap value-sum (a forfeit pays its
+    // credited score's pair, a bye the clean-sweep pair — both pointsMap values).
     declaredPointsSets(cfg) {
       return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
     },
@@ -2489,6 +2608,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     // spec 03 §6 — deterministic generator. Summary-dominant so best-of-N
     // matches decide within the conformance event budget; rally bursts exercise
     // the point-by-point path and coarsen (§9.6).
+    // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
     arbitraryEvent(state, rng: Rng): ModuleEvent<SetBasedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
@@ -2579,7 +2699,10 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       }
       const roll = rng();
       if (roll < 0.02) {
-        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: "walkover" } };
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a set holds a point
+        // (nobody retires from a match never played) — never a walkover, from the roll taken.
+        const played = state.sets.some((s) => s.home + s.away > 0);
+        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
       }
       if (roll < 0.04) return { type: "core.abandon", payload: { reason: "venue closed" } };
       if (roll < 0.14) return { type: rallyType, payload: rallyPayload() };
@@ -2591,6 +2714,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
         payload: { home: homeWins ? hi : lo, away: homeWins ? lo : hi },
       };
     },
+    // Stryker restore all
 
     // §9.6 — collapse a rally stream into per-set summaries. Completed sets emit
     // a non-partial entrant-keyed summary; a trailing open set emits a `partial`

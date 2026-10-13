@@ -1,0 +1,872 @@
+{
+  "schemaVersion": 3,
+  "runId": "w2b-repro2-new-ab-award",
+  "harnessCommit": "59a743308",
+  "startedAt": "2026-10-09T21:39:16.044Z",
+  "finishedAt": "2026-10-09T21:40:18.845Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L3",
+  "driver": "http",
+  "plan": "--set w1-driving --scenario AB-AWARD",
+  "workers": 4,
+  "cases": [
+    {
+      "caseId": "league|football|11-a-side|AB-AWARD",
+      "row": "league",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "AB-AWARD",
+      "canary": false,
+      "state": "red",
+      "reason": "I3-table-points-equal-declared: 505b3963-a5fe-49fa-9e86-abfdabe85d9a: table 11, declared Σ 15; w2b-abandon-with-result: 49569439-eaf5-491c-82af-4acee18055f2 (leading): abandoned {\"kind\":\"award\",\"winner\":\"505b3963-a5fe-49fa-9e86-abfdabe85d9a\",\"loser\":null,\"reason\":\"\"}, wanted decided win{505b3963-a5fe-49fa-9e86-abfdabe85d9a, method abandoned}; w2b-abandon-in-table: 505b3963-a5fe-49fa-9e86-abfdabe85d9a: won 3≠4, points 11≠15, drawn 2≠3",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 8,
+          "reason": "505b3963-a5fe-49fa-9e86-abfdabe85d9a: table 11, declared Σ 15",
+          "evidence": [
+            "505b3963-a5fe-49fa-9e86-abfdabe85d9a: table 11, declared Σ 15",
+            "5f0e17e5-6da7-4b9b-a0e2-a70550d5cc8f: table 6, declared Σ 7"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 56,
+          "reason": "56 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-abandon-with-result",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "49569439-eaf5-491c-82af-4acee18055f2 (leading): abandoned {\"kind\":\"award\",\"winner\":\"505b3963-a5fe-49fa-9e86-abfdabe85d9a\",\"loser\":null,\"reason\":\"\"}, wanted decided win{505b3963-a5fe-49fa-9e86-abfdabe85d9a, method abandoned}",
+          "evidence": [
+            "49569439-eaf5-491c-82af-4acee18055f2 (leading): abandoned {\"kind\":\"award\",\"winner\":\"505b3963-a5fe-49fa-9e86-abfdabe85d9a\",\"loser\":null,\"reason\":\"\"}, wanted decided win{505b3963-a5fe-49fa-9e86-abfdabe85d9a, method abandoned}",
+            "f2d02901-0f61-4939-8f66-5c08dbd9d66e (level): abandoned {\"kind\":\"no_result\"}, wanted decided draw (a level abandon in a table)"
+          ]
+        },
+        {
+          "id": "w2b-abandon-in-table",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 3,
+          "reason": "505b3963-a5fe-49fa-9e86-abfdabe85d9a: won 3≠4, points 11≠15, drawn 2≠3",
+          "evidence": [
+            "505b3963-a5fe-49fa-9e86-abfdabe85d9a: won 3≠4, points 11≠15, drawn 2≠3",
+            "0133640c-1566-4972-b2ee-95f8f77aa991: lost 5≠6",
+            "5f0e17e5-6da7-4b9b-a0e2-a70550d5cc8f: drawn 3≠4, points 6≠7"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 246,
+        "fixtures": 28,
+        "events": 103
+      },
+      "durationMs": 57421,
+      "notes": [
+        "stage league status after start: active",
+        "lineups: 56 PUT across 28 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "league|cricket|t20|AB-AWARD",
+      "row": "league",
+      "sport": "cricket",
+      "variant": "t20",
+      "scenario": "AB-AWARD",
+      "canary": false,
+      "state": "red",
+      "reason": "I3-table-points-equal-declared: 5f73a268-aba1-428e-88df-ea4b56ac1621: table 10, declared Σ 11; w2b-abandon-with-result: d84b8755-66fb-4831-8ff7-08c7e3029f8f (past_min_overs): abandoned {\"kind\":\"win\",\"winner\":\"5104ee61-1602-470f-8747-0211f838e0e4\",\"method\":\"dls\"}, wanted decided win{method dls} or tie (past the minimum overs); w2b-abandon-in-table: 5f73a268-aba1-428e-88df-ea4b56ac1621: lost 0≠1, points 10≠11, metrics.no_results 0≠1",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 8,
+          "reason": "5f73a268-aba1-428e-88df-ea4b56ac1621: table 10, declared Σ 11",
+          "evidence": [
+            "5f73a268-aba1-428e-88df-ea4b56ac1621: table 10, declared Σ 11",
+            "fea675bb-9639-4f53-ba1d-470e54c7c6b5: table 2, declared Σ 3",
+            "5104ee61-1602-470f-8747-0211f838e0e4: table 0, declared Σ 2"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 56,
+          "reason": "56 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-abandon-with-result",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "d84b8755-66fb-4831-8ff7-08c7e3029f8f (past_min_overs): abandoned {\"kind\":\"win\",\"winner\":\"5104ee61-1602-470f-8747-0211f838e0e4\",\"method\":\"dls\"}, wanted decided win{method dls} or tie (past the minimum overs)",
+          "evidence": [
+            "d84b8755-66fb-4831-8ff7-08c7e3029f8f (past_min_overs): abandoned {\"kind\":\"win\",\"winner\":\"5104ee61-1602-470f-8747-0211f838e0e4\",\"method\":\"dls\"}, wanted decided win{method dls} or tie (past the minimum overs)",
+            "c1a16632-f9bf-4e10-a522-e34aa82f58b5 (before_min_overs): abandoned {\"kind\":\"no_result\"}, wanted decided no_result (CK-AB-2)"
+          ]
+        },
+        {
+          "id": "w2b-abandon-in-table",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 3,
+          "reason": "5f73a268-aba1-428e-88df-ea4b56ac1621: lost 0≠1, points 10≠11, metrics.no_results 0≠1",
+          "evidence": [
+            "5f73a268-aba1-428e-88df-ea4b56ac1621: lost 0≠1, points 10≠11, metrics.no_results 0≠1",
+            "5104ee61-1602-470f-8747-0211f838e0e4: won 0≠1, points 0≠2",
+            "fea675bb-9639-4f53-ba1d-470e54c7c6b5: points 2≠3, metrics.no_results 0≠1"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 228,
+        "fixtures": 28,
+        "events": 85
+      },
+      "durationMs": 52812,
+      "notes": [
+        "stage league status after start: active",
+        "lineups: 56 PUT across 28 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "league|icehockey|iihf|AB-AWARD",
+      "row": "league",
+      "sport": "icehockey",
+      "variant": "iihf",
+      "scenario": "AB-AWARD",
+      "canary": false,
+      "state": "red",
+      "reason": "I3-table-points-equal-declared: 63a78970-f13d-42e9-ac18-39402facc4f6: table 15, declared Σ 19; w2b-abandon-with-result: bbb0a965-75da-4b4f-ba49-15f60f1fc42d (leading): abandoned {\"kind\":\"award\",\"winner\":\"63a78970-f13d-42e9-ac18-39402facc4f6\",\"loser\":null,\"reason\":\"\"}, wanted decided win{63a78970-f13d-42e9-ac18-39402facc4f6, method abandoned}; w2b-abandon-in-table: 63a78970-f13d-42e9-ac18-39402facc4f6: won 5≠6, points 15≠19, drawn 0≠1",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 8,
+          "reason": "63a78970-f13d-42e9-ac18-39402facc4f6: table 15, declared Σ 19",
+          "evidence": [
+            "63a78970-f13d-42e9-ac18-39402facc4f6: table 15, declared Σ 19",
+            "da69b07b-db3e-4544-ae04-6153cb128171: table 3, declared Σ 4"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 56,
+          "reason": "56 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-abandon-with-result",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "bbb0a965-75da-4b4f-ba49-15f60f1fc42d (leading): abandoned {\"kind\":\"award\",\"winner\":\"63a78970-f13d-42e9-ac18-39402facc4f6\",\"loser\":null,\"reason\":\"\"}, wanted decided win{63a78970-f13d-42e9-ac18-39402facc4f6, method abandoned}",
+          "evidence": [
+            "bbb0a965-75da-4b4f-ba49-15f60f1fc42d (leading): abandoned {\"kind\":\"award\",\"winner\":\"63a78970-f13d-42e9-ac18-39402facc4f6\",\"loser\":null,\"reason\":\"\"}, wanted decided win{63a78970-f13d-42e9-ac18-39402facc4f6, method abandoned}",
+            "2c115d6d-218d-4a5f-b14b-d0db90a85cf4 (level): abandoned {\"kind\":\"no_result\"}, wanted decided draw (a level abandon in a table)"
+          ]
+        },
+        {
+          "id": "w2b-abandon-in-table",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 3,
+          "reason": "63a78970-f13d-42e9-ac18-39402facc4f6: won 5≠6, points 15≠19, drawn 0≠1",
+          "evidence": [
+            "63a78970-f13d-42e9-ac18-39402facc4f6: won 5≠6, points 15≠19, drawn 0≠1",
+            "7fb205f7-af83-481e-9c03-c55c9739b677: lost 6≠7",
+            "da69b07b-db3e-4544-ae04-6153cb128171: drawn 0≠1, points 3≠4"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 282,
+        "fixtures": 28,
+        "events": 139
+      },
+      "durationMs": 59122,
+      "notes": [
+        "stage league status after start: active",
+        "lineups: 56 PUT across 28 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    },
+    {
+      "caseId": "league|hockey|fih-outdoor|AB-AWARD",
+      "row": "league",
+      "sport": "hockey",
+      "variant": "fih-outdoor",
+      "scenario": "AB-AWARD",
+      "canary": false,
+      "state": "red",
+      "reason": "I3-table-points-equal-declared: afa22189-91a0-4c64-8770-ced62041a672: table 11, declared Σ 15; w2b-abandon-with-result: a1ace4cd-3d5c-4fdd-991b-452d5af11b5f (leading): abandoned {\"kind\":\"award\",\"winner\":\"afa22189-91a0-4c64-8770-ced62041a672\",\"loser\":null,\"reason\":\"\"}, wanted decided win{afa22189-91a0-4c64-8770-ced62041a672, method abandoned}; w2b-abandon-in-table: afa22189-91a0-4c64-8770-ced62041a672: won 3≠4, points 11≠15, drawn 2≠3",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 8,
+          "reason": "afa22189-91a0-4c64-8770-ced62041a672: table 11, declared Σ 15",
+          "evidence": [
+            "afa22189-91a0-4c64-8770-ced62041a672: table 11, declared Σ 15",
+            "f005324d-7d9b-410e-bf69-a8df69fc3fc2: table 6, declared Σ 7"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 37,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 28,
+          "reason": "28 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 56,
+          "reason": "56 ok",
+          "evidence": []
+        },
+        {
+          "id": "w2b-abandon-with-result",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "a1ace4cd-3d5c-4fdd-991b-452d5af11b5f (leading): abandoned {\"kind\":\"award\",\"winner\":\"afa22189-91a0-4c64-8770-ced62041a672\",\"loser\":null,\"reason\":\"\"}, wanted decided win{afa22189-91a0-4c64-8770-ced62041a672, method abandoned}",
+          "evidence": [
+            "a1ace4cd-3d5c-4fdd-991b-452d5af11b5f (leading): abandoned {\"kind\":\"award\",\"winner\":\"afa22189-91a0-4c64-8770-ced62041a672\",\"loser\":null,\"reason\":\"\"}, wanted decided win{afa22189-91a0-4c64-8770-ced62041a672, method abandoned}",
+            "d960b00c-b40d-4340-83ae-d19ccca262f6 (level): abandoned {\"kind\":\"no_result\"}, wanted decided draw (a level abandon in a table)"
+          ]
+        },
+        {
+          "id": "w2b-abandon-in-table",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 3,
+          "reason": "afa22189-91a0-4c64-8770-ced62041a672: won 3≠4, points 11≠15, drawn 2≠3",
+          "evidence": [
+            "afa22189-91a0-4c64-8770-ced62041a672: won 3≠4, points 11≠15, drawn 2≠3",
+            "a992427b-1f5d-4ee0-a3c2-2095ceea67c8: lost 5≠6",
+            "f005324d-7d9b-410e-bf69-a8df69fc3fc2: drawn 3≠4, points 6≠7"
+          ]
+        }
+      ],
+      "counts": {
+        "calls": 300,
+        "fixtures": 28,
+        "events": 157
+      },
+      "durationMs": 59464,
+      "notes": [
+        "stage league status after start: active",
+        "lineups: 56 PUT across 28 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    }
+  ]
+}

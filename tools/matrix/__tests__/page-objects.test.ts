@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
-import { FINALIZE_TESTID, FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_CONFIRM_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import {
   LandedElsewhere, READS_ONLY, REACT_PROPS_KEY, REPLACEMENTS_MAX, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitHydrated, awaitScreen, boundActions,
@@ -23,7 +23,7 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_DIALOG_TESTID, FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID, FORFEIT_NEITHER_TESTID, ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
@@ -907,20 +907,29 @@ describe("the console, the run sheet and the public page", () => {
 
   it("a forfeit is the bench's own console route for the side `by` names; a fixture with an empty side, or a `by` on neither side, is refused", () => {
     const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
-    const steps = forfeitSteps(fx, "e-away", "retired hurt");
+    const steps = forfeitSteps(fx, "e-away", "retired");
+    // W2b Task 11: the console's forfeit dialog — the opener, the side, the reason radio, the one Confirm.
     expect(steps).toEqual([
       { kind: "testid", testid: FORFEIT_TESTID },
-      { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}away` },
-      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired hurt" },
-      { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
+      { kind: "testid", testid: `${FORFEIT_WHO_TESTID_PREFIX}away` },
+      { kind: "testid", testid: `${FORFEIT_WHY_TESTID_PREFIX}retired` },
+      { kind: "testid", testid: FORFEIT_CONFIRM_TESTID },
     ]);
-    expect(forfeitSteps(fx, "e-home", "walkover")[1]).toEqual({ kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}home` });
+    expect(forfeitSteps(fx, "e-home", "walkover")[1]).toEqual({ kind: "testid", testid: `${FORFEIT_WHO_TESTID_PREFIX}home` });
     expect(() => forfeitSteps({ ...fx, away_entrant_id: null }, "e-home", "walkover")).toThrow(ForfeitNeedsBothSides);
     expect(() => forfeitSteps({ ...fx, home_entrant_id: null }, "e-away", "walkover")).toThrow(ForfeitNeedsBothSides);
     expect(() => forfeitSteps(fx, "e-other", "walkover")).toThrow(/matches neither/);
-    // The side buttons are the console's own composition (fixture-console.tsx ForfeitButton).
-    expect(src(`${V2}/fixture-console.tsx`)).toContain("data-testid={`score-forfeit-${sideKey}`}");
-    expect(FORFEIT_SIDE_TESTID_PREFIX).toBe("score-forfeit-");
+    // The choices are the dialog's own composition (forfeit-dialog.tsx ForfeitDialog); the opener is the console's.
+    const dialog = src(`${V2}/forfeit-dialog.tsx`);
+    expect(dialog).toContain("data-testid={`forfeit-who-${w}`}");
+    expect(dialog).toContain("data-testid={`forfeit-why-${r}`}");
+    expect(dialog).toContain('data-testid="forfeit-confirm"');
+    // Re-review N-1: forfeitUi waits on the panel and counts the guidance that stands in for a withheld Neither.
+    expect(dialog).toContain(`data-testid="${FORFEIT_DIALOG_TESTID}"`);
+    expect(dialog).toContain(`data-testid="${FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID}"`);
+    expect(forfeitSteps(fx, "both", "walkover")[1], "the Neither chip forfeitUi counts is the one organiserStepsFor taps").toEqual({ kind: "testid", testid: FORFEIT_NEITHER_TESTID });
+    expect(src(`${V2}/fixture-console.tsx`)).toContain('data-testid="score-forfeit"');
+    expect([FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, FORFEIT_CONFIRM_TESTID]).toEqual(["forfeit-who-", "forfeit-why-", "forfeit-confirm"]);
   });
 
   // AGENTS class 20: the forfeit is four steps, each waiting up to its own
@@ -952,7 +961,7 @@ describe("the console, the run sheet and the public page", () => {
     const steps = forfeitSteps(fx, "e-away", "walkover");
     const b = forfeitBudgets({ holdMs: 3000 }, steps.length);
     expect(steps.length).toBe(4);
-    const submit = `[data-testid="${PROMPT_SUBMIT_TESTID}"]`;
+    const submit = `[data-testid="${FORFEIT_CONFIRM_TESTID}"]`;
     const stepWaits: number[] = [];
     /** The bound each click/fill ran under: its own timeout, else the page default. */
     const actWaits: number[] = [];
@@ -1264,7 +1273,8 @@ describe("openFixtureUi: the controls a console can be mounted with, one per sta
 
 // W2a Task 14 Step 8: the console's Abandon. It has no testid (fixture-console.tsx renders msg("score.abandon") in a bare
 // `btn btn-danger` button), so it is found by its accessible name (the dictionary's value, derived); it opens the same
-// TextPromptDialog forfeit uses (score-prompt-reason / score-prompt-submit, the bench's own constants) and submits
+// TextPromptDialog reason prompt (score-prompt-reason / score-prompt-submit, the bench's own constants; the abandon's alone since W2b
+// Task 11's forfeit dialog) and submits
 // core.abandon {reason} to the fixture's events route. An abandoned (or held) match is no longer offered Abandon, so the
 // button going away is the screen proving it.
 describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
@@ -1401,6 +1411,112 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
 // the detail sheet's form (name, Ends on) → "Use this template", which POSTs
 // /api/v1/competitions/from-template; a created competition router.push()es
 // to its page, a degraded one opens the degrade modal and stays on /c/new.
+// A walkover is recorded BEFORE core.start (D3 R2). Since W2b Task 11 the console's forfeit dialog offers that walkover,
+// and Neither, before play itself, so forfeitUi drives a scheduled console through the dialog and never taps Start
+// (review I-1 retired the old refusal by name, ConsoleForfeitNotStarted, whose premise was "it would tap Start first").
+describe("forfeitUi: the dialog's four taps on a console scheduled or under way — never Start — answering its core.forfeit", () => {
+  const BASE = "http://localhost:3999";
+  const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+
+  /** `absent`: testids the page does not render — counted 0, and a wait on one times out as Playwright's would. */
+  function forfeitPage(started: boolean, absent: readonly string[] = []) {
+    const log: string[] = [];
+    const missing = (d: string) => absent.some((t) => d === `testid:${t}` || d === `[data-testid="${t}"]`);
+    let screen = 0;
+    let deliver: (() => void) | null = null;
+    const answer = { seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" };
+    const response: Resp = { request: () => ({ method: () => "POST" }), url: () => `${BASE}/api/v1/fixtures/fx-1/events`, status: () => 201, json: () => Promise.resolve({ ok: true, data: answer }) };
+    const submit = `[data-testid="${FORFEIT_CONFIRM_TESTID}"]`;
+    type Loc = { d: string; first(): Loc; or(o: Loc): Loc; count(): Promise<number>; waitFor(w?: { state?: string }): Promise<void>; elementHandles(): Promise<unknown[]>; click(): Promise<void>; fill(v: string): Promise<void> };
+    const loc = (d: string): Loc => ({
+      d,
+      first: () => loc(d),
+      or: (o) => loc(`${d}|${o.d}`),
+      // Start is mounted while scheduled, and only then; every other control the console shows.
+      count: async () => (d === `testid:${START_MATCH_TESTID}` ? (started ? 0 : 1) : missing(d) ? 0 : 1),
+      waitFor: async (w) => {
+        log.push(`wait ${w?.state} ${d}`);
+        if (missing(d)) { const e = new Error(`Timeout waiting for ${d}`); e.name = "TimeoutError"; throw e; }
+      },
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      click: async () => { log.push(`click ${d}`); screen++; if (d === submit) deliver?.(); },
+      fill: async (v) => { log.push(`fill ${d} ${v}`); screen++; },
+    });
+    const page = {
+      reload: async () => { log.push("reload"); },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, o: { timeout: number }): Promise<Resp> => new Promise((resolve, reject) => {
+        log.push("await the events POST");
+        const timer = setTimeout(() => { const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, o.timeout);
+        deliver = () => { if (pred(response)) { clearTimeout(timer); resolve(response); } };
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: unknown) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence: new Evidence("/r", "case-1", fs) };
+    return { ctx, log };
+  }
+
+  it("Start mounted (scheduled): a walkover and Neither are the dialog's four taps, Start never tapped, and the answer is the core.forfeit's alone (review I-1)", async () => {
+    let checked = 0;
+    for (const by of ["e-away", "both"]) {
+      const g = forfeitPage(false);
+      const posted = await forfeitUi(g.ctx, fx, by, "walkover");
+      expect(posted, by).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
+      expect(g.log[0], by).toBe("reload");
+      const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+      const steps = forfeitSteps(fx, by, "walkover");
+      expect(acts.length, by).toBe(steps.length);
+      expect(acts.some((l) => l.includes(START_MATCH_TESTID)), `${by}: Start is never tapped`).toBe(false);
+      expect(acts[1], by).toContain(by === "both" ? "forfeit-who-both" : "forfeit-who-away");
+      expect(acts.at(-1), by).toBe(`click [data-testid="${FORFEIT_CONFIRM_TESTID}"]`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("re-review N-1: Neither withheld (D19, the guidance in its place) is ConsoleChoiceNotOffered by name — counted, never waited for; nothing tapped past the opener, nothing posted", async () => {
+    const g = forfeitPage(false, [FORFEIT_NEITHER_TESTID]);
+    const e = await forfeitUi(g.ctx, fx, "both", "walkover").then(() => null, (x: unknown) => x);
+    // A wait on the absent chip would have thrown the page's TimeoutError instead.
+    expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
+    expect({ testid: (e as ConsoleChoiceNotOffered).testid, guidance: (e as ConsoleChoiceNotOffered).guidance, fixtureId: (e as ConsoleChoiceNotOffered).fixtureId }).toEqual({ testid: FORFEIT_NEITHER_TESTID, guidance: true, fixtureId: "fx-1" });
+    expect(g.log.filter((l) => l.startsWith("wait") && l.includes(FORFEIT_NEITHER_TESTID)), "never waited on").toEqual([]);
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([`click [data-testid="${FORFEIT_TESTID}"]`]);
+    expect(g.log, "the dialog's panel was up before the count").toContain(`wait undefined testid:${FORFEIT_DIALOG_TESTID}`);
+    expect(g.log).not.toContain("await the events POST");
+  });
+
+  it("re-review N-1: a reason the phase does not admit is ConsoleChoiceNotOffered for its chip, after the side was picked; no guidance shown", async () => {
+    const g = forfeitPage(true, [`${FORFEIT_WHY_TESTID_PREFIX}walkover`, FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID]);
+    const e = await forfeitUi(g.ctx, fx, "e-away", "walkover").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ConsoleChoiceNotOffered);
+    expect([(e as ConsoleChoiceNotOffered).testid, (e as ConsoleChoiceNotOffered).guidance]).toEqual([`${FORFEIT_WHY_TESTID_PREFIX}walkover`, false]);
+    const steps = forfeitSteps(fx, "e-away", "walkover");
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual(steps.slice(0, 2).map((st) => `click [data-testid="${(st as { testid: string }).testid}"]`));
+    expect(g.log).not.toContain("await the events POST");
+  });
+
+  it("under way (no Start): the four Forfeit steps are tapped and the console's answer is the core.forfeit's alone (the positive pair)", async () => {
+    const g = forfeitPage(true);
+    const posted = await forfeitUi(g.ctx, fx, "e-away", "walkover");
+    expect(posted).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
+    const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+    expect(acts.length).toBe(forfeitSteps(fx, "e-away", "walkover").length);
+    expect(acts.some((l) => l.includes(START_MATCH_TESTID))).toBe(false);
+    expect(acts.at(-1)).toBe(`click [data-testid="${FORFEIT_CONFIRM_TESTID}"]`);
+  });
+});
+
 describe("createFromTemplateUi: the card, the sheet, the product's answer", () => {
   const BASE = "http://localhost:3999";
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }

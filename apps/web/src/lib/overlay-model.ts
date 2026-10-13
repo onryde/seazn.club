@@ -26,6 +26,7 @@ import {
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { cricketDetail } from "@/lib/overlay-cricket";
+import { creditsNobody, forfeitCopyLookup, forfeitTag, forfeitWords, NO_LEDGER, type ForfeitCopy } from "@/lib/forfeit-tag";
 import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme";
 
 /**
@@ -250,6 +251,10 @@ export interface OverlayModelInput {
   /** The decided sentence's templates — `fixture.decidedBy.*`, the `ui`
    *  namespace — resolved server-side exactly as `LiveScoreBody` receives them. */
   decidedTemplates: DecidedOutcomeTemplates;
+  /** W2b T13 review M-4 — the forfeit tags and sentences (`forfeitCopyOf` over the public dictionary the stage already
+   *  holds). A credited result reads its sentence from them, as every public surface does. Optional: absent, the
+   *  result templates above word every outcome, as before. */
+  forfeitCopy?: ForfeitCopy;
   /** Slate card pill — competition / stage names from the public page. */
   slateMeta?: OverlaySlateMeta | null;
 }
@@ -615,7 +620,10 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // payload this projection cannot place, so it falls to the em-dash state
   // rather than guessing which line belongs to which row.
   const perSide = data.summary?.perSide;
-  const usable = Array.isArray(perSide) && perSide.length === 2 ? perSide : null;
+  // Design review M-1 (audit 3.1 on air): a double walkover credits nobody, but its summary still carries a line per
+  // side — drawn big, that 0 / 0 reads as an unplayed match. It takes the em-dash state; the result line says what
+  // happened.
+  const usable = Array.isArray(perSide) && perSide.length === 2 && !creditsNobody(data.outcome) ? perSide : null;
 
   const overlaySides = ([0, 1] as const).map((row): OverlaySide => {
     const input_ = sides[row];
@@ -645,13 +653,26 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   const clock = ended ? null : input.clockLabel;
   const shootout = shootoutScoreFromDetail(data.summary?.detail);
   const tiebreakScore = tiebreakScoreFromDetail(data.summary?.detail);
-  const result = renderDecidedOutcome(
-    data.outcome,
-    { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
-    input.decidedTemplates,
-    shootout,
-    tiebreakScore,
-  );
+  // W2b T13 review M-4 — a credited result (a forfeit, a double walkover) reads `forfeitTag`'s sentence, never the
+  // result templates' "{winner} won" (and a double walkover, which they word not at all, says so). The overlay's
+  // payload carries no ledger, so an abandon keeps its result sentence here (as the live score's fallback does).
+  const forfeit =
+    input.forfeitCopy === undefined
+      ? null
+      : forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });
+  const forfeitLine = (names: Record<string, string>): string | null =>
+    forfeit === null || input.forfeitCopy === undefined
+      ? null
+      : forfeitWords(forfeit, forfeitCopyLookup(input.forfeitCopy), (id) => names[id] ?? "?").sentence;
+  const result =
+    forfeitLine({ [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name }) ??
+    renderDecidedOutcome(
+      data.outcome,
+      { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
+      input.decidedTemplates,
+      shootout,
+      tiebreakScore,
+    );
   // Fix round 5, I2 — `_THEMES.md` §3:330-333: "the band carries `resultMsg`'s
   // full sentence, the context line carries the same sentence with the winner
   // reduced to the short name the cell already uses ('Kings won by 44 runs'
@@ -661,13 +682,15 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // which would let the bar and the detail band disagree about who won.
   // `codes` is what `OverlaySide.short` already carries (an entrant's own
   // short name where the payload ever holds one, else three letters).
-  const shortResult = renderDecidedOutcome(
-    data.outcome,
-    { [sides[0].id]: codes[0], [sides[1].id]: codes[1] },
-    input.decidedTemplates,
-    shootout,
-    tiebreakScore,
-  );
+  const shortResult =
+    forfeitLine({ [sides[0].id]: codes[0], [sides[1].id]: codes[1] }) ??
+    renderDecidedOutcome(
+      data.outcome,
+      { [sides[0].id]: codes[0], [sides[1].id]: codes[1] },
+      input.decidedTemplates,
+      shootout,
+      tiebreakScore,
+    );
   // Fix round 3, F1/F3 — a void-no-verdict frame renders NO detail band at
   // all (`_THEMES.md` §3/§4): `chase`/`result` are already null by
   // construction for this branch (see `hasVerdict`'s doc comment), but a

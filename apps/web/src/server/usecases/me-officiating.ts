@@ -15,6 +15,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 // cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
 // doc comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
+import { unseatedForfeitLoserName, unseatedWithdrew } from "@/lib/forfeit-tag";
 
 // refreshOfficialsCache is typed for the tenant tx; it only uses the tagged
 // template + .json, which the superuser `sql` shares — safe structural cast.
@@ -40,6 +41,10 @@ export interface MyOfficiatingAssignment {
   sport_key: string;
   home_name: string | null;
   away_name: string | null;
+  /** Design audit 4.1 — a finished duty's empty seat names ruling 116's withdrawn winner (`home_name`/`away_name` is
+   *  hers): the lane marks her as gone. Set on a finished duty only; absent means no. */
+  home_withdrew?: boolean;
+  away_withdrew?: boolean;
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   /** Cross-org doc, so each duty is localized by ITS OWN org's default
@@ -143,7 +148,17 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
   // resolve, so this query can return unfilled home/away rows too — the
   // interface makes all three fields non-optional, and this query used to
   // select none of them.
-  const completedRaw = await sql<(Omit<MyOfficiatingAssignment, "court_name"> & { org_id: string })[]>`
+  // R116-4: a finished duty's empty seat a walkover was won over (owner ruling 116) names HER, as any walkover names
+  // the side that did not play — the outcome and its loser's name ride along for `unseatedForfeitLoserName`.
+  const completedRaw = await sql<
+    (Omit<MyOfficiatingAssignment, "court_name"> & {
+      org_id: string;
+      outcome: unknown;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      forfeit_loser_name: string | null;
+    })[]
+  >`
     select fo.fixture_id, fo.id as fixture_official_id, f.fixture_no, o.id as official_id,
            f.org_id, org.name as org_name, org.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
@@ -151,6 +166,7 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
            d.name as division_name, d.slug as division_slug, d.sport_key,
            h.display_name as home_name, a.display_name as away_name,
            f.home_slot_label, f.away_slot_label,
+           f.outcome, f.home_entrant_id, f.away_entrant_id, le.display_name as forfeit_loser_name,
            org.default_locale as org_default_locale,
            f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
            f.venue_id, ven.name as venue_name, f.court_id,
@@ -170,6 +186,7 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     left join organizations vorg on vorg.id = d.org_id
     left join entrants h on h.id = f.home_entrant_id
     left join entrants a on a.id = f.away_entrant_id
+    left join entrants le on le.division_id = f.division_id and le.id::text = f.outcome->>'loser'
     where p.user_id = ${userId} and p.merged_into is null
       and f.status = any(${[...FINISHED_STATUSES]})
     order by f.scheduled_at desc nulls last, f.id, fo.role_key
@@ -190,7 +207,16 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
     };
   };
   const assignments = assignmentsRaw.map(resolveCourt);
-  const completed = completedRaw.map(resolveCourt);
+  const completed = completedRaw.map(({ outcome, home_entrant_id, away_entrant_id, forfeit_loser_name, ...r }) => {
+    const seats = { outcome, home_entrant_id, away_entrant_id, forfeit_loser_name };
+    return resolveCourt({
+      ...r,
+      home_name: r.home_name ?? unseatedForfeitLoserName(seats, "home"),
+      away_name: r.away_name ?? unseatedForfeitLoserName(seats, "away"),
+      home_withdrew: unseatedWithdrew(seats, "home") && unseatedForfeitLoserName(seats, "home") !== null,
+      away_withdrew: unseatedWithdrew(seats, "away") && unseatedForfeitLoserName(seats, "away") !== null,
+    });
+  });
 
   const blackouts = await sql<MyBlackout[]>`
     select oa.date::text as date, min(oa.note) as note

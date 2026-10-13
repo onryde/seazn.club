@@ -22,6 +22,7 @@
 import { interpolate } from "@/lib/i18n-runtime";
 import type { MessageKey } from "@/lib/messages";
 import { awardLabel, enumLabel, eventLabel, type MsgFn } from "@/lib/scoring-vocab";
+import { forfeitCopyKind, isExpungeAbandon, type ForfeitCopyKind } from "@/lib/forfeit-copy-kind";
 
 export interface EventDescription {
   /** Short badge text, e.g. "Goal", "Set summary", "Undo". */
@@ -42,7 +43,23 @@ export const EVENT_COPY_KEYS: readonly MessageKey[] = [
   "eventCopy.wins", "eventCopy.winsBy", "eventCopy.draw", "eventCopy.recorded",
   "eventCopy.inProgress", "eventCopy.pointTo",
   "eventCopy.settled", "eventCopy.settled.lot", "eventCopy.settled.higher_seed", "eventCopy.settled.organiser",
+  "eventCopy.forfeit.walkover", "eventCopy.forfeit.retired", "eventCopy.forfeit.disqualified",
+  "eventCopy.forfeit.withdrew", "eventCopy.forfeit.bye", "eventCopy.forfeit.doubleWalkover",
+  "eventCopy.abandoned.expunge",
 ];
+
+/** W2b Task 12: a forfeit's sentence per kind (the reason is part of the fact, D3). Exhaustive, so a reason the engine
+ *  adds is a tsc red here. A whole sentence per kind rather than "{name} forfeited — <reason>": the reason word's
+ *  agreement differs per locale (fr), and a double walkover names nobody. A row with no reason the engine declares
+ *  keeps "{name} forfeited". */
+const FORFEIT_SENTENCE_KEY: Readonly<Record<ForfeitCopyKind, MessageKey>> = {
+  walkover: "eventCopy.forfeit.walkover",
+  retired: "eventCopy.forfeit.retired",
+  disqualified: "eventCopy.forfeit.disqualified",
+  withdrew: "eventCopy.forfeit.withdrew",
+  bye: "eventCopy.forfeit.bye",
+  double_walkover: "eventCopy.forfeit.doubleWalkover",
+};
 
 /** W2a (X-ST-1): `core.settle`'s sentence per settle method (engine `SETTLE_METHODS`). A method this table does not
  *  know falls to the method-free "{name} advances" rather than inventing how. */
@@ -85,6 +102,15 @@ function because(p: Payload, m: MsgFn): string {
   return typeof p.reason === "string" && p.reason ? ` — ${enumLabel("reason", p.reason, m)}` : "";
 }
 
+/** W2b Task 12: a forfeit's sentence by kind; a double walkover names nobody; a row with no reason the engine declares
+ *  keeps the reason-free "{name} forfeited" (plus whatever reason it carries). */
+function forfeitSentence(p: Payload, names: Record<string, string>, m: MsgFn): string {
+  const kind = forfeitCopyKind(p);
+  if (kind === null) return say(m, "eventCopy.forfeited", { name: name(names, p.by, m) }) + because(p, m);
+  if (kind === "double_walkover") return m(FORFEIT_SENTENCE_KEY.double_walkover);
+  return say(m, FORFEIT_SENTENCE_KEY[kind], { name: name(names, p.by, m) });
+}
+
 export function describeEvent(
   type: string,
   rawPayload: unknown,
@@ -108,13 +134,12 @@ export function describeEvent(
     case "core.void":
       return { label: badge, text: m("eventCopy.voided"), tone: "void" };
     case "core.forfeit":
-      return {
-        label: badge,
-        text: say(m, "eventCopy.forfeited", { name: name(names, p.by, m) }) + because(p, m),
-        tone: "admin",
-      };
+      return { label: badge, text: forfeitSentence(p, names, m), tone: "admin" };
     case "core.abandon":
-      return { label: badge, text: m("eventCopy.abandoned") + because(p, m), tone: "admin" };
+      // W2b D5: the withdrawal cascade's expunge says why the match left the table; its reason is the sentence.
+      return isExpungeAbandon(p)
+        ? { label: badge, text: m("eventCopy.abandoned.expunge"), tone: "admin" }
+        : { label: badge, text: m("eventCopy.abandoned") + because(p, m), tone: "admin" };
     case "core.settle": {
       // W2a (X-ST-1): who advances and how; the organiser's optional note is
       // free text, echoed like core.note's.

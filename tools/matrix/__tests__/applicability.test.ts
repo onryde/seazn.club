@@ -320,7 +320,8 @@ describe("M5's tie arm — a level result supportsDraws does not declare (I-1)",
     expect(nonBracket.filter((k) => !TABLE_KINDS.includes(k))).toContain("ladder");
     // The ladder premise, text-pinned: the product reorders a ladder only when the match has a winner.
     const scoring = readFileSync(resolve(REPO, "apps/web/src/server/usecases/scoring.ts"), "utf8");
-    expect(scoring).toContain('if (fixture.kind === "ladder" && winner !== undefined && loser !== undefined) {');
+    // W2b X-WD-2 renamed the loser to `ladderLoser` (an award's named loser counts); the premise — no winner, no move — is unchanged.
+    expect(scoring).toContain('if (fixture.kind === "ladder" && winner !== undefined && ladderLoser !== undefined) {');
     // And it reaches the drops: the ladder row's M5 drops carry it.
     const ladder = base.drops.filter((d) => d.row === "ladder" && d.scenario === "M5");
     expect(ladder.length).toBeGreaterThan(0);

@@ -694,7 +694,7 @@ describe("set-piece conversion counters in standingsDelta", () => {
     const state = foldIce([
       start,
       { type: "icehockey.set_piece", payload: { by: IH, kind: "ps", outcome: "scored" } },
-      { type: "core.forfeit", payload: { by: IA, reason: "no-show" } },
+      { type: "core.forfeit", payload: { by: IA, reason: "retired" } }, // W2b: after the start, a retirement
     ]);
     const [home] = iceDeltas(state);
     expect(home.metrics.gf).toBe(5); // cfg.awardScore, not the played goals

@@ -42,14 +42,16 @@
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
 // the rank_adjacent cascade rank, and chess colours.
+import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
-import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut } from "../lib/driver/types.ts";
+import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
-import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
+import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, type FakeFixture } from "./fake-driver.ts";
 import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
 
@@ -94,6 +96,9 @@ function advancingWinner(outcome: unknown): string | undefined {
   return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
 }
 
+/** fed-seats.ts advancesNobody: a double walkover advances nobody (X-DW-2). */
+const isDoubleWalkover = (outcome: unknown): boolean => (outcome as { kind?: unknown } | null)?.kind === "double_walkover";
+
 /** append-event.ts LOCKED_FIXTURE_STATUSES: refused before the fold. */
 const LOCKED = new Set(["finalized", "cancelled"]);
 /** lib/table-withdrawal.ts WITHDRAWAL_PLAYED_STATUSES: a result to void first. */
@@ -128,6 +133,13 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   readonly feeds = new Map<string, { target: string; slot: 1 | 2 }>();
   /** A swiss stage's bye shells (the product's `sw-r<n>-bye` ext_key). Reset per division. */
   readonly byeShells = new Set<string>();
+  /** `<fixture id>:<slot>`: a bracket seat no entrant will reach (stages.ts resolveBracketSeats' dead seat) — one whose
+   *  withdrawn entrant's opponent was still TBD (X-WD-3, plan Task 8), or one a double walkover or a void feeds (X-DW-2,
+   *  Review Focus 1). The opponent who arrives beside it is walked over by bye. Reset per division. */
+  readonly deadSeats = new Set<string>();
+  /** The dead seats that DEPARTED (resolveBracketSeats' seatDeparted): a withdrawal's emptied seat. A double walkover
+   *  the model records always carries its event, so the seat it kills is dead, not departed. Reset per division. */
+  readonly departedSeats = new Set<string>();
   constructor(opts: ModelFakeOpts = {}) {
     super("org-model");
     this.opts = opts;
@@ -146,8 +158,49 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   override refuseStages(): never { throw new Error("fake: league or swiss only"); }
   get #swiss(): boolean { return this.stage?.kind === "swiss"; }
   /** withdrawal.ts: swiss NEVER expunges (owner ruling 2026-09-24) — every
-   *  paired board walks over; a league keeps the table rule. */
-  override expungesEarly(): boolean { return !this.#swiss; }
+   *  paired board walks over; a league keeps the table rule. A BRACKET kind
+   *  (BRACKET_WALKOVER_KINDS → withdrawBracketEntrant) never expunges either:
+   *  every pending fixture walks over (review I-3 — a test that reads the stage
+   *  as a knockout gets the bracket's cascade, never the league's). */
+  override expungesEarly(): boolean { return !this.#swiss && !BRACKET_STAGE_KINDS.has(this.stage?.kind ?? ""); }
+  /** A BRACKET withdrawal (withdrawal.ts WITHDRAWAL_WALKOVER_KINDS → withdrawBracketEntrant; X-WD-1, X-WD-3; loop F):
+   *  every fixture of the entrant the planner acts on (bracketWithdrawalStatus: scheduled, in_play, needs_decision, and
+   *  abandoned while its abandon is active) walks over to its opponent through the cascade's bare forfeit, an active
+   *  abandon voided first, a HELD line counted in `walked_over_held`; one whose opponent is still TBD is never voided —
+   *  the entrant's seat is emptied and dead (departSeat "tbd", counted a walkover), and the opponent who arrives is
+   *  walked over (#fill). Nothing is expunged. The answer's policy is the bracket branch's (rulings 53 + 106, read from the
+   *  product's text): "walkover" once the planner acted on a line, "none" with nothing pending. A table kind keeps the league's rule (FakeLeagueDriver.withdraw). An opponent already withdrawn (X-WD-4)
+   *  is not modelled: a withdrawn entrant's lines are all walked over by then, so the model never seats one. */
+  override async withdraw(entrantId: string): Promise<WithdrawOut> {
+    if (!BRACKET_STAGE_KINDS.has(this.stage?.kind ?? "")) return super.withdraw(entrantId);
+    this.log("withdraw");
+    const entrant = this.entrants.find((e) => e.id === entrantId);
+    if (entrant === undefined) throw new RefusedCall("POST", `/api/v1/entrants/${entrantId}/withdraw`, 404, "NOT_FOUND", "entrant not found");
+    let walkovers = 0;
+    let held = 0;
+    const mine = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
+    const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
+    for (const f of acts) {
+      const home = f.home_entrant_id === entrantId;
+      const opponent = home ? f.away_entrant_id : f.home_entrant_id;
+      walkovers++;
+      if (opponent !== null) {
+        if (this.heldForWithdrawal(f)) held++;
+        for (const a of liveEntries(this.ledgers.get(f.id) ?? []).filter((e) => e.type === "core.abandon")) await this.#cascadePost(f.id, [{ type: "core.void", payload: { event_id: a.id } }]);
+        await this.walkoverFixture(f, entrantId);
+        continue;
+      }
+      if (home) f.home_entrant_id = null;
+      else f.away_entrant_id = null;
+      this.#killSeat(f, home ? 1 : 2, true);
+    }
+    entrant.status = "withdrawn";
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+  }
+  /** The table folds each fixture's LIVE ledger (voids resolved), as the product's standings read it. */
+  override tableEvents(f: FakeFixture): readonly StreamEvent[] {
+    return liveEntries(this.ledgers.get(f.id) ?? []).map((e) => ({ type: e.type, payload: e.payload }));
+  }
   /** One driver may serve every property run of a cell, as HttpDriver does: a
    *  new division starts empty. Fixture ids keep counting (minted). */
   override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]): Promise<DivisionRef> {
@@ -156,6 +209,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.ledgers.clear();
     this.feeds.clear();
     this.byeShells.clear();
+    this.deadSeats.clear();
+    this.departedSeats.clear();
     this.stage = null;
     this.completed = false;
     this.#lateEntrant = false;
@@ -242,6 +297,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     // (#cascadePost), never read off the prefix (review m-5): an organiser
     // post may carry none. Read here, synchronously, before any await.
     const label = this.#cascading > 0 ? " by-product" : "";
+    const organiser = this.#cascading === 0;
     return Promise.resolve().then(() => {
       this.calls.push("postStream");
       this.trace.push(`postStream ${id}${label}`);
@@ -254,6 +310,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       const out: PostedEvent[] = [];
       for (const ev of events) {
         if (LOCKED.has(f.status)) throw new RefusedCall("POST", path, 422, "ALREADY_DECIDED", `fixture ${id} is ${f.status}`);
+        if (ev.type === "core.forfeit" && organiser) this.#serverForfeitRules(f, ev, path);
         const eid = `ev${++this.#eventNo}`;
         const target = ev.type === "core.void" ? (ev.payload as { event_id?: unknown } | null)?.event_id : undefined;
         const entry: LedgerEntry = { id: eid, seq: ledger.length + 1, type: ev.type, payload: ev.payload, ...(typeof target === "string" ? { voids: target } : {}) };
@@ -283,6 +340,22 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       return out;
     });
   }
+  /** W2b's two server rules on an organiser's core.forfeit, before the fold (the cascade's own writes are exempt):
+   *  PF-2 — `withdrew` is the withdrawal cascade's alone, refused from every other writer INVALID_EVENT (422); X-DW-3 —
+   *  a double walkover on a bracket fixture with no next match (the product's feedsNextMatch over its lines: no feed
+   *  edge out, a final, a third-place match) is refused DOUBLE_WALKOVER_NO_NEXT_MATCH, the fixture left open. */
+  #serverForfeitRules(f: FakeFixture, ev: StreamEvent, path: string): void {
+    const p = (ev.payload ?? {}) as { by?: unknown; reason?: unknown };
+    if (p.reason === "withdrew") throw new RefusedCall("POST", path, 422, "INVALID_EVENT", "a withdrawal is recorded by withdrawing the entrant, not by a forfeit");
+    const kind = this.stage?.kind ?? null;
+    // W2b D19: the feeding bracket kinds only — a ladder (forbidsLevelResult, but no feed edges) takes one anywhere.
+    // A double walkover is `both` + walkover (X-DW-1); `both` with another reason is the schema's R1, INVALID_EVENT.
+    // This fake wires winner lines only (feed() — the model's brackets hold no loser line), so its loser line is null.
+    const feeds = feedsNextMatch({ winner_to_fixture: this.feeds.get(f.id)?.target ?? null, loser_to_fixture: null });
+    if (p.by === "both" && p.reason === "walkover" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !feeds) {
+      throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
+    }
+  }
   /** A test hook for a bracket feed edge (stages.ts generate's second pass:
    *  a target's homeFrom/awayFrom becomes the source's winner_to_fixture/slot). */
   feed(source: string, target: string, slot: 1 | 2): void {
@@ -303,6 +376,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  throw, or null. A cascade walkover is reset, and whatever it advanced
    *  moves too. */
   #release(f: FakeFixture, next: unknown, path: string, plan: (() => void)[]): RefusedCall | null {
+    // Review Focus 1: a double walkover taken back (voided) revives the seat it killed (fed-seats.ts releaseFedSeats).
+    if (isDoubleWalkover(f.outcome) && !isDoubleWalkover(next)) return this.#revive(f, path, plan);
     const edge = this.feeds.get(f.id);
     const was = advancingWinner(f.outcome);
     if (edge === undefined || was === undefined || was === advancingWinner(next)) return null;
@@ -330,14 +405,92 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (mode === "absent") return null;
     return { [NEXT.wire.key]: { [NEXT.wire.idField]: mode === "foreign" ? FOREIGN_NEXT_MATCH : t.id } };
   }
-  /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. */
+  /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. An arrival into a
+   *  fixture whose other seat is dead (X-WD-3) is walked over at once (scoring.ts resolveBracketSeats after fillSlot),
+   *  with no event, and goes on. A double walkover advances nobody (X-DW-2): the seat it feeds is dead (#killSeat). */
   #fill(f: FakeFixture): void {
     const edge = this.feeds.get(f.id);
     const w = advancingWinner(f.outcome);
     const t = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
-    if (edge === undefined || w === undefined || t === undefined) return;
-    if (edge.slot === 1 && t.home_entrant_id === null) t.home_entrant_id = w;
-    if (edge.slot === 2 && t.away_entrant_id === null) t.away_entrant_id = w;
+    if (edge === undefined || t === undefined) return;
+    if (isDoubleWalkover(f.outcome)) {
+      this.#killSeat(t, edge.slot, false);
+      return;
+    }
+    if (w === undefined) return;
+    if (edge.slot === 1 && t.home_entrant_id === null && !this.deadSeats.has(`${t.id}:1`)) t.home_entrant_id = w;
+    if (edge.slot === 2 && t.away_entrant_id === null && !this.deadSeats.has(`${t.id}:2`)) t.away_entrant_id = w;
+    if (this.deadSeats.has(`${t.id}:${edge.slot === 1 ? 2 : 1}`) && t.status === NEXT.notStarted) {
+      t.status = "forfeited";
+      t.outcome = { kind: "award", winner: w, loser: null, reason: "bye" }; // awardSeededByes (W2b C-5)
+      this.#fill(t);
+    }
+  }
+  /** stages.ts resolveBracketSeats (loop F) on one seat that just died — a withdrawal's emptied seat (departed) or the
+   *  seat a double walkover or a void feeds (dead, not departed), as fake-driver.ts killSlot plays it:
+   *  - an entrant waiting opposite walks over at once: `forfeited` + the bye award, no event (W2b C-5), and goes on;
+   *  - the other seat still on its way: nothing yet (the arrival is #fill's bye);
+   *  - the other seat dead too: a void, `abandoned` with no outcome, nobody seated (Review Focus 1), and the seat it
+   *    feeds dies in turn. Both seats DEPARTED would be X-WD-4's departure double walkover, which the model cannot
+   *    reach: a withdrawal empties only a seat whose opponent is TBD, and an arrival beside a dead seat is walked over
+   *    at once, so no line has two withdrawn sides. It is refused by name, never played. */
+  #killSeat(t: FakeFixture, slot: 1 | 2, departed: boolean): void {
+    const key = `${t.id}:${slot}`;
+    const otherKey = `${t.id}:${slot === 1 ? 2 : 1}`;
+    this.deadSeats.add(key);
+    if (departed) this.departedSeats.add(key);
+    if (t.status !== NEXT.notStarted || t.outcome !== null) return;
+    const waiting = slot === 1 ? t.away_entrant_id : t.home_entrant_id;
+    if (waiting !== null) {
+      t.status = "forfeited";
+      t.outcome = { kind: "award", winner: waiting, loser: null, reason: "bye" }; // awardSeededByes (W2b C-5)
+      this.#fill(t);
+      return;
+    }
+    if (!this.deadSeats.has(otherKey)) return;
+    if (this.departedSeats.has(key) && this.departedSeats.has(otherKey)) {
+      throw new Error(`fake: both seats of ${t.id} departed (X-WD-4's departure double walkover) — the model never seats two withdrawn sides on one line, so this is not modelled`);
+    }
+    t.status = "abandoned";
+    t.outcome = null;
+    const edge = this.feeds.get(t.id);
+    const next = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
+    if (edge !== undefined && next !== undefined) this.#killSeat(next, edge.slot, false);
+  }
+  /** fed-seats.ts reviveDeadSeats (W2b Review Focus 1): voiding a double walkover makes its feeder live again, so the
+   *  seat it killed revives under the un-fill's own rules — PLANNED into `plan` like every release, so a refusal writes
+   *  nothing. A departed seat (a withdrawal's) is never revived: no feeder killed it.
+   *  - a cascade walkover on it (the bye award): back to scheduled, no outcome, and what it advanced is released in
+   *    turn (#release: refused NEXT_MATCH_STARTED when that next match started);
+   *  - a cascade void: back to scheduled, and the seat IT killed revives the same way;
+   *  - still waiting: the seat is live again. */
+  #revive(src: FakeFixture, path: string, plan: (() => void)[]): RefusedCall | null {
+    const edge = this.feeds.get(src.id);
+    const t = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
+    if (edge === undefined || t === undefined) return null;
+    const key = `${t.id}:${edge.slot}`;
+    const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
+    if (!this.deadSeats.has(key) || this.departedSeats.has(key) || occupant !== null) return null;
+    const live = () => this.deadSeats.delete(key);
+    if (t.status === "abandoned" && t.outcome === null && t.home_entrant_id === null && t.away_entrant_id === null && liveEntries(this.ledgers.get(t.id) ?? []).length === 0) {
+      plan.push(() => {
+        live();
+        t.status = NEXT.notStarted;
+      });
+      return this.#revive(t, path, plan);
+    }
+    if (this.#cascade(t)) {
+      const refused = this.#release(t, null, path, plan);
+      if (refused !== null) return refused;
+      plan.push(() => {
+        live();
+        t.status = NEXT.notStarted;
+        t.outcome = null;
+      });
+      return null;
+    }
+    plan.push(live);
+    return null;
   }
   /** withdrawal.ts applyUpdate + voidAndAbandon: a played fixture has every
    *  live state-bearing event voided, newest first; then core.abandon. */
@@ -353,6 +506,11 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  organiser's, not the cascade's). */
   override async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
     await this.#cascadePost(f.id, [{ type: "core.forfeit", payload: { by, reason: REASON } }]);
+  }
+  /** withdrawal.ts's table double walkover (Loop R M-4, X-WD-4): the cascade's bare `core.forfeit{by: "both"}` —
+   *  "both" is only ever a walkover (core/events.ts CoreForfeit), so its reason is `walkover`, never `withdrew`. */
+  override async doubleWalkoverFixture(f: FakeFixture): Promise<void> {
+    await this.#cascadePost(f.id, [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
   }
   /** Open while a withdrawal cascade writes (review m-5): postStream labels its trace line `by-product`. */
   #cascading = 0;
@@ -504,7 +662,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (round.bye !== undefined) {
       const byeShell = shells.find((f) => this.byeShells.has(f.id));
       if (byeShell === undefined) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss bye shell missing for pairing");
-      Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye } });
+      Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye, loser: null, reason: "bye" } });
     }
     return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
   }

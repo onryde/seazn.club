@@ -12,7 +12,13 @@ import type { CheckResult } from "../results.ts";
 export const W2A_SCENARIO_KEYS = ["BRACKET_SETTLE_LEVEL", "BRACKET_SETTLE_ABANDON", "BRACKET_TIEBREAK", "BRACKET_EXTRA_BOARD", "BRACKET_NO_DRAW_GENERIC"] as const;
 export type W2aScenarioKey = (typeof W2A_SCENARIO_KEYS)[number];
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey;
+/** W2b (Task 2): the opt-in forfeit-credit scenarios, keys fixed by the plan (the selection file and the judge read
+ *  them). Planned ONLY by `--set w1-driving --scenario <key>`, as W2a's are; w2b-forfeit-credit.ts re-exports the list
+ *  as W2B_SCENARIOS. */
+export const W2B_SCENARIO_KEYS = ["WO-PRE", "RT-PART", "DW-ALL", "AB-AWARD", "WD-CASC"] as const;
+export type W2bScenarioKey = (typeof W2B_SCENARIO_KEYS)[number];
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey;
 
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys

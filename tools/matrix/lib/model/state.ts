@@ -17,7 +17,7 @@
 // fix round 1, T14-R3) — and a row the model does not drive is refused by
 // family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
@@ -26,6 +26,8 @@ import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture,
 import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
 import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
 import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
+import { BRACKET_OF } from "../scenarios/terminal-finals.ts";
+import { hasNoNextMatch, wireGraph } from "../scenarios/w2b-checks.ts";
 import { entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -33,8 +35,8 @@ export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walko
 export type CommandKind = (typeof COMMAND_KINDS)[number];
 /** W2a (finding 24): commands a model run asks for BY NAME, never part of the default set — so the default arbitrary
  *  array, every committed seed and every cell's counts replay byte for byte. `modelCommands({ settle: true })`
- *  appends them. */
-export const OPT_IN_KINDS = ["Settle"] as const;
+ *  appends Settle, and W2b's `modelCommands({ forfeit: true })` appends Forfeit (D10), each on its own flag. */
+export const OPT_IN_KINDS = ["Settle", "Forfeit"] as const;
 export type OptInKind = (typeof OPT_IN_KINDS)[number];
 export type AnyCommandKind = CommandKind | OptInKind;
 
@@ -102,6 +104,8 @@ export interface ModelState {
   counts: Record<CommandKind, CommandCounts> & Partial<Record<OptInKind, CommandCounts>>;
   /** W2a: every core.settle the model's Settle command posted, accepted or refused, in order (status 200 when accepted). */
   settles: { status: number; code: string | null }[];
+  /** W2b: every core.forfeit the model's Forfeit command posted, accepted or refused, in order (status 200 when accepted). */
+  forfeits: { status: number; code: string | null }[];
   /** Items each step check judged, summed over steps (R25: a cell owes > 0). */
   stepChecks: Map<string, number>;
   /** Fixtures whose product outcome matched the engine's fold of the known ledger, summed over steps. */
@@ -158,6 +162,21 @@ export const BRACKET_LEVEL_CHECK = "model-bracket-never-decided-level";
 export const HELD_SEATS_CHECK = "model-held-seats-nobody";
 /** W2a (X-ST-1): a settled match seats its winner in a later round, when the bracket has one. */
 export const SETTLE_SEATS_CHECK = "model-settle-seats-winner";
+/** W2b (D3, D4, PF-2, X-DW-3): a forfeit the model expects refused is refused with the rule's code, nothing else. */
+export const FORFEIT_REFUSAL_CHECK = "model-forfeit-refused-by-name";
+/** W2b (X-DW-1, X-DW-2): nobody advances from a double walkover — none of its entrants is seated in a later-round
+ *  fixture of a feeding bracket. */
+export const DW_ADVANCES_NOBODY_CHECK = "model-double-walkover-advances-nobody";
+/** W2b (D7, D2): one result per active forfeit — a fixture whose known ledger holds a live core.forfeit holds exactly
+ *  one, and the product shows it `forfeited` with an award or a double walkover; and a fixture the product shows with
+ *  an award or a double walkover off a known, non-empty ledger holds one. */
+export const FORFEIT_ONE_RESULT_CHECK = "model-one-result-per-active-forfeit";
+/** W2b (X-WO-1, D7; review I-4): on a TABLE stage (league, group, swiss — the kinds whose standings rows are the
+ *  division's entrants), the table counts one result per active forfeit: each active entrant seated in a fixture whose
+ *  known ledger holds a live core.forfeit has a standings row whose `played` is the number of its fixtures the product
+ *  shows with a result — a voided forfeit, or a second one refused, never counted again. Read only on a step where such
+ *  a fixture exists, so a cell with no forfeit costs no standings read. */
+export const FORFEIT_TABLE_CHECK = "model-table-counts-one-result-per-forfeit";
 /** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
  *  items (lineup-plan.ts lineupItems): every side of every team fixture the
  *  model posted to had its lineup PUT, one item per side, re-judged after
@@ -241,6 +260,37 @@ export function fedCandidates(m: ModelState, f: FixtureModel, refusal?: RefusedC
   const mine = [f.home, f.away].filter((e): e is string => e !== null);
   const holds = (g: FixtureModel) => (g.home !== null && mine.includes(g.home)) || (g.away !== null && mine.includes(g.away));
   return [...m.fixtures.values()].filter((g) => g.round !== null && g.round > round && holds(g));
+}
+
+/** X-DW-3 on the model: `round` is the last round — no fixture sits in a later one. The model holds no feed edges (the
+ *  product's fixture list serves none: driver/types.ts FixtureRow), so this structural read stands in for the product's
+ *  feedsNextMatch; lastRoundReadDiverges says where it may (commands.ts noNextMatch reads it, Start guards it). */
+export function inLastRound(round: number, rounds: Iterable<number | null>): boolean {
+  for (const r of rounds) if (r !== null && r > round) return false;
+  return true;
+}
+
+/** Loop F I-5, an assumption made a guard: on the engine's bracket for this stage (`kind`, `config`) and a field of
+ *  `entrants`, each fixture's last-round read against the PRODUCT's next-match rule (w2b-checks hasNoNextMatch: apps/web
+ *  bracket-next-match.ts feedsNextMatch, over the engine's two lines out of it). `diverges`: the fixtures where the two
+ *  part — a match whose winner AND loser feed one fixture (a bracket reset's grand final, a two-entrant double elim's
+ *  winners' match) has no next match, yet is not in the last round. `checked`: the fixtures read. A kind with no feed
+ *  edges reads nothing; so does a field the engine cannot lay out (the product's Start refuses it, so no fixture is
+ *  ever judged). A feeding kind with no generator is refused by name, never passed. */
+export function lastRoundReadDiverges(kind: string, config: Readonly<Record<string, unknown>>, entrants: number, generators: typeof BRACKET_OF = BRACKET_OF): { checked: number; diverges: string[] } {
+  if (!NEXT_MATCH_LOCK.kinds.includes(kind)) return { checked: 0, diverges: [] };
+  const gen = generators[kind];
+  if (gen === undefined) throw new Error(`model: '${kind}' feeds next matches, but BRACKET_OF lays out no bracket for it — add its generator before the model reads its X-DW-3`);
+  let bracket: ReturnType<typeof gen>;
+  try {
+    bracket = gen(Array.from({ length: entrants }, (_, i) => `e${i + 1}`), config);
+  } catch (e) {
+    if (EngineError.is(e)) return { checked: 0, diverges: [] };
+    throw e;
+  }
+  const graph = wireGraph(bracket.fixtures);
+  const rounds = bracket.fixtures.map((g) => g.round);
+  return { checked: bracket.fixtures.length, diverges: bracket.fixtures.filter((g) => inLastRound(g.round, rounds) !== hasNoNextMatch(graph, g.id)).map((g) => g.id) };
 }
 
 /** fed-seats.ts `!isCascadeWalkover(t) && hasStarted(t)` for one candidate,
@@ -396,7 +446,7 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
     sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
     divisionId: division.id, stageId: stage.id, tag: input.tag,
     entrants: added.map((e) => e.id), withdrawn: new Set(), started: false, completed: false, lateEntry: false, posts: 0,
-    fixtures: new Map(), generates: [], settles: [],
+    fixtures: new Map(), generates: [], settles: [], forfeits: [],
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, zero()])) as ModelState["counts"],
     stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [], steps: [], unknowns: [], findings: new Map(),
     rosters, lineupSides: new Map(), teamPosts: new Map(), lineupsPut: 0,
@@ -519,7 +569,7 @@ function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string
       const seated = fedCandidates(m, f);
       if (seated.length > 0) held.fails.push(`fixture ${r.id} is held (${r.status}) yet ${seated.map((g) => g.id).join(", ")} seat${seated.length === 1 ? "s" : ""} one of its entrants in a later round (X-BR-2)`);
     }
-    if (feeds && r.status === "decided" && o !== null && (o.kind === "win" || o.kind === "award") && o.method?.startsWith("settled_") === true && r.round_no !== null) {
+    if (feeds && r.status === "decided" && o !== null && o.kind === "win" && o.method?.startsWith("settled_") === true && r.round_no !== null) {
       const later = mine.filter((g) => g.round_no !== null && g.round_no > r.round_no!);
       if (later.length === 0) continue; // the last round: nobody to seat
       settled.checked++;
@@ -527,6 +577,63 @@ function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string
     }
   }
   return [level, held, settled];
+}
+
+/** W2b: the two forfeit rules a step can judge from what the product shows, each counting the items it judged (zero
+ *  where the cell met no forfeit — the step totals, R25):
+ *   - X-DW-1/X-DW-2: a double walkover seats nobody — none of its entrants sits in a LATER-round fixture of a feeding
+ *     bracket (fedCandidates, the model's own structural seat read; on a table there is nothing to advance to, so it
+ *     judges brackets only);
+ *   - one result per active forfeit, over the fixtures whose whole ledger the model knows: a live core.forfeit is ONE
+ *     (a second one accepted is a defect) and the row is `forfeited` with an award or a double walkover (D7 rule 4,
+ *     D2); and an award or double-walkover row off a known, non-empty ledger has its live forfeit. */
+function forfeitChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string; checked: number; fails: string[] }[] {
+  const dw = { id: DW_ADVANCES_NOBODY_CHECK, checked: 0, fails: [] as string[] };
+  const one = { id: FORFEIT_ONE_RESULT_CHECK, checked: 0, fails: [] as string[] };
+  const feeds = NEXT_MATCH_LOCK.kinds.includes(m.stageKind);
+  for (const r of mine) {
+    const o = toObservedOutcome(r.outcome);
+    const f = m.fixtures.get(r.id);
+    if (feeds && o?.kind === "double_walkover" && f !== undefined) {
+      dw.checked++;
+      const seated = fedCandidates(m, f);
+      if (seated.length > 0) dw.fails.push(`fixture ${r.id} is a double walkover yet ${seated.map((g) => g.id).join(", ")} seat${seated.length === 1 ? "s" : ""} one of its entrants in a later round (X-DW-1)`);
+    }
+    if (f === undefined || f.ledger === null || f.ledger.length === 0) continue;
+    const live = liveEntries(f.ledger).filter((e) => e.type === "core.forfeit").length;
+    const forfeitShape = o !== null && (o.kind === "award" || o.kind === "double_walkover");
+    if (live === 0 && !forfeitShape) continue;
+    one.checked++;
+    if (live > 1) one.fails.push(`fixture ${r.id} holds ${live} live forfeits — a second forfeit was accepted over the first`);
+    else if (live === 1 && (r.status !== "forfeited" || !forfeitShape)) one.fails.push(`fixture ${r.id} holds a live forfeit, yet the product shows it ${r.status} with ${o === null ? "no outcome" : `a ${o.kind}`} (D7: forfeited, an award or a double walkover)`);
+    else if (live === 0) one.fails.push(`fixture ${r.id} shows ${o!.kind} off a ledger with no live forfeit — a result with nothing behind it`);
+  }
+  return [dw, one];
+}
+
+/** The table kinds whose standings rows are the division's entrants (americano's are its pairs' players). */
+const forfeitTableKind = (kind: string): boolean => !forbidsLevelResult(kind) && kind !== "americano";
+
+/** FORFEIT_TABLE_CHECK's items: one per active entrant of a fixture with a live forfeit (zero when there is none). */
+async function forfeitTableCheck(m: ModelState, d: OrganiserDriver, mine: readonly FixtureRow[]): Promise<{ checked: number; fails: string[] }> {
+  if (!forfeitTableKind(m.stageKind)) return { checked: 0, fails: [] };
+  const judged = new Set<string>();
+  for (const r of mine) {
+    const f = m.fixtures.get(r.id);
+    if (f === undefined || f.ledger === null || !liveEntries(f.ledger).some((e) => e.type === "core.forfeit")) continue;
+    for (const e of [r.home_entrant_id, r.away_entrant_id]) if (e !== null && !m.withdrawn.has(e)) judged.add(e);
+  }
+  if (judged.size === 0) return { checked: 0, fails: [] };
+  const rows = new Map<string, { played?: number }>();
+  for (const pool of new Set(mine.map((r) => r.pool_id))) for (const row of (await d.standings(m.stageId, pool)).rows) rows.set(row.entrantId, row);
+  const fails: string[] = [];
+  for (const e of judged) {
+    const results = mine.filter((r) => (r.home_entrant_id === e || r.away_entrant_id === e) && toObservedOutcome(r.outcome) !== null).length;
+    const row = rows.get(e);
+    if (row === undefined) fails.push(`entrant ${e} has a live forfeit but no row in the table`);
+    else if (row.played !== results) fails.push(`entrant ${e}: the table counts played ${row.played ?? "(none)"}, the product shows ${results} result(s) — one per active forfeit (X-WO-1, D7)`);
+  }
+  return { checked: judged.size, fails };
 }
 
 /** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
@@ -594,4 +701,13 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
     const engine = want.refused === null ? JSON.stringify(want.out) : `a refusal (${want.refused})`;
     throw new ModelViolation("model-fold-parity", [`fixture ${r.id}: product ${JSON.stringify(got)}, engine fold of the ledger ${engine} (${f.ledger.length} events)`]);
   }
+  // W2b's two forfeit invariants run AFTER fold parity: they read the ledger as the forfeits it holds, so a ledger the
+  // engine refuses (or one the tip re-read just marked unknown) is fold parity's to name, never theirs.
+  for (const c of forfeitChecks(m, mine)) {
+    add(m, c.id, c.checked);
+    if (c.fails.length > 0) throw new ModelViolation(c.id, c.fails.slice(0, 12));
+  }
+  const table = await forfeitTableCheck(m, d, mine);
+  add(m, FORFEIT_TABLE_CHECK, table.checked);
+  if (table.fails.length > 0) throw new ModelViolation(FORFEIT_TABLE_CHECK, table.fails.slice(0, 12));
 }

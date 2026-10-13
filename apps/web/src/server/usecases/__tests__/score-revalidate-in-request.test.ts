@@ -402,7 +402,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       // documents, which used to be a `pub:v1:div:{id}:*` SCAN. No SCAN is sent.
       expect(targetsOf("del"), write.type).toEqual(
         expect.arrayContaining([
-          `pub:v1:fixture:v2:${fixtureId}`,
+          `pub:v1:fixture:v3:${fixtureId}`,
           `pub:v1:hub:${competitionId}`,
           `pub:v1:player-matches-gen:${competitionId}`,
           `pub:v1:div:${divisionId}:schedule`,
@@ -440,7 +440,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
     const competitionId = await competitionOf(divisionId);
-    const fixtureKey = `pub:v1:fixture:v2:${fixtureId}`;
+    const fixtureKey = `pub:v1:fixture:v3:${fixtureId}`;
     const hubKey = `pub:v1:hub:${competitionId}`;
     const playerMatchesGenKey = `pub:v1:player-matches-gen:${competitionId}`;
     // Spectator W2 Task 15: the org home's live document rides the same DEL.
@@ -595,7 +595,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     expect(targetsOf("del")).toEqual(
-      expect.arrayContaining([`pub:v1:fixture:v2:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
+      expect.arrayContaining([`pub:v1:fixture:v3:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
     );
 
     // And the pushes still wait for the DEL, then go out once each.

@@ -23,6 +23,11 @@ import {
   EntrantId,
   type DisciplineCard,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type ScoreSummary,
   type StageKind,
@@ -30,6 +35,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -38,7 +44,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, playedInStats, resultInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — carrom.md §1 (ICF Laws 52, 54, 56, 57)
@@ -450,25 +456,34 @@ function applyAdjust(
 
 // Walkover — carrom.md §7: the match is awarded to the opponent; completed
 // games stand in the ledger.
-function applyForfeit(state: CarromState, by: string, reason: string): CarromState {
-  const winnerSide = opponent(sideOf(state, by));
+function applyForfeit(state: CarromState, by: string, reason: ForfeitReason): CarromState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
+  // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
+  // reason. What the table credits is `forfeitCredit`'s (W2b Task 4), never a score written here.
+  if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
 
-// Abandonment — PROMPT-16 §4: `no_result`, with completed games recorded (the
-// ledger metrics keep whatever was actually played).
+/** W2b (plan D3) — the kernel's forfeit guard reads this module's phase through this Record (closed union, so a
+ *  phase added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<CarromState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
+
+// Abandonment — W2b CA-AB-1 (plan D16): a replay by default. The phase closes the match (nothing more is played on
+// it) and the outcome stays null, so nobody is credited shared points (opt-in sharing is W2c). Before W2b this was a
+// `no_result` with draw points each (PROMPT-16 §4); voiding the abandon resumes the match as before.
 function applyAbandon(state: CarromState): CarromState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  return { ...state, phase: "abandoned", outcome: { kind: "no_result" } };
+  return { ...state, phase: "abandoned" };
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +517,67 @@ function sideLedger(state: CarromState, side: Side): Record<string, number> {
     points_won: pointsFor,
     points_lost: pointsAgainst,
   };
+}
+
+/** The metric keys carrom declares (`carrom.metrics`), for the double walkover's exclusion list. */
+const CARROM_METRIC_KEYS = ["sets_won", "sets_lost", "boards_won", "boards_lost", "points_won", "points_lost"] as const;
+
+/** One side's board points in one game: the boards it won, as `sideLedger` counts them. */
+const gamePoints = (game: CarromGameState, side: Side): number =>
+  game.boards.reduce((sum, board) => sum + (board.winner === side ? board.points : 0), 0);
+
+/**
+ * W2b (spec §5.2; CA-WO-1, CA-RT-1) — what a forfeit credits, from cfg and the games in state.
+ *
+ * WALKOVER: the games the winner needs (⌈bestOf/2⌉), each `gameTo`-0; no boards (nobody sat at one).
+ * RETIREMENT, in-match disqualification, a withdrawal (PF-7): completed games stand; the unfinished game is
+ * `gameTo`-(the retiree's points in it); every further game the winner still needs is `gameTo`-0. Boards stay as played
+ * (no phantom boards for `board_ratio`). Before play there are no games, so this is the walkover credit.
+ */
+function carromForfeitCredit(cfg: CarromCfg, state: CarromState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  const played = [sideLedger(state, "home"), sideLedger(state, "away")] as const;
+  if (by === "both") return doubleWalkoverCredit(played[0], played[1], CARROM_METRIC_KEYS);
+  if (reason === "bye") return { perSide: played, excluded: [] };
+  const winner = opponent(by);
+  const games = { home: 0, away: 0 };
+  const points = { home: 0, away: 0 };
+  if (reason !== "walkover") {
+    games.home = state.gamesWon.home;
+    games.away = state.gamesWon.away;
+    for (const game of state.games) {
+      points[by] += gamePoints(game, by);
+      if (game.winner !== null) {
+        points[winner] += gamePoints(game, winner);
+        continue;
+      }
+      points[winner] += cfg.gameTo; // the unfinished game, completed for the winner
+      games[winner] += 1;
+    }
+  }
+  const need = majority(cfg.bestOf);
+  while (games[winner] < need) {
+    games[winner] += 1;
+    points[winner] += cfg.gameTo;
+  }
+  const record = (side: Side) => ({
+    sets_won: games[side],
+    sets_lost: games[opponent(side)],
+    points_won: points[side],
+    points_lost: points[opponent(side)],
+  });
+  return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };
+}
+
+/** X-WO-1 (Task 13 review C1) — the games a decided match READS: the credited ones for a forfeit (the same
+ *  `carromForfeitCredit` `standingsDelta` lays over the table — CA-WO-1/CA-RT-1), the games won otherwise. A bye needs
+ *  no branch: its credit IS the played tally (C-5). Mirrors football's `displayedGoals`. */
+function displayedGames(state: CarromState): { home: number; away: number } {
+  const outcome = state.outcome;
+  if (outcome?.kind !== "award") return state.gamesWon;
+  const reason = awardReasonOf(outcome);
+  const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+  const credit = carromForfeitCredit(state.cfg, state, reason, offender);
+  return { home: credit.perSide[0].sets_won ?? state.gamesWon.home, away: credit.perSide[1].sets_won ?? state.gamesWon.away };
 }
 
 // ---------------------------------------------------------------------------
@@ -751,14 +827,16 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
     for (const personId of personsForEntrant(ctx, entrant.id)) bump(personId, key, by);
   };
 
-  // "matches" — attendance. Gated on the ledger naming SOME entrant at all
-  // (the same entrant-id scan `discipline.extractCards` already uses, so an
-  // empty/pre-match stream credits nobody) — but once gated open, BOTH
-  // `ctx.entrants` are credited, not just whichever one a payload happens to
-  // name: a whitewash where the loser never wins a board, never covers a
-  // queen and never draws a penalty would otherwise leave the loser's own
-  // roster with no "matches" row at all, despite unambiguously having played.
-  if (entrantIdsIn(events).length > 0) {
+  // "matches" — attendance: `playedInStats` (R115 review M3), the one players'-stats reader every other surface asks
+  // (the shared fold's appearance, apps/web's career count), never a local "does a payload name an entrant". An empty
+  // ledger credits nobody; a walkover, a double walkover, and a disqualification, a withdrawal or an abandon with
+  // nothing played before it (whatever its result or settle) are no match for anybody (X-PS-1, rulings 115, 120, 127);
+  // a retirement or an in-match disqualification is one for both sides even before the first board, and a withdrawal
+  // or an abandon after play is one (X-PS-2, ruling 127). Once it says played, BOTH `ctx.entrants` are credited, not just whichever one
+  // a payload happens to name: a whitewash where the loser never wins a board, never covers a queen and never draws a
+  // penalty would otherwise leave the loser's own roster with no "matches" row at all, despite having played.
+  const played = playedInStats(events, carrom);
+  if (played) {
     for (const entrant of ctx.entrants) creditEach(entrant, "matches", 1);
   }
 
@@ -788,7 +866,13 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
       // beside module state, so `state.outcome` would credit a settled level
       // match as a draw.
       const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));
-      if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
+      // W2b (X-PS-1; rulings 120, 127): a fixture that is no match played — an unplayed forfeit, or an abandon with
+      // nothing played before it, whatever its result or settle — credits no personal win or loss, not even the zero;
+      // nor does a withdrawal after play (ruling 127), a match both sides played that nobody won on the board. The
+      // same reader as `matches`, so a player never holds a win from a match they did not play.
+      if (!resultInStats(events, carrom)) {
+        // nothing: no personal result (no match played, or a withdrawal after play)
+      } else if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;
         creditEach(home, "wins", winnerIsHome ? 1 : 0);
         creditEach(away, "wins", winnerIsHome ? 0 : 1);
@@ -874,6 +958,9 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+  // W2b (spec §5.2) — see carromForfeitCredit.
+  forfeitCredit: carromForfeitCredit,
 
   // §9.5 — defined at every prefix; boards render like sets (carrom.md §6).
   // W4a (#425) T6b — the cross-sport position axis (see `carromPosition`).
@@ -881,9 +968,14 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
   summary(state): ScoreSummary {
     const current = state.games.find((game) => game.winner === null);
+    // A forfeit reads its credited games (X-WO-1); the per-game detail below stays as played.
+    const won = displayedGames(state);
+    // Loop R M-2b: the bracket is the game IN PLAY. A decided match has none — a forfeit leaves its game unfinished,
+    // and that game's score beside the credited games ("2 (0)") read as a running board.
+    const inPlay = state.outcome === null ? current : undefined;
     const line = (side: Side): string => {
-      const games = `${state.gamesWon[side]}`;
-      return current === undefined ? games : `${games} (${current.score[side]})`;
+      const games = `${won[side]}`;
+      return inPlay === undefined ? games : `${games} (${inPlay.score[side]})`;
     };
     const breaker =
       state.phase === "live" && current !== undefined
@@ -892,7 +984,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
           ]
         : null;
     return {
-      headline: `${state.gamesWon.home} — ${state.gamesWon.away}`,
+      headline: `${won.home} — ${won.away}`,
       perSide: [
         { entrantId: state.entrants.home, line: line("home") },
         { entrantId: state.entrants.away, line: line("away") },
@@ -937,6 +1029,10 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
       points: pts,
       metrics: sideLedger(state, side),
     });
+    const credited = (side: Side, w: number, l: number, pts: number, credit: ForfeitCredit): StandingsDelta => ({
+      ...build(side, w, 0, l, pts),
+      metrics: creditedMetrics(sideLedger(state, side), credit, side),
+    });
 
     switch (outcome.kind) {
       case "win": {
@@ -951,12 +1047,19 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
           build("away", 0, 1, 0, cfg.points.draw),
         ];
       case "award": {
-        // Walkover — carrom.md §7: match points as a win; the ledger keeps
-        // only what was actually played (no phantom boards).
+        // Walkover — carrom.md §7: match points as a win. W2b (spec §5.2): the CREDITED games and points
+        // (`carromForfeitCredit`); boards stay as played (no phantom boards).
         const winnerSide = sideOf(state, outcome.winner);
-        const winner = build(winnerSide, 1, 0, 0, cfg.points.win);
-        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.points.loss);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+        const credit = carromForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+        const winner = credited(winnerSide, 1, 0, cfg.points.win, credit);
+        const loser = credited(offender, 0, 1, cfg.points.loss, credit);
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "double_walkover": {
+        // X-DW-4: both played and lost, no points, no score, out of every ratio.
+        const credit = carromForfeitCredit(cfg, state, "walkover", "both");
+        return [credited("home", 0, 1, 0, credit), credited("away", 0, 1, 0, credit)];
       }
       case "no_result":
         // Abandonment — PROMPT-16 §4: shared (draw) points, completed games
@@ -1097,6 +1200,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
   // spec 03 §6 — deterministic generator: optional toss, start, then boards
   // with occasional umpire adjustments, forfeits and abandonments.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<CarromEv> | null {
     const randomEntrant = () => (rng() < 0.5 ? state.entrants.home : state.entrants.away);
     if (state.phase === "pre") {
@@ -1109,7 +1213,11 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
     const roll = rng();
     if (roll < 0.02) {
-      return { type: "core.forfeit", payload: { by: randomEntrant(), reason: "no-show" } };
+      // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a board is recorded
+      // (nobody retires from a match never played; before the Start this generator draws only the toss) — never a
+      // walkover, from the roll taken.
+      const played = state.games.some((g) => g.boards.length > 0);
+      return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
     }
     if (roll < 0.04) {
       return { type: "core.abandon", payload: { reason: "venue closed" } };
@@ -1159,4 +1267,5 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
       },
     };
   },
+  // Stryker restore all
 };

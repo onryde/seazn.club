@@ -6,9 +6,12 @@ import {
   decidedOutcomeText, shootoutScoreFromDetail, decidedOutcomeTemplates, renderDecidedOutcome,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
-  SETTLE_METHOD_IDS, TIEBREAK_RUNG_IDS, settledMethodId,
+  SETTLE_METHOD_IDS, TIEBREAK_RUNG_IDS, settledMethodId, FORFEIT_PHASE_KEY, FORFEIT_REASON_KEY,
 } from "@/lib/scoring-vocab";
+import { REFUSAL_PHASES } from "@/lib/forfeit-phase-refusal";
+import { FORFEIT_REASONS } from "@seazn/engine/core";
 import { interpolate } from "@/lib/i18n-runtime";
+import type { Locale } from "@/lib/i18n-constants";
 import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
@@ -946,6 +949,87 @@ describe("scoring-vocab covers what the engine declares", () => {
       expect(scoringErrorText("LEVEL_RESULT_IN_BRACKET", "raw", m, "score.failed", { reason: "finalize_unsettled" }), locale).toBe(fin);
       // A reason on another code changes nothing.
       expect(engineErrorLabel("WRONG_PHASE", m, "finalize_unsettled"), locale).toBe(dict["engineError.WRONG_PHASE"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("M-4: FORFEIT_REASON_WRONG_PHASE names the phase and the allowed reasons in every locale; a double walkover in a tie-break is its own sentence", () => {
+    // The engine's own declarations: every phase the guard refuses in, every forfeit reason (FORFEIT_REASONS) — less
+    // spec PF-2's cascade-only `withdrew`, which no writer this refusal reaches may record (loop-F R-3).
+    const PF2_CASCADE_ONLY: readonly string[] = ["withdrew"];
+    const reasons: readonly string[] = FORFEIT_REASONS.filter((r) => !PF2_CASCADE_ONLY.includes(r));
+    expect(reasons.length, "the engine declares writer reasons").toBeGreaterThan(0);
+    expect(Object.keys(FORFEIT_REASON_KEY).sort(), "one word per reason a writer may record").toEqual([...reasons].sort());
+    expect(Object.keys(FORFEIT_PHASE_KEY).sort()).toEqual([...REFUSAL_PHASES].sort());
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k, v) => interpolate(dict[k]!, v);
+      for (const k of [...Object.values(FORFEIT_PHASE_KEY), ...Object.values(FORFEIT_REASON_KEY)]) {
+        expect(typeof dict[k] === "string" && dict[k]!.length > 0, `${locale} ${k}`).toBe(true);
+      }
+      const named = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named"]!;
+      const both = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak"]!;
+      expect([named.includes("{phase}"), named.includes("{allowed}"), both.includes("{allowed}")], locale).toEqual([true, true, true]);
+      // The engine lists the cascade's `withdrew` (it admits it in every phase); the sentence names only the walkover.
+      const allowed = ["walkover", "withdrew"];
+      const words = dict["forfeit.reason.walkover"]!;
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false }), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: words }),
+      );
+      // R3: both sides in a tie-break — the game was played; its own sentence, never the phase sentence.
+      const tb = scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "tiebreak", allowed, both: true });
+      expect(tb, locale).toBe(interpolate(both, { allowed: words }));
+      // Both sides outside a tie-break is the phase sentence (R2: a walkover outside its phases).
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: true }), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: words }),
+      );
+      // The empty case: no extras (an older server) reads the code's own copy, which names no rule it cannot know.
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", null), locale).toBe(dict["engineError.FORFEIT_REASON_WRONG_PHASE"]);
+      // R-3's empty case: a phase admitting ONLY the cascade's reason names nothing — the code's own copy again.
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "pre", allowed: ["withdrew"], both: false }), locale).toBe(
+        dict["engineError.FORFEIT_REASON_WRONG_PHASE"],
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("ruling 113: a retirement refused after a bare Start reads \"before anything has been played\", never \"once play has started\" — every locale; played: true keeps the play sentence", () => {
+    // The engine's refusal names `played` (core/events.ts): the phase reads "play" from the Start, and ruling 113 refuses
+    // a retirement there until something is played. "Once play has started" would contradict the refusal it explains.
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k, v) => interpolate(dict[k]!, v);
+      const nothing = dict["forfeit.phase.nothingPlayed"];
+      expect(typeof nothing === "string" && nothing.length > 0, `${locale} forfeit.phase.nothingPlayed`).toBe(true);
+      expect(nothing, `${locale}: its own words, not the play phase's`).not.toBe(dict["forfeit.phase.play"]);
+      const named = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named"]!;
+      // The engine's list after a bare Start (walkover, disqualified, withdrew); the sentence drops the cascade's withdrew.
+      const allowed = ["walkover", "disqualified", "withdrew"];
+      // Design audit 1.5: the list is the reader's language's own list (the platform's Intl.ListFormat, the house
+      // pattern of stages-panel's roster-drift sentence), never English ", " punctuation in every locale. The premise:
+      // the right answer differs from the comma join in every locale, so this case can witness the regression.
+      const list = (xs: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(xs);
+      const words = list([dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!]);
+      expect(words, `${locale}: the language's own list differs from ", "`).not.toBe([dict["forfeit.reason.walkover"]!, dict["forfeit.reason.disqualified"]!].join(", "));
+      const bare = scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: false }, locale as Locale);
+      expect(bare, locale).toBe(interpolate(named, { phase: nothing!, allowed: words }));
+      expect(bare, locale).not.toContain(dict["forfeit.phase.play"]!);
+      // The pair: once something is played, the play phase's words (a walkover refused after play).
+      const after = ["retired", "disqualified", "withdrew"];
+      const afterWords = list([dict["forfeit.reason.retired"]!, dict["forfeit.reason.disqualified"]!]);
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed: after, both: false, played: true }, locale as Locale), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: afterWords }),
+      );
+      // Before the Start nothing is played either, and the pre phase's words stand (the match has not started).
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "pre", allowed: ["walkover", "withdrew"], both: false, played: false }), locale).toBe(
+        interpolate(named, { phase: dict["forfeit.phase.pre"]!, allowed: dict["forfeit.reason.walkover"]! }),
+      );
+      // A `played` that is not a boolean is no shape this codebase reads: the code's own copy.
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false, played: "no" }), locale).toBe(
+        dict["engineError.FORFEIT_REASON_WRONG_PHASE"],
+      );
       checked++;
     }
     expect(checked).toBe(4);

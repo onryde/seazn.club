@@ -33,6 +33,11 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type MetricSpec,
   type ScoreSummary,
@@ -41,6 +46,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   FidelityBand,
   ModuleEvent,
@@ -54,6 +60,8 @@ import type {
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
   personsForEntrant,
+  playedInStats,
+  type StatsPlayDeclaration,
   type PlayerStatMetric,
   type PlayerStatRow,
   type PlayerStatsFoldCtx,
@@ -1372,17 +1380,25 @@ function applySetSummary(
 // Forfeit / abandon — mirror setbased.
 // ---------------------------------------------------------------------------
 
-function applyForfeit(state: NestedState, by: string, reason: string): NestedState {
+function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): NestedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  const winnerSide = opponent(sideOf(state, by));
+  // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
+  // reason. What the table credits is `forfeitCredit`'s (W2b Task 4), never a score written here.
+  if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads this module's phase through this Record (closed union, so a
+ *  phase added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<NestedState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 function applyAbandon(state: NestedState): NestedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
@@ -1810,14 +1826,16 @@ function nestedGamesOf(state: NestedState, side: Side): number {
  * Positional set summaries here need no special case, unlike the set-based
  * kernel's: `NestedSetSummary` has only ONE shape (`{home, away, tb?}`,
  * always positional) — there is no entrant-keyed alternative to prefer, so
- * every well-formed summary in the ledger is evidence both sides "played",
- * and it is always fed to the replay (which needs no entrant id to bank a
+ * every well-formed summary in the ledger is always fed to the replay (which needs no entrant id to bank a
  * games score, only two numbers to compare against `idX`'s/`idY`'s already-
  * known positions).
  */
 function nestedMatchOutcomesFold(
   preset: NestedPreset,
   configSchema: ReturnType<typeof makeNestedConfigSchema>,
+  /** The module this fold belongs to, read when the fold runs: `playedInStats` reads its own declarations (ruling
+   *  120), never a copy. */
+  play: () => StatsPlayDeclaration,
 ): NonNullable<PlayerStatsModel["folded"]> {
   const pointType = `${preset.key}.point`;
   const summaryType = `${preset.key}.set_summary`;
@@ -1846,11 +1864,9 @@ function nestedMatchOutcomesFold(
       let state: NestedState | undefined = cfgParsed.success
         ? nestedReplayState(cfgParsed.data, idX, idY)
         : undefined;
-      let played = false;
 
       for (const event of events) {
         if (event.type === pointType) {
-          played = true;
           if (state === undefined) continue;
           const by = (event.payload as Record<string, unknown>).by;
           if (typeof by !== "string" || (by !== idX && by !== idY)) continue;
@@ -1862,7 +1878,6 @@ function nestedMatchOutcomesFold(
           continue;
         }
         if (event.type === summaryType) {
-          played = true; // no entrant id on this shape — see the doc comment above
           if (state === undefined) continue;
           const payload = event.payload as Record<string, unknown>;
           if (typeof payload.home !== "number" || typeof payload.away !== "number") continue;
@@ -1874,7 +1889,6 @@ function nestedMatchOutcomesFold(
           continue;
         }
         if (event.type === gameAwardType) {
-          played = true;
           if (state === undefined) continue;
           const winner = (event.payload as Record<string, unknown>).winner;
           if (typeof winner !== "string" || (winner !== idX && winner !== idY)) continue;
@@ -1893,7 +1907,12 @@ function nestedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      if (played) {
+      // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
+      // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
+      // walkover, a double walkover, and a disqualification, a withdrawal or an abandon with nothing played before it are
+      // none (rulings 115, 120, 127); a retirement, an in-match disqualification, a withdrawal after play (ruling 127) and
+      // an abandon after play are one, scored or not (X-PS-2, ruling 114).
+      if (playedInStats(events, play())) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -1979,6 +1998,10 @@ function mergePlayerStats(
 
 export function makeNestedModule(
   preset: NestedPreset,
+  /** The module this call returns, as the caller's own binding (`makeNestedModule({...}, () => tennis)`, as hockey hands
+   *  `() => hockey` to its keeper fold): the matches fold reads its declarations when it runs (ruling 120), never a
+   *  copy. A thunk the caller owns lets the module stay the returned object literal the Stryker split names. */
+  self: () => StatsPlayDeclaration,
 ): SportModule<NestedCfg, NestedEv, NestedState> {
   const configSchema = makeNestedConfigSchema(preset.defaults);
   const pointType = `${preset.key}.point`;
@@ -2047,6 +2070,34 @@ export function makeNestedModule(
       games_lost: gamesOf(opp),
       points_won: state.pointsWon[side],
     };
+  };
+
+  /**
+   * W2b (spec §5.2; TN-WO-1, TN-RT-1) — a walkover, a retirement, an in-match disqualification and a withdrawal all
+   * credit the same: straight sets (⌈bestOf/2⌉-0) for set %, and the match's games EXCLUDED from game % (read 0 for
+   * this match on both sides). Points won stay as played — a ledger record, and no ratio of tennis's reads it.
+   */
+  const nestedForfeitCredit = (cfg: NestedCfg, state: NestedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
+    const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
+    if (by === "both") return doubleWalkoverCredit(played[0], played[1], METRICS.map((m) => m.key));
+    if (reason === "bye") return { perSide: played, excluded: [] };
+    const need = majority(cfg.bestOf);
+    return {
+      perSide: creditFor(by, { sets_won: need, sets_lost: 0 }, { sets_won: 0, sets_lost: need }),
+      excluded: ["games_won", "games_lost"],
+    };
+  };
+
+  /** X-WO-1 (Task 13 review C1) — the sets a decided match READS: the credited ones for a forfeit (the same
+   *  `nestedForfeitCredit` `standingsDelta` lays over the table — TN-WO-1/TN-RT-1 straight sets), the sets won
+   *  otherwise. A bye needs no branch: its credit IS the played tally (C-5). Mirrors football's `displayedGoals`. */
+  const displayedSets = (state: NestedState): { home: number; away: number } => {
+    const outcome = state.outcome;
+    if (outcome?.kind !== "award") return state.setsWon;
+    const reason = awardReasonOf(outcome);
+    const offender = awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id));
+    const credit = nestedForfeitCredit(state.cfg, state, reason, offender);
+    return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
   };
 
   return {
@@ -2127,6 +2178,9 @@ export function makeNestedModule(
     },
 
     outcome: (state) => state.outcome,
+    forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+    // W2b (spec §5.2) — see nestedForfeitCredit.
+    forfeitCredit: nestedForfeitCredit,
 
     // W4a (#425) §7 obligation 2 — the EXPORTED function itself, handed over by
     // reference. Not a wrapper and not a copy of its output: the guard and the
@@ -2141,7 +2195,14 @@ export function makeNestedModule(
     // closed-set strip (6–4 7–6(5) [10–7]), live games and the spoken game
     // score; serve state rides in detail for pads and scorebugs.
     summary(state): ScoreSummary {
-      const strip = state.sets.map(closedSetLine).join(" ");
+      // Loop R M-2c: a forfeit ends the match in the set it stopped — that set stays in the strip ("3–6 2–1", the way
+      // a retirement is scored) and in the detail as an open set, as the set kernels keep their open game. Without it a
+      // retirement at 3–6 2–1 read "2 — 0 · 3–6", the set she retired in gone from every surface.
+      const stopped = (state.outcome?.kind === "award" || state.outcome?.kind === "double_walkover") && setInProgress(state);
+      const strip = [
+        ...state.sets.map(closedSetLine),
+        ...(stopped ? [state.points.kind === "matchTiebreak" ? `[${state.points.home}–${state.points.away}]` : `${state.games.home}–${state.games.away}`] : []),
+      ].join(" ");
       const liveGames =
         state.phase === "live" && (setInProgress(state) || state.sets.length > 0)
           ? state.points.kind === "matchTiebreak"
@@ -2153,14 +2214,16 @@ export function makeNestedModule(
                 ? ` (${gameScoreLine(state.points)})`
                 : "")
           : "";
+      // A forfeit reads its credited sets (X-WO-1); the played strip beside them stays as played.
+      const sets = displayedSets(state);
       return {
         headline:
-          `${state.setsWon.home} — ${state.setsWon.away}` +
+          `${sets.home} — ${sets.away}` +
           (strip === "" ? "" : ` · ${strip}`) +
           liveGames,
         perSide: [
-          { entrantId: state.entrants.home, line: `${state.setsWon.home}` },
-          { entrantId: state.entrants.away, line: `${state.setsWon.away}` },
+          { entrantId: state.entrants.home, line: `${sets.home}` },
+          { entrantId: state.entrants.away, line: `${sets.away}` },
         ],
         detail: {
           // Closed sets + (when play is under way) one open entry with the
@@ -2169,7 +2232,7 @@ export function makeNestedModule(
           // without knowing the sport. The MTB live entry carries its points.
           sets: [
             ...state.sets.map((set) => ({ ...set, closed: true })),
-            ...(state.phase === "live" && setInProgress(state)
+            ...((state.phase === "live" || stopped) && setInProgress(state)
               ? [
                   state.points.kind === "matchTiebreak"
                     ? { home: state.points.home, away: state.points.away, closed: false }
@@ -2205,12 +2268,30 @@ export function makeNestedModule(
         metrics: sideMetrics(state, side),
       });
       switch (outcome.kind) {
-        case "win":
-        case "award": {
+        case "win": {
           const winnerSide = sideOf(state, outcome.winner);
           const winner = build(winnerSide, 1, 0, cfg.points.win);
           const loser = build(opponent(winnerSide), 0, 1, cfg.points.loss);
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "award": {
+          // W2b (spec §5.2): the credited sets (`nestedForfeitCredit`) over the played ledger.
+          const winnerSide = sideOf(state, outcome.winner);
+          const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+          const credit = nestedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+          const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+            ...build(side, w, l, pts),
+            metrics: creditedMetrics(sideMetrics(state, side), credit, side),
+          });
+          const winner = at(winnerSide, 1, 0, cfg.points.win);
+          const loser = at(offender, 0, 1, cfg.points.loss);
+          return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "double_walkover": {
+          // X-DW-4: both played and lost, no points, no score, out of every ratio.
+          const credit = nestedForfeitCredit(cfg, state, "walkover", "both");
+          const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side), credit, side) });
+          return [at("home"), at("away")];
         }
         default:
           invalid(`nested module cannot rank outcome "${outcome.kind}"`);
@@ -2243,7 +2324,7 @@ export function makeNestedModule(
     playerStats: mergePlayerStats(
       {
         metrics: [nestedPointsWonMetric(pointType)],
-        folded: nestedMatchOutcomesFold(preset, configSchema),
+        folded: nestedMatchOutcomesFold(preset, configSchema, self),
       },
       preset.playerStats,
     ),
@@ -2252,6 +2333,7 @@ export function makeNestedModule(
     // spec 03 §6 — deterministic generator. Summary-dominant so matches decide
     // within the conformance event budget; point bursts exercise the rally
     // path (deuce loops, TB entry) like setbased's rally bursts.
+    // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
     arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
@@ -2367,7 +2449,10 @@ export function makeNestedModule(
       }
       const roll = rng();
       if (roll < 0.02) {
-        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: "walkover" } };
+        // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a point, game or set is
+        // on the board (nobody retires from a match never played) — never a walkover, from the roll taken.
+        const played = state.sets.length > 0 || state.games.home + state.games.away > 0 || state.pointsWon.home + state.pointsWon.away > 0;
+        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
       }
       if (roll < 0.04) return { type: "core.abandon", payload: { reason: "rain" } };
       if (roll < 0.14) return { type: pointType, payload: pointPayload() };
@@ -2404,5 +2489,6 @@ export function makeNestedModule(
         payload: { home: homeWins ? rules.gamesTo : lo, away: homeWins ? lo : rules.gamesTo },
       };
     },
+    // Stryker restore all
   };
 }

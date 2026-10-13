@@ -57,13 +57,17 @@ describe("bracketWinnerLoser", () => {
   });
 
   it("derives the loser as the OTHER home/away side for an award (walkover) outcome", () => {
+    // A pre-W2b award names only its winner; W2b (spec §5.3, W2b-R11) marks the bracket walked over there, so
+    // `bracketRanks` pins the forfeiting side's elimination to this fixture.
     expect(bracketWinnerLoser({ kind: "award", winner: "A" }, "A", "B")).toEqual({
       winner: "A",
       loser: "B",
+      walkedOver: "loser",
     });
     expect(bracketWinnerLoser({ kind: "award", winner: "B" }, "A", "B")).toEqual({
       winner: "B",
       loser: "A",
+      walkedOver: "loser",
     });
   });
 

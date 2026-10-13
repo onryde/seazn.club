@@ -60,7 +60,7 @@ limitation stated in the table rather than buried in the code.
 | Timeout allowance (exactly one) | all | — | — | deferred | the umpire enforces it. Refusing a second `tabletennis.timeout` would make a legitimate correction unrecordable — a product decision. |
 | Racket and equipment inspection | all | persons | — | deferred | a pre-match control document, not a scoring fact. |
 | Team ties (Swaythling / modern club format: first to 3 of 5 individual matches) | all | entrants | competition layer, `Fixture.parent_fixture_id` | modelled | out of module scope by design — this module scores one singles/doubles fixture. |
-| Retirement or injury | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | opponent takes the match with the clean-sweep points pair. |
+| Retirement or injury | all | entrant | `core.forfeit` → `outcome.kind = "award"` | modelled | opponent takes the match with the points for the CREDITED game score (X-WO-1; the pointsMap pair, exact score else `*`). |
 | Match abandoned (venue, power) | all | — | `core.abandon` → `State.replayFlagged` | modelled | leaves the fixture undecided for re-scheduling. |
 | Umpire on the sheet | all | official | `officialLabel.scorer = "Umpire"` | modelled | |
 | Remarks, injury notes | all | — | `core.note` | modelled | free text, no fold effect. |

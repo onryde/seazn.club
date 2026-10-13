@@ -4320,9 +4320,6 @@
       "provenance": "real",
       "events": [
         {
-          "type": "core.start"
-        },
-        {
           "type": "core.forfeit",
           "payload": {
             "by": "@e-a-sandro-eric-sosing",

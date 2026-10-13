@@ -363,6 +363,73 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     expect(served.status).toBe("served");
   });
 
+  /** Loop R M-9 (owner ruling 126, 2026-10-13): a double walkover counts as a match SERVED by a suspended entrant —
+   *  `by: "both"` includes her. Every fixture is written through the console's own door (`scoreEvent`), after the
+   *  ban was confirmed, except the two legacy chess rows, which only a pre-W2b ledger holds (the write door refuses
+   *  `boardgame.result{double_forfeit}` now, D15). Each case on its own ban of 5 (so a count is never capped), the cap
+   *  on a ban of 1. single-sport: football — the counter reads statuses and outcomes, never the sport; the chess rows
+   *  are a ledger shape, written raw. */
+  it("ruling 126: a double walkover serves 1 for the suspended entrant; a forfeit by the opponent 0; a forfeit by her 1; capped at matches_total; a legacy chess double forfeit 1; voided, a double walkover or her forfeit serves 0", async () => {
+    async function banned(ban: number) {
+      const ctx = await seedFootballDivision();
+      await setRules(ctx, { accumulation: [{ key: "yellow_5", color: "yellow", count: 5, ban_matches: ban }], dismissal: [] });
+      await sql`update divisions set status = 'active' where id = ${ctx.divisionId}`;
+      const cardFx = await makeFixture(ctx, 1, ctx.entrantA, ctx.entrantB);
+      for (let i = 0; i < 5; i++) await insertCard(ctx, cardFx, ctx.entrantA, ctx.personX, "yellow");
+      await detect(ctx);
+      const pending = (await listSuspensions(ctx.auth, ctx.divisionId)).find((r) => r.source === "auto_accumulation")!;
+      const confirmed = await decideSuspension(ctx.auth, pending.id, { kind: "confirm" });
+      expect([confirmed.status, confirmed.entrantId, confirmed.matchesTotal], "rig: A's ban is active").toEqual(["active", ctx.entrantA, ban]);
+      return { ctx, id: pending.id };
+    }
+    const forfeit = (ctx: Ctx, fx: string, by: string) =>
+      scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by, reason: "walkover" } } as never);
+    /** Loop R2 N-4: the forfeit, then the console's Undo of it — the ledger keeps both events, the fixture is unplayed
+     *  again, and only the stored STATUS says the forfeit no longer stands (the counter reads every event, voided ones
+     *  too, for who forfeited). */
+    const forfeitThenVoid = async (ctx: Ctx, fx: string, by: string) => {
+      const done = (await forfeit(ctx, fx, by)) as { event_id: string };
+      await scoreEvent(ctx.auth, fx, { expected_seq: 1, type: "core.void", payload: { event_id: done.event_id } } as never);
+      const [row] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${fx}`;
+      expect([row!.status, row!.outcome], `rig: the voided forfeit (by ${by === "both" ? "both" : "her"}) leaves the line unplayed`).toEqual(["scheduled", null]);
+    };
+    /** A pre-W2b chess double forfeit (`boardgame.result{double_forfeit}`, no core.forfeit): held `decided` where it
+     *  was never refolded, `forfeited` (outcome double_walkover, append-event.ts rule 4) where it was. */
+    const legacyChess = async (ctx: Ctx, status: "decided" | "forfeited") => {
+      const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, status);
+      if (status === "forfeited") await sql`update fixtures set outcome = ${sql.json({ kind: "double_walkover" })} where id = ${fx}`;
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'boardgame.result', ${sql.json({ winner: null, method: "double_forfeit" /* legacy row: a pre-W2b stream */ })},
+                now() + interval '1 hour')`;
+    };
+    const CASES: { name: string; ban: number; write: (ctx: Ctx) => Promise<unknown>; served: number }[] = [
+      { name: "a double walkover (by: both)", ban: 5, served: 1, write: async (ctx) => forfeit(ctx, await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB), "both") },
+      { name: "a forfeit by the opponent", ban: 5, served: 0, write: async (ctx) => forfeit(ctx, await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB), ctx.entrantB) },
+      { name: "a forfeit by the suspended entrant", ban: 5, served: 1, write: async (ctx) => forfeit(ctx, await makeFixture(ctx, 2, ctx.entrantB, ctx.entrantA), ctx.entrantA) },
+      { name: "the cap: two double walkovers on a ban of 1", ban: 1, served: 1, write: async (ctx) => {
+        await forfeit(ctx, await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB), "both");
+        await forfeit(ctx, await makeFixture(ctx, 3, ctx.entrantB, ctx.entrantA), "both");
+      } },
+      { name: "a legacy chess double forfeit held as decided", ban: 5, served: 1, write: (ctx) => legacyChess(ctx, "decided") },
+      { name: "a legacy chess double forfeit refolded to forfeited", ban: 5, served: 1, write: (ctx) => legacyChess(ctx, "forfeited") },
+      { name: "a voided double walkover", ban: 5, served: 0, write: async (ctx) => forfeitThenVoid(ctx, await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB), "both") },
+      { name: "a voided forfeit by the suspended entrant", ban: 5, served: 0, write: async (ctx) => forfeitThenVoid(ctx, await makeFixture(ctx, 2, ctx.entrantB, ctx.entrantA), ctx.entrantA) },
+    ];
+    // Every case read before any is judged, so one red names every case that moved, not just the first.
+    const seen: Record<string, [number, string]> = {};
+    for (const c of CASES) {
+      const { ctx, id } = await banned(c.ban);
+      await c.write(ctx);
+      const row = (await listSuspensions(ctx.auth, ctx.divisionId)).find((r) => r.id === id)!;
+      seen[c.name] = [row.matchesServed, row.status];
+    }
+    expect(Object.keys(seen).length, "every case ran").toBe(CASES.length);
+    expect(seen, `served, status per case: ${JSON.stringify(seen)}`).toEqual(
+      Object.fromEntries(CASES.map((c) => [c.name, [c.served, c.served >= c.ban ? "served" : "active"]])),
+    );
+  }, 180_000);
+
   // S4 (#428) acceptance: "DisciplineCard.reason is adjudicable: a test
   // expresses a real league rule over it (e.g. 'three cards for the same
   // offence') and that rule fires." Extends DisciplineRules.accumulation with

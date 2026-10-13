@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
+import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -77,6 +78,11 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   LEVEL_RESULT_IN_BRACKET: 409,
   // An assertion (X-BR-1): reaching it is a server bug, so it surfaces as one.
   LEVEL_RESULT_SEATED: 500,
+  // W2b (spec §7) — each a state of THIS fixture the organiser resolves another way (the copy says which).
+  FORFEIT_REASON_WRONG_PHASE: 409,
+  ABANDONED_SETTLE_OR_VOID: 409,
+  DOUBLE_WALKOVER_NO_NEXT_MATCH: 409,
+  STAGE_SEAT_DEPARTED: 409,
 };
 
 // HTTP status → stable machine code for non-engine errors.
@@ -242,6 +248,20 @@ async function v1Inner<T>(
       if (err.code === "SETTLE_NOT_APPLICABLE") {
         const reason = (err.data as { reason?: unknown } | undefined)?.reason;
         if (isSettleRefusalReason(reason)) extra = { reason };
+      }
+      // W2b D11 (PF-9): STAGE_SEAT_DEPARTED names the departed entrant and the match to record — her display name
+      // and the board's own ref, never an id in the copy (lib/scoring-vocab.ts renders it in the reader's language).
+      if (err.code === "STAGE_SEAT_DEPARTED") {
+        const d = err.data as { reason?: unknown; entrant?: unknown; match?: unknown } | undefined;
+        if (d?.reason === "seat_departed" && typeof d.entrant === "string") {
+          extra = { reason: "seat_departed", entrant: d.entrant, match: d.match ?? null };
+        }
+      }
+      // W2b loop-F M-4 (plan D3): FORFEIT_REASON_WRONG_PHASE names the phase it judged and the reasons it admits —
+      // only a shape this codebase reads (lib/forfeit-phase-refusal.ts); anything else keeps the code's own copy.
+      if (err.code === "FORFEIT_REASON_WRONG_PHASE") {
+        const named = forfeitPhaseRefusalOf(err.data);
+        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both, ...(named.played === undefined ? {} : { played: named.played }) };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }

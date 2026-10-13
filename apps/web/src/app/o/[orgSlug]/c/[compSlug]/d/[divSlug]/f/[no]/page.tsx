@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { requireFixturePage } from "@/server/page-auth";
 import {
   eventRecorderNames,
+  fixtureFeedsNextMatch,
   getFixture,
   getFixtureState,
   getLineup,
@@ -15,7 +16,9 @@ import {
 import { getDivision } from "@/server/usecases/divisions";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { getCompetition } from "@/server/usecases/competitions";
-import { getEntrant } from "@/server/usecases/entrants";
+import { DEPARTED_STATUSES, getEntrant } from "@/server/usecases/entrants";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import { resolveModule } from "@/server/engine-db";
 import {
   FixtureConsole,
@@ -40,6 +43,7 @@ import { sql } from "@/lib/db";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
+import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 
 /** A search param as `URLSearchParams.get` reads it: the first value of a repeated key. */
 const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -66,7 +70,7 @@ export default async function FixturePage({
   // applied. Deliberately not `division.config`, which is what this page used
   // to hand the pad: it disagrees with the fold for any scored fixture, and it
   // cannot see a per-stage format override at all.
-  const [division, state, events, recorderNames, availability, schedule, padLoad] =
+  const [division, state, events, recorderNames, availability, schedule, padLoad, feedsNext] =
     await Promise.all([
       getDivision(auth, fixture.division_id),
       getFixtureState(auth, id),
@@ -77,6 +81,8 @@ export default async function FixturePage({
       // W2a: `{ cfg, stageKind }` — the cfg drives the pad; the stage kind drives the console's held block (Task 11)
       // and the pad's bracket rules (Task 12). Never discarded: a kind read and dropped is the inert seam.
       loadFixturePadCfg(auth, id),
+      // Loop-F tidy 2: the held block's no-choice sentence on a line that feeds no next match (a final, third place).
+      fixtureFeedsNextMatch(auth, id),
     ]);
   const { cfg: padCfg, stageKind } = padLoad;
   const [competition, planKey] = await Promise.all([
@@ -117,6 +123,9 @@ export default async function FixturePage({
       id: entrant.id,
       name: entrant.display_name,
       kind: entrant.kind,
+      // Left the field — withdrawn OR disqualified (the ONE departed vocabulary): the settle dialog never offers her,
+      // as the server refuses a settle naming either (append-event.ts C17, loop-F tidy).
+      withdrawn: DEPARTED_STATUSES.has(entrant.status),
       members: entrant.members as SideInfo["members"],
       lineup: lineup.slots as LineupSlotIn[],
     };
@@ -125,6 +134,20 @@ export default async function FixturePage({
     side(fixture.home_entrant_id),
     side(fixture.away_entrant_id),
   ]);
+  // R116-4 (owner ruling 116): an empty seat a walkover was won over (a withdrawn winner's, walked over by the side that
+  // arrived) is HER side. Only her NAME goes to the console — the header names her as any walkover names the side that
+  // did not play — never a seated side: the pad, the forfeit and settle dialogs all read `home`/`away` as who is IN it.
+  const unseatedName = async (seat: "home" | "away"): Promise<string | null> => {
+    const id = unseatedForfeitLoser(fixture, seat);
+    if (id === null) return null;
+    const entrant = await getEntrant(auth, id);
+    return entrantDisplayName({
+      name: entrant.display_name,
+      kind: entrant.kind,
+      members: entrant.members as SideInfo["members"],
+    });
+  };
+  const [homeUnseatedName, awayUnseatedName] = await Promise.all([unseatedName("home"), unseatedName("away")]);
   // SPEC-1: active suspensions among this fixture's entrants, joined into the
   // pad bootstrap (no client fetch). Returns [] when the org isn't entitled.
   const activeSuspensions = await suspensionsForFixture(auth, fixture.division_id, [
@@ -231,6 +254,12 @@ export default async function FixturePage({
             round_no: fixture.round_no,
             home_slot_label: fixture.home_slot_label,
             away_slot_label: fixture.away_slot_label,
+            home_unseated_name: homeUnseatedName,
+            away_unseated_name: awayUnseatedName,
+            feeds_next_match: feedsNext,
+            // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
+            // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).
+            no_next_match: doubleWalkoverRefused(stageKind, feedsNext),
           }}
           sport={{
             key: division.sport_key,

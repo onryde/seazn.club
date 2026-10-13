@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "expected": 77,
+  "read": 5799,
+  "found": 77,
+  "works": 75,
+  "pinnedRed": [
+    {
+      "caseId": "ko_plate|boardgame|blitz|F1",
+      "now": "FX-G14",
+      "wave": "W4"
+    }
+  ],
+  "greened": [
+    "swiss_playoff|generic|score|R4"
+  ],
+  "unexpectedRed": [],
+  "wrongReason": [],
+  "exit": 0
+}

@@ -486,7 +486,8 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
     const decider = await decide(rig.auth, line.id);
     const final = await row(rig.final.id);
     expect(final.status, "premise: the final was walked over to this line's winner").toBe("forfeited");
-    expect(final.outcome).toEqual({ kind: "award", winner: line.home_entrant_id });
+    // W2b C-5 (spec §5.1): a cascade walkover is a bye — reason "bye", no loser.
+    expect(final.outcome).toEqual({ kind: "award", winner: line.home_entrant_id, loser: null, reason: "bye" });
     expect(await eventCount(rig.final.id), "…with no score event behind it").toBe(0);
     expect(seatLabel(final, other.winner_to_slot)?.key, "premise: the dead side carries the bye").toBe("bracket.slot.bye");
 
@@ -524,6 +525,8 @@ describe.skipIf(!HAS_DB)("voiding a decided knockout result takes back the name 
     expect(final.outcome, "awarded to the re-decided winner, not the old one").toEqual({
       kind: "award",
       winner: line.away_entrant_id,
+      loser: null,
+      reason: "bye", // W2b C-5
     });
     expect(seat(final, line.winner_to_slot)).toBe(line.away_entrant_id);
     expect(await eventCount(rig.final.id), "still nothing recorded on it").toBe(0);
@@ -890,7 +893,7 @@ describe.skipIf(!HAS_DB)("fix round 1: a walkover the CASCADE awarded has not st
     const winner = d.sibling.home_entrant_id!;
     const semi = await row(d.semi.id);
     expect(semi.status, "premise: the cascade walked the semi over").toBe("forfeited");
-    expect(semi.outcome).toEqual({ kind: "award", winner });
+    expect(semi.outcome).toEqual({ kind: "award", winner, loser: null, reason: "bye" }); // W2b C-5
     expect(await eventCount(d.semi.id), "premise: nobody recorded anything on it").toBe(0);
     expect(seat(await row(d.final.id), d.semi.winner_to_slot), "premise: the walkover advanced its winner").toBe(winner);
 
@@ -913,7 +916,7 @@ describe.skipIf(!HAS_DB)("fix round 1: a walkover the CASCADE awarded has not st
     await decide(d.auth, d.sibling.id, true);
     const semiRedone = await row(d.semi.id);
     expect(semiRedone.status).toBe("forfeited");
-    expect(semiRedone.outcome).toEqual({ kind: "award", winner: d.sibling.away_entrant_id });
+    expect(semiRedone.outcome).toEqual({ kind: "award", winner: d.sibling.away_entrant_id, loser: null, reason: "bye" }); // W2b C-5
     expect(seat(await row(d.final.id), d.semi.winner_to_slot)).toBe(d.sibling.away_entrant_id);
     expect(await sql.begin((tx) => resolveBracketSeats(tx, d.stageId)), "idempotent after the re-award").toEqual([]);
   });

@@ -1,0 +1,564 @@
+[
+  {
+    "id": "phase-guard-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (event.type === \"core.forfeit\") {\n      const phase = forfeitPhaseOf(",
+    "replace": "if (event.type === \"core.forfeit\" && false) {\n      const phase = forfeitPhaseOf(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ],
+    "note": "R0 (the kernel does not judge a forfeit in phase \"over\") has no row: it is EQUIVALENT. Every \"over\" state is either decided — guarantee 4 answers ALREADY_DECIDED before the phase guard — or under an active abandon — D4 answers first (and a settled abandon is decided, M-6) — so judging \"over\" here could never change a verdict. The dead `phase === \"over\"` arm in forfeitReasonsAllowed was deleted in 8cd0ee392 (its type now excludes \"over\")."
+  },
+  {
+    "id": "walkover-any-phase",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (reason === \"walkover\") return walkoverPhases.includes(walkoverPhase);",
+    "replace": "if (reason === \"walkover\") return true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "dq-pre-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    return phase !== \"pre\";\n  });\n}",
+    "replace": "    return true;\n  });\n}",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "both-tiebreak-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const bothRefused = by === \"both\" && phase === \"tiebreak\";",
+    "replace": "const bothRefused = false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "BG-WO-3: chess tie-break pending"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "R14 \\(W2b\\): a one-side forfeit while the tie-break is pending"
+      }
+    ]
+  },
+  {
+    "id": "withdrew-refused",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (reason === \"withdrew\") return true;",
+    "replace": "if (reason === \"withdrew\") return false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "abandon-guard-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-AB-4: a forfeit while an abandon is active"
+      }
+    ]
+  },
+  {
+    "id": "abandon-guard-below-g4",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
+    "replace": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null && !decided) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-AB-4: a forfeit while an abandon is active"
+      }
+    ]
+  },
+  {
+    "id": "void-ignored",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  let abandonActive = false;\n",
+    "replace": "  let abandonActive = events.some((e) => e.type === \"core.abandon\");\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-AB-4 \\(rulings 112, 113\\): void-then-forfeit"
+      }
+    ]
+  },
+  {
+    "id": "expunge-ignored",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  if (folded.expunged === true) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D5: an expunge abandon folds to no outcome"
+      }
+    ]
+  },
+  {
+    "id": "expunge-flag-sticky",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "expunged = (event.payload as z.infer<typeof CoreAbandon>).expunge === true;",
+    "replace": "expunged = true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D5: an expunge abandon folds to no outcome"
+      }
+    ]
+  },
+  {
+    "id": "expunge-settle-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const applies = !expunged && settleApplies(",
+    "replace": "const applies = settleApplies(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D5: a settle over an expunged abandon is refused"
+      }
+    ]
+  },
+  {
+    "id": "legacy-settle-strict-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const legacySettle = !strict && effective?.kind === \"double_walkover\";",
+    "replace": "const legacySettle = effective?.kind === \"double_walkover\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D6: a legacy settled chess double forfeit"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1 / BG-DW-1: only a game the league calls DRAWN"
+      }
+    ]
+  },
+  {
+    "id": "legacy-settle-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const legacySettle = !strict && effective?.kind === \"double_walkover\";",
+    "replace": "const legacySettle = false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D6: a legacy settled chess double forfeit"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1 / BG-DW-1: only a game the league calls DRAWN"
+      }
+    ]
+  },
+  {
+    "id": "advances-nobody-true",
+    "file": "packages/engine/src/core/types.ts",
+    "find": "  return o?.kind === \"double_walkover\";",
+    "replace": "  return true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/outcome-set.test.ts"
+        ],
+        "name": "X-DW-1: advancesNobody"
+      }
+    ]
+  },
+  {
+    "id": "dw-level",
+    "file": "packages/engine/src/core/types.ts",
+    "find": "(outcome.kind === \"draw\" || outcome.kind === \"tie\" || outcome.kind === \"no_result\")",
+    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"tie\" || outcome.kind === \"no_result\" || outcome.kind === \"double_walkover\")",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/outcome-set.test.ts"
+        ],
+        "name": "X-BR-1: a double walkover is not level"
+      }
+    ]
+  },
+  {
+    "id": "both-any-reason",
+    "file": "packages/engine/src/core/events.ts",
+    "find": ".refine((p) => p.by !== \"both\" || p.reason === \"walkover\", {",
+    "replace": ".refine((p) => true || p.by !== \"both\" || p.reason === \"walkover\", {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1: free text, an unknown reason"
+      }
+    ]
+  },
+  {
+    "id": "award-bye-loser-unguarded",
+    "file": "packages/engine/src/core/types.ts",
+    "find": ".refine((o) => (o.loser === null) === (o.reason === \"bye\") && o.loser !== o.winner, {",
+    "replace": ".refine((o) => o.loser !== o.winner, {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/outcome-set.test.ts"
+        ],
+        "name": "X-WO-1: an award's loser is null exactly when it is a bye"
+      }
+    ]
+  },
+  {
+    "id": "award-self-loser-ok",
+    "file": "packages/engine/src/core/types.ts",
+    "find": ".refine((o) => (o.loser === null) === (o.reason === \"bye\") && o.loser !== o.winner, {",
+    "replace": ".refine((o) => (o.loser === null) === (o.reason === \"bye\"), {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/outcome-set.test.ts"
+        ],
+        "name": "X-WO-1: an award's loser is null exactly when it is a bye"
+      }
+    ]
+  },
+  {
+    "id": "pf1-admission-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const withdrawalOverLevel =\n      decided &&",
+    "replace": "const withdrawalOverLevel =\n      false &&",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: a withdrawal over a level result"
+      }
+    ]
+  },
+  {
+    "id": "pf1-any-reason",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "forfeitReasonOf(event.payload) === \"withdrew\" &&\n      isLevelOutcome(outcomeOf(",
+    "replace": "isLevelOutcome(outcomeOf(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: a withdrawal over a level result"
+      }
+    ]
+  },
+  {
+    "id": "pf1-not-only-level",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "isLevelOutcome(outcomeOf(module, { state, settlement, expunged, levelWithdrawal }));",
+    "replace": "outcomeOf(module, { state, settlement, expunged, levelWithdrawal }) !== null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: the admission is one-shot"
+      }
+    ]
+  },
+  {
+    "id": "pf1-outcome-ignored",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  if (w != null) return { kind: \"award\", winner: w.winner, loser: w.loser, reason: \"withdrew\" };\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: a withdrawal over a level result"
+      }
+    ]
+  },
+  {
+    "id": "pf1-kernel-owns-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? false",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: kernelOwnsEvent names the admitted withdrawal"
+      }
+    ]
+  },
+  {
+    "id": "pf1-kernel-owns-settled",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: kernelOwnsEvent names the admitted withdrawal"
+      }
+    ]
+  },
+  {
+    "id": "pf1-kernel-owns-any-reason",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? !folded.settled && isLevelOutcome(moduleOutcome)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-WD-1: kernelOwnsEvent names the admitted withdrawal"
+      }
+    ]
+  },
+  {
+    "id": "c17-no-pre",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return decided ? \"over\" : started ? \"play\" : \"pre\";",
+    "replace": "return decided ? \"over\" : \"play\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "C17 \\+ ruling 112: a FoldableModule that declares no forfeitPhase"
+      }
+    ]
+  },
+  {
+    "id": "c17-start-ignored",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      if (event.type === \"core.start\") started = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "C17 \\+ ruling 112: a FoldableModule that declares no forfeitPhase"
+      }
+    ]
+  },
+  {
+    "id": "bg-walkover-phases-default",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  walkoverPhases: [\"pre\", \"play\", \"tiebreak\"],\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "football-shootout-over",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  SHOOTOUT: \"play\",\n",
+    "replace": "  SHOOTOUT: \"over\",\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D3: forfeitPhase classifies every phase"
+      }
+    ]
+  },
+  {
+    "id": "period-shootout-over",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "  if (state.phase === \"done\" || state.phase === \"final\" || state.phase === \"abandoned\") return \"over\";\n  return \"play\";",
+    "replace": "  if (state.phase === \"done\" || state.phase === \"final\" || state.phase === \"abandoned\" || state.phase === \"SHOOTOUT\") return \"over\";\n  return \"play\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D3: forfeitPhase classifies every phase"
+      }
+    ]
+  },
+  {
+    "id": "cricket-super-over-over",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "  super_over: \"play\",\n",
+    "replace": "  super_over: \"over\",\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "D3: forfeitPhase classifies every phase"
+      }
+    ]
+  },
+  {
+    "id": "dw-both-module-award",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "        if (by === \"both\") return { ...state, phase: \"done\", outcome: { kind: \"double_walkover\" } };\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1 \\(rulings 112, 113\\): 11 sports × 4 reasons × \\{before the start, after a bare start, after the sport's own play\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "forfeit-bye-reason-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": ".strictObject({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })",
+    "replace": ".strictObject({ by: EntrantId, reason: z.enum([...FORFEIT_REASONS, \"bye\"]) })",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1: free text, an unknown reason, and both with a non-walkover reason are INVALID_EVENT"
+      }
+    ]
+  },
+  {
+    "id": "pf1-summary-overlay-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return module.summary({ ...state, outcome: outcomeOf(module, folded) } as State);",
+    "replace": "return module.summary(folded.state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "each level-capable sport: the table credits the retirement"
+      }
+    ]
+  },
+  {
+    "id": "pf1-summary-guard-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (typeof state !== \"object\" || state === null || !(\"outcome\" in state)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "guard: an overlay asked of a state with no"
+      }
+    ]
+  },
+  {
+    "id": "abandon-guard-settled-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
+    "replace": "if (event.type === \"core.forfeit\" && abandonActive) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "M-6: abandon"
+      }
+    ]
+  }
+]

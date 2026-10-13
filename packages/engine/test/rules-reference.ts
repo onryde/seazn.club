@@ -119,9 +119,23 @@ function classify(callee: ts.Expression): Callee {
   return gate !== undefined && GATE_CALLEES.has(gate) ? "title" : "other";
 }
 
+/** The last parse of each path, with the exact source it parsed. Many rows cite the same test file (abandon-result,
+ *  bracket-finish, double-walkover …), and an AST parse per (row, path) pair is what made the proof test cost seconds
+ *  (W2b Task 14 M-3: about 265 parses of 66 files). A hit needs the SAME source, not just the same path: a synthetic test
+ *  that hands one path two different in-memory sources gets each source's own titles. */
+const TITLES_MEMO = new Map<string, { source: string; titles: readonly string[] }>();
+
 /** The first argument of every title-bearing call that is a string literal, from the AST, so a comment, a body string
  *  and a second argument are never titles; an unconditionally skipped call yields nothing and is not entered. */
 export function testTitles(path: string, source: string): string[] {
+  const hit = TITLES_MEMO.get(path);
+  if (hit !== undefined && hit.source === source) return [...hit.titles];
+  const titles = parseTestTitles(path, source);
+  TITLES_MEMO.set(path, { source, titles });
+  return [...titles];
+}
+
+function parseTestTitles(path: string, source: string): string[] {
   const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false);
   const titles: string[] = [];
   const visit = (n: ts.Node): void => {

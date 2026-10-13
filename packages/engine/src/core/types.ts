@@ -129,34 +129,94 @@ export const StageCtx = z.object({
 });
 export type StageCtx = z.infer<typeof StageCtx>;
 
-// spec 03 §3 — all five kinds. `tie` (cricket) ≠ `draw`: different points in
-// some competitions. `award` covers forfeit/DQ with an awarded score.
+// W2b (spec §5.1, plan D1) — the closed forfeit vocabulary. A `core.forfeit` records exactly one of these, never
+// free text (Appendix A X-RS-1): walkover = before play started (chess also after the session starts, FIDE Laws
+// 6.7.1), retired / disqualified = after, withdrew = either (written only by the withdrawal cascade). They live here,
+// not in events.ts, because `MatchOutcome.award` needs them and events.ts already imports this file.
+export const FORFEIT_REASONS = ["walkover", "retired", "disqualified", "withdrew"] as const;
+export type ForfeitReason = (typeof FORFEIT_REASONS)[number];
+/** Every reason an `award` may carry: the four forfeit reasons plus `bye`, a SYSTEM-only reason — the server's bye
+ *  writers emit it with no event, and `core.forfeit` never accepts it (C-5). */
+export const AWARD_REASONS = [...FORFEIT_REASONS, "bye"] as const;
+export type AwardReason = (typeof AWARD_REASONS)[number];
+
+/**
+ * Loop R I-1 — the forfeit reason of an award STORED before W2b, or null. The kernels before W2b stored a walkover (and
+ * every other forfeit) as `{kind: "award", winner, method: <core.forfeit's then free-text reason>}` — football and the
+ * period kernel added the awarded `score` — with no `loser` and no `reason`, and `fixtures.outcome` / `match_states`
+ * keep that shape until a refold (ruling 112 made no data migration; the one production walkover, 069dbf22, and the
+ * staging one, d26fca49, are such rows). A `method` from the closed vocabulary IS that forfeit's reason. Anything else —
+ * a typed award, the server's pre-W2b bye writers' `{kind, winner}`, a free-text method the vocabulary never had —
+ * answers null, and the caller keeps its own reading (a bye). The SEATS are the caller's to check: an award decided
+ * over a fixture's two seats (the engine's `sideOf`; the web reader's both-seats test) — a one-seat award is a bye.
+ * The one legacy reader, shared by the engine's `awardReasonOf` and the web's `forfeitTag`.
+ */
+export function legacyAwardForfeitReason(outcome: unknown): ForfeitReason | null {
+  if (typeof outcome !== "object" || outcome === null) return null;
+  const o = outcome as { kind?: unknown; reason?: unknown; loser?: unknown; method?: unknown };
+  if (o.kind !== "award" || o.reason !== undefined || o.loser !== undefined) return null;
+  return typeof o.method === "string" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;
+}
+
+// W2b (plan D2) — the outcome set, pinned by core/outcome-set.test.ts (none was pinned before W2b). `MatchOutcome`
+// below is the discriminated union over exactly these, in this order.
+export const OUTCOME_KINDS = ["win", "draw", "tie", "no_result", "award", "double_walkover"] as const;
+export type OutcomeKind = (typeof OUTCOME_KINDS)[number];
+
+// spec 03 §3 — all five kinds, and W2b's sixth. `tie` (cricket) ≠ `draw`: different points in some competitions.
+// `award` covers every unplayed or stopped result one side lost (forfeit, disqualification, retirement, withdrawal) and
+// the system's bye; `double_walkover` is both sides absent (Appendix A X-DW-1).
 export const MatchOutcome = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("win"),
     winner: EntrantId,
     loser: EntrantId,
     // 'regulation' | 'extra_time' | 'shootout' | 'super_over' | 'dls' |
-    // 'walkover' | 'timeout' — sport modules may extend, so plain string.
+    // 'walkover' | 'timeout' | 'abandoned' (W2b D8) — sport modules may extend, so plain string.
     method: z.string().min(1).optional(),
   }),
   z.object({ kind: z.literal("draw") }),
   z.object({ kind: z.literal("tie") }),
   z.object({ kind: z.literal("no_result") }),
-  z.object({
-    kind: z.literal("award"),
-    winner: EntrantId,
-    score: z.unknown().optional(),
-    // WHY the award was made, carried verbatim from `core.forfeit`'s required
-    // `reason` (`events.ts:52`). Without it a walkover, a disqualification and
-    // a retirement fold to byte-identical outcomes, which is what the B06b
-    // darts bench hit: the only way left to state a walkover was a result card
-    // crediting a score nobody played. Free-form for the same reason `win`'s
-    // `method` is — the caller's vocabulary, not the engine's.
-    method: z.string().min(1).optional(),
-  }),
+  z
+    .object({
+      kind: z.literal("award"),
+      winner: EntrantId,
+      // W2b (D2): the side that forfeited, typed, so no reader has to derive it as "whichever side is not the
+      // winner" (the readers disagreed, W2b-R11). `null` only for a bye — nobody lost to the advancing side.
+      loser: EntrantId.nullable(),
+      // W2b (D1, D2): WHY, from the closed vocabulary. Replaces #772's free-text `method`; the credited score is the
+      // sport's `forfeitCredit` (module.ts), never a `score` field on the outcome.
+      reason: z.enum(AWARD_REASONS),
+    })
+    // Assumptions are guards: a bye names no loser and anything else names one, and nobody forfeits to themselves.
+    .refine((o) => (o.loser === null) === (o.reason === "bye") && o.loser !== o.winner, {
+      message: "an award names its loser exactly when it is not a bye, and the loser is never the winner",
+    }),
+  z.object({ kind: z.literal("double_walkover") }),
 ]);
 export type MatchOutcome = z.infer<typeof MatchOutcome>;
+
+/** W2b (spec §5.1) — THE one authority on whether a decided fixture advances anybody: true for a double walkover and
+ *  for nothing else. Every bracket reader asks this rather than testing the kind itself. The empty case (no outcome)
+ *  answers false: an undecided fixture has not yet advanced nobody. */
+export function advancesNobody(o: MatchOutcome | null | undefined): boolean {
+  return o?.kind === "double_walkover";
+}
+
+/** W2b (plan D3) — where in a match a forfeit is being recorded, as the module reads its own state: before play,
+ *  during play (a stoppage reads as the phase it interrupted), a pending decider (chess tie-break), or over. */
+export type ForfeitPhase = "pre" | "play" | "tiebreak" | "over";
+/** W2b (plan D9) — the OFFENDING side of a forfeit; `both` is the double walkover. */
+export type ForfeitBy = "home" | "away" | "both";
+/** W2b (plan D9) — what a forfeit credits, per sport, from cfg and state alone. */
+export interface ForfeitCredit {
+  /** home, away: the metrics this match credits each side, in the module's own metric keys. */
+  readonly perSide: readonly [Readonly<Record<string, number>>, Readonly<Record<string, number>>];
+  /** metric keys this match must not feed into a ratio tie-break (set %, game %, NRR, goal ratio). Realised by
+   *  crediting them 0 on both sides, so no reader changes its arithmetic. */
+  readonly excluded: readonly string[];
+}
 
 // spec 03 §3 — structured, render-agnostic: UI and public API render it
 // without knowing the sport.

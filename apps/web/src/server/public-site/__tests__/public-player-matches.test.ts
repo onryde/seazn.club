@@ -78,7 +78,24 @@ vi.mock("@/server/engine-db/fold", async (importOriginal) => {
 });
 const foldsOf = (fixtureId: string) => foldSpy.calls.filter((id) => id === fixtureId).length;
 
-import { foldMatch, type EventEnvelope, type LineupPair, type ScoreSummary } from "@seazn/engine/core";
+// R115-4: `getPublicPlayer` asks the read-side stats check (`reconcilePlayerStatsOnRead`) of the divisions the person
+// plays in, after the response, and that check refolds an owed snapshot. This file's subject is the match lines, and
+// its last test seeds snapshot rows by hand; a background refold landing beside them would collide with that insert.
+// So the after-response window is captured here, not run (`@/lib/deferred` is what the check registers on; nothing
+// else this file drives registers there), and the capture is asserted: a card read queues its check.
+// `player-stats-read-side-check-r115-4.test.ts` runs the window and drives the check itself.
+const afterResponse = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
+vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => void afterResponse.tasks.push(fn) }));
+
+import {
+  foldMatch,
+  foldMatchWithStoppage,
+  outcomeOf,
+  summaryOf,
+  type EventEnvelope,
+  type LineupPair,
+  type ScoreSummary,
+} from "@seazn/engine/core";
 import { resolvePositions, type AnySportModule, type ModuleEvent } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
@@ -519,13 +536,22 @@ async function seed(): Promise<Scene> {
   // first failure would take every later line down with it.
   await sql`update match_states set updated_at = '2030-12-01T10:00:00Z' where fixture_id = ${unfoldable.id}`;
 
-  // Rovers v Dingoes: Dingoes FORFEIT before a ball is bowled. Both sides had
-  // declared their XI (so Hal, still on the Dingoes roster, is not dragged in).
-  // Never scheduled; recorded now, i.e. before every 2030 date in the scene.
+  // Rovers v Dingoes: Dingoes RETIRE after the first over, recorded as a
+  // summary — a forfeit with something played, so an appearance with a result
+  // (X-PS-2; a walkover would be no match at all, X-PS-1 and R115-1 — see
+  // player-matches-played-x-ps-1.test.ts), and a summary names no batter or
+  // bowler, so nobody has figures. Both sides had declared their XI (so Hal,
+  // still on the Dingoes roster, is not dragged in). Never scheduled; recorded
+  // now, i.e. before every 2030 date in the scene.
   const forfeit = between(cricketFixtures, roversE!.id, dingoesE!.id);
   await insertLineup(forfeit.id, roversE!.id, rovers);
   await insertLineup(forfeit.id, dingoesE!.id, dingoes);
-  await append(orgId, forfeit.id, [{ type: "core.forfeit", payload: { by: dingoesE!.id, reason: "walkover" } }]);
+  await append(orgId, forfeit.id, [
+    { type: "cricket.toss", payload: { wonBy: roversE!.id, elected: "bat" } },
+    { type: "core.start", payload: {} },
+    { type: "cricket.innings.summary", payload: { runs: 8, wickets: 0, legalBalls: 6, partial: true } },
+    { type: "core.forfeit", payload: { by: dingoesE!.id, reason: "retired" } },
+  ]);
 
   // Comets v Dingoes, decided. Dingoes' team sheet: three starters, a COACH on
   // a starting row, and two on the bench. Bea comes on for D3 straight after the
@@ -628,10 +654,15 @@ async function seed(): Promise<Scene> {
   ]);
   await insertLineupRow(eaglesFoxes.id, gullsE!.id, stray, { orderNo: 1 });
   await sql`update fixtures set scheduled_at = '2030-08-01T10:00:00Z' where id = ${eaglesFoxes.id}`;
-  // Eagles (made HOME) v Gulls: Gulls forfeit, nobody declared a sheet. Dee is
-  // on BOTH rosters, so both sides are "hers" by roster alone.
+  // Eagles (made HOME) v Gulls: Gulls retire a point down, nobody declared a
+  // sheet — a played forfeit (X-PS-2), so an appearance. Dee is on BOTH
+  // rosters, so both sides are "hers" by roster alone.
   const eaglesGulls = await makeHome(between(extraFixtures, eaglesE!.id, gullsE!.id), eaglesE!.id);
-  await append(orgId, eaglesGulls.id, [{ type: "core.forfeit", payload: { by: gullsE!.id, reason: "walkover" } }]);
+  await append(orgId, eaglesGulls.id, [
+    { type: "core.start", payload: {} },
+    { type: "generic.score", payload: { by: eaglesE!.id, points: 1 } },
+    { type: "core.forfeit", payload: { by: gullsE!.id, reason: "retired" } },
+  ]);
   await sql`update fixtures set scheduled_at = '2030-08-02T10:00:00Z' where id = ${eaglesGulls.id}`;
 
   // ---- an ARCHIVED division of the same public competition --------------------
@@ -1020,7 +1051,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(await linesFor(scene.persons.stray)).toEqual([]);
   });
 
-  it("FORFEITED: listed, the result read off the award's winner, and '—' with no figures", async () => {
+  it("FORFEITED after play (X-PS-2): listed, the result read off the award's winner, and '—' with no figures", async () => {
     const [{ status }] = await sql<{ status: string }[]>`
       select status from fixtures where id = ${scene.forfeitFixtureId}`;
     expect(status).toBe("forfeited");
@@ -1028,7 +1059,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(line).toMatchObject({ result: "won", line: "—", opponentName: "Dingoes" });
   });
 
-  it("the settled lines agree with the career rollup's own match count, forfeits included", async () => {
+  it("the settled lines agree with the career rollup's own match count, played forfeits included (X-PS-2)", async () => {
     for (const [personId, divisionId] of [
       [scene.persons.r1, scene.cricketDivisionId],
       [scene.persons.ivy, scene.extraDivisionId],
@@ -1038,6 +1069,30 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
       expect(counted).toBe(2);
       expect(settled).toBe(counted);
     }
+  });
+
+  it("ruling 122, round 1: the career count agrees with the settled match lines for EVERY person in the scene — one appearance rule, the bench rule and cricket's figures included", async () => {
+    // One reader (`@/server/appearances`) behind both: a cricket bench player who came on and bowled is a match in
+    // both (Bea), one who never came on in neither (Ula), a football-style bench row in neither (Ben's Eagles v Foxes),
+    // a coach on the sheet in neither (Cora).
+    const divisionIds = (await sql<{ id: string }[]>`
+      select id from public_divisions_v where competition_id = ${scene.competitionId}`).map((d) => d.id);
+    const n = { persons: 0, matches: 0 };
+    const counts: Record<string, number> = {};
+    for (const [name, personId] of Object.entries(scene.persons)) {
+      const byDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
+      const counted = [...byDivision.values()].reduce((sum, c) => sum + c, 0);
+      const settled = (await linesFor(personId)).filter((l) => l.result !== "live").length;
+      expect(counted, `${name}: the career count vs the settled lines`).toBe(settled);
+      counts[name] = counted;
+      n.persons++;
+      n.matches += counted;
+    }
+    expect(n.persons, "every person in the scene asked").toBe(Object.keys(scene.persons).length);
+    expect(n.persons).toBeGreaterThan(15);
+    expect(n.matches).toBeGreaterThan(0);
+    // The bench rule's own declaration, read off the scene's two cricket bench players' figures.
+    expect([counts.bea, counts.ula, counts.cora, counts.ben]).toEqual([1, 0, 0, 1]);
   });
 
   it("ORDER: an unscheduled fixture sorts by when it was last recorded, not to either end", async () => {
@@ -1379,6 +1434,37 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(foldsOf(fixtureId)).toBe(2);
   });
 
+  it("MERGE (bench, ruling 122 round 2): a survivor's cricket bench row counts by the figures the ledger recorded under the absorbed id — in the career count AND the lines", async () => {
+    // Bea sat on the bench, came on and bowled: her figures are recorded under HER id. Merged into a survivor, the
+    // sheet row moves to the survivor and the ledger keeps naming Bea — so both readers must ask the bench rule with
+    // every id the survivor carries (`figurePeople`), or the survivor's bench row is dropped.
+    const { fixtureId, card } = scene.bench;
+    const bea = scene.persons.bea;
+    const figures = expectedCricketLine(card, bea);
+    expect(figures, "premise: Bea bowled in the bench fixture").toMatch(/^\d+\/\d+$/);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name) values (${`merge-${randomUUID().slice(0, 8)}@example.test`}, 'Merger')
+      returning id`;
+    const auth: AuthCtx = { orgId: scene.orgId, via: "session", userId, role: "owner", keyId: null };
+    const survivor = await seedPerson(scene.orgId, "Bo Survivor", { public_name: true });
+    await mergePersons(auth, survivor, bea, { confirmedBy: userId });
+    const [premise] = await sql<{ slot: string | null; survivor_figures: number; bea_mentions: number }[]>`
+      select (select slot from lineups where fixture_id = ${fixtureId} and person_id = ${survivor}) as slot,
+             (select count(*)::int from score_events
+               where fixture_id = ${fixtureId} and payload::text like ${"%" + survivor + "%"}) as survivor_figures,
+             (select count(*)::int from score_events
+               where fixture_id = ${fixtureId} and payload::text like ${"%" + bea + "%"}) as bea_mentions`;
+    expect(premise, "premise: the survivor holds Bea's BENCH row; the ledger names only Bea").toMatchObject({ slot: "bench", survivor_figures: 0 });
+    expect(premise!.bea_mentions).toBeGreaterThan(0);
+
+    const settled = (await linesFor(survivor)).filter((l) => l.result !== "live");
+    expect(settled.map((l) => [l.fixtureId, l.line]), "the lines: the survivor's bench row, with Bea's figures").toEqual([[fixtureId, figures]]);
+    const divisionIds = (await sql<{ id: string }[]>`
+      select id from public_divisions_v where competition_id = ${scene.competitionId}`).map((d) => d.id);
+    const counted = [...(await countMatchesByDivision(sql, { by: "person", personId: survivor }, divisionIds)).values()];
+    expect(counted, "the career count agrees with the lines: one match").toEqual([1]);
+  });
+
   it("GATE: publicPlayerGate refuses exactly when getPublicPlayer does — and folds nothing", async () => {
     const other = await sql<{ id: string }[]>`
       insert into organizations (name, slug) values ('Other', ${"other-" + randomUUID().slice(0, 8)}) returning id`;
@@ -1453,7 +1539,14 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(expected).toHaveLength(3);
 
     // Path 1: no sport spans two divisions' snapshots → the early return.
+    // A minute on, so the once-a-minute throttle has let go of every division an earlier test's card read checked.
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true, now: Date.now() + 61_000 });
+    afterResponse.tasks.length = 0;
     const early = await getPublicPlayer(scene.orgSlug, scene.compSlug, scene.persons.h1);
+    vi.useRealTimers();
+    // R115-4: the card queued its read-side check for after the response, and ran none of it on the request.
+    expect(afterResponse.tasks.length, "the card's read-side check, queued after the response").toBe(1);
+    afterResponse.tasks.length = 0;
     expect(early).not.toBeNull();
     expect(early!.career).toEqual([]);
     expect(early!.matches).toEqual(expected);
@@ -2052,5 +2145,49 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
     expect(mismatches).toEqual([]);
     expect(inPlay).toBeGreaterThan(0);
     expect(decided).toBeGreaterThan(0);
+  });
+});
+
+describe("scoreLineFor — W2b PF-1: a withdrawal over a held level result reads the AWARD from both sides", () => {
+  // single-sport: football — the bracket level result PF-1 admits a withdrawal over (0-0 FT), with a credited score
+  // (FB-WO-1: `awardScore.goals`–0 at 0-0) that differs from the draw, so the line can witness the overlay.
+  const cfg = football.configSchema.parse({}) as { awardScore: { goals: number } };
+  const G = cfg.awardScore.goals;
+  const pair = defaultLineupPair(resolvePositions(football, cfg));
+  const level: ModuleEvent[] = [
+    { type: "core.start", payload: {} },
+    { type: "football.period", payload: { phase: "HT" } },
+    { type: "football.period", payload: { phase: "FT" } },
+  ];
+  /** What `match_states` + `fixtures` hand the reader: the stored headline (append-event's `summaryOf`), the module
+   *  state (a JSON round trip) and the fixture's outcome (`outcomeOf`). */
+  const storedFrom = (events: ModuleEvent[], lineups: LineupPair) => {
+    const folded = foldMatchWithStoppage(football, cfg, lineups, events.map((e, i) => makeEnvelope(i, e)));
+    return {
+      folded,
+      stored: {
+        summary: summaryOf(football, folded),
+        state: JSON.parse(JSON.stringify(folded.state)),
+        outcome: outcomeOf(football, folded),
+      },
+    };
+  };
+  it("the away side withdrew: home reads G — 0, the away line reads 0 — G (the swapped fold's own summaryOf)", () => {
+    const withdrew = (by: string): ModuleEvent => ({ type: "core.forfeit", payload: { by, reason: "withdrew" } });
+    const { folded, stored } = storedFrom([...level, withdrew(pair.away.entrantId)], pair);
+    expect(folded.levelWithdrawal, "rig: the kernel admitted the withdrawal over the level result").not.toBeNull();
+    const oracle = storedFrom([...level, withdrew(pair.away.entrantId)], { home: pair.away, away: pair.home }).stored.summary.headline;
+    expect({
+      home: scoreLineFor(stored, pair.home.entrantId, pair.home.entrantId, football),
+      away: scoreLineFor(stored, pair.away.entrantId, pair.home.entrantId, football),
+      oracle,
+    }).toEqual({ home: `${G} — 0`, away: `0 — ${G}`, oracle: `0 — ${G}` });
+  });
+  it("the negative pair: the held draw with no withdrawal reads 0 — 0 from both sides", () => {
+    const { stored } = storedFrom(level, pair);
+    expect([
+      scoreLineFor(stored, pair.home.entrantId, pair.home.entrantId, football),
+      scoreLineFor(stored, pair.away.entrantId, pair.home.entrantId, football),
+    ]).toEqual(["0 — 0", "0 — 0"]);
   });
 });

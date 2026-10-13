@@ -14,6 +14,12 @@ const scene = vi.hoisted(() => ({
   frozen: false,
   status: "scheduled",
   open: [] as string[],
+  feedsNext: true,
+  stageKind: null as string | null,
+  // R116-4: the seats and the stored outcome getFixture returns.
+  homeId: "e-home" as string | null,
+  awayId: "e-away" as string | null,
+  outcome: null as unknown,
 }));
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
@@ -34,8 +40,9 @@ vi.mock("@/server/usecases/fixtures", () => ({
     division_id: "div-1",
     status: scene.status,
     scheduled_at: "2026-09-30T10:00:00Z",
-    home_entrant_id: "e-home",
-    away_entrant_id: "e-away",
+    home_entrant_id: scene.homeId,
+    away_entrant_id: scene.awayId,
+    outcome: scene.outcome,
     venue_name: null,
     court_name: null,
     round_no: 1,
@@ -47,7 +54,8 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listEvents: vi.fn(async () => []),
   eventRecorderNames: vi.fn(async () => ({})),
   getLineup: vi.fn(async () => ({ slots: [] })),
-  loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: null })),
+  loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: scene.stageKind })),
+  fixtureFeedsNextMatch: vi.fn(async (_auth: unknown, id: string) => (id === "fx-7" ? scene.feedsNext : !scene.feedsNext)),
 }));
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({
@@ -66,10 +74,13 @@ vi.mock("@/server/usecases/schedule", () => ({ getScheduleSettings: vi.fn(async 
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: vi.fn(async () => ({ id: "comp-1", name: "Comp", slug: "comp", frozen: scene.frozen, visibility: "private" })),
 }));
-vi.mock("@/server/usecases/entrants", () => ({
+// The page reads the server's ONE departed vocabulary for the settle flag (loop-F tidy) — the real Set, never a restated
+// list (departed-vocabulary-is-single-sourced.test.ts).
+vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
+  DEPARTED_STATUSES: (await importOriginal<typeof import("@/server/usecases/entrants")>()).DEPARTED_STATUSES,
   getEntrant: vi.fn(async (_auth: unknown, id: string) => ({
     id,
-    display_name: id === "e-home" ? "Alpha Athletic" : "Bravo Rangers",
+    display_name: ({ "e-home": "Alpha Athletic", "e-away": "Bravo Rangers", "e-gone": "Charlie Gone" } as Record<string, string>)[id] ?? id,
     kind: "team",
     members: [],
   })),
@@ -124,7 +135,10 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 }
 
 beforeEach(() => {
-  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [] });
+  Object.assign(scene, {
+    canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true, stageKind: null,
+    homeId: "e-home", awayId: "e-away", outcome: null,
+  });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
@@ -195,5 +209,73 @@ describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () =>
     expect(spies.loader.mock.calls[0][0]).toMatchObject({ checkout: { status: undefined, sessionId: "cs_a" } });
     // The empty case: any other value of `stream` is not a return.
     expect((await consoleProps({ stream: "closed" })).streamReturn).toBe(false);
+  });
+});
+
+// Loop-F tidy 2 — not Stream, the same page harness: the held block's no-choice sentence reads whether THIS line feeds a
+// next match (needs-decision.tsx `feedsNextMatch`), and the page is what hands the console that read.
+describe("the organiser fixture page hands the console whether the line feeds a next match (loop-F tidy 2)", () => {
+  it("passes THIS fixture's fixtureFeedsNextMatch read through, both ways", async () => {
+    let checked = 0;
+    for (const feeds of [true, false]) {
+      scene.feedsNext = feeds;
+      const fixture = (await consoleProps()).fixture as { id: string; feeds_next_match?: boolean };
+      expect([fixture.id, fixture.feeds_next_match], `feeds ${String(feeds)}`).toEqual(["fx-7", feeds]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+// W2b Task 11 (D19, X-DW-3): the forfeit dialog's "Neither" is hidden exactly where the server refuses a double walkover,
+// and the page is what hands the console that reading — the stage kind (`loadFixturePadCfg`) with the feed edges
+// (`fixtureFeedsNextMatch`). Expected values are D19's rows, typed: a feeding bracket kind on a line that feeds nothing
+// refuses; a ladder, a table stage, a stage-less fixture and a line that feeds a next match never do.
+describe("the organiser fixture page hands the console D19's double-walkover reading (W2b Task 11)", () => {
+  it("no_next_match is true only for a feeding bracket kind on a line that feeds no next match", async () => {
+    const ROWS: [stageKind: string | null, feeds: boolean, want: boolean][] = [
+      [null, false, false],
+      [null, true, false],
+      ["league", false, false],
+      ["ladder", false, false],
+      ["knockout", true, false],
+      ["knockout", false, true],
+      ["double_elim", false, true],
+      ["stepladder", false, true],
+      ["page_playoff", false, true],
+    ];
+    let checked = 0;
+    for (const [stageKind, feeds, want] of ROWS) {
+      Object.assign(scene, { stageKind, feedsNext: feeds });
+      const fixture = (await consoleProps()).fixture as { no_next_match?: boolean };
+      expect(fixture.no_next_match, `${String(stageKind)}, feeds ${String(feeds)}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+});
+
+// R116-4 (owner ruling 116): the console's header names the side a walkover was won over whose seat is EMPTY — the page
+// reads her through `unseatedForfeitLoser` and hands down only her name, never a seated side (the pad and the dialogs
+// read `home`/`away` as who is IN the fixture). The pairs: a bye (no loser) and a seated loser hand down nothing.
+describe("the organiser fixture page names ruling 116's withdrawn winner for the console header (R116-4)", () => {
+  it("her name rides on her empty seat, either side; a bye and a seated loser name nobody", async () => {
+    const withdrew = (winner: string) => ({ kind: "award", winner, loser: "e-gone", reason: "withdrew" });
+    const ROWS: [name: string, homeId: string | null, awayId: string | null, outcome: unknown, want: [unknown, unknown]][] = [
+      ["her seat home", null, "e-away", withdrew("e-away"), ["Charlie Gone", null]],
+      ["her seat away", "e-home", null, withdrew("e-home"), [null, "Charlie Gone"]],
+      ["a bye", "e-home", null, { kind: "award", winner: "e-home", loser: null, reason: "bye" }, [null, null]],
+      ["a seated loser", "e-home", "e-away", { kind: "award", winner: "e-home", loser: "e-away", reason: "withdrew" }, [null, null]],
+    ];
+    let checked = 0;
+    for (const [name, homeId, awayId, outcome, want] of ROWS) {
+      Object.assign(scene, { status: "forfeited", homeId, awayId, outcome });
+      const props = await consoleProps();
+      const fixture = props.fixture as { home_unseated_name?: unknown; away_unseated_name?: unknown };
+      expect([fixture.home_unseated_name, fixture.away_unseated_name], name).toEqual(want);
+      expect([props.home === null, props.away === null], `${name}: the seated sides are untouched`).toEqual([homeId === null, awayId === null]);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
   });
 });

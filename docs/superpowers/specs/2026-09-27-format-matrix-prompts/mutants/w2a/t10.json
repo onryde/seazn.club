@@ -38,7 +38,7 @@
         "files": [
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
-        "name": "NEW-H1 \\(after a withdrawal\\)"
+        "name": "NEW-H1 \\(legacy withdrawal abandon\\)"
       }
     ]
   },
@@ -156,7 +156,7 @@
         "files": [
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
-        "name": "characterisation \\(D-G3, W2b\\): a ladder holder's withdrawal"
+        "name": "W2b X-WD-2 \\(was the D-G3 characterisation\\): a ladder holder's withdrawal"
       }
     ]
   },
@@ -208,7 +208,7 @@
         "files": [
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
-        "name": "characterisation \\(D-G3, W2b\\): a stepladder whose seed 1 departed BEFORE the draw"
+        "name": "W2b D-G3 corner 3 \\(was the characterisation\\): a stepladder whose seed 1 departed BEFORE the draw"
       }
     ]
   },

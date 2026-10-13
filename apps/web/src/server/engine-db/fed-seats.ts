@@ -1,4 +1,5 @@
 import "server-only";
+import { advancesNobody, type MatchOutcome } from "@seazn/engine/core";
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { msg } from "@/lib/messages";
@@ -10,6 +11,7 @@ import {
   type RoundCodeRef,
 } from "@/lib/next-match-started";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
+import { clearAwardedMatchState } from "./awarded-state";
 
 // OWNER RULING 2026-09-23 — a write that takes back a knockout decision takes
 // back the names that decision advanced.
@@ -78,6 +80,9 @@ interface Node {
   status: string;
   outcome: unknown;
   live_events: number;
+  /** The seats' slot-label keys — a dead seat carries the cascade's bye key (Review Focus 1's revive reads it). */
+  home_key: string | null;
+  away_key: string | null;
 }
 
 type Side = "winner" | "loser";
@@ -85,21 +90,74 @@ type Side = "winner" | "loser";
 interface Step {
   target: string;
   slot: 1 | 2;
-  occupant: string;
+  /** The name the plan takes back — or null for a seat its departed entrant left DEAD (loop-F I-1): nobody to take
+   *  back, only the bye stamp to lift. */
+  occupant: string | null;
+  /** For an empty seat (`occupant` null): it carries the dead-seat stamp. False only for a seat a dead loser edge fed
+   *  into a line the cascade VOIDED — a void stamps nothing (loop-F tidy 2). */
+  stamped?: boolean;
   label: { key: string; params: { round: number; seq: number } } | null;
-  /** The target is a cascade walkover being put back to `scheduled`. */
+  /** The target is a cascade walkover (or, for a dead seat, a cascade void / departure double walkover) being put back
+   *  to `scheduled`. */
   reset: boolean;
 }
 
-/** Who a decision sends onward — a winner from a `win` or an `award`, a loser
- *  only from a `win`. `onDecided` (usecases/scoring.ts) fills from exactly
- *  this, so the un-fill can never disagree with the fill about who advanced. */
+/** A LEGACY forfeit: a `win` whose method is a forfeit — chess's pre-W2b `boardgame.result{method:"forfeit"}` still
+ *  folds to `win{method:"forfeit"}` (the method is retired on write, D15, but a stored stream replays). The same
+ *  reading as the engine's own points rule (competition/points.ts `isForfeit`: a win by walkover or forfeit). Its
+ *  loser forfeited, exactly like an `award`'s (X-DE-1). */
+export function isLegacyForfeitWin(o: { kind?: string; method?: string } | null | undefined): boolean {
+  return o?.kind === "win" && (o.method === "forfeit" || o.method === "walkover");
+}
+
+/** W2b X-DE-1: a decision that KILLS its loser edge — it names a loser, but that loser forfeited and is out of the
+ *  tournament: an `award` (a walkover, retirement, disqualification or withdrawal; a bye names no loser at all), or a
+ *  legacy forfeit win. `advancingSides` sends nobody down that edge, and the cascade reads the edge as a dead feeder
+ *  (usecases/stages.ts `loserFeederIsDead`, which reads this). */
+export function killsLoserEdge(outcome: unknown): boolean {
+  const o = outcome as { kind?: string; method?: string } | null | undefined;
+  return o?.kind === "award" || isLegacyForfeitWin(o);
+}
+
+/** What a stored decision being TAKEN BACK had done down its two edges: who it sent (`advancingSides`), and whether
+ *  it left the loser edge dead (`killsLoserEdge`). */
+interface TakenBack {
+  winner: string | undefined;
+  loser: string | undefined;
+  loserKilled: boolean;
+}
+function takenBack(outcome: unknown): TakenBack {
+  return { ...advancingSides(outcome), loserKilled: killsLoserEdge(outcome) };
+}
+
+/** Who a decision sends onward, per outcome kind (exhaustive over the engine's `OUTCOME_KINDS`; a kind added there
+ *  fails this switch's typecheck until it is classified here):
+ *  - `win` — the winner, and the loser on a loser edge, unless the loser FORFEITED (a legacy forfeit win);
+ *  - `award` — the winner only: a walkover, retirement, disqualification or withdrawal loser is out of the
+ *    tournament and never drops to a losers'-bracket or third-place seat (X-DE-1), and a bye has no loser;
+ *  - `draw`, `tie`, `no_result` — nobody (held, X-BR-2; a level result never seats, X-BR-1);
+ *  - `double_walkover` — nobody (`advancesNobody`, X-DW-2): both sides are out.
+ *  `onDecided` (usecases/scoring.ts) fills from exactly this, so the un-fill can never disagree with the fill about
+ *  who advanced. No outcome, nobody. */
 export function advancingSides(outcome: unknown): { winner: string | undefined; loser: string | undefined } {
-  const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
-  return {
-    winner: o.kind === "win" || o.kind === "award" ? o.winner : undefined,
-    loser: o.kind === "win" ? o.loser : undefined,
-  };
+  if (outcome === null || outcome === undefined) return { winner: undefined, loser: undefined };
+  const o = outcome as MatchOutcome;
+  switch (o.kind) {
+    case "win":
+      return { winner: o.winner, loser: isLegacyForfeitWin(o) ? undefined : o.loser };
+    case "award":
+      return { winner: o.winner, loser: undefined };
+    case "draw":
+    case "tie":
+    case "no_result":
+    case "double_walkover":
+      return { winner: undefined, loser: undefined };
+    default: {
+      // Assumptions are guards: a stored outcome of a kind the engine does not declare is a corrupt row, never "nobody".
+      const unknown: never = o;
+      throw new Error(`advancingSides: outcome kind ${JSON.stringify((unknown as { kind?: unknown }).kind)} is not an engine OUTCOME_KINDS member`);
+    }
+  }
 }
 
 /** Has the next match started, in the ruling's own three terms. Each is
@@ -111,9 +169,44 @@ function hasStarted(t: Node): boolean {
 }
 
 /** A walkover the SYSTEM awarded, which nobody played: `awardSeededByes`
- *  writes exactly `forfeited` + `{kind: "award"}` and no event. */
+ *  writes exactly `forfeited` + `{kind: "award", reason: "bye"}` and no event (W2b C-5; a row stored before W2b
+ *  carries no reason) — or, where the dead seat's feeder delivered a winner who has since withdrawn, the same award
+ *  naming her as its loser, reason "withdrew" (owner ruling 116), and still no event. A recorded walkover has its `core.forfeit` behind it, which `live_events` sees — so the
+ *  award's reason is not read here: it would be a second guard covering for this one, and nothing could kill it. */
 function isCascadeWalkover(t: Node): boolean {
   return t.status === "forfeited" && (t.outcome as { kind?: string } | null)?.kind === "award" && t.live_events === 0;
+}
+
+/** The bye label the cascade stamps on a dead seat (usecases/stages.ts BYE_SLOT_LABEL — one string, read here). */
+const BYE_KEY = "bracket.slot.bye";
+
+/** A line the cascade VOIDED because both its feeders died: `abandoned`, no outcome, no seat, no event. */
+function isCascadeVoid(t: Node): boolean {
+  return t.status === "abandoned" && t.outcome === null && t.home_entrant_id === null && t.away_entrant_id === null && t.live_events === 0;
+}
+
+/** W2b X-WD-4: a DEPARTURE double walkover — written with no event (`writeDepartedSeat`, `resolveBracketSeats`). */
+function isDepartureDoubleWalkover(t: Node): boolean {
+  return t.status === "forfeited" && (t.outcome as { kind?: string } | null)?.kind === "double_walkover" && t.live_events === 0;
+}
+
+/** The seat an edge feeds is EMPTY and stamped dead (`bracket.slot.bye`). */
+function seatIsStamped(t: Node, slot: 1 | 2): boolean {
+  const occupant = slot === 1 ? t.home_entrant_id : t.away_entrant_id;
+  return occupant === null && (slot === 1 ? t.home_key : t.away_key) === BYE_KEY;
+}
+
+/** Of `ids`, the entrants who have left the field (`DEPARTED_STATUSES`). */
+async function departedOf(tx: Tx, ids: readonly (string | undefined)[]): Promise<Set<string>> {
+  const want = ids.filter((id): id is string => id !== undefined);
+  if (want.length === 0) return new Set();
+  // Imported lazily, as player-stats imports its refresh module: `usecases/entrants` sits ABOVE this file
+  // (entrants → stages → … → append-event → here), and a static edge back up made the cycle evaluate in a different
+  // order — a module mocked by a test (`@/server/engine-db`) was bound before its factory finished.
+  const { DEPARTED_STATUSES } = await import("@/server/usecases/entrants");
+  const rows = await tx<{ id: string }[]>`
+    select id from entrants where id in ${tx(want)} and status in ${tx([...DEPARTED_STATUSES])}`;
+  return new Set(rows.map((r) => r.id));
 }
 
 /** The label a fed seat carried BEFORE anything filled it — the same value
@@ -140,6 +233,7 @@ async function readNode(tx: Tx, id: string): Promise<Node | undefined> {
     select f.id, f.stage_id, f.round_no, f.seq_in_round, f.home_entrant_id, f.away_entrant_id,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
            s.progression ->> 'timing' as timing, f.status, f.outcome,
+           f.home_slot_label ->> 'key' as home_key, f.away_slot_label ->> 'key' as away_key,
            (select count(*)::int from score_events e
             where e.fixture_id = f.id and e.type <> 'core.void'
               and not exists (select 1 from score_events v
@@ -182,6 +276,10 @@ async function reachable(tx: Tx, src: Node, moved: Record<Side, boolean>, out: M
     if (isCascadeWalkover(t)) {
       const was = advancingSides(t.outcome);
       await reachable(tx, t, { winner: was.winner !== undefined, loser: was.loser !== undefined }, out);
+    } else if ((seatIsStamped(t, edge.slot) || edge.side === "loser") && (isCascadeVoid(t) || isDepartureDoubleWalkover(t))) {
+      // I-1: a dead line a departed entrant's stamp helped kill revives what IT killed (`planRevive`) — and so does
+      // one a dead LOSER edge helped kill (loop-F tidy 2), stamped or not: this walk only over-approximates the plan.
+      await reachableRevive(tx, t, out);
     }
   }
 }
@@ -207,6 +305,13 @@ async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
   return { ...ref, code: { key, params, ref_seq: rc.refSeq } };
 }
 
+/** W2b D11 (STAGE_SEAT_DEPARTED): a fixture named the way the schedule board names it, for a refusal that must say
+ *  WHICH match the organiser records (`boardRef`); null when there is no such fixture. */
+export async function fixtureBoardRef(tx: Tx, fixtureId: string): Promise<NextMatchRef | null> {
+  const node = await readNode(tx, fixtureId);
+  return node ? boardRef(tx, node) : null;
+}
+
 /** The SAME lock every append to that fixture takes (append-event.ts), held
  *  to commit. Without it the next match's first event could commit between
  *  the "not started" check and the write after it, and a match in play would
@@ -214,6 +319,58 @@ async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
  *  finds the seat empty. */
 async function lockFixture(tx: Tx, id: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+}
+
+/**
+ * W2b Loop R I-2 — the lock every bracket writer that judges a seat by ANOTHER line's stored decision takes, held to
+ * commit: the void of a double walkover (`reviveDeadSeats`: what did that double walkover kill?), a decision's cascade
+ * (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?) and, since Loop R2 N-2, a
+ * withdrawal's no-event seat write (`writeDepartedSeat` → `resolveBracketSeats`). Each held only its own fixture's
+ * lock, so the decision could read the double walkover still standing while its void, parked between its read and its
+ * commit, had planned nothing — and both committed: the semi live again, the final a no-event walkover.
+ *
+ * LOCK ORDER (Loop R2 N-1): this lock comes BEFORE any `fixture:` lock, in every writer that takes both — the stage id
+ * is read first without a lock (a fixture never changes stage), then this, then the writer's own fixture, then (the
+ * void) its targets in bracket order (`releaseFedSeats`' ascending (round_no, id)). The void of a stored double
+ * walkover takes it ahead of the append's own fixture lock (`lockStageSeatsForVoid`, append-event.ts); `onDecided`
+ * and `writeDepartedSeat` ahead of their own. I-2 first took it AFTER the own fixture lock, and the void then locked its targets
+ * after it — so the void of a first-round double walkover held this and asked for a semi's fixture lock while that
+ * semi's decision held its fixture lock and asked for this: 40P01, and a decision chosen as the victim seated nobody.
+ * Nothing takes this lock while holding a `fixture:` lock, so no cycle runs through it; `reviveDeadSeats` refuses to
+ * run without it (`holdsStageSeats`). The two-key form keeps it out of the single-key space every `fixture:` and
+ * `division:` lock lives in, so a hash collision can never make it one of those. Not taken by the plain un-fill
+ * (`releaseFedSeats`' release path), which holds fixture locks only.
+ */
+export async function lockStageSeats(tx: Tx, stageId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext('stage-seats'), hashtext(${stageId}))`;
+}
+
+/** Loop R2 N-1 — the void's half of the one lock order: a `core.void` of a line whose STORED outcome is a double
+ *  walkover feeding a next match may revive what it killed (`reviveDeadSeats`), so it takes the stage lock before the
+ *  append's own fixture lock. Read without a lock: a fixture never changes stage, and an outcome that turns into a
+ *  double walkover between this read and the append's locked one was written by another append, which the append's
+ *  seq check refuses (SEQ_CONFLICT) before anything is revived. Only a void can take back a double walkover — the
+ *  engine refuses every other event on a decided match (guarantee 4, `foldMatch`) — so every other append pays no
+ *  query here. Returns whether it locked. */
+export async function lockStageSeatsForVoid(tx: Tx, fixtureId: string): Promise<boolean> {
+  const [f] = await tx<{ stage_id: string; outcome: MatchOutcome | null; feeds: boolean }[]>`
+    select stage_id, outcome, (winner_to_fixture is not null or loser_to_fixture is not null) as feeds
+      from fixtures where id = ${fixtureId}`;
+  if (!f || !f.feeds || !advancesNobody(f.outcome)) return false;
+  await lockStageSeats(tx, f.stage_id);
+  return true;
+}
+
+/** Does THIS transaction hold `lockStageSeats(stageId)`? `pg_locks` shows a two-key advisory lock as classid/objid —
+ *  the two int4 keys as unsigned oids — with objsubid 2. */
+async function holdsStageSeats(tx: Tx, stageId: string): Promise<boolean> {
+  const [{ held }] = await tx<{ held: boolean }[]>`
+    select exists (
+      select 1 from pg_locks
+       where locktype = 'advisory' and pid = pg_backend_pid() and granted and objsubid = 2
+         and classid = (hashtext('stage-seats')::bigint & 4294967295)::oid
+         and objid = (hashtext(${stageId})::bigint & 4294967295)::oid) as held`;
+  return held;
 }
 
 /** Plan the seats `src` must give back when its winner and/or loser `moved`,
@@ -226,8 +383,12 @@ async function planRelease(
   moved: Record<Side, boolean>,
   plan: Step[],
   locked: Set<string>,
+  revives: Revive[],
+  /** What `src`'s TAKEN-BACK decision did down each edge (`takenBack` of the stored outcome). */
+  was: TakenBack,
 ): Promise<void> {
   const mine = new Set([src.home_entrant_id, src.away_entrant_id].filter((id): id is string => id !== null));
+  const departed = await departedOf(tx, [was.winner, was.loser]);
   for (const edge of movedEdges(src, moved)) {
     if (!locked.has(edge.target)) {
       // Not reached by the unlocked walk: a cross-stage target (never locked,
@@ -242,7 +403,43 @@ async function planRelease(
     const t = await readNode(tx, edge.target);
     if (!t) continue;
     const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
-    if (occupant === null || !mine.has(occupant)) continue;
+    if (occupant === null) {
+      // Loop-F I-1 / R-1: the entrant this decision sent down the edge LEFT, and the seat is stamped dead — by her
+      // withdrawal after she was seated (X-WD-3/D17's `writeDepartedSeat`), or by the decision itself when she had
+      // already left (`onDecided`'s `stampDepartedSeat`, winner or X-WD-5 loser), or by the cascade walking her
+      // opponent over the empty seat — so the seat holds nobody to take back, and the line beyond it may have been
+      // settled on her absence. Taking the decision back makes the seat wait for this line again: the stamp is lifted
+      // to the drawn label, and the line it fed is revived on the Review Focus 1 path (a cascade walkover reset and what it advanced released; a cascade void or a departure double walkover
+      // reset and what IT killed revived) — or, when that next match was recorded, refused NEXT_MATCH_STARTED.
+      //
+      // Loop-F tidy 2: the same when the taken-back decision ITSELF left this LOSER edge dead — an award or a legacy
+      // forfeit win (X-DE-1, `killsLoserEdge`), or a departed loser (X-WD-5) — whoever lost. What sits on the seat was
+      // settled on that death: a cascade walkover over the stamped seat, or a cascade VOID when the line's other feed
+      // was dead too (a void stamps nothing, so this seat may carry no stamp). Left alone, the replayed line's loser is
+      // seated into that settled row — the abandoned void, or the bye award with both seats filled.
+      const leaver = edge.side === "winner" ? was.winner : was.loser;
+      const stamped = seatIsStamped(t, edge.slot);
+      const leaverDeparted = leaver !== undefined && departed.has(leaver);
+      const deadLoserEdge = edge.side === "loser" && (was.loserKilled || leaverDeparted);
+      if (!(leaverDeparted && stamped) && !deadLoserEdge) continue;
+      const lifted = { target: t.id, slot: edge.slot, occupant: null, stamped, label: drawnLabel(src, edge.side) };
+      if (isCascadeWalkover(t)) {
+        plan.push({ ...lifted, reset: true });
+        const gave = takenBack(t.outcome);
+        await planRelease(tx, t, { winner: gave.winner !== undefined, loser: gave.loser !== undefined }, plan, locked, revives, gave);
+      } else if (isCascadeVoid(t) || isDepartureDoubleWalkover(t)) {
+        plan.push({ ...lifted, reset: true });
+        await planRevive(tx, t, revives, plan, locked);
+      } else if (hasStarted(t)) {
+        const ref = await boardRef(tx, t);
+        throw new HttpError(409, nextMatchStartedMessage(nextMatchLabel(ref, msg)), NEXT_MATCH_STARTED_CODE, { next_match: ref });
+      } else if (stamped) {
+        plan.push({ ...lifted, reset: false });
+      }
+      // (Unstamped, waiting and unstarted: the line is still waiting for this feeder — nothing was settled on it.)
+      continue;
+    }
+    if (!mine.has(occupant)) continue;
     const reset = isCascadeWalkover(t);
     if (!reset && hasStarted(t)) {
       const ref = await boardRef(tx, t);
@@ -250,9 +447,63 @@ async function planRelease(
     }
     plan.push({ target: t.id, slot: edge.slot, occupant, label: drawnLabel(src, edge.side), reset });
     if (reset) {
-      // The walkover goes back to undecided, so whatever IT advanced moves too.
-      const was = advancingSides(t.outcome);
-      await planRelease(tx, t, { winner: was.winner !== undefined, loser: was.loser !== undefined }, plan, locked);
+      // The walkover goes back to undecided, so whatever IT advanced moves too. (Its dead side stays dead, so it is
+      // awarded again and its loser edge stays dead — that edge has nothing to give back.)
+      const gave = takenBack(t.outcome);
+      await planRelease(tx, t, { winner: gave.winner !== undefined, loser: gave.loser !== undefined }, plan, locked, revives, gave);
+    }
+  }
+}
+
+/** Review Focus 1 (W2b): what a feeder that STOPS advancing nobody gives back. A double walkover killed the seats it
+ *  feeds — `resolveBracketSeats` stamped each one a bye beside a seated opponent and walked that opponent over, or
+ *  voided the line when its other feeder was dead too. Voiding the double walkover makes the feeder live again, so
+ *  each of those is put back to waiting, under the un-fill's own rules:
+ *  - a cascade WALKOVER on the seat goes back to `scheduled` with no outcome and the seat's drawn label, and what
+ *    the walkover advanced is released in turn (`planRelease`: refused NEXT_MATCH_STARTED if that next match started);
+ *  - a cascade VOID line goes back to `scheduled`, and the seats IT killed revive the same way.
+ *  A seat this feeder never killed (still waiting, label drawn) is left alone — and the cascade never stamps a bye
+ *  without its walkover (`resolveBracketSeats` stamps only beside a seated entrant, then `awardSeededByes` settles
+ *  it in the same pass), so a stamped seat a revive reaches is always the walkover case. The one stamp at rest is a
+ *  withdrawal's (X-WD-3, `writeDepartedSeat`): her own seat, which no feeder killed and no revive reaches.
+ *  W2b X-WD-4's DEPARTURE double walkover (`resolveBracketSeats`' `seatDeparted`) is never revived: every feed it is
+ *  written from — a withdrawal's stamp, another departure double walkover — carries no event a void could target,
+ *  and a RECORDED double walkover beside a dead seat makes a cascade void (above), not one. */
+interface Revive {
+  target: string;
+  slot: 1 | 2;
+  label: Step["label"];
+  kind: "walkover" | "void";
+}
+
+async function reachableRevive(tx: Tx, src: Node, out: Map<string, Node>): Promise<void> {
+  for (const edge of movedEdges(src, { winner: true, loser: true })) {
+    const t = await readNode(tx, edge.target);
+    if (!t || t.stage_id !== src.stage_id || out.has(t.id)) continue;
+    out.set(t.id, t);
+    if (isCascadeWalkover(t)) await reachable(tx, t, { winner: true, loser: false }, out);
+    else if (isCascadeVoid(t)) await reachableRevive(tx, t, out);
+  }
+}
+
+async function planRevive(tx: Tx, src: Node, revives: Revive[], plan: Step[], locked: Set<string>): Promise<void> {
+  for (const edge of movedEdges(src, { winner: true, loser: true })) {
+    if (!locked.has(edge.target)) continue; // cross-stage (never reached, never touched)
+    const t = await readNode(tx, edge.target);
+    if (!t) continue;
+    const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
+    const label = edge.slot === 1 ? t.home_key : t.away_key;
+    if (occupant !== null) continue; // a feeder that advanced nobody seated nobody (D20 asserts it)
+    if (isCascadeVoid(t)) {
+      // The seat the reviving feeder fed goes back to its drawn label; a seat the line's OTHER side left dead (a
+      // withdrawal's stamp, X-WD-3) keeps its stamp, so the line waits for this side only.
+      revives.push({ target: t.id, slot: edge.slot, label: drawnLabel(src, edge.side), kind: "void" });
+      await planRevive(tx, t, revives, plan, locked);
+      continue;
+    }
+    if (label === BYE_KEY && isCascadeWalkover(t)) {
+      revives.push({ target: t.id, slot: edge.slot, label: drawnLabel(src, edge.side), kind: "walkover" });
+      await planRelease(tx, t, { winner: true, loser: false }, plan, locked, revives, takenBack(t.outcome));
     }
   }
 }
@@ -263,6 +514,8 @@ async function planRelease(
  *
  * A no-op — not one query — unless there WAS a stored decision and who it
  * advances changed, so the hot append path pays nothing for an ordinary event.
+ * One more case since W2b (Review Focus 1): a stored double walkover the new
+ * fold no longer holds revives the seats it killed (`reviveDeadSeats`).
  *
  * Returns the ids of the fixtures it actually changed — from each update's own
  * `returning id`, never re-derived — so a caller can publish exactly what
@@ -278,9 +531,14 @@ export async function releaseFedSeats(
   after: unknown,
 ): Promise<string[]> {
   if (before === null || before === undefined) return [];
-  const was = advancingSides(before);
-  const now = advancingSides(after);
-  const moved = { winner: was.winner !== now.winner, loser: was.loser !== now.loser };
+  // Review Focus 1: a double walkover taken back (voided) revives the seats it killed.
+  if (advancesNobody(before as MatchOutcome) && !advancesNobody(after as MatchOutcome | null)) return reviveDeadSeats(tx, fixtureId);
+  const was = takenBack(before);
+  const now = takenBack(after);
+  // Loop-F tidy 2: the loser edge MOVED when the decision that left it dead (an award, a legacy forfeit win) is taken
+  // back — `advancingSides` reads "nobody" down it both before and after, but the cascade settled its target on that
+  // death, and the release must give that back (`planRelease`).
+  const moved = { winner: was.winner !== now.winner, loser: was.loser !== now.loser || was.loserKilled !== now.loserKilled };
   if (!moved.winner && !moved.loser) return [];
   const src = await readNode(tx, fixtureId);
   if (!src) return [];
@@ -303,23 +561,98 @@ export async function releaseFedSeats(
   for (const t of order) await lockFixture(tx, t.id);
 
   const plan: Step[] = [];
-  await planRelease(tx, src, moved, plan, new Set(reach.keys()));
+  const revives: Revive[] = [];
+  await planRelease(tx, src, moved, plan, new Set(reach.keys()), revives, was);
+  const changed = await writePlan(tx, plan);
+  for (const id of await writeRevives(tx, revives)) if (!changed.includes(id)) changed.push(id);
+  return changed;
+}
 
+/** Write a planned release, each update guarded on the occupant the plan saw; the ids it changed. */
+async function writePlan(tx: Tx, plan: readonly Step[]): Promise<string[]> {
   const released: string[] = [];
   for (const p of plan) {
     const json = p.label === null ? null : tx.json(p.label as never);
     const seatCol = p.slot === 1 ? tx`home_entrant_id` : tx`away_entrant_id`;
     const labelCol = p.slot === 1 ? tx`home_slot_label` : tx`away_slot_label`;
     // Guarded on the occupant the plan saw, so the write can only ever take
-    // back the name it was judged on.
+    // back the name it was judged on — or, for a dead seat (I-1), on the seat still being empty and stamped.
+    const seated =
+      p.occupant !== null
+        ? tx`${seatCol} = ${p.occupant}`
+        : p.stamped === false
+          ? tx`${seatCol} is null`
+          : tx`${seatCol} is null and ${labelCol} ->> 'key' = ${BYE_KEY}`;
     const [row] = p.reset
       ? await tx<{ id: string }[]>`
           update fixtures set ${seatCol} = null, ${labelCol} = ${json}, status = 'scheduled', outcome = null
-          where id = ${p.target} and ${seatCol} = ${p.occupant} returning id`
+          where id = ${p.target} and ${seated} returning id`
       : await tx<{ id: string }[]>`
           update fixtures set ${seatCol} = null, ${labelCol} = ${json}
-          where id = ${p.target} and ${seatCol} = ${p.occupant} returning id`;
+          where id = ${p.target} and ${seated} returning id`;
+    // R116-2: a reset award takes the score written beside it (ruling 116's walkover).
+    if (row && p.reset) await clearAwardedMatchState(tx, row.id);
     if (row && !released.includes(row.id)) released.push(row.id);
   }
   return released;
+}
+
+/** Review Focus 1's write path: plan every revive (and every release a reset walkover owes) under the locks, in the
+ *  un-fill's one global order, then write. Same refusal contract as `releaseFedSeats`: a started next match refuses
+ *  the whole write (409 NEXT_MATCH_STARTED) before anything is written. */
+async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
+  const src = await readNode(tx, fixtureId);
+  if (!src) return [];
+  // Nothing in this stage to revive: a line that feeds no next match (a league's, a group's — X-DW-4 records and counts
+  // it) or only another stage's (never reached, never touched). Read before the guard: a feed edge and its target's
+  // stage are structure, not a seat — and `lockStageSeatsForVoid` took no lock for a line that feeds nothing.
+  const [{ own }] = await tx<{ own: number }[]>`
+    select count(*)::int as own from fixtures
+     where id in (${src.winner_to_fixture ?? src.id}, ${src.loser_to_fixture ?? src.id}) and id <> ${src.id}
+       and stage_id = ${src.stage_id}`;
+  if (own === 0) return [];
+  // I-2: before the first read of a seat this double walkover killed — a sibling's decision must not judge it dead
+  // while this void is in flight, nor this void judge it before that decision's cascade has committed. N-1: taken by
+  // the caller BEFORE its own fixture lock (`lockStageSeatsForVoid`), never here — taking it now, behind a fixture
+  // lock, is the order that deadlocks against a decision.
+  if (!(await holdsStageSeats(tx, src.stage_id))) {
+    throw new Error(
+      `reviveDeadSeats: fixture ${fixtureId} revives without the stage lock — take lockStageSeats before the fixture lock (Loop R2 N-1)`,
+    );
+  }
+  const reach = new Map<string, Node>();
+  await reachableRevive(tx, src, reach);
+  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const t of order) await lockFixture(tx, t.id);
+  const revives: Revive[] = [];
+  const plan: Step[] = [];
+  await planRevive(tx, src, revives, plan, new Set(reach.keys()));
+  const changed = await writeRevives(tx, revives);
+  for (const id of await writePlan(tx, plan)) if (!changed.includes(id)) changed.push(id);
+  return changed;
+}
+
+/** Write planned revives (Review Focus 1), each guarded on the dead shape the plan judged; the ids it changed.
+ *  A walkover revive also matches a row already back at `scheduled`: the release's own `writePlan` (which runs first,
+ *  in `releaseFedSeats`) may have just reset that same walkover through its OTHER seat — page_playoff's final, reset
+ *  through q1's winner edge while q2's void, revived through q1's dead loser edge, lifts the final's stamp (loop-F
+ *  tidy 2). Nothing else writes it under these locks, so `scheduled` here is this transaction's own reset. */
+async function writeRevives(tx: Tx, revives: readonly Revive[]): Promise<string[]> {
+  const changed: string[] = [];
+  for (const r of revives) {
+    const json = r.label === null ? null : tx.json(r.label as never);
+    const seatCol = r.slot === 1 ? tx`home_entrant_id` : tx`away_entrant_id`;
+    const labelCol = r.slot === 1 ? tx`home_slot_label` : tx`away_slot_label`;
+    const [row] =
+      r.kind === "walkover"
+        ? await tx<{ id: string }[]>`
+            update fixtures set ${labelCol} = ${json}, status = 'scheduled', outcome = null
+            where id = ${r.target} and ${seatCol} is null and ${labelCol} ->> 'key' = ${BYE_KEY}
+              and status in ('forfeited', 'scheduled') returning id`
+        : await tx<{ id: string }[]>`
+            update fixtures set ${labelCol} = ${json}, status = 'scheduled'
+            where id = ${r.target} and ${seatCol} is null and status = 'abandoned' and outcome is null returning id`;
+    if (row && !changed.includes(row.id)) changed.push(row.id);
+  }
+  return changed;
 }

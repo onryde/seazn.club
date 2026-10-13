@@ -72,6 +72,7 @@ import { localiseParams } from "@/components/public-site/match-centre/timeline-t
 import {
   CORE_EVENT_SCHEMAS,
   EngineError,
+  FORFEIT_REASONS,
   LINEUP_EVENT_SCHEMAS,
   SETTLE_METHODS,
   foldMatchWithStoppage,
@@ -992,12 +993,75 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
         if (line.seq === 1 && TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
       }
     }
-    // The gate says what it saw: both no-side branches, both goal flags and
-    // every settle method fired — each override key exactly once.
-    expect(overridden).toBe(4 + SETTLE_METHODS.length);
+    // W2b Task 12: each engine forfeit reason, a double walkover and an expunge abandon say their own sentence.
+    // single-sport: KEY_OVERRIDE is keyed by event TYPE, and core.forfeit / core.abandon are kernel events every sport folds the same way — boardgame stands for all.
+    const forfeitLedgers = [
+      ...FORFEIT_REASONS.map((reason) => [env(0, "core.forfeit", { by: "H", reason })]),
+      [env(0, "core.forfeit", { by: "both", reason: "walkover" })],
+      [env(0, "core.abandon", { reason: "withdrew", expunge: true })],
+    ];
+    for (const events of forfeitLedgers) {
+      for (const line of linesOf(args({ sportKey: "boardgame", events }))) {
+        emitted.add(line.text.key);
+        if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+      }
+    }
+    // The gate says what it saw: both no-side branches, both goal flags, every
+    // settle method and every forfeit kind fired — each override key exactly once.
+    expect(overridden).toBe(4 + SETTLE_METHODS.length + FORFEIT_REASONS.length + 2);
     expect(overridden).toBe(TIMELINE_OVERRIDE_KEYS.length);
     const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
     expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
+  });
+
+  it("W2b Task 12: a forfeit line says its reason, a double walkover names nobody, an expunge is not a plain abandon — distinct keys, all four locales", () => {
+    // single-sport: KEY_OVERRIDE is keyed by event TYPE, and core.forfeit / core.abandon are kernel events every sport folds the same way — boardgame stands for all.
+    // Reasons from the engine's own FORFEIT_REASONS. A bye is written with no event, so the timeline never meets one.
+    // `locale:key` sentences MEANT to read as the English; every other non-English one must differ from it (a key added
+    // to en alone and copied across reads as present). Empty today.
+    const SAME_AS_ENGLISH: ReadonlySet<string> = new Set<string>([]);
+    let translated = 0;
+    const listedAndEqual = new Set<string>();
+    const cases: [string, string, Record<string, unknown>][] = [
+      ...FORFEIT_REASONS.map((reason): [string, string, Record<string, unknown>] => [reason, "core.forfeit", { by: "H", reason }]),
+      ["double_walkover", "core.forfeit", { by: "both", reason: "walkover" }],
+      ["legacy", "core.forfeit", { by: "H" }],
+      ["expunge", "core.abandon", { reason: "withdrew", expunge: true }],
+      ["abandon", "core.abandon", { reason: "rain" }],
+    ];
+    const keys = new Map<string, string>();
+    let read = 0;
+    for (const [name, type, payload] of cases) {
+      const [line] = linesOf(args({ sportKey: "boardgame", events: [env(0, type, payload)] })).filter((l) => l.seq === 0);
+      expect(line, name).toBeDefined();
+      keys.set(name, line!.text.key);
+      for (const locale of LOCALES) {
+        const raw = DICTS[locale][line!.text.key];
+        expect(typeof raw, `${locale}:${line!.text.key}`).toBe("string");
+        const dict = DICTS[locale] as Dict;
+        const text = t(dict, line!.text.key, localiseParams(dict, line!.text.params));
+        if (name === "double_walkover") expect(text, `${locale}/${name}`).not.toContain(SIDES[0].name);
+        else if (type === "core.forfeit") expect(text, `${locale}/${name}`).toContain(SIDES[0].name);
+        expect(text, `${locale}/${name}`).not.toMatch(/[{}]/);
+        read++;
+        if (locale === "en") continue;
+        const english = DICTS.en[line!.text.key];
+        if (SAME_AS_ENGLISH.has(`${locale}:${line!.text.key}`)) {
+          expect(raw, `${locale}:${line!.text.key} is listed as the English`).toBe(english);
+          listedAndEqual.add(`${locale}:${line!.text.key}`);
+        } else {
+          expect(raw, `${locale}:${line!.text.key} is translated, not the English`).not.toBe(english);
+          translated++;
+        }
+      }
+    }
+    expect(translated + listedAndEqual.size, `translations checked: ${translated}`).toBe(cases.length * (LOCALES.length - 1));
+    expect(translated, "at least one sentence is checked against the English").toBeGreaterThan(0);
+    expect(new Set(keys.values()).size, JSON.stringify(Object.fromEntries(keys))).toBe(cases.length);
+    // The reason-free lines stay the legacy fallbacks — the table's own entries.
+    expect(keys.get("legacy")).toBe(TIMELINE_KEY_FOR["core.forfeit"]);
+    expect(keys.get("abandon")).toBe(TIMELINE_KEY_FOR["core.abandon"]);
+    expect(read, `keys read: ${read}`).toBe(cases.length * LOCALES.length);
   });
 
   it("X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales", () => {

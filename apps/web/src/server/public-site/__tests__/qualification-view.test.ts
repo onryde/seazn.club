@@ -54,6 +54,8 @@
 //   seat restored), lag-void, Swiss-seated, pool-filter, the forfeited mapping
 //   and the ledgerless reading of a real walkover on real reads too.
 import { describe, expect, it } from "vitest";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import {
   PointsRule,
   pointsRuleBounds,
@@ -361,20 +363,30 @@ describe("stageQualMeta / divisionPointsBounds", () => {
     expect(divisionPointsBounds(undefined, CFG)).toBeNull();
     expect(divisionPointsBounds(GENERIC, { resultMode: "nonsense" })).toBeNull();
   });
-  it("divisionAwardAddsToLedger: exactly the modules whose config declares a forfeit score (awardScore)", () => {
-    // Premise, read off the engine: ice hockey's walkover scores cfg.awardScore.
+  it("divisionAwardAddsToLedger: exactly the modules whose walkover CREDITS the table (the engine's forfeitCredit, ruling 108)", () => {
+    // W2b Task 13 (X-WO-1): the question is the engine's own — what does a walkover credit this sport's table
+    // (`forfeitCredit`, the hook `standingsDelta` reads for an award) — not "does the cfg declare an awardScore".
+    // Before W2b only the goal sports' award wrote a score; now every sport's walkover credits its ledger (sets,
+    // points, a chess win, a defaulter's full quota of balls) except generic's, whose walkover is the win points at
+    // 0–0 (GN-WO-1). Membership pinned, not derived: a sport that starts (or stops) crediting its walkover is a
+    // deliberate edit here.
     expect(ICEHOCKEY.configSchema.parse({})).toMatchObject({ awardScore: { goals: 5 } });
-    // Membership pinned, not derived: a sport that starts (or stops) writing a
-    // forfeit score into its ledger is a deliberate edit here.
     const adds = builtinModules.filter((m) => divisionAwardAddsToLedger(m, {})).map((m) => m.key).sort();
-    expect(adds).toEqual(["football", "hockey", "icehockey"]);
+    expect(adds).toEqual(["badminton", "boardgame", "carrom", "cricket", "football", "hockey", "icehockey", "tabletennis", "tennis", "volleyball"]);
+    expect(adds.length).toBe(builtinModules.length - 1);
     expect(divisionAwardAddsToLedger(GENERIC, CFG)).toBe(false);
-    expect(divisionAwardAddsToLedger(BADMINTON, {})).toBe(false);
+    // The case where the hook and the old awardScore reading part ways: badminton declares no forfeit score, and its
+    // walkover credits the table 2–0 in sets all the same (BD-WO-1), so its walkover is an ordinary ledger match.
+    expect((BADMINTON.configSchema.parse({}) as { awardScore?: unknown }).awardScore).toBeUndefined();
+    expect(divisionAwardAddsToLedger(BADMINTON, {})).toBe(true);
     // No module, or a cfg that does not parse: false (the builder has no
     // bounds then either, so it shows no status at all).
     expect(divisionAwardAddsToLedger(null, {})).toBe(false);
     expect(divisionAwardAddsToLedger(undefined, {})).toBe(false);
     expect(divisionAwardAddsToLedger(ICEHOCKEY, { awardScore: { goals: "five" } })).toBe(false);
+    // A module whose `init` refuses the empty seats it is asked with: false, never a thrown public page.
+    const refusing = { ...ICEHOCKEY, init: () => { throw new Error("no lineup"); } } as unknown as typeof ICEHOCKEY;
+    expect(divisionAwardAddsToLedger(refusing, {})).toBe(false);
   });
 });
 
@@ -551,6 +563,30 @@ describe("no status — stated first, each with its positive pair", () => {
     expect(Object.keys(folded.rows).sort()).toEqual(["A", "B", "C", "D"]);
     // …carried points included: E folded at 3 is a known rival too.
     expect(view({ ...s, rows: withE(3), fixtures: [...s.fixtures, ...expunged], statuses: { E: "withdrawn" } })).not.toBeNull();
+  });
+  it("I-2 (W2b D5): a DEPARTED member whose every line is an active EXPUNGE is owed no snapshot row — the table shows; back in the field, or one line not expunged, it still hides", () => {
+    // Loop-F review I-2. W2b's expunge abandons with NO outcome (PF-4), so the snapshot never folds the leaver — and
+    // nothing of hers is still to come. Before the fix F2 read her as unknown and the pool's qualification vanished.
+    const s = open4();
+    const eOpen = [open(1, "E", "B"), open(4, "A", "E")];
+    const expunged = eOpen.map((f) => ({ ...f, status: "abandoned", outcome: null, expunged: true }));
+    let checked = 0;
+    for (const status of ["withdrawn", "disqualified"]) {
+      const shown = must(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: status } }));
+      expect(shown.rows.E, status).toBeUndefined();
+      expect(Object.keys(shown.rows).sort(), status).toEqual(["A", "B", "C", "D"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // An unreadable status, or a member back IN the field (her lines expunged, yet she plays on): unknown — hidden.
+    const rest = { ...input({ ...s, fixtures: [...s.fixtures, ...expunged] }).entrantStatuses };
+    delete rest.E;
+    expect(view({ ...s, fixtures: [...s.fixtures, ...expunged] }, { entrantStatuses: rest })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: "confirmed" } })).toBeNull();
+    // One line NOT expunged (a plain recorded abandon, or still scheduled): her points can still move — hidden.
+    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false }];
+    expect(view({ ...s, fixtures: [...s.fixtures, ...plain], statuses: { E: "withdrawn" } })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, expunged[0]!, eOpen[1]!], statuses: { E: "withdrawn" } })).toBeNull();
   });
   it("snapshot lag: a row that has played FEWER matches than its settled fixtures → no status; equal or more shows", () => {
     const s = open4();
@@ -1071,6 +1107,40 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view({ ...o, fixtures })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
+  // Loop R M-13 (X-DW-4): a double walkover credits NOTHING — no score to either side, in every sport, whatever the
+  // division's walkover credits (`applyPointsRule` and the folds pay it nothing) — so it is a match the average leaves
+  // out, as it leaves out a no-result. Swept over every sport whose engine folds a both-sides forfeit to a double
+  // walkover, the outcome being the engine's own fold, never typed; `awardAddsToLedger` is each sport's own reading, so
+  // a sport whose WALKOVER would count (ice hockey's 5–0) is in the sweep too. D's 14 goals then came from ONE match and
+  // the win by 8 fits; counted as a match, they halve to 7 and there is no target (the right answer differs from the
+  // wrong one's sentence).
+  it("…and double walkovers, in every sport (X-DW-4: a match that credited nothing)", () => {
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const target = `If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`;
+    const checked: string[] = [];
+    let ledgerSports = 0;
+    for (const m of builtinModules) {
+      const cfg = m.configSchema.parse(Object.values(m.variants ?? {})[0] ?? {});
+      const l = defaultLineupPair(m.positions);
+      const events: EventEnvelope[] = [makeEnvelope(1, { type: "core.forfeit", payload: { by: "both", reason: "walkover" } })];
+      let outcome: unknown;
+      try {
+        outcome = outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, events));
+      } catch {
+        continue; // a sport whose kernel refuses a both-sides forfeit has no double walkover to read
+      }
+      if ((outcome as { kind?: string } | null)?.kind !== "double_walkover") continue;
+      const addsToLedger = divisionAwardAddsToLedger(m, cfg);
+      if (addsToLedger) ledgerSports++;
+      const dw = fx(2, "B", "D", "forfeited", outcome);
+      const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), dw, open(3, "A", "B"), open(3, "C", "D")];
+      const d = must(view({ ...o, fixtures }, { awardAddsToLedger: addsToLedger })).rows.D!;
+      expect(d.whatIf, `${m.key}: the double walkover is no match in the average`).toBe(target);
+      checked.push(m.key);
+    }
+    expect(checked.length, `sports checked: ${checked.join(", ")}`).toBeGreaterThanOrEqual(5);
+    expect(ledgerSports, "premise: at least one swept sport's walkover WOULD count toward the average").toBeGreaterThan(0);
+  });
   it("an ice-hockey walkover writes its forfeit score into the ledger, so it COUNTS toward the average; a generic one does not", () => {
     // The walkover scene above, in a sport whose core.forfeit records
     // cfg.awardScore (5–0) as the match's goals (period kernel `applyForfeit`,
@@ -1085,6 +1155,73 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     // D's 14 goals are one match's, and the target stands.
     const generic = must(view({ ...o, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(GENERIC, CFG) })).rows.D!;
     expect(generic.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+  });
+  it("X-WO-1: the qualification view and the public table show the same credited score as the table", () => {
+    // A REAL hockey walkover (D did not show; B is awarded it). Three readers of one credited score:
+    const HOCKEY = moduleOf("hockey");
+    const cfg = HOCKEY.configSchema.parse({});
+    const l = defaultLineupPair(HOCKEY.positions);
+    const events: EventEnvelope[] = [makeEnvelope(1, { type: "core.forfeit", payload: { by: l.away.entrantId, reason: "walkover" } })];
+    const f = foldMatchWithStoppage(HOCKEY as never, cfg as never, l, events);
+    const o = outcomeOf(HOCKEY as never, f)!;
+    // …the engine's declaration, which the other three must agree with (not a typed 5–0):
+    const credit = HOCKEY.forfeitCredit(cfg, HOCKEY.init(cfg, l), "walkover", "away");
+    const credited: [number, number] = [credit.perSide[0].gf!, credit.perSide[1].gf!];
+    expect(credited[0], "premise: a walkover is not 0–0 in hockey").toBeGreaterThan(0);
+    expect(credited).toEqual([5, 0]); // FIH: the brief's "hockey 5-0", confirmed against the engine
+    // 1. the table: the standings delta the fold writes.
+    const [home, away] = HOCKEY.standingsDelta(o, cfg, { kind: "league" } as never, f.state);
+    expect([home.metrics.gf, away.metrics.gf]).toEqual(credited);
+    expect([home.metrics.ga, away.metrics.ga]).toEqual([credited[1], credited[0]]);
+    // 2. the public summary (the match card's and the match centre's score lines).
+    expect(HOCKEY.summary(f.state).perSide.map((p) => p.line)).toEqual(credited.map(String));
+    // 3. the qualification view: the walkover is a match of THAT score in the what-if's average. D's row carries the
+    //    table's goals — 6–3 played plus the credited 0–5 — so D's 14 goals came from two matches, an average of 7, and
+    //    a win by 8 fits in neither: the what-if states values instead of a target.
+    const scored = { D: [6 + credited[1], 3 + credited[0]] as [number, number], B: [7, 2] as [number, number] };
+    const o4 = open4(scored);
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const d = must(view({ ...o4, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(HOCKEY, {}) })).rows.D!;
+    expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    // The pair that reads the PLAYED ledger instead (nothing was played: 0–0, so the walkover would add nothing) —
+    // the view must not: it would set a target the credited score already rules out.
+    const played = HOCKEY.standingsDelta(o, cfg, { kind: "league" } as never, HOCKEY.init(cfg, l));
+    expect(played[0].metrics.gf, "the credit is the award's, not the empty board's").toBe(credited[0]);
+    const misread = must(view({ ...o4, fixtures }, { awardAddsToLedger: false })).rows.D!;
+    expect(misread.whatIf).not.toBe(d.whatIf);
+  });
+  it("X-WO-1 (review M-5): every sport whose walkover credits GOALS counts it in the what-if, at the engine's own credit", () => {
+    // The hockey case above, swept. The what-if decides on goal difference here (RULE), so the sports it can read a
+    // walkover in are those whose engine credit carries goals; every other sport's credit (sets, points, a chess win,
+    // a quota) never enters a goal average — and which modules' awards reach the ledger at all is pinned for EVERY
+    // sport by the divisionAwardAddsToLedger test above. The scene is chosen so the answer moves with ANY credit c > 0:
+    // D played one 6–6 match and lost the walkover 0–c, so D's average match is (12 + c) / 2 goals and the margin it
+    // needs is 6 + c — more than that average for every c > 0 (values, not a target), but within ONE match's 12 + c
+    // goals (the misreading that ignores the credit would set a target).
+    const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
+    const goalSports: string[] = [];
+    let swept = 0;
+    for (const m of builtinModules) {
+      const cfg = m.configSchema.safeParse({}).success ? m.configSchema.parse({}) : m.configSchema.parse(Object.values(m.variants ?? {})[0]);
+      const l = defaultLineupPair(m.positions);
+      const credit = m.forfeitCredit(cfg as never, m.init(cfg as never, l) as never, "walkover", "away");
+      swept++;
+      const c = credit.perSide[0].gf ?? 0;
+      if (c <= 0) continue;
+      goalSports.push(m.key);
+      expect(credit.perSide[1].gf, `${m.key}: the side that did not show is credited nothing`).toBe(0);
+      expect(divisionAwardAddsToLedger(m, cfg), m.key).toBe(true);
+      const o4 = open4({ D: [6, 6 + c], B: [7, 2] });
+      const d = must(view({ ...o4, fixtures }, { awardAddsToLedger: divisionAwardAddsToLedger(m, cfg) })).rows.D!;
+      expect(d.whatIf, m.key).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -${c}, Bo +5.`);
+      const misread = must(view({ ...o4, fixtures }, { awardAddsToLedger: false })).rows.D!;
+      expect(misread.whatIf, `${m.key}: the pair that ignores the credit`).toBe(
+        `If you finish level on points with Bo, ${RULE} decides: win your next match by ${6 + c} or more to finish ahead.`,
+      );
+    }
+    expect(swept, "every builtin sport").toBe(builtinModules.length);
+    // Membership from the engine's credit, pinned so a sport that starts (or stops) crediting goals is a visible change.
+    expect(goalSports.sort()).toEqual(["football", "hockey", "icehockey"]);
   });
   it("…but a one-sided bye adds no goals even there (the adapter folds it from a fresh 0–0 state): still out of the average", () => {
     const d = must(view(swiss5(), { awardAddsToLedger: divisionAwardAddsToLedger(ICEHOCKEY, {}) })).rows.D!;
@@ -1247,13 +1384,18 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view({ kind: "league", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(d.whatIf).toMatch(new RegExp(`^If you finish level on points with Bo, ${word("goals")} decides[.:]`));
   });
-  it("a badminton walkover under the rule: set ratio reads no goals, so the walkover stays out of the average", () => {
-    // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Di's
-    // sets (1–2) are ONE real match's; Bo is 3–3. A win by 2 fits one 3-set
-    // match (3.5/2.5 > 1); counted as two matches it does not, and the what-if
-    // falls back to the rule and values.
+  it("a badminton walkover credits its sets (BD-WO-1): set ratio reads them, so the walkover is IN the average, rule or no rule", () => {
+    // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Before W2b a badminton walkover credited
+    // nothing, so Di's sets (1–2) were ONE real match's and a win by 2 fit it (3.5/2.5 > 1) — "win by 2". W2b
+    // Task 13 (ruling 108, X-WO-1): the walkover credits the table the engine's own sets (`forfeitCredit`, read
+    // here, never typed), so Di's row is 1–2 plus the credited sets, from TWO matches, and a win by 2 fits no average
+    // match: the what-if falls back to the rule and values. A stage rule's goals change nothing about that.
     const BB = divisionPointsBounds(BADMINTON, {})!;
     const bw = BB.winFloor;
+    const bcfg = BADMINTON.configSchema.parse({});
+    const credit = BADMINTON.forfeitCredit(bcfg, BADMINTON.init(bcfg, defaultLineupPair(BADMINTON.positions)), "walkover", "away");
+    const [cw, cl] = credit.perSide;
+    expect(cw.sets_won, "premise: the walkover credits sets").toBeGreaterThan(0);
     // Wins only, as badminton's own bounds are — else `wins` decides, not set ratio.
     const winsOnlyRule = {
       base: { win: bw, draw: 0, loss: 0 },
@@ -1262,18 +1404,24 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     };
     const sets = (w: number, l: number): Metrics => ({ sets_won: w, sets_lost: l });
     const rows = (scored: boolean) => [
-      ledgerRow("A", 1, 2, 2, 2 * bw, { ...sets(2, 0), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("A", 1, 2, 2, 2 * bw, { ...sets(2 + cw.sets_won!, 0 + cw.sets_lost!), ...(scored ? ruleAward(3, 0) : {}) }),
       ledgerRow("B", 2, 1, 2, bw, sets(3, 3)),
       ledgerRow("C", 3, 1, 2, bw, sets(2, 3)),
-      ledgerRow("D", 4, 0, 2, 0, { ...sets(1, 2), ...(scored ? ruleAward(0, 3) : {}) }),
+      ledgerRow("D", 4, 0, 2, 0, { ...sets(1 + cl.sets_won!, 2 + cl.sets_lost!), ...(scored ? ruleAward(0, 3) : {}) }),
     ];
     const fixtures = [walkover(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), won(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
     const over = { cascade: [...BADMINTON.defaultTiebreakers], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
     const target = "If you finish level on points with Bo, set ratio decides: win your next match by 2 or more to finish ahead.";
     const plain = must(view({ kind: "league", rows: rows(false), fixtures }, over)).rows.D!;
-    expect(plain.whatIf).toBe(target);
+    expect(plain.whatIf).not.toBe(target);
+    // The values are the rows' own set ratios: Di's, with the credited sets, and Bo's 3–3.
+    const ratio = (w: number, l: number) => (w / l).toFixed(2);
+    expect(plain.whatIf).toBe(`If you finish level on points with Bo, set ratio decides. Now: you ${ratio(1 + cl.sets_won!, 2 + cl.sets_lost!)}, Bo ${ratio(3, 3)}.`);
     const scored = must(view({ kind: "league", rows: rows(true), fixtures, meta: { pointsRule: winsOnlyRule } }, over)).rows.D!;
-    expect(scored.whatIf).toBe(target);
+    expect(scored.whatIf).toBe(plain.whatIf);
+    // The pair: the same rows with the walkover read as no match (the pre-W2b flag) set the stale target.
+    const stale = must(view({ kind: "league", rows: rows(false), fixtures }, { ...over, awardAddsToLedger: false })).rows.D!;
+    expect(stale.whatIf).not.toBe(plain.whatIf);
   });
   it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;

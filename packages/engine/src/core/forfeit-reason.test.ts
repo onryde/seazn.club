@@ -1,93 +1,67 @@
-// `core.forfeit` carries a REQUIRED `reason` (`events.ts:52` —
-// `z.strictObject({ by: EntrantId, reason: z.string().min(1) })`), and until
-// this suite existed every shipped module threw it away: all four handlers cast
-// the payload as `{ by: string }` and never read the second field. The fixture
-// came out `{ kind: "award", winner }`, which records THAT a side forfeited and
-// loses WHY — so a walkover, a disqualification and a retirement were
-// indistinguishable downstream, for every sport.
+// #772, rewritten for W2b (spec §5.1). `core.forfeit` carries a REQUIRED `reason`, and before #772 every shipped module
+// threw it away: the handlers cast the payload as `{ by: string }`, so a walkover, a disqualification and a retirement
+// folded to byte-identical outcomes (found by the B06b darts bench). #772 put the free-text reason in `award.method`.
 //
-// Found by the B06b darts bench, which wanted to state a walkover and could
-// only reach `method: "regulation"` through a result card — an encoding that
-// credits a score nobody played, which then flows into player stats as real.
+// W2b closes the vocabulary (`FORFEIT_REASONS`) and moves the reason to `award.reason`, beside a typed `loser`. Chess is
+// no longer the exception: its `core.forfeit` used to decide `win{method:"forfeit"}` and drop the reason on purpose
+// (`CARRIES_ITS_OWN_METHOD`); the spec's chess unification (§5.2) folds it to the same `award` as the other ten, so the
+// exemption is gone and the sweep below has no hole.
 //
-// The sweep runs over `builtinModules` rather than a hand-listed four, so a
-// sport added later is covered the day it ships rather than the day someone
-// remembers this file. "One sample is not a parity sweep" is a standing rule
-// here, and a forfeit is exactly the kind of shared-kernel behaviour that looks
-// identical in one sport and diverges in the next.
+// The sweep runs over `builtinModules` × `FORFEIT_REASONS`, each reason in the phase Appendix A X-RS-1 makes it legal
+// in (walkover before play; disqualified after `core.start`; retired once something is played — ruling 113 — so after
+// the start and the sport's own play; withdrew either — here after), so a sport added later is covered the day it
+// ships.
 import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "./events.ts";
-import type { LineupPair, MatchOutcome } from "./types.ts";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "./events.ts";
+import { FORFEIT_REASONS, type ForfeitReason, type LineupPair } from "./types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
-import { builtinModules } from "../sports/index.ts";
+import { onePlayEvent } from "../testkit/play-event.ts";
+import { forEachSport } from "../testkit/for-each-sport.ts";
 import type { AnySportModule } from "../sport/module.ts";
 
-const REASON = "walkover";
-
-/** The ONE module that does not carry the reason, and why.
- *
- *  `boardgame` already puts a MEANINGFUL value in `outcome.method` — its typed
- *  `BoardgameMethod`, "forfeit" (`boardgame.ts:619`) — where the other ten
- *  leave the field empty. Filling it from `core.forfeit`'s free-text `reason`
- *  would overwrite a classification with prose, and `boardgame.test.ts:74`
- *  pins that classification on purpose. Boardgame states a walkover through
- *  its own `boardgame.result` method enum instead.
- *
- *  Declared here rather than left as a silent hole in the loop below: an
- *  exemption nobody can see is how a sweep quietly stops sweeping. */
-const CARRIES_ITS_OWN_METHOD = new Set(["boardgame"]);
-
-/** Almost every module parses an empty config. `generic` is the exception — it
- *  has two fields with no default (`resultMode`, `allowDraws`), because an
- *  unknown sport has to be TOLD whether it keeps score. */
-const CFG_SEED: Readonly<Record<string, unknown>> = {
-  generic: { resultMode: "win_loss", allowDraws: false },
-};
+/** Appendix A X-RS-1: the phase each reason is recordable in — before play for a walkover, after `core.start` for the
+ *  rest (withdrew is legal either side; after is the case #772 never covered). */
+const STARTED_FOR: Readonly<Record<ForfeitReason, boolean>> = { walkover: false, retired: true, disqualified: true, withdrew: true };
+/** Ruling 113: a retirement also needs something played after the start (nobody retires from a match never played). */
+const PLAYED_FOR: Readonly<Record<ForfeitReason, boolean>> = { walkover: false, retired: true, disqualified: false, withdrew: false };
 
 function lineupsFor(mod: AnySportModule, cfg: unknown): LineupPair {
   return defaultLineupPair(resolvePositions(mod as never, cfg as never));
 }
 
-function stream(...specs: Array<[type: string, payload?: unknown]>): EventEnvelope[] {
-  return specs.map(([type, payload], i) => makeEnvelope(i, { type, payload: payload ?? {} }));
-}
-
-/** The forfeiting side is "A", so every module should award to "H". */
-function foldForfeit(mod: AnySportModule): MatchOutcome | null {
-  const cfg = mod.configSchema.parse(CFG_SEED[mod.key] ?? {});
-  const state = foldMatch(
-    mod as never,
-    cfg as never,
-    lineupsFor(mod, cfg),
-    stream(["core.start"], ["core.forfeit", { by: "A", reason: REASON }]) as never,
-  );
-  return (mod as { outcome: (s: unknown) => MatchOutcome | null }).outcome(state);
-}
-
-describe("core.forfeit carries its reason into the outcome", () => {
-  it("sweeps every shipped module — an empty list would pass vacuously", () => {
-    expect(builtinModules.length).toBeGreaterThanOrEqual(10);
-  });
-
-  for (const mod of builtinModules) {
-    it(`${mod.key}: the reason survives the fold`, () => {
-      const outcome = foldForfeit(mod);
-      expect(outcome).not.toBeNull();
-      // TWO branches are legitimate here, and asserting one was this test's own
-      // first bug. Ten modules decide a forfeit as `award`; `boardgame` decides
-      // it as `win` — which is why `method` belongs on BOTH branches of
-      // `MatchOutcome` rather than as a new field on one. What matters to every
-      // caller is that the fixture is DECIDED and says why.
-      expect(["award", "win"]).toContain(outcome?.kind);
-      // The regression this file exists for.
-      expect(outcome as { method?: string }).toMatchObject({
-        method: CARRIES_ITS_OWN_METHOD.has(mod.key) ? "forfeit" : REASON,
-      });
-    });
-
-    it(`${mod.key}: awards against the forfeiting side`, () => {
-      expect(foldForfeit(mod)).toMatchObject({ winner: "H" });
-    });
+function foldForfeit(mod: AnySportModule, reason: ForfeitReason) {
+  // The first declared variant: generic's bare schema does not parse (resultMode/allowDraws have no default).
+  const declared = mod.configSchema.parse(Object.values(mod.variants)[0] ?? {});
+  const l = lineupsFor(mod, declared);
+  const prefix: EventEnvelope[] = STARTED_FOR[reason] ? [makeEnvelope(1, { type: "core.start", payload: {} })] : [];
+  let cfg: unknown = declared;
+  if (PLAYED_FOR[reason]) {
+    // The sport's own play, from its generator; chess decides a plain game with its one event, so its play is a draw
+    // held for the tie-break under the bracket deciders.
+    const deciders = mod.configSchema.parse({ ...(declared as object), ...mod.bracketDeciders(declared as never) });
+    const found = [declared, deciders].map((c) => ({ c, play: onePlayEvent(mod, c, l, prefix) })).find((x) => x.play !== null);
+    if (found === undefined) throw new Error(`${mod.key}: no play to retire from`);
+    cfg = found.c;
+    prefix.push(found.play!);
   }
+  const events: EventEnvelope[] = [...prefix, makeEnvelope(prefix.length + 1, { type: "core.forfeit", payload: { by: l.away.entrantId, reason } })];
+  return { l, outcome: outcomeOf(mod as never, foldMatchWithStoppage(mod as never, cfg as never, l, events) as never) };
+}
+
+describe("core.forfeit carries its reason into award.reason (#772, W2b)", () => {
+  it("sweeps every shipped module × every forfeit reason — 44 cases, an empty list would pass vacuously", () => {
+    let checked = 0;
+    const sports = forEachSport(({ module: mod }) => {
+      for (const reason of FORFEIT_REASONS) {
+        const { l, outcome } = foldForfeit(mod, reason);
+        // The regression #772 exists for, now on the typed field, with the loser named — never `method`.
+        expect(outcome, `${mod.key} ${reason}`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason });
+        expect(Object.hasOwn(outcome as object, "method"), `${mod.key} ${reason}`).toBe(false);
+        checked++;
+      }
+    });
+    expect(sports).toBe(11);
+    expect(checked).toBe(44);
+  });
 });

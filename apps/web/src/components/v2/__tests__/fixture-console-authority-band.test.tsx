@@ -339,38 +339,52 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     return { sport: { ...sport, key: "boardgame", scorerLabel: "Arbiter", lineupSize: 1 }, state, events, moduleVersion: chess.version, resolvedConfig: ko };
   }
 
-  it("I1: a chess knockout in its tie-break is HELD — the organiser gets the block and NO Forfeit/Abandon (held: the settle is the way out — the engine refuses forfeit WRONG_PHASE but would take an abandon)", () => {
-    // The REAL fold: a drawn knockout game opens phase "tiebreak" with status in_play and outcome null — not `decided`,
-    // so only the held gate keeps the band's two organiser writes off it (boardgame.ts refuses a forfeit in this phase;
-    // an abandon it accepts — tiebreak.test.ts — so the gate, not the engine, keeps Abandon off a held match).
-    const chess = builtinModules.find((m) => m.key === "boardgame")!;
-    const ko = chess.configSchema.parse({ ...chess.bracketDeciders!(chess.configSchema.parse({})) });
-    const lineups = defaultLineupPair(chess.positions);
-    const ledger = [
-      makeEnvelope(1, { type: "core.start", payload: {} } as never),
-      makeEnvelope(2, { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as never),
-    ];
-    const state = foldMatch(chess, ko, lineups, ledger);
-    expect((state as { phase?: string }).phase, "the rig must reach the tie-break").toBe("tiebreak");
-    const events: EventIn[] = ledger.map((e, i) => ({ ...EVENTS[0]!, id: `ev-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload as Record<string, unknown> }));
-    const other = {
-      sport: { ...sport, key: "boardgame", scorerLabel: "Arbiter", lineupSize: 1 },
-      state,
-      events,
-      moduleVersion: chess.version,
-      resolvedConfig: ko,
-    };
-    const held = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other });
+  it("W2b-R14 (BG-WO-3): a chess knockout in its tie-break is HELD — the organiser gets the block AND the Forfeit (a no-show for the tie-break games is walked over), still no Abandon", () => {
+    // The REAL fold: a drawn knockout game opens phase "tiebreak" with status in_play and outcome null — not `decided`.
+    // W2a's I1 kept both organiser writes off a held match; W2b-R14 reopens the Forfeit there alone (the engine admits a
+    // walkover in phase tiebreak, boardgame.ts `walkoverPhases`), and the held gate still keeps Abandon off it (the
+    // engine would take an abandon — tiebreak.test.ts — so the gate, not the engine, is what refuses it).
+    const rig = chessTiebreak();
+    const held = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: rig });
     expect(held, "the tie-break is owed: the block shows").toContain(BLOCK);
     expect(held, "D-H3: and says the tie-break is what is owed").toContain('data-cause="tiebreak"');
-    expect(held).not.toContain('data-testid="score-forfeit"');
+    expect(bandHtml(held), "R14: the Forfeit is open on a pending tie-break").toContain('data-testid="score-forfeit"');
     expect(held).not.toContain(">Abandon…<");
-    // The positive pair: the SAME chess game in play, before the draw, still offers both to the organiser.
-    const live = foldMatch(chess, ko, lineups, ledger.slice(0, 1));
-    const open = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: { ...other, state: live, events: events.slice(0, 1) } });
+    // The pairs. A held LEVEL result (a football knockout draw) is not a tie-break: neither write, the settle is the way
+    // out. And the SAME chess game in play, before the draw, offers both to the organiser.
+    const level = consoleHtml(HELD);
+    expect(level).toContain('data-cause="level"');
+    expect(level).not.toContain('data-testid="score-forfeit"');
+    expect(level).not.toContain(">Abandon…<");
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const live = foldMatch(chess, rig.resolvedConfig as never, defaultLineupPair(chess.positions), [makeEnvelope(1, { type: "core.start", payload: {} } as never)]);
+    const open = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: { ...rig, state: live, events: rig.events.slice(0, 1) } });
     expect(open).not.toContain(BLOCK);
     expect(bandHtml(open)).toContain('data-testid="score-forfeit"');
     expect(bandHtml(open)).toContain(">Abandon…<");
+    // And an official scorer on the tie-break is offered neither — the forfeit is organiser-only (X-ST-2, X-RS-3).
+    expect(consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", canOrganise: false, other: rig })).not.toContain('data-testid="score-forfeit"');
+  });
+
+  it("W2b-R14's other side: a held ABANDONED line is not a tie-break — no Forfeit, even while the status lags the ledger (the resync's two reads race)", () => {
+    // The console's resync reads /state and /events in parallel (fixture-console.tsx `resync`), so an abandon landing
+    // between the two reads leaves an in_play status (not `decided`) beside a ledger whose abandon holds the line. Only
+    // the held gate keeps the Forfeit closed there: R14 reopens it for a pending tie-break alone. The engine would refuse
+    // the send anyway (ABANDONED_SETTLE_OR_VOID, X-AB-4); the console must not offer it.
+    const rig = chessTiebreak();
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const live = foldMatch(chess, rig.resolvedConfig as never, defaultLineupPair(chess.positions), [makeEnvelope(1, { type: "core.start", payload: {} } as never)]);
+    const abandon: EventIn = { ...rig.events[0]!, id: "ev-abandon", seq: 2, type: "core.abandon", payload: { reason: "rain" } };
+    const racing = { ...rig, state: live, events: [rig.events[0]!, abandon] };
+    const html = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: racing });
+    expect(html, "the abandon holds the line").toContain(BLOCK);
+    expect(html).toContain('data-cause="abandoned"');
+    expect(html).not.toContain('data-testid="score-forfeit"');
+    expect(html).not.toContain(">Abandon…<");
+    // The positive pair: the same live state with no abandon on the ledger offers the organiser both.
+    const open = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: { ...racing, events: [rig.events[0]!] } });
+    expect(open).not.toContain(BLOCK);
+    expect(bandHtml(open)).toContain('data-testid="score-forfeit"');
   });
 
   it("P1 follow-up: a SCHEDULED chess knockout renders its console — not held, Start match offered (the page serves state null before kickoff)", () => {
@@ -379,7 +393,9 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(html).toContain("Start match");
     expect(html, "nothing is owed before the game is played").not.toContain(BLOCK);
     expect(html).not.toContain(FINALIZE);
-    // The positive pair is I1 above: the same sport, stage kind and module pin, drawn, IS held.
+    // W2b Task 11: the null state reads as the module's init (before play), so the walkover is offered before kickoff.
+    expect(bandHtml(html), "a scheduled fixture's Forfeit (a walkover before play)").toContain('data-testid="score-forfeit"');
+    // The positive pair is R14 above: the same sport, stage kind and module pin, drawn, IS held.
   });
 
   it("an official scorer on a held fixture sees no block and no Settle (the settle is organiser-only)", () => {

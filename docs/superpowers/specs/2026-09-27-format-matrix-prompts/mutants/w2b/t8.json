@@ -1,0 +1,434 @@
+[
+ {
+  "id": "held-skipped",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "    case \"needs_decision\":\n      return \"scheduled\";",
+  "replace": "    case \"needs_decision\":\n      return \"void\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-1: a held knockout fixture is walked over"
+   }
+  ]
+ },
+ {
+  "id": "open-format-abandons",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "new Set([...BRACKET_WALKOVER_KINDS, \"page_playoff\", \"ladder\"]);",
+  "replace": "new Set([...BRACKET_WALKOVER_KINDS, \"ladder\"]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-2: page_playoff q1 withdrawal walks over"
+   }
+  ]
+ },
+ {
+  "id": "ladder-abandons",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "new Set([...BRACKET_WALKOVER_KINDS, \"page_playoff\", \"ladder\"]);",
+  "replace": "new Set([...BRACKET_WALKOVER_KINDS, \"page_playoff\"]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-2: a ladder holder"
+   }
+  ]
+ },
+ {
+  "id": "tbd-throws",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "        if (u.walkoverTo === undefined) {\n          // X-WD-3",
+  "replace": "        if (u.walkoverTo === undefined && false) {\n          // X-WD-3",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-3: withdrawing from a fixture whose opponent is TBD"
+   }
+  ]
+ },
+ {
+  "id": "both-dead-void-cascade",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "        if (gone.has(u.walkoverTo)) {",
+  "replace": "        if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4: both entrants of a line withdraw in turn"
+   }
+  ]
+ },
+ {
+  "id": "both-dead-void-resolver",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "        if (seatDeparted(byeHome, feedHome) && seatDeparted(byeAway, feedAway)) {",
+  "replace": "        if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 .dead seats.: a seat its withdrawn entrant left beside a DEPARTURE"
+   }
+  ]
+ },
+ {
+  "id": "departure-dw-any-dw",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  return bye || (e !== undefined && e.via === \"winner\" && e.row.departed_walkover);",
+  "replace": "  return bye || (e !== undefined && advancesNobody(e.row.outcome as MatchOutcome | null));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 negative pair"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+    ],
+    "name": "Review Focus 1: a line voided because BOTH"
+   }
+  ]
+ },
+ {
+  "id": "departure-dw-dropped",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  return bye || (e !== undefined && e.via === \"winner\" && e.row.departed_walkover);",
+  "replace": "  return bye;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 .dead seats.: a seat its withdrawn entrant left beside a DEPARTURE"
+   }
+  ]
+ },
+ {
+  "id": "final-dw-written",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          } else if (feeds) {\n",
+  "replace": "          } else if (true) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4: both finalists withdraw"
+   }
+  ]
+ },
+ {
+  "id": "final-dw-written-resolver",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "          if (!feedsNextMatch(f)) continue;",
+  "replace": "          if (false) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4: every finalist-to-be withdraws"
+   }
+  ]
+ },
+ {
+  "id": "loser-edge-seats-withdrawn",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "      const filled = loserDeparted\n",
+  "replace": "      const filled = false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-5: a settle never seats a departed loser"
+   }
+  ]
+ },
+ {
+  "id": "loser-edge-seat-not-dead",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (f.loser_withdrawn) return true;",
+  "replace": "  if (false) return true;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-5: a settle never seats a departed loser"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2 .X-WD-5, legacy.: a departed loser's dead seat"
+   }
+  ]
+ },
+ {
+  "id": "abandoned-not-voided",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "    if (fixture.status === \"abandoned\") {\n      for (const abandon of activeAbandons",
+  "replace": "    if (false) {\n      for (const abandon of activeAbandons",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G2 corner 1: withdrawal from an abandoned"
+   }
+  ]
+ },
+ {
+  "id": "abandoned-maps-void",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "      return activeAbandon ? \"scheduled\" : \"void\";",
+  "replace": "      return \"void\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G2 corner 1: withdrawal from an abandoned"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+    ],
+    "name": "N4: every fixtures.status maps as ruled"
+   }
+  ]
+ },
+ {
+  "id": "stepladder-config-invalid",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "        if (side !== undefined && fed) {\n          departedSeat.set(u.fixtureId, side);",
+  "replace": "        if (false) {\n          departedSeat.set(u.fixtureId, side);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G3 corner 3: a stepladder qualifier departed before the draw"
+   }
+  ]
+ },
+ {
+  "id": "seat-departed-unnamed",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "        if (stuck) {",
+  "replace": "        if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G3 corner 3: a seat that cannot resolve is refused STAGE_SEAT_DEPARTED"
+   }
+  ]
+ },
+ {
+  "id": "seat-departed-envelope-drops-entrant",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "          extra = { reason: \"seat_departed\", entrant: d.entrant, match: d.match ?? null };",
+  "replace": "          extra = { reason: \"seat_departed\", match: d.match ?? null };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G3 corner 3: a seat that cannot resolve is refused STAGE_SEAT_DEPARTED"
+   }
+  ]
+ },
+ {
+  "id": "seat-departed-generic-copy",
+  "file": "apps/web/src/lib/scoring-vocab.ts",
+  "find": "    if (typeof extra.entrant === \"string\" && extra.entrant.length > 0 && ref) {",
+  "replace": "    if (false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D-G3 corner 3: a seat that cannot resolve is refused STAGE_SEAT_DEPARTED"
+   }
+  ]
+ },
+ {
+  "id": "tiebreak-holds",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "            status: bracketWithdrawalStatus(f.status, abandoned),",
+  "replace": "            status: owed ? \"void\" : bracketWithdrawalStatus(f.status, abandoned),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "BG-WO-3: a chess withdrawal while the tie-break is pending"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+    ],
+    "name": "R14: chess knockout"
+   }
+  ]
+ },
+ {
+  "id": "expunge-flag-dropped",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "payload: { reason: REASON, expunge: true } },",
+  "replace": "payload: { reason: REASON } },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "D5: a league expunge"
+   }
+  ]
+ },
+ {
+  "id": "reason-english",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "const REASON = \"withdrew\";",
+  "replace": "const REASON = \"entrant withdrew\";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "BG-WO-2 / CD-T13"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/swiss-withdrawal-chess.test.ts"
+    ],
+    "name": "CD-T13-SW"
+   }
+  ]
+ },
+ {
+  "id": "held-not-counted",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "    if (held) out.walked_over_held++;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "Review Focus 5: X-WD-1 walk-over"
+   }
+  ]
+ },
+ {
+  "id": "bye-stamp-not-dead",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      const deadHome = openHome && (byeHome || seatFeederIsDead(feedHome));\n      const deadAway = openAway && (byeAway || seatFeederIsDead(feedAway));",
+  "replace": "      const deadHome = openHome && seatFeederIsDead(feedHome);\n      const deadAway = openAway && seatFeederIsDead(feedAway);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 .dead seats.: a seat its withdrawn entrant left beside a DEPARTURE"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4 negative pair"
+   }
+  ]
+ },
+ {
+  "id": "departed-seat-throw-silent",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  if (!row) {\n    throw new Error(`writeDepartedSeat:",
+  "replace": "  if (!row) {\n    return [];\n    throw new Error(`writeDepartedSeat:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "writeDepartedSeat: a write that finds no row"
+   }
+  ]
+ },
+ {
+  "id": "ladder-walkover-no-swap",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "    const ladderLoser =\n      loser ?? (",
+  "replace": "    const ladderLoser =\n      loser ?? (true ? undefined : ",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-2: a ladder holder"
+   }
+  ]
+ },
+ {
+  "id": "settle-dialog-offers-withdrawn",
+  "file": "apps/web/src/components/v2/needs-decision.tsx",
+  "find": ".filter((e) => e.withdrawn !== true)",
+  "replace": ".filter(() => true)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/needs-decision.test.tsx"
+    ],
+    "name": "D-R9: a withdrawn side is not a choice"
+   }
+  ]
+ }
+]

@@ -12,29 +12,41 @@
 //    `scoring` (:685 — status not finalized) — so a finalized console drops it.
 //  - Start is `score-start-match` → send("core.start", {}) (:1026-1031), shown
 //    while the status is scheduled (`started`, :725). The console never
-//    starts a match by itself: a forfeit on a scheduled fixture is preceded
-//    by the Start tap here, as HttpDriver.forfeit posts [START, forfeit].
-//  - ForfeitButton (:1294, :1336-1408) renders while not decided: toggle
-//    `score-forfeit` → `score-forfeit-home|away` → TextPromptDialog (opens
-//    "walkover") → send("core.forfeit", {by, reason}). Those steps are the
-//    bench's own organiserStepsFor (scorer.ts:322-355, ruling 38), run through
-//    the copied executeStep (lib/pads/execute.ts).
+//    starts a match by itself. Since W2b Task 11 its Forfeit is offered BEFORE
+//    play too (the dialog's walkover and "Neither", D3 R2), so forfeitUi drives
+//    a forfeit on a scheduled match through the dialog as well, and never taps
+//    Start: a walkover is recorded before core.start (review I-1, which retired
+//    the old refusal of a console still showing Start).
+//  - The forfeit dialog (W2b Task 11, forfeit-dialog.tsx `ForfeitDialog`)
+//    opens from `score-forfeit` while not decided (and on a chess tie-break
+//    that is pending, R14): `forfeit-who-home|away|both` →
+//    `forfeit-why-<reason>` (only the reasons the engine's phase guard admits,
+//    never the cascade's withdrew) → `forfeit-confirm` →
+//    post("core.forfeit", {by, reason}). Those steps are the bench's own
+//    organiserStepsFor (scorer.ts, ruling 38), run through the copied
+//    executeStep (lib/pads/execute.ts). The dialog OMITS a choice it does not
+//    offer — Neither on a match that feeds no next match (D19: the
+//    `forfeit-guidance-no-next-match` line shows instead), a reason the phase
+//    does not admit — so forfeitUi COUNTS the side and the reason chips once
+//    the dialog (`forfeit-dialog`) and its reason group are up, and an absent
+//    one is ConsoleChoiceNotOffered by name, never a wait that times out
+//    (Task 11 re-review N-1).
 //  - "Void last entry" (:1277-1286, W1d Task 14) has no testid: it is the button whose accessible name is the
 //    dictionary's score.voidLast, and its title (score.voidLastTitle) names the entry it would void. It voids the
 //    newest event that is neither a core.void nor already voided (:880 lastVoidable) — an entry the console
 //    chooses itself, so the page object reports the answer and the caller judges the choice. It renders only while
 //    the match is scoring (not decided-locked), so it is offered on an in-play fixture.
 //  - "Abandon" (W2a Task 14 Step 8) has no testid either: it is the `btn btn-danger` button whose accessible name is the
-//    dictionary's score.abandon. It opens the TextPromptDialog forfeit's reason prompt also uses (score-prompt-reason /
-//    score-prompt-submit) and submits send("core.abandon", { reason }). It is offered only while `offerOrganiserActions`
-//    (not decided, not HELD, an organiser), so an abandoned or held match drops it.
+//    dictionary's score.abandon. It opens the console's TextPromptDialog reason prompt (score-prompt-reason /
+//    score-prompt-submit — the abandon's alone since W2b Task 11) and submits send("core.abandon", { reason }). It is
+//    offered only while `offerAbandon` (not decided, not HELD, an organiser), so an abandoned or held match drops it.
 //  - The console polls only every 15 s (scorepad/use-fixture-stream.ts:21),
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
 import type { Page } from "playwright";
-import { FINALIZE_TESTID, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
-import { executeSteps } from "../../pads/execute.ts";
+import { FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_WHO_TESTID_PREFIX, FORFEIT_WHY_TESTID_PREFIX, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, organiserStepsFor, selectorForTapStep, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
+import { executeStep, executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
 import { NAME } from "../selectors.ts";
@@ -53,8 +65,33 @@ export class ForfeitNeedsBothSides extends Error {
   }
 }
 
+/** The forfeit dialog's panel and its no-next-match guidance (forfeit-dialog.tsx `ForfeitDialog`). */
+export const FORFEIT_DIALOG_TESTID = "forfeit-dialog";
+export const FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID = "forfeit-guidance-no-next-match";
+/** The dialog's "Neither side turned up" (organiserStepsFor's side chip for `by: "both"`). */
+export const FORFEIT_NEITHER_TESTID = `${FORFEIT_WHO_TESTID_PREFIX}both`;
+
+/** The open forfeit dialog does not render the choice a forfeit needs: a side (`forfeit-who-<side>`; Neither is
+ *  `forfeit-who-both`) or a reason (`forfeit-why-<reason>`). Counted once the dialog is up, never waited for, so it is
+ *  this error by name and not a step timeout. `guidance` says whether the dialog showed the no-next-match line in the
+ *  choice's place (D19), which is the one case BrowserDriver answers over http (Task 11 re-review N-1). */
+export class ConsoleChoiceNotOffered extends Error {
+  readonly fixtureId: string;
+  readonly testid: string;
+  readonly guidance: boolean;
+  constructor(fixtureId: string, testid: string, guidance: boolean) {
+    super(`browser: fixture ${fixtureId}'s forfeit dialog does not offer ${testid}${guidance ? " (it shows the no-next-match guidance instead)" : ""} — the product withholds the choice, so there is nothing to tap`);
+    this.name = "ConsoleChoiceNotOffered";
+    this.fixtureId = fixtureId;
+    this.testid = testid;
+    this.guidance = guidance;
+  }
+}
+
 export type ForfeitFixture = Pick<FixtureRow, "id" | "home_entrant_id" | "away_entrant_id">;
-export type ForfeitReason = "walkover" | "retired hurt";
+/** D1's reasons (streams/types.ts); the console's forfeit dialog offers them as choices (W2b Task 11), less withdrew. */
+export type { ForfeitReason } from "../../streams/types.ts";
+import type { ForfeitReason } from "../../streams/types.ts";
 
 /** The console taps that forfeit `fixture` for `by`: the bench's own
  *  organiserStepsFor (it reads only the two entrants; the config is opaque to
@@ -93,25 +130,40 @@ export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage,
   return data;
 }
 
-/** Forfeits the open console's match for `by` (an entrant id); every events
- *  answer the console produced, in order: core.start's first when the fixture
- *  was still scheduled, then core.forfeit's. A `by` naming neither side, or
- *  an unauthorable reason, is the bench's own refusal (organiserStepsFor). */
+/** The choice `step` taps is rendered in the open dialog, or ConsoleChoiceNotOffered: `count()` never waits. */
+async function requireOffered(page: Page, fixtureId: string, step: TapStep): Promise<void> {
+  if ((await page.locator(selectorForTapStep(step)).count()) > 0) return;
+  const guidance = (await page.getByTestId(FORFEIT_GUIDANCE_NO_NEXT_MATCH_TESTID).count()) > 0;
+  throw new ConsoleChoiceNotOffered(fixtureId, step.kind === "testid" ? step.testid : selectorForTapStep(step), guidance);
+}
+
+/** Forfeits the open console's match for `by` (an entrant id, or "both" for the dialog's Neither); the console's answer
+ *  to the core.forfeit, as a one-element list. The match may be scheduled or under way: the dialog offers a walkover
+ *  and Neither before Start (D3 R2), and Start is never tapped. A `by` naming neither side, or an unauthorable reason,
+ *  is the bench's own refusal (organiserStepsFor). A side or reason the dialog does not render — Neither where the
+ *  match feeds no next match (D19), a reason the PHASE does not admit — is ConsoleChoiceNotOffered by name: the chip is
+ *  COUNTED once the dialog (then its reason group) is up, so nothing waits on a choice the product withholds, and
+ *  nothing is posted. */
 export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string, reason: ForfeitReason): Promise<PostedEvent[]> {
   const { page } = c;
   const steps = forfeitSteps(fixture, by, reason);
-  const t = actBudget(c, 1);
+  const [opener, who, why] = steps;
+  if (opener === undefined || who === undefined || why === undefined) throw new Error(`browser: the forfeit's steps are opener, side, reason, Confirm — got ${steps.length}`);
   const nav = navBudget(c);
-  const start = page.getByTestId(START_MATCH_TESTID);
-  // The first act is Start while the match is scheduled, else the Forfeit toggle.
-  await reload(c, { control: start.or(page.getByTestId(FORFEIT_TESTID)), what: "the console's Start or Forfeit" });
+  const { stepMs } = forfeitBudgets(c, steps.length);
+  // The Forfeit opener is the first act, scheduled or under way.
+  await reload(c, { control: page.getByTestId(FORFEIT_TESTID), what: "the console's Forfeit" });
   const posted: PostedEvent[] = [];
-  if ((await start.count()) > 0) {
-    posted.push((await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixture.id) }, () => start.click({ timeout: t }), t)).data);
-    await awaitScreen(() => start.waitFor({ state: "detached", timeout: nav }), "the console, started", nav);
-  }
   const before = await shoot(c, "07-forfeit-before");
-  posted.push(await postForfeit(page, c, fixture.id, steps));
+  // Open the dialog and wait for its PANEL (always rendered), then count the side; pick it, wait for the reason group
+  // (an offered side always has one), then count the reason. Only then the reason and Confirm, answered by the post.
+  await executeStep(page, opener, stepMs);
+  await page.getByTestId(FORFEIT_DIALOG_TESTID).waitFor({ timeout: stepMs });
+  await requireOffered(page, fixture.id, who);
+  await executeStep(page, who, stepMs);
+  await page.locator(`[data-testid^="${FORFEIT_WHY_TESTID_PREFIX}"]`).first().waitFor({ timeout: stepMs });
+  await requireOffered(page, fixture.id, why);
+  posted.push(await postForfeit(page, c, fixture.id, steps.slice(2)));
   await awaitScreen(() => page.getByTestId(FORFEIT_TESTID).waitFor({ state: "detached", timeout: nav }), "the console, decided by forfeit", nav);
   await shoot(c, "07-forfeit", before);
   return posted;

@@ -1,0 +1,159 @@
+[
+ {
+  "id": "t-r1-loser-stamp-dropped",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "        ? await stampDepartedSeat(tx, fixture.loser_to_fixture, fixture.loser_to_slot)\n",
+  "replace": "        ? null\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "R-1: a departed LOSER"
+   }
+  ]
+ },
+ {
+  "id": "t-r1-loser-stamp-seats-her",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "      const filled = loserDeparted\n        ? await stampDepartedSeat(tx, fixture.loser_to_fixture, fixture.loser_to_slot)",
+  "replace": "      const filled = false\n        ? await stampDepartedSeat(tx, fixture.loser_to_fixture, fixture.loser_to_slot)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/settle-seating.test.ts"
+    ],
+    "name": "C17 over the ONE departed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-5: a settle never seats a departed loser"
+   }
+  ]
+ },
+ {
+  "id": "t-r3-cascade-reason-listed",
+  "file": "apps/web/src/lib/forfeit-phase-refusal.ts",
+  "find": "filter((r): r is WriterForfeitReason => !CASCADE_ONLY.has(r));",
+  "replace": "filter((r): r is WriterForfeitReason => true);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "every sport, before the start, after a bare start and once something is played"
+   }
+  ]
+ },
+ {
+  "id": "t-r3-empty-named",
+  "file": "apps/web/src/lib/forfeit-phase-refusal.ts",
+  "find": "  if (allowed.length === 0) return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "the empty case: an unreadable shape forwards code"
+   }
+  ]
+ },
+ {
+  "id": "t-pf2-list-unread",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "const cascadeOnlyForfeit = candidate.type === \"core.forfeit\" && isCascadeOnlyForfeitReason(payload.reason);",
+  "replace": "const cascadeOnlyForfeit = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/w2b-status.test.ts"
+    ],
+    "name": "PF-2: reason withdrew and core.abandon"
+   }
+  ]
+ },
+ {
+  "id": "t-settle-withdrawn-only",
+  "file": "apps/web/src/server/engine-db/append-event.ts",
+  "find": "if (w !== undefined && DEPARTED_STATUSES.has(w.status)) {",
+  "replace": "if (w?.status === \"withdrawn\") { void DEPARTED_STATUSES;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/settle-seating.test.ts"
+    ],
+    "name": "C17 over the ONE departed"
+   }
+  ]
+ },
+ {
+  "id": "t-page-flag-withdrawn-only",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+  "find": "      withdrawn: DEPARTED_STATUSES.has(entrant.status),",
+  "replace": "      withdrawn: entrant.status === \"withdrawn\" || DEPARTED_STATUSES.size < 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/departed-entrants-wiring.test.ts"
+    ],
+    "name": "derives the settle flag from DEPARTED_STATUSES"
+   }
+  ]
+ },
+ {
+  "id": "t-recap-expunge-open",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "\n                              and not ${hasActiveAbandonSql(tx, \"fixtures\", { expunge: true })})::int as open",
+  "replace": ")::int as open",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "ruling 105's sibling"
+   }
+  ]
+ },
+ {
+  "id": "t-recap-cancelled-open",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "status not in ('decided','finalized','forfeited','cancelled')\n",
+  "replace": "status not in ('decided','finalized','forfeited')\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "ruling 105's sibling"
+   }
+  ]
+ },
+ {
+  "id": "t-recap-results-unfiltered",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "\n      and f.status in ${tx([...DECIDED])}",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "ruling 105's sibling"
+   }
+  ]
+ }
+]

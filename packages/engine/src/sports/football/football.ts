@@ -36,7 +36,12 @@ import {
   AttemptOutcome,
   DRAW_KINDS,
   EntrantId,
+  type AwardReason,
   type DisciplineCard,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
+  type ForfeitReason,
   type LineupPair,
   type MatchOutcome,
   type ScoreSummary,
@@ -46,6 +51,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -58,7 +64,7 @@ import type {
   TiebreakerKey,
 } from "../../sport/module.ts";
 import { expectedKicker, shootoutDecision, shootoutTally } from "../period/shootout.ts";
-import type { PlayerStatRow, PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §1.1
@@ -468,6 +474,23 @@ type Side = "home" | "away";
 // needs no change and no cfg branch of its own.
 type PlayPhase = "H1" | "H2" | "Q2" | "Q3" | "Q4" | "ET_H1" | "ET_H2";
 type Phase = "pre" | PlayPhase | "SHOOTOUT" | "done" | "final" | "abandoned";
+
+// W2b (plan D3) — the kernel's forfeit guard reads football's phase through this. A Record over the closed union, so
+// a phase added later cannot go unclassified. The shoot-out is play (ruling 102 Q5).
+const FORFEIT_PHASE: Record<Phase, ForfeitPhase> = {
+  pre: "pre",
+  H1: "play",
+  H2: "play",
+  Q2: "play",
+  Q3: "play",
+  Q4: "play",
+  ET_H1: "play",
+  ET_H2: "play",
+  SHOOTOUT: "play",
+  done: "over",
+  final: "over",
+  abandoned: "over",
+};
 
 // W4 — a live temporary dismissal. Anonymous entries (coarse scoring) are
 // recorded but never move the pitch, the same discipline anonymous cards get.
@@ -1633,21 +1656,22 @@ function applyShootoutKick(
   };
 }
 
-function applyForfeit(state: FootballState, by: string, reason: string): FootballState {
+// W2b (spec §5.2) — a forfeit decides `award{winner, loser, reason}`, or `double_walkover` when both sides are
+// absent. The PLAYED goals stay in state: what the table credits (FB-WO-1's 3-0, FB-RT-1's max of awarded and real)
+// is `forfeitCredit`'s, read by `standingsDelta` — overwriting `goals` here made a 0-5 retirement read 0-3 (F-16).
+function applyForfeit(state: FootballState, by: string, reason: ForfeitReason): FootballState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  const winnerSide = opponent(sideOf(state, by));
-  const goals =
-    winnerSide === "home"
-      ? { home: state.cfg.awardScore.goals, away: 0 }
-      : { home: 0, away: state.cfg.awardScore.goals };
-  // spec 04 §1 / PROMPT-04 §7 — forfeit ⇒ award with cfg.awardScore goals.
+  if (by === "both") {
+    return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "double_walkover" } };
+  }
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...sweepEndOfMatch(state), // W4a — the match is over, whatever phase it was in
     phase: "done",
-    goals,
-    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals, method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
 
@@ -1664,17 +1688,22 @@ function applyAbandon(state: FootballState): FootballState {
   // W4a — an AWARDED abandonment decides the match, so it is the final whistle.
   // The `replay` branch above deliberately does not sweep: that fixture is not
   // over, it is to be regenerated.
+  //
+  // W2b D8 (FB-AB-1, ruling 102 Q3): the leader WINS with the real score (`method: "abandoned"`), and a level
+  // abandon is a DRAW with the real score — held for a decision in a bracket by the server's status rule (D7). It
+  // was an `award` with a `score`, which W2b's award no longer carries: nobody forfeited.
   if (home === away) {
-    return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "no_result" } };
+    return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "draw" } };
   }
   const winnerSide: Side = home > away ? "home" : "away";
   return {
     ...sweepEndOfMatch(state),
     phase: "done",
     outcome: {
-      kind: "award",
+      kind: "win",
       winner: state.entrants[winnerSide],
-      score: { home, away },
+      loser: state.entrants[opponent(winnerSide)],
+      method: "abandoned",
     },
   };
 }
@@ -1695,6 +1724,41 @@ function sideMetrics(state: FootballState, side: Side, zero: boolean): Record<st
     red: counts.red,
     fair_play: state.cfg.fairPlay ? fairPlayPoints(state.cards, side) : 0,
   };
+}
+
+/** The metric keys football declares (`football.metrics`), for the double walkover's exclusion list. */
+const FOOTBALL_METRIC_KEYS = ["gf", "ga", "gd", "yellow", "red", "fair_play"] as const;
+
+/**
+ * W2b (spec §5.2; FB-WO-1, FB-RT-1, X-WO-1) — what a forfeit credits football's table, from cfg and state alone.
+ * A walkover (and a withdrawal before kick-off, PF-7) is `awardScore`-0: nothing was played, so `goalCredit` has no
+ * real score to keep. A retirement, an in-match disqualification or a withdrawal after kick-off is the awarded score
+ * unless the real one is worse for the offender (FDC Art. 28), which stands. Cards and fair play are records of what
+ * happened, never score, so they are not part of the credit (the played ledger keeps them). A bye is today's bye
+ * delta: the played ledger, untouched (C-5).
+ */
+function footballForfeitCredit(cfg: FootballCfg, state: FootballState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  const played = [sideMetrics(state, "home", false), sideMetrics(state, "away", false)] as const;
+  if (by === "both") return doubleWalkoverCredit(played[0], played[1], FOOTBALL_METRIC_KEYS);
+  if (reason === "bye") return { perSide: played, excluded: [] };
+  const winner = opponent(by);
+  const credited = goalCredit(cfg.awardScore.goals, { winner: state.goals[winner], offender: state.goals[by] });
+  const record = (gf: number, ga: number) => ({ gf, ga, gd: gf - ga });
+  return {
+    perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)),
+    excluded: [],
+  };
+}
+
+/** X-WO-1 — the score a decided football match READS: the credited one for a forfeit, the goals otherwise. The
+ *  headline and the table read the same credit, so they cannot disagree. */
+function displayedGoals(state: FootballState): { home: number; away: number } {
+  const outcome = state.outcome;
+  if (outcome?.kind !== "award") return state.goals;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return state.goals;
+  const credit = footballForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id)));
+  return { home: credit.perSide[0].gf ?? state.goals.home, away: credit.perSide[1].gf ?? state.goals.away };
 }
 
 // ---------------------------------------------------------------------------
@@ -1952,9 +2016,14 @@ function footballKeeperStatsFold(
       return p === undefined ? undefined : { personId: p, conceded: false };
     })(),
   };
+  // W2b (X-PS-1; rulings 120, 127): a clean sheet is a match kept — none in a fixture that is no match played (a
+  // walkover, a double walkover, a disqualification, a withdrawal or an abandon with nothing played before it, whatever
+  // its result: the one players'-stats reader). A retirement, an in-match disqualification, a withdrawal after play
+  // (ruling 127) and an abandon after play were played, and keep their clean sheets (X-PS-2).
+  const unplayed = !playedInStats(events, football);
   const closeSpell = (side: Side): void => {
     const spell = open[side];
-    if (spell !== undefined && !spell.conceded) bump(spell.personId, "clean_sheets");
+    if (spell !== undefined && !spell.conceded && !unplayed) bump(spell.personId, "clean_sheets");
   };
   const refreshSpell = (side: Side): void => {
     const p = keeperOf(side);
@@ -2139,8 +2208,10 @@ function applyEvent(
       return applySinBinEnd(state, parsePayload(FootballSinBinEnd, ev.payload, ev.type));
     case "football.shot":
       return applyShot(state, parsePayload(FootballShot, ev.payload, ev.type));
-    case "core.forfeit":
-      return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
+    case "core.forfeit": {
+      const { by, reason } = forfeitOf(ev.payload);
+      return applyForfeit(state, by, reason);
+    }
     case "core.abandon":
       return applyAbandon(state);
     case "core.finalize":
@@ -2568,13 +2639,19 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
 
   outcome: (state) => state.outcome,
 
+  // W2b (plan D3) — see FORFEIT_PHASE.
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+  // W2b (spec §5.2) — see footballForfeitCredit.
+  forfeitCredit: footballForfeitCredit,
+
   // W4a (#425) T6b — the cross-sport position axis, via the SAME core
   // derivation the period kernel uses (see `footballPosition`).
   position: footballPosition,
 
   // §9.5 — defined at every prefix.
   summary(state): ScoreSummary {
-    const { home, away } = state.goals;
+    // W2b X-WO-1: a forfeit reads its credited score (FB-WO-1 3-0), the same one the table credits.
+    const { home, away } = displayedGoals(state);
     // R3.5/Task H (F22) — ONE tally. This was a THIRD hand-rolled copy of the
     // shoot-out reduce (`period/kernel.ts` already reads `shootoutTally` for
     // its own summary); `shootout.ts`'s own doc explains why that must not
@@ -2621,12 +2698,30 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     });
 
     switch (outcome.kind) {
-      case "win":
       case "award": {
+        // W2b (spec §5.2): the credited score, never the played one (`footballForfeitCredit`). The offender is the side
+        // that is not the winner — the award's typed `loser` (D9), or the phantom seat of a bye.
+        const winnerSide = sideOf(state, outcome.winner);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+        const credit = footballForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+        const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+          ...build(side, w, 0, l, pts),
+          metrics: creditedMetrics(sideMetrics(state, side, false), credit, side),
+        });
+        const winner = at(winnerSide, 1, 0, cfg.points.win);
+        const loser = at(offender, 0, 1, cfg.points.loss);
+        return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "double_walkover": {
+        // X-DW-4: both played and lost, no points, no score, out of every ratio.
+        const credit = footballForfeitCredit(cfg, state, "walkover", "both");
+        const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });
+        return [at("home"), at("away")];
+      }
+      case "win": {
         const winnerSide = sideOf(state, outcome.winner);
         // spec 04 §1.4 — optional shootout points split (group-stage SO).
         const split =
-          outcome.kind === "win" &&
           outcome.method === "shootout" &&
           cfg.points.shootoutWin !== undefined &&
           cfg.points.shootoutLoss !== undefined;
@@ -2825,6 +2920,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   },
 
   // spec 03 §6 — deterministic valid-event generator.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<FootballEv> | null {
     const sideId = (side: Side) => state.entrants[side];
     const randomSide = (): Side => (rng() < 0.5 ? "home" : "away");
@@ -2881,7 +2977,11 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
 
     const roll = rng();
     if (roll < 0.02) {
-      return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: "walkover" } };
+      // W2b D3 + ruling 113: play has started, so a disqualification — or a retirement once a goal is on the board
+      // (nobody retires from a match never played; before the Start this generator draws only cards) — never a
+      // walkover, from the roll taken.
+      const played = state.goals.home + state.goals.away > 0;
+      return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: roll < 0.01 && played ? "retired" : "disqualified" } };
     }
     if (roll < 0.04) return { type: "core.abandon", payload: { reason: "weather" } };
     if (roll < 0.14) {
@@ -3081,6 +3181,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       },
     };
   },
+  // Stryker restore all
 
   // §9.6 / PROMPT-04 §9 — timeline → period summaries: strip attribution
   // (scorers, minutes, kick takers) keeping only what moves the score, drop

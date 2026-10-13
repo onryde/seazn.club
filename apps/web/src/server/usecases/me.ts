@@ -23,7 +23,7 @@ import {
 // different file: usecases/player-stats.ts vs server/player-stats.ts).
 // Shared with personCareerStats (usecases/player-stats.ts) and
 // public-site/data.ts's getPublicPlayer, review round 2 finding 2.
-import { countMatchesByDivision } from "./player-stats";
+import { careerMatchesByDivision, placedDivisions } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
@@ -34,6 +34,7 @@ import { playerLinkId } from "@/lib/name-display";
 // single-org tenant tx this file never opens); see that helper's own doc
 // comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
+import { activeAbandonReasonSql } from "@/server/engine-db/recorded-abandon";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
 
@@ -82,9 +83,18 @@ export interface MyResult {
   org_slug: string;
   entrant_name: string | null;
   opponent_name: string | null;
+  /** The player's entrant holds the HOME seat — the stored headline's first side (fix round 3: /me names her side
+   *  first, so the score is read from that side too). */
+  player_home: boolean;
   scheduled_at: string | null;
   summary: string | null;
   outcome: unknown;
+  /** Loop R M-11 — the fixture's seats and its active abandon's reason (`activeAbandonReasonSql`): with `outcome`, all
+   *  `outcomeTagWords` reads for the line's tag ("w/o", "ret.", "Aband. · DLS"). The seats name the reason of an award
+   *  stored before W2b (which carried it only beside two seats). */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  abandon_reason: string | null;
 }
 
 export interface MyTeam {
@@ -161,7 +171,9 @@ export async function listMyFixtures(userId: string): Promise<{
            d.name as division_name, d.slug as division_slug,
            o.name as org_name, o.slug as org_slug,
            e.display_name as entrant_name, opp.display_name as opponent_name,
-           f.scheduled_at, m.summary, f.outcome
+           (f.home_entrant_id = e.id) as player_home,
+           f.scheduled_at, m.summary, f.outcome,
+           f.home_entrant_id, f.away_entrant_id, ${activeAbandonReasonSql(sql, "f")} as abandon_reason
     from persons p
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}
@@ -318,6 +330,24 @@ export interface MyStatBlock {
   metrics: LabelledPlayerStat[];
 }
 
+/** R115-4: /me reads `player_stat_snapshots` as they stand, so it asks the
+ *  same bounded read-side check the public stats route asks
+ *  (`reconcilePlayerStatsOnRead`) of every division it is about to show. The
+ *  check runs after the response, at most once a minute per division and
+ *  within a share of the DB pool. It never folds on this request: a snapshot
+ *  that is behind (an older `STATS_FOLD_VERSION`, R115-2, or a refresh lost to
+ *  a restart) is refolded in the background, so this visit shows the rows as
+ *  they stood and the next one shows the refold. Grouped by org, because the
+ *  check runs under each division's own tenant. The refresh module is
+ *  imported lazily: it imports `player-stats`, which this file imports too. */
+async function checkSnapshotsOnRead(rows: readonly { org_id: string; division_id: string }[]): Promise<void> {
+  if (rows.length === 0) return;
+  const byOrg = new Map<string, Set<string>>();
+  for (const r of rows) byOrg.set(r.org_id, (byOrg.get(r.org_id) ?? new Set<string>()).add(r.division_id));
+  const { reconcilePlayerStatsOnRead } = await import("./player-stats-refresh");
+  for (const [orgId, divisionIds] of byOrg) reconcilePlayerStatsOnRead(orgId, [...divisionIds]);
+}
+
 /** G6 — the PROMPT-65 stat blocks, self-view: every snapshot belonging to a
  *  person the user has claimed, across ALL orgs/competitions (private ones
  *  included — these are the player's own numbers; consent gates only the
@@ -330,9 +360,11 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
       published: boolean;
       youth: boolean;
       player_name_display: string | null;
+      division_id: string;
+      org_id: string;
     })[]
   >`
-    select ps.person_id, p.full_name as person_name,
+    select ps.person_id, p.full_name as person_name, ps.division_id, d.org_id,
            o.name as org_name, o.slug as org_slug,
            c.name as competition_name, c.slug as competition_slug,
            d.name as division_name, d.slug as division_slug,
@@ -373,12 +405,17 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
   // English is the right answer there, not a crash.
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return rows.flatMap(({ module_version, stats, published, youth, player_name_display, ...row }) => {
+  // Every snapshot read is checked, a block with no metric to show included: a stale row can be what hides it.
+  const read: { org_id: string; division_id: string }[] = [];
+  const blocks = rows.flatMap(({ module_version, stats, published, youth, player_name_display, division_id, org_id, ...row }) => {
+    read.push({ org_id, division_id });
     const metrics = labelPlayerStats(row.sport_key, module_version, stats, m);
     if (metrics.length === 0) return [];
     const public_card = playerLinkId(published ? row.person_id : null, { youth, player_name_display }) !== null;
     return [{ ...row, public_card, metrics }];
   });
+  await checkSnapshotsOnRead(read);
+  return blocks;
 }
 
 /** S9/#418 — the /me Career section: every claimed person's snapshot rows,
@@ -396,22 +433,28 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
  *  player_stat_snapshots exactly as they stand, never calls
  *  recomputePlayerStats. */
 export async function listMyCareerStats(userId: string): Promise<CareerSportStats[]> {
-  const rows = await sql<CareerSnapshotRow[]>`
-    select ps.division_id, ps.sport_key, d.variant_key, ps.stats
+  const rows = await sql<(CareerSnapshotRow & { org_id: string })[]>`
+    select ps.division_id, d.org_id, ps.sport_key, d.variant_key, ps.stats
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null
     order by d.slug`;
-  if (rows.length === 0) return [];
+  if (rows.length > 0) await checkSnapshotsOnRead(rows);
 
-  const matchesByDivision = await countMatchesByDivision(
-    sql,
-    { by: "claimedPersons", userId },
-    [...new Set(rows.map((r) => r.division_id))],
-  );
+  // W2b ruling 120 follow-up: the count runs over every unarchived division a claimed person is placed in — not only
+  // those holding a snapshot row — and the listing cards every division it found (`groupCareerStatsBySport`), so a
+  // sport played without a credited figure is still in the career. Placed = on a roster or a sheet's player
+  // (`placedDivisions`, ruling 122 round 1: a sheet player since removed from the roster still played there).
+  const scope = await sql<{ division_id: string }[]>`
+    select distinct pd.division_id
+    from (${placedDivisions(sql, { by: "claimedPersons", userId })}) pd
+    join divisions d on d.id = pd.division_id and d.archived_at is null`;
+  const divisionIds = [...new Set([...rows.map((r) => r.division_id), ...scope.map((d) => d.division_id)])];
+  const played = await careerMatchesByDivision(sql, { by: "claimedPersons", userId }, divisionIds);
+  if (rows.length === 0 && played.size === 0) return [];
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return groupCareerStatsBySport(rows, matchesByDivision, m);
+  return groupCareerStatsBySport(rows, played, m);
 }
 
 /** True when the user's ONLY relationship to the platform is a claimed

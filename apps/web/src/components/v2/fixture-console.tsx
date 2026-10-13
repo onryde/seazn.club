@@ -33,8 +33,11 @@ import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { forfeitLedgerOf, forfeitTag, unseatedWithdrew } from "@/lib/forfeit-tag";
+import { outcomeTagWords, outcomeText } from "@/lib/outcome-text";
+import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -70,7 +73,10 @@ import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
-import { ScoreSentence } from "@/components/score-sentence";
+import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, forfeitPlayRecorded, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
+import { lineupPairFrom } from "@/components/v2/scorepad/registry";
+import type { AnySportModule } from "@seazn/engine/sport";
+import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -139,9 +145,11 @@ function StreamControl({
 }
 
 /** Focus-trapped, Esc-to-close single-field text prompt — replaces the native
- *  browser prompt dialog for the abandon/forfeit reason inputs below (same
- *  reasoning as prose-editor.tsx's EditorDialog: stylable, localizable,
- *  testable, consistent with the rest of the app's dialogs). */
+ *  browser prompt dialog for the abandon reason input below (same reasoning as
+ *  prose-editor.tsx's EditorDialog: stylable, localizable, testable, consistent
+ *  with the rest of the app's dialogs). The forfeit no longer types a reason:
+ *  W2b Task 11's `ForfeitDialog` (forfeit-dialog.tsx) offers the closed
+ *  vocabulary as choices. */
 function TextPromptDialog({
   title, initialValue, msg, onSubmit, onClose,
 }: {
@@ -255,6 +263,9 @@ export interface SideInfo {
    *  Optional: existing test fixtures and callers that never render
    *  `LineupEditor` predate this field. */
   kind?: string;
+  /** W2b D-R9: the entrant has LEFT THE FIELD — withdrawn or disqualified (`DEPARTED_STATUSES`, loop-F tidy) — so the
+   *  settle dialog never offers them. Optional for the same reason as `kind`. */
+  withdrawn?: boolean;
   members: MemberIn[];
   lineup: LineupSlotIn[];
 }
@@ -311,6 +322,19 @@ interface Props {
      *  is null (V360's fixtures.home/away_slot_label). */
     home_slot_label?: SlotLabel | null;
     away_slot_label?: SlotLabel | null;
+    /** R116-4 (owner ruling 116): the name of the side a walkover was won over whose seat is EMPTY — a withdrawn
+     *  winner's dead seat — resolved by the page through `unseatedForfeitLoser`. The header prints it in that seat, as
+     *  any walkover names the side that did not play, before the seat's stored label. Absent or null: no such side. */
+    home_unseated_name?: string | null;
+    away_unseated_name?: string | null;
+    /** Loop-F tidy 2: the line feeds a next match (`fixtureFeedsNextMatch`) — the held block's no-choice sentence
+     *  reads it (needs-decision.tsx `feedsNextMatch`). */
+    feeds_next_match?: boolean;
+    /** W2b Task 11 (D19, X-DW-3): the server refuses a double walkover on this fixture (`doubleWalkoverRefused`,
+     *  lib/double-walkover-next-match.ts — a feeding bracket kind on a line that feeds no next match), read by the page.
+     *  The forfeit dialog then shows the guidance instead of "Neither". Absent reads false: "Neither" is offered and
+     *  the server's own refusal still stands. */
+    no_next_match?: boolean;
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -519,6 +543,8 @@ export function FixtureConsole({
   viewerPlan,
 }: Props) {
   const msg = useMsg();
+  // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider, as stages-panel.
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const [live, setLive] = useState<LiveState>(initialState);
   const [events, setEvents] = useState<EventIn[]>(initialEvents);
@@ -536,6 +562,13 @@ export function FixtureConsole({
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
   const [abandonPrompt, setAbandonPrompt] = useState(false);
+  /** W2b Task 11: the forfeit dialog, open with the model it was opened on. A snapshot on purpose: a background resync
+   *  (another device, the tab-return refresh) must not move the choices under the organiser's finger — the server judges
+   *  the send, and a refusal closes the dialog with its reason (`forfeitRefusal`). */
+  const [forfeitOpen, setForfeitOpen] = useState<ForfeitDialogModel | null>(null);
+  /** Spec §7: a refused forfeit closes the dialog and its reason shows here. Outside the match-actions band, because a
+   *  refusal that resynced (SEQ_CONFLICT: the match was decided elsewhere) unmounts the band it came from. */
+  const [forfeitRefusal, setForfeitRefusal] = useState<string | null>(null);
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
   // Spec 2026-09-30 §2: ONE panel open at a time — Remote scoring or Stream (`nextOpenPanel`). `detailsOpen` and the
@@ -628,6 +661,9 @@ export function FixtureConsole({
   const post = useCallback(
     async (type: string, payload: unknown): Promise<{ ok: true } | { ok: false; message: string | null }> => {
       setError(null);
+      // Review M-2: an old forfeit refusal answers the write it came from, not the next one — any new write clears it,
+      // as it clears the console's own error line (reopening the dialog clears it too).
+      setForfeitRefusal(null);
       setPaywallFeature(null);
       setBusy(true);
       try {
@@ -663,13 +699,14 @@ export function FixtureConsole({
             msg,
             "score.failed",
             err instanceof ApiV1Error ? err.extra : null,
+            locale,
           ),
         };
       } finally {
         setBusy(false);
       }
     },
-    [fixture.id, live.last_seq, resync, router, msg],
+    [fixture.id, live.last_seq, resync, router, msg, locale, setForfeitRefusal],
   );
 
   const send: SendEvent = useCallback(
@@ -685,6 +722,15 @@ export function FixtureConsole({
   const settle = useCallback(
     async (payload: unknown): Promise<SettleResult> => {
       const r = await post("core.settle", payload);
+      return r.ok ? r : { ok: false, message: r.message ?? msg("score.failed") };
+    },
+    [post, msg],
+  );
+
+  // W2b Task 11 (spec §7): the forfeit dialog shows a refusal on the console, like the settle dialog's.
+  const forfeit = useCallback(
+    async ({ by, reason }: { by: string; reason: WriterForfeitReason }): Promise<ForfeitResult> => {
+      const r = await post("core.forfeit", { by, reason });
       return r.ok ? r : { ok: false, message: r.message ?? msg("score.failed") };
     },
     [post, msg],
@@ -744,8 +790,8 @@ export function FixtureConsole({
     // reachable in tests because `apps/web` vitest is `environment: "node"` and
     // `_hook-harness.tsx` commits effects with no browser at all — every other
     // `document` listener in this file sits in a CHILD the harness never
-    // mounts (`TextPromptDialog`'s keydown trap and `ForfeitButton`'s
-    // pointerdown dismiss), and this is the first one on the always-mounted
+    // mounts (`TextPromptDialog`'s keydown trap and `ForfeitDialog`'s, both
+    // mounted only while open), and this is the first one on the always-mounted
     // root. Guarding is what lets three existing console suites render at all.
     // Named by their components on purpose: the line numbers this comment
     // originally carried were already wrong when it was written, because the
@@ -841,23 +887,48 @@ export function FixtureConsole({
   // the organiser's settle (a level result, an active abandon that decided nobody, a chess game whose tie-break is
   // pending). The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
   // back to "no pending-decider hook", which can only HIDE the block in phase tiebreak, never show it wrongly.
-  const settleModule = useMemo((): { awaitingDecider?(state: never): boolean } => {
+  // W2b Task 11: the same resolution feeds the forfeit dialog (its phase guard, credit and metric order); null there
+  // offers no Forfeit at all rather than a dialog with nothing to choose.
+  const sportModule = useMemo((): AnySportModule | null => {
     try {
       return resolveModuleClient(sport.key, scorePadV2?.moduleVersion ?? "");
     } catch {
-      return {};
+      return null;
     }
   }, [sport.key, scorePadV2?.moduleVersion]);
-  const held = needsDecision(settleModule, { outcome: live.outcome, state: live.state, stageKind, events });
+  const held = needsDecision(sportModule ?? {}, { outcome: live.outcome, state: live.state, stageKind, events });
+  // W2b Task 11 (UI-1; spec §5.5): what the forfeit dialog offers, from the engine's own phase guard over THIS state (a
+  // scheduled fixture's null read as the module's init), the cfg the pad folds against, and the page's D19 reading.
+  const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
+  const noNextMatch = fixture.no_next_match === true;
+  // Ruling 112: a walkover stays on offer after the Start until something is played — the engine's own reading of the
+  // full ledger this console holds (`listEvents` since 0, re-read on every resync beside the state), for this
+  // fixture's module (ruling 118: chess's Start is play). No module, no dialog (below), so nothing to read.
+  const playRecorded = useMemo(() => (sportModule === null ? false : forfeitPlayRecorded(events, sportModule)), [events, sportModule]);
+  const forfeitModel = useMemo((): ForfeitDialogModel | null => {
+    if (sportModule === null || home === null || away === null) return null;
+    try {
+      const state = forfeitBaseState(sportModule, forfeitCfg, live.state, lineupPairFrom(home, away));
+      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch, playRecorded });
+    } catch {
+      // A state the module cannot read here is not a dialog to guess at; the console stays up without the Forfeit.
+      return null;
+    }
+  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch, playRecorded]);
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
   //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them.
-  //  - Fix round 1 (I1): nor while HELD — a chess knockout in its tie-break is in play and undecided; the engine refuses
-  //    a forfeit there (WRONG_PHASE, boardgame.ts) but would take an abandon, so THIS gate is what keeps both off a held
-  //    match, and the settle above is the organiser's way out.
+  //  - Fix round 1 (I1): nor while HELD — the settle above is the organiser's way out, and the engine would take an
+  //    abandon on a chess tie-break, so THIS gate is what keeps Abandon off a held match.
+  //  - W2b-R14 (BG-WO-3): EXCEPT the Forfeit on a chess knockout whose tie-break is pending — a player who does not turn
+  //    up for the tie-break games is walked over (the engine admits it in phase tiebreak now). Abandon stays closed there.
+  //  - The Forfeit also needs a dialog with something to choose (`forfeitModel`): an unresolvable module offers none.
   const offerFinalize = finalizeVisible({ decided, held });
-  const offerOrganiserActions = !decided && !held && canOrganise;
+  const tiebreakPending = held && heldCause({ outcome: live.outcome, events }) === "tiebreak";
+  const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;
+  const offerAbandon = !decided && !held && canOrganise;
+  const offerOrganiserActions = offerForfeit || offerAbandon;
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -928,6 +999,39 @@ export function FixtureConsole({
   // `lib/entrant-name.ts`.
   const homeName = home ? entrantDisplayName(home) : null;
   const awayName = away ? entrantDisplayName(away) : null;
+  // Design review M-4 (audit 4.1): the side the page names in a dead seat (R116-4) may have WITHDRAWN — the run sheet
+  // row that links here marks her (`run-sheet-row.tsx` `seatName`), so the header does too, in the same composition:
+  // her name muted, the entrant status's own word in a chip, each name a `min-w-0 truncate` span, the chip and "vs"
+  // `shrink-0` — a whole-line truncate cut the chip to "With…" at 320. As the header always did, only the phone strip
+  // with its details closed truncates: opened, or at ≥768, the line wraps between whole items and every name is read
+  // in full. Owner ruling (option A, 2026-10-13): on that closed strip the chip takes its own short line under the names
+  // (a two-row grid, the chip spanning row 2), so the two names share the whole first row — each its own
+  // `minmax(0,max-content)` track, truncating normally — where beside the chip each was cut to about one letter at 320.
+  // The trailing `minmax(0,1fr)` track is load-bearing: a spanning item that crosses a flexible track is left out of
+  // the content-track sizing, so the chip's width cannot inflate the `auto` "vs" track and starve the names (it did).
+  // Read off the live outcome and the seats.
+  const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
+  const seatWithdrew = (seat: "home" | "away") =>
+    (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
+  const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
+  const vsWord = <span className="text-slate-600">{msg("schedule.vs")}</span>;
+  const nameFit = detailsOpen ? "min-w-0" : "min-w-0 max-md:truncate";
+  const chipLine = detailsOpen ? "shrink-0" : "shrink-0 max-md:col-span-full max-md:row-start-2";
+  const headerName = (seat: "home" | "away", name: string) =>
+    !withdrawnSeat ? (
+      name
+    ) : seatWithdrew(seat) ? (
+      <>
+        <span className={`${nameFit} text-slate-500`}>{name}</span>
+        <span className={chipLine}>
+          <span data-testid="console-withdrawn" className={`${detailsOpen ? "" : "max-md:ml-0 "}ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600`}>
+            {msg("entrants.status.withdrawn")}
+          </span>
+        </span>
+      </>
+    ) : (
+      <span className={nameFit}>{name}</span>
+    );
   // Feed name map: entrant ids AND every rostered person, so person-carrying
   // events (core.award MOTM, cards, subs) render names instead of "Unknown".
   const entrantNames: Record<string, string> = {};
@@ -942,14 +1046,26 @@ export function FixtureConsole({
   // that can say who won and how for those sports; `msg`/`entrantNames` are
   // exactly what `decidedOutcomeText` needs and this component already has
   // both.
-  const decidedLine = decidedOutcomeText(
-    outcome,
-    entrantNames,
-    msg,
-    shootoutScoreFromDetail(summary?.detail),
-    undefined,
-    tiebreakScoreFromDetail(summary?.detail),
-  );
+  //
+  // W2b loop H F2: a CREDITED result — a forfeit, a double walkover, an abandon the ledger holds — reads as the run
+  // sheet reads it ("Bears of Brockley won (w/o)"), through the run sheet's own `outcomeText` and `forfeitTag`, the one
+  // reader. The ledger is this console's ACTIVE events (a voided abandon is no abandon), as the match centre reads it.
+  // Any other result keeps this console's own method sentence ("won after extra time").
+  const voidedIds = new Set(events.flatMap((e) => (e.type === "core.void" && e.voids_event_id !== null ? [e.voids_event_id] : [])));
+  const forfeitLedger = forfeitLedgerOf(events.filter((e) => e.type !== "core.void" && !voidedIds.has(e.id)));
+  // Design audit 4.3: the tag in that line, with its expansion (accessible name and tooltip).
+  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger, seatsOf);
+  const decidedLine =
+    forfeitTag(outcome, forfeitLedger, seatsOf) !== null
+      ? outcomeText(msg, outcome, entrantNames, forfeitLedger, seatsOf)
+      : decidedOutcomeText(
+          outcome,
+          entrantNames,
+          msg,
+          shootoutScoreFromDetail(summary?.detail),
+          undefined,
+          tiebreakScoreFromDetail(summary?.detail),
+        );
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
@@ -1046,11 +1162,11 @@ export function FixtureConsole({
       <header className="card p-5 max-md:p-3">
         <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
           <h1
-            className={`text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
-              detailsOpen ? "" : "max-md:truncate"
+            className={`${withdrawnSeat ? `flex min-w-0 flex-wrap items-baseline ${detailsOpen ? "" : "max-md:grid max-md:grid-cols-[minmax(0,max-content)_auto_minmax(0,max-content)_minmax(0,1fr)] max-md:gap-y-0.5 "}` : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+              detailsOpen || withdrawnSeat ? "" : "max-md:truncate"
             }`}
           >
-            {homeName ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            {headerName("home", homeName ?? fixture.home_unseated_name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd"))}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
                 is the token this codebase already uses for legible secondary
@@ -1058,8 +1174,10 @@ export function FixtureConsole({
                 the badge/label convention throughout components/v2). Ratio
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
-            <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
-            {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
+            {/* M-4: in the withdrawn composition the word keeps its own span (pinned by the contrast test) and an outer
+                `shrink-0` item gives it the run sheet's margin. */}
+            {withdrawnSeat ? <span className="mx-1.5 shrink-0">{vsWord}</span> : vsWord}{" "}
+            {headerName("away", awayName ?? fixture.away_unseated_name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd"))}
           </h1>
           {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
           <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>
@@ -1132,8 +1250,8 @@ export function FixtureConsole({
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
         {decidedLine && (
-          <p className="mt-1 text-sm font-medium text-slate-700">
-            <ScoreSentence text={decidedLine} />
+          <p data-testid="console-decided-line" className="mt-1 text-sm font-medium text-slate-700">
+            <OutcomeTagText text={decidedLine} tag={decidedTag} scores />
           </p>
         )}
         {/* Phone-only: the round/venue/time line sits behind
@@ -1165,7 +1283,7 @@ export function FixtureConsole({
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
 
       {/* Soft suspension warnings (SPEC-1) — one dismissible banner per flagged
@@ -1482,8 +1600,9 @@ export function FixtureConsole({
         <NeedsDecisionBlock
           msg={msg}
           cause={heldCause({ outcome: live.outcome, events })}
-          home={{ id: home.id, name: homeName! }}
-          away={{ id: away.id, name: awayName! }}
+          home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
+          away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
+          feedsNextMatch={fixture.feeds_next_match}
           busy={busy || padSyncing}
           settle={settle}
         />
@@ -1523,18 +1642,29 @@ export function FixtureConsole({
                 )}
               </>
             )}
-            {offerOrganiserActions && (
-              <>
-                <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
-                <button
-                  type="button"
-                  disabled={busy || padSyncing}
-                  onClick={() => setAbandonPrompt(true)}
-                  className="btn btn-danger min-h-11"
-                >
-                  {msg("score.abandon")}
-                </button>
-              </>
+            {offerForfeit && (
+              <button
+                type="button"
+                data-testid="score-forfeit"
+                disabled={busy || padSyncing}
+                onClick={() => {
+                  setForfeitRefusal(null);
+                  setForfeitOpen(forfeitModel);
+                }}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.forfeit")}
+              </button>
+            )}
+            {offerAbandon && (
+              <button
+                type="button"
+                disabled={busy || padSyncing}
+                onClick={() => setAbandonPrompt(true)}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.abandon")}
+              </button>
             )}
           </div>
           {abandonPrompt && (
@@ -1551,6 +1681,29 @@ export function FixtureConsole({
           )}
         </section>
       )}
+      {/* W2b Task 11 (spec §7): a refused forfeit closed its dialog; the reason stays here, outside the band, so a
+          refusal that resynced the match into its decided state is still read. Design audit 1.4: in the console's own
+          error-banner treatment (the `error` line under the header, the app's house alert) — one red banner style. */}
+      {forfeitRefusal !== null && (
+        <p data-testid="forfeit-refusal" role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 [overflow-wrap:anywhere]">
+          {forfeitRefusal}
+        </p>
+      )}
+      {forfeitOpen !== null && home && away && (
+        <ForfeitDialog
+          msg={msg}
+          model={forfeitOpen}
+          live={forfeitModel}
+          home={{ id: home.id, name: homeName! }}
+          away={{ id: away.id, name: awayName! }}
+          forfeit={forfeit}
+          onClose={() => setForfeitOpen(null)}
+          onRefused={(message) => {
+            setForfeitOpen(null);
+            setForfeitRefusal(message);
+          }}
+        />
+      )}
 
     </div>
   );
@@ -1566,80 +1719,4 @@ export function FixtureConsole({
 
 function decidedLock(status: string): boolean {
   return status === "finalized" || status === "cancelled";
-}
-
-function ForfeitButton({
-  busy,
-  padSyncing,
-  home,
-  away,
-  send,
-}: {
-  busy: boolean;
-  padSyncing: boolean;
-  home: SideInfo;
-  away: SideInfo;
-  send: SendEvent;
-}) {
-  const msg = useMsg();
-  const [open, setOpen] = useState(false);
-  const [forfeitPrompt, setForfeitPrompt] = useState<SideInfo | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        data-testid="score-forfeit"
-        disabled={busy || padSyncing}
-        onClick={() => setOpen(!open)}
-        className="btn btn-danger min-h-11"
-      >
-        {msg("score.forfeit")}
-      </button>
-      {open && (
-        <div className="card absolute z-10 mt-1 w-56 space-y-1 p-2 shadow-lg">
-          {([["home", home], ["away", away]] as const).map(([sideKey, s]) => (
-            <button
-              key={s.id}
-              type="button"
-              data-testid={`score-forfeit-${sideKey}`}
-              className="block min-h-11 w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
-              onClick={() => {
-                setOpen(false);
-                setForfeitPrompt(s);
-              }}
-            >
-              {/* R7/C5 — the person, not the entry label. */}
-              {msg("score.forfeits", { name: entrantDisplayName(s) })}
-            </button>
-          ))}
-        </div>
-      )}
-      {forfeitPrompt && (
-        <TextPromptDialog
-          // R7/C review fix #3 — the picker resolved the person and the
-          // confirmation behind it did not, so a console that named Ada
-          // Okonkwo everywhere else asked the organiser to confirm a forfeit
-          // for "Entry 3". Same resolution, same `SideInfo`.
-          title={msg("score.forfeitPrompt", { name: entrantDisplayName(forfeitPrompt) })}
-          initialValue="walkover"
-          msg={msg}
-          onClose={() => setForfeitPrompt(null)}
-          onSubmit={(reason) => {
-            const by = forfeitPrompt.id;
-            setForfeitPrompt(null);
-            void send("core.forfeit", { by, reason });
-          }}
-        />
-      )}
-    </div>
-  );
 }

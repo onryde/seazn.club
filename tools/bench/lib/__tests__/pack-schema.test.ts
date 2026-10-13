@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { StandingsDelta } from "@seazn/engine/core";
+import { AWARD_REASONS, OUTCOME_KINDS, StandingsDelta, type MatchOutcome } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
 import {
   entrantsOfDivision,
@@ -17,6 +17,7 @@ import {
   SEED_LEGAL_BY_PROVENANCE,
   STANDINGS_SCALAR_FIELDS,
   fixtureKey,
+  packMethodOf,
   seedRefusalMessage,
   type Pack,
 } from "../pack-schema.ts";
@@ -434,15 +435,17 @@ describe("PackSchema — a stream may name its stage", () => {
   });
 });
 
-describe("PackSchema — an award outcome cannot claim a method", () => {
+describe("PackSchema — an award outcome's method", () => {
   // INVERTED 2026-09-11, and the old assertion is worth stating because it was
   // right when it was written: the engine's `award` variant was
   // `{kind, winner, score?}` with no `method`, so a pack that wrote one would
   // parse and then be UNSATISFIABLE against every possible fold — the
-  // comparison reads `undefined` and reds forever. `MatchOutcome`'s award now
-  // declares `method`, fed verbatim from `core.forfeit`'s required `reason`,
-  // so the field is satisfiable and a pack folding a forfeit can assert WHY
-  // the award happened. Suite 11's walkover is the first caller.
+  // comparison reads `undefined` and reds forever. `MatchOutcome`'s award then
+  // declared `method`, and W2b (D2) replaced it with a typed `reason` from a
+  // closed vocabulary. The PACK keeps the name `method` (packs are frozen), and
+  // it is compared against the engine's `reason` (`packMethodOf`), so the field
+  // stays satisfiable and a pack folding a forfeit can assert WHY the award
+  // happened. Suite 11's walkover is the first caller.
   it("accepts `method` on an award, and KEEPS the parsed value", () => {
     const parsed = PackSchema.parse(
       pack((p) => {
@@ -481,6 +484,116 @@ describe("PackSchema — an award outcome cannot claim a method", () => {
       }),
     );
     expect(out.expected.matches[0]?.outcome).toEqual({ kind: "award", winner: "e-alpha" });
+  });
+});
+
+// W2b — the engine's sixth outcome kind. A double walkover is both sides absent
+// (Appendix A X-DW-1): no winner, no loser, nothing to assert but the kind. The
+// pack arm mirrors it, so a bench pack can declare the result a mutual no-show
+// produces instead of that fixture being inexpressible.
+describe("PackSchema — a double walkover outcome", () => {
+  const withOutcome = (outcome: Record<string, unknown>) =>
+    pack((p) => {
+      const matches = (p.expected as Record<string, unknown>)["matches"] as Record<string, unknown>[];
+      matches[0]!["outcome"] = outcome;
+    });
+
+  it("accepts `double_walkover` as an expected outcome, and KEEPS the kind", () => {
+    const out = parsed(withOutcome({ kind: "double_walkover" }));
+    // By VALUE: a union that silently matched some other arm (or stripped the
+    // kind) would still parse and assert nothing.
+    expect(out.expected.matches[0]?.outcome).toEqual({ kind: "double_walkover" });
+  });
+
+  it("is strict: a double walkover names no winner, loser or method", () => {
+    // Both sides were absent, so a field naming one would be unsatisfiable
+    // against every fold — the same reason an award never carried a `score`.
+    for (const extra of [
+      { winner: "e-alpha" },
+      { loser: "e-bravo" },
+      { method: "walkover" },
+    ]) {
+      const result = PackSchema.safeParse(withOutcome({ kind: "double_walkover", ...extra }));
+      expect(result.success, `a double_walkover carrying ${JSON.stringify(extra)} must be refused`).toBe(false);
+    }
+  });
+
+  it("an outcome claim may name `double_walkover` as the kind", () => {
+    const out = parsed(
+      pack((p) => {
+        (p.expected as Record<string, unknown>)["specials"] = [
+          {
+            kind: "retirement",
+            divisionRef: "d-main",
+            fixtureExtKey: "rr-r1-c1",
+            claims: [{ on: "outcome", kind: "double_walkover" }],
+          },
+        ];
+      }),
+    );
+    expect(out.expected.specials[0]?.claims[0]).toEqual({ on: "outcome", kind: "double_walkover" });
+  });
+
+  it("the pack's outcome kinds are exactly the engine's declared ones", () => {
+    // Derived from the ENGINE's own `OUTCOME_KINDS`, never typed here: parse a
+    // minimal outcome of every declared kind. A sixth kind the engine adds
+    // without the pack following reds this by name, at runtime, as well as at
+    // tsc.
+    const samples: Record<(typeof OUTCOME_KINDS)[number], Record<string, unknown>> = {
+      win: { kind: "win", winner: "e-alpha", loser: "e-bravo" },
+      draw: { kind: "draw" },
+      tie: { kind: "tie" },
+      no_result: { kind: "no_result" },
+      award: { kind: "award", winner: "e-alpha" },
+      double_walkover: { kind: "double_walkover" },
+    };
+    let checked = 0;
+    for (const kind of OUTCOME_KINDS) {
+      const result = PackSchema.safeParse(withOutcome(samples[kind]));
+      expect(result.success, `the pack cannot express the engine's "${kind}" outcome`).toBe(true);
+      checked += 1;
+    }
+    // Anti-vacuity: an empty engine list would pass the loop in silence.
+    expect(checked).toBe(OUTCOME_KINDS.length);
+    expect(checked).toBeGreaterThanOrEqual(6);
+  });
+});
+
+// W2b — `method` on a pack's `award` is compared against the ENGINE's `reason`.
+// `packMethodOf` is the one place that reads a pack-comparable method off an
+// engine outcome, shared by the live oracle and stage 0. Expected values come
+// from the engine's declared vocabulary, never from the helper.
+describe("packMethodOf — the value a pack's `method` is compared against", () => {
+  it("reads an award's REASON, for every reason the engine declares", () => {
+    let checked = 0;
+    for (const reason of AWARD_REASONS) {
+      const award = {
+        kind: "award",
+        winner: "e1",
+        loser: reason === "bye" ? null : "e2",
+        reason,
+      } as MatchOutcome;
+      expect(packMethodOf(award), `award reason "${reason}"`).toBe(reason);
+      checked += 1;
+    }
+    expect(checked).toBe(AWARD_REASONS.length);
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it("reads a win's `method`, and nothing off a win that states none", () => {
+    expect(packMethodOf({ kind: "win", winner: "e1", loser: "e2", method: "shootout" })).toBe("shootout");
+    expect(packMethodOf({ kind: "win", winner: "e1", loser: "e2" })).toBeUndefined();
+  });
+
+  it("answers undefined for every kind that carries no method — the double walkover among them", () => {
+    const none: MatchOutcome[] = [
+      { kind: "draw" },
+      { kind: "tie" },
+      { kind: "no_result" },
+      { kind: "double_walkover" },
+    ];
+    for (const o of none) expect(packMethodOf(o), o.kind).toBeUndefined();
+    expect(none.length).toBe(OUTCOME_KINDS.length - 2); // every kind but win and award
   });
 });
 
@@ -586,7 +699,7 @@ describe("PackSchema — streams and events", () => {
     const ok = pack((p) => {
       const streams = p.streams as Record<string, unknown>[];
       const events = (streams[0] as Record<string, unknown>).events as Record<string, unknown>[];
-      events.splice(1, 1, { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired hurt" } });
+      events.splice(1, 1, { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired" } });
       const expected = p.expected as Record<string, unknown>;
       (expected.matches as Record<string, unknown>[])[0] = {
         divisionRef: "d-main",

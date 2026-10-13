@@ -51,15 +51,30 @@ vi.mock("@/lib/db", async (importOriginal) => {
       const head = args[0];
       // `sql(ids)` / `sql(obj)` build fragments, not statements.
       if (!(Array.isArray(head) && "raw" in head)) return query;
-      return (async () => {
+      // Counted when AWAITED, not when built: a tagged template interpolated into another one is a FRAGMENT
+      // (`hasActiveAbandonSql`, W2b loop-F I-2), never sent on its own — wrapping it in a promise here would run it
+      // as a statement and hand the outer query a promise. The query object itself is returned, so postgres.js
+      // still inlines it.
+      const then = query.then.bind(query);
+      (query as { then: PromiseLike<unknown>["then"] }).then = (onFulfilled, onRejected) => {
         probe.inFlight += 1;
         probe.peak = Math.max(probe.peak, probe.inFlight);
-        try {
-          return await query;
-        } finally {
+        const settle = () => {
           probe.inFlight -= 1;
-        }
-      })();
+        };
+        return then(
+          (v) => {
+            settle();
+            return onFulfilled ? onFulfilled(v) : (v as never);
+          },
+          (e: unknown) => {
+            settle();
+            if (onRejected) return onRejected(e);
+            throw e;
+          },
+        );
+      };
+      return query;
     },
   });
   return { ...actual, sql: counted };
@@ -125,7 +140,20 @@ async function readPublicDivisionDetailBefore(division: PublicDivision) {
            (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
            (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
            (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-           (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
+           (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot,
+           -- W2b loop-F I-2, carried like rules above so the diff stays T4's alone: D5's expunge, written out by
+           -- hand (an independent reading of the rule, not the loaders' own hasActiveAbandonSql).
+           (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged,
+           -- W2b Task 13, carried the same way: the active abandon's reason, for a row an abandon could have left a
+           -- result on (the reader's ABANDON_RESULT_KINDS, written out), latest first. Independent of the loaders'.
+           (case when public_fixtures_v.outcome ->> 'kind' in ('win', 'draw', 'tie', 'no_result') then (
+             select a.payload ->> 'reason' from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)
+              order by a.seq desc limit 1) end) as abandon_reason
     from public_fixtures_v where division_id = ${division.id}
     order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixtureBefore));
   const fixtures = await withCourtVenueNames(rawFixtures);
@@ -198,7 +226,12 @@ async function embedDivisionDataBefore(divisionId: string) {
              (select x.winner_to_fixture from fixtures x where x.id = public_fixtures_v.id) as winner_to_fixture,
              (select x.winner_to_slot    from fixtures x where x.id = public_fixtures_v.id) as winner_to_slot,
              (select x.loser_to_fixture  from fixtures x where x.id = public_fixtures_v.id) as loser_to_fixture,
-             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot
+             (select x.loser_to_slot     from fixtures x where x.id = public_fixtures_v.id) as loser_to_slot,
+             -- W2b loop-F I-2: the same carry as readPublicDivisionDetailBefore.
+             (public_fixtures_v.status = 'abandoned' and exists (
+             select 1 from score_events a
+              where a.fixture_id = public_fixtures_v.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
+                and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))) as expunged
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(isoBefore))

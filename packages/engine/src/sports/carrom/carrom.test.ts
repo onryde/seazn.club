@@ -11,6 +11,7 @@ import {
   type PlayerStatsFoldCtx,
 } from "../../stats/stats.ts";
 import { conformanceSuite, defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
+import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
 import { checkActionCoverage, padItemLabelKey, padSpecConformanceSuite } from "../../testkit/conformance-pad.ts";
 import {
   carrom,
@@ -192,29 +193,82 @@ describe("carrom golden: walkover", () => {
   const state = fold(
     stream(["core.start"], ...boards(["H", 5, "H"]), [
       "core.forfeit",
-      { by: "A", reason: "no-show" },
+      { by: "A", reason: "retired" },
     ]),
   );
 
   it("awards the match to the opponent", () => {
-    // `method` is the forfeit's own `reason`, carried verbatim — the field
-    // that lets a reader tell this walkover from a disqualification.
-    expect(state.outcome).toEqual({ kind: "award", winner: "H", method: "no-show" });
+    // W2b: `reason` is the forfeit's closed reason and `loser` is typed — the
+    // fields that let a reader tell this retirement from a disqualification
+    // (#772 carried free text in `method`). Games were played, so it is a
+    // retirement: the phase guard refuses a walkover after `core.start`.
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", loser: "A", reason: "retired" });
   });
 
-  it("pays win/loss points; the ledger keeps only what was played", () => {
+  // W2b CA-RT-1 (product rule W2b-R5) — until W2b this pinned "the ledger keeps only what was played" (sets_won 0,
+  // points_won 8). A retirement is now credited: completed games stand (none here), the unfinished game is gameTo to
+  // the retiree's score in it (A scored nothing), and the remaining games up to the majority are gameTo-0. Boards are
+  // what was played.
+  it("pays win/loss points; a retirement credits the match to the winner (CA-RT-1)", () => {
     const [home, away] = carrom.standingsDelta(state.outcome!, cfg, league, state);
     expect(home).toMatchObject({ won: 1, points: 2 });
     expect(away).toMatchObject({ lost: 1, points: 0 });
-    expect(home.metrics).toMatchObject({ boards_won: 1, points_won: 8, sets_won: 0 });
+    const games = Math.ceil(cfg.bestOf / 2); // 2 of a default best of 3
+    expect(home.metrics).toMatchObject({ boards_won: 1, sets_won: games, sets_lost: 0, points_won: games * cfg.gameTo, points_lost: 0 });
+    expect(away.metrics).toMatchObject({ boards_won: 0, sets_won: 0, sets_lost: games, points_won: 0, points_lost: games * cfg.gameTo });
     expect(home.points + away.points).toBe(2); // inside declaredPointsSets
   });
 });
 
 // ---------------------------------------------------------------------------
-// Abandonment — PROMPT-16 §4: no_result, completed games recorded.
+// W2b Loop R M-2b — a decided match's side line is its games, with no running board in brackets. The bracket is the
+// game in play's score ("1 (12)" while the second game runs); a forfeit leaves that game unfinished, so the line kept
+// printing it beside the credited games — "2 (12)" for the side credited the match, "2 (0)" for a walkover before a
+// board. The per-game detail keeps what was played. Every declared cfg, both seats at fault, a walkover, a
+// retirement, a disqualification and a double walkover; the expected games are the module's own forfeit credit.
 // ---------------------------------------------------------------------------
-describe("carrom: abandonment → no_result", () => {
+describe("carrom: a forfeit's side line is its credited games, no running board (Loop R M-2b)", () => {
+  it("every declared cfg, either seat at fault, every forfeit: the line is the credited games alone", () => {
+    let checked = 0;
+    for (const { name, cfg: c } of declaredCfgs(carrom as never)) {
+      const played: Array<[string, unknown?]> = [["core.start"], ...boards(["H", 5])];
+      const cases: Array<[label: string, events: Array<[string, unknown?]>, offender: "home" | "away" | "both", reason: string]> = [];
+      for (const [at, side] of [["H", "home"], ["A", "away"]] as const) {
+        cases.push([`walkover by ${at}`, [["core.forfeit", { by: at, reason: "walkover" }]], side, "walkover"]);
+        cases.push([`retirement by ${at}`, [...played, ["core.forfeit", { by: at, reason: "retired" }]], side, "retired"]);
+        cases.push([`disqualification of ${at}`, [...played, ["core.forfeit", { by: at, reason: "disqualified" }]], side, "disqualified"]);
+      }
+      cases.push(["double walkover", [["core.forfeit", { by: "both", reason: "walkover" }]], "both", "walkover"]);
+      for (const [label, events, offender, reason] of cases) {
+        const state = fold(stream(...events), c as never);
+        expect(state.outcome, `${name}: ${label} decided it`).not.toBeNull();
+        // A forfeit after a board leaves its game unfinished — the bracket's source; one before a board has no game.
+        expect(state.games.some((g) => g.winner === null), `${name}: ${label} — premise: a game left unfinished`).toBe(events.length > 1);
+        const credit = carrom.forfeitCredit(c as never, state, reason as never, offender);
+        const want = credit.perSide.map((x) => String(x.sets_won ?? 0));
+        expect(carrom.summary(state).perSide.map((p) => p.line), `${name}: ${label}`).toEqual(want);
+        checked++;
+      }
+    }
+    expect(checked, "cfgs × (2 seats × 3 reasons + a double walkover)").toBe(declaredCfgs(carrom as never).length * 7);
+  });
+
+  it("the positive pair: an undecided match still shows the game in play in brackets", () => {
+    const state = fold(stream(["core.start"], ...boards(["H", 5])));
+    const g = state.games.at(-1)!;
+    expect(g.winner, "premise: game 1 in play").toBeNull();
+    expect(carrom.summary(state).perSide.map((p) => p.line)).toEqual([`0 (${g.score.home})`, `0 (${g.score.away})`]);
+    expect(g.score.home, "premise: a board scored").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Abandonment — W2b CA-AB-1 (product rule RB2B-25 / W2b-R6): a replay. Until W2b
+// this was PROMPT-16 §4's no_result with shared points; the abandoned match now
+// has no result at all (no shared points; opt-in sharing is W2c), and the
+// completed game stays recorded on the state.
+// ---------------------------------------------------------------------------
+describe("carrom: abandonment → replay (CA-AB-1)", () => {
   const game1: BoardSpec[] = [["H", 9], ["H", 9], ["H", 9]]; // H takes game 1
   const state = fold(
     stream(["core.start"], ...boards(...game1, ["A", 4]), [
@@ -223,11 +277,13 @@ describe("carrom: abandonment → no_result", () => {
     ]),
   );
 
-  it("records no_result with the completed game in the ledger", () => {
-    expect(state.outcome).toEqual({ kind: "no_result" });
+  it("records no result (a replay) with the completed game kept on the state", () => {
+    expect(state.outcome).toBeNull();
+    expect(state.phase).toBe("abandoned");
     expect(state.gamesWon).toEqual({ home: 1, away: 0 });
-    const [home, away] = carrom.standingsDelta(state.outcome!, cfg, league, state);
-    expect([home.points, away.points]).toEqual([1, 1]); // shared draw points
+    // A legacy `no_result` (an abandon folded before W2b) still ranks as it did: shared draw points, played ledger.
+    const [home, away] = carrom.standingsDelta({ kind: "no_result" }, cfg, league, state);
+    expect([home.points, away.points]).toEqual([1, 1]);
     expect(home.metrics).toMatchObject({ sets_won: 1, boards_won: 3, boards_lost: 1 });
     expect(away.metrics).toMatchObject({ sets_won: 0, boards_won: 1 });
   });
@@ -574,7 +630,7 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
     expect(rows.find((r) => r.personId === "A-p1")?.stats).toEqual({ matches: 1, wins: 0 });
   });
 
-  it("a void over the decisive board un-counts matches, wins and boards_won", () => {
+  it("a void over the decisive board un-counts wins and boards_won; abandoned after it, nothing was played — no match for anybody (ruling 120)", () => {
     const ctx = ctxFor(
       [
         { id: "H", persons: ["H-p1"] },
@@ -595,7 +651,15 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
       ...decisive,
       makeEnvelope(decisive.length, { type: "core.void", payload: {} }, decisive[1]!.id),
     ];
-    expect(aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx)).toEqual([]);
+    // The void un-counts what the board decided: no win and no board for anybody. A fixture whose play is all voided is
+    // back in play, and no rule row says whether an unfinished fixture is a match (apps/web folds no fixture in play),
+    // so its `matches` is not pinned here.
+    const after = aggregatePlayerStats(voided, carrom.playerStats!, undefined, ctx);
+    expect(after.flatMap((r) => Object.keys(r.stats).filter((k) => k !== "matches")), "no win and no board for anybody").toEqual([]);
+    // Ruling 120: abandoned now, with nothing played before the abandon (its only board was voided) — no match for
+    // anybody, whatever the abandon's result, and so no row at all.
+    const abandoned = [...voided, makeEnvelope(decisive.length + 2, { type: "core.abandon", payload: { reason: "rain" } })];
+    expect(aggregatePlayerStats(abandoned, carrom.playerStats!, undefined, ctx)).toEqual([]);
   });
 
   it("is deterministic: the same stream + ctx folds twice to deeply equal rows", () => {

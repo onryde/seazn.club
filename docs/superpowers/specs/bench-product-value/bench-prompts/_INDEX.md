@@ -174,6 +174,19 @@ fall back from, is live — no B-prompt needs its fallback path.
 
 (append as sessions run)
 
+- 2026-10-10 — **Format-matrix W2b moved the bench onto its outcome shape**
+  (owner-approved bench edit, format-matrix `_INDEX.md` ruling 107). Not a
+  session row. W2b adds a sixth outcome kind, `double_walkover`, and
+  replaces `award.method` with `award.reason`. Done in W2b's own PR: a
+  `double_walkover` arm in `PackExpectedOutcome` and the outcome-claim kinds
+  (both additive, both flagged in the PR body per `_RULES.md` §4); one
+  shared `packMethodOf` reader (a pack's `award.method` is compared against
+  the engine's `award.reason`; packs keep writing `method`); `suite11`'s
+  walkover is a lone `core.forfeit` with no `core.start`, since W2b refuses
+  a walkover after play starts; `_tiny`'s `retired hurt` → `retired`. Bench
+  vitest 1909/1909. Still owed to the bench, by W2b Task 11:
+  `lib/drivers/scorer.ts` `organiserStepsFor` uses the console forfeit
+  testids Task 11 replaces.
 - 2026-10-04 — **The bench moved to `tools/bench` (`@seazn/bench`).** This
   carries out a controller ruling (see "Decisions already made"); it is not
   a session row, and B07b–B18 are unaffected except for the path. Branch

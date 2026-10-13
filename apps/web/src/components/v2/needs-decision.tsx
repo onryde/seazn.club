@@ -84,8 +84,15 @@ interface BlockProps {
   msg: Msg;
   /** Ruling D-H3 — which sentence the block says (`heldCause`). */
   cause: HeldCause;
-  home: { id: string; name: string };
-  away: { id: string; name: string };
+  /** `withdrawn` (W2b D-R9, legacy rows only): a side that has left the competition is never offered as the winner —
+   *  the server refuses it (C17). New rows cannot hold a withdrawn entrant on a held line: a withdrawal walks it over. */
+  home: { id: string; name: string; withdrawn?: boolean };
+  away: { id: string; name: string; withdrawn?: boolean };
+  /** Loop-F tidy 2: does this line feed a NEXT match (`feedsNextMatch`, lib/bracket-next-match.ts — D19's one reading)?
+   *  False on a final, a grand final, a third-place line: with both sides gone, the R-4 route (void, then a forfeit)
+   *  would award that title or place to someone who has left, so the no-choice sentence names the vacancy instead.
+   *  Unknown (absent) reads as the R-4 sentence. */
+  feedsNextMatch?: boolean;
   busy: boolean;
   /** Sends `core.settle` and reports the server's answer — the localized refusal on a 4xx. */
   settle: (payload: { winner: string; method: SettleMethod; note?: string }) => Promise<SettleResult>;
@@ -159,6 +166,8 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
   });
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // D-R9: only the sides still in the competition are a choice.
+  const choices = [props.home, props.away].filter((e) => e.withdrawn !== true);
 
   // Focus ONCE on mount (preflight C23: re-focusing on every render stole the caret from the note field), and give it
   // back to whatever opened the dialog when it closes. Escape and Tab are bound once and read live values via refs.
@@ -222,8 +231,14 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
         </h2>
         <fieldset className="mt-4 min-w-0">
           <legend className="text-sm font-medium text-slate-700">{msg("score.needsDecision.whoAdvances")}</legend>
+          {/* Loop-F M-8 (legacy rows only, PF-8a): both sides withdrawn leaves no choice — say so, never an empty grid. */}
+          {choices.length === 0 && (
+            <p data-testid="settle-no-choice" className="mt-2 text-sm text-slate-600">
+              {msg(props.feedsNextMatch === false ? "score.needsDecision.noChoice.place" : "score.needsDecision.noChoice")}
+            </p>
+          )}
           <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-            {[props.home, props.away].map((e) => (
+            {choices.map((e) => (
               <button
                 key={e.id}
                 type="button"

@@ -8,7 +8,11 @@ import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
 import type {
+  AwardReason,
   DisciplineModel,
+  ForfeitBy,
+  ForfeitCredit,
+  ForfeitPhase,
   LineupPair,
   MatchOutcome,
   MetricSpec,
@@ -784,6 +788,27 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   apply(state: State, ev: EventEnvelope<Ev | CoreEv>, ctx?: FoldContext): State; // pure; throws EngineError
   outcome(state: State): MatchOutcome | null; // null = still live
   summary(state: State): ScoreSummary; // display-ready at every prefix (§9.5)
+
+  /**
+   * W2b (plan D3) — REQUIRED here (optional on FoldableModule only for hand-built fakes). Where in the match a
+   * `core.forfeit` is being recorded, read from this module's own phase union; the kernel's phase guard judges every
+   * forfeit against it before `apply` runs. See FoldableModule for the four values.
+   */
+  forfeitPhase(state: State): ForfeitPhase;
+  /** W2b (plan D3 R2) — the phases a walkover may be recorded in. Absent ⇒ ["pre"]; only boardgame widens it. */
+  walkoverPhases?: readonly ForfeitPhase[];
+  /** W2b ruling 118 — the Start is play: the sport records nothing between the Start and its result (chess), so the
+   *  kernel's one "played" reading (`playRecorded`) is true from an active `core.start`. See FoldableModule. Absent ⇒
+   *  false; only boardgame declares it. */
+  startIsPlay?: boolean;
+  /**
+   * W2b (plan D9; spec §5.2) — what an `award` (or a double walkover) credits this sport's table, computed from cfg
+   * and the folded state alone (best-of, set targets, overs, `awardScore`), never a literal. `by` is the OFFENDING
+   * side, "both" the double walkover. `reason` "bye" returns exactly the delta a bye got before W2b (C-5). Its
+   * `standingsDelta` reads this for `award` instead of the played ledger, and for `double_walkover` (nothing credited,
+   * every metric excluded, X-DW-4).
+   */
+  forfeitCredit(cfg: Cfg, state: State, reason: AwardReason, by: ForfeitBy): ForfeitCredit;
 
   /**
    * W4a (#425) T6b — WHERE IN THE MATCH we are: set 2, game 4, 30–15 · over

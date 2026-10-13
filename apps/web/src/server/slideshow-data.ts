@@ -13,6 +13,8 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
@@ -123,6 +125,15 @@ export interface FixtureSlideItem {
   awayLogo: string | null;
   /** Display-ready score headline from match_states, e.g. "2 – 1" or "21-15, 21-18". */
   line: string | null;
+  /** Design review I-1 (audit 3.1): a result that credits nobody (a double walkover) carries no `line` — its 0 / 0 would
+   *  read as a played draw — and this, the forfeit tag in the org's locale, drawn where the score would be. Absent on
+   *  every other row. */
+  tag?: string | null;
+  /** Loop R M-11 (UI-2): a credited result's house tag ("w/o", "ret.", "DQ", "Aband. · DLS") and its expansion, in the
+   *  org's locale, drawn in the status cell in place of the status word — which said "Forfeit" for every reason and
+   *  "Ended" for an abandon decided by DLS or the award policy. Read through the one reader (`statusTagOf`). Absent on
+   *  a played result, a bye, and a double walkover, whose tag already stands in the score's place (`tag`). */
+  statusTag?: { word: string; full: string };
   status: string;
   round: number;
   /** N1d d4 — the fixture's round NAME in the org's locale ("Losers' round 1"),
@@ -151,6 +162,8 @@ export interface BracketSlideFixture {
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   line: string | null;
+  /** As `FixtureSlideItem.tag` (review I-1): the double walkover's tag, its `line` null. */
+  tag?: string | null;
   status: string;
 }
 
@@ -329,22 +342,34 @@ export async function buildDivisionSlides(
             where fixture_id = any(${ids})`,
         );
   const lineOf = new Map(summaries.map((s) => [s.fixture_id, s.summary?.headline ?? null]));
+  // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
+  const scoreOf = (f: (typeof fixtures)[number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
+    creditsNobody(f.outcome)
+      ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
+      : { line: lineOf.get(f.id) ?? null, ...statusTagOf(lookup, f) };
 
   // Fix round 3 (Important 4): `lookup` (this org's REAL locale, resolved
   // above from `orgLocale`) — was `msg` (client-safe English, always),
   // regardless of the org's own locale, even though the RSC callers
   // (slideshow/competitions/[id]/page.tsx, slideshow/divisions/[id]/page.tsx)
   // hold `org` and could always pass it through.
+  // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+  const unseatedName = (f: (typeof fixtures)[number], which: "home" | "away"): string | null => {
+    const id = unseatedForfeitLoser(f, which);
+    return id === null ? null : (names[id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"));
+  };
+  const seatText = (f: (typeof fixtures)[number], which: "home" | "away"): string =>
+    unseatedName(f, which) ?? resolveSlotLabel(which === "home" ? f.home_slot_label : f.away_slot_label, lookup, "schedule.tbd");
   const item = (f: (typeof fixtures)[number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd"),
+      : seatText(f, "home"),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd"),
+      : seatText(f, "away"),
     homeLogo: logos[f.home_entrant_id ?? ""] ?? null,
     awayLogo: logos[f.away_entrant_id ?? ""] ?? null,
-    line: lineOf.get(f.id) ?? null,
+    ...scoreOf(f),
     status: f.status,
     round: f.round_no,
   });
@@ -389,13 +414,13 @@ export async function buildDivisionSlides(
           seq_in_round: f.seq_in_round,
           home: f.home_entrant_id
             ? (names[f.home_entrant_id] ?? null)
-            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+            : (unseatedName(f, "home") ?? resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd")),
           away: f.away_entrant_id
             ? (names[f.away_entrant_id] ?? null)
-            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
+            : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd")),
           home_slot_label: f.home_slot_label,
           away_slot_label: f.away_slot_label,
-          line: lineOf.get(f.id) ?? null,
+          ...scoreOf(f),
           status: f.status,
         })),
       });
@@ -475,6 +500,14 @@ export interface PublicSlideInput {
     winner_to_slot?: number | null;
     loser_to_fixture?: string | null;
     loser_to_slot?: number | null;
+    /** R116-1 — the stored outcome, from which `unseatedForfeitLoser` reads whom an empty seat names (ruling 116's
+     *  withdrawn winner, never "Bye"). Optional for the reason the feed edges are; both /present pages spread
+     *  `getPublicDivision`'s fixtures, which carry it. */
+    outcome?: unknown;
+    /** Loop R M-11 — the active abandon's reason (`activeAbandonReasonSql`), the ledger `statusTagOf` reads an abandon's
+     *  tag from. Optional for the reason the outcome is; both /present pages spread `getPublicDivision`'s fixtures,
+     *  which carry it. */
+    abandon_reason?: string | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: {
@@ -503,6 +536,18 @@ export interface PublicSlideInput {
    *  existing caller/test that predates this keeps its current behaviour;
    *  every real /present page has an `org` in scope and should pass it. */
   orgLocale?: string;
+}
+
+/** Loop R M-11 — a fixtures-slide row's status tag (`FixtureSlideItem.statusTag`), or nothing: `outcomeTagWords`, the
+ *  one reader the organiser's result line uses, over the stored outcome, the active abandon's reason and the seats (an
+ *  award stored before W2b names its reason only beside two seats). A double walkover never reaches here (its tag is
+ *  the score's). */
+function statusTagOf(
+  lookup: SlotLabelLookup,
+  f: { outcome: unknown; abandon_reason?: string | null; home_entrant_id: string | null; away_entrant_id: string | null },
+): { statusTag?: { word: string; full: string } } {
+  const words = outcomeTagWords(lookup, f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  return words === null ? {} : { statusTag: words };
 }
 
 export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise<Slide[]> {
@@ -570,24 +615,36 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   // seat this exists for: a `timing: "setup"` bracket leaves a sibling-fed
   // seat's stored label NULL, so the namer was never reached and the kiosk
   // kept printing "TBD".
+  // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+  const standIn = (f: PublicSlideInput["fixtures"][number], which: "home" | "away"): string | null => {
+    const id = unseatedForfeitLoser({ ...f, outcome: f.outcome ?? null }, which);
+    return id === null ? null : (names[id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"));
+  };
   const bracketSeat = (f: PublicSlideInput["fixtures"][number], which: "home" | "away"): string => {
+    const named = standIn(f, which);
+    if (named !== null) return named;
     const stored = (which === "home" ? f.home_slot_label : f.away_slot_label) ?? null;
     const label = namer.seatLabelOf(f.id, which, stored);
     return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
   };
 
+  // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
+  const publicScoreOf = (f: PublicSlideInput["fixtures"][number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
+    creditsNobody(f.outcome)
+      ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
+      : { line: f.summary?.headline ?? null, ...statusTagOf(lookup, { ...f, outcome: f.outcome ?? null }) };
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
       // `seat`, not `slot` — a setup bracket's sibling-fed seat has no stored
       // label, so the kiosk showed "TBD" on a match with a known feeder.
-      : namer.seat(f.id, "home", f.home_slot_label ?? null),
+      : (standIn(f, "home") ?? namer.seat(f.id, "home", f.home_slot_label ?? null)),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : namer.seat(f.id, "away", f.away_slot_label ?? null),
+      : (standIn(f, "away") ?? namer.seat(f.id, "away", f.away_slot_label ?? null)),
     homeLogo: null,
     awayLogo: null,
-    line: f.summary?.headline ?? null,
+    ...publicScoreOf(f),
     status: f.status,
     round: f.round_no,
     // N1d d4 — the row's round as the hub's rail names it, never the board's
@@ -631,7 +688,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
           away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : bracketSeat(f, "away"),
           home_slot_label: f.home_slot_label ?? null,
           away_slot_label: f.away_slot_label ?? null,
-          line: f.summary?.headline ?? null,
+          ...publicScoreOf(f),
           status: f.status,
         })),
       });

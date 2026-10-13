@@ -104,4 +104,4 @@ export const tabletennis = makeSetBasedModule({
       },
     ],
   },
-});
+}, () => tabletennis);

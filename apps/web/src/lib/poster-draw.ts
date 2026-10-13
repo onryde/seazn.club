@@ -37,6 +37,7 @@
 // — the overwhelming majority, since a 3rd-place playoff is opt-in per
 // stage — is untouched.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { PublicFixture } from "@/server/public-site/data";
 
 export interface DrawFixtureRow {
@@ -185,8 +186,9 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
     }
     bucket.rows.push({
       id: f.id,
-      home: sideText(f.home_entrant_id, f.home_slot_label, entrantNames, lookup, seatText, f.id, "home"),
-      away: sideText(f.away_entrant_id, f.away_slot_label, entrantNames, lookup, seatText, f.id, "away"),
+      // R116-1: an empty seat a walkover was won over (ruling 116's withdrawn winner) names her, never its bye label.
+      home: sideText(f.home_entrant_id ?? unseatedForfeitLoser(f, "home"), f.home_slot_label, entrantNames, lookup, seatText, f.id, "home"),
+      away: sideText(f.away_entrant_id ?? unseatedForfeitLoser(f, "away"), f.away_slot_label, entrantNames, lookup, seatText, f.id, "away"),
       isFinal: f.is_final === true,
       thirdPlace: f.third_place === true,
     });

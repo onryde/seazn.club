@@ -9,7 +9,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
 import { fixtureHasResultSql } from "./fixture-results-sql";
+import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { streamUrlSchema } from "@/lib/stream-url";
+import { feedsNextMatch, type FeedEdges } from "@/lib/bracket-next-match";
 import { fireDivisionRevalidate } from "../public-site/revalidate";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
@@ -65,6 +67,18 @@ export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut>
       ...row,
       court_name: row.court_id !== null ? (courtNames.get(row.court_id) ?? row.court_id) : null,
     };
+  });
+}
+
+/** Loop-F tidy 2: does this fixture feed a NEXT match? D19's one reading (`feedsNextMatch`, lib/bracket-next-match.ts)
+ *  over its two feed edges — false on a final (and on a grand final whose reset is its own rematch) and on a
+ *  third-place line. Read by the fixture page for the held block's no-choice sentence; its own read, so the v1
+ *  fixture's wire shape (`getFixture`) does not grow the edges. */
+export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): Promise<boolean> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<FeedEdges[]>`select winner_to_fixture, loser_to_fixture from fixtures where id = ${fixtureId}`;
+    if (!row) throw new HttpError(404, "fixture not found");
+    return feedsNextMatch(row);
   });
 }
 
@@ -158,7 +172,9 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.venue_id, ven.name as venue_name,
              f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
-             f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot
+             f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
+             ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
+             ${activeAbandonReasonSql(tx, "f")} as abandon_reason
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}
@@ -316,7 +332,7 @@ export interface FixtureStreamOut {
  *
  * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
  * `broadcastRevalidate` — the latter is the peer primitive that helper calls
- * internally. It is what busts the `["pub-fixture-v3", fixtureId]` cache entry
+ * internally. It is what busts the `["pub-fixture-v4", fixtureId]` cache entry
  * tagged `divisionTag(division.id)` (`getPublicFixture`, data.ts), which is the
  * entry the public match page reads the link from.
  */

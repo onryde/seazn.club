@@ -369,7 +369,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "chess: a scorer's decisive dock has no forfeit"
+        "name": "the dock the host RENDERS is the filtered one"
       },
       {
         "cwd": "apps/web",
@@ -391,7 +391,7 @@
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "chess: a scorer's decisive dock has no forfeit"
+        "name": "the dock the host RENDERS is the filtered one"
       },
       {
         "cwd": "apps/web",

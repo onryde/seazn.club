@@ -130,7 +130,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(others).toBeGreaterThan(0);
   });
 
-  it("boardgame level (M7): refused BY NAME, and the reason is the engine's — a drawn game opens the tie-break, and the one level result a chess bracket has is a double forfeit (no_result), which no request builds (W2b, RB2B-15)", () => {
+  it("boardgame level (M7, rewritten W2b): refused BY NAME, and the reason is the engine's — a drawn chess bracket game opens the tie-break (BG-KO-1), so a chess bracket has no level result; both sides absent is a double walkover, its own request (BG-DW-1, X-DW-1)", () => {
     const boards = cases().filter((c) => c.key === "boardgame");
     expect(boards.length).toBeGreaterThan(0);
     let named = 0;
@@ -140,7 +140,9 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
       for (const outcome of [{ kind: "level" }, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "level" }] as const satisfies readonly RequestedOutcome[]) {
         const e = thrown(() => generateStream(request(c, cfg, "knockout", outcome)));
         expect(e, `${c.variant} ${outcome.kind}`).toBeInstanceOf(OutcomeUnreachable);
-        expect((e as OutcomeUnreachable).message, `${c.variant} ${outcome.kind}`).toMatch(/double forfeit/);
+        // M7 (W2b): the name points at the request that DOES build both-absent — never at a double forfeit as a level result.
+        expect((e as OutcomeUnreachable).message, `${c.variant} ${outcome.kind}`).toMatch(/tie-break \(BG-KO-1\).*request double_walkover/);
+        expect((e as OutcomeUnreachable).message, `${c.variant} ${outcome.kind}`).not.toMatch(/double forfeit/);
         named++;
       }
       expect(levelReachable(c.key, cfg, "knockout"), c.variant).toBe(false);
@@ -148,15 +150,27 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
       const bare = resolveSportCfg(c.key, c.variant);
       expect((bare as { tiebreak?: boolean }).tiebreak, c.variant).not.toBe(true);
       expect(isLevelOutcome(outcomeAfter(c, bare, generateStream(request(c, bare, "knockout", { kind: "level" })))), `${c.variant}: a bare cfg draws`).toBe(true);
-      // The reason is true, folded through the REAL engine: a drawn game holds NO outcome (phase tiebreak) ...
+      // The reason is true, folded through the REAL engine: a drawn game holds NO outcome (phase tiebreak).
       const drawn = outcomeAfter(c, cfg, [START, { type: "boardgame.result", payload: { winner: null, method: "agreement" } }]);
       expect(drawn, `${c.variant}: a drawn game opens the tie-break`).toBeNull();
-      // ... and a double forfeit (chess.md §7: both default) folds to no_result, a LEVEL result - held in a bracket.
-      const both = outcomeAfter(c, cfg, [START, { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } }]);
-      expect(both, c.variant).toEqual({ kind: "no_result" });
-      expect(isLevelOutcome(both), c.variant).toBe(true);
     }
     expect(named).toBe(2 * boards.length);
+  });
+
+  it("boardgame (M7, W2b BG-DW-1): a chess double forfeit is a double walkover — not a level result — in a bracket and in a table, and the double_walkover request folds to the same", () => {
+    const boards = cases().filter((c) => c.key === "boardgame");
+    expect(boards.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const c of boards) {
+      for (const [kind, cfg] of [["knockout", bracketCfg(c)], ["league", resolveSportCfg(c.key, c.variant)]] as const) {
+        const both = outcomeAfter(c, cfg, [START, { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } }]);
+        expect(both, `${c.variant}/${kind}: chess.md §7 both default`).toEqual({ kind: "double_walkover" });
+        expect(isLevelOutcome(both as never), `${c.variant}/${kind}`).toBe(false);
+        expect(outcomeAfter(c, cfg, generateStream(request(c, cfg, kind, { kind: "double_walkover" }))), `${c.variant}/${kind}: the request`).toEqual({ kind: "double_walkover" });
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * boards.length);
   });
 
   it("boardgame level (M7): the fold is the SECOND net under chess's named refusal - with that refusal off, `level` is still refused, by the fold finding the decider pending, never built as a level result", () => {
@@ -169,7 +183,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
         const e = thrown(() => generateStream(request(c, bracketCfg(c), "knockout", { kind: "level" })));
         expect(e, c.variant).toBeInstanceOf(OutcomeUnreachable);
         expect((e as OutcomeUnreachable).message, c.variant).toMatch(/decider is pending/);
-        expect((e as OutcomeUnreachable).message, c.variant).not.toMatch(/double forfeit/);
+        expect((e as OutcomeUnreachable).message, c.variant).not.toMatch(/double walkover/);
         refused++;
       }
       expect(spy, "the generator's refusal was consulted (and silenced)").toHaveBeenCalled();

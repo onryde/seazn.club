@@ -98,10 +98,11 @@ describe("foldRows — the real engine fold over product ledger rows (R64)", () 
   it("rr-r3's pack rows fold to phase done; the same ledger WITH the sign-off folds to final", async () => {
     const { module, cfg } = await dTinyModuleAndCfg();
     const lineups = lineupPairFromSheets("id-alpha", SHEETS.home, "id-bravo", SHEETS.away);
-    const packRows = [row(1, "core.start"), row(2, "core.forfeit", { by: "id-bravo", reason: "retired hurt" })];
+    // The pack's rr-r3 (ruling 113): the first point is played, then Bravo retires.
+    const packRows = [row(1, "core.start"), row(2, "generic.score", { by: "id-alpha", points: 1 }), row(3, "core.forfeit", { by: "id-bravo", reason: "retired" })];
     expect((foldRows(module, cfg, lineups, "fx-3", packRows) as { phase: string }).phase).toBe("done");
     // Control: the fold does see a sign-off, so dropping it is what the cut is for.
-    expect((foldRows(module, cfg, lineups, "fx-3", [...packRows, row(3, "core.finalize")]) as { phase: string }).phase).toBe(
+    expect((foldRows(module, cfg, lineups, "fx-3", [...packRows, row(4, "core.finalize")]) as { phase: string }).phase).toBe(
       "final",
     );
   });
@@ -131,8 +132,9 @@ describe("specialStateThroughPackEvents — reads the ledger and both sheets, ne
               ok: true,
               data: [
                 wire(1, "core.start", {}),
-                wire(2, "core.forfeit", { by: "id-bravo", reason: "retired hurt" }),
-                wire(3, "core.finalize", {}),
+                wire(2, "generic.score", { by: "id-alpha", points: 1 }),
+                wire(3, "core.forfeit", { by: "id-bravo", reason: "retired" }),
+                wire(4, "core.finalize", {}),
               ],
             },
           } as unknown as RawResult;
@@ -151,7 +153,7 @@ describe("specialStateThroughPackEvents — reads the ledger and both sheets, ne
       fixtureId: "fx-3",
       homeEntrantId: "id-alpha",
       awayEntrantId: "id-bravo",
-      packEventTypes: ["core.start", "core.forfeit"],
+      packEventTypes: ["core.start", "generic.score", "core.forfeit"],
       module,
       cfg,
       transport,

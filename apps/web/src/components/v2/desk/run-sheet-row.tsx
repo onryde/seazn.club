@@ -29,7 +29,10 @@ import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { HoldState } from "@/server/relay/domain/session";
-import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
+import { outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
+import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
+import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
@@ -269,14 +272,46 @@ export function RunSheetRow({
   // (and the live bye collision that depends on it) stated there once.
   // A seat with no stored label and no feeder reaches neither and keeps the
   // localized "schedule.tbd" fallback, exactly as before.
+  // R116-3: an empty seat a walkover was won over (ruling 116) is HER side — named, as any walkover names the side that
+  // did not play, never its stored bye label.
   const feed = feedLabels?.[fixture.id];
-  const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? "?")
+  const homeId = fixture.home_entrant_id ?? unseatedForfeitLoser(fixture, "home");
+  const awayId = fixture.away_entrant_id ?? unseatedForfeitLoser(fixture, "away");
+  const home = homeId
+    ? (entrantNames[homeId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.home_slot_label, feed, "home"), msg, "schedule.tbd");
-  const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? "?")
+  const away = awayId
+    ? (entrantNames[awayId] ?? "?")
     : resolveSlotLabel(seatLabel(fixture.away_slot_label, feed, "away"), msg, "schedule.tbd");
-  const decided = outcomeText(msg, fixture.outcome, entrantNames);
+  // Design audit 4.1: the side named in that empty seat WITHDREW, and the result alone ("X won (w/o)") cannot say so —
+  // withdrew shares the walkover tag. Marked as a departed entrant is in the ladder (`ladder-panel.tsx`): her name
+  // muted, then the entrant status's own word in a chip (slate-600, not the ladder's slate-500: 4.3:1 on slate-100).
+  // Such a row's names line is the device pad's scan-confirm composition (`device-score-pad.tsx`; loop H F1): each name
+  // a `min-w-0 truncate` span, the chip and "vs" `shrink-0`, so at 320 the names shorten and the chip stays whole
+  // beside the opponent — one truncating string cut the chip to "With…" and pushed the opponent off the line. The chip
+  // is `inline-block` inside its item, so the forfeited row's strike-through does not cross it.
+  const withdrawnSeat = unseatedWithdrew(fixture, "home") || unseatedWithdrew(fixture, "away");
+  const seatName = (seat: "home" | "away", name: string) =>
+    !withdrawnSeat ? (
+      name
+    ) : unseatedWithdrew(fixture, seat) ? (
+      <>
+        <span className="min-w-0 truncate text-slate-500">{name}</span>
+        <span className="shrink-0">
+          <span data-testid="run-sheet-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+            {msg("entrants.status.withdrawn")}
+          </span>
+        </span>
+      </>
+    ) : (
+      <span className="min-w-0 truncate">{name}</span>
+    );
+  // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
+  // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
+  const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
+  // Design audit 4.3: the tag in that result, with its expansion — both copies below render it as a named symbol.
+  const decidedTag = outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
+  const decided = decidedParts === null ? null : decidedParts.lead + decidedParts.tail;
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,
   // venue-qualified name this row already prints, so an archived court carried
@@ -345,6 +380,11 @@ export function RunSheetRow({
   // paragraphs there (see the `hidden md:block` pair below); this combined
   // string is read ONLY by the `md:hidden` line-2 paragraph further down.
   const phoneLineTwo = subLine !== null && subLine !== "" ? `${metaLine} · ${subLine}` : metaLine;
+  // W2b loop H F1 (controller ruling: the result tag never truncates). As ONE truncating string, line 2 lost its END
+  // first — at 320 "Round 2 · forfeited · Bears of Brockley won (w/o)" read "… Bears of Br…", so the result said
+  // nothing. The line ends with the result's tail whenever it carries one (the sub-line's precedence above puts the
+  // result last), so it is cut there: the meta and the name truncate, the tail does not.
+  const phoneLine = splitResultTail(phoneLineTwo, decidedParts?.tail);
 
   /**
    * THE ONLY DOOR into the editor, and the one place `when` is seeded.
@@ -501,9 +541,9 @@ export function RunSheetRow({
                 route to its own fixture console at all. */}
             <Link
               href={href}
-              className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
+              className={`${withdrawnSeat ? "flex min-w-0 items-baseline" : "block min-w-0 truncate"} text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
-              {home}
+              {seatName("home", home)}
               {/* slate-500, not slate-400. `#94a3b8` on white measures ~2.9:1
                   — below the 4.5:1 AA floor for body text — and axe reports it
                   at SERIOUS impact. Found by the scoped axe scan fix round 5
@@ -515,13 +555,15 @@ export function RunSheetRow({
                   lightest step that clears AA and keeps `vs` quieter than the
                   entrant names it separates — the same remedy `move-panel.tsx`
                   already applied to its own contrast finding. */}
-              <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
-              {away}
+              <span className={`mx-1.5 text-slate-500${withdrawnSeat ? " shrink-0" : ""}`}>{msg("schedule.vs")}</span>
+              {seatName("away", away)}
             </Link>
             {/* Task 9: `hidden md:block`, same reasoning as the meta line
                 above — `phoneLineTwo` is the phone's copy of this text. */}
             {subLine !== null && subLine !== "" && (
-              <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{subLine}</p>
+              <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">
+                <OutcomeTagText text={subLine} tag={decidedTag} />
+              </p>
             )}
           </div>
         </div>
@@ -540,7 +582,17 @@ export function RunSheetRow({
           {/* Loop R M7(d): a HELD row also carries the held chip and Settle on this line, and at 320 they took the room —
               the meta truncated to "Round 1 · …" and hid the reason ("abandoned"). A held row's meta takes the whole
               line (`max-md:basis-full`) and the chip and Settle wrap below it; every other row keeps two lines. */}
-          <p className={`min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>{phoneLineTwo}</p>
+          {/* Loop H F1: the device pad's scan-confirm pattern (`device-score-pad.tsx`) — a `min-w-0 truncate` span for
+              what may shorten, a `shrink-0 whitespace-pre` span for what may not (`whitespace-pre` keeps the tail's
+              leading space, which a flex item would otherwise drop). */}
+          <p className={`flex min-w-0 flex-1 text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>
+            <span className="min-w-0 truncate">{phoneLine.lead}</span>
+            {phoneLine.tail !== "" && (
+              <span className="shrink-0 whitespace-pre">
+                <OutcomeTagText text={phoneLine.tail} tag={decidedTag} />
+              </span>
+            )}
+          </p>
           {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
               chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
               status: a stream outlives the whistle. 44 px tall on phones (the tap floor).

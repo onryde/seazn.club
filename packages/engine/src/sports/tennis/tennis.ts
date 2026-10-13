@@ -108,4 +108,4 @@ export const tennis = makeNestedModule({
       },
     ],
   },
-});
+}, () => tennis);

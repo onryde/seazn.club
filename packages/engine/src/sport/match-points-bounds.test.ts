@@ -262,7 +262,7 @@ describe("matchPointsBounds — winsOnly holds on the bye path too (an award thr
       claimed.push(`${m.key} (${label})`);
       it(`${m.key} (${label}): a bye pays winFloor to the winner, 0 to the phantom`, () => {
         const state = m.init(cfg, { home: { entrantId: "W", slots: [] }, away: { entrantId: "BYE", slots: [] } });
-        const pair = m.standingsDelta({ kind: "award", winner: "W" }, cfg, { kind: "swiss" }, state);
+        const pair = m.standingsDelta({ kind: "award", winner: "W", loser: null, reason: "bye" }, cfg, { kind: "swiss" }, state);
         for (const d of pair) expect(d.points, d.entrantId).toBe(d.won * b.winFloor);
         expect(pair.find((d) => d.entrantId === "W")?.won).toBe(1);
       });

@@ -24,6 +24,7 @@
 // fixture").
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import type { FixtureRow } from "@/server/usecases/stages";
+import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 
 /** The fixture fields this builder (and Task 4's rendering of its rows) reads,
  *  derived from the wire row rather than retyped — a hand-written twin is how
@@ -62,6 +63,8 @@ export type RunSheetFixture = Pick<
   | "third_place"
   | "conditional"
   | "ext_key"
+  // W2b Task 13: the active abandon's reason, the run sheet's abandon tag read (`outcomeText`'s ledger).
+  | "abandon_reason"
 >;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };
@@ -119,10 +122,16 @@ export const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladd
 /** A bye: one side empty with an auto-advance award outcome (v3/04 §3 item 6).
  *  Copied verbatim from `stages-panel.tsx`'s module-private `isBye`, typed
  *  against `RunSheetFixture` instead of `FixtureRow` — a lib must not import
- *  from a component. Task 4 deletes that copy and imports this instead. */
+ *  from a component. Task 4 deletes that copy and imports this instead.
+ *
+ *  R116-3 (owner ruling 116): an empty seat the award names a LOSER in — a withdrawn winner's, walked over by the side
+ *  that arrived — is HER seat, so the line is a walkover like any other, not a bye. `unseatedForfeitLoser` is the one
+ *  reader of that shape; an award with no loser (a bye, a dead feeder's seat, a DQ'd winner's) still answers yes. */
 export function isBye(f: RunSheetFixture): boolean {
   const o = f.outcome as { kind?: string } | null;
-  return o?.kind === "award" && (f.home_entrant_id === null || f.away_entrant_id === null);
+  if (o?.kind !== "award") return false;
+  const empty = f.home_entrant_id === null ? "home" : f.away_entrant_id === null ? "away" : null;
+  return empty !== null && unseatedForfeitLoser(f, empty) === null;
 }
 
 /** A settled fixture with no time is a RESULT, not open scheduling work —

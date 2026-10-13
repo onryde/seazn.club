@@ -79,7 +79,9 @@ import { z } from "zod";
 import {
   foldMatchWithStoppage,
   mulberry32,
+  summaryOf,
   type EventEnvelope,
+  type FoldedOutcomeFacts,
   type LineupPair,
   type Rng,
 } from "@seazn/engine/core";
@@ -215,8 +217,16 @@ interface LedgerSet {
   readonly closed: boolean;
 }
 
-function setLedger(sportModule: AnySportModule, state: unknown): readonly LedgerSet[] {
-  const parsed = SetLedgerDetail.safeParse(sportModule.summary(state).detail);
+/** A state built by `module.apply` alone (the generator's own walk) carries no kernel facts: no settle and no
+ *  admitted withdrawal, so `summaryOf` reads it exactly as the module does. */
+function applied(state: unknown): FoldedOutcomeFacts<unknown> {
+  return { state, settlement: null };
+}
+
+/** Read through the engine's one summary (`summaryOf`, W2b PF-1), the function apps/web reads, never
+ *  `module.summary(state)` directly. */
+function setLedger(sportModule: AnySportModule, folded: FoldedOutcomeFacts<unknown>): readonly LedgerSet[] {
+  const parsed = SetLedgerDetail.safeParse(summaryOf(sportModule, folded).detail);
   if (!parsed.success) {
     throw new Error(
       `"${sportModule.key}@${sportModule.version}" exposes no set ledger — its ` +
@@ -379,7 +389,7 @@ export function reconstructSetRallies(input: ReconstructSetRalliesInput): PackEv
     }
     // Engine-checked postcondition. The plan chose the order; the module says
     // whether the set it actually banked is the one that was asked for.
-    const issue = setBankedIssue(ledgerAt(setLedger(sportModule, state), setIndex), target, setIndex);
+    const issue = setBankedIssue(ledgerAt(setLedger(sportModule, applied(state)), setIndex), target, setIndex);
     if (issue !== null) throw new Error(issue);
   });
 
@@ -434,7 +444,7 @@ function planSet(
         `sport's own cap, so this is a mis-transcribed score rather than a long one`,
     );
   }
-  const ledgerHere = setLedger(sportModule, base);
+  const ledgerHere = setLedger(sportModule, applied(base));
   if (ledgerHere.length !== setIndex) {
     throw new Error(
       `set ${setIndex + 1}: the fold already holds ${ledgerHere.length} set(s), so the stream this ` +
@@ -474,7 +484,7 @@ function planSet(
       );
       states[at(x, y)] = next;
       present[at(x, y)] = true;
-      closed[at(x, y)] = ledgerAt(setLedger(sportModule, next), setIndex).closed;
+      closed[at(x, y)] = ledgerAt(setLedger(sportModule, applied(next)), setIndex).closed;
     }
   }
 
@@ -581,7 +591,7 @@ export function foldMatchLedgerIssue(
   // `any` (`no-unsafe-assignment`). `validate-pack.ts`'s own call site reads
   // `result.state` into a declared variable for the same reason.
   const folded = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, PACK_FOLD_OPTIONS);
-  const ledger = setLedger(sportModule, folded.state);
+  const ledger = setLedger(sportModule, folded);
   // Both sides through `scoreText`, never one inline template and one call: a
   // comparison whose two halves format the same fact in two places diverges the
   // first time either moves, and reds on the formatting rather than the data.

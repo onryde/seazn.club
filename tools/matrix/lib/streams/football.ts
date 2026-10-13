@@ -29,4 +29,11 @@ export const footballGenerator: SportStreamGenerator = {
     if (req.outcome.kind === "draw") return [START, ...markers];
     return [START, { type: "football.goal", payload: { by: idOf(req, req.outcome.winner), minute: 10 } }, ...markers];
   },
+  // W2b (FB-RT-1): a goal each in the first half, no period marker — the match is live.
+  partial(req) {
+    return [
+      { type: "football.goal", payload: { by: req.home, minute: 10 } },
+      { type: "football.goal", payload: { by: req.away, minute: 20 } },
+    ];
+  },
 };

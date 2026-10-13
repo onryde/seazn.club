@@ -21,6 +21,7 @@
 // real deciding `scoreEvent` through the real `deferred` → `after()` chain.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 vi.hoisted(() => {
@@ -111,6 +112,15 @@ import { schedulePlayerStatsRefresh } from "../player-stats-refresh";
 import { publicCompetitionHub } from "../public";
 import { scoreEvent } from "../scoring";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { getPublicPlayer } from "@/server/public-site/data";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createPerson } from "../persons";
+import { createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -430,19 +440,76 @@ describe.skipIf(!HAS_DB)("the read-side stats check runs where after() is real (
     expect(await folded(s.divisionId)).toBe(true);
   }, 60_000);
 
-  it("a check whose after() never runs frees its division once the interval has passed", async () => {
+  it("a check whose after() never runs claims nothing: the next read checks the division at once (R115 review M1)", async () => {
     const s = await lostResult();
     const dropped = await inRequestWithAfter(() => publicCompetitionHub(s.orgSlug, s.compSlug), "never-closes");
     expect(dropped.pendingCallbacks(), "the check was registered, and will never run").toBe(1);
 
     const soon = await inRequestWithAfter(() => publicCompetitionHub(s.orgSlug, s.compSlug));
     await soon.close();
-    expect(probe.folds, "inside the interval the division is not checked again").toBe(0);
+    expect(probe.folds, "inside the minute, the next read checks the division and the lost result folds").toBe(1);
+    expect(await folded(s.divisionId)).toBe(true);
 
-    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true, now: Date.now() + 61_000 });
-    const later = await inRequestWithAfter(() => publicCompetitionHub(s.orgSlug, s.compSlug));
-    await later.close();
-    expect(probe.folds, "a minute on, the division is checked and the lost result folds").toBe(1);
+    // The check that RAN claimed the minute: a third read inside it registers none.
+    const third = await inRequestWithAfter(() => publicCompetitionHub(s.orgSlug, s.compSlug), "never-closes");
+    expect(third.pendingCallbacks(), "a division checked this minute registers no second check").toBe(0);
+  }, 60_000);
+
+  /** The public player card's scene: a Pro org's public generic league of two, a consenting player on each side, and a
+   *  deciding result whose refresh was lost (the scoring response never closed), so the snapshot is owed. */
+  async function lostCardResult() {
+    const { auth } = await seedOrg();
+    await setOrgPlan(auth.orgId, "pro"); // the public player card is a player-pages (Pro) key
+    await invalidateOrgEntitlements(auth.orgId);
+    const suffix = randomUUID().slice(0, 8);
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `M1 ${suffix}`, visibility: "public", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: `open-${suffix}`, sport_key: "generic", variant_key: "score", config: {} });
+    const names = ["Pat Player", "Opp One"];
+    const people: { id: string }[] = [];
+    for (const full_name of names) {
+      people.push(await createPerson(auth, { full_name, consent: { public_name: true }, dob: null, gender: null, external_ref: null }));
+    }
+    await createEntrants(
+      auth,
+      division.id,
+      people.map((p, i) => ({
+        kind: "individual" as const,
+        display_name: names[i]!,
+        seed: i + 1,
+        members: [{ person_id: p.id, squad_number: null, is_captain: false, roles: [], default_position_key: null }],
+      })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    await startDivision(auth, division.id);
+    expect(fixtures.length, "a league of two is one fixture").toBe(1);
+    const fixtureId = fixtures[0]!.id;
+    await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await inRequestWithAfter(
+      () => scoreEvent(auth, fixtureId, { expected_seq: 1, type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }),
+      "never-closes",
+    );
+    probe.folds = 0;
+    const [row] = await sql<{ org_slug: string }[]>`select slug as org_slug from organizations where id = ${auth.orgId}`;
+    return { divisionId: division.id, orgSlug: row!.org_slug, compSlug: comp.slug, personId: people[0]!.id };
+  }
+
+  it("an ISR regeneration of the public player card registers its check, which never runs and claims nothing (R115 review M1)", async () => {
+    const s = await lostCardResult();
+    expect(await folded(s.divisionId), "the lost result left nothing folded").toBe(false);
+    // The card renders in its page's ISR scope. A background regeneration renders after its response closed, so the
+    // check it registers never runs (final review I1).
+    const regen = await inRequestWithAfter(() => getPublicPlayer(s.orgSlug, s.compSlug, s.personId), "isr-regeneration");
+    expect(regen.result, "the card rendered").not.toBeNull();
+    expect(regen.pendingCallbacks(), "the card registered its read-side check, which will never run").toBe(1);
+    expect(probe.folds).toBe(0);
+
+    // Inside the same minute, a card render for a request (a cold or expired entry, whose after() is real): the
+    // regeneration claimed nothing, so this read checks the division and the lost result folds.
+    const cold = await inRequestWithAfter(() => getPublicPlayer(s.orgSlug, s.compSlug, s.personId));
+    expect(cold.pendingCallbacks(), "the cold render registered its check").toBe(1);
+    await cold.close();
+    expect(probe.folds, "the check ran and folded the lost result").toBe(1);
     expect(await folded(s.divisionId)).toBe(true);
   }, 60_000);
 });

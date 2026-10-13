@@ -81,7 +81,7 @@ export const m1Walkover: Scenario = {
         target = { id: f.id, absent: absentSide === "home" ? f.home_entrant_id! : f.away_entrant_id!, winner: found.winner, round };
         // The fixture stays in this round's batch; decideFixture then finds it
         // finished and leaves it alone.
-        await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: absentSide, reason: "walkover" });
+        await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: absentSide, reason: "walkover", at: "before_start" });
       },
     });
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });

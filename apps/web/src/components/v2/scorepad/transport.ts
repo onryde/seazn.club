@@ -261,6 +261,13 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "LEVEL_RESULT_IN_BRACKET",
   "SETTLE_NOT_APPLICABLE",
   "TIEBREAK_NOT_APPLICABLE",
+  // W2b: the forfeit and walkover refusals are about the write's content too — a reason the phase does not admit, a
+  // forfeit over an abandon that must be settled or voided first, a double walkover with no next match, a bracket
+  // seat whose entrant departed. A resend is refused identically.
+  "FORFEIT_REASON_WRONG_PHASE",
+  "ABANDONED_SETTLE_OR_VOID",
+  "DOUBLE_WALKOVER_NO_NEXT_MATCH",
+  "STAGE_SEAT_DEPARTED",
 ]);
 
 /**

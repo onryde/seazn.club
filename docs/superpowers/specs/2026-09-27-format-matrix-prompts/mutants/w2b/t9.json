@@ -1,0 +1,107 @@
+[
+ {
+  "id": "mig-settled-too",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "\n     and not exists (select 1 from score_events st\n                      where st.fixture_id = f.id and st.type = 'core.settle'\n                        and not exists (select 1 from score_events v3 where v3.voids_event_id = st.id));",
+  "replace": ";",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "BG-DW-1 migration"
+   }
+  ]
+ },
+ {
+  "id": "mig-voided-too",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "\n                                    and not exists (select 1 from score_events v2 where v2.voids_event_id = r2.id)))",
+  "replace": "))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "BG-DW-1 migration"
+   }
+  ]
+ },
+ {
+  "id": "mig-any-kind",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "   where s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')\n     and f.status = 'needs_decision'",
+  "replace": "   where f.status = 'needs_decision'",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "BG-DW-1 migration"
+   }
+  ]
+ },
+ {
+  "id": "dhr-no-result-counts",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "not in ('no_result', 'double_walkover')",
+  "replace": "not in ('double_walkover')",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "X-BL-1"
+   }
+  ]
+ },
+ {
+  "id": "dhr-dw-counts",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "not in ('no_result', 'double_walkover')",
+  "replace": "not in ('no_result')",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "X-BL-1"
+   }
+  ]
+ },
+ {
+  "id": "dhr-walkover-excluded",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "not in ('no_result', 'double_walkover')",
+  "replace": "not in ('no_result', 'double_walkover', 'award')",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "X-BL-1"
+   }
+  ]
+ },
+ {
+  "id": "mig-notice-miscounts",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "  select count(*),\n",
+  "replace": "  select count(*) + 1,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "empty case first"
+   }
+  ]
+ }
+]

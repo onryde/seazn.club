@@ -77,8 +77,8 @@
   {
     "id": "summary-level-dropped",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "    if (level) {\n      home = draw;\n      away = draw;\n    } else if (outcome?.kind === \"win\") {",
-    "replace": "    if (outcome?.kind === \"win\") {",
+    "find": "    if (level) {\n      home = draw;\n      away = draw;\n    } else if (outcome?.kind === \"win\" || outcome?.kind === \"award\") {",
+    "replace": "    if (outcome?.kind === \"win\" || outcome?.kind === \"award\") {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -144,15 +144,15 @@
   {
     "id": "t15-r1-double-forfeit-enters-tiebreak",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"no_result\" } };\n    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };",
-    "replace": "    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"no_result\" } };",
+    "find": "    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };\n    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };",
+    "replace": "    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"double_walkover\" } };",
     "killers": [
       {
         "cwd": "packages/engine",
         "files": [
           "src/sports/boardgame/tiebreak.test.ts"
         ],
-        "name": "T15-R1 BG-KO-1: only a game the league calls DRAWN enters the tie-break — a bracket double forfeit is held no_result, awaitingDecider false, closed by settle"
+        "name": "BG-KO-1 / BG-DW-1: only a game the league calls DRAWN enters the tie-break"
       }
     ]
   },
@@ -256,8 +256,8 @@
   {
     "id": "d-c7-kernel-guard-dropped",
     "file": "packages/engine/src/core/events.ts",
-    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
-    "replace": "    if (false) {",
+    "find": "if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {",
+    "replace": "if (false) {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -271,8 +271,8 @@
   {
     "id": "d-c7-guard-settlement-blind",
     "file": "packages/engine/src/core/events.ts",
-    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
-    "replace": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement: null })) {",
+    "find": "if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {",
+    "replace": "if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement: null, expunged, levelWithdrawal })) {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -286,8 +286,8 @@
   {
     "id": "d-c7-guard-ignores-phase",
     "file": "packages/engine/src/core/events.ts",
-    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
-    "replace": "    if (deciderTypes.has(event.type) && outcomeOf(module, { state, settlement }) !== null) {",
+    "find": "if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {",
+    "replace": "if (deciderTypes.has(event.type) && outcomeOf(module, { state, settlement, expunged, levelWithdrawal }) !== null) {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -301,8 +301,8 @@
   {
     "id": "d-c7-guard-below-guarantee-4",
     "file": "packages/engine/src/core/events.ts",
-    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n",
-    "replace": "    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement, expunged, levelWithdrawal }) },\n      );\n    }\n    // W2b D4 (X-AB-4) — a forfeit while an unvoided abandon is active. ABOVE guarantee 4 on purpose: a football\n    // award-policy abandon DECIDES the match, so guarantee 4 would answer ALREADY_DECIDED first and hide the guidance\n    // the organiser needs (settle to decide; void the abandon to replay). Voids resolve first, so void-then-forfeit\n    // reaches the phase guard below instead (play started: retired, disqualified or withdrew — and a walkover while\n    // nothing was played, ruling 112: an abandon is the kernel's, not play). Once a settle decided\n    // the abandoned match there is nothing left to settle or replay, so it falls to guarantee 4: ALREADY_DECIDED\n    // (review M-6).\n    if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {\n      throw new EngineError(\n        \"ABANDONED_SETTLE_OR_VOID\",\n        \"this match was abandoned — settle it to decide it, or void the abandon first if it is being replayed\",\n        { eventId: event.id },\n      );\n    }\n    // W2b PF-1 (X-WD-1) — the one forfeit guarantee 4 admits: a withdrawal over a held LEVEL result that nothing has\n    // settled (the effective outcome is still level). Walkover, retired and disqualified there stay ALREADY_DECIDED.\n    // One-shot: once admitted the effective outcome is an award, so a second one answers ALREADY_DECIDED.\n    const withdrawalOverLevel =\n      decided &&\n      event.type === \"core.forfeit\" &&\n      forfeitReasonOf(event.payload) === \"withdrew\" &&\n      isLevelOutcome(outcomeOf(module, { state, settlement, expunged, levelWithdrawal }));\n    if (decided && !postDecision.has(event.type) && !withdrawalOverLevel) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n",
+    "replace": "    // W2b D4 (X-AB-4) — a forfeit while an unvoided abandon is active. ABOVE guarantee 4 on purpose: a football\n    // award-policy abandon DECIDES the match, so guarantee 4 would answer ALREADY_DECIDED first and hide the guidance\n    // the organiser needs (settle to decide; void the abandon to replay). Voids resolve first, so void-then-forfeit\n    // reaches the phase guard below instead (play started: retired, disqualified or withdrew — and a walkover while\n    // nothing was played, ruling 112: an abandon is the kernel's, not play). Once a settle decided\n    // the abandoned match there is nothing left to settle or replay, so it falls to guarantee 4: ALREADY_DECIDED\n    // (review M-6).\n    if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {\n      throw new EngineError(\n        \"ABANDONED_SETTLE_OR_VOID\",\n        \"this match was abandoned — settle it to decide it, or void the abandon first if it is being replayed\",\n        { eventId: event.id },\n      );\n    }\n    // W2b PF-1 (X-WD-1) — the one forfeit guarantee 4 admits: a withdrawal over a held LEVEL result that nothing has\n    // settled (the effective outcome is still level). Walkover, retired and disqualified there stay ALREADY_DECIDED.\n    // One-shot: once admitted the effective outcome is an award, so a second one answers ALREADY_DECIDED.\n    const withdrawalOverLevel =\n      decided &&\n      event.type === \"core.forfeit\" &&\n      forfeitReasonOf(event.payload) === \"withdrew\" &&\n      isLevelOutcome(outcomeOf(module, { state, settlement, expunged, levelWithdrawal }));\n    if (decided && !postDecision.has(event.type) && !withdrawalOverLevel) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement, expunged, levelWithdrawal })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement, expunged, levelWithdrawal }) },\n      );\n    }\n",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -361,15 +361,15 @@
   {
     "id": "minor6-forfeit-guard-dropped",
     "file": "packages/engine/src/sports/boardgame/boardgame.ts",
-    "find": "        if (state.phase !== \"live\") wrongPhase(`forfeit not allowed in phase \"${state.phase}\"`);\n",
+    "find": "  if (state.phase !== \"pre\" && state.phase !== \"live\" && state.phase !== \"tiebreak\") {\n    wrongPhase(`forfeit not allowed in phase \"${state.phase}\"`);\n  }\n",
     "replace": "",
     "killers": [
       {
         "cwd": "packages/engine",
         "files": [
-          "src/sports/boardgame/tiebreak.test.ts"
+          "src/sports/boardgame/boardgame.test.ts"
         ],
-        "name": "BG-KO-1: a core\\.forfeit while the tie-break is pending is refused WRONG_PHASE"
+        "name": "refuses a forfeit on a game that is over — done, final or abandoned — with the phase named"
       }
     ]
   }

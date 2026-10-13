@@ -32,6 +32,8 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision } from "../data";
+import { embedDivisionData } from "@/server/embed-data";
+import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import {
   buildQualificationView,
   divisionAwardAddsToLedger,
@@ -141,12 +143,13 @@ async function playRound(
   }
 }
 
-/** A real walkover: `loser` forfeits its round-`round` match (core.forfeit). */
+/** A real walkover: `loser` forfeits its round-`round` match (core.forfeit) before it starts. W2b: the forfeit reason
+ *  is one of the engine's FORFEIT_REASONS (the free-text "no-show" is refused), and a `walkover` is a pre-start
+ *  forfeit (D3) — so no `core.start` precedes it. */
 async function forfeitRound(r: Rig, round: number, loser: string): Promise<void> {
   const id = r.id[loser]!;
   const f = (await fixturesOf(r)).find((x) => x.round_no === round && (x.home_entrant_id === id || x.away_entrant_id === id))!;
-  await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
-  await scoreEvent(r.auth, f.id, { expected_seq: 1, type: "core.forfeit", payload: { by: id, reason: "no-show" } });
+  await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.forfeit", payload: { by: id, reason: "walkover" } });
 }
 
 async function load(
@@ -340,8 +343,11 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     };
 
     // (a) the organiser's withdrawal (withdrawEntrantCascade): nothing played,
-    // so expunge. It voids every leaver fixture as `abandoned` WITH a
-    // no_result outcome, so the pooled snapshot DOES fold the leaver, at 0.
+    // so expunge. W2b (plan D5, PF-4): it abandons every leaver fixture with
+    // `core.abandon{reason:"withdrew", expunge:true}` and NO outcome (before
+    // W2b: a no_result the snapshot folded at 0), so the pooled snapshot does
+    // not fold the leaver at all — and her lines are dead, so nothing of hers
+    // is still to come and the pool resolves (unlike (b) below).
     const a = await scene();
     expect((await withdrawEntrantCascade(a.r.auth, a.leaver)).policy).toBe("expunge");
     await playRound(a.r, 1, EIGHT, Infinity, a.pool);
@@ -349,7 +355,22 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     const cascaded = await load(a.r, a.pool);
     const leaverFx = (await fixturesOf(a.r)).filter((f) => f.home_entrant_id === a.leaver || f.away_entrant_id === a.leaver);
     expect(leaverFx.map((f) => f.status)).toEqual(["abandoned", "abandoned", "abandoned"]);
-    expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual([...a.others, a.leaver].sort());
+    const outcomes = await sql<{ outcome: unknown }[]>`select outcome from fixtures where id in ${sql(leaverFx.map((f) => f.id))}`;
+    expect(outcomes.map((f) => f.outcome), "D5: an expunge records no outcome").toEqual([null, null, null]);
+    // Loop-F I-2: both public reads carry the expunge — getPublicDivision (the division page and the hub) and the
+    // embed's own read — true on exactly her three lines, false on every other fixture of the division.
+    const hers = new Set(leaverFx.map((f) => f.id));
+    const flagged = (fx: readonly { id: string; expunged?: boolean }[]) => fx.filter((f) => f.expunged === true).map((f) => f.id).sort();
+    const page = (await getPublicDivision(...a.r.slugs))!;
+    expect(page.fixtures.length, "the page read has the division's fixtures").toBeGreaterThan(hers.size);
+    expect(flagged(page.fixtures), "page read").toEqual([...hers].sort());
+    expect(page.fixtures.every((f) => typeof f.expunged === "boolean"), "page read: every row says").toBe(true);
+    const embed = await embedDivisionData(a.r.divisionId);
+    if (!embed.ok) throw new Error(`rig: the embed is not served (${embed.reason})`);
+    expect(flagged(embed.data.fixtures), "embed read").toEqual([...hers].sort());
+    // …and the console's (the organiser's standings tab builds the same view from listDivisionFixtures).
+    expect(flagged(await listDivisionFixtures(a.r.auth, a.r.divisionId)), "console read").toEqual([...hers].sort());
+    expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual(a.others);
     expect(cascaded.view).not.toBeNull();
     expect(cascaded.view!.rows[a.leaver]).toBeUndefined();
     expect(cascaded.view!.table.label).toBe("First place goes through to Finals · 1 round left");

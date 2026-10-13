@@ -9,6 +9,7 @@ import { completeStageIfReady } from "@/server/engine-db/competition";
 import { scoreEvent, onDecided } from "@/server/usecases/scoring";
 import { loadBracketFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
+import { DEPARTED_STATUSES, patchEntrant } from "@/server/usecases/entrants";
 import { assertNoLevelSeat, SEATING_STATUSES } from "../level-seat";
 import { declaredVariant, seedBracket } from "./helpers/seed-bracket";
 
@@ -232,11 +233,25 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
     expect(await seated(t.final)).toEqual([t.home]);
   });
 
-  it("X-ST-1 (ruling C17, Review Focus 5): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn), and a settle for the remaining one seats them", async () => {
+  it("W2b X-WD-1 (supersedes the C17 hold): a withdrawal walks a held fixture over to the remaining side, and the final seats them", async () => {
     const t = await heldChess();
-    await withdrawEntrantCascade(t.auth, t.away);
+    const before = await seq(t.sf);
+    const out = await withdrawEntrantCascade(t.auth, t.away);
+    expect([out.walkovers, out.walked_over_held]).toEqual([1, 1]);
     const r = await row(t.sf);
-    expect(r.status).toBe("needs_decision"); // withdrawBracketEntrant skips it (withdrawal.ts → "void", stage.ts)
+    expect(r.status).toBe("forfeited");
+    expect(r.outcome).toEqual({ kind: "award", winner: t.home, loser: t.away, reason: "withdrew" });
+    expect(await seq(t.sf)).toBe(before + 1); // one core.forfeit, no settle
+    expect(await seated(t.final)).toEqual([t.home]);
+  });
+
+  it("X-ST-1 (ruling C17, Review Focus 5) on a LEGACY row — an entrant withdrawn while her fixture stayed held (pre-W2b): a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn), and a settle for the remaining one seats them", async () => {
+    const t = await heldChess();
+    // The pre-W2b cascade skipped the held line and only flipped her status; W2b's cascade walks it over (above), so
+    // the legacy shape is a raw status flip.
+    await sql`update entrants set status = 'withdrawn' where id = ${t.away}`;
+    const r = await row(t.sf);
+    expect(r.status).toBe("needs_decision");
     expect(r.outcome).toEqual({ kind: "draw" });
     expect(await seated(t.final)).toEqual([]);
     const before = await seq(t.sf);
@@ -249,6 +264,28 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
     await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }); // the positive pair
     expect((await row(t.sf)).status).toBe("decided");
     expect(await seated(t.final)).toEqual([t.home]);
+  });
+
+  it("C17 over the ONE departed vocabulary (loop-F tidy): a DISQUALIFIED winner is refused like a withdrawn one — a disqualification is a status change with no cascade, so her held line stays held", async () => {
+    // single-sport: chess, the held-line rig above; the guard reads the entrant's status, not the sport. Every
+    // DEPARTED_STATUSES member, so a narrowed set reds here.
+    let checked = 0;
+    for (const departed of [...DEPARTED_STATUSES]) {
+      const t = await heldChess();
+      await patchEntrant(t.auth, t.away, { status: departed } as never);
+      expect([(await row(t.sf)).status, (await row(t.sf)).outcome], `${departed}: rig — her line is still held`).toEqual(["needs_decision", { kind: "draw" }]);
+      const before = await seq(t.sf);
+      await expect(post(t.auth, t.sf, "core.settle", { winner: t.away, method: "organiser" }), departed).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+        data: { reason: "withdrawn", winner: t.away },
+      });
+      expect(await seq(t.sf), `${departed}: the refusal wrote nothing`).toBe(before);
+      expect(await seated(t.final), departed).toEqual([]);
+      await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }); // the positive pair
+      expect(await seated(t.final), departed).toEqual([t.home]);
+      checked++;
+    }
+    expect(checked).toBe(DEPARTED_STATUSES.size);
   });
 
   it("X-ST-1 (Review Focus 2): a second settle is refused SETTLE_NOT_APPLICABLE and seats nobody twice", async () => {

@@ -13,7 +13,7 @@
 // ledger, a model with nothing to judge, a command with no candidate, a cell
 // with no informative step.
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, FORFEIT_REASONS } from "@seazn/engine/core";
 import { generateDoubleElim, generatePagePlayoff, generateRoundRobin, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -1324,12 +1324,13 @@ describe("I-2: every ledger that goes unknown is counted, and a cell with no inf
 });
 
 describe("model walkover uses the organiser's forfeit composition", () => {
-  it("a scheduled fixture's walkover posts START then core.forfeit (as HttpDriver.forfeit does)", async () => {
+  it("W2b: a scheduled fixture's walkover posts the bare core.forfeit, no START before it (as HttpDriver.forfeit does — D3 R2, finding 10)", async () => {
     // single-sport: the composition is core events only.
     const { m, d } = await fresh();
     await play(m, d, [["Start", 0], ["Walkover", 0, 0]]);
     const f = [...m.fixtures.values()].find((x) => (x.ledger ?? []).some((e) => e.type === "core.forfeit"));
-    expect(f?.ledger?.map((e) => e.type)).toEqual([START.type, "core.forfeit"]);
+    expect(f?.ledger?.map((e) => e.type)).toEqual(["core.forfeit"]);
+    expect(d.fixtures.find((x) => x.id === f?.id)?.status).toBe("forfeited");
   });
 });
 
@@ -1388,8 +1389,13 @@ describe("carry (a): a withdrawal's cascade rides the ledger, and an abandoned f
     await play(m, d, [["Score", 0, 1], ["Generate", 0]]);
     expect(m.foldParity).toBeGreaterThan(before);
   });
-  it("F1 offline, every modelled sport: where the engine refuses a forfeit before core.start, the cascade's bare walkover is refused and the first Withdraw fails as an unexpected refusal", async () => {
-    let refusing = 0;
+  // W2b re-key: BG-WO-2 ("a chess forfeit is recordable before the game starts") retired the one refusal this test
+  // found, so the refusing arm is EMPTY now — the empty case is the rule, and a sport that refuses is a red by name.
+  it("F1 offline, every modelled sport: the cascade's bare walkover before core.start is accepted in every sport (BG-WO-2), with a withdrawal reason the engine admits", async () => {
+    // D1: the cascade's reason is one of the engine's own. Red until loop F moves withdrawal.ts REASON to "withdrew"
+    // (plan finding 14): until then the engine refuses every cascade walkover INVALID_EVENT.
+    expect(FORFEIT_REASONS as readonly string[], "withdrawal.ts REASON").toContain(withdrawalReason());
+    const refusing: string[] = [];
     let accepting = 0;
     for (const sport of SPORT_KEYS) {
       const variant = variantKeys(sport)[0] ?? "";
@@ -1410,14 +1416,13 @@ describe("carry (a): a withdrawal's cascade rides the ledger, and an abandoned f
         expect(pending.status, sport).toBe("forfeited");
         accepting++;
       } else {
-        const e = await violation(play(m, d, [["Withdraw", m.entrants.indexOf(who)]]));
-        expect(e.check, sport).toBe(UNEXPECTED_REFUSAL);
-        expect(m.counts.Withdraw, sport).toEqual(counts(1, { unexpected: 1 }));
-        refusing++;
+        refusing.push(sport);
       }
     }
-    expect(refusing).toBeGreaterThan(0);
-    expect(accepting).toBeGreaterThan(0);
+    expect(refusing, "sports whose engine refuses a bare walkover before core.start").toEqual([]);
+    const individual = SPORT_KEYS.filter((s) => entrantKindFor(s, resolveSportCfg(s, variantKeys(s)[0] ?? "")) !== "team");
+    expect(accepting).toBe(individual.length);
+    expect(accepting).toBeGreaterThan(0); // anti-vacuity
   });
 });
 

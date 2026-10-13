@@ -1,56 +1,6 @@
 {
-  "note": "Controller ruling D-P2 (progress.md, 'P1 phase 3 review'): six boardgame L3 cells in expect-77.json are not W2a's to turn green, and a seventh (swiss_playoff|generic|score|R4, ruling D-R3, see below). Task 16's judge (tools/matrix/w2a-expect.ts) passes for 71 works + these 6 red, each for its pinned reason; any other red, one of these red for a different reason, or one of these also failing a check outside its `failing` list, fails it. `reason` is compared with double quotes dropped on both sides (the product writes phase \"pre\"). Moved by the ruling, not by a run: the ids stay in expect-77.json. `failing` is the check ids the cell fails today, from the post-W2a drive of these cells (p1d, run ids w2a-p1-fin2-*): the five R4 cells end in a case-level error and fail no check, ko_plate F1 fails three. The committed repro runs beside this file predate W2a and show SC-O1's own checks. The seventh, swiss_playoff|generic|score|R4, is SC-O2 whose reason flipped to SW-H1 on CI (Swiss stage 1 round 5 pairs nobody by the lots tie-break, a UUID-hashed draw: owner ruling 70, P6, owner W3); it is red or works from run to run, so it passes as either (works is listed as greened). Its reason and failing set were read from the CI artifacts kept beside this file in expect-77-rekeys-evidence.json.",
+  "note": "Controller ruling D-P2 (progress.md, 'P1 phase 3 review'): six boardgame L3 cells in expect-77.json are not W2a's to turn green, and a seventh (swiss_playoff|generic|score|R4, ruling D-R3, see below). Task 16's judge (tools/matrix/w2a-expect.ts) passes for 71 works + these 6 red, each for its pinned reason; any other red, one of these red for a different reason, or one of these also failing a check outside its `failing` list, fails it. `reason` is compared with double quotes dropped on both sides (the product writes phase \"pre\"). Moved by the ruling, not by a run: the ids stay in expect-77.json. `failing` is the check ids the cell fails today, from the post-W2a drive of these cells (p1d, run ids w2a-p1-fin2-*): the five R4 cells end in a case-level error and fail no check, ko_plate F1 fails three. The committed repro runs beside this file predate W2a and show SC-O1's own checks. The seventh, swiss_playoff|generic|score|R4, is SC-O2 whose reason flipped to SW-H1 on CI (Swiss stage 1 round 5 pairs nobody by the lots tie-break, a UUID-hashed draw: owner ruling 70, P6, owner W3); it is red or works from run to run, so it passes as either (works is listed as greened). Its reason and failing set were read from the CI artifacts kept beside this file in expect-77-rekeys-evidence.json. The five W2b rekeys (the boardgame blitz R4 cells knockout, knockout_third_place, double_elim, ko_plate and qualifying_main, refused \"forfeit not allowed in phase pre\") were removed by W2b Task 16, judged greened in w2b-final (truth-runs/w2b-final/w2a-expect-before.json lists exactly those five as greened); the two left are W3's and W4's.",
   "rekeys": [
-    {
-      "caseId": "knockout|boardgame|blitz|R4",
-      "was": "SC-O1",
-      "now": "CD-T13",
-      "wave": "W2b",
-      "rule": "BG-WO-2",
-      "reason": "forfeit not allowed in phase \"pre\"",
-      "failing": [],
-      "ruling": "D-P2"
-    },
-    {
-      "caseId": "knockout_third_place|boardgame|blitz|R4",
-      "was": "SC-O1",
-      "now": "CD-T13",
-      "wave": "W2b",
-      "rule": "BG-WO-2",
-      "reason": "forfeit not allowed in phase \"pre\"",
-      "failing": [],
-      "ruling": "D-P2"
-    },
-    {
-      "caseId": "double_elim|boardgame|blitz|R4",
-      "was": "SC-O1",
-      "now": "CD-T13",
-      "wave": "W2b",
-      "rule": "BG-WO-2",
-      "reason": "forfeit not allowed in phase \"pre\"",
-      "failing": [],
-      "ruling": "D-P2"
-    },
-    {
-      "caseId": "ko_plate|boardgame|blitz|R4",
-      "was": "SC-O1",
-      "now": "CD-T13",
-      "wave": "W2b",
-      "rule": "BG-WO-2",
-      "reason": "forfeit not allowed in phase \"pre\"",
-      "failing": [],
-      "ruling": "D-P2"
-    },
-    {
-      "caseId": "qualifying_main|boardgame|blitz|R4",
-      "was": "SC-O1",
-      "now": "CD-T13",
-      "wave": "W2b",
-      "rule": "BG-WO-2",
-      "reason": "forfeit not allowed in phase \"pre\"",
-      "failing": [],
-      "ruling": "D-P2"
-    },
     {
       "caseId": "ko_plate|boardgame|blitz|F1",
       "was": "SC-O1",

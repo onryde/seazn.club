@@ -4,6 +4,7 @@
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 export interface BoardDivision {
@@ -273,13 +274,21 @@ export function cardTitle(
   // context, so it stays on the default).
   lookup: SlotLabelLookup = msg,
 ): string {
-  const home = f.home_entrant_id
-    ? (names[f.home_entrant_id] ?? "?")
+  // R116-4 (owner ruling 116): an empty seat a walkover was won over is HER side — named, as any walkover names the
+  // side that did not play, never its feeder ("Winner of R1·1") or its bye label.
+  const homeId = f.home_entrant_id ?? unseatedForfeitLoser(f, "home");
+  const awayId = f.away_entrant_id ?? unseatedForfeitLoser(f, "away");
+  // Design audit 4.1: that side withdrew — her name carries the withdrawn mark (the title is a string: the card, its
+  // tooltip and the picked-card announcement all read it).
+  const mark = (seat: "home" | "away", name: string) => (unseatedWithdrew(f, seat) ? lookup("schedule.withdrawnSide", { name }) : name);
+  const home = homeId
+    ? mark("home", names[homeId] ?? "?")
     : resolveSlotLabel(feeds[f.id]?.home ?? f.home_slot_label ?? null, lookup, "schedule.tbd");
-  const away = f.away_entrant_id
-    ? (names[f.away_entrant_id] ?? "?")
+  const away = awayId
+    ? mark("away", names[awayId] ?? "?")
     : resolveSlotLabel(feeds[f.id]?.away ?? f.away_slot_label ?? null, lookup, "schedule.tbd");
-  return `${home} vs ${away}`;
+  // Design audit 4.2: the dictionary's join, never a typed English " vs ".
+  return `${home} ${lookup("schedule.vs")} ${away}`;
 }
 
 /** One proposal block painted over the grid while an AI proposal is on screen

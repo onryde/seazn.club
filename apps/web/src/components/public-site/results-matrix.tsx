@@ -8,6 +8,8 @@ import type { PublicFixture } from "@/server/public-site/data";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { EntityLogo } from "@/components/ui/entity-logo";
+import { forfeitLedgerOfReason, forfeitTag, forfeitWords, type ForfeitWords } from "@/lib/forfeit-tag";
+import { ForfeitTagChip } from "./forfeit-tag-chip";
 
 interface Props {
   /** Row/column order — pass the standings rank order. */
@@ -44,6 +46,13 @@ export function ResultsMatrix({
     list.push(f);
     byPair.set(key, list);
   }
+  // W2b Task 13 (review I-2): a forfeited cell carries its tag and sentence, in the page's dictionary. A round robin
+  // feeds no next match, so a double walkover's sentence has no next-round clause here.
+  const nameOf = (id: string) => entrantNames[id] ?? "?";
+  const forfeitOf = (f: PublicFixture): ForfeitWords | null => {
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+    return tag === null ? null : forfeitWords(tag, (key, vars) => t(dict, key, vars), nameOf);
+  };
   const initials = (id: string) =>
     (entrantNames[id] ?? "?")
       .split(/\s+/)
@@ -115,10 +124,22 @@ export function ResultsMatrix({
                       <span className="text-zinc-300">·</span>
                     ) : (
                       <span className="flex flex-col items-center gap-0.5">
-                        {cell.map((f) =>
-                          f.status === "in_play" ? (
+                        {cell.map((f) => {
+                          const words = DONE.has(f.status) ? forfeitOf(f) : null;
+                          return f.status === "in_play" ? (
                             <Link key={f.id} href={fixtureHref(f.id)} aria-label={t(dict, "matchesHub.live")}>
                               <span className="animate-live-pulse inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                            </Link>
+                          ) : words !== null ? (
+                            // A credited result: its headline and its tag; a double walkover credits nobody, so its
+                            // 0 — 0 is not shown — the tag alone says what happened.
+                            <Link
+                              key={f.id}
+                              href={fixtureHref(f.id)}
+                              className="inline-flex items-center gap-1 font-display text-[13px] font-semibold text-accent-strong hover:underline"
+                            >
+                              {words.kind !== "double_walkover" && f.summary?.headline ? f.summary.headline : null}
+                              <ForfeitTagChip tag={words.tag} sentence={words.sentence} testId="results-matrix-forfeit-tag" />
                             </Link>
                           ) : DONE.has(f.status) && f.summary?.headline ? (
                             <Link
@@ -132,8 +153,8 @@ export function ResultsMatrix({
                             <span key={f.id} className="text-zinc-300">
                               ·
                             </span>
-                          ),
-                        )}
+                          );
+                        })}
                       </span>
                     )}
                   </td>

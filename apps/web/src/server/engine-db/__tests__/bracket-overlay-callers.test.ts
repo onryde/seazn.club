@@ -1,6 +1,6 @@
 // W2a Task 6 — spec §5.4.1 + risk row 1 (the inert seam): the bracket overlay must reach EVERY resolveFixtureCfg
 // call site. Each case drives the site's REAL exported entry on real rows and reads what resolveFixtureCfg returned
-// THERE, through a spy that wraps the real function. A source scan pins the site count, so a 12th caller fails
+// THERE, through a spy that wraps the real function. A source scan pins the site count, so a 13th caller fails
 // until it has a case. Three sites are driven from the existing suite that already builds their inputs
 // (match-centre-load-feeder-read, event-import-dryrun, org-posts-enrichment-sources); `SITES[].case` names them.
 import { randomUUID } from "node:crypto";
@@ -19,6 +19,7 @@ import { sql, withTenant } from "@/lib/db";
 import { loadFixturePadCfg } from "@/server/usecases/fixtures";
 import { computePlayerStats } from "@/server/usecases/player-stats";
 import { fixtureConfigPanel, resnapshotFixtureConfig } from "@/server/usecases/admin-fixture-config";
+import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -59,10 +60,12 @@ const SITES: readonly { file: string; count: number; case: string }[] = [
   { file: "apps/web/src/server/usecases/event-import.ts", count: 1, case: "event-import.ts importEvents" },
   { file: "apps/web/src/server/usecases/admin-fixture-config.ts", count: 2, case: "admin-fixture-config.ts panel and resnapshot" },
   { file: "apps/web/src/server/usecases/org-posts.ts", count: 1, case: "org-posts.ts draftPostsForDecidedFixture" },
+  // R116-2 (W2b Task 16): the score of ruling 116's walkover, which no event records.
+  { file: "apps/web/src/server/engine-db/awarded-state.ts", count: 1, case: "awarded-state.ts writeAwardedMatchState" },
 ];
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 11 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 12 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -81,7 +84,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(11);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(12);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -155,6 +158,21 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
     await withTenant(s.auth.orgId, (tx) => computePlayerStats(tx, s.divisionId));
     expectOverlay("knockout");
+  });
+
+  it.skipIf(!HAS_DB)("awarded-state.ts writeAwardedMatchState: ruling 116's walkover is scored under the bracket's cfg", async () => {
+    // A two-entrant final whose away side withdrew after winning in: her seat is empty, the award names her.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    const [f] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${id}`;
+    const award = { kind: "award", winner: f!.home_entrant_id, loser: f!.away_entrant_id, reason: "withdrew" };
+    await sql`update fixtures set away_entrant_id = null, status = 'forfeited', outcome = ${sql.json(award)} where id = ${id}`;
+    spy.mockClear();
+    await withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id));
+    expectOverlay("knockout");
+    const [row] = await sql<{ summary: { perSide: unknown[] } }[]>`select summary from match_states where fixture_id = ${id}`;
+    expect(row!.summary.perSide, "and its score was written").toHaveLength(2);
   });
 
   it.skipIf(!HAS_DB)("admin-fixture-config.ts panel and resnapshot", async () => {

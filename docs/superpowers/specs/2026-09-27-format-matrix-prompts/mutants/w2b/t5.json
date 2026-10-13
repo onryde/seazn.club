@@ -1,0 +1,99 @@
+[
+  {
+    "id": "walkover-rule-inverted",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "return playRecorded(prefix, {}) ? \"retired\" : \"walkover\";",
+    "replace": "return playRecorded(prefix, {}) ? \"walkover\" : \"retired\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "a forfeit before core\\.start becomes a walkover"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "ruling 113: a forfeit after core\\.start AND the sport's own play becomes retired"
+      }
+    ]
+  },
+  {
+    "id": "voided-start-counted",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "makeEnvelope(i, event as never, event.voids)",
+    "replace": "makeEnvelope(i, event as never)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "a voided core\\.start counts as not started"
+      }
+    ]
+  },
+  {
+    "id": "void-reaches-back",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "const prefix = events.slice(0, index).map(",
+    "replace": "const prefix = events.map(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "a voided core\\.start counts as not started"
+      }
+    ]
+  },
+  {
+    "id": "unchanged-counted-rewritten",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "      if (payload.reason === reason) return event;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "a forfeit before core\\.start becomes a walkover; one already a walkover is examined, not rewritten"
+      }
+    ]
+  },
+  {
+    "id": "both-after-start-unguarded",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "if (by === \"both\" && reason === \"retired\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "assumptions are guards"
+      }
+    ]
+  },
+  {
+    "id": "no-side-unguarded",
+    "file": "packages/engine/src/testkit/golden-forfeit-migration.ts",
+    "find": "if (typeof by !== \"string\") throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/golden-forfeit-migration.test.ts"
+        ],
+        "name": "assumptions are guards"
+      }
+    ]
+  }
+]

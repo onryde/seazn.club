@@ -1,0 +1,1561 @@
+[
+ {
+  "id": "lr-i1-legacy-reader-null",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  return typeof o.method === \"string\" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;\n",
+  "replace": "  return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-any-method",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  return typeof o.method === \"string\" && (FORFEIT_REASONS as readonly string[]).includes(o.method) ? (o.method as ForfeitReason) : null;\n",
+  "replace": "  return typeof o.method === \"string\" ? (o.method as ForfeitReason) : null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-kind",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-reason",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.kind !== \"award\" || o.loser !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-reader-ignores-loser",
+  "file": "packages/engine/src/core/types.ts",
+  "find": "  if (o.kind !== \"award\" || o.reason !== undefined || o.loser !== undefined) return null;\n",
+  "replace": "  if (o.kind !== \"award\" || o.reason !== undefined) return null;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-award-reason-legacy-bye",
+  "file": "packages/engine/src/sport/forfeit-credit.ts",
+  "find": "  return legacyAwardForfeitReason(outcome) ?? \"bye\";\n",
+  "replace": "  return \"bye\";\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-tag-legacy-null",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "      return loser === null ? null : tagOf(legacy, { winner: ids.winner!, loser });\n",
+  "replace": "      return null;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-loser-self",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  if (home === away) return null;\n  return winner === home",
+  "replace": "  return winner === home",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-legacy-loser-swapped",
+  "file": "apps/web/src/lib/forfeit-tag.ts",
+  "find": "  return winner === home ? away : winner === away ? home : null;\n",
+  "replace": "  return winner === home ? home : winner === away ? away : null;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/forfeit-tag.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-results-matrix",
+  "file": "apps/web/src/components/public-site/results-matrix.tsx",
+  "find": "forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-bracket-words",
+  "file": "apps/web/src/lib/bracket-forfeit-words.ts",
+  "find": "forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-hub-card",
+  "file": "apps/web/src/server/public-site/competition-hub.ts",
+  "find": "): (ForfeitWords & { played?: boolean }) | null {\n  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "): (ForfeitWords & { played?: boolean }) | null {\n  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/legacy-walkover-loop-r-i1.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-match-centre",
+  "file": "apps/web/src/server/public-site/match-centre.ts",
+  "find": "forfeitTag(fixture.outcome, forfeitLedgerOf(events), fixture);",
+  "replace": "forfeitTag(fixture.outcome, forfeitLedgerOf(events));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-live-score",
+  "file": "apps/web/src/components/public-site/live-score.tsx",
+  "find": "    sideIds.length === 2 ? { home_entrant_id: sideIds[0]!, away_entrant_id: sideIds[1]! } : undefined,\n",
+  "replace": "    undefined,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-overlay",
+  "file": "apps/web/src/lib/overlay-model.ts",
+  "find": "forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });",
+  "replace": "forfeitTag(data.outcome, NO_LEDGER);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/overlay-model.test.ts"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-run-sheet-parts",
+  "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+  "find": "entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture);",
+  "replace": "entrantNames, forfeitLedgerOfReason(fixture.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-run-sheet-tag",
+  "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+  "find": "outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason), fixture);",
+  "replace": "outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-tag",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "outcomeTagWords(msg, outcome, forfeitLedger, seatsOf);",
+  "replace": "outcomeTagWords(msg, outcome, forfeitLedger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-gate",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "    forfeitTag(outcome, forfeitLedger, seatsOf) !== null\n",
+  "replace": "    forfeitTag(outcome, forfeitLedger) !== null\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-console-text",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "outcomeText(msg, outcome, entrantNames, forfeitLedger, seatsOf)",
+  "replace": "outcomeText(msg, outcome, entrantNames, forfeitLedger)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-decided-line.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-text",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "  const tag = forfeitTag(outcome, ledger, seats);\n  if (tag !== null) {\n    const word = msg(tag.tagKey);",
+  "replace": "  const tag = forfeitTag(outcome, ledger);\n  if (tag !== null) {\n    const word = msg(tag.tagKey);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-parts",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "[key]: NAME_MARK }, ledger, seats);",
+  "replace": "[key]: NAME_MARK }, ledger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i1-seats-outcome-tag-words",
+  "file": "apps/web/src/lib/outcome-text.ts",
+  "find": "  seats?: ForfeitSeats,\n): { word: string; full: string } | null {\n  const tag = forfeitTag(outcome, ledger, seats);",
+  "replace": "  seats?: ForfeitSeats,\n): { word: string; full: string } | null {\n  const tag = forfeitTag(outcome, ledger);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+    ],
+    "name": "Loop R I-1"
+   }
+  ]
+ },
+ {
+  "id": "lr-i3-generic-keeps-any-score",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });\n",
+  "replace": "  const credited = { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 };\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "GN-RT-1"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ]
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "after play"
+   }
+  ]
+ },
+ {
+  "id": "lr-i3-reference-keeps-any-score",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "  if (p !== null && sum(p.win) - sum(p.off) > 0) { w = sum(p.win); o = sum(p.off); }\n",
+  "replace": "  if (p !== null) { w = sum(p.win); o = sum(p.off); }\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "packages/reference/src/families/walkover-credit.test.ts"
+    ],
+    "name": "GN-RT-1"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "lr-i3-headline-reads-card",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "  if (state.score && !creditReplacesCard(state)) return String(state.score[side]);\n",
+  "replace": "  if (state.score) return String(state.score[side]);\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "each level-capable sport"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-table-both-gone-walks-over",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "      } else if (u.status === \"walkover\" && gone.has(u.walkoverTo!)) {\n",
+  "replace": "      } else if (u.status === \"walkover\" && gone.has(u.walkoverTo!) && step.bracket !== undefined) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "X-WD-4 in a league"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-table-dw-over-live-play",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "\n        if (line.played) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
+  "replace": "\n        if (false) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-1 holds in a table too"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-fake-table-both-gone-walks-over",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "      if (policy === \"walkover\" && opponent !== null && gone.has(opponent)) {\n",
+  "replace": "      if (policy === \"walkover\" && opponent !== null && gone.has(opponent) && false) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-4 on a table"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-fake-table-dw-over-live-play",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        if (liveEvents(f.events).length === 0) { await this.doubleWalkoverFixture(f); walkovers++; }\n",
+  "replace": "        if (true) { await this.doubleWalkoverFixture(f); walkovers++; }\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-4 on a table"
+   }
+  ]
+ },
+ {
+  "id": "lr-m9-dw-serves-nothing",
+  "file": "apps/web/src/server/usecases/discipline.ts",
+  "find": " || f.outcome?.kind === \"double_walkover\")) served++;",
+  "replace": ")) served++;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/discipline.test.ts"
+    ],
+    "name": "ruling 126"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-withdrawal-always-unplayed",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "(reason === \"disqualified\" && !afterPlay) || reason === \"withdrew\") role = \"unplayed\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-withdrawal-after-play-keeps-wl",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    else role = reason === \"withdrew\" ? \"appeared\" : \"played\";\n",
+  "replace": "    else role = \"played\";\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-result-reader-ignores-withdrawal",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  return forfeitStatsRole(resolveVoids([...events]), undefined, module) !== \"appeared\";\n",
+  "replace": "  return true;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-carrom-wins-on-played",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "      if (!resultInStats(events, carrom)) {\n",
+  "replace": "      if (!played) {\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-web-badge-on-played",
+  "file": "apps/web/src/server/public-site/public-player-matches.ts",
+  "find": "reading.get(r.id)?.result === true ? playerMatchResult(",
+  "replace": "reading.get(r.id)?.played === true ? playerMatchResult(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-web-reading-result-is-played",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "result: resultInStats(ledger, sportModule) });",
+  "replace": "result: playedInStats(ledger, sportModule) });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "badminton"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-fold-version-not-bumped",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "export const STATS_FOLD_VERSION = 6;",
+  "replace": "export const STATS_FOLD_VERSION = 5;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "fold version"
+   }
+  ]
+ },
+ {
+  "id": "lr-i2-revive-takes-no-stage-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "  await lockStageSeats(tx, src.stage_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the void reads first and parks before its commit"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the other order"
+   }
+  ]
+ },
+ {
+  "id": "lr-i2-decision-takes-no-stage-lock",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);",
+  "replace": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) void 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the void reads first and parks before its commit"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the other order"
+   }
+  ]
+ },
+ {
+  "id": "lr-m15-forfeit-schema-not-strict",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "  .strictObject({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })\n",
+  "replace": "  .object({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/events.test.ts"
+    ],
+    "name": "Loop R M-15"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-guard.test.ts"
+    ],
+    "name": "Loop R M-15"
+   }
+  ]
+ },
+ {
+  "id": "lr-m6-fails-open",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "  if examined > 0 then\n",
+  "replace": "  if false then\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "M-6 fail closed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "BG-DW-1 migration"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "M-6: the remedy"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-bare-start-is-play",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "    played: playRecorded(events.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), sportModule),\n",
+  "replace": "    played: events.some((e) => e.type !== \"core.void\" && !voided.has(e.id)),\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-5: a bare Start is not play"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-module-not-passed",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "voids: e.voids_event_id })), sportModule),",
+  "replace": "voids: e.voids_event_id })), {}),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-voids-ignored",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "({ id: e.id, type: e.type, voids: e.voids_event_id })",
+  "replace": "({ id: e.id, type: e.type, voids: null })",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-live-line-not-recorded",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "            if (line.live) await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "replace": "            if (false) await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-empty-line-recorded",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "            else await departSeat(auth, u.fixtureId, entrantId, \"double_walkover\");\n",
+  "replace": "            else await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4: both entrants of a line withdraw in turn"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-abandon-not-voided",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "  for (const abandon of activeAbandons(events)) {\n    const state = await getFixtureState(auth, fixtureId);",
+  "replace": "  for (const abandon of [] as EventOut[]) {\n    const state = await getFixtureState(auth, fixtureId);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-bracket-left-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (line.played) {\n            void 0;\n          } else if (feeds) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-1: a line with recorded play is never overwritten"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both finalists gone after play on the final"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-table-left-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "\n        if (line.played) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
+  "replace": "\n        if (line.played) {\n          void 0;\n        } else {\n          await recordDoubleWalkover",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-1 holds in a table too"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-played-final-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (line.played && feeds) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both finalists gone after play on the final"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-dw-takes-colour",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    if (o?.kind !== \"award\" && o?.kind !== \"double_walkover\") {\n",
+  "replace": "    if (o?.kind !== \"award\") {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/swiss-colour-history-double-walkover.test.ts"
+    ],
+    "name": "both round-1 boards double walkovers"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-f14-no-awarded-state",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      if (r.status === \"forfeited\" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);\n",
+  "replace": "      if (false) await writeAwardedMatchState(tx, r.id);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "withdraw then generate stores the walkover"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-f14-bye-gets-state",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      if (r.status === \"forfeited\" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);\n",
+  "replace": "      if (r.status === \"forfeited\") await writeAwardedMatchState(tx, r.id);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "a departed qualifier holding a BYE"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-counts-f14",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id\n                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)\n                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))",
+  "replace": "    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "an F14 walkover is not a result"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-drops-r116",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)\n                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))",
+  "replace": "                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "R116-3: the organiser's exports name her in her dead seat"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-null-trap",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "coalesce(${f}.outcome ->> 'kind' = 'award', false)",
+  "replace": "${f}.outcome ->> 'kind' = 'award'",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/swiss-shell-fixtures.test.ts"
+    ],
+    "name": "Unpair refuses a match_state with no score_events"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2-award-mark-collapsed",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "AWARD_WINNER_MARK[awardReasonOf(outcome)] : \"L\"",
+  "replace": "\"W/O\" : \"L\"",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "maps core.forfeit to an award for the other side"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "an award's winner reads W/O only where it walked over"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2-dq-reads-walkover",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "retired: \"W\", disqualified: \"W\" }",
+  "replace": "retired: \"W\", disqualified: \"W/O\" }",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/generic/generic.test.ts"
+    ],
+    "name": "an award's winner reads W/O only where it walked over"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2b-bracket-after-decision",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "    const inPlay = state.outcome === null ? current : undefined;\n",
+  "replace": "    const inPlay = current;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/carrom/carrom.test.ts"
+    ],
+    "name": "every declared cfg, either seat at fault, every forfeit: the line is the credited games alone"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-stopped-never",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "      const stopped = (state.outcome?.kind === \"award\" || state.outcome?.kind === \"double_walkover\") && setInProgress(state);\n",
+  "replace": "      const stopped = false;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-strip-drops-stopped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "        ...(stopped ? [state.points.kind",
+  "replace": "        ...(false ? [state.points.kind",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-detail-drops-stopped",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "            ...((state.phase === \"live\" || stopped) && setInProgress(state)\n",
+  "replace": "            ...(state.phase === \"live\" && setInProgress(state)\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m2c-mtb-printed-as-games",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "state.points.kind === \"matchTiebreak\" ? `[${state.points.home}–${state.points.away}]` : `${state.games.home}–${state.games.away}`",
+  "replace": "`${state.games.home}–${state.games.away}`",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "the strip keeps the set the retirement stopped"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-compare-named-only",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  for (const k of eng.declared) {\n",
+  "replace": "  for (const k of [] as string[]) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-played-boards-uncounted",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  if (item.c.sport === \"carrom\" && key === \"boards_won\") return count(\"carrom.board.summary\", (p) => p.winner === id);\n",
+  "replace": "  if (false) return count(\"carrom.board.summary\", (p) => p.winner === id);\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-standings-league-only",
+  "file": "tools/matrix/__tests__/reference-walkover-credit.test.ts",
+  "find": "  for (const kind of DRAW_KINDS) {\n",
+  "replace": "  for (const kind of [] as string[]) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "negative: a column with no rule"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-engine-carrom-boards-credited",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "      metrics: creditedMetrics(sideLedger(state, side), credit, side),\n",
+  "replace": "      metrics: { ...creditedMetrics(sideLedger(state, side), credit, side), boards_won: 0, boards_lost: 0 },\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-engine-generic-group-points",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "        const winner = build(winnerSide, 1, 0, 0, points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));\n",
+  "replace": "        const winner = build(winnerSide, 1, 0, 0, _ctx.kind === \"group\" ? 0 : points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m16-rule-points-won-credited",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "...ruled(\"as-played\", [\"points_won\"]) },",
+  "replace": "...ruled(\"credited\", [\"points_won\"]) },",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "packages/reference/src/families/walkover-credit.test.ts"
+    ],
+    "name": "the rules name exactly each sport"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ],
+    "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-not-award",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (outcome.kind !== \"award\") {",
+  "replace": "  if (outcome.kind !== \"award\" && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses anything but an award"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-bye-no-loser",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (outcome.loser === null) {",
+  "replace": "  if (outcome.loser === null && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a bye"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-fold-not-the-award",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (!isDeepStrictEqual(decided, outcome)) {",
+  "replace": "  if (!isDeepStrictEqual(decided, outcome) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses an award the engine would not decide"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-no-award-no-seat",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (home === null || away === null || fixture.outcome === null) {",
+  "replace": "  if ((home === null || away === null || fixture.outcome === null) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "a tie holding no award is refused by name"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-already-holds",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (written.length === 0) {",
+  "replace": "  if (written.length === 0 && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-standing-play-refused",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) {",
+  "replace": "  if (ledger.standing > 0 && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-tip-not-zero",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "values (${fixtureId}, ${ledger.tip},",
+  "replace": "values (${fixtureId}, 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-overwrite-empty-ledger",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "      where ${ledger.tip > 0}",
+  "replace": "      where ${ledger.tip > 0 || true}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-overwrite-voided-ledger",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "      where ${ledger.tip > 0}",
+  "replace": "      where ${ledger.tip > 0 && false}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-standing-counts-voided",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "e.type <> 'core.void' and not exists (",
+  "replace": "e.type <> 'core.void' and exists (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-no-restore",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) return;",
+  "replace": "  if (ledger.standing > 0 || true) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-rewrites-play",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) return;",
+  "replace": "  if (ledger.standing > 0 && false) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-two-sides",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (sides.length !== 2 || !sides[0]!.entrantId || !sides[1]!.entrantId) {",
+  "replace": "  if ((sides.length !== 2 || !sides[0]!.entrantId || !sides[1]!.entrantId) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-sides-swapped",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "{ home: sides[0]!.entrantId, away: sides[1]!.entrantId }",
+  "replace": "{ home: sides[1]!.entrantId, away: sides[0]!.entrantId }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-fold-sides-ignored",
+  "file": "apps/web/src/server/engine-db/fold.ts",
+  "find": "  const home = sides?.home ?? fixture.home_entrant_id;",
+  "replace": "  const home = fixture.home_entrant_id;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-not-forfeit",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "  if (event.type !== \"core.forfeit\") return null;",
+  "replace": "  if (event.type !== \"core.forfeit\" && false) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "every other core event type admits nothing"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-neither-side",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "  if (by !== home && by !== away) {",
+  "replace": "  if (by !== home && by !== away && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "a forfeit by neither side is refused"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-winner",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "winner: by === home ? away : home",
+  "replace": "winner: by === home ? home : away",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "the helper admits exactly what the kernel's fold admits"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-slides-dw",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "    creditsNobody(f.outcome)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: lineOf.get(f.id)",
+  "replace": "    (creditsNobody(f.outcome) && false)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: lineOf.get(f.id)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/double-walkover-hosts-db.test.ts"
+    ],
+    "name": "the organiser's slideshow"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-public-slides-dw",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "    creditsNobody(f.outcome)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: f.summary?.headline",
+  "replace": "    (creditsNobody(f.outcome) && false)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: f.summary?.headline",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/public-slides.test.ts"
+    ],
+    "name": "every sport that admits one: the results and bracket slides carry no line and the tag"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-exports-dw",
+  "file": "apps/web/src/server/usecases/exports.ts",
+  "find": "headline: creditsNobody(f.outcome) ? slotLookup(",
+  "replace": "headline: creditsNobody(f.outcome) && false ? slotLookup(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/double-walkover-hosts-db.test.ts"
+    ],
+    "name": "the bracket poster"
+   }
+  ]
+ }
+]

@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   addEntrantsViaApi,
   apiJson,
@@ -72,8 +74,30 @@ async function ledger(
   return res.data ?? [];
 }
 
+/** One event through the API, at the fixture's tip (the console's own expected_seq discipline). */
+async function postEvent(
+  request: import("@playwright/test").APIRequestContext,
+  fixtureId: string,
+  type: string,
+  payload: unknown = {},
+): Promise<void> {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  expect(state.status, `state read failed: ${JSON.stringify(state.error)}`).toBe(200);
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data!.last_seq,
+    type,
+    payload,
+  });
+  expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+}
+
+/** The en ui dictionary: console copy under test is read from it, never typed. */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
 /** A started division with one live knockout fixture between two named
- *  entrants — the same shape the forfeit-dropdown test below builds, lifted so
+ *  entrants — the same shape every forfeit test below builds, lifted so
  *  the terminal-outcome tests do not each repeat it. */
 async function seedLiveFixture(
   request: import("@playwright/test").APIRequestContext,
@@ -106,9 +130,10 @@ async function seedLiveFixture(
 // The two TERMINAL outcomes, end to end (2026-08-24).
 //
 // Both were effectively uncovered before this. The only forfeit test in the
-// repo was the dropdown-dismissal one below — it opens the menu, checks an item
-// is visible, and dismisses it, so it never forfeits anything and asserts
-// nothing about the ledger. Abandon had no e2e at all; its single mention in
+// repo was a dropdown-dismissal one — it opened the menu, checked an item was
+// visible, and dismissed it, so it never forfeited anything and asserted
+// nothing about the ledger (W2b Task 11 replaced it with the dialog's own
+// dismissal test, which reads the ledger). Abandon had no e2e at all; its single mention in
 // `scorepad-v3-football.spec.ts` is a COMMENT about card colours.
 //
 // That gap matters more than an ordinary one: these two events END a fixture
@@ -138,35 +163,46 @@ test("forfeit records core.forfeit with the side and the reason, and ends the fi
   page,
   request,
 }) => {
+  // W2b Task 11 (ruling 4): the old version typed "walkover" into a prompt PREFILLED with "walkover", so a console that
+  // ignored the field passed it. Now play is under way (core.start and one rally through the API — ruling 112: a bare
+  // Start still offers the walkover) and the dialog's NON-default reason is picked — `retired` — so the ledger's
+  // reason can only be the one the organiser chose.
   const { fixtureId, home, homeId } = await seedLiveFixture(request, "Forfeit");
+  await postEvent(request, fixtureId, "core.start");
+  await postEvent(request, fixtureId, "badminton.rally", { wonBy: homeId });
   await page.goto(await fixturePath(page.request, fixtureId));
 
-  await page.getByRole("button", { name: /Forfeit/ }).click({ timeout: 20_000 });
-  // The NAMED side, not `.first()` — the payload's `by` is asserted against it
-  // below, so a swapped-side bug in `ForfeitButton` has to fail here rather
-  // than pass on a merely-truthy id.
-  await page.getByRole("button", { name: `${home} forfeits`, exact: true }).click();
-
-  // Not a native prompt — `TextPromptDialog` (fixture-console.tsx), which is
-  // the whole reason `fixture-console-no-native-prompt.test.ts` exists.
-  const dialog = page.getByRole("dialog");
+  await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
+  // Not a native prompt — the in-app `ForfeitDialog` (forfeit-dialog.tsx).
+  const dialog = page.getByTestId("forfeit-dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
-  await dialog.locator('input[name="reason"]').fill("no-show");
-  await dialog.getByRole("button", { name: "Apply", exact: true }).click();
+  // After play: no Neither (X-RS-1, ruling 112: something was played). The NAMED side — the payload's `by` is asserted against it below, so a swapped
+  // side has to fail here rather than pass on a merely-truthy id.
+  await expect(dialog.getByTestId("forfeit-who-both")).toHaveCount(0);
+  const homeChoice = dialog.getByTestId("forfeit-who-home");
+  await expect(homeChoice).toHaveText(home);
+  await homeChoice.click();
+  // After play: retired or disqualified; the walkover is gone with "before play", withdrew is the cascade's (PF-2).
+  await expect(dialog.getByTestId("forfeit-why-walkover")).toHaveCount(0);
+  await expect(dialog.getByTestId("forfeit-why-withdrew")).toHaveCount(0);
+  await expect(dialog.getByTestId("forfeit-confirm"), "Confirm waits for the reason").toBeDisabled();
+  await dialog.getByTestId("forfeit-why-retired").check();
+  await expect(dialog.getByTestId("forfeit-confirm")).toHaveText(UI_EN["forfeitDialog.confirm.retired"]!);
+  await dialog.getByTestId("forfeit-confirm").click();
 
   await expect
     .poll(async () => (await ledger(request, fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.forfeit");
   const forfeit = (await ledger(request, fixtureId)).find((e) => e.type === "core.forfeit")!;
-  expect(forfeit.payload.reason, "the reason the scorer typed must reach the ledger").toBe("no-show");
+  expect(forfeit.payload.reason, "the reason the organiser picked must reach the ledger").toBe("retired");
   expect(
     forfeit.payload.by,
-    "the payload must name the side whose menu item was clicked — the engine awards the OTHER one",
+    "the payload must name the side that was chosen — the engine awards the OTHER one",
   ).toBe(homeId);
 
   // `!decided` gates both controls (fixture-console.tsx), so a decided fixture
   // offers neither. This is the user-visible half of the same claim.
-  await expect(page.getByRole("button", { name: /Forfeit/ })).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByTestId("score-forfeit")).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Abandon…", exact: true })).toHaveCount(0);
 });
 
@@ -237,32 +273,33 @@ test("abandon with an empty reason writes nothing — the fixture stays live", a
   ).toEqual([]);
 });
 
-test("forfeit dropdown closes when clicking outside", async ({ page, request }) => {
-  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
-    name: `Badminton ${TAG}`,
-    visibility: "private",
-  });
-  const div = await apiJson<{ id: string }>(
-    request,
-    `/api/v1/competitions/${comp.data!.id}/divisions`,
-    "POST",
-    { name: "MS", sport_key: "badminton", variant_key: "bwf", config: {} },
-  );
-  const divisionId = div.data!.id;
-  await addEntrantsViaApi(request, divisionId, ["Asha", "Bala"]);
-  const { fixtureIds } = await createStageAndGenerate(request, divisionId, {
-    kind: "knockout",
-    name: "Final",
-  });
-  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+test("the forfeit dialog closes on Cancel, Escape and a tap outside, writing nothing", async ({ page, request }) => {
+  // W2b Task 11: replaces the side menu's outside-click test. The dialog is a modal sheet; each way out closes it and
+  // the ledger stays empty (the fixture was never started, so nothing at all is recorded).
+  const { fixtureId } = await seedLiveFixture(request, "ForfeitDismiss");
+  await page.goto(await fixturePath(page.request, fixtureId));
+  const dialog = page.getByTestId("forfeit-dialog");
+  const open = async () => {
+    await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await dialog.getByTestId("forfeit-who-away").click();
+  };
 
-  await page.goto(await fixturePath(page.request, fixtureIds[0]));
-  await page.getByRole("button", { name: /Forfeit/ }).click({ timeout: 20_000 });
-  await expect(page.getByRole("button", { name: /forfeits$/ }).first()).toBeVisible();
+  await open();
+  await dialog.getByRole("button", { name: UI_EN["editor.cancel"]!, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 
-  // clicking anywhere outside the menu must dismiss it
-  await page.getByRole("heading", { level: 1 }).click();
-  await expect(page.getByRole("button", { name: /forfeits$/ })).toHaveCount(0);
+  await open();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+
+  await open();
+  // The overlay's own top-left corner — outside the sheet at every width (a bottom sheet on phones, centred above).
+  await page.mouse.click(4, 4);
+  await expect(dialog).toHaveCount(0);
+
+  await expect(page.getByTestId("score-forfeit"), "nothing was decided: Forfeit is still offered").toBeVisible();
+  expect((await ledger(request, fixtureId)).map((e) => e.type), "a dismissed dialog writes nothing").toEqual([]);
 });
 
 test("badminton pad shows the current game number, not always game 1", async ({

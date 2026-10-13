@@ -10,6 +10,10 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
+  type ForfeitPhase,
   type MatchOutcome,
   type ScoreSummary,
   type StageCtx,
@@ -17,6 +21,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -25,7 +30,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
-import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { personsForEntrant, resultInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
 export const GenericCfg = z.object({
@@ -75,8 +80,13 @@ export type GenericScore = z.infer<typeof GenericScore>;
 export const GenericEvent = z.union([GenericResult, GenericScore]);
 export type GenericEv = z.infer<typeof GenericEvent>;
 
+/** W2b (plan D3) — the kernel's forfeit guard reads generic's phase through this Record (closed union, so a phase
+ *  added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<GenericState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
+
 export interface GenericState {
-  phase: "pre" | "live" | "done" | "final";
+  // W2b GN-AB-1 (plan D16): "abandoned" — a replay; the outcome stays null and voiding the abandon resumes play.
+  phase: "pre" | "live" | "done" | "final" | "abandoned";
   cfg: GenericCfg;
   entrants: { home: string; away: string };
   score: { home: number; away: number } | null;
@@ -203,8 +213,13 @@ function applyScore(state: GenericState, payload: GenericScore): GenericState {
   return { ...state, running: { ...base, [side]: next } };
 }
 
+/** Loop R M-2 — an award's winner's mark. "W/O" names a side that walked over: its opponent never played the game (a
+ *  walkover, a withdrawal, a bye). A side whose opponent retired from the game or was disqualified from it won it: "W",
+ *  with the result's own chip ("ret." / "DQ") naming how — the "W/O" every award used to read misnamed both. */
+const AWARD_WINNER_MARK: Record<AwardReason, "W/O" | "W"> = { walkover: "W/O", withdrew: "W/O", bye: "W/O", retired: "W", disqualified: "W" };
+
 function sideLine(state: GenericState, side: Side): string {
-  if (state.score) return String(state.score[side]);
+  if (state.score && !creditReplacesCard(state)) return String(state.score[side]);
   const outcome = state.outcome;
   // A live tally renders while the fixture is undecided; a decided fixture
   // always renders its result, never the tally.
@@ -218,7 +233,9 @@ function sideLine(state: GenericState, side: Side): string {
     case "no_result":
       return "N/R";
     case "award":
-      return outcome.winner === state.entrants[side] ? "W/O" : "L";
+      return outcome.winner === state.entrants[side] ? AWARD_WINNER_MARK[awardReasonOf(outcome)] : "L";
+    case "double_walkover":
+      return "L"; // X-DW-1: both sides lose
   }
 }
 
@@ -231,6 +248,41 @@ function sideMetrics(state: GenericState, side: Side): Record<string, number> {
   const forScore = state.score[side];
   const against = state.score[opponent(side)];
   return { for: forScore, against, diff: forScore - against };
+}
+
+/** GN-WO-1: generic's walkover score — the win points at 0-0 (a stage-level awarded score is W2c). */
+const GENERIC_WALKOVER_SCORE = 0;
+
+/**
+ * W2b (spec §5.2; GN-WO-1, GN-RT-1) — a walkover is the win points at 0-0 (`GENERIC_WALKOVER_SCORE`). A retirement,
+ * an in-match disqualification or a withdrawal is the walkover credit, unless the recorded score — the result card's,
+ * else the running tally — is WORSE for the offender, in which case it stands: football's rule (FB-RT-1, `goalCredit`),
+ * owner ruling 124 (2026-10-13, amends ruling 87, which kept any recorded score and so let a retiree who led 10-2 finish
+ * +8 on difference). An equal margin takes the walkover credit. Before play nothing is recorded, so a withdrawal before
+ * the start is the walkover credit (PF-7) — except a tally pressed with no `core.start`, which generic's tally permits
+ * and which this reads as play (generic has no start gate on its tally).
+ */
+function genericForfeitCredit(_cfg: GenericCfg, state: GenericState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
+  if (by === "both") return doubleWalkoverCredit(played[0], played[1], ["for", "against", "diff"]);
+  if (reason === "bye") return { perSide: played, excluded: [] };
+  const recorded = reason === "walkover" ? null : (state.score ?? state.running ?? null);
+  const winner = opponent(by);
+  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });
+  const record = (forScore: number, against: number) => ({ for: forScore, against, diff: forScore - against });
+  return { perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)), excluded: [] };
+}
+
+/** X-WO-1 (ruling 124) — a forfeit over a recorded result card reads the table's credit: the card's numbers only where
+ *  GN-RT-1 keeps them. True where the walkover credit replaced them, so the line is generic's walkover marker. */
+function creditReplacesCard(state: GenericState): boolean {
+  const outcome = state.outcome;
+  if (outcome?.kind !== "award" || state.score === null) return false;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return false;
+  const winnerSide = sideOf(state, outcome.winner);
+  const credit = genericForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id)));
+  return credit.perSide[0].for !== state.score.home || credit.perSide[0].against !== state.score.away;
 }
 
 // ---------------------------------------------------------------------------
@@ -465,7 +517,12 @@ function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFold
       // to protect (unlike this wave's boardgame sibling), so there is no
       // stray-row risk in writing the zero.
       let wdl: { wHome: number; wAway: number; dEach: number; lHome: number; lAway: number } | null = null;
-      if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
+      if (!resultInStats(events, generic)) {
+        // W2b (X-PS-1; rulings 120, 127): a fixture that is no match played — a walkover, a double walkover, a
+        // disqualification or a withdrawal with nothing played, an abandon with nothing played before it, whatever its
+        // result or settle (the one players'-stats reader) — has no W/D/L, not even the zeros; nor has a withdrawal
+        // after play (ruling 127): a match its players appeared in, that nobody won or lost on the field.
+      } else if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;
         wdl = winnerIsHome
           ? { wHome: 1, wAway: 0, dEach: 0, lHome: 0, lAway: 1 }
@@ -564,14 +621,20 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
         const { by, reason } = forfeitOf(ev.payload);
-        const winner = state.entrants[opponent(sideOf(state, by))];
-        return { ...state, phase: "done", outcome: { kind: "award", winner, method: reason } };
+        // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the
+        // closed reason. The table's credit is `forfeitCredit`'s (W2b Task 4).
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+        const loserSide = sideOf(state, by);
+        const winner = state.entrants[opponent(loserSide)];
+        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason } };
       }
       case "core.abandon": {
         if (state.phase !== "pre" && state.phase !== "live") {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
-        return { ...state, phase: "done", outcome: { kind: "no_result" } };
+        // W2b GN-AB-1 (plan D16): a replay — no outcome, so nobody is credited shared points (opt-in sharing is W2c).
+        // Before W2b this was a `no_result` with draw points each.
+        return { ...state, phase: "abandoned" };
       }
       case "core.finalize": {
         if (state.phase !== "done") throw new EngineError("WRONG_PHASE", "not decided");
@@ -586,6 +649,9 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+  // W2b (spec §5.2) — see genericForfeitCredit.
+  forfeitCredit: genericForfeitCredit,
 
   // §9.5 — defined at every prefix; before any result the headline is "—".
   summary(state): ScoreSummary {
@@ -622,13 +688,29 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     });
 
     switch (outcome.kind) {
-      case "win":
-      case "award": {
+      case "win": {
         const winnerSide = sideOf(state, outcome.winner);
         const loserSide = opponent(winnerSide);
         const winner = build(winnerSide, 1, 0, 0, points.w, sideMetrics(state, winnerSide));
         const loser = build(loserSide, 0, 0, 1, points.l, sideMetrics(state, loserSide));
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "award": {
+        // W2b (spec §5.2): the credited score (`genericForfeitCredit`) — GN-WO-1 0-0, GN-RT-1 the recorded score only where it is worse for the offender (ruling 124).
+        const winnerSide = sideOf(state, outcome.winner);
+        const loserSide = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
+        const credit = genericForfeitCredit(cfg, state, awardReasonOf(outcome), loserSide);
+        const winner = build(winnerSide, 1, 0, 0, points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));
+        const loser = build(loserSide, 0, 0, 1, points.l, creditedMetrics(sideMetrics(state, loserSide), credit, loserSide));
+        return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "double_walkover": {
+        // X-DW-4: both played and lost, no points, no score, out of every ratio.
+        const credit = genericForfeitCredit(cfg, state, "walkover", "both");
+        return [
+          build("home", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, "home"), credit, "home")),
+          build("away", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, "away"), credit, "away")),
+        ];
       }
       case "draw":
       case "tie":
@@ -698,13 +780,17 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   },
 
   // spec 03 §6 — valid-event generator for the conformance kit.
+  // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<GenericEv> | null {
-    if (state.phase === "done" || state.phase === "final") return null;
+    if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") return null;
     if (state.phase === "pre" && rng() < 0.3) return { type: "core.start", payload: {} };
     const roll = rng();
     if (roll < 0.08) {
       const by = rng() < 0.5 ? state.entrants.home : state.entrants.away;
-      return { type: "core.forfeit", payload: { by, reason: "walkover" } };
+      // W2b D3 + ruling 113: a walkover only before play; once started, a disqualification — or a retirement once a
+      // score is on the running tally (nobody retires from a match never played) — from the roll taken.
+      const played = state.running !== undefined;
+      return { type: "core.forfeit", payload: { by, reason: state.phase === "pre" ? "walkover" : roll < 0.04 && played ? "retired" : "disqualified" } };
     }
     if (roll < 0.15) return { type: "core.abandon", payload: { reason: "rain" } };
     // W4 — a scoring action on the running tally. Person ids follow the
@@ -720,7 +806,9 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         },
       };
     };
-    if (roll < 0.55) return tallyOne();
+    // Ruling 113: the generator scores nothing before the Start (the band starts the match instead), so a running tally
+    // is play after it and the retirement above may read it. A result-only card before the Start is still drawn below.
+    if (roll < 0.55) return state.phase === "pre" ? { type: "core.start", payload: {} } : tallyOne();
 
     const running = state.running;
     if (running !== undefined) {
@@ -745,4 +833,5 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     const winnerId = rng() < 0.5 ? state.entrants.home : state.entrants.away;
     return { type: "generic.result", payload: { winnerId } };
   },
+  // Stryker restore all
 };

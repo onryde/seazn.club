@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import type { Dict } from "@/lib/i18n-constants";
 import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
 import en from "@/dictionaries/en/ui.json";
 import { FixtureBlock } from "../fixture-block";
 import type { BoardConflict, BoardFixture } from "../types";
@@ -172,6 +173,19 @@ describe("FixtureBlock", () => {
     expect(html).toContain("Ganador del Grupo A");
     expect(html).toContain("Ganador del Grupo B");
     expect(html).not.toContain("Winner of Group A");
+  });
+
+  it("design audit 4.2: the card joins its sides with the dictionary's word in the org's language — French reads « contre »", () => {
+    const frDict = fr as unknown as Dict;
+    const join = (frDict as Record<string, string>)["schedule.vs"]!;
+    expect(join, "premise: French joins with its own word, not the English one").not.toBe((en as Record<string, string>)["schedule.vs"]);
+    const html = renderToStaticMarkup(
+      <DictProvider dict={frDict} locale="fr">
+        <FixtureBlock {...baseProps} entrantNames={{ p1: "Riverside FC", p2: "Harbour United" }} />
+      </DictProvider>,
+    );
+    expect(html).toContain(`>Riverside FC ${join} Harbour United<`);
+    expect(html).not.toContain("Riverside FC vs Harbour United");
   });
 
   // Schedule-board knockout round codes (2026-09-23, owner-approved design).

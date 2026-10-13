@@ -49,6 +49,10 @@ import {
 } from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
+import publicEn from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import { forfeitCopyOf } from "@/lib/forfeit-tag";
 
 /** A msg that returns its own key, so any literal that leaked into the model
  *  shows up as prose among keys (R14). Never the real dictionary. */
@@ -926,6 +930,83 @@ describe("overlayModel — §3's decided/void context line (fix round 5, I2)", (
 // (`cricket.ts:3678-3680`) and the projection passes through whole — not a
 // field a fixture on both ends invented.
 // ---------------------------------------------------------------------------
+// W2b Task 13 fix round 1 (review M-4) — a credited result on air reads the SAME sentence as every public surface
+// (`forfeitTag` → `forfeitWords`), from the forfeit copy the overlay page resolves server-side like `decidedTemplates`.
+// It said "{winner} won" for a walkover and nothing for a double walkover. The band names sides in full, the context
+// line by their codes — the same split `renderDecidedOutcome` makes. Words are the real en public.json (the overlay
+// page's own dictionary; the sentences live there, the tags in both).
+describe("overlayModel — a credited result reads its forfeit sentence (W2b T13 review M-4)", () => {
+  const UI = publicEn as unknown as Dict;
+  const COPY = forfeitCopyOf((k) => t(UI, k));
+  const onAir = (outcome: LiveFixtureData["outcome"], withCopy = true) =>
+    overlayModel({
+      sportKey: "football",
+      data: { lastSeq: null, venueTz: "UTC", ...payload("football", [], "forfeited", outcome) } as OverlayLiveData,
+      sides: SIDES,
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: TEMPLATES,
+      ...(withCopy ? { forfeitCopy: COPY } : {}),
+    });
+
+  it("every forfeit reason, the AWAY side at fault: the band names it in full, the context line by its code", () => {
+    let checked = 0;
+    for (const reason of ["walkover", "withdrew", "retired", "disqualified"]) {
+      const model = onAir({ kind: "award", winner: "H", loser: "A", reason } as never);
+      expect(model.decided, reason).toBe(true);
+      expect(model.result, reason).toBe(t(UI, `forfeit.sentence.${reason}`, { loser: "Northbridge Athletic" }));
+      expect(model.header.period, reason).toBe(t(UI, `forfeit.sentence.${reason}`, { loser: "NOR" }));
+      expect(model.result, `${reason}: never "won"`).not.toContain("WIN");
+      expect(model.result, `${reason}: the dictionary holds the sentence (not a bare key)`).toContain("Northbridge Athletic");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // Loop R I-1: a walkover stored before W2b (`{kind: "award", winner, method}` — no loser, no reason) names the
+  // loser from the band's two sides, as the typed one does.
+  it("Loop R I-1: a walkover STORED before W2b reads its sentence on air, as the typed one", () => {
+    const legacy = onAir({ kind: "award", winner: "H", method: "walkover" } as never);
+    expect(legacy.result).toBe(t(UI, "forfeit.sentence.walkover", { loser: "Northbridge Athletic" }));
+    expect(legacy.header.period).toBe(onAir({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never).header.period);
+  });
+
+  it("a double walkover says so (it said nothing)", () => {
+    const model = onAir({ kind: "double_walkover" } as never);
+    expect(model.result).toBe(t(UI, "forfeit.sentence.doubleWalkover"));
+    expect(model.header.period).toBe(t(UI, "forfeit.sentence.doubleWalkover"));
+  });
+
+  // Design review M-1 (audit 3.1 on air): a double walkover credits nobody, but its summary carries a score line per
+  // side — the band drew those as its big digits, a 0 / 0 that reads as an unplayed match. It draws the overlay's own
+  // no-score state (the em dash) instead; a one-sided walkover keeps its credited lines. Every sport, through the real
+  // fold; the premise (the summary really carries a line to hide) is counted.
+  it("a double walkover's band draws no score on any sport; a walkover keeps its lines", () => {
+    let checked = 0;
+    for (const key of builtinModules.map((m) => m.key)) {
+      const at = (outcome: LiveFixtureData["outcome"]) => {
+        const data = { lastSeq: null, venueTz: "UTC", ...payload(key, [], "forfeited", outcome) } as OverlayLiveData;
+        const lines = (data.summary?.perSide ?? []).map((p) => p.line);
+        const model = overlayModel({ sportKey: key, data, sides: SIDES, startLabel: null, clockLabel: null, msg: keyMsg, decidedTemplates: TEMPLATES, forfeitCopy: COPY });
+        return { lines, big: model.sides.map((x) => x.big) };
+      };
+      const dw = at({ kind: "double_walkover" } as never);
+      if (dw.lines.length !== 2 || !dw.lines.every((l) => /\d/.test(String(l)))) continue; // premise: a line to hide
+      expect(dw.big, `${key}: the double walkover draws no score`).toEqual(["—", "—"]);
+      const wo = at({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never);
+      expect(wo.big.every((b) => b !== "—"), `${key}: the walkover keeps its credited lines`).toBe(true);
+      checked++;
+    }
+    expect(checked, "sports whose summary carries a line to hide").toBeGreaterThanOrEqual(5);
+  });
+
+  it("the positive pair: a played win, and a caller with no forfeit copy, keep the result templates", () => {
+    expect(onAir({ kind: "win", winner: "H", loser: "A", method: "regulation" } as never).result).toBe("WIN Milton Keynes Rovers REG");
+    expect(onAir({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never, false).result).toBe("WIN Milton Keynes Rovers");
+  });
+});
+
 describe("overlayModel — the chase line's revision marker (fix round 5)", () => {
   /** Innings 2's deliveries: the bowler must be in the FIELDING lineup, which
    *  is the one membership check a non-strict read fold enforces. */

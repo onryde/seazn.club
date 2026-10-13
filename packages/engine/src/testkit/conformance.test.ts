@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
-import type { CoreEv, EventEnvelope } from "../core/events.ts";
+import { forfeitOf, type CoreEv, type EventEnvelope } from "../core/events.ts";
 import type { MatchOutcome, StandingsDelta } from "../core/types.ts";
 import type { ModuleEvent, SportModule } from "../sport/module.ts";
 import { conformanceSuite } from "./conformance.ts";
@@ -115,12 +115,13 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
         if (state.phase === "done" || state.phase === "final") {
           throw new EngineError("WRONG_PHASE", "already over");
         }
-        const by = (event.payload as { by: string }).by;
+        const { by, reason } = forfeitOf(event.payload);
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
         if (by !== state.entrants.home && by !== state.entrants.away) {
           throw new EngineError("INVALID_EVENT", "unknown entrant");
         }
         const winner = by === state.entrants.home ? state.entrants.away : state.entrants.home;
-        return { ...state, phase: "done", outcome: { kind: "award", winner } };
+        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: by, reason } };
       }
       case "core.abandon": {
         if (state.phase !== "live") throw new EngineError("WRONG_PHASE", "not live");
@@ -140,6 +141,9 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => (state.phase === "pre" ? "pre" : state.phase === "live" ? "play" : "over"),
+  // W2b (spec §5.2): a coin flip has no score to credit — a forfeit credits the win alone; a double walkover nothing.
+  forfeitCredit: () => ({ perSide: [{}, {}], excluded: [] }),
 
   summary: (state) => ({
     headline: `${state.score.home} — ${state.score.away}`,
@@ -177,6 +181,8 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
         return [row("home", 0, 1, 0, 1), row("away", 0, 1, 0, 1)];
       case "no_result":
         return [row("home", 0, 0, 0, 1), row("away", 0, 0, 0, 1)];
+      case "double_walkover":
+        return [row("home", 0, 0, 1, 0), row("away", 0, 0, 1, 0)];
     }
   },
 
@@ -206,7 +212,7 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
         ? { type: "core.start", payload: {} }
         : {
             type: "core.forfeit",
-            payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: "no-show" },
+            payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: "walkover" },
           };
     }
     const roll = rng();

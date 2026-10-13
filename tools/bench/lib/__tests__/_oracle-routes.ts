@@ -465,6 +465,33 @@ export function makeOracleRoutesWorld(input: {
   };
 }
 
+/** A pack outcome as the live board would SERVE it: the ENGINE's shape.
+ *
+ *  They differ on the award since W2b. The pack's is `{winner, method?}`; the
+ *  engine's is `{winner, loser, reason}` with `loser` null only for a bye and
+ *  `reason` required, and `compareMatches` parses the wire through that union —
+ *  so an echoed pack award is "(unparseable)", not a match. The echo therefore
+ *  maps `method` onto `reason` and supplies the loser the pack never states:
+ *  the first of `sides` that is not the winner. That must be a REAL entrant
+ *  where one is known, because the engine's `standingsDelta` resolves an
+ *  award's loser against the fold's own entrants and throws on a stranger
+ *  (the specials oracle then reads every standings cell as absent). Only when
+ *  no other side is known does it fall back to a stand-in id.
+ *
+ *  Both fills are echoes (vacuous by construction, see below): the oracle
+ *  compares an award's winner and method, never its loser, and the real
+ *  comparison is covered by `oracle-matches.test.ts`. */
+const ECHO_LOSER = "echo-loser";
+const ECHO_REASON = "walkover";
+export function echoEngineOutcome(outcome: unknown, sides: readonly string[] = []): unknown {
+  if (typeof outcome !== "object" || outcome === null) return outcome;
+  const o = outcome as Record<string, unknown>;
+  if (o["kind"] !== "award") return o;
+  const { method, loser, ...rest } = o;
+  const other = sides.find((side) => side !== o["winner"]);
+  return { ...rest, loser: loser ?? other ?? ECHO_LOSER, reason: method ?? ECHO_REASON };
+}
+
 /** B06a task 3 — the per-match board, echoed straight back from what the pack
  *  declared.
  *
@@ -493,7 +520,7 @@ export function echoExpectedBoard(args: {
     extKey: e.fixtureExtKey,
     status: "decided",
     roundNo: null,
-    outcome: e.outcome,
+    outcome: echoEngineOutcome(e.outcome, e.perSide?.map((side) => side.entrant)),
     ...(e.perSide === undefined ? {} : { perSide: e.perSide }),
   }));
 }
@@ -536,7 +563,7 @@ export function echoSpecialSubjects(args: {
         standings.set(entrant, row);
       }
     }
-    out.set(`${sp.divisionRef}/${sp.fixtureExtKey}`, { outcome, state, standings });
+    out.set(`${sp.divisionRef}/${sp.fixtureExtKey}`, { outcome: echoEngineOutcome(outcome), state, standings });
   }
   return out;
 }

@@ -158,7 +158,8 @@ export const NAME = names({
   voidLast: dictionary("score.voidLast", `${V2}/fixture-console.tsx`),
   // W2a Task 14 Step 8: the console's Abandon has no testid either (fixture-console.tsx renders msg("score.abandon") inside
   // a bare `btn btn-danger` button, W2a loop H left it so); its accessible name is the dictionary's value, and the reason
-  // prompt it opens is the one forfeit already uses (score-prompt-reason / score-prompt-submit).
+  // prompt it opens is the console's TextPromptDialog (score-prompt-reason / score-prompt-submit), the abandon's alone
+  // since W2b Task 11 moved the forfeit to its dialog.
   abandon: dictionary("score.abandon", `${V2}/fixture-console.tsx`),
 });
 

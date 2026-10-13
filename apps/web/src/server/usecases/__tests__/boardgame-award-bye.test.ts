@@ -2,9 +2,11 @@
 // division (chess / draughts / go).
 //
 // `boardgame` was the one shipped module with no `case "award"` in
-// `standingsDelta`, because its own kernel never emits one: a boardgame
-// `core.forfeit` folds to `{kind:"win", method:"forfeit"}`. An award reaches
-// it only from the competition layer, which synthesises one for a fixture
+// `standingsDelta`, because its own kernel never emitted one then: a chess
+// forfeit was `boardgame.result{method:"forfeit"}`, which folds to
+// `{kind:"win", method:"forfeit"}` (a pre-W2b stream holding one still replays
+// so). W2b's own chess `core.forfeit` folds to an award; this file's case is the
+// other source — the competition layer, which synthesises one for a fixture
 // nobody played — `engine-db/competition.ts` sees a row with exactly one seat
 // filled and calls `awardByeDelta`.
 //

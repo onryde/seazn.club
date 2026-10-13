@@ -63,7 +63,7 @@ import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS, builderDefaultVariant, cellId, type RowKey } from "./lib/catalogue.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { productMessageOf, type OrganiserDriver } from "./lib/driver/types.ts";
-import { newModelState } from "./lib/model/commands.ts";
+import { MODEL_ENTRANTS, newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { modelRowRefusal } from "./lib/model/state.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
@@ -437,7 +437,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),
-          newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row: job.row, sport: job.sport, variant, entrants: 4, tag: `${cli.runId}-${i + 1}-${n}`, competitionId: await competitionFor() }) }),
+          newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row: job.row, sport: job.sport, variant, entrants: MODEL_ENTRANTS, tag: `${cli.runId}-${i + 1}-${n}`, competitionId: await competitionFor() }) }),
         });
         const cell: ModelCell = redactAll({ ...rep, replayOf: job.replay?.id ?? null, verdict: verdictOf(rep, job.replay) });
         cells.push(cell);

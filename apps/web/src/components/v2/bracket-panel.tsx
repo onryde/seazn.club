@@ -20,6 +20,7 @@ import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 // `seatLabel` is SHARED with the draw list's `RunSheetRow`: both panels sit on
 // ?tab=fixtures and must answer the same way about the same seat, so the
 // precedence lives in one place rather than once per surface.
@@ -67,6 +68,13 @@ interface FixtureLike {
 
 /** A bracket row as `feedLabels()` wants it — the feed columns are optional on
  *  `FixtureLike` and required on `FeedRow`. */
+/** R116-3 (owner ruling 116): who a seat draws — its entrant, or, for an empty seat a walkover was won over (a withdrawn
+ *  winner's, walked over by the side that arrived), HER: named and muted as any walkover draws the side that did not
+ *  play, never the stored bye label. `unseatedForfeitLoser` is the one reader; a bye (no loser) keeps its label. */
+function seatEntrant(f: FixtureLike, seat: "home" | "away"): string | null {
+  return (seat === "home" ? f.home_entrant_id : f.away_entrant_id) ?? unseatedForfeitLoser(f, seat);
+}
+
 function toFeedRow(f: FixtureLike): FeedRow {
   return {
     id: f.id,
@@ -135,18 +143,32 @@ function colX(node: Pick<BracketNode, "side" | "col">, colsPerSide: number): num
   return colsPerSide * COL_W; // center
 }
 
+function nodeHeadlines(
+  fixtures: readonly FixtureLike[],
+  stored: Record<string, string> | undefined,
+  doubleWalkoverTag: string,
+): Record<string, string> | undefined {
+  const dw = fixtures.filter((f) => creditsNobody(f.outcome));
+  if (dw.length === 0) return stored;
+  return { ...stored, ...Object.fromEntries(dw.map((f) => [f.id, doubleWalkoverTag])) };
+}
+
 export function BracketPanel({
   kind,
   fixtures,
   divisionFixtures,
   entrantNames,
   entrantBadges,
-  headlines,
+  headlines: storedHeadlines,
   orgSlug,
   compSlug,
   divSlug,
 }: Props) {
   const msg = useMsg();
+  // Design review M-1 (audit 3.1): a double walkover credits nobody, and its stored "0–0" headline read as an
+  // unplayed match — so its node carries the tag in the headline's muted slot instead, in every layout below. Done
+  // once, here, so no sub-panel can paint the stored score.
+  const headlines = nodeHeadlines(fixtures, storedHeadlines, msg("forfeit.tag.doubleWalkover"));
   // Built HERE, once, from the WHOLE DIVISION's rows — the same scope the
   // draw list (`stages-panel.tsx`) and the schedule board use, so the three
   // surfaces cannot diverge by construction rather than by agreement. See
@@ -327,8 +349,8 @@ export function BracketPanel({
                 }}
               >
                 <span className="flex h-full flex-col justify-center gap-0.5">
-                  {side(f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live)}
-                  {side(f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live)}
+                  {side(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"), winner, live)}
+                  {side(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"), winner, live)}
                 </span>
                 {headline !== undefined && (
                   <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -458,8 +480,8 @@ function DoubleElimPanel({
         style={{ left, top, width: NODE_W, height: NODE_H }}
       >
         <span className="flex h-full flex-col justify-center gap-0.5">
-          {sideRow(f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-          {sideRow(f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+          {sideRow(seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+          {sideRow(seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
         </span>
         {headline !== undefined && (
           <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -632,8 +654,8 @@ function StepladderPanel({
               className="relative block max-w-md rounded-lg border border-[color:var(--app-hairline,#334155)] bg-[color:var(--app-card,#1e293b)] px-2.5 py-1.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow"
             >
               <span className="flex flex-col gap-0.5">
-                {row(f, f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-                {row(f, f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+                {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+                {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
               </span>
               {headlines?.[f.id] !== undefined && (
                 <span className="absolute right-2 top-1.5 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">
@@ -750,8 +772,8 @@ function PagePlayoffPanel({
                   style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}
                 >
                   <span className={`flex h-full flex-col justify-center gap-0.5 ${headlines?.[f.id] !== undefined ? "pr-12" : ""}`}>
-                    {row(f, f.home_entrant_id, seatLabel(f.home_slot_label, feeds[f.id], "home"))}
-                    {row(f, f.away_entrant_id, seatLabel(f.away_slot_label, feeds[f.id], "away"))}
+                    {row(f, seatEntrant(f, "home"), seatLabel(f.home_slot_label, feeds[f.id], "home"))}
+                    {row(f, seatEntrant(f, "away"), seatLabel(f.away_slot_label, feeds[f.id], "away"))}
                   </span>
                   {headlines?.[f.id] !== undefined && (
                     <span className="absolute right-2 top-1/2 -translate-y-1/2 font-display text-[11px] tabular-nums text-[color:var(--app-fg-muted,#94a3b8)]">

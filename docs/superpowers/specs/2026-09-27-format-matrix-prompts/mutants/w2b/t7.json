@@ -1,0 +1,478 @@
+[
+  {
+    "id": "status-dw-decided",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (has(\"core.forfeit\") || advancesNobody(outcome)) return \"forfeited\";",
+    "replace": "  if (has(\"core.forfeit\")) return \"forfeited\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "a chess double forfeit is no longer held"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "D15 positive pair"
+      }
+    ]
+  },
+  {
+    "id": "status-forfeit-on-kind",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (has(\"core.forfeit\") || advancesNobody(outcome)) return \"forfeited\";",
+    "replace": "  if (outcome?.kind === \"award\" || advancesNobody(outcome)) return \"forfeited\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "each row of the order"
+      }
+    ]
+  },
+  {
+    "id": "status-abandon-result-abandoned",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (has(\"core.abandon\") && (outcome === null || levelInBracket)) return \"abandoned\";",
+    "replace": "  if (has(\"core.abandon\")) return \"abandoned\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "each row of the order"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "ST-G1 / CR-2"
+      }
+    ]
+  },
+  {
+    "id": "dw-no-next-off",
+    "file": "apps/web/src/lib/double-walkover-next-match.ts",
+    "find": "  return doubleWalkoverNeedsNextMatch(stageKind) && !feedsNext;",
+    "replace": "  return false && !feedsNext;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "D19 / X-DW-3"
+      }
+    ]
+  },
+  {
+    "id": "dw-no-next-ladder",
+    "file": "apps/web/src/lib/double-walkover-next-match.ts",
+    "find": "  return forbidsLevelResult(stageKind) && stageKind !== \"ladder\";",
+    "replace": "  return forbidsLevelResult(stageKind);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "D19 positive pair"
+      }
+    ]
+  },
+  {
+    "id": "chess-method-open",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (retired !== undefined && retired.values.includes(payload[retired.field] as string)) {",
+    "replace": "  if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "D15: chess boardgame\\.result"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D15: every retired chess forfeit shape is refused"
+      }
+    ]
+  },
+  {
+    "id": "pf2-cascade-only-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if ((cascadeOnlyForfeit || expunge) && writer !== \"withdrawal_cascade\") {",
+    "replace": "  if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "PF-2:"
+      }
+    ]
+  },
+  {
+    "id": "pf1-withdrew-over-result-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (withdrew && fixture.outcome !== null && fixture.status !== \"needs_decision\") {",
+    "replace": "  if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "PF-1: a withdrew forfeit over a league draw"
+      }
+    ]
+  },
+  {
+    "id": "dead-clause-winner",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "  if (advancesNobody(f.outcome as MatchOutcome | null)) return true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DW-2 \\(knockout of 8\\)"
+      }
+    ]
+  },
+  {
+    "id": "dead-clause-loser",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "  if (feederIsDead(f)) return true;\n  // W2b X-WD-5",
+    "replace": "  if (f.status === \"cancelled\" || (f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon)) return true;\n  // W2b X-WD-5",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DW-2 \\(third place\\)"
+      }
+    ]
+  },
+  {
+    "id": "loser-dead-legacy-off",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "  return killsLoserEdge(f.outcome);\n",
+    "replace": "  return f.outcome?.kind === \"award\";\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DE-1:"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-off",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "  if (f.seatedEntrant !== null && SEATING_STATUSES.has(f.status) && advancesNobody(f.outcome as never)) {",
+    "replace": "  if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "D20: under every seating status"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-ondecided-off",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "    assertAdvancingSeat({\n      fixtureId,\n",
+    "replace": "    void ({\n      fixtureId,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "D20: onDecided refuses"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-complete-off",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "  assertAdvancingSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome, seatedEntrant: fedSeatOccupant(f, seatsOf) });",
+    "replace": "  void ({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome, seatedEntrant: fedSeatOccupant(f, seatsOf) });",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "D20: the bracket completion read"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-rebuild-off",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "    assertAdvancingSeat({\n      fixtureId: f.id,\n",
+    "replace": "    void ({\n      fixtureId: f.id,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "D20: the completed-bracket rebuild read"
+      }
+    ]
+  },
+  {
+    "id": "advancing-award-loser",
+    "file": "apps/web/src/server/engine-db/fed-seats.ts",
+    "find": "      return { winner: o.winner, loser: undefined };",
+    "replace": "      return { winner: o.winner, loser: o.loser ?? undefined };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "every OUTCOME_KINDS member is classified"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DE-1:"
+      }
+    ]
+  },
+  {
+    "id": "advancing-legacy-forfeit-loser",
+    "file": "apps/web/src/server/engine-db/fed-seats.ts",
+    "find": "      return { winner: o.winner, loser: isLegacyForfeitWin(o) ? undefined : o.loser };",
+    "replace": "      return { winner: o.winner, loser: o.loser };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "the award's other shapes"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DE-1:"
+      }
+    ]
+  },
+  {
+    "id": "walked-over-loser-dropped",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      return loser === null || (loser !== home && loser !== away) ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: \"loser\" };",
+    "replace": "      return loser === null || (loser !== home && loser !== away) ? { winner: o.winner } : { winner: o.winner, loser };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "every OUTCOME_KINDS member is classified"
+      }
+    ]
+  },
+  {
+    "id": "walked-over-both-dropped",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      return { walkedOver: \"both\" };",
+    "replace": "      return {};",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "every OUTCOME_KINDS member is classified"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DW-2 \\(knockout of 8\\)"
+      }
+    ]
+  },
+  {
+    "id": "pf5-off",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "        if (bf.walkedOver === \"both\") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "X-DW-2 \\(knockout of 8\\)"
+      }
+    ]
+  },
+  {
+    "id": "revive-off",
+    "file": "apps/web/src/server/engine-db/fed-seats.ts",
+    "find": "  if (advancesNobody(before as MatchOutcome) && !advancesNobody(after as MatchOutcome | null)) return reviveDeadSeats(tx, fixtureId);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "Review Focus 1: void of a double walkover un-seats"
+      }
+    ]
+  },
+  {
+    "id": "revive-void-off",
+    "file": "apps/web/src/server/engine-db/fed-seats.ts",
+    "find": "    if (isCascadeVoid(t)) {\n      // The seat the reviving feeder fed",
+    "replace": "    if (false) {\n      // The seat the reviving feeder fed",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "Review Focus 1: a line voided because BOTH"
+      }
+    ]
+  },
+  {
+    "id": "bye-reason-walkover",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "'reason', case when lines.withdrawn is null then 'bye' else 'withdrew' end)",
+    "replace": "'reason', case when lines.withdrawn is null then 'walkover' else 'withdrew' end)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "C-5 bye: the Swiss bye"
+      }
+    ]
+  },
+  {
+    "id": "bye-reason-walkover-ts",
+    "file": "apps/web/src/lib/fixture-bye.ts",
+    "find": "  return { kind: \"award\", winner, loser: null, reason: \"bye\" };",
+    "replace": "  return { kind: \"award\", winner, loser: null, reason: \"walkover\" } as never;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "C-5 bye: the Swiss bye"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+        ],
+        "name": "C-5 bye: a Swiss table credits"
+      }
+    ]
+  },
+  {
+    "id": "generated-departed-is-bye",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "  return other === null ? byeAward(winner) : { kind: \"award\", winner, loser: other, reason: \"withdrew\" };",
+    "replace": "  return byeAward(winner);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+        ],
+        "name": "the departed qualifier's line is a walkover"
+      }
+    ]
+  },
+  {
+    "id": "autoadvance-finalized-open",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "status not in ('decided', 'forfeited', 'finalized', 'cancelled')",
+    "replace": "status not in ('decided', 'forfeited')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/auto-advance-finished.test.ts"
+        ],
+        "name": "every group fixture finalized"
+      }
+    ]
+  },
+  {
+    "id": "organiser-chess-entry-back",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "= {};",
+    "replace": "= { \"boardgame.result\": { field: \"method\", values: [\"forfeit\", \"double_forfeit\"] } };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D15: every value the server retires on write is a derived forfeit"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "sport table is EXACTLY the derived list"
+      }
+    ]
+  },
+  {
+    "id": "fold-summary-bare",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "    summary: summaryOf(sportModule, folded),",
+    "replace": "    summary: sportModule.summary(folded.state),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2b-status.test.ts"
+        ],
+        "name": "the away side withdrew: outcome the award"
+      }
+    ]
+  }
+]

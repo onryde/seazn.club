@@ -13,6 +13,10 @@
 //         The judge passes for "70 works + 7 red with the pinned reason"; any OTHER red, a re-keyed cell red for a
 //         different reason, or a re-keyed cell that ALSO fails a check outside the ones its re-key pins (`failing`), fails
 //         it. Right reason passes, wrong reason fails, an extra failing check fails, an unexpected red fails.
+//   R16-4 W2b Task 16 removed the five W2b re-keys from the committed file (controller ruling R16-4): its truth run judged
+//         them greened (truth-runs/w2b-final/w2a-expect-before.json). The file now holds the two still owed (W3, W4). The
+//         judge's behaviour is still tested against the seven as D-P2 and D-R3 ruled them (`RULED_REKEYS`, the removed
+//         five typed from the ruling), so a multi-cell pin keeps its coverage.
 //
 // Expected values here come from the ruling's own text (ids, owners, reasons) and the plan's declarations (livePlan),
 // never from the judge's output.
@@ -49,6 +53,12 @@ const PINNED = [...R4_CELLS, F1_CELL, SWISS_CELL];
 /** The ruling's counts: "70 works + 7 pinned" (typed from the ruling; the file is held to them below). */
 const WORKS = 70;
 const PINNED_COUNT = 7;
+/** Ruling R16-4: what the committed file holds after W2b Task 16 - the two cells still owed, each by another wave. */
+const STILL_OWED = [F1_CELL, SWISS_CELL];
+/** The five W2b re-keys as D-P2 ruled them, typed from the ruling (the committed file no longer holds them, R16-4). */
+const W2B_REMOVED: Rekey[] = R4_CELLS.map((caseId) => ({ caseId, was: "SC-O1", now: "CD-T13", wave: "W2b", rule: "BG-WO-2", reason: R4_REASON, failing: [], ruling: "D-P2" }));
+/** The seven as D-P2 and D-R3 ruled them: the judge's behaviour fixture. */
+const RULED_REKEYS: Rekey[] = [...W2B_REMOVED, ...REKEYS_FILE.rekeys];
 
 /** The CI evidence the swiss cell is pinned from: the cell's case, verbatim out of each named artifact. */
 interface EvidenceSource { runId: number; headSha: string; artifact: string; case: CaseResult }
@@ -72,7 +82,7 @@ const SWISS_RED = (): CaseResult => ({ ...SWISS_RED_RECORDS[0]!.case });
 function expectedRun(over: (c: CaseResult) => CaseResult = (c) => c): CaseResult[] {
   return WANT.map((id) => over(R4_CELLS.includes(id) ? R4_RED(id) : id === F1_CELL ? F1_RED(id) : id === SWISS_CELL ? SWISS_RED() : kase(id)));
 }
-const judge = (cases: CaseResult[], rekeys: readonly Rekey[] = REKEYS_FILE.rekeys) => judgeExpectation({ want: WANT, rekeys, sources: [{ label: "now", cases }] });
+const judge = (cases: CaseResult[], rekeys: readonly Rekey[] = RULED_REKEYS) => judgeExpectation({ want: WANT, rekeys, sources: [{ label: "now", cases }] });
 const refusal = (f: () => unknown): ExpectRefused => {
   try { f(); } catch (e) { if (e instanceof ExpectRefused) return e; throw e; }
   throw new Error("expected a refusal");
@@ -135,21 +145,20 @@ describe("w2a-local-selection.json - the L1/L2 stripes hold the 77's grid cells 
 
 // --- the re-keys, as the ruling states them --------------------------------------------------------------------------
 
-describe("expect-77-rekeys.json - the seven cells D-P2 and D-R3 re-key", () => {
-  it("is exactly the rulings' seven: each in the 77, with its old gap, new gap, owner and pinned reason", () => {
+describe("expect-77-rekeys.json - the cells D-P2 and D-R3 re-key, less the five W2b's truth run greened (R16-4)", () => {
+  it("is exactly the two still owed (W4's ko_plate F1, W3's swiss cell), each in the 77 with its old gap, new gap, owner and pinned reason; none of the five W2b R4 cells", () => {
     const byId = new Map(REKEYS_FILE.rekeys.map((r) => [r.caseId, r]));
-    expect([...byId.keys()].sort()).toEqual([...PINNED].sort());
+    expect([...byId.keys()].sort()).toEqual([...STILL_OWED].sort());
     expect(byId.size).toBe(REKEYS_FILE.rekeys.length);
+    for (const id of R4_CELLS) expect(byId.has(id), `${id}: removed by W2b Task 16 (R16-4)`).toBe(false);
+    expect(REKEYS_FILE.rekeys.filter((r) => r.wave === "W2b"), "no W2b re-key is left").toEqual([]);
     let checked = 0;
-    for (const id of PINNED) {
+    for (const id of STILL_OWED) {
       const r = byId.get(id)!;
       expect(WANT, id).toContain(id);
       expect(r.was, id).toBe(id === SWISS_CELL ? "SC-O2" : "SC-O1");
       if (id === SWISS_CELL) {
         expect([r.now, r.wave], id).toEqual(["SW-H1", "W3"]);
-      } else if (R4_CELLS.includes(id)) {
-        expect([r.now, r.wave, r.rule, r.reason], id).toEqual(["CD-T13", "W2b", "BG-WO-2", R4_REASON]);
-        expect(r.failing, `${id}: an R4 cell ends in a case-level error and fails no check`).toEqual([]);
       } else {
         expect([r.now, r.wave], id).toEqual(["FX-G14", "W4"]);
         expect(r.reason, id).toContain("STAGE_COMPLETED_SEEDING_FAILED");
@@ -157,13 +166,30 @@ describe("expect-77-rekeys.json - the seven cells D-P2 and D-R3 re-key", () => {
       }
       checked++;
     }
-    expect(checked).toBe(PINNED_COUNT);
+    expect(checked).toBe(STILL_OWED.length);
+    expect((REKEYS_FILE as unknown as { note: string }).note, "the note says who removed the five, and why").toMatch(/removed by W2b Task 16, judged greened in w2b-final/);
   });
 
-  it("the file parses against the expectation, and nothing but the seven is re-keyed: 70 stay W2a's to turn green", () => {
+  it("the file parses against the expectation: 75 stay to turn green; the ruled seven parse too (the behaviour fixture is a valid file), 70 left", () => {
     const rekeys = parseRekeys(REKEYS_FILE, WANT, "expect-77-rekeys.json");
-    expect(rekeys).toHaveLength(PINNED_COUNT);
-    expect(WANT.length - rekeys.length).toBe(WORKS);
+    expect(rekeys).toHaveLength(STILL_OWED.length);
+    expect(WANT.length - rekeys.length).toBe(75);
+    const ruled = parseRekeys({ note: "the rulings' seven", rekeys: RULED_REKEYS }, WANT, "ruled");
+    expect(ruled).toHaveLength(PINNED_COUNT);
+    expect(WANT.length - ruled.length).toBe(WORKS);
+  });
+
+  it("judged by the committed file, the five R4 cells working is a pass with nothing greened, and one of them red for the old pin is an UNEXPECTED red (the pin is gone)", () => {
+    const after = (cases: CaseResult[]) => judge(cases, REKEYS_FILE.rekeys);
+    const greenedR4 = expectedRun((c) => (R4_CELLS.includes(c.caseId) ? kase(c.caseId) : c));
+    expect(after(greenedR4)).toMatchObject({ found: 77, works: 75, exit: 0, greened: [], unexpectedRed: [], wrongReason: [] });
+    let checked = 0;
+    for (const id of R4_CELLS) {
+      const v = after(greenedR4.map((c) => (c.caseId === id ? R4_RED(id) : c)));
+      expect([v.exit, v.unexpectedRed.map((u) => u.caseId), v.works], id).toEqual([1, [id], 74]);
+      checked++;
+    }
+    expect(checked).toBe(R4_CELLS.length);
   });
 
   // D-R3: the swiss cell's pin is what the CI artifacts show - read from the evidence file, which holds the cell's case
@@ -220,7 +246,7 @@ describe("judgeExpectation - 70 works + 7 red with the pinned reason", () => {
       const v = judge(expectedRun((c) => (c.caseId === id ? kase(id, "red", "I1-rr-pair-once-per-leg: a pair met twice", [check("fail", "a pair met twice")]) : c)));
       expect(v.exit, id).toBe(1);
       expect(v.wrongReason.map((w) => w.caseId), id).toEqual([id]);
-      expect(v.wrongReason[0]!.wanted, id).toBe(REKEYS_FILE.rekeys.find((r) => r.caseId === id)!.reason);
+      expect(v.wrongReason[0]!.wanted, id).toBe(RULED_REKEYS.find((r) => r.caseId === id)!.reason);
       expect(v.wrongReason[0]!.got, id).toContain("a pair met twice");
       expect([v.unexpectedRed.length, v.pinnedRed.length, v.works], id).toEqual([0, PINNED_COUNT - 1, WORKS]);
       checked++;
@@ -229,9 +255,9 @@ describe("judgeExpectation - 70 works + 7 red with the pinned reason", () => {
   });
 
   it("a pin written without the product's quotes (the ruling's own words, phase pre) still matches the product's text (phase \"pre\"), and nothing else is normalised", () => {
-    const bareRekeys = REKEYS_FILE.rekeys.map((r) => (r.reason === R4_REASON ? { ...r, reason: "forfeit not allowed in phase pre" } : r));
+    const bareRekeys = RULED_REKEYS.map((r) => (r.reason === R4_REASON ? { ...r, reason: "forfeit not allowed in phase pre" } : r));
     expect(judge(expectedRun(), bareRekeys)).toMatchObject({ exit: 0, works: WORKS, pinnedRed: expect.any(Array) });
-    const different = REKEYS_FILE.rekeys.map((r) => (r.reason === R4_REASON ? { ...r, reason: "forfeit not allowed in phase live" } : r));
+    const different = RULED_REKEYS.map((r) => (r.reason === R4_REASON ? { ...r, reason: "forfeit not allowed in phase live" } : r));
     expect(judge(expectedRun(), different).wrongReason).toHaveLength(5);
   });
 
@@ -302,8 +328,8 @@ describe("judgeExpectation - 70 works + 7 red with the pinned reason", () => {
     expect(e.name).toBe("ExpectedAbsent");
     expect(e.message).toContain(WANT[0]!);
     expect(refusal(() => judge([])).name).toBe("NoCases");
-    expect(refusal(() => judgeExpectation({ want: WANT, rekeys: REKEYS_FILE.rekeys, sources: [] })).name).toBe("NoCases");
-    expect(refusal(() => judgeExpectation({ want: WANT, rekeys: REKEYS_FILE.rekeys, sources: [{ label: "now", cases: [] }] })).name).toBe("NoCases");
+    expect(refusal(() => judgeExpectation({ want: WANT, rekeys: RULED_REKEYS, sources: [] })).name).toBe("NoCases");
+    expect(refusal(() => judgeExpectation({ want: WANT, rekeys: RULED_REKEYS, sources: [{ label: "now", cases: [] }] })).name).toBe("NoCases");
   });
 
   it("the first source that holds an id decides it (CI before local), and an id only a later source holds is read from that one", () => {
@@ -311,12 +337,12 @@ describe("judgeExpectation - 70 works + 7 red with the pinned reason", () => {
     const first = all.slice(0, 40).map((c) => (c.caseId === all[0]!.caseId ? kase(c.caseId, "red", "the CI run's red") : c));
     // The later run holds ALL 77 (the red id too, green there): an id both hold is decided by the first, one only it holds by it.
     const rest = all.slice();
-    const v = judgeExpectation({ want: WANT, rekeys: REKEYS_FILE.rekeys, sources: [{ label: "ci", cases: first }, { label: "local", cases: rest }] });
+    const v = judgeExpectation({ want: WANT, rekeys: RULED_REKEYS, sources: [{ label: "ci", cases: first }, { label: "local", cases: rest }] });
     expect(v.found).toBe(77);
     expect(v.unexpectedRed.map((u) => u.caseId)).toEqual([all[0]!.caseId]); // the CI red wins over local's green
     expect(v.read).toBe(first.length + rest.length);
     // The same two runs the other way round: local's green decides it, so the order is what decided it (positive pair).
-    const flipped = judgeExpectation({ want: WANT, rekeys: REKEYS_FILE.rekeys, sources: [{ label: "local", cases: rest }, { label: "ci", cases: first }] });
+    const flipped = judgeExpectation({ want: WANT, rekeys: RULED_REKEYS, sources: [{ label: "local", cases: rest }, { label: "ci", cases: first }] });
     expect(flipped.unexpectedRed).toEqual([]);
     expect(flipped.exit).toBe(0);
   });
@@ -369,7 +395,11 @@ describe("w2a-expect.ts - the judge as Task 16 runs it", () => {
     vi.spyOn(process.stderr, "write").mockImplementation((s: string | Uint8Array) => { err.push(String(s)); return true; });
   });
   afterEach(() => vi.restoreAllMocks());
-  const argv = (now: string[], extra: string[] = []) => ["--expect", join(REPO, REPRO, "expect-77.json"), "--rekeys", join(REPO, REPRO, "expect-77-rekeys.json"), ...now.flatMap((f) => ["--now", f]), ...extra];
+  const COMMITTED_REKEYS = join(REPO, REPRO, "expect-77-rekeys.json");
+  /** The synthetic runs are the rulings' outcome, so they are judged against the ruled seven; the committed-artifact tests
+   *  below read the committed file. */
+  const RULED_FILE = put("ruled-rekeys.json", { note: "the rulings' seven", rekeys: RULED_REKEYS });
+  const argv = (now: string[], extra: string[] = [], rekeys = RULED_FILE) => ["--expect", join(REPO, REPRO, "expect-77.json"), "--rekeys", rekeys, ...now.flatMap((f) => ["--now", f]), ...extra];
 
   it("exit 0 for the ruling's outcome, naming the counts; exit 1 for an unexpected red, naming it; exit 2 for a missing id", () => {
     expect(main(argv([put("run.json", runOf(expectedRun()))]))).toBe(0);
@@ -396,7 +426,7 @@ describe("w2a-expect.ts - the judge as Task 16 runs it", () => {
   it("the committed CI truth run itself (the real artifact, all three layers): 77 found, and the swiss cell is held, whether that run showed it red for its pin or working", () => {
     const ci = ["L1", "L2", "L3"].map((L) => join(REPO, TRUTH_RUNS, "w2a-final/ci", L, "results.json"));
     const jsonOut = join(dir, "ci-verdict.json");
-    const exit = main(argv(ci, ["--json-out", jsonOut]));
+    const exit = main(argv(ci, ["--json-out", jsonOut], COMMITTED_REKEYS));
     const v = JSON.parse(readFileSync(jsonOut, "utf8")) as { expected: number; read: number; found: number; works: number; pinnedRed: { caseId: string }[]; greened: string[]; unexpectedRed: { caseId: string }[]; wrongReason: unknown[]; exit: number };
     expect(v.read, "cases read across the three layers").toBeGreaterThan(2000);
     expect([v.expected, v.found]).toEqual([77, 77]);
@@ -405,6 +435,22 @@ describe("w2a-expect.ts - the judge as Task 16 runs it", () => {
     expect([...v.pinnedRed.map((p) => p.caseId), ...v.greened], "the swiss cell is held").toContain(SWISS_CELL);
     expect(v.wrongReason, "no re-keyed cell is red for another reason").toEqual([]);
     expect(v.works + v.pinnedRed.length + v.greened.length + v.unexpectedRed.length, "every one of the 77 is accounted for").toBe(77);
+  });
+
+  // Ruling R16-4: W2b Task 16's after-judgment, re-run here from the committed inputs it names - the five local R4 runs,
+  // then W2a's CI L3, L2 and L1. Its one unexpected red is W2a false premise 50 (the M1 cell), accepted by the ruling.
+  it("W2b Task 16's after-judgment (R16-4): the five local R4 runs then W2a's CI - nothing greened, 74 works, the two pins held, the M1 cell the one unexpected red", () => {
+    const now = [
+      ...[1, 2, 3, 4, 5].map((i) => join(REPO, TRUTH_RUNS, "w2b-final/local/L3", `w2b-final-${i}`, "results.json")),
+      ...["L3", "L2", "L1"].map((L) => join(REPO, TRUTH_RUNS, "w2a-final/ci", L, "results.json")),
+    ];
+    const jsonOut = join(dir, "w2b-after.json");
+    expect(main(argv(now, ["--json-out", jsonOut], COMMITTED_REKEYS))).toBe(1);
+    const v = JSON.parse(readFileSync(jsonOut, "utf8")) as { found: number; works: number; pinnedRed: { caseId: string }[]; greened: string[]; unexpectedRed: { caseId: string }[]; wrongReason: unknown[] };
+    expect([v.found, v.works, v.greened, v.wrongReason]).toEqual([77, 74, [], []]);
+    expect(v.pinnedRed.map((p) => p.caseId).sort()).toEqual([...STILL_OWED].sort());
+    expect(v.unexpectedRed.map((u) => u.caseId)).toEqual(["page_playoff_only|generic|score|M1"]);
+    for (const id of R4_CELLS) expect(v.unexpectedRed.map((u) => u.caseId), id).not.toContain(id);
   });
 
   it("usage and unreadable input are refused (2), nothing judged", () => {

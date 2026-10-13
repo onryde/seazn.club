@@ -24,6 +24,9 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { getDictionary, toLocale } from "@/lib/i18n";
+import { t } from "@/lib/i18n-runtime";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
+import { doubleWalkoverNextWinner, forfeitLedgerOf, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
@@ -211,6 +214,52 @@ async function readSides(
   return { rows, maskedNames };
 }
 
+/**
+ * W2b Task 13 (X-DW-1) — the name of the side a double walkover's NEXT match was walked over to, or null. Read only for
+ * a double walkover. The line must feed a next match (`feedsNextMatch`, D19 — the rule is that file's, not restated
+ * here) and that match must stand walked over (`doubleWalkoverNextWinner`): the cascade's seat-arrival walkover. The
+ * next fixture is read through `public_fixtures_v`, so the view still decides what is visible, and its winner is named
+ * the way this page names a side (`readSides`, masked for a youth division). Every other case is no clause.
+ */
+async function readDoubleWalkoverNext(
+  sql: Sql,
+  fixture: Pick<PublicFixture, "id">,
+  division: { youth: boolean; playerNameDisplay: string | null },
+): Promise<string | null> {
+  const [edges] = await sql<{ winner_to_fixture: string | null; loser_to_fixture: string | null }[]>`
+    select winner_to_fixture, loser_to_fixture from fixtures where id = ${fixture.id}`;
+  if (!edges || !feedsNextMatch(edges) || edges.winner_to_fixture === null) return null;
+  const [next] = await sql<{ outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+    select outcome, home_entrant_id, away_entrant_id from public_fixtures_v where id = ${edges.winner_to_fixture}`;
+  const winner = doubleWalkoverNextWinner(true, next);
+  if (winner === null || !next) return null;
+  const { rows, maskedNames } = await readSides(sql, next, division);
+  const row = rows.find((r) => r.id === winner);
+  return row ? (maskedNames.get(winner) ?? row.display_name) : null;
+}
+
+/**
+ * Owner ruling 116 (W2b Task 16; X-WD-3) — the forfeit's loser when she holds no seat in this fixture, or null: a
+ * winner who withdrew before this tie, whose dead seat the arriving side walked over (`awardSeededByes` names her as
+ * the award's loser, reason "withdrew"). Which seat is hers is `unseatedForfeitLoser`'s answer (`forfeitTag`, the one
+ * reader — R116-1). The sides read only who is seated, so her name is read here — through `public_entrants_v`, masked
+ * the way this page masks a side (`readSides`). Read only for such an award: any other fixture, a seated loser's
+ * included, makes no read.
+ */
+async function readUnseatedForfeitLoser(
+  sql: Sql,
+  fixture: Pick<PublicFixture, "outcome" | "home_entrant_id" | "away_entrant_id">,
+  division: { youth: boolean; playerNameDisplay: string | null },
+): Promise<{ id: string; name: string; seat: "home" | "away"; read: { rows: SideRow[]; maskedNames: Map<string, string> } } | null> {
+  const home = unseatedForfeitLoser(fixture, "home");
+  const seat = home !== null ? "home" : "away";
+  const loser = home ?? unseatedForfeitLoser(fixture, "away");
+  if (loser === null) return null;
+  const read = await readSides(sql, { home_entrant_id: loser, away_entrant_id: null }, division);
+  const row = read.rows.find((r) => r.id === loser);
+  return row ? { id: loser, name: read.maskedNames.get(loser) ?? row.display_name, seat, read } : null;
+}
+
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
  *  bye/TBD case (an entrant id still null) without throwing: its name is
  *  `slot(label)` — the feeder's round for a side waiting on a match
@@ -221,8 +270,14 @@ function buildSides(
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   { rows, maskedNames }: { rows: SideRow[]; maskedNames: Map<string, string> },
   slot: (label: SlotLabel | null, seat: "home" | "away") => string,
+  unseated: { readonly id: string; readonly seat: "home" | "away"; readonly read: { rows: SideRow[]; maskedNames: Map<string, string> } } | null,
 ): [SideT, SideT] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  // R116-1: the seat a walkover was won over (ruling 116's withdrawn winner) is HER side — her name, crest and colour,
+  // read like any seated side's — never its bye label, and never the waiting-slot `entrantId: ""`.
+  const byId = new Map([...rows, ...(unseated?.read.rows ?? [])].map((r) => [r.id, r]));
+  const masked = new Map([...maskedNames, ...(unseated?.read.maskedNames ?? [])]);
+  const seatOf = (seated: string | null, seat: "home" | "away"): string | null =>
+    seated ?? (unseated !== null && unseated.seat === seat ? unseated.id : null);
 
   const sideOf = (
     entrantId: string | null,
@@ -230,8 +285,7 @@ function buildSides(
     seat: "home" | "away",
   ): SidePre => {
     if (entrantId === null) {
-      const name = slot(slotLabel, seat);
-      return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
+      return { entrantId: "", name: slot(slotLabel, seat), colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
     // Defensive fallback (contract notes: "never a blank row") — an
@@ -239,7 +293,7 @@ function buildSides(
     // returns (deleted, or its division/competition dropped out of
     // public/unlisted visibility since the fixture was scored).
     if (!row) return { entrantId, name: "?", colour: null, badgeUrl: null, isPerson: false };
-    const name = maskedNames.get(entrantId) ?? row.display_name;
+    const name = masked.get(entrantId) ?? row.display_name;
     const colors = row.team_display?.colors as { home_primary?: string } | null | undefined;
     return {
       entrantId,
@@ -253,8 +307,8 @@ function buildSides(
     };
   };
 
-  const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label, "home");
-  const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label, "away");
+  const home = sideOf(seatOf(fixture.home_entrant_id, "home"), fixture.home_slot_label, "home");
+  const away = sideOf(seatOf(fixture.away_entrant_id, "away"), fixture.away_slot_label, "away");
   // R11 fix round, C9 — resolved TOGETHER, not independently: a collision
   // can only be seen — and broken — by comparing both sides at once.
   const [homeShort, awayShort] = disambiguatedShorts(home, away);
@@ -495,8 +549,18 @@ export async function loadMatchCentre(
     // "TBD" here is the most visible copy of this defect.
     slot = (label, seat) => namer.seat(fixture.id, seat, label);
   }
-  const sides = buildSides(fixture, sideRead, slot);
+  const unseated = await readUnseatedForfeitLoser(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay });
+  const sides = buildSides(fixture, sideRead, slot, unseated);
   const venueTz = resolveVenueTz(ctx.division.tz, ctx.orgTz);
+  // W2b Task 13: the forfeit sentence's two outside words — an abandon's result in words (the ORG's locale, like the
+  // format label above), and a double walkover's next-round side. Each is read only for the fixture that needs it: the
+  // dictionary for a ledger holding an abandon (M7 — a played fixture loads no dictionary, feeder-read.test.ts), the
+  // next fixture for a double walkover.
+  const publicDict = forfeitLedgerOf(events).abandon !== null ? await getDictionary(toLocale(ctx.locale), "public") : null;
+  const doubleWalkoverNext =
+    (fixture.outcome as { kind?: string } | null)?.kind === "double_walkover"
+      ? await readDoubleWalkoverNext(sql, fixture, { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay })
+      : null;
 
   const input: MatchCentreInput = {
     fixture,
@@ -512,6 +576,9 @@ export async function loadMatchCentre(
     stage: ctx.stage,
     moduleVersion: ctx.division.moduleVersion,
     formatLabel,
+    resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
+    doubleWalkoverNext,
+    unseatedForfeitLoser: unseated,
   };
   return buildMatchCentre(input);
 }

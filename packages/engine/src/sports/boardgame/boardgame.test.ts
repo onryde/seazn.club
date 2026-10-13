@@ -13,6 +13,8 @@ import {
   boardgame,
   BOARDGAME_EVENT_SCHEMAS,
   BOARDGAME_TIEBREAKERS,
+  BoardgameMethod,
+  BoardgameResult,
   padSpec,
   type BoardgameState,
 } from "./boardgame.ts";
@@ -70,18 +72,20 @@ describe("boardgame golden: draw (½-½)", () => {
 
 describe("boardgame golden: forfeit + double forfeit", () => {
   it("scores a forfeit like a win but excludes it from colour history", () => {
-    const state = fold(stream(["core.start"], ["core.forfeit", { by: "A", reason: "no-show" }]));
-    expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "forfeit" });
+    // W2b (chess unified): a walkover after the session starts is legal in chess (FIDE Laws 6.7.1), and it folds to
+    // the same `award` as every other sport — no longer `win{method:"forfeit"}`.
+    const state = fold(stream(["core.start"], ["core.forfeit", { by: "A", reason: "walkover" }]));
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", loser: "A", reason: "walkover" });
     const [home, away] = boardgame.standingsDelta(state.outcome!, cfg, league, state);
     expect(home).toMatchObject({ won: 1, points: 2, metrics: { wins: 1, white: 0, black: 0 } });
     expect(away.metrics).toMatchObject({ white: 0, black: 0 }); // colour excluded
   });
 
-  it("maps a double forfeit to a 0-0 no-result", () => {
+  it("maps a double forfeit to a 0-0 double walkover (W2b BG-DW-1; was a no-result)", () => {
     const state = fold(
       stream(["core.start"], ["boardgame.result", { winner: null, method: "double_forfeit" }]),
     );
-    expect(state.outcome).toEqual({ kind: "no_result" });
+    expect(state.outcome).toEqual({ kind: "double_walkover" });
     const [home, away] = boardgame.standingsDelta(state.outcome!, cfg, league, state);
     expect([home.points, away.points]).toEqual([0, 0]);
     expect(home.points + away.points).toBe(0); // inside declaredPointsSets
@@ -92,10 +96,11 @@ describe("boardgame golden: forfeit + double forfeit", () => {
 // with no `case "award"` in `standingsDelta`, so an award fell to
 // `default: invalid(...)` and threw INVALID_EVENT.
 //
-// The award does NOT come from this kernel — boardgame's own `core.forfeit`
-// folds to `{kind:"win", method:"forfeit"}` (see the forfeit golden above),
-// which is exactly why the case was never needed and never noticed missing.
-// It is synthesised by the COMPETITION layer for a fixture nobody played: a
+// Before W2b the award did NOT come from this kernel — boardgame's own
+// `core.forfeit` folded to `{kind:"win", method:"forfeit"}`, which is exactly why
+// the case was never needed and never noticed missing (W2b unified it: a chess
+// forfeit is now an `award` too). The bye below is synthesised by the
+// COMPETITION layer for a fixture nobody played: a
 // Swiss odd-field sit-out, or a knockout seeded bye with one seat null
 // (apps/web `engine-db/competition.ts` awardByeDelta). Two live consequences
 // before this case existed: chess Swiss "Pair next" committed the bye write
@@ -107,7 +112,7 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
   const fresh = boardgame.init(cfg, lineups);
 
   it("ranks the advancing side exactly as a win, at cfg's own win score", () => {
-    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H", loser: null, reason: "bye" }, cfg, league, fresh);
     expect(home).toMatchObject({
       entrantId: "H",
       played: 1,
@@ -120,7 +125,7 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
   });
 
   it("keeps [home, away] lineup order when the AWAY seat is the one advancing", () => {
-    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "A" }, cfg, league, fresh);
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "A", loser: null, reason: "bye" }, cfg, league, fresh);
     expect(home.entrantId).toBe("H");
     expect(away.entrantId).toBe("A");
     expect(away.points).toBe(cfg.scoring.win);
@@ -128,7 +133,7 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
   });
 
   it("stays inside declaredPointsSets, so the conformance kit still holds", () => {
-    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H", loser: null, reason: "bye" }, cfg, league, fresh);
     expect(boardgame.declaredPointsSets(cfg)).toContain(home.points + away.points);
   });
 
@@ -139,7 +144,7 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
     const custom = boardgame.configSchema.parse({ scoring: { win: 3, draw: 1, loss: 0 } });
     expect(custom.scoring.win).not.toBe(cfg.scoring.win);
     const state = boardgame.init(custom, lineups);
-    const [home] = boardgame.standingsDelta({ kind: "award", winner: "H" }, custom, league, state);
+    const [home] = boardgame.standingsDelta({ kind: "award", winner: "H", loser: null, reason: "bye" }, custom, league, state);
     expect(home.points).toBe(custom.scoring.win);
   });
 
@@ -148,7 +153,7 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
     // would put a game they never played into the `white`/`black` ledger.
     // `colorOf` already excludes a forfeit for that reason; an award is the
     // same class of non-game.
-    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H" }, cfg, league, fresh);
+    const [home, away] = boardgame.standingsDelta({ kind: "award", winner: "H", loser: null, reason: "bye" }, cfg, league, fresh);
     expect(fresh.colorOfHome).toBe("W"); // colours ARE on — the exclusion is deliberate, not vacuous
     expect(home.metrics).toMatchObject({ wins: 1, white: 0, black: 0 });
     expect(away.metrics).toMatchObject({ wins: 0, white: 0, black: 0 });
@@ -628,9 +633,9 @@ describe("boardgame: an omitted winner settles exactly like an explicit null (S6
     expect(omitted).toEqual(explicit);
   });
 
-  it("records a no-result double forfeit with no `winner` key at all", () => {
+  it("records a double forfeit (a double walkover, W2b BG-DW-1) with no `winner` key at all", () => {
     const omitted = fold(stream(["core.start"], ["boardgame.result", { method: "double_forfeit" }]));
-    expect(omitted.outcome).toEqual({ kind: "no_result" });
+    expect(omitted.outcome).toEqual({ kind: "double_walkover" });
   });
 
   it("still rejects a completely empty payload (disambiguation from boardgame.pairing survives)", () => {
@@ -687,14 +692,95 @@ describe("boardgame padSpec — no core.* actions (match lifecycle is universal 
     }
   });
 
-  it("single forfeit rides boardgame.result's own method enum, not core.forfeit", () => {
+  // W2b (spec §5.2 "Chess forfeit paths", D15) — this pinned the opposite until W2b: a chess forfeit rode
+  // `boardgame.result{method:"forfeit" | "double_forfeit"}`. It is now `core.forfeit`, as in every other sport, so the
+  // spec's method enums no longer offer either; the methods stay in `BoardgameMethod` for streams written before W2b.
+  it("W2b D15: the result enums offer no forfeit method — a chess forfeit is core.forfeit; the schema still reads both", () => {
     const spec = padSpec(cfg);
     const decisive = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.result")!;
     const method = decisive.fields.find((f) => f.path === "method");
     expect(method?.kind).toBe("enum");
-    if (method?.kind === "enum") expect(method.values).toContain("forfeit");
     const drawn = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.draw")!;
     const drawnMethod = drawn.fields.find((f) => f.path === "method");
-    if (drawnMethod?.kind === "enum") expect(drawnMethod.values).toContain("double_forfeit");
+    expect(drawnMethod?.kind).toBe("enum");
+    if (method?.kind !== "enum" || drawnMethod?.kind !== "enum") throw new Error("method fields are enums");
+    expect(method.values.length).toBeGreaterThan(0);
+    expect(drawnMethod.values.length).toBeGreaterThan(0);
+    for (const retired of ["forfeit", "double_forfeit"]) {
+      expect(method.values, retired).not.toContain(retired);
+      expect(drawnMethod.values, retired).not.toContain(retired);
+      expect(BoardgameMethod.options, retired).toContain(retired);
+    }
+    // Every other method stays offered: the two enums together are BoardgameMethod minus the two retired ones.
+    const offered = new Set([...method.values, ...drawnMethod.values]);
+    expect([...offered].sort()).toEqual(BoardgameMethod.options.filter((m) => m !== "forfeit" && m !== "double_forfeit").sort());
+  });
+
+  it("W2b f-w2: the method and the winner agree — a double forfeit has no winner, a single forfeit names one", () => {
+    const ok = (payload: unknown) => BoardgameResult.safeParse(payload).success;
+    // accepted: the shapes streams written before W2b carry
+    expect(ok({ winner: null, method: "double_forfeit" })).toBe(true);
+    expect(ok({ method: "double_forfeit" })).toBe(true);
+    expect(ok({ winner: "H", method: "forfeit" })).toBe(true);
+    // refused: the shapes that disagree
+    expect(ok({ winner: "H", method: "double_forfeit" })).toBe(false);
+    expect(ok({ winner: null, method: "forfeit" })).toBe(false);
+    expect(ok({ method: "forfeit" })).toBe(false);
+    // every other method is unaffected either way
+    expect(ok({ winner: null, method: "agreement" })).toBe(true);
+    expect(ok({ winner: "H", method: "checkmate" })).toBe(true);
+    // The refusal names the field and says why — it is the message a recorder reads back on a rejected result.
+    const issues = (payload: unknown) => BoardgameResult.safeParse(payload).error?.issues.map((i) => ({ path: i.path, message: i.message }));
+    expect(issues({ winner: "H", method: "double_forfeit" })).toEqual([{ path: ["winner"], message: "a double forfeit has no winner" }]);
+    expect(issues({ winner: null, method: "forfeit" })).toEqual([{ path: ["winner"], message: "a forfeit names its winner" }]);
+    expect(issues({ method: "forfeit" })).toEqual([{ path: ["winner"], message: "a forfeit names its winner" }]);
+  });
+});
+
+// W2b (spec §5.2, R14) — the kernel's phase guard judges WHICH reason a phase admits; the module refuses only a
+// forfeit on a game that is over. Folding never reaches this (the kernel refuses first), so it is driven by
+// `apply` directly — the assumption "the kernel always guards first" is a guard here, not a comment.
+describe("boardgame: the module's own forfeit phase guard (W2b)", () => {
+  const ko = boardgame.configSchema.parse({ ...boardgame.bracketDeciders(cfg) });
+  const forfeit = (payload: unknown) => asEv(makeEnvelope(9, { type: "core.forfeit", payload }));
+  const states: Record<string, BoardgameState> = {
+    pre: fold(stream()),
+    live: fold(stream(["core.start"])),
+    tiebreak: fold(stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]), ko),
+    done: fold(stream(["core.start"], ["boardgame.result", { winner: "H", method: "resign" }])),
+    final: fold(stream(["core.start"], ["boardgame.result", { winner: "H", method: "resign" }], ["core.finalize"])),
+    abandoned: fold(stream(["core.start"], ["core.abandon", { reason: "power cut" }])),
+  };
+
+  it("positive pair: a forfeit in pre, live or tie-break is applied — the offender loses, 1-0 out of colour history", () => {
+    let checked = 0;
+    for (const phase of ["pre", "live", "tiebreak"]) {
+      const state = states[phase]!;
+      expect(state.phase, phase).toBe(phase);
+      const out = boardgame.apply(state, forfeit({ by: "A", reason: "walkover" }));
+      expect([out.phase, out.method, out.forfeited, out.outcome], phase).toEqual(["done", "forfeit", true, { kind: "award", winner: "H", loser: "A", reason: "walkover" }]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("refuses a forfeit on a game that is over — done, final or abandoned — with the phase named", () => {
+    let checked = 0;
+    for (const phase of ["done", "final", "abandoned"]) {
+      const state = states[phase]!;
+      expect(state.phase, phase).toBe(phase);
+      expect(() => boardgame.apply(state, forfeit({ by: "A", reason: "withdrew" })), phase).toThrowError(
+        expect.objectContaining({ code: "WRONG_PHASE", message: `forfeit not allowed in phase "${phase}"` }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a core.forfeit by both records the double forfeit method — the same game a boardgame.result{double_forfeit} records", () => {
+    const viaCore = boardgame.apply(states.live!, forfeit({ by: "both", reason: "walkover" }));
+    const viaResult = fold(stream(["core.start"], ["boardgame.result", { winner: null, method: "double_forfeit" }]));
+    expect([viaCore.phase, viaCore.method, viaCore.forfeited, viaCore.outcome]).toEqual(["done", "double_forfeit", true, { kind: "double_walkover" }]);
+    expect([viaResult.method, viaResult.outcome]).toEqual([viaCore.method, viaCore.outcome]);
   });
 });

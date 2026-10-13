@@ -5,15 +5,19 @@
 // w2a-fakes.test.ts holds this function to them.
 import { forbidsLevelResult, isLevelOutcome } from "@seazn/engine/core";
 
-/** D3, in the product's order, over the ACTIVE (void-resolved) events: 1 an active settle decides, even an abandoned
- *  match; 2 an active abandon otherwise leaves it abandoned (stuck and visible); 3 a level outcome in a bracket kind
- *  is HELD as needs_decision; then an outcome is forfeited (a core.forfeit) or decided, and no outcome is in_play once
- *  started and scheduled before. */
+/** W2b D7 (the plan's status table, amending W2a's D3), in the product's order, over the ACTIVE (void-resolved)
+ *  events: 1 an active settle decides, even an abandoned match; 2 an active abandon leaves it abandoned when it left
+ *  no outcome, or a level one in a bracket kind (stuck and visible) — an abandon whose sport's rule gives it a result
+ *  falls through (X-AB-2); 3 a level outcome in a bracket kind is HELD as needs_decision; 4 an active core.forfeit, or a
+ *  double walkover, is forfeited; 5 any other outcome is decided; and no outcome is in_play once started, scheduled
+ *  before. */
 export function fixtureStatusFromFold(outcome: unknown, active: readonly { readonly type: string }[], stageKind: string | null): string {
   const has = (type: string) => active.some((e) => e.type === type);
+  const heldLevel = outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome as never);
   if (has("core.settle")) return "decided";
-  if (has("core.abandon")) return "abandoned";
-  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome as never)) return "needs_decision";
-  if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
+  if (has("core.abandon") && (outcome === null || heldLevel)) return "abandoned";
+  if (heldLevel) return "needs_decision";
+  if (outcome !== null && (has("core.forfeit") || (outcome as { kind?: unknown }).kind === "double_walkover")) return "forfeited";
+  if (outcome !== null) return "decided";
   return has("core.start") ? "in_play" : "scheduled";
 }

@@ -124,6 +124,8 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     expect(files.filter((f) => f.includes("/")).length, "no file under a src/ subdirectory was scanned (src/families/ holds the W2a family)").toBeGreaterThan(0);
     let bare = 0;
     for (const f of files) for (const m of read(`packages/reference/src/${f}`).matchAll(/from\s+"([^".][^"]*)"/g)) {
+      // A Node built-in (`node:fs` in a family test reading Appendix A) is never a package dependency.
+      if (m[1]!.startsWith("node:")) continue;
       bare++;
       const name = m[1]!.startsWith("@") ? m[1]!.split("/").slice(0, 2).join("/") : m[1]!.split("/")[0]!;
       expect(declared.has(name), `${f}: ${m[1]} is not declared`).toBe(true);

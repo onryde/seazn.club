@@ -14,3 +14,5 @@ export * from "./stoppages.ts";
 export * from "./for-each-sport.ts";
 // W2a (preflight C7) — the declared cfgs every W2a sport sweep walks. Pure.
 export * from "./declared-cfgs.ts";
+// W2b ruling 112 — one real sport event, drawn from the module's own generator. Pure.
+export * from "./play-event.ts";

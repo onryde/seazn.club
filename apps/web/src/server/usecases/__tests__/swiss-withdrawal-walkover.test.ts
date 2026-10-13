@@ -47,7 +47,7 @@ interface FixtureRow {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
-  outcome: { kind?: string; winner?: string; method?: string } | null;
+  outcome: { kind?: string; winner?: string; loser?: string | null; reason?: string; method?: string } | null;
 }
 
 async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
@@ -167,12 +167,15 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
       walkovers: 1,
       voided: 0,
       skipped_finalized: 0,
+      walked_over_held: 0,
+      left_to_organiser: [],
     });
 
     const after = await fixturesOf(rig.stageId);
     const walkedOver = after.find((f) => f.id === theirs.id)!;
     expect(walkedOver.status, "a walkover, not an abandoned board").toBe("forfeited");
-    expect(walkedOver.outcome).toEqual({ kind: "award", winner: S2, method: "entrant withdrew" });
+    // W2b §5.1: the award names its loser and the closed reason (finding 14: the English "entrant withdrew" is refused).
+    expect(walkedOver.outcome).toEqual({ kind: "award", winner: S2, loser: S4, reason: "withdrew" });
     // The other board and the unseated round 2 are nobody's business here.
     expect(after.find((f) => f.id === other.id)).toMatchObject({ status: "scheduled", outcome: null });
     expect(round(after, 2).map((f) => [f.home_entrant_id, f.away_entrant_id, f.status])).toEqual([
@@ -210,16 +213,16 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
     // The earlier walkover S4 WON stands, untouched.
     expect(after.find((f) => f.id === earlier.id)).toMatchObject({
       status: "forfeited",
-      outcome: { kind: "award", winner: S4, method: "walkover" },
+      outcome: { kind: "award", winner: S4, loser: S2, reason: "walkover" },
     });
     // Both boards S4 was still owed go to the opponents.
     expect(after.find((f) => f.id === boardOf(r2, 2, S1!, S4!).id)).toMatchObject({
       status: "forfeited",
-      outcome: { kind: "award", winner: S1, method: "entrant withdrew" },
+      outcome: { kind: "award", winner: S1, loser: S4, reason: "withdrew" },
     });
     expect(after.find((f) => f.id === adHoc)).toMatchObject({
       status: "forfeited",
-      outcome: { kind: "award", winner: S3, method: "entrant withdrew" },
+      outcome: { kind: "award", winner: S3, loser: S4, reason: "withdrew" },
     });
     // Nothing of S4's was abandoned.
     expect(after.filter((f) => f.status === "abandoned")).toEqual([]);

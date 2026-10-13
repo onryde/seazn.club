@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/i18n", () => ({
-  getDictionary: vi.fn(async () => ({ "overlay.vs": "vs", "stream.title": "not overlay" })),
+  getDictionary: vi.fn(async () => ({ "overlay.vs": "vs", "stream.title": "not overlay", "forfeit.sentence.walkover": "{loser} w/o" })),
   t: (_dict: unknown, key: string) => key,
 }));
 vi.mock("@/lib/entitlements", () => ({
@@ -298,11 +298,12 @@ describe("RT: the loader hands the panel one signed overlay key per listed fixtu
     vi.mocked(hasFeature).mockImplementation(async () => true);
     vi.stubEnv("AUTH_SECRET", "");
     expect(await keysOf(), "no AUTH_SECRET").toEqual({});
-    // The positive pair, the secret back: the keys are back — and the dictionary is sliced to `overlay.*` alone.
+    // The positive pair, the secret back: the keys are back — and the dictionary is sliced to `overlay.*` plus the
+    // forfeit copy's keys (W2b T13 re-review N-1: the preview's stage words a credited result from them).
     vi.stubEnv("AUTH_SECRET", "rt-page-unit-secret-0123456789abcdef");
     const on = await load(undefined, { fixtureIds: IDS });
     expect(Object.keys(on?.overlayKeys ?? {})).toHaveLength(IDS.length);
-    expect(on?.overlayDict).toEqual({ "overlay.vs": "vs" });
+    expect(on?.overlayDict).toEqual({ "overlay.vs": "vs", "forfeit.sentence.walkover": "{loser} w/o" });
   });
 });
 

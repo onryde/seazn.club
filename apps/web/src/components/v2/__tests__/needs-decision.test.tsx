@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BRACKET_KINDS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
+import { BRACKET_KINDS, FORFEIT_REASONS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame"; // the "./sports/*" subpath export (engine package.json)
 import { declaredCfgs, defaultLineupPair, forEachSport, makeEnvelope } from "@seazn/engine/testkit";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NeedsDecisionBlock, SettleDialog, confirmBlocked, finalizeVisible, hasActiveAbandon, heldCause, needsDecision, type HeldCause } from "../needs-decision";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 
 // W2a Task 11 (spec §5.5, UI-1 option A; controller ruling C12). The console's "Needs a decision" block shows iff the
 // stage is a bracket kind AND the kernel's own `settleApplies` is true, fed the same facts. Pure predicates — the
@@ -237,5 +240,142 @@ describe("the settle dialog never truncates a name (M12)", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// W2b Task 8 (merge notice D-R9; legacy rows only, PF-8a): a W2a withdrawal left a held line held, so its settle dialog
+// offered the withdrawn entrant as a winner the server then refused (SETTLE_NOT_APPLICABLE withdrawn, C17). The dialog
+// now offers only the sides still in the competition. New rows cannot reach it: a withdrawal walks a held line over.
+describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
+  const dialog = (home: { id: string; name: string; withdrawn?: boolean }, away: { id: string; name: string; withdrawn?: boolean }, feedsNextMatch?: boolean) =>
+    renderToStaticMarkup(
+      <SettleDialog
+        msg={(k) => (en as Record<string, string>)[k] ?? k}
+        cause="level"
+        home={home}
+        away={away}
+        feedsNextMatch={feedsNextMatch}
+        busy={false}
+        settle={async () => ({ ok: true })}
+        onClose={() => {}}
+        onRefused={() => {}}
+      />,
+    );
+  const offered = (html: string) => [...html.matchAll(/data-testid="settle-winner-([^"]+)"/g)].map((m) => m[1]);
+
+  it("D-R9: a withdrawn side is not a choice; the remaining side is — on either seat", () => {
+    let checked = 0;
+    for (const gone of ["h", "a"] as const) {
+      const html = dialog({ id: "h", name: "Home", withdrawn: gone === "h" }, { id: "a", name: "Away", withdrawn: gone === "a" });
+      expect(offered(html), `${gone} withdrawn`).toEqual([gone === "h" ? "a" : "h"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("D-R9 positive pair: with nobody withdrawn (flag absent or false) both sides are offered, home first", () => {
+    expect(offered(dialog({ id: "h", name: "Home" }, { id: "a", name: "Away" }))).toEqual(["h", "a"]);
+    expect(offered(dialog({ id: "h", name: "Home", withdrawn: false }, { id: "a", name: "Away", withdrawn: false }))).toEqual(["h", "a"]);
+  });
+
+  // Loop-F review M-8: both sides withdrawn (a legacy row, PF-8a) left the dialog with an empty "Who advances?" — it
+  // now says why there is no choice, and Confirm stays blocked (no winner can be chosen).
+  it("M-8: both sides withdrawn — no choice is offered and the dialog says why; with one side left it says nothing", () => {
+    const noChoice = (html: string) => /data-testid="settle-no-choice"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+    const both = dialog({ id: "h", name: "Home", withdrawn: true }, { id: "a", name: "Away", withdrawn: true });
+    expect(offered(both)).toEqual([]);
+    expect(noChoice(both)).toBe((en as Record<string, string>)["score.needsDecision.noChoice"]);
+    expect(/data-testid="settle-confirm"[^>]*disabled=""/.test(both), "Confirm is blocked").toBe(true);
+    let checked = 0;
+    for (const gone of [null, "h", "a"] as const) {
+      const html = dialog({ id: "h", name: "Home", withdrawn: gone === "h" }, { id: "a", name: "Away", withdrawn: gone === "a" });
+      expect(noChoice(html), `${gone ?? "nobody"} withdrawn`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  // Loop-F R-4, rewritten by Loop R M-12: the sentence names the way out in every locale — the route
+  // withdrawal-w2b.test.ts "R-4" drives: void back into play, then a forfeit. It names the console's own controls by
+  // their own labels: "Void last entry", "Forfeit…", and in the forfeit dialog "Both sides" (offered only while nothing
+  // is played: a double walkover is a walkover, R2) or a side with the reason that fits, which after play is a
+  // retirement or a disqualification (D3; PF-2 keeps the withdrawal the cascade's own). It once told the organiser to
+  // record a disqualification that never happened, quoting the engine's raw value «disqualified» in es/fr/nl (the
+  // dialog has said "Disqualification: …" since design audit 1.2) and naming a retirement ("abandono", "opgave") as the
+  // forfeit in es/nl. Every label is read from the dictionary the dialog renders, never typed here; a reason label's
+  // word is its noun, the part before the "Noun: gloss" colon.
+  it("R-4 / M-12: the no-choice sentence names the console's real options by their own labels, in every locale", () => {
+    const LOCALES: [string, Record<string, string>][] = [["en", en], ["es", es], ["fr", fr], ["nl", nl]];
+    const noun = (label: string | undefined) => {
+      expect(label, "the dialog's label exists").toBeTruthy();
+      const at = label!.indexOf(":");
+      expect(at, `"${label}" keeps its "Noun: gloss" form`).toBeGreaterThan(0);
+      return label!.slice(0, at).trim();
+    };
+    const lines = new Set<string>();
+    let labels = 0;
+    let checked = 0;
+    for (const [locale, dict] of LOCALES) {
+      const line = dict["score.needsDecision.noChoice"]!;
+      const owed = [
+        dict["score.voidLast"]!.replace(/^[^\p{L}]+/u, ""), // the console's "⟲ Void last entry", without its glyph
+        dict["score.forfeit"]!,
+        dict["forfeitDialog.who.both"]!,
+        noun(dict["forfeitDialog.reason.retired"]),
+        noun(dict["forfeitDialog.reason.disqualified"]),
+      ];
+      for (const label of owed) {
+        expect(label, `${locale}: a label to name`).toBeTruthy();
+        expect(line.includes(label), `${locale}: names the control "${label}" by its own label`).toBe(true);
+        labels++;
+      }
+      // No raw engine reason value: the dialog never shows one.
+      for (const code of FORFEIT_REASONS) {
+        expect(new RegExp(`\\b${code}\\b`, "u").test(line), `${locale}: no raw reason value "${code}"`).toBe(false);
+      }
+      lines.add(line);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(labels).toBe(4 * 5);
+    expect(lines.size, "four translations, not one sentence copied").toBe(4);
+  });
+
+  // Loop-F tidy 2: on a line that feeds NO next match — a final, a grand final, a third-place line — the R-4 route would
+  // award the title or the place to a side that has left ("nobody advances" is false there: the forfeit names a
+  // winner). The dialog says so and offers no route: the place stays vacant (X-WD-4: a vacant title is W4's).
+  it("tidy-2: on a line that feeds no next match the no-choice sentence names the vacancy and offers no forfeit; on one that does (or unknown) it names the R-4 route", () => {
+    const noChoice = (html: string) => /data-testid="settle-no-choice"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+    const gone = [{ id: "h", name: "Home", withdrawn: true }, { id: "a", name: "Away", withdrawn: true }] as const;
+    const EN = en as Record<string, string>;
+    const unescape = (h: string | null) => h?.replace(/&#x27;/g, "'").replace(/&quot;/g, '"') ?? null;
+    const cases: [boolean | undefined, string][] = [
+      [false, EN["score.needsDecision.noChoice.place"]!],
+      [true, EN["score.needsDecision.noChoice"]!],
+      [undefined, EN["score.needsDecision.noChoice"]!],
+    ];
+    let checked = 0;
+    for (const [feeds, want] of cases) {
+      expect(want, `${String(feeds)}: the key exists`).toBeTruthy();
+      expect(unescape(noChoice(dialog(gone[0], gone[1], feeds))), `feedsNextMatch ${String(feeds)}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // With a side left, the line has a choice wherever it sits: no sentence at all (the M-8 negative pair, on a final).
+    expect(noChoice(dialog({ id: "h", name: "Home" }, gone[1], false)), "one side left on a final: a choice, no sentence").toBeNull();
+    const DQ: (typeof FORFEIT_REASONS)[number] = "disqualified";
+    const LOCALES: [string, Record<string, string>][] = [["en", en], ["es", es], ["fr", fr], ["nl", nl]];
+    const lines = new Set<string>();
+    let locales = 0;
+    for (const [locale, dict] of LOCALES) {
+      const line = dict["score.needsDecision.noChoice.place"];
+      expect(line, `${locale}: translated`).toBeTruthy();
+      expect(line!.includes(DQ), `${locale}: offers no forfeit route on a line that decides a place`).toBe(false);
+      expect(line, `${locale}: a different sentence from the R-4 route`).not.toBe(dict["score.needsDecision.noChoice"]);
+      lines.add(line!);
+      locales++;
+    }
+    expect(locales).toBe(4);
+    expect(lines.size, "four translations, not one sentence copied").toBe(4);
   });
 });

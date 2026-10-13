@@ -23,6 +23,9 @@ const spies = vi.hoisted(() => ({
 }));
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
+// R116-4: the officials tab's fixture rows (both readers) and entrants, when a test sets them (null: the one TBD row
+// below).
+const scene = vi.hoisted(() => ({ rows: null as unknown[] | null, entrants: [] as { id: string; display_name: string }[] }));
 
 // Configurable per-test — default (undefined) reads as "no switcher cookie",
 // matching a first-time visitor; set to "es" to prove the locale actually
@@ -72,7 +75,7 @@ vi.mock("@/server/usecases/stages", () => ({ listStages: vi.fn(async () => []) }
 // every declaration in this file, so a factory closing over a const would
 // throw on module load.
 vi.mock("@/server/usecases/fixtures", () => ({
-  listDivisionFixtures: vi.fn(async () => [
+  listDivisionFixtures: vi.fn(async () => scene.rows ?? [
     {
       id: "fx-1",
       home_entrant_id: null,
@@ -84,7 +87,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
       officials: [],
     },
   ]),
-  listDivisionFixturesForBoard: vi.fn(async () => [
+  listDivisionFixturesForBoard: vi.fn(async () => scene.rows ?? [
     {
       id: "fx-1",
       home_entrant_id: null,
@@ -97,7 +100,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
     },
   ]),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => scene.entrants) }));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "Europe/London" })),
 }));
@@ -115,7 +118,9 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import DivisionSchedulePage from "../page";
+import { msg } from "@/lib/messages";
 import { OfficialsPanel } from "@/components/v2/officials-panel";
+import frUi from "@/dictionaries/fr/ui.json";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -159,10 +164,82 @@ describe("officials-tab fixture picker resolves slot labels via resolveLocale() 
   // hardcoded to the client-safe English msg() regardless of ANY locale
   // signal, so this would still read "Winner of Group A vs Winner of Group
   // B" even with the switcher cookie set to Spanish.
+  // Audit 4.2's sibling on this page: the join was a typed English " vs " in every locale; French says "contre".
+  it("seazn_locale=fr -> the label joins its sides with the French dictionary's word, never English vs", async () => {
+    localeCookie.value = "fr";
+    const panel = find(await renderOfficialsTab(), OfficialsPanel);
+    const label = (panel!.props as { fixtures: { label: string }[] }).fixtures[0]!.label;
+    const word = (frUi as Record<string, string>)["schedule.vs"]!;
+    expect(word, "premise: French has its own word").not.toBe("vs");
+    expect(label).toContain(` ${word} `);
+    expect(label).not.toContain(" vs ");
+  });
+
   it("seazn_locale=es -> resolves the SAME fixture's label in Spanish", async () => {
     localeCookie.value = "es";
     const panel = find(await renderOfficialsTab(), OfficialsPanel);
     const label = (panel!.props as { fixtures: { label: string }[] }).fixtures[0]!.label;
     expect(label).toBe("Ganador del Grupo A vs Ganador del Grupo B");
+  });
+});
+
+// R116-4 (owner ruling 116): the officials tab's fixture picker printed "Bye" for a withdrawn winner's dead seat, walked
+// over by the side that arrived. The picker names her in her seat, either side, as any walkover names the side that did
+// not play (`unseatedForfeitLoser`); a genuine bye and a DQ'd winner's dead seat (`loser: null`) keep the bye label.
+describe("officials-tab fixture picker names ruling 116's withdrawn winner in her dead seat (R116-4)", () => {
+  beforeEach(() => {
+    spies.listOfficialsForConsole.mockReset().mockResolvedValue([]);
+    spies.listOfficialBlackouts.mockReset().mockResolvedValue([]);
+    spies.listOfficialBusyElsewhere.mockReset().mockResolvedValue([]);
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(divisionPage());
+    localeCookie.value = undefined;
+  });
+
+  it("her name in her seat, either side; a bye and a DQ'd winner's dead seat keep the bye", async () => {
+    const BYE = { key: "bracket.slot.bye", params: {} };
+    /** The bye word as the en dictionary prints it — the copy, never a literal typed here. */
+    const BYE_WORD = msg("bracket.slot.bye");
+    const row = (id: string, home: string | null, away: string | null, outcome: unknown) => ({
+      id,
+      home_entrant_id: home,
+      away_entrant_id: away,
+      home_slot_label: home === null ? BYE : null,
+      away_slot_label: away === null ? BYE : null,
+      scheduled_at: null,
+      status: "forfeited",
+      outcome,
+      officials: [],
+    });
+    const withdrew = (winner: string) => ({ kind: "award", winner, loser: "e-gone", reason: "withdrew" });
+    const bye = (winner: string) => ({ kind: "award", winner, loser: null, reason: "bye" });
+    scene.entrants = [
+      { id: "e-bears", display_name: "Bears of Brockley" },
+      { id: "e-gone", display_name: "Charlie Gone" },
+    ];
+    // Design audit 4.1: her name carries the dictionary's withdrawn mark (a departed side is marked across the organiser
+    // UI); audit 4.2's sibling: the join is the dictionary's own "vs".
+    const her = msg("schedule.withdrawnSide", { name: "Charlie Gone" });
+    expect(her, "premise: the mark adds to her name").not.toBe("Charlie Gone");
+    const vs = (a: string, b: string) => `${a} ${msg("schedule.vs")} ${b}`;
+    const ROWS: [id: string, row: unknown, want: string][] = [
+      ["her seat home", row("f-home", null, "e-bears", withdrew("e-bears")), vs(her, "Bears of Brockley")],
+      ["her seat away", row("f-away", "e-bears", null, withdrew("e-bears")), vs("Bears of Brockley", her)],
+      ["a bye", row("f-bye", "e-bears", null, bye("e-bears")), vs("Bears of Brockley", BYE_WORD)],
+      ["a DQ'd winner's dead seat", row("f-dq", null, "e-bears", bye("e-bears")), vs(BYE_WORD, "Bears of Brockley")],
+    ];
+    scene.rows = ROWS.map(([, r]) => r);
+    try {
+      const panel = find(await renderOfficialsTab(), OfficialsPanel);
+      const labels = (panel!.props as { fixtures: { id: string; label: string }[] }).fixtures;
+      let checked = 0;
+      for (const [name, r, want] of ROWS) {
+        expect(labels.find((f) => f.id === (r as { id: string }).id)?.label, name).toBe(want);
+        checked++;
+      }
+      expect(checked).toBe(ROWS.length);
+    } finally {
+      scene.rows = null;
+      scene.entrants = [];
+    }
   });
 });

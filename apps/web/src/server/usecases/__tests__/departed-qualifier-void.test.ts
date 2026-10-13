@@ -55,11 +55,18 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   outcome: { kind?: string; winner?: string } | null;
+  home_slot_label: { key?: string } | null;
+  away_slot_label: { key?: string } | null;
 }
+
+/** The dead-seat stamp (W2b X-WD-3 / plan D17): `stages.ts`'s `BYE_SLOT_LABEL` key, the bracket's own bye copy. */
+const BYE_KEY = "bracket.slot.bye";
+const stampedDead = (r: FixtureRow) =>
+  (r.home_entrant_id === null && r.home_slot_label?.key === BYE_KEY) || (r.away_entrant_id === null && r.away_slot_label?.key === BYE_KEY);
 
 async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
   return sql<FixtureRow[]>`
-    select ext_key, round_no, seq_in_round, home_entrant_id, away_entrant_id, status, outcome
+    select ext_key, round_no, seq_in_round, home_entrant_id, away_entrant_id, status, outcome, home_slot_label, away_slot_label
     from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
 }
 
@@ -190,9 +197,11 @@ describe.skipIf(!HAS_DB)("no departed qualifier is seated in a playable fixture"
       const rows = await expectNoDepartedInPendingFixture(rig);
       await expectNoDepartedWinner(rig, rows);
       // ...and her line was SETTLED rather than left half-alive: walked over
-      // where she had a live opponent, voided where the other seat was a TBD
-      // feed she could not concede to.
-      expect(rows.some((r) => r.status === "forfeited" || r.status === "abandoned")).toBe(true);
+      // where she had a live opponent; where the other seat was a TBD feed she
+      // could not concede to, W2b (X-WD-3, D-G3 corner 3) un-seats her and
+      // stamps the seat dead, so the arriving opponent walks over it — before
+      // W2b that line was voided with her still seated in it.
+      expect(rows.some((r) => r.status === "forfeited" || r.status === "abandoned" || (r.status === "scheduled" && stampedDead(r)))).toBe(true);
     });
 
     it(`${kind}: both sides of a pairing depart — the line is void, not scheduled`, async () => {

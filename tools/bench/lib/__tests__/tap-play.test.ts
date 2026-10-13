@@ -32,8 +32,9 @@
 //     real race `releaseHold` exists for.
 //   - the score-entry sheet: tile, then number + confirm per side, home first
 //     (generic.tsx:554-578), then an immediate `generic.result`.
-//   - the console's forfeit: toggle, per-side button, reason prompt (initial
-//     "walkover", trimmed on submit), and the send carries `expected_seq` from
+//   - the console's forfeit dialog (W2b T11): the opener, a side choice
+//     (home, away or both), a reason radio, then Confirm — blocked until both
+//     are chosen — and the send carries `expected_seq` from
 //     the page's last load — a stale console is refused (SEQ_CONFLICT,
 //     fixture-console.tsx:456-469) and writes nothing. Finalize likewise.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -248,8 +249,7 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     let dock: { readonly id: number; readonly side: Side; readonly named: boolean } | undefined;
     let sheet: { step: Side; value: number; home: number } | undefined;
     // --- the console ---
-    let menuOpen = false;
-    let prompt: { side: Side; reason: string } | undefined;
+    let dialog: { who?: Side | "both"; reason?: string } | undefined;
 
     const render = (): void => {
       dock =
@@ -277,8 +277,7 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     const refreshConsole = (): void => {
       snapshotStatus = statusNow();
       snapshotSeq = tip();
-      menuOpen = false;
-      prompt = undefined;
+      dialog = undefined;
     };
 
     const onConsole = (): boolean => ctx.signedIn && url === `${ORIGIN}${CONSOLE_PATH}`;
@@ -295,12 +294,15 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           return onConsole() && (snapshotStatus === "decided" || snapshotStatus === "forfeited");
         case '[data-testid="score-forfeit"]':
           return onConsole() && !["decided", "forfeited", "finalized"].includes(snapshotStatus);
-        case '[data-testid="score-forfeit-home"]':
-        case '[data-testid="score-forfeit-away"]':
-          return onConsole() && menuOpen;
-        case '[data-testid="score-prompt-reason"]':
-        case '[data-testid="score-prompt-submit"]':
-          return onConsole() && prompt !== undefined;
+        case '[data-testid="forfeit-who-home"]':
+        case '[data-testid="forfeit-who-away"]':
+        case '[data-testid="forfeit-who-both"]':
+        case '[data-testid="forfeit-confirm"]':
+          return onConsole() && dialog !== undefined;
+        case '[data-testid="forfeit-why-walkover"]':
+        case '[data-testid="forfeit-why-retired"]':
+        case '[data-testid="forfeit-why-disqualified"]':
+          return onConsole() && dialog?.who !== undefined;
         case '[data-testid="score-start-match"]':
           return padLive && !started;
         case '[data-role="v3-scorebug-half"][data-side="home"]':
@@ -357,18 +359,24 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           append("core.finalize", {});
           return;
         case '[data-testid="score-forfeit"]':
-          menuOpen = !menuOpen;
+          dialog = {};
           return;
-        case '[data-testid="score-forfeit-home"]':
-        case '[data-testid="score-forfeit-away"]':
-          menuOpen = false;
-          prompt = { side: sel.includes("home") ? "home" : "away", reason: "walkover" };
+        case '[data-testid="forfeit-who-home"]':
+        case '[data-testid="forfeit-who-away"]':
+        case '[data-testid="forfeit-who-both"]':
+          dialog!.who = /forfeit-who-(home|away|both)/.exec(sel)![1] as Side | "both";
           return;
-        case '[data-testid="score-prompt-submit"]': {
-          const { side, reason } = prompt!;
-          prompt = undefined;
-          if (reason.trim() === "" || snapshotSeq !== tip()) return;
-          append("core.forfeit", { by: SIDE_ID[side], reason: reason.trim() });
+        case '[data-testid="forfeit-why-walkover"]':
+        case '[data-testid="forfeit-why-retired"]':
+        case '[data-testid="forfeit-why-disqualified"]':
+          dialog!.reason = /forfeit-why-(\w+)/.exec(sel)![1];
+          return;
+        case '[data-testid="forfeit-confirm"]': {
+          const { who, reason } = dialog!;
+          if (who === undefined || reason === undefined) return; // Confirm is disabled until both are chosen
+          dialog = undefined;
+          if (snapshotSeq !== tip()) return;
+          append("core.forfeit", { by: who === "both" ? "both" : SIDE_ID[who], reason });
           refreshConsole();
           return;
         }
@@ -450,7 +458,6 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           async fill(value) {
             if (!attached(sel)) throw new Error(`fake page: ${sel} is not attached`);
             if (sel === '[data-testid="pad-sheet-number"]') sheet!.value = Number(value);
-            else if (sel === '[data-testid="score-prompt-reason"]') prompt!.reason = value;
             else throw new Error(`fake page: fill is not modelled (${sel})`);
           },
           async waitFor(options) {
@@ -1001,22 +1008,23 @@ describe("R59 — the three d-tiny routes, played through the real driver (fix r
     expect(payloadsOf(world, "generic.score")).toEqual([{ by: HOME, points: 2 }]);
   });
 
-  it("(c) a forfeit is an ORGANISER action on a freshly loaded console — toggle, side, typed reason, submit — and lands exactly", async () => {
+  it("(c) a forfeit is an ORGANISER action on a freshly loaded console — opener, side, reason, Confirm — and lands exactly", async () => {
     const world = fakeWorld();
-    const result = await player(world).playFixture(job([START, { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } }]));
+    const result = await player(world).playFixture(job([START, { type: "core.forfeit", payload: { by: "@away", reason: "retired" } }]));
 
     expect(result.findings).toEqual([]);
     expect(world.rows.map((r) => [r.type, r.payload])).toEqual([
       ["core.start", {}],
-      ["core.forfeit", { by: AWAY, reason: "retired hurt" }],
+      ["core.forfeit", { by: AWAY, reason: "retired" }],
       ["core.finalize", {}],
     ]);
     expect(world.statusNow()).toBe("finalized");
-    const forfeitClicks = world.record.clicks.filter((c) => c.includes("score-forfeit") || c.includes("score-prompt"));
+    const forfeitClicks = world.record.clicks.filter((c) => c.includes("forfeit"));
     expect(forfeitClicks).toEqual([
       'console [data-testid="score-forfeit"]',
-      'console [data-testid="score-forfeit-away"]',
-      'console [data-testid="score-prompt-submit"]',
+      'console [data-testid="forfeit-who-away"]',
+      'console [data-testid="forfeit-why-retired"]',
+      'console [data-testid="forfeit-confirm"]',
     ]);
     // Once before the forfeit (the console was loaded before play), once before finalize.
     expect(world.record.reloads).toBeGreaterThanOrEqual(2);
@@ -1028,7 +1036,7 @@ describe("R59 — the three d-tiny routes, played through the real driver (fix r
       job([
         START,
         { type: "generic.score", payload: { by: "@home", points: 2 } },
-        { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } },
+        { type: "core.forfeit", payload: { by: "@away", reason: "retired" } },
       ]),
     );
 

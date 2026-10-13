@@ -37,14 +37,17 @@ import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/comp
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
-import { abandonUi, finalizeUi, forfeitUi, voidLastUi, type ForfeitReason } from "../browser/pages/fixture-console.ts";
+import { ConsoleChoiceNotOffered, FORFEIT_NEITHER_TESTID, abandonUi, finalizeUi, forfeitUi, voidLastUi, type ForfeitReason } from "../browser/pages/fixture-console.ts";
 import { settleUi, type SettleMethodId } from "../browser/pages/needs-decision.ts";
 import { startUi } from "../browser/pages/launch.ts";
 import { readPublicUi } from "../browser/pages/public-division.ts";
 import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../browser/pages/run-sheet.ts";
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
-import { SETTLE_METHODS } from "@seazn/engine/core";
+import { FORFEIT_REASONS, SETTLE_METHODS } from "@seazn/engine/core";
+// W2b Task 11 (review I-1): the reasons PF-2 reserves for the withdrawal cascade, the PRODUCT's list (the console's
+// dialog and the server's refusal read it too), never a hand copy. It imports only @seazn/engine/core (boundary.test.ts).
+import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
@@ -135,6 +138,25 @@ export const PUBLIC_DATA_REVALIDATE_S = 30;
  *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
  *  literal only, PF-3); browser-driver.test.ts pins the two together. */
 export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; its wave owns the editor fixes (rulings 33, 47)");
+/** The one forfeit the console's dialog cannot record as the rule has it: one with generated PLAY to post first (a
+ *  retirement or a disqualification follows some of the sport's play, D3 R4). The dialog posts the bare core.forfeit, and
+ *  this driver's direct forfeit() does not tap that play on the pad first, so it goes over http — HttpDriver.forfeit's own
+ *  composition, streams/index.ts forfeitPosting — exempt by this route; an http forfeit does not use the browser's turn.
+ *  Since W2b Task 11 the dialog records a walkover before Start, Neither before Start on a match that feeds a next
+ *  match, and a forfeit under way (review I-1); Neither where the match feeds NO next match is not offered at all, which
+ *  is NEITHER_WITHHELD_ROUTE's. A stream that carries its play beside the forfeit is cut by segmentStream (play on the
+ *  pad, the forfeit on the console) and never reaches this route. */
+export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "a forfeit with generated play to post first is posted over http: the console's forfeit dialog records the forfeit alone, and the play is not tapped on the pad first");
+/** D19 (X-DW-3): on a match that feeds no next match the dialog does not offer Neither — it shows the no-next-match
+ *  guidance in its place, by design — so a double walkover asked of the console there (DW-ALL's refusal probe at a
+ *  final or a third-place match) cannot be tapped. The page object says so by name (ConsoleChoiceNotOffered, with the
+ *  guidance shown), and the driver posts that ONE request over http so the server answers it: its 409
+ *  DOUBLE_WALKOVER_NO_NEXT_MATCH is the RefusedCall the scenario records and judges (Task 11 re-review N-1). An
+ *  ACCEPTED answer there is NeitherWithheldButAccepted by name (re-review N-3). Any other
+ *  choice the dialog withholds is the product's finding and propagates. A case that needed both this route and
+ *  FORFEIT_DIALOG_ROUTE would be refused by MixedLedger.exempt (one route per type); no scenario does: the refusal
+ *  probe is DW-ALL's, which posts no play. */
+export const NEITHER_WITHHELD_ROUTE = routeTo("W2", "a double walkover on a match that feeds no next match is posted over http: the console's forfeit dialog withholds Neither there and shows its guidance instead, so the refusal is the server's to answer");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -148,6 +170,19 @@ export class ConsoleVoidUnproven extends Error {
   constructor(fixtureId: string, why: string) {
     super(`browser: the console's Void last entry on fixture ${fixtureId} — ${why}`);
     this.name = "ConsoleVoidUnproven";
+    this.fixtureId = fixtureId;
+  }
+}
+
+/** The console's dialog withheld Neither on a fixture (ConsoleChoiceNotOffered, its no-next-match guidance shown), yet the
+ *  server ACCEPTED the double walkover NEITHER_WITHHELD_ROUTE then posted over http. The page's D19 reading and the
+ *  server's disagree — the dialog hid a choice the product takes — so the case is refused by name rather than passing on
+ *  the http answer (Task 11 re-review N-3). */
+export class NeitherWithheldButAccepted extends Error {
+  readonly fixtureId: string;
+  constructor(fixtureId: string, posted: readonly PostedEvent[]) {
+    super(`browser: fixture ${fixtureId}'s forfeit dialog withheld Neither (its no-next-match guidance), but the server accepted the double walkover over http (seq ${posted.map((p) => p.seq).join(", ") || "none"}) — the page reads "no next match" where the server does not`);
+    this.name = "NeitherWithheldButAccepted";
     this.fixtureId = fixtureId;
   }
 }
@@ -185,7 +220,10 @@ const ORGANISER_ACTION: Readonly<Record<string, "settle" | "abandon" | "forfeit"
   "core.abandon": "abandon",
   "core.forfeit": "forfeit",
 });
-const FORFEIT_REASONS: readonly ForfeitReason[] = ["walkover", "retired hurt"];
+/** The reasons the console's forfeit dialog authors: the engine's closed list less the product's cascade-only reasons,
+ *  which the dialog never offers and the server refuses from every writer but the withdrawal cascade (PF-2). Both lists
+ *  are read, never retyped (review I-1). */
+const CONSOLE_FORFEIT_REASONS: readonly ForfeitReason[] = FORFEIT_REASONS.filter((r) => !(CASCADE_ONLY_FORFEIT_REASONS as readonly string[]).includes(r));
 
 type OrganiserAct =
   | { readonly action: "settle"; readonly winner: string; readonly method: SettleMethodId; readonly note: string | undefined }
@@ -212,15 +250,18 @@ function organiserActOf(event: StreamEvent): OrganiserAct {
     return { action, reason: p.reason };
   }
   if (!text(p.by)) throw new NoOrganiserRoute(event, "its payload names no entrant that forfeits");
-  if (!FORFEIT_REASONS.includes(p.reason as ForfeitReason)) throw new NoOrganiserRoute(event, `its reason is not one the console's Forfeit authors (${FORFEIT_REASONS.join(", ")})`);
+  if (!CONSOLE_FORFEIT_REASONS.includes(p.reason as ForfeitReason)) throw new NoOrganiserRoute(event, `its reason is not one the console's Forfeit authors (${CONSOLE_FORFEIT_REASONS.join(", ")})`);
   return { action, by: p.by, reason: p.reason as ForfeitReason };
 }
 
-/** D-P3 (phase 3 review I-1): a SPORT's forfeit value (the product's ORGANISER_ONLY_SPORT_EVENTS, D-O1: boardgame.result
- *  method forfeit / double_forfeit) is organiser-only but is not a console control. The organiser's console mounts the
- *  pad with `canOrganise`, whose dock offers the sport's own forfeit chips (pad-host.tsx dockFor, skins/boardgame.tsx),
- *  and this driver's session is the organiser's. So the event rides the pad with the scorer's events (or http, for a
- *  sport with no pad adapter): the real path today, not a refusal. Keyed on the product's own table, no second list. */
+/** D-P3 (phase 3 review I-1): a SPORT's forfeit value that the product declares organiser-only (ORGANISER_ONLY_SPORT_EVENTS,
+ *  D-O1) is not a console control. The organiser's console mounts the pad with `canOrganise`, whose dock offers the
+ *  sport's own chips (pad-host.tsx dockFor), and this driver's session is the organiser's. So the event rides the pad
+ *  with the scorer's events (or http, for a sport with no pad adapter), not a refusal. Since W2b (spec C-4, D15) the table
+ *  is EMPTY: chess's `boardgame.result{method: forfeit | double_forfeit}` is retired on write for every writer, and a
+ *  chess forfeit is a core.forfeit through the console's control. So today this admits nothing, and a retired value is
+ *  the scorer's by isOrganiserOnlyEvent alone, answered by the server's own refusal. Keyed on the product's own table,
+ *  no second list, so a value the product declares again rides the pad and is not refused as having no control. */
 const padAuthored = (event: StreamEvent): boolean => Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, event.type);
 
 /** The stream cut at every organiser-only event (isOrganiserOnlyEvent) that a console control writes: the scorer's
@@ -847,10 +888,10 @@ export class BrowserDriver implements OrganiserDriver {
   async #organiserEvent(fixtureId: string, event: StreamEvent, act: OrganiserAct, idempotencyPrefix: string): Promise<PostedEvent[]> {
     if (act.action === "forfeit") {
       // The existing forfeit route on either lane (its own ledger record and pages); the console's answers are
-      // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes.
-      const viaConsole = this.#wants("forfeit");
-      const posted = await this.forfeit(fixtureId, act.by, act.reason, idempotencyPrefix);
-      return viaConsole ? this.#consoleRows(fixtureId, event, posted) : posted;
+      // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes. The
+      // path is the one the forfeit TOOK (an organiser segment carries no play, so it is the dialog's while the turn is open).
+      const { posted, via } = await this.#forfeit(fixtureId, act.by, act.reason, idempotencyPrefix, []);
+      return via === "browser" ? this.#consoleRows(fixtureId, event, posted) : posted;
     }
     if (!this.#wants(act.action)) {
       this.#ledger.record(act.action, "http");
@@ -865,24 +906,22 @@ export class BrowserDriver implements OrganiserDriver {
     return this.#consoleRows(fixtureId, event, [answered]);
   }
 
-  /** The ledger row at each seq the console answered, as `stored`; the LAST answer is the event the stream meant, and
-   *  its row must be that type and hold every value the event carries (a forfeit on a still-scheduled match answers
-   *  core.start first: that row is stored, not compared). */
+  /** The ledger row at the seq the console answered, as `stored`: it must be the event's type and hold every value the
+   *  event carries. The console answers each act with exactly ONE event (forfeitUi's one-element list; settle and
+   *  abandon one each), so none, or more than one, is OrganiserWriteUnproven by name — never a row stored uncompared. */
   async #consoleRows(fixtureId: string, event: StreamEvent, answered: readonly PostedEvent[]): Promise<PostedEvent[]> {
     if (answered.length === 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, "the page answered no event");
-    const rows = await this.#http.ledger(fixtureId, Math.min(...answered.map((a) => a.seq)) - 1);
-    return answered.map((a, i) => {
-      const row = rows.find((r) => r.seq === a.seq);
-      if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the product's answer names seq ${a.seq}, which the ledger does not hold (it holds ${rows.map((r) => r.seq).join(", ") || "nothing after it"})`);
-      if (i === answered.length - 1) {
-        if (row.type !== event.type) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} is ${row.type}, not ${event.type}`);
-        const want = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
-        const held = (typeof row.payload === "object" && row.payload !== null ? row.payload : {}) as Record<string, unknown>;
-        const off = Object.keys(want).filter((k) => JSON.stringify(held[k]) !== JSON.stringify(want[k]));
-        if (off.length > 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} holds ${off.map((k) => `${k}=${JSON.stringify(held[k])}`).join(", ")}, the event meant ${off.map((k) => `${k}=${JSON.stringify(want[k])}`).join(", ")}`);
-      }
-      return { ...a, stored: { type: row.type, payload: row.payload } };
-    });
+    if (answered.length > 1) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the page answered ${answered.length} events (seq ${answered.map((p) => p.seq).join(", ")}), want exactly one`);
+    const a = answered[0];
+    const rows = await this.#http.ledger(fixtureId, a.seq - 1);
+    const row = rows.find((r) => r.seq === a.seq);
+    if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the product's answer names seq ${a.seq}, which the ledger does not hold (it holds ${rows.map((r) => r.seq).join(", ") || "nothing after it"})`);
+    if (row.type !== event.type) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} is ${row.type}, not ${event.type}`);
+    const want = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
+    const held = (typeof row.payload === "object" && row.payload !== null ? row.payload : {}) as Record<string, unknown>;
+    const off = Object.keys(want).filter((k) => JSON.stringify(held[k]) !== JSON.stringify(want[k]));
+    if (off.length > 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} holds ${off.map((k) => `${k}=${JSON.stringify(held[k])}`).join(", ")}, the event meant ${off.map((k) => `${k}=${JSON.stringify(want[k])}`).join(", ")}`);
+    return [{ ...a, stored: { type: row.type, payload: row.payload } }];
   }
 
   /** `stored` on every answered event or on none: when some segments were answered from the ledger (the pad, the
@@ -963,15 +1002,41 @@ export class BrowserDriver implements OrganiserDriver {
     return result.stored.map((r) => ({ seq: r.seq, event_id: r.id, status: state.status, outcome: state.outcome, stored: { type: r.type, payload: r.payload } }));
   }
 
-  async forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]> {
-    if (!this.#wants("forfeit")) {
+  async forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[] = []): Promise<PostedEvent[]> {
+    return (await this.#forfeit(fixtureId, by, reason, idempotencyPrefix, play)).posted;
+  }
+
+  /** The console's forfeit dialog while the type's browser turn is open and there is no play to post first: a walkover
+   *  or Neither on a match not yet started (the dialog offers both before Start, D3 R2 — Start is never tapped), and a
+   *  forfeit on a match under way (review I-1). Generated play first is HttpDriver.forfeit, exempt by
+   *  FORFEIT_DIALOG_ROUTE while the browser's turn was open (the dialog would have dropped the play). Neither on a match
+   *  that feeds no next match is withheld by the dialog (ConsoleChoiceNotOffered with its guidance): that one request
+   *  goes over http, exempt by NEITHER_WITHHELD_ROUTE, and the browser's turn stays open (re-review N-1). */
+  async #forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[]): Promise<{ posted: PostedEvent[]; via: "browser" | "http" }> {
+    const wanted = this.#wants("forfeit");
+    const onConsole = wanted && play.length === 0;
+    if (!onConsole) {
+      if (wanted) this.#ledger.exempt("forfeit", FORFEIT_DIALOG_ROUTE);
       this.#ledger.record("forfeit", "http");
-      return this.#write(() => this.#http.forfeit(fixtureId, byEntrantId, reason, idempotencyPrefix));
+      return { posted: await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play)), via: "http" };
     }
     const { where, row, no } = await this.#findFixture(fixtureId);
-    this.#ledger.record("forfeit", "browser");
-    await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
-    return this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, byEntrantId, reason)));
+    // Recorded once the console has answered or failed: a withheld Neither never reached the product, so it is http.
+    let via: "browser" | "http" = "browser";
+    try {
+      await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
+      return { posted: await this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, by, reason))), via };
+    } catch (e) {
+      if (!(by === "both" && e instanceof ConsoleChoiceNotOffered && e.testid === FORFEIT_NEITHER_TESTID && e.guidance)) throw e;
+      via = "http";
+    } finally {
+      this.#ledger.record("forfeit", via);
+    }
+    this.#ledger.exempt("forfeit", NEITHER_WITHHELD_ROUTE);
+    // The withheld Neither is the server's to REFUSE (its RefusedCall propagates from here); an acceptance means the
+    // dialog hid a choice the product takes (re-review N-3).
+    const accepted = await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play));
+    throw new NeitherWithheldButAccepted(fixtureId, accepted);
   }
 
   /** The fixture's ledger rows after `sinceSeq`: a read, always HTTP (a scenario that needs to prove a void asks). */
