@@ -439,7 +439,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
   }
   /** withdrawal.ts:130-200 + stage.ts withdrawTableEntrant: played < 50% of
    *  (played + pending) expunges, otherwise pending games walk over; finalized
-   *  and cancelled are skipped; a TBD opponent is voided, not walked over. */
+   *  and cancelled are skipped; a TBD opponent is voided, not walked over; an
+   *  opponent who already left (X-WD-4, Loop R M-4: no bracket scope) makes the
+   *  line a recorded double walkover, unless it holds live play (M-1: left as
+   *  it is, and not counted). */
   expungesEarly(): boolean { return true; }
   async withdraw(entrantId: string): Promise<WithdrawOut> {
     this.log("withdraw");
@@ -451,10 +454,15 @@ export class FakeLeagueDriver implements OrganiserDriver {
     let walkovers = 0;
     let voided = 0;
     let skipped = 0;
+    const gone = new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id));
     const touched = policy === "expunge" ? [...played, ...pending] : pending;
     for (const f of touched) {
       if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+      if (policy === "walkover" && opponent !== null && gone.has(opponent)) {
+        if (liveEvents(f.events).length === 0) { await this.doubleWalkoverFixture(f); walkovers++; }
+        continue;
+      }
       if (policy === "walkover" && opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
       await this.abandonFixture(f);
       voided++;
@@ -486,6 +494,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
    *  ModelFakeDriver posts withdrawal.ts's bare forfeit instead. */
   async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
     await this.forfeit(f.id, by, "walkover");
+  }
+  /** X-WD-4 on a table (Loop R M-4): both sides gone — the double walkover, composed as walkoverFixture is. */
+  async doubleWalkoverFixture(f: FakeFixture): Promise<void> {
+    await this.forfeit(f.id, "both", "walkover");
   }
   /** The expunge's void of one fixture. This table fake writes the status
    *  directly, with no event, so a later post would fold over it (Task 1

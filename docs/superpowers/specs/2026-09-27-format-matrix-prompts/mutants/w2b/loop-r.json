@@ -442,5 +442,65 @@
     "name": "each level-capable sport"
    }
   ]
+ },
+ {
+  "id": "lr-m4-table-both-gone-walks-over",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "      } else if (u.status === \"walkover\" && gone.has(u.walkoverTo!)) {\n",
+  "replace": "      } else if (u.status === \"walkover\" && gone.has(u.walkoverTo!) && step.bracket !== undefined) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "X-WD-4 in a league"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-table-dw-over-live-play",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "        if (!(await hasLivePlay(auth, u.fixtureId))) {\n",
+  "replace": "        if (true) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-1 holds in a table too"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-fake-table-both-gone-walks-over",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "      if (policy === \"walkover\" && opponent !== null && gone.has(opponent)) {\n",
+  "replace": "      if (policy === \"walkover\" && opponent !== null && gone.has(opponent) && false) {\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-4 on a table"
+   }
+  ]
+ },
+ {
+  "id": "lr-m4-fake-table-dw-over-live-play",
+  "file": "tools/matrix/__tests__/fake-driver.ts",
+  "find": "        if (liveEvents(f.events).length === 0) { await this.doubleWalkoverFixture(f); walkovers++; }\n",
+  "replace": "        if (true) { await this.doubleWalkoverFixture(f); walkovers++; }\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/forfeit-command.test.ts"
+    ],
+    "name": "X-WD-4 on a table"
+   }
+  ]
  }
 ]

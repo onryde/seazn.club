@@ -507,6 +507,11 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   override async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
     await this.#cascadePost(f.id, [{ type: "core.forfeit", payload: { by, reason: REASON } }]);
   }
+  /** withdrawal.ts's table double walkover (Loop R M-4, X-WD-4): the cascade's bare `core.forfeit{by: "both"}` —
+   *  "both" is only ever a walkover (core/events.ts CoreForfeit), so its reason is `walkover`, never `withdrew`. */
+  override async doubleWalkoverFixture(f: FakeFixture): Promise<void> {
+    await this.#cascadePost(f.id, [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
+  }
   /** Open while a withdrawal cascade writes (review m-5): postStream labels its trace line `by-product`. */
   #cascading = 0;
   /** The withdrawal cascade's write: through postStream (so a subclass's

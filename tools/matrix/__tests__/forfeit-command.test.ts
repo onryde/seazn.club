@@ -717,6 +717,36 @@ describe("rule 10 — the required sequences, every step checked", () => {
     b.d.departedSeats.add(`${b.fin}:2`);
     await expect(b.d.withdraw(sf1.home_entrant_id!)).rejects.toThrow(/both seats of .* departed \(X-WD-4's departure double walkover\).*not modelled/);
   });
+  it("X-WD-4 on a table (Loop R M-4): a line whose other side already left is a recorded double walkover, never a walkover to her; a line with live play is left as it is (M-1)", async () => {
+    // single-sport: the check reads statuses, never the sport. Rigged, as the bracket case above is: the model never
+    // leaves a withdrawn side seated on a pending line (every model withdrawal cascades), but the product meets one —
+    // a self-withdrawal is a bare status write (ruling 111).
+    const tableStream = (home: string, away: string) =>
+      generateStream({ sportKey: "generic", cfg: resolveSportCfg("generic", offlineBuilderDefault("generic")), stageKind: "league", home, away, outcome: { kind: "win", winner: "home" } });
+    let checked = 0;
+    for (const played of [false, true]) {
+      const { d } = await league("generic");
+      const line = d.fixtures.find((x) => x.home_entrant_id !== null && x.away_entrant_id !== null)!;
+      const [her, left] = [line.home_entrant_id!, line.away_entrant_id!];
+      // The table policy walks her pending game over only once she has played half her games: play the other two.
+      for (const f of d.fixtures.filter((x) => x.id !== line.id && (x.home_entrant_id === her || x.away_entrant_id === her))) {
+        await d.postStream(f.id, tableStream(f.home_entrant_id!, f.away_entrant_id!));
+      }
+      if (played) await d.postStream(line.id, [{ type: "core.start", payload: {} }]);
+      const before = [...(d.ledgers.get(line.id) ?? [])];
+      d.entrants.find((e) => e.id === left)!.status = "withdrawn";
+      const out = await d.withdraw(her);
+      expect(out, played ? "M-1: nothing written" : "the double walkover counts as the line acted on").toMatchObject({ policy: "walkover", walkovers: played ? 0 : 1, voided: 0 });
+      if (played) {
+        expect(d.ledgers.get(line.id), "M-1: the played line's ledger is the organiser's").toEqual(before);
+      } else {
+        expect(row(d, line.id)).toMatchObject({ status: "forfeited", outcome: { kind: "double_walkover" } });
+        expect(liveForfeits(d, line.id).map((e) => e.payload), "the cascade's bare double walkover").toEqual([{ by: "both", reason: "walkover" }]);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
 
   /** Review I-4: the same rule on a TABLE — the league's standings read after every step (FORFEIT_TABLE_CHECK). */
   it("on a league: void-then-forfeit and a second forfeit each leave the table counting ONE result per active forfeit, read from the standings after every step; each sequence judged", async () => {

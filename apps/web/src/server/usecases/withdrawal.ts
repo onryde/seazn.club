@@ -360,6 +360,25 @@ export async function withdrawEntrantCascade(
       } else if (u.status === "walkover" && !u.walkoverTo) {
         // A table stage's TBD opponent can't receive a walkover — void that slot instead.
         step.update = { fixtureId: u.fixtureId, status: "void" };
+      } else if (u.status === "walkover" && gone.has(u.walkoverTo!)) {
+        // Loop R M-4 (controller ruling 2026-10-13): signed X-WD-4 (ruling 90) has no bracket scope. In a league, group
+        // or Swiss round the opponent who already left (a bare status write — ruling 111's self-withdrawal, which
+        // cascades nothing) is still seated, and a walkover would hand her the points and the walkover score. Both
+        // sides have withdrawn: a double walkover. Unlike a bracket line (which seats nothing, so it is written as a
+        // bye is), a table line is RECORDED — X-DW-4 counts it P+1, L+1 for both, and the table folds only a line with
+        // a match state — so it goes through the ordinary write, as the console's double walkover does. M-1's guard
+        // holds here too: a line with recorded play is the organiser's to settle.
+        if (!(await hasLivePlay(auth, u.fixtureId))) {
+          const state = await getFixtureState(auth, u.fixtureId);
+          await scoreEvent(
+            auth,
+            u.fixtureId,
+            { expected_seq: state.last_seq, type: "core.forfeit", payload: { by: "both", reason: "walkover" } },
+            CASCADE,
+          );
+          out.walkovers++;
+        }
+        continue;
       }
       await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true);
     }
