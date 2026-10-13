@@ -5,8 +5,10 @@
 // Nothing in the product broke. What broke was every test that mocks guard or fixtures with `importOriginal`:
 // importing the original drags in result.ts and preflight.ts, which then bind to the UNMOCKED modules. The staged
 // pauses of external-play-result-race.test.ts and the lock-order hook of open-round.test.ts never fired, so 7 race
-// and lock-order guards could not fail (task-16-rereview.md N1). The helpers now live in the leaf
-// `public-site/cache-tags.ts`.
+// and lock-order guards could not fail (task-16-rereview.md N1). The same loop, entered from its other end, unbound
+// four suites that mock `public-site/revalidate` with `importOriginal` (admin-fixture-config-cache,
+// hub-cache-invalidation, schedule-slot-writes-cache-keys, scoring-deferred): 5 more tests whose spies were never
+// called. The helpers now live in the leaf `public-site/cache-tags.ts`.
 //
 // This walks the real source: static `import … from` / `export … from` edges only. An `import type` is erased and a
 // dynamic `import()` runs later, so neither can close a cycle at module evaluation. Every walk reports what it
@@ -27,6 +29,8 @@ const FIXTURES = path.join(SRC, "server/usecases/fixtures.ts");
 const GUARD = path.join(SRC, "server/usecases/external-play/guard.ts");
 const RESULT = path.join(SRC, "server/usecases/external-play/result.ts");
 const PREFLIGHT = path.join(SRC, "server/usecases/external-play/preflight.ts");
+const REVALIDATE = path.join(SRC, "server/public-site/revalidate.ts");
+const SCORING = path.join(SRC, "server/usecases/scoring.ts");
 
 function resolveSpecifier(from: string, spec: string): string | null {
   let base: string;
@@ -94,6 +98,16 @@ describe("no import cycle through usecases/fixtures.ts or external-play/guard.ts
     expect(reached.has(path.join(SRC, "server/public-site/revalidate.ts")), "premise: fixtures.ts → revalidate.ts").toBe(true);
     for (const target of [RESULT, PREFLIGHT, FIXTURES]) {
       expect(reached.has(target), `fixtures.ts must not reach ${rel(target)}: ${shown(reached.get(target))}`).toBe(false);
+    }
+  });
+
+  it("public-site/revalidate.ts (mocked with importOriginal by the cache suites) never reaches itself, fixtures.ts or scoring.ts", () => {
+    const reached = walk(REVALIDATE);
+    expect(reached.size, "anti-vacuity: modules visited from revalidate.ts").toBeGreaterThan(3);
+    expect(walk(FIXTURES).has(REVALIDATE), "premise: fixtures.ts → revalidate.ts").toBe(true);
+    expect(walk(SCORING).has(REVALIDATE), "premise: scoring.ts → revalidate.ts").toBe(true);
+    for (const target of [REVALIDATE, FIXTURES, SCORING]) {
+      expect(reached.has(target), `revalidate.ts must not reach ${rel(target)}: ${shown(reached.get(target))}`).toBe(false);
     }
   });
 
