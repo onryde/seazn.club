@@ -1041,7 +1041,10 @@ export async function patchDivision(
       const tiebreakersChanged =
         patch.tiebreakers !== undefined && canonicalJson(patch.tiebreakers) !== canonicalJson(current.tiebreakers);
 
-      refused = await divisionRefusals(tx, id, { configKeys, variant: variantChanged, tiebreakers: tiebreakersChanged });
+      refused = await divisionRefusals(
+        tx, id, { configKeys, variant: variantChanged, tiebreakers: tiebreakersChanged },
+        { module: sportModule ?? resolveModule(current.sport_key, current.module_version), variantKey: current.variant_key, divisionConfig: currentConfig },
+      );
       const refusedFields = new Set(refused.map((r) => r.field));
       const variantRefusal = refused.find((r) => r.field === "variant_key");
 

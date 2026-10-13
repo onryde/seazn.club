@@ -8,10 +8,27 @@ import "server-only";
 // changing".
 import type { Tx } from "@/lib/db";
 import type { RefusedField } from "@/lib/rule-errors";
+import { DRAW_KINDS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
+import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, type AnySportModule } from "@seazn/engine/sport";
 
-/** Division config keys that are TABLE rules (Q3); every other key is match format (Q4).
- *  A literal until Task 5, which derives it from the engine (`pointsKeysFor` ∪ {"pointsMap"}, D11). */
-export const TABLE_RULE_KEYS: ReadonlySet<string> = new Set(["points", "pointsMap"]);
+/**
+ * Division config keys that are TABLE rules (Q3); every other key is match format (Q4). Derived from the engine's own
+ * declaration (plan D11): the sport's `points`-scope keys for this variant, plus `pointsMap`, named explicitly so the
+ * set sports' points table stays a table rule even if a module version stops declaring it (the set kernel declares it
+ * today). Ice hockey's `awardScore` is a points key, so it is a table rule; its `periods` is match format.
+ */
+export const tableRuleKeys = (module: AnySportModule, variant: string | null): ReadonlySet<string> =>
+  new Set([...pointsKeysFor(module, null, variant), "pointsMap"]);
+
+/** The top segment of a declared key: `periods.minutes` is a `periods` rule to a division config that stores `periods`. */
+const topOf = (key: string): string => key.split(".")[0]!;
+
+/** Whether the engine says a division key applies to a stage of this kind and variant. A key it never declares (tennis
+ *  `interruptions`, a config key the form does not edit) has no narrowing, so it applies to every stage, as it always did. */
+function appliesToStage(module: AnySportModule, key: string, kind: StageKind, variant: string): boolean {
+  const facts = Object.entries(module.ruleKeys ?? {}).filter(([k]) => topOf(k) === key).map(([, f]) => f);
+  return facts.length === 0 || facts.some((f) => ruleKeyApplies(f, kind, variant));
+}
 
 /**
  * "Which of these stages have already started?" — THE format-lock predicate,
@@ -53,27 +70,38 @@ export async function divisionRefusals(
   tx: Tx,
   divisionId: string,
   change: { configKeys: readonly string[]; variant: boolean; tiebreakers: boolean },
+  scope: { module: AnySportModule; variantKey: string; divisionConfig: Record<string, unknown> },
 ): Promise<RefusedField[]> {
   if (change.configKeys.length === 0 && !change.variant && !change.tiebreakers) return [];
-  const stages = await tx<{ id: string; name: string; seq: number; config: Record<string, unknown> | null }[]>`
-    select id, name, seq, config from stages where division_id = ${divisionId} order by seq`;
+  const stages = await tx<{ id: string; name: string; seq: number; kind: StageKind; config: Record<string, unknown> | null }[]>`
+    select id, name, seq, kind, config from stages where division_id = ${divisionId} order by seq`;
   const started = await lockedStageIdsAmong(tx, stages.map((s) => s.id));
   const live = stages.filter((s) => started.has(s.id));
   const out: RefusedField[] = [];
   const first = (pred: (s: (typeof live)[number]) => boolean) => live.find(pred);
+  const { module, variantKey } = scope;
+  const tableKeys = tableRuleKeys(module, variantKey);
+  // The keys a bracket stage forces on itself for the tie it must break (carrom's tie board, a board game's tiebreak):
+  // that stage never reads the division's value for them.
+  const forced = live.some((s) => forbidsLevelResult(s.kind)) ? new Set(Object.keys(module.bracketDeciders(scope.divisionConfig as never))) : new Set<string>();
   if (change.variant) {
     const s = first(() => true);
     if (s) out.push({ field: "variant_key", code: "DIVISION_FORMAT_LOCKED", stageId: s.id, stageName: s.name });
   }
   if (change.tiebreakers) {
-    const s = first(() => true); // W2d owns per-stage cascades; until then every stage inherits them
+    // W2d owns per-stage cascades; until then every stage that HAS a table inherits it. A knockout ranks no table.
+    const s = first((st) => DRAW_KINDS.has(st.kind));
     if (s) out.push({ field: "tiebreakers", code: "DIVISION_TABLE_RULES_LOCKED", stageId: s.id, stageName: s.name });
   }
   for (const key of change.configKeys) {
-    const table = TABLE_RULE_KEYS.has(key);
+    const table = tableKeys.has(key);
     const s = first((st) => {
       const cfg = st.config ?? {};
+      if (table && !DRAW_KINDS.has(st.kind)) return false;        // a knockout has no table to protect
       if (table) return cfg.points == null;                       // a stage PointsRule replaces division points
+      if (!appliesToStage(module, key, st.kind, variantKey)) return false;
+      if (forbidsLevelResult(st.kind) && forced.has(key)) return false;
+      if (deciderKeysFor(module, st.kind, variantKey).includes(key) && cfg[key] !== undefined) return false; // the stage carries its own decider
       const rules = (cfg.rules ?? {}) as Record<string, unknown>;
       return rules[key] === undefined;                             // the stage inherits this key
     });

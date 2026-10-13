@@ -8,11 +8,14 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/rule-errors";
 import { EngineError } from "@seazn/engine/core";
+import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, type AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ENGINE_HTTP } from "@/server/api-v1/http";
 import { appendEvent, resolveLatestModule } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
+import { divisionRefusals, tableRuleKeys } from "../rule-locks";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
@@ -31,11 +34,11 @@ async function seedOrg(): Promise<AuthCtx> {
 }
 
 /** Two league stages, 2 entrants each in one division; stage 1 generated. */
-async function rig(sport: string, variant: string) {
+async function rig(sport: string, variant: string, kind: "individual" | "team" = "individual") {
   const auth = await seedOrg();
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Dl " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config: {} });
-  await createEntrants(auth, d.id, [1, 2].map((i) => ({ kind: "individual" as const, display_name: `E${i}`, seed: i, members: [] })));
+  await createEntrants(auth, d.id, [1, 2].map((i) => ({ kind, display_name: `E${i}`, seed: i, members: [] })));
   const [s1] = await createStages(auth, d.id, { seq: 1, kind: "league", name: "Pool A", config: {}, progression: null });
   const [s2] = await createStages(auth, d.id, { seq: 2, kind: "league", name: "Pool B", config: {}, progression: null });
   await generateStageFixtures(auth, s1!.id);
@@ -498,6 +501,241 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     // And null against a stored null is the genuine no-op.
     const same = await patchDivision(r.auth, r.divisionId, { name: "Same", tiebreakers: null });
     expect(same.refused).toEqual([]);
+  });
+});
+
+// ---- W2c Task 5 — the lock reads the engine's declaration (X-SR-4) -----------------------------------------------------
+
+/** A division whose first stage is a bracket stage ("Final", no table), 2 entrants, generated; `league` adds a "Pool" league stage after it. */
+async function rigBracket(sport: string, variant: string, opts: { league?: boolean; kind?: "individual" | "team" } = {}) {
+  const auth = await seedOrg();
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Dl " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+  const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config: {} });
+  await createEntrants(auth, d.id, [1, 2].map((i) => ({ kind: opts.kind ?? ("individual" as const), display_name: `E${i}`, seed: i, members: [] })));
+  const [ko] = await createStages(auth, d.id, { seq: 1, kind: "knockout", name: "Final", config: {}, progression: null });
+  const league = opts.league ? (await createStages(auth, d.id, { seq: 2, kind: "league", name: "Pool", config: {}, progression: null }))[0]! : undefined;
+  await generateStageFixtures(auth, ko!.id);
+  const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${ko!.id} order by id limit 1`;
+  if (league) await generateStageFixtures(auth, league.id);
+  const [lf] = league ? await sql<{ id: string }[]>`select id from fixtures where stage_id = ${league.id} order by id limit 1` : [];
+  return { auth, divisionId: d.id, ko: ko!, league, fixtureId: f!.id, leagueFixtureId: lf?.id };
+}
+
+describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration (no database)", () => {
+  it("X-SR-4 tableRuleKeys is the engine's points keys plus pointsMap, narrowed by variant; another sport's non-points keys are never in it", () => {
+    const fake = {
+      key: "fake",
+      ruleKeys: {
+        pts: { scope: "points" },
+        vpts: { scope: "points", appliesTo: { variants: ["a"] } },
+        fmt: { scope: "match" },
+        stg: { scope: "stage" },
+      },
+    } as unknown as AnySportModule;
+    expect([...tableRuleKeys(fake, null)].sort()).toEqual(["pointsMap", "pts", "vpts"]);
+    expect([...tableRuleKeys(fake, "a")].sort()).toEqual(["pointsMap", "pts", "vpts"]);
+    expect([...tableRuleKeys(fake, "b")].sort(), "a points key that does not apply to the variant is not a table key").toEqual(["pointsMap", "pts"]);
+    expect([...tableRuleKeys({ key: "none", ruleKeys: undefined } as unknown as AnySportModule, null)], "no declaration: only pointsMap").toEqual(["pointsMap"]);
+    // The real sports, every variant (M-4). The expected classification is the engine's declaration: a declared `points`
+    // key is a table rule, every other declared key is not. The config is a second authority: a table key the sport's
+    // own parsed config does not carry could never be a changed config key, so it would be a lock that never fires.
+    let sports = 0;
+    let classified = 0;
+    let carried = 0;
+    for (const m of builtinModules) {
+      for (const variant of [null, ...Object.keys(m.variants)]) {
+        const keys = tableRuleKeys(m, variant);
+        for (const [k, fact] of Object.entries(m.ruleKeys ?? {})) {
+          if (!ruleKeyApplies(fact, null, variant)) continue;
+          expect(keys.has(k), `${m.key}/${variant ?? "-"} ${k} (${fact.scope})`).toBe(fact.scope === "points");
+          classified++;
+        }
+        expect(keys.has("pointsMap"), `${m.key}: pointsMap is always a table rule`).toBe(true);
+        const parsed = m.configSchema.safeParse(variant === null ? {} : m.variants[variant]);
+        if (!parsed.success) continue; // generic's bare config needs a mode; every variant preset parses
+        for (const k of pointsKeysFor(m, null, variant)) { expect(k in parsed.data, `${m.key}/${variant ?? "-"} table key ${k} is not in its parsed config`).toBe(true); carried++; }
+      }
+      sports++;
+    }
+    expect(sports).toBe(builtinModules.length);
+    expect(classified, "the sweep classified no key at all").toBeGreaterThan(builtinModules.length);
+    expect(carried, "no table key was checked against a parsed config").toBeGreaterThanOrEqual(builtinModules.length);
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGINE's declaration", () => {
+  it("X-SR-4 table rule keys come from the engine: an ice hockey `points` edit is table rules, a `periods` edit is match format", async () => {
+    const ice = resolveLatestModule("icehockey");
+    const table = new Set(pointsKeysFor(ice, null, null));
+    // The expectation is the engine's own declaration. `awardScore` is the case the old literal got wrong: a points key
+    // that is not called `points`.
+    expect([...table].sort()).toEqual(["awardScore", "points"]);
+    expect(table.has("periods"), "periods is match format").toBe(false);
+
+    const r = await rig("icehockey", "iihf", "team");
+    await start(r.auth, r.fixtureId);
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown> & { points: object; awardScore: { goals: number }; periods: { count: number; minutes: number } };
+    const out = await patchDivision(r.auth, r.divisionId, {
+      name: "Renamed", // a save that applies nothing at all throws; the rename is what lands beside `refused`
+      config: { ...before, points: { ...before.points, win: 4 }, awardScore: { goals: before.awardScore.goals + 1 }, periods: { ...before.periods, minutes: before.periods.minutes - 5 } },
+    });
+    expect(out.refused.map((x) => x.field).sort(), "all three edits were refused").toEqual(["awardScore", "periods", "points"]);
+    let judged = 0;
+    for (const x of out.refused) {
+      expect(x.code, x.field).toBe(table.has(x.field) ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED");
+      judged++;
+    }
+    expect(judged).toBe(3);
+    expect(out.refused.filter((x) => x.code === "DIVISION_TABLE_RULES_LOCKED").length, "both points keys were table rules").toBe(table.size);
+    expect(out.config, "nothing refused was written").toEqual(before);
+  });
+
+  it("M-b a started KNOCKOUT stage has no table: a division pointsMap and tiebreakers edit save; a started league stage refuses the same patch", async () => {
+    const ko = await rigBracket("badminton", "short");
+    await start(ko.auth, ko.fixtureId);
+    const b1 = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown>;
+    const saved = await patchDivision(ko.auth, ko.divisionId, { config: { ...b1, pointsMap: { "*": [3, 0] } }, tiebreakers: ["head_to_head"] as never });
+    expect(saved.refused).toEqual([]);
+    expect((saved.config as { pointsMap: unknown }).pointsMap, "the table change was written").toEqual({ "*": [3, 0] });
+    expect(saved.tiebreakers, "the cascade change was written").toEqual(["head_to_head"]);
+
+    // The pair: the same two edits against a started LEAGUE stage are refused, by name.
+    const lg = await rig("badminton", "short");
+    await start(lg.auth, lg.fixtureId);
+    const b2 = (await getDivision(lg.auth, lg.divisionId)).config as Record<string, unknown>;
+    const refused = await patchDivision(lg.auth, lg.divisionId, { name: "Renamed", config: { ...b2, pointsMap: { "*": [3, 0] } }, tiebreakers: ["head_to_head"] as never });
+    expect(refused.refused.map((x) => `${x.field}:${x.code}`).sort()).toEqual(["pointsMap:DIVISION_TABLE_RULES_LOCKED", "tiebreakers:DIVISION_TABLE_RULES_LOCKED"]);
+  });
+
+  it("M-b a started knockout still inherits the division's MATCH format: setTo is refused naming the Final", async () => {
+    const ko = await rigBracket("badminton", "short");
+    await start(ko.auth, ko.fixtureId);
+    const before = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown>;
+    const out = await patchDivision(ko.auth, ko.divisionId, { name: "Renamed", config: { ...before, setTo: 15 } });
+    expect(out.refused).toEqual([{ field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: ko.ko.id, stageName: "Final" }]);
+    expect(out.name).toBe("Renamed");
+  });
+
+  it("M-b a knockout and a league both started: the table refusal names the league (the stage with a table), the format refusal the knockout (first by seq)", async () => {
+    const r = await rigBracket("badminton", "short", { league: true });
+    await start(r.auth, r.fixtureId);
+    await start(r.auth, r.leagueFixtureId!);
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, pointsMap: { "*": [3, 0] }, setTo: 15 }, tiebreakers: ["head_to_head"] as never });
+    const byField = Object.fromEntries(out.refused.map((x) => [x.field, x.stageName]));
+    expect(byField).toEqual({ pointsMap: "Pool", tiebreakers: "Pool", setTo: "Final" });
+  });
+
+  it("M-b carrom `tieBoard` applies to table stages: a started knockout (which forces the extra board) does not inherit it, a started league does", async () => {
+    const carrom = resolveLatestModule("carrom");
+    expect(ruleKeyApplies(carrom.ruleKeys!.tieBoard!, "knockout", null), "precondition: the engine says tieBoard is not a knockout key").toBe(false);
+    expect(ruleKeyApplies(carrom.ruleKeys!.tieBoard!, "league", null), "precondition: and is a league key").toBe(true);
+
+    const ko = await rigBracket("carrom", "icf");
+    await start(ko.auth, ko.fixtureId);
+    const b1 = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown>;
+    expect(b1.tieBoard, "precondition: the stored value is the default").toBe("extra");
+    const saved = await patchDivision(ko.auth, ko.divisionId, { config: { ...b1, tieBoard: "draw" } });
+    expect(saved.refused).toEqual([]);
+    expect((saved.config as { tieBoard: string }).tieBoard).toBe("draw");
+
+    const lg = await rig("carrom", "icf");
+    await start(lg.auth, lg.fixtureId);
+    const b2 = (await getDivision(lg.auth, lg.divisionId)).config as Record<string, unknown>;
+    const refused = await patchDivision(lg.auth, lg.divisionId, { name: "Renamed", config: { ...b2, tieBoard: "draw" } });
+    expect(refused.refused).toEqual([{ field: "tieBoard", code: "DIVISION_FORMAT_LOCKED", stageId: lg.s1.id, stageName: "Pool A" }]);
+  });
+
+  it("M-b a started knockout that carries its own top-level `shootout` does not inherit the division's; one that does not, does", async () => {
+    const fb = resolveLatestModule("football");
+    expect(deciderKeysFor(fb, "knockout", null), "precondition: the engine declares shootout a decider").toContain("shootout");
+
+    const own = await rigBracket("football", "11-a-side", { kind: "team" });
+    await sql`update stages set config = config || ${sql.json({ shootout: true } as never)} where id = ${own.ko.id}`;
+    await start(own.auth, own.fixtureId);
+    const b1 = (await getDivision(own.auth, own.divisionId)).config as Record<string, unknown>;
+    const saved = await patchDivision(own.auth, own.divisionId, { config: { ...b1, shootout: true } });
+    expect(saved.refused).toEqual([]);
+    expect((saved.config as { shootout: boolean }).shootout).toBe(true);
+
+    const inherits = await rigBracket("football", "11-a-side", { kind: "team" });
+    await start(inherits.auth, inherits.fixtureId);
+    const b2 = (await getDivision(inherits.auth, inherits.divisionId)).config as Record<string, unknown>;
+    const refused = await patchDivision(inherits.auth, inherits.divisionId, { name: "Renamed", config: { ...b2, shootout: true } });
+    expect(refused.refused).toEqual([{ field: "shootout", code: "DIVISION_FORMAT_LOCKED", stageId: inherits.ko.id, stageName: "Final" }]);
+  });
+
+  it("M-b the division's own variant reaches the lock: cricket DLS, offered in t20, is refused naming the started stage", async () => {
+    const cr = resolveLatestModule("cricket");
+    expect(ruleKeyApplies(cr.ruleKeys!.dls!, "league", "t20"), "precondition: the engine offers DLS in t20").toBe(true);
+    // (The pair, a test-match division, cannot be witnessed through a save: the cricket schema refuses DLS there outright,
+    // "DLS requires a limited-overs config". The narrowing itself is proven on a fake module below.)
+    const r = await rig("cricket", "t20", "team");
+    await start(r.auth, r.fixtureId);
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown> & { dls: { enabled: boolean; edition: string } };
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, dls: { ...before.dls, enabled: true } } });
+    expect(out.refused).toEqual([{ field: "dls", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+    expect((out.config as { dls: { enabled: boolean } }).dls.enabled, "nothing refused was written").toBe(false);
+  });
+
+  // The predicate with a module the test builds, over REAL started stages: each guard witnessed alone (carrom's
+  // tieBoard cannot do it: its appliesTo and its forced value cover the same kinds, so either guard hides the other).
+  describe("the inherits predicate, one guard at a time (fake module, real stages)", () => {
+    const fakeModule = (ruleKeys: Record<string, unknown>, forced: Record<string, unknown> = {}) =>
+      ({ key: "fake", ruleKeys, bracketDeciders: () => forced }) as unknown as AnySportModule;
+    const refusalsFor = async (r: { divisionId: string }, mod: AnySportModule, keys: string[], variantKey = "x") =>
+      sql.begin((tx) => divisionRefusals(tx, r.divisionId, { configKeys: keys, variant: false, tiebreakers: false }, { module: mod, variantKey, divisionConfig: {} }));
+
+    it("X-SR-4 a key that applies to table kinds only is not inherited by a started knockout, and is by a started league", async () => {
+      const r = await rigBracket("generic", "score", { league: true });
+      await start(r.auth, r.fixtureId);
+      const mod = fakeModule({ drawOnly: { scope: "stage", appliesTo: { stageKinds: ["league"] } }, anyKind: { scope: "stage" } });
+      const got = await refusalsFor(r, mod, ["drawOnly", "anyKind"]);
+      expect(got.map((x) => `${x.field}@${x.stageName}`)).toEqual(["anyKind@Final"]);          // knockout started only: anyKind yes, drawOnly no
+      await start(r.auth, r.leagueFixtureId!);
+      const both = await refusalsFor(r, mod, ["drawOnly", "anyKind"]);
+      expect(both.map((x) => `${x.field}@${x.stageName}`).sort()).toEqual(["anyKind@Final", "drawOnly@Pool"]);
+    });
+
+    it("X-SR-4 a top key declared only by a dotted key still applies by its top segment (periods.minutes → periods)", async () => {
+      const r = await rigBracket("generic", "score");
+      await start(r.auth, r.fixtureId);
+      const mod = fakeModule({ "periods.minutes": { scope: "match", appliesTo: { stageKinds: ["league"] } } });
+      expect(await refusalsFor(r, mod, ["periods"]), "not a knockout key").toEqual([]);
+      expect((await refusalsFor(r, fakeModule({ "periods.minutes": { scope: "match" } }), ["periods"])).map((x) => x.field), "a key with no narrowing").toEqual(["periods"]);
+    });
+
+    it("X-SR-4 a key declared for some variants only is inherited by a stage in one of them and not by a stage in another", async () => {
+      const r = await rigBracket("generic", "score");
+      await start(r.auth, r.fixtureId);
+      const mod = fakeModule({ onlyY: { scope: "stage", appliesTo: { variants: ["y"] } } });
+      expect((await refusalsFor(r, mod, ["onlyY"], "y")).map((x) => x.field), "offered in y").toEqual(["onlyY"]);
+      expect(await refusalsFor(r, mod, ["onlyY"], "z"), "not offered in z").toEqual([]);
+    });
+
+    it("X-SR-4 a key the engine never declares keeps locking (interruptions-shaped config the form never edits)", async () => {
+      const r = await rigBracket("generic", "score");
+      await start(r.auth, r.fixtureId);
+      expect((await refusalsFor(r, fakeModule({}), ["undeclared"])).map((x) => x.field)).toEqual(["undeclared"]);
+    });
+
+    it("X-SR-4 a key a bracket stage has forced on (bracketDeciders) is not inherited by a started knockout, by a started league it is", async () => {
+      const r = await rigBracket("generic", "score", { league: true });
+      await start(r.auth, r.fixtureId);
+      await start(r.auth, r.leagueFixtureId!);
+      const mod = fakeModule({ forcedKey: { scope: "stage" }, plainKey: { scope: "stage" } }, { forcedKey: true });
+      const got = await refusalsFor(r, mod, ["forcedKey", "plainKey"]);
+      expect(got.map((x) => `${x.field}@${x.stageName}`).sort()).toEqual(["forcedKey@Pool", "plainKey@Final"]);
+    });
+
+    it("X-SR-4 a stage that sets a declared decider at its top level does not inherit it; one that sets a non-decider there still does", async () => {
+      const r = await rigBracket("generic", "score");
+      await sql`update stages set config = config || ${sql.json({ dec: 1, plain: 1 } as never)} where id = ${r.ko.id}`;
+      await start(r.auth, r.fixtureId);
+      const mod = fakeModule({ dec: { scope: "stage", decider: true }, plain: { scope: "stage" } });
+      const got = await refusalsFor(r, mod, ["dec", "plain"]);
+      expect(got.map((x) => x.field), "only the non-decider is inherited").toEqual(["plain"]);
+    });
   });
 });
 
