@@ -212,6 +212,9 @@ export const icehockey = makePeriodModule({
   // W2c (spec §4.1 Q5) — the period kernel's keys as they are: overtime and the shoot-out per stage, their lengths
   // per match.
   ruleKeys: { ...PERIOD_RULE_KEYS },
+  // W2c Q10 (D9; review I5) - replay or the result as it stood (IH-AB-1). The 4th-quarter rule is a field-hockey rule
+  // (HK-AB-2): ice hockey is never offered `q4_stands`, and its schema refuses it.
+  abandonOptions: ["replay", "award"],
   // W2c X-SR-6, IH-KO-1 (spec §4.2) — a NEW bracket stage starts with a 10-minute sudden-death overtime and the GWS,
   // each the organiser's to switch off; a table stage starts with none. A fresh object on every call.
   stageDefaults: (kind) =>

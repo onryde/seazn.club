@@ -108,7 +108,9 @@ export interface PeriodParams {
   goalKinds: string[]; // allowed goal kinds beyond plain fg ('og' credits opponent)
   assists: boolean; // ice: up to 2 assists per goal feed player stats
   awardScore: { goals: number };
-  abandonPolicy: "replay" | "award";
+  /** W2c Q10 — `q4_stands` is the FIH rule (HK-AB-2): replay until the 4th quarter has started, then the result stands.
+   *  Which of the three a SPORT offers is its preset's `abandonOptions`; the schema refuses the rest. */
+  abandonPolicy: "replay" | "award" | "q4_stands";
 }
 
 // W4 (#407) — resolved-config knobs that are deliberately NOT PeriodParams
@@ -145,9 +147,13 @@ const SuspensionClassSchema: z.ZodType<SuspensionClass> = z.object({
   releaseOnGoal: z.boolean().optional(),
 });
 
+/** The policies a period sport offers when its preset declares no list: today's two (W2c Task 7). */
+const DEFAULT_ABANDON_OPTIONS: readonly string[] = ["replay", "award"];
+
 export function makePeriodConfigSchema(
   defaults: PeriodParams,
   setPieceKinds: readonly string[] = [],
+  abandonOptions: readonly string[] = DEFAULT_ABANDON_OPTIONS,
 ) {
   return z.object({
     // W4 review item 4 — which restarts this competition records as AWARDED
@@ -224,7 +230,18 @@ export function makePeriodConfigSchema(
     goalKinds: z.array(z.string().min(1)).default(defaults.goalKinds),
     assists: z.boolean().default(defaults.assists),
     awardScore: z.object({ goals: z.number().int().positive() }).default(defaults.awardScore),
-    abandonPolicy: z.enum(["replay", "award"]).default(defaults.abandonPolicy),
+    abandonPolicy: z.enum(["replay", "award", "q4_stands"]).default(defaults.abandonPolicy),
+  }).superRefine((cfg, ctx) => {
+    // W2c Task 7 (review I5): a policy outside the SPORT'S OWN list is refused, so ice hockey never takes `q4_stands`
+    // (a hockey rule) whatever its period count. `code: "custom"` like every cross-field refusal of this schema.
+    if (!abandonOptions.includes(cfg.abandonPolicy)) {
+      ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: `This sport does not offer "${cfg.abandonPolicy}" for an abandoned match.` });
+      return;
+    }
+    // HK-AB-2: the 4th-quarter rule exists only for four-quarter formats.
+    if (cfg.abandonPolicy === "q4_stands" && cfg.periods.count !== 4) {
+      ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: "The 4th-quarter rule needs four periods." });
+    }
   });
 }
 
@@ -1467,11 +1484,18 @@ function drawStands(cfg: PeriodCfg): boolean {
   return cfg.overtime === null && cfg.shootout === null;
 }
 
+/** HK-AB-2 (review I4) — true until the LAST regulation period has started: before the start, or in a regulation period
+ *  before the last. From the 4th quarter on - overtime and the shoot-out included - it is false and the result stands. */
+function lastRegulationPeriodNotStarted(state: PeriodState): boolean {
+  return state.phase === "pre" || periodLabels(state.cfg).slice(0, -1).includes(state.phase);
+}
+
 function applyAbandon(state: PeriodState): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  if (state.cfg.abandonPolicy === "replay") {
+  const { abandonPolicy } = state.cfg;
+  if (abandonPolicy === "replay" || (abandonPolicy === "q4_stands" && lastRegulationPeriodNotStarted(state))) {
     return { ...state, phase: "abandoned", replayFlagged: true };
   }
   // W2b D8 (ruling 102 Q3): an award-policy abandon is the leader's WIN on the real score (`method: "abandoned"`),
@@ -1802,6 +1826,8 @@ export const PERIOD_RULE_KEYS: RuleKeys = {
   shootout: { scope: "stage", decider: true },
   points: { scope: "points" },
   awardScore: { scope: "points" },
+  // W2c Q10 — what an abandoned match counts as is the stage's: replay, the result as it stood, or (hockey) the FIH 4th-quarter rule.
+  abandonPolicy: { scope: "stage" },
 };
 
 export interface PeriodPreset {
@@ -1811,6 +1837,9 @@ export interface PeriodPreset {
   /** W2c (spec §4.1 as amended) — who may set which cfg key, from `PERIOD_RULE_KEYS` spread or narrowed. Optional only
    *  so hand-built test presets compile: the X-SR-1 sweep (`sport/rule-keys.test.ts`) fails a builtin without it. */
   ruleKeys?: RuleKeys;
+  /** W2c (plan D9, Q10) - the abandon policies this sport offers an organiser, in `abandonPolicy`'s vocabulary. The schema
+   *  refuses any other; omitted ⇒ `replay` and `award`, and the module offers none. */
+  abandonOptions?: readonly ("replay" | "award" | "q4_stands")[];
   /** W2c X-SR-6 (spec §4.2) — what a NEW stage of this kind and variant starts with, passed through to the module's own
    *  `stageDefaults`. Omitted ⇒ the module declares none. */
   stageDefaults?: (kind: StageKind, variant: string | null) => Partial<PeriodCfg>;
@@ -1923,7 +1952,7 @@ export interface PeriodPreset {
 export function makePeriodModule(
   preset: PeriodPreset,
 ): SportModule<PeriodCfg, PeriodEv, PeriodState> {
-  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? []);
+  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS);
   const goalType = `${preset.key}.goal`;
   const advanceType = `${preset.key}.period.advance`;
   const clockType = `${preset.key}.clock`;
@@ -2565,6 +2594,7 @@ export function makePeriodModule(
     },
     variants: preset.variants,
     ruleKeys: preset.ruleKeys,
+    ...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),
     ...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),
 
     // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. `lineupPolicy` is

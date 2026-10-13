@@ -30,6 +30,7 @@ import type {
   PadSpec,
   SportModule,
 } from "../../sport/module.ts";
+import { SHARE_NEEDS_DRAWS } from "../../sport/abandon-share.ts";
 import { personsForEntrant, resultInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // spec 04 §8 Cfg
@@ -49,6 +50,14 @@ export const GenericCfg = z.object({
   // v1 stepladder progress-score carry; stored for the PROMPT-15 cutover,
   // no scoring effect inside the module.
   progressScore: z.boolean().default(false),
+  // W2c Q10 (GN-AB-2): what an abandoned match counts as, per stage. Absent = a replay (GN-AB-1) - optional with NO
+  // default, so no recorded config or frozen state gains a key.
+  abandonPolicy: z.enum(["replay", "share"]).optional(),
+}).superRefine((cfg, ctx) => {
+  // Owner P-5: sharing the points is a drawn result, so it needs draws to be allowed.
+  if (cfg.abandonPolicy === "share" && !cfg.allowDraws) {
+    ctx.addIssue({ code: "custom", path: ["abandonPolicy"], message: SHARE_NEEDS_DRAWS });
+  }
 });
 export type GenericCfg = z.infer<typeof GenericCfg>;
 
@@ -587,7 +596,10 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     resultMode: { scope: "stage" },
     allowDraws: { scope: "stage" },
     points: { scope: "points" },
+    // W2c Q10 - sharing the points on an abandon is a table stage's choice: a bracket match must have a winner.
+    abandonPolicy: { scope: "stage", appliesTo: { stageKinds: [...DRAW_KINDS] } },
   },
+  abandonOptions: ["replay", "share"],
 
   init(cfg, lineups: LineupPair): GenericState {
     return {
@@ -638,9 +650,12 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         if (state.phase !== "pre" && state.phase !== "live") {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
-        // W2b GN-AB-1 (plan D16): a replay — no outcome, so nobody is credited shared points (opt-in sharing is W2c).
-        // Before W2b this was a `no_result` with draw points each.
-        return { ...state, phase: "abandoned" };
+        // W2b GN-AB-1 (plan D16): a replay - no outcome, so nobody is credited shared points. Before W2b this was a
+        // `no_result` with draw points each.
+        if (state.cfg.abandonPolicy !== "share") return { ...state, phase: "abandoned" };
+        // W2c GN-AB-2: the stage opted in to sharing - a draw (P-5 made `allowDraws` a precondition of the cfg), and the
+        // running tally as it stood is the match's score, not rewritten to level.
+        return { ...state, phase: "done", score: state.running ?? state.score, outcome: { kind: "draw" } };
       }
       case "core.finalize": {
         if (state.phase !== "done") throw new EngineError("WRONG_PHASE", "not decided");

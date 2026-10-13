@@ -73,12 +73,11 @@ function declaredCfgsWithStagePresets(m: AnySportModule): { name: string; cfg: R
  *  fails until it is deleted. */
 const VARIANT = "a variant fact: set by the variant preset, never edited per stage or match (not in spec §4.1 Q5's settable list)";
 const BOOKKEEPING = "scorer bookkeeping or pad vocabulary, not a format rule";
-const ABANDON_T7 = "D9: settable from W2c Task 7, which declares it (stage) with abandonOptions and its web field; no form sets it before then";
 const PERIOD_SECONDS =
   "a per-phase length override in seconds, only for periods of UNEQUAL length (period/kernel.ts:781-786); the settable length is the minutes scalar Q5 names";
 const PERIOD_UNSET = {
   setPieceKinds: BOOKKEEPING, goalkeeper: BOOKKEEPING, periodSeconds: PERIOD_SECONDS, suspensions: VARIANT,
-  strength: VARIANT, goalKinds: BOOKKEEPING, assists: BOOKKEEPING, abandonPolicy: ABANDON_T7,
+  strength: VARIANT, goalKinds: BOOKKEEPING, assists: BOOKKEEPING,
 } as const;
 const SET_UNSET = { records: "stat-recording flags, not a format rule" } as const;
 const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -89,7 +88,6 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     periodSeconds: PERIOD_SECONDS,
     halves: "picks the phase machine (2 halves or 4 quarters); a variant fact",
     fairPlay: "card tracking for the FIFA fair-play tie-break; the tie-break cascade is W2d's",
-    abandonPolicy: ABANDON_T7,
   },
   cricket: {
     inningsPerSide: VARIANT, ballsPerOver: VARIANT, followOn: VARIANT,
@@ -124,7 +122,6 @@ const Q5 = {
 /** Q5 names no engine cfg holds yet, each with the task that adds it; the sweep fails once one lands, so its row goes. */
 const Q5_PENDING: Readonly<Record<string, string>> = {
   tiebreakRungs: "W2c Task 8 adds the chess tie-break rungs",
-  abandon: "W2c Task 7 declares abandonPolicy (UNSETTABLE until then)",
 };
 /** Where a Q5 name lives in an engine cfg: the schema path it names, and the declared key owning that path (default:
  *  the path itself). A sport row wins over the shared one. */
@@ -317,13 +314,16 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(whole).toBeGreaterThan(0);
   });
 
-  it("appliesTo is carried by exactly carrom tieBoard (DRAW_KINDS), chess tiebreak (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
+  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreak (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
     const ck = sport("cricket");
     const ckVariants = ck.variants as Record<string, object>;
     const variantsWhere = (on: Record<string, unknown>): string[] =>
       sorted(Object.keys(ckVariants).filter((v) => ck.configSchema.safeParse({ ...ckVariants[v], ...on }).success));
     const expected: Record<string, { stageKinds?: string[]; variants?: string[] }> = {
       "carrom.tieBoard": { stageKinds: sorted(DRAW_KINDS) },
+      // W2c Task 7 (CA-AB-2, GN-AB-2): sharing the points on an abandon is a table stage's choice.
+      "carrom.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
+      "generic.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
       "boardgame.tiebreak": { stageKinds: sorted(BRACKET_KINDS) },
       "cricket.superOver": { variants: variantsWhere({ superOver: true }) },
       "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
@@ -394,6 +394,8 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(sorted(noOnValue)).toEqual(sorted([
       "football.maxSubs", "football.subWindows", "football.sinBinMinutes", "football.concussionSubs",
       "boardgame.clock", "volleyball.cap",
+      // W2c Task 7: a policy, not an on/off switch - `share` is one of two values, and no declared cfg sets either.
+      "carrom.abandonPolicy", "generic.abandonPolicy",
     ]));
   });
 

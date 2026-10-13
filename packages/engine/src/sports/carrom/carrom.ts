@@ -34,6 +34,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { SHARE_NEEDS_DRAWS } from "../../sport/abandon-share.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
@@ -76,12 +77,22 @@ export const CarromCfg = z
     // 'draw' = the game is drawn (house rule; enables drawn matches).
     tieBoard: z.enum(["extra", "draw"]).default("extra"),
     points: CarromPoints.default({ win: 2, loss: 0, draw: 1 }), // competition points
+    // W2c Q10 (CA-AB-2): what an abandoned match counts as, per stage. Absent = a replay (CA-AB-1) - optional with NO
+    // default, so no recorded config or frozen state gains a key.
+    abandonPolicy: z.enum(["replay", "share"]).optional(),
   })
   .refine((cfg) => cfg.bestOf % 2 === 1, {
     message: "bestOf must be odd (a decider must exist)",
   })
   .refine((cfg) => cfg.queenCapAt <= cfg.gameTo, {
     message: "queenCapAt must not exceed gameTo",
+  })
+  // Owner P-5, applied to carrom: sharing the points is a DRAWN result, and carrom takes a draw only under the
+  // tieBoard "draw" house rule (`supportsDraws`) - ICF play ("extra") always produces a winner, and the server refuses a
+  // draw it does not support (DRAW_NOT_ALLOWED), so a share under "extra" would be an abandon nobody could record.
+  .refine((cfg) => cfg.abandonPolicy !== "share" || cfg.tieBoard === "draw", {
+    message: SHARE_NEEDS_DRAWS,
+    path: ["abandonPolicy"],
   });
 export type CarromCfg = z.infer<typeof CarromCfg>;
 
@@ -477,12 +488,15 @@ function applyForfeit(state: CarromState, by: string, reason: ForfeitReason): Ca
 const FORFEIT_PHASE: Record<CarromState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 // Abandonment — W2b CA-AB-1 (plan D16): a replay by default. The phase closes the match (nothing more is played on
-// it) and the outcome stays null, so nobody is credited shared points (opt-in sharing is W2c). Before W2b this was a
-// `no_result` with draw points each (PROMPT-16 §4); voiding the abandon resumes the match as before.
+// it) and the outcome stays null, so nobody is credited shared points. Before W2b this was a `no_result` with draw
+// points each (PROMPT-16 §4); voiding the abandon resumes the match as before. W2c CA-AB-2: a stage that opted in to
+// sharing (`abandonPolicy: "share"`, which the schema allows only where carrom takes a draw) records a draw, the games
+// and boards played staying on the state as they stood.
 function applyAbandon(state: CarromState): CarromState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
+  if (state.cfg.abandonPolicy === "share") return { ...state, phase: "done", outcome: { kind: "draw" } };
   return { ...state, phase: "abandoned" };
 }
 
@@ -922,7 +936,10 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     pointsPerCoin: { scope: "stage" },
     tieBoard: { scope: "stage", decider: true, appliesTo: { stageKinds: [...DRAW_KINDS] } },
     points: { scope: "points" },
+    // W2c Q10 - sharing the points on an abandon is a table stage's choice: a bracket match must have a winner.
+    abandonPolicy: { scope: "stage", appliesTo: { stageKinds: [...DRAW_KINDS] } },
   },
+  abandonOptions: ["replay", "share"],
 
   init(cfg, lineups: LineupPair): CarromState {
     return {

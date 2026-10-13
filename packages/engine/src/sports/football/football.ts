@@ -2566,7 +2566,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     concussionSubs: { scope: "stage" },
     points: { scope: "points" },
     awardScore: { scope: "points" },
+    // W2c Q10 - what an abandoned match counts as is the stage's: replay, or the result as it stood (FB-AB-1).
+    abandonPolicy: { scope: "stage" },
   },
+  abandonOptions: ["replay", "award"],
 
   init(cfg, lineups: LineupPair): FootballState {
     // S3/W4b (#426) — ONE construction of the squad, the kernel's. The private

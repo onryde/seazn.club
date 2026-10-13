@@ -144,6 +144,9 @@ export const hockey = makePeriodModule({
     "fih-shootout": {
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
       points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      // HK-AB-2 (W2c, H-15): the FIH tournament rule - an abandon replays until the 4th quarter has started, then the
+      // result stands (ruling 117 where the cfg refuses a draw).
+      abandonPolicy: "q4_stands",
     },
     // W5 (#416) — regression fix, hockey/DOMAIN.md's "Other youth
     // divergences" row: `periods` was already correctly shortened, but
@@ -167,6 +170,8 @@ export const hockey = makePeriodModule({
       suspensions: { classes: HOCKEY_YOUTH_SUSPENSIONS },
     },
   },
+  // W2c Q10 (D9) - "If a match is abandoned": replay, the result as it stood, or the FIH 4th-quarter rule (HK-AB-2).
+  abandonOptions: ["replay", "award", "q4_stands"],
   // W2c (spec §4.1 Q5) — the period kernel's keys, narrowed: FIH hockey has no overtime, so neither the stage key nor
   // its match-length leaf is offered (the X-SR-1 sweep holds `overtime` UNSETTABLE for hockey).
   ruleKeys: (({ overtime: _noOvertime, "overtime.minutes": _noOvertimeMinutes, ...keys }) => keys)(PERIOD_RULE_KEYS),
