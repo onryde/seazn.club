@@ -297,17 +297,24 @@ export async function seedGameSql(
 }
 
 /** What the bridge row says now — the specs' proof that nothing reached for a game. */
-export async function bridgeRow(fixtureId: string): Promise<{
+export type BridgeRowView = {
   status: string;
   challenge_id: string | null;
   create_sent_at: Date | null;
   last_error: string | null;
+  needs_reason: string | null;
   move_count: number;
-} | null> {
+  /** Each side's time AS AT `last_move_at` (V436, T10's append), in ms. */
+  white_ms: number | null;
+  black_ms: number | null;
+};
+
+export async function bridgeRow(fixtureId: string): Promise<BridgeRowView | null> {
   return withDb(async (sql) => {
-    const [row] = await sql<
-      { status: string; challenge_id: string | null; create_sent_at: Date | null; last_error: string | null; move_count: number }[]
-    >`select status, challenge_id, create_sent_at, last_error, move_count from fixture_external_play where fixture_id = ${fixtureId}`;
+    const [row] = await sql<BridgeRowView[]>`
+      select status, challenge_id, create_sent_at, last_error, needs_reason, move_count,
+             white_ms, black_ms
+        from fixture_external_play where fixture_id = ${fixtureId}`;
     return row ?? null;
   });
 }
@@ -342,6 +349,8 @@ export type SeededRound = {
   arbiterPath: string;
   /** `/shared/{org}/{comp}/{div}` — prefix of every public fixture page. */
   publicBase: string;
+  /** The slug chain, for `routes.*` builders (T17 review M10: never retyped). */
+  slugs: { org: string; comp: string; div: string };
   /** Round 1's boards, in fixture order (seq_in_round). */
   boards: RoundBoard[];
 };
@@ -464,6 +473,7 @@ export async function seedOnlineRound(
       fixturesTab: `${base}?tab=fixtures`,
       arbiterPath: `${base}/arbiter`,
       publicBase: `/shared/${slug!.org}/${slug!.comp}/${slug!.div}`,
+      slugs: { org: slug!.org, comp: slug!.comp, div: slug!.div },
       boards: rows.map((r) => ({ fixtureId: r.id, home: byEntrant.get(r.home)!, away: byEntrant.get(r.away)! })),
     };
   });

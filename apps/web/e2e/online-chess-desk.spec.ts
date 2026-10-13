@@ -514,7 +514,11 @@ test.describe("online chess — the public fixture page", () => {
     a.on("request", (req) => {
       if (req.url().includes(`/fixtures/${room.fixtureId}/external-play/lobby`)) lobby.push(req.url());
     });
-    const polled = a.waitForResponse((res) => res.url().includes(`/api/v1/public/fixtures/${room.fixtureId}`), { timeout: POLL_MS + 30_000 });
+    // The watch panel's poll itself — an exact path, so the page's realtime-token fetch (a sibling route, which answers
+    // 500 on a server with no JWT secret) is never taken for it.
+    const polled = a.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/public/fixtures/${room.fixtureId}`, {
+      timeout: POLL_MS + 30_000,
+    });
     await a.goto(room.fixturePath);
     await expect(a.getByTestId("watch-panel")).toBeVisible();
     expect((await polled).status(), "premise: the page's client is running").toBe(200);

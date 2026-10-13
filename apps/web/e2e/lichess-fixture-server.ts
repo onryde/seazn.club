@@ -90,6 +90,11 @@ export interface LichessFixtureGame {
   winner: Colour | null;
   /** Canonical UCI, as the board stream speaks it. */
   movesUci: string[];
+  /** Each side's time in ms AS AT `lastMoveAt` — the bridge row's own terms (V436). The stream's wtime/btime is the
+   *  same for the side NOT to move, and counts the side to move down from `lastMoveAt` (T17 review M5). */
+  clockMs: Record<Colour, number>;
+  /** Epoch ms of the last move (the challenge's creation before one). */
+  lastMoveAt: number;
 }
 
 export interface LichessFixtureServer {
@@ -545,6 +550,7 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
   const view = (g: Game): LichessFixtureGame => ({
     id: g.id, white: g.white, black: g.black, limitSeconds: g.limit, incrementSeconds: g.increment,
     status: g.status, winner: g.winner, movesUci: [...g.uci],
+    clockMs: { ...g.remaining }, lastMoveAt: g.lastMoveAt,
   });
 
   return {

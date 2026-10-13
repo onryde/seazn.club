@@ -267,6 +267,34 @@ describe("lichess fixture server — the measured facts", () => {
     expect(snap?.blackMs).toBe(180_000);
   });
 
+  // M5 (T17 review): the walkthrough compares the bridge row's clocks with the stub's game() view, so the view must be
+  // the stream's clock re-expressed as at the last move — exact for the side NOT to move, an upper bound for the mover.
+  it("the game() view's clockMs is the stream's clock as at lastMoveAt: equal for the waiting side, never below the mover's", async () => {
+    const id = await startGame(300, 3);
+    await play(id, "e2e4", "e7e5");
+    const stream = async () => {
+      const r = await api.readGameStream({ token: W.token, gameId: id });
+      if (!r.ok) throw new Error("stream refused");
+      return r.game;
+    };
+    // Two plies cost nothing, so both sides hold the whole limit (the rulebook's 300 s) as at the last move; from
+    // here White's clock runs (scalachess Clock.step), so the stream reads White at or under it.
+    expect(fx.game(id)?.clockMs).toEqual({ white: 300_000, black: 300_000 });
+    const two = await stream();
+    expect(two.blackMs, "the waiting side").toBe(300_000);
+    expect(two.whiteMs, "the mover").toBeLessThanOrEqual(300_000);
+    await new Promise((r) => setTimeout(r, 30));
+    await play(id, "g1f3");
+    // Black to move: White's reading is exact (paid its 30+ ms, earned 3 s), Black's runs from lastMoveAt.
+    const v = fx.game(id)!;
+    const three = await stream();
+    expect(three.whiteMs, "the waiting side: the view IS the stream").toBe(v.clockMs.white);
+    expect(v.clockMs.white, "paid the pause, earned the 3 s increment").toBeGreaterThan(300_000);
+    expect(v.clockMs.white).toBeLessThanOrEqual(303_000 - 30);
+    expect(three.blackMs, "the mover: counted down from lastMoveAt").toBeLessThanOrEqual(v.clockMs.black);
+    expect(v.clockMs.black).toBe(300_000);
+  });
+
   it("M16: an export of a game in play withholds the last 3 plies once past 5 (8 on the board, 5 exported — export-mid.json beside gamefull-mid-*.ndjson)", async () => {
     const id = await startGame();
     const eight = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"];
