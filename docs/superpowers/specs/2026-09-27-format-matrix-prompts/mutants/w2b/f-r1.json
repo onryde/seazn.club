@@ -316,7 +316,7 @@
  },
  {
   "id": "r1-i4-notice-fixture-ids",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "string_agg(distinct stage_id::text, ',' order by stage_id::text)",
   "replace": "string_agg(distinct id::text, ',' order by id::text)",
   "killers": [

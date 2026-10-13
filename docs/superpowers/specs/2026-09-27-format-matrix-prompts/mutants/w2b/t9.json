@@ -1,7 +1,7 @@
 [
  {
   "id": "mig-settled-too",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "\n       and not exists (select 1 from score_events st\n                        where st.fixture_id = f.id and st.type = 'core.settle'\n                          and not exists (select 1 from score_events v3 where v3.voids_event_id = st.id));",
   "replace": ";",
   "killers": [
@@ -16,7 +16,7 @@
  },
  {
   "id": "mig-voided-too",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "\n                                      and not exists (select 1 from score_events v2 where v2.voids_event_id = r2.id)))",
   "replace": "))",
   "killers": [
@@ -31,7 +31,7 @@
  },
  {
   "id": "mig-any-kind",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "     where s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')\n       and f.status = 'needs_decision'",
   "replace": "     where f.status = 'needs_decision'",
   "killers": [
@@ -46,7 +46,7 @@
  },
  {
   "id": "dhr-no-result-counts",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "not in ('no_result', 'double_walkover')",
   "replace": "not in ('double_walkover')",
   "killers": [
@@ -61,7 +61,7 @@
  },
  {
   "id": "dhr-dw-counts",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "not in ('no_result', 'double_walkover')",
   "replace": "not in ('no_result')",
   "killers": [
@@ -76,7 +76,7 @@
  },
  {
   "id": "dhr-walkover-excluded",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "not in ('no_result', 'double_walkover')",
   "replace": "not in ('no_result', 'double_walkover', 'award')",
   "killers": [
@@ -91,7 +91,7 @@
  },
  {
   "id": "mig-notice-miscounts",
-  "file": "db/migration/deltas/V435__w2b_double_walkover_and_results.sql",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
   "find": "  get diagnostics changed = row_count;",
   "replace": "  changed := 0;",
   "killers": [

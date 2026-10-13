@@ -1,5 +1,6 @@
--- W2b (spec §5.4; plan D12, D13). V435, not the plan's V433: the local branch feat/chess-lichess-external-play holds
--- V433 and V434 (C-9). RENUMBER AT MERGE (Task 18 Step 1) if main has moved; the tests read this file by glob.
+-- W2b (spec §5.4; plan D12, D13). V438: main reached V437 (capture_records) while W2b was open, so this delta,
+-- first V435 (C-9), was renumbered at Task 18 Step 1. RENUMBER AGAIN AT MERGE if main has moved; the tests read
+-- this file by glob.
 --
 -- 1) Re-classify every UNSETTLED held bracket fixture whose ACTIVE result is the legacy chess double forfeit
 --    (`boardgame.result{method:"double_forfeit"}`, retired by D15): it is now a double walkover (BG-DW-1), never
