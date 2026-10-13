@@ -35,7 +35,23 @@ export type BoardProps = {
   onMove: (uci: string) => void;
   label: string;
   t: RoomT;
+  /** T16 — a spectator's board: chessground binds no events, and no move is
+   *  offered whatever `movable` says. */
+  viewOnly?: boolean;
 };
+
+/** The board's fixed chessground settings; `viewOnly` is the spectators'. */
+export function boardChrome(viewOnly: boolean): CgConfig {
+  return {
+    coordinates: true,
+    viewOnly,
+    highlight: { lastMove: true, check: true },
+    animation: { enabled: true, duration: 150 },
+    premovable: { enabled: false },
+    selectable: { enabled: !viewOnly },
+    drawable: { enabled: false },
+  };
+}
 
 /** chess.js's legal moves as chessground's destination map. */
 export function legalDests(fen: string): Map<CgKey, CgKey[]> {
@@ -67,7 +83,8 @@ function inCheck(fen: string): boolean {
   }
 }
 
-export default function Board({ fen, orientation, lastMove, movable, syncKey, onMove, label, t }: BoardProps) {
+export default function Board({ fen, orientation, lastMove, movable: asked, syncKey, onMove, label, t, viewOnly = false }: BoardProps) {
+  const movable = asked && !viewOnly;
   const el = useRef<HTMLDivElement>(null);
   const api = useRef<CgApi | null>(null);
   const [promo, setPromo] = useState<null | { from: string; to: string }>(null);
@@ -111,15 +128,9 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
     () => ({
       ...position,
       ...interaction,
-      coordinates: true,
-      viewOnly: false,
-      highlight: { lastMove: true, check: true },
-      animation: { enabled: true, duration: 150 },
-      premovable: { enabled: false },
-      selectable: { enabled: true },
-      drawable: { enabled: false },
+      ...boardChrome(viewOnly),
     }),
-    [position, interaction],
+    [position, interaction, viewOnly],
   );
   // The latest props, for the board built after the loader resolves: a
   // snapshot that lands while chessground is still loading must not be lost
@@ -206,6 +217,7 @@ export default function Board({ fen, orientation, lastMove, movable, syncKey, on
         data-testid="room-board-surface"
         data-fen={fen}
         data-movable={movable ? "true" : "false"}
+        data-view-only={viewOnly ? "true" : "false"}
         // A group, not an image: its squares take clicks and drags (review m8).
         role="group"
         aria-label={label}

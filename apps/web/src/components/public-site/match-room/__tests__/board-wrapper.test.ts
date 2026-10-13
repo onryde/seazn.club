@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import Board, { legalDests } from "../board";
+import Board, { boardChrome, legalDests } from "../board";
 
 const DIR = join(__dirname, "..");
 
@@ -37,6 +37,28 @@ describe("the board wrapper", () => {
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  it("T16: a view-only board (the spectators') takes no move, even when asked to be movable, and says so", () => {
+    const html = renderToStaticMarkup(
+      createElement(Board, {
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        orientation: "white",
+        lastMove: null,
+        movable: true,
+        viewOnly: true,
+        syncKey: 0,
+        onMove: () => {},
+        label: "White to move",
+        t: (k: string) => k,
+      }),
+    );
+    expect(html).toContain('data-movable="false"');
+    expect(html).toContain('data-view-only="true"');
+    // chessground's own switch, and no square to select (its README: viewOnly "don't bind events").
+    expect(boardChrome(true)).toMatchObject({ viewOnly: true, selectable: { enabled: false }, drawable: { enabled: false } });
+    // The positive pair: the room's board binds its events.
+    expect(boardChrome(false)).toMatchObject({ viewOnly: false, selectable: { enabled: true } });
   });
 
   it("room-shell mounts the board through next/dynamic with ssr:false — chessground touches document", () => {

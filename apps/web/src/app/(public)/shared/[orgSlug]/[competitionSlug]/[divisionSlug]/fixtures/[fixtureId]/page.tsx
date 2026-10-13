@@ -27,7 +27,8 @@ import { posterFileName } from "@/lib/poster-file-name";
 import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { MatchCentreSubheading } from "./subheading";
-import { ExternalPlayCta } from "@/components/public-site/external-play-cta";
+import { WatchPanel, showWatchPanel } from "@/components/public-site/match-centre/watch-panel";
+import type { PublicWatchDoc } from "@/server/external-play/public-view";
 import { YourBoard } from "@/components/public-site/your-board";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { shareTextFor } from "./share-text";
@@ -236,6 +237,8 @@ export default async function FixturePage({ params }: Props) {
   const ui = await getDictionary(locale, "ui");
 
   const [home, away] = sideNamesFor(data, msgFn);
+  const onlineBoard = supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess";
+  const watchDoc: PublicWatchDoc = { roundOpened: data.roundOpened, externalPlay: data.externalPlay };
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
 
@@ -401,26 +404,12 @@ export default async function FixturePage({ params }: Props) {
 
         {/* T16 — a player's door into their match room. This HTML is shared (ISR), so it carries no door: the
             island asks the lobby route after hydration, and only one of the two players gets an answer. */}
-        {supportsOnlinePlay(data.division.sport_key) && readOnlinePlay(data.division.config) === "lichess" ? (
-          <YourBoard fixtureId={fixture.id} />
-        ) : null}
+        {onlineBoard ? <YourBoard fixtureId={fixture.id} /> : null}
 
-        {data.externalPlay && data.externalPlay.status !== "pending" ? (
-          <ExternalPlayCta
-            externalPlay={data.externalPlay}
-            scheduledLabel={
-              fixture.scheduled_at
-                ? new Date(fixture.scheduled_at).toLocaleString(locale, {
-                    weekday: "short",
-                    day: "numeric",
-                    month: "short",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : null
-            }
-            msg={(key, vars) => t(ui, key, vars)}
-          />
+        {/* T16 — the online board, watched here (D3: one venue, no Lichess link). The server's doc paints
+            first; the island keeps it live (its poll, and the moves pushed through the match centre's channel). */}
+        {onlineBoard && showWatchPanel(fixture.status, watchDoc) ? (
+          <WatchPanel fixtureId={fixture.id} initial={watchDoc} names={{ home, away }} />
         ) : null}
 
         {/* Task 14 — the match centre replaces the old bare scorebug
