@@ -466,15 +466,16 @@ test("re-review N-1: /me's results print a finalized double walkover's tag, neve
     await expect(woLine, `${width}: the walkover is a result`).toHaveCount(1);
     const dwCell = dwLine.locator("span.app-display");
     await expect(dwCell, `${width}: one score cell`).toHaveCount(1);
-    await expect(dwCell, `${width}: the tag is a symbol`).toHaveAttribute("role", "img");
-    await expect(dwCell, `${width}: named by the full words`).toHaveAccessibleName(full);
+    const symbol = dwCell.getByRole("img");
+    await expect(symbol, `${width}: the tag is one symbol`).toHaveCount(1);
+    await expect(symbol, `${width}: named by the full words`).toHaveAccessibleName(full);
     // innerText, so `.app-display`'s uppercase would show: the tag keeps its case.
     expect(await dwCell.innerText(), `${width}: the double walkover prints its tag, in its own case`).toBe(tag);
     await expect(dwLine, `${width}: never the stored 0 — 0`).not.toContainText(/0\s*[–—-]\s*0/);
     // The pair: the same cell on the walkover's line prints its credited score.
     const woCell = woLine.locator("span.app-display");
     await expect(woCell, `${width}: the walkover keeps its credited score`).toHaveText(/\d+\s*[–—-]\s*\d+/);
-    await expect(woCell, `${width}: and no tag`).not.toHaveAttribute("role", "img");
+    await expect(woCell.getByRole("img"), `${width}: and no tag`).toHaveCount(0);
     await expectNoHorizontalScroll(me);
     const box = me.locator("section").filter({ has: dwLine });
     await box.screenshot({ path: shots ? `${shots}/me-results-double-walkover-${width}.png` : testInfo.outputPath(`me-results-dw-${width}.png`) });

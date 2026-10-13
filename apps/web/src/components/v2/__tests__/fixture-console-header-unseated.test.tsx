@@ -112,10 +112,17 @@ describe("fixture-console header — M-4: a withdrawn side wears the Withdrawn c
       const h1 = headerHtml(seat, "Charlie Gone");
       const chips = [...h1.matchAll(CHIP)];
       expect(chips.map((c) => c[2]), `${seat}: the chip, once`).toEqual([WITHDRAWN]);
-      expect(chips[0]![1]!.split(" ").sort(), `${seat}: the run sheet's chip`).toEqual(RUN_SHEET_CHIP);
+      // The run sheet's chip, plus ONE closed-strip override: on its own line under the names (owner option A) it starts
+      // flush, so its `ml-1.5` is cancelled below md.
+      const own = chips[0]![1]!.split(" ");
+      expect(own, `${seat}: flush on its own line`).toContain("max-md:ml-0");
+      expect(own.filter((c) => c !== "max-md:ml-0").sort(), `${seat}: the run sheet's chip`).toEqual(RUN_SHEET_CHIP);
+      expect(h1, `${seat}: the chip's line spans row 2 on the closed phone strip`).toContain(
+        '<span class="shrink-0 max-md:col-span-full max-md:row-start-2"><span data-testid="console-withdrawn"',
+      );
       expect(h1, `${seat}: her name muted`).toContain('<span class="min-w-0 max-md:truncate text-slate-500">Charlie Gone</span>');
       expect(h1, `${seat}: the opponent truncates on its own`).toContain('<span class="min-w-0 max-md:truncate">Bears of Brockley</span>');
-      expect(/^<h1 class="[^"]*\bflex min-w-0 flex-wrap items-baseline max-md:flex-nowrap\b/.test(h1), `${seat}: a flex line, one line on the phone`).toBe(true);
+      expect(/^<h1 class="[^"]*\bflex min-w-0 flex-wrap items-baseline max-md:grid max-md:grid-cols-\[minmax\(0,max-content\)_auto_minmax\(0,max-content\)_minmax\(0,1fr\)\]/.test(h1), `${seat}: a flex line; on the closed phone strip, a two-row grid`).toBe(true);
       expect(/^<h1 class="[^"]*max-md:truncate/.test(h1), `${seat}: no whole-line truncate (it cut the chip)`).toBe(false);
       checked++;
     }

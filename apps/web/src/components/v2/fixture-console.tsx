@@ -1004,21 +1004,27 @@ export function FixtureConsole({
   // her name muted, the entrant status's own word in a chip, each name a `min-w-0 truncate` span, the chip and "vs"
   // `shrink-0` — a whole-line truncate cut the chip to "With…" at 320. As the header always did, only the phone strip
   // with its details closed truncates: opened, or at ≥768, the line wraps between whole items and every name is read
-  // in full. Read off the live outcome and the seats.
+  // in full. Owner ruling (option A, 2026-10-13): on that closed strip the chip takes its own short line under the names
+  // (a two-row grid, the chip spanning row 2), so the two names share the whole first row — each its own
+  // `minmax(0,max-content)` track, truncating normally — where beside the chip each was cut to about one letter at 320.
+  // The trailing `minmax(0,1fr)` track is load-bearing: a spanning item that crosses a flexible track is left out of
+  // the content-track sizing, so the chip's width cannot inflate the `auto` "vs" track and starve the names (it did).
+  // Read off the live outcome and the seats.
   const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
   const seatWithdrew = (seat: "home" | "away") =>
     (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
   const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
   const vsWord = <span className="text-slate-600">{msg("schedule.vs")}</span>;
   const nameFit = detailsOpen ? "min-w-0" : "min-w-0 max-md:truncate";
+  const chipLine = detailsOpen ? "shrink-0" : "shrink-0 max-md:col-span-full max-md:row-start-2";
   const headerName = (seat: "home" | "away", name: string) =>
     !withdrawnSeat ? (
       name
     ) : seatWithdrew(seat) ? (
       <>
         <span className={`${nameFit} text-slate-500`}>{name}</span>
-        <span className="shrink-0">
-          <span data-testid="console-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+        <span className={chipLine}>
+          <span data-testid="console-withdrawn" className={`${detailsOpen ? "" : "max-md:ml-0 "}ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600`}>
             {msg("entrants.status.withdrawn")}
           </span>
         </span>
@@ -1156,7 +1162,7 @@ export function FixtureConsole({
       <header className="card p-5 max-md:p-3">
         <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
           <h1
-            className={`${withdrawnSeat ? `flex min-w-0 flex-wrap items-baseline ${detailsOpen ? "" : "max-md:flex-nowrap "}` : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+            className={`${withdrawnSeat ? `flex min-w-0 flex-wrap items-baseline ${detailsOpen ? "" : "max-md:grid max-md:grid-cols-[minmax(0,max-content)_auto_minmax(0,max-content)_minmax(0,1fr)] max-md:gap-y-0.5 "}` : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
               detailsOpen || withdrawnSeat ? "" : "max-md:truncate"
             }`}
           >

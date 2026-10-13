@@ -15,7 +15,7 @@
 // retirement), §7 for the refusal (the dialog closes, the reason shows on the console).
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement, ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { foldMatch } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
@@ -469,7 +469,7 @@ describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal d
 // between whole items so both names are read in full. The static header test sees the closed state only; this drives
 // the details toggle through the island.
 describe("M-4: a withdrawn side's header line wraps once the phone details are open", () => {
-  it("closed: a nowrap phone line of truncating names; opened: a wrapping line, names whole", () => {
+  it("closed: a two-row phone grid, names truncating on row 1, the chip on row 2; opened: a wrapping line, names whole", () => {
     const base = baseProps("scheduled");
     const island = renderIsland(FixtureConsole, {
       ...base,
@@ -481,14 +481,22 @@ describe("M-4: a withdrawn side's header line wraps once the phone details are o
     const nameSpan = (name: string) => island.tree().find((e) => e.type === "span" && propsOf(e).children === name);
     const cls = (e: ReactElement | undefined) => String(propsOf(e!).className).split(/\s+/u);
     expect(byTestid(island.tree(), "console-withdrawn"), "premise: the withdrawn composition is on").toHaveLength(1);
-    expect(cls(h1()), "closed: the phone line does not wrap").toEqual(expect.arrayContaining(["flex", "flex-wrap", "max-md:flex-nowrap"]));
+    // Owner option A: closed, the phone line is a two-row grid — the names on row 1, the chip's line on row 2.
+    const chipLine = () =>
+      island.tree().find((e) => {
+        const kid = propsOf(e).children;
+        return e.type === "span" && isValidElement(kid) && propsOf(kid)["data-testid"] === "console-withdrawn";
+      });
+    expect(cls(h1()), "closed: a two-row grid on the phone").toEqual(expect.arrayContaining(["flex", "flex-wrap", "max-md:grid"]));
+    expect(cls(chipLine()), "closed: the chip on its own line").toEqual(expect.arrayContaining(["max-md:col-span-full", "max-md:row-start-2"]));
     expect(cls(nameSpan("Charlie Gone")), "closed: her name truncates on the phone").toContain("max-md:truncate");
     expect(cls(nameSpan(HOME.name)), "closed: the opponent truncates on the phone").toContain("max-md:truncate");
     const toggle = island.tree().find((e) => propsOf(e)["aria-label"] === en("console.phone.showDetails"));
     expect(toggle, "the phone details toggle").toBeDefined();
     click(toggle);
     expect(cls(h1()), "opened: the line wraps").toContain("flex-wrap");
-    expect(cls(h1()), "opened: never nowrap").not.toContain("max-md:flex-nowrap");
+    expect(cls(h1()), "opened: never the grid").not.toContain("max-md:grid");
+    expect(cls(chipLine()), "opened: the chip stays in the line").not.toContain("max-md:row-start-2");
     expect(cls(nameSpan("Charlie Gone")), "opened: her name whole").not.toContain("max-md:truncate");
     expect(cls(nameSpan(HOME.name)), "opened: the opponent whole").not.toContain("max-md:truncate");
   });

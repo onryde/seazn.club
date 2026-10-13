@@ -828,19 +828,56 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
       const header = await quote(s.header);
       expect(header.indexOf(pair[0]!) < header.indexOf(pair[1]!), `${width}: her name in her seat (${header})`).toBe(true);
       expect(header, `${width}: the console's header prints no bye word`).not.toMatch(BYE);
-      // Design review M-4 (audit 4.1): the header marks her as the run sheet does — the Withdrawn chip, once, whole
-      // inside the header's line at every width (a whole-line truncate cut it to "With…" at 320).
+      // Design review M-4 (audit 4.1): the header marks her as the run sheet does — the Withdrawn chip, once, whole and
+      // inside the header at every width (a whole-line truncate cut it to "With…" at 320). Owner option A (2026-10-13):
+      // on the phone strip with its details closed the chip takes its own line UNDER the names, so each name keeps
+      // real room — beside the chip each was cut to about one letter at 320 ("R… Withdrawn vs B…"). Measured off the
+      // rendering: each name's visible box against the width its own first characters need (a Range over its text);
+      // never class names. Elsewhere (≥768, no toggle) the chip stays on the names' line.
       const chip = s.header.locator('[data-testid="console-withdrawn"]');
       await expect(chip, `${width}: the console marks her as withdrawn`).toHaveCount(1);
       await expect(chip, `${width}: in the entrant status's own word`).toHaveText(UI["entrants.status.withdrawn"]!);
-      const chipFits = await chip.evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        const line = el.closest("h1")!.getBoundingClientRect();
-        return { whole: el.scrollWidth <= el.clientWidth + 0.5, inside: r.left >= line.left - 0.5 && r.right <= line.right + 0.5 };
-      });
-      expect(chipFits, `${width}: the chip is whole, inside the header line`).toEqual({ whole: true, inside: true });
-      await expectNoHorizontalScroll(page);
+      // Cropped before the measurements below, so the picture exists whichever way they go.
       await crop(s.header.locator("xpath=ancestor::header[1]"), `organiser-console-withdrew-final-${width}`);
+      const phoneStrip = await page.locator('[data-role="match-details-toggle"]').isVisible();
+      const FEW = 6;
+      const room = await s.header.evaluate(
+        (h1, [names, few]) => {
+          const chipEl = h1.querySelector('[data-testid="console-withdrawn"]')!;
+          const r = chipEl.getBoundingClientRect();
+          const line = h1.getBoundingClientRect();
+          const spans = (names as string[]).map((name) => [...h1.querySelectorAll("span")].find((x) => x.textContent === name) ?? null);
+          const measured = spans.map((el, i) => {
+            if (!el || !el.firstChild) return null;
+            const range = document.createRange();
+            range.setStart(el.firstChild, 0);
+            range.setEnd(el.firstChild, Math.min(few as number, (names as string[])[i]!.length));
+            return { visible: el.getBoundingClientRect().width, needs: range.getBoundingClientRect().width, bottom: el.getBoundingClientRect().bottom, top: el.getBoundingClientRect().top };
+          });
+          return {
+            whole: chipEl.scrollWidth <= chipEl.clientWidth + 0.5,
+            inside: r.left >= line.left - 0.5 && r.right <= line.right + 0.5,
+            chipTop: r.top,
+            chipBottom: r.bottom,
+            names: measured,
+          };
+        },
+        [pair, FEW] as const,
+      );
+      expect({ whole: room.whole, inside: room.inside }, `${width}: the chip is whole, inside the header`).toEqual({ whole: true, inside: true });
+      expect(room.names.every((x) => x !== null), `${width}: both names found in the header`).toBe(true);
+      room.names.forEach((x, i) => {
+        // Each name shows at least its first FEW characters: its visible box is no narrower than they need.
+        expect(x!.visible, `${width}: "${pair[i]}" shows more than a few characters (${x!.visible.toFixed(1)}px for ${x!.needs.toFixed(1)}px)`).toBeGreaterThanOrEqual(x!.needs - 0.5);
+      });
+      const namesBottom = Math.max(...room.names.map((x) => x!.bottom));
+      const herBox = room.names[pair.indexOf(herName)]!;
+      if (phoneStrip) {
+        expect(room.chipTop, `${width}: closed phone strip — the chip on its own line under the names`).toBeGreaterThanOrEqual(namesBottom - 0.5);
+      } else {
+        expect(room.chipTop < herBox.bottom && room.chipBottom > herBox.top, `${width}: the chip on her name's line`).toBe(true);
+      }
+      await expectNoHorizontalScroll(page);
       console.log(`R116-4 ${width} console header: ${header}`);
       screens++;
       // Review M-4 follow-up: on the phone the closed strip truncates the names; opening its details shows both whole
