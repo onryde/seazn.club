@@ -24,8 +24,8 @@ import { isValidCutoffDay } from "@/lib/registration-rules";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
-import { divisionRefusals, type RefusedField } from "./rule-locks";
-import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
+import { divisionRefusals } from "./rule-locks";
+import { RULE_ERROR_STATUS, ruleErrorMessage, type RefusedField } from "@/lib/rule-errors";
 import {
   slugify,
   withUniqueSlug,
@@ -1073,13 +1073,25 @@ export async function patchDivision(
               refused.push({ field: k, code: "DIVISION_FORMAT_LOCKED", stageId: variantRefusal.stageId, stageName: variantRefusal.stageName });
             }
           }
-          // A variant-only patch carries no entrants, which the parse above reads as "clear the override" — not a
-          // thing a refused variant may do.
-          if (patch.config === undefined) restoreKey(finalConfig, currentConfig, "entrants");
+        }
+        // A save that names no config carries no entrants, which the parse above reads as "clear the override". Two
+        // such saves must not clear it: a refused variant (nothing of it may land), and a re-send of the CURRENT
+        // variant (nothing is changing, so there is no variant change to carry a reset of an unrelated setting). An
+        // ACCEPTED change of variant keeps its pre-W2c reset.
+        if (patch.config === undefined && (variantRefusal !== undefined || !variantChanged)) {
+          restoreKey(finalConfig, currentConfig, "entrants");
         }
         if (refused.length > 0) {
           const reparsed = sportModule.configSchema.safeParse(finalConfig);
-          if (!reparsed.success) throw new HttpError(422, reparsed.error.issues[0]?.message ?? "Invalid config", "CONFIG_INVALID");
+          // Same shape as the first parse (EngineError CONFIG_INVALID with `issues`), plus the locked fields that were
+          // kept as stored: without them the organiser sees a config error about a value they did not send.
+          if (!reparsed.success) {
+            throw new EngineError(
+              "CONFIG_INVALID",
+              `invalid ${current.sport_key} config once ${refused.map((r) => r.field).join(", ")} stay as stored`,
+              { issues: reparsed.error.issues, refused },
+            );
+          }
         }
         configApplied = canonicalJson(finalConfig) !== canonicalJson(currentConfig);
       }

@@ -7,18 +7,11 @@ import "server-only";
 // this stage started", the division PATCH (`divisions.ts`) asks "which started stages depend on the thing I am
 // changing".
 import type { Tx } from "@/lib/db";
+import type { RefusedField } from "@/lib/rule-errors";
 
 /** Division config keys that are TABLE rules (Q3); every other key is match format (Q4).
  *  A literal until Task 5, which derives it from the engine (`pointsKeysFor` ∪ {"pointsMap"}, D11). */
 export const TABLE_RULE_KEYS: ReadonlySet<string> = new Set(["points", "pointsMap"]);
-
-/** One field a division save did not apply, and the first started stage that depends on it. */
-export interface RefusedField {
-  field: string;
-  code: "DIVISION_FORMAT_LOCKED" | "DIVISION_TABLE_RULES_LOCKED";
-  stageId: string;
-  stageName: string;
-}
 
 /**
  * "Which of these stages have already started?" — THE format-lock predicate,

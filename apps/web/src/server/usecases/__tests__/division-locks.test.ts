@@ -7,13 +7,17 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/rule-errors";
+import { EngineError } from "@seazn/engine/core";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { ENGINE_HTTP } from "@/server/api-v1/http";
 import { appendEvent, resolveLatestModule } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { putStageRules } from "../stage-rules";
+import { withdrawEntrantCascade } from "../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
@@ -39,6 +43,21 @@ async function rig(sport: string, variant: string) {
   return { auth, divisionId: d.id, s1: s1!, s2: s2!, fixtureId: f!.id };
 }
 const start = (auth: AuthCtx, fixtureId: string) => appendEvent(auth.orgId, fixtureId, 0, { type: "core.start", payload: {} });
+
+/** Pool B generates its fixtures and takes its first event: a SECOND started stage (`rig` starts neither). */
+async function startPoolB(r: Awaited<ReturnType<typeof rig>>): Promise<void> {
+  await generateStageFixtures(r.auth, r.s2.id);
+  const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.s2.id} order by id limit 1`;
+  await start(r.auth, f!.id);
+}
+
+/** The `refused` list off a rejected save (the 409 carries it in `extra`, a CONFIG_INVALID in `data`). */
+async function rejection(p: Promise<unknown>): Promise<Record<string, unknown>> {
+  return p.then(
+    () => { throw new Error("expected the save to be refused, but it resolved"); },
+    (e: unknown) => e as Record<string, unknown>,
+  );
+}
 
 describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", () => {
   it("empty patch on a started division: saves, refuses nothing", async () => {
@@ -285,8 +304,172 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     // Preconditions from the engine's own schema, so the case cannot pass vacuously:
     expect(m.configSchema.safeParse(requested).success, "the requested pair is valid").toBe(true);
     expect(m.configSchema.safeParse(restored).success, "the restored mix is invalid (cap below setTo)").toBe(false);
-    await expect(patchDivision(r.auth, r.divisionId, { config: requested })).rejects.toMatchObject({ status: 422, code: "CONFIG_INVALID" });
+    // M-1: the SAME shape as the first parse (an EngineError CONFIG_INVALID carrying the engine's `issues`), plus the locked
+    // fields that were kept as stored — the organiser never sent the value that makes the config invalid.
+    const err = await rejection(patchDivision(r.auth, r.divisionId, { config: requested }));
+    expect(err).toBeInstanceOf(EngineError);
+    expect(err).toMatchObject({ code: "CONFIG_INVALID" });
+    expect(ENGINE_HTTP.CONFIG_INVALID, "EngineError CONFIG_INVALID is a 422 on the wire").toBe(422);
+    const data = (err as unknown as EngineError).data as { issues: { message: string }[]; refused: { field: string; stageName: string }[] };
+    expect(data.issues.length, "the engine's own issues ride along").toBeGreaterThan(0);
+    expect(data.issues.map((i) => i.message)).toContain("cap must be ≥ the set target");
+    expect(data.refused.map((x) => `${x.field}@${x.stageName}`).sort()).toEqual(["finalSetTo@Pool A", "setTo@Pool A"]);
+    expect((err as unknown as Error).message, "the message names the kept fields").toMatch(/setTo.*stay as stored/);
     expect((await getDivision(r.auth, r.divisionId)).config).toEqual(before);
+  });
+
+  // ---- fix round 1 (review of 3658e6ea0) ----------------------------------------------------------------------
+
+  it("I-2 withdrawal: an entrant withdrawing before any play STARTS the stage — the save that worked a moment ago is refused, naming it", async () => {
+    // The cascade's forfeit goes through scoreEvent, so it writes a score_events row and freezes the fixture's snapshot:
+    // that fixture now plays under the rules in force at the withdrawal, and a later division change would put the stage
+    // on mixed rules. The lock is correct; the copy ("has started") is the owner's ruling, kept.
+    const r = await rig("badminton", "short");
+    await startDivision(r.auth, r.divisionId);        // the cascade only settles fixtures of a started division
+    const used = () => sql<{ events: number; frozen: number }[]>`
+      select (select count(*)::int from score_events e join fixtures f on f.id = e.fixture_id where f.stage_id = ${r.s1.id}) as events,
+             (select count(*)::int from fixtures f where f.stage_id = ${r.s1.id} and f.config_snapshot is not null) as frozen`;
+    expect((await used())[0], "precondition: Pool A has no event and no snapshot yet").toEqual({ events: 0, frozen: 0 });
+
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    const ok = await patchDivision(r.auth, r.divisionId, { config: { ...before, setTo: 13 } });          // the negative pair
+    expect(ok.refused).toEqual([]);
+    expect((ok.config as { setTo: number }).setTo).toBe(13);
+
+    const [e1] = await sql<{ id: string }[]>`select id from entrants where division_id = ${r.divisionId} order by seed limit 1`;
+    const out = await withdrawEntrantCascade(r.auth, e1!.id);
+    expect(out.walkovers + out.voided, "the cascade wrote an event on Pool A's fixture").toBeGreaterThan(0);
+    const after = (await used())[0]!;
+    expect(after.events, "the withdrawal left a score event").toBeGreaterThan(0);
+
+    const err = await rejection(patchDivision(r.auth, r.divisionId, { config: { ...(ok.config as object), setTo: 15 } }));
+    expect(err).toMatchObject({
+      status: 409,
+      code: "DIVISION_FORMAT_LOCKED",
+      message: "Pool A has started; its match format is locked. Change individual unstarted matches instead.",
+      extra: { refused: [{ field: "setTo", stageName: "Pool A" }] },
+    });
+    expect(((await getDivision(r.auth, r.divisionId)).config as { setTo: number }).setTo, "the refused value was not written").toBe(13);
+  });
+
+  it("M-2 two started stages: Pool A sets the key itself, Pool B inherits it — the refusal names Pool B", async () => {
+    const r = await rig("badminton", "short");
+    await putStageRules(r.auth, r.s1.id, { rules: { setTo: 11 } });
+    await start(r.auth, r.fixtureId);
+    await startPoolB(r);
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, setTo: 15 } });
+    expect(out.refused).toEqual([{ field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: r.s2.id, stageName: "Pool B" }]);
+    expect((out.config as { setTo: number }).setTo).toBe((before as { setTo: number }).setTo);
+  });
+
+  it("M-2 two started stages that both inherit: every refusal names the first by seq (Pool A) — config key, variant and tiebreakers", async () => {
+    const r = await rig("generic", "score");
+    await start(r.auth, r.fixtureId);
+    await startPoolB(r);
+    const before = (await getDivision(r.auth, r.divisionId)).config as { allowDraws: boolean };
+    const out = await patchDivision(r.auth, r.divisionId, {
+      name: "Renamed", tiebreakers: ["head_to_head"] as never, config: { ...before, allowDraws: !before.allowDraws },
+    });
+    expect(out.refused.length, "a config key and the tiebreakers were refused").toBe(2);
+    for (const x of out.refused) expect(x, x.field).toMatchObject({ stageId: r.s1.id, stageName: "Pool A" });
+    const v = await rejection(patchDivision(r.auth, r.divisionId, { variant_key: "win_loss" }));
+    expect((v as { extra: { refused: { field: string; stageName: string }[] } }).extra.refused.find((x) => x.field === "variant_key")).toMatchObject({ stageName: "Pool A" });
+  });
+
+  it("M-3 a started stage that carries its own points still inherits every FORMAT key (the table exemption is for table keys only)", async () => {
+    // Fixture-only: a stage's own `config.points` has no producer until Task 13, so it is written to the column.
+    const r = await rig("generic", "score");
+    await sql`update stages set config = config || ${sql.json({ points: { win: 2, draw: 1, loss: 0 } } as never)} where id = ${r.s1.id}`;
+    await start(r.auth, r.fixtureId);
+    const before = (await getDivision(r.auth, r.divisionId)).config as { allowDraws: boolean };
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, allowDraws: !before.allowDraws } });
+    expect(out.refused).toEqual([{ field: "allowDraws", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+  });
+
+  it("M-3 pointsMap is a TABLE rule: refused with the table code while a started stage inherits it, saved once the stage carries its own points", async () => {
+    const inherits = await rig("badminton", "short");
+    await start(inherits.auth, inherits.fixtureId);
+    const b1 = (await getDivision(inherits.auth, inherits.divisionId)).config as Record<string, unknown>;
+    const refused = await patchDivision(inherits.auth, inherits.divisionId, { name: "Renamed", config: { ...b1, pointsMap: { "*": [3, 0] } } });
+    expect(refused.refused).toEqual([{ field: "pointsMap", code: "DIVISION_TABLE_RULES_LOCKED", stageId: inherits.s1.id, stageName: "Pool A" }]);
+    expect((refused.config as { pointsMap: unknown }).pointsMap).toEqual((b1 as { pointsMap: unknown }).pointsMap);
+
+    const own = await rig("badminton", "short");
+    await sql`update stages set config = config || ${sql.json({ points: { win: 3, loss: 0 } } as never)} where id = ${own.s1.id}`;
+    await start(own.auth, own.fixtureId);
+    const b2 = (await getDivision(own.auth, own.divisionId)).config as Record<string, unknown>;
+    const saved = await patchDivision(own.auth, own.divisionId, { config: { ...b2, pointsMap: { "*": [3, 0] } } });
+    expect(saved.refused).toEqual([]);
+    expect((saved.config as { pointsMap: unknown }).pointsMap).toEqual({ "*": [3, 0] });
+  });
+
+  it("M-3 a stored config that LACKS a key the schema defaults: re-sending it is refused as an added key, and the key stays absent", async () => {
+    // Legacy-shape fixture (a row written before `winBy` existed): the key is removed from the column directly.
+    const r = await rig("badminton", "short");
+    await sql`update divisions set config = config - 'winBy' where id = ${r.divisionId}`;
+    await start(r.auth, r.fixtureId);
+    const before = await getDivision(r.auth, r.divisionId);
+    expect(before.config, "precondition: the stored config has no winBy").not.toHaveProperty("winBy");
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: before.config as never });
+    expect(out.refused).toEqual([{ field: "winBy", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+    expect(out.config, "the refused default was not written: the key is still absent").not.toHaveProperty("winBy");
+    expect(out.config).toEqual(before.config);
+  });
+
+  it("M-3 a variant preset the schema cannot parse alone still contributes its own keys to a refused variant", async () => {
+    // Custom preset { cap: 10 }: alone it is invalid (cap below the default setTo of 21), so `completedPreset` falls back to its
+    // own keys. Pool A sets `cap` itself, so only the preset delta can put the preset's cap back.
+    const r = await rig("badminton", "short");
+    const key = "zz-partial-" + randomUUID().slice(0, 6);
+    const m = resolveLatestModule("badminton");
+    expect(m.configSchema.safeParse({ cap: 10 }).success, "the preset alone is invalid, or the fallback is never reached").toBe(false);
+    await sql`insert into sport_variants (sport_key, key, name, config, is_system) values ('badminton', ${key}, 'partial', ${sql.json({ cap: 10 } as never)}, true)`;
+    try {
+      await putStageRules(r.auth, r.s1.id, { rules: { cap: 15 } });
+      await start(r.auth, r.fixtureId);
+      const before = await getDivision(r.auth, r.divisionId);
+      expect(m.configSchema.safeParse({ cap: 10, setTo: 7, finalSetTo: 7 }).success, "merged with the patch the config parses").toBe(true);
+      const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", variant_key: key, config: { setTo: 7, finalSetTo: 7 } });
+      expect(out.variant_key).toBe("short");
+      expect(out.config, "the preset's cap did not land beside the kept variant").toEqual(before.config);
+      expect(out.refused).toContainEqual(expect.objectContaining({ field: "cap", code: "DIVISION_FORMAT_LOCKED", stageName: "Pool A" }));
+      expect(out.refused).toContainEqual(expect.objectContaining({ field: "variant_key" }));
+    } finally {
+      await sql`delete from sport_variants where sport_key = 'badminton' and key = ${key}`;
+    }
+  });
+
+  it("sibling gap: re-sending the CURRENT variant with no config on a started division is a no-op — the entrants override survives", async () => {
+    const r = await rig("generic", "score");
+    const stored = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
+    const withOverride = { ...stored, entrants: { kinds: ["individual"], defaultKind: "individual" } };
+    await patchDivision(r.auth, r.divisionId, { config: withOverride });
+    await start(r.auth, r.fixtureId);
+    const before = await getDivision(r.auth, r.divisionId);
+    expect((before.config as { entrants?: unknown }).entrants, "precondition: the override is stored").toEqual(withOverride.entrants);
+    const out = await patchDivision(r.auth, r.divisionId, { variant_key: "score" });
+    expect(out.refused).toEqual([]);
+    expect(out.variant_key).toBe("score");
+    expect(out.config, "nothing changed, the entrants override included").toEqual(before.config);
+  });
+
+  it("tiebreakers: [] against a stored null is a CHANGE (an empty cascade is not the sport default) — refused once started", async () => {
+    // Pinned as found, NOT as the fix-round brief asked ("[] and null both mean no custom tie-breaks, treat as equal"):
+    // `engine-db/competition.ts:413` reads `division.tiebreakers ?? module.defaultTiebreakers`, so null is the sport's default
+    // cascade and [] is an EMPTY one (rows then split by seed). Treating them as equal would either drop the organiser's
+    // explicit empty cascade or write it past the lock this task adds.
+    const r = await rig("badminton", "short");
+    const before = await getDivision(r.auth, r.divisionId);
+    expect(before.tiebreakers, "precondition: stored null").toBeNull();
+    await start(r.auth, r.fixtureId);
+    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: [] as never })).rejects.toMatchObject({
+      status: 409, code: "DIVISION_TABLE_RULES_LOCKED", extra: { refused: [{ field: "tiebreakers", stageName: "Pool A" }] },
+    });
+    expect((await getDivision(r.auth, r.divisionId)).tiebreakers, "still null").toBeNull();
+    // And null against a stored null is the genuine no-op.
+    const same = await patchDivision(r.auth, r.divisionId, { name: "Same", tiebreakers: null });
+    expect(same.refused).toEqual([]);
   });
 });
 

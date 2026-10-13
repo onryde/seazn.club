@@ -17,6 +17,15 @@ export const RULE_ERROR_STATUS = {
 
 export type RuleErrorCode = keyof typeof RULE_ERROR_STATUS;
 
+/** One field a division save did not apply, and the first started stage that depends on it. Lives here, not beside
+ *  `divisionRefusals` (server-only): the 409 body and the 200 body's `refused` list both carry it to a client. */
+export interface RefusedField {
+  field: string;
+  code: Extract<RuleErrorCode, "DIVISION_FORMAT_LOCKED" | "DIVISION_TABLE_RULES_LOCKED">;
+  stageId: string;
+  stageName: string;
+}
+
 export interface RuleErrorParams {
   stage?: string;
   field?: string;
