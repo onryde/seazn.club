@@ -810,6 +810,8 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
   /** A bracket line that feeds no next match, in W2b's own terms. */
   const SHAPES = [
     { label: "a knockout final", kind: "knockout", thirdPlace: false },
+    // Documentation, not a separate branch (rebase review M-2): D19 reads the feed edges, never the third_place flag, so
+    // this is the final's branch again. The shape whose answer DIFFERS is the pair below — a rung that does feed.
     { label: "a third-place match", kind: "knockout", thirdPlace: true },
     { label: "a stepladder's last rung", kind: "stepladder", thirdPlace: false },
   ] as const;
@@ -834,21 +836,28 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     expect(checked, "no-next-match shapes checked").toBe(SHAPES.length);
   });
 
-  it("RB2, the pair: a KNOCKOUT double walkover that FEEDS a next match is written, not held", async () => {
-    const b = await openedBoard({ checkedIn: [], kind: "knockout" });
-    // A next match for the winner to go to — the feed edge W2b reads.
-    const [next] = await sql<{ id: string }[]>`
-      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
-      values (${b.stageId}, ${b.divisionId}, ${b.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
-      returning id`;
-    await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
-    const report = await sweep(b, { now: b.at(45) });
-    expect(report.heldForOrganiser).toBe(0);
-    expect((await bridgeOf(b.fixtureId))?.status, "not held").toBe("pending");
-    expect(report.noShows).toBe(1);
-    expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: "both", reason: WALKOVER }]);
-    const fx = await fixtureRow(b.fixtureId);
-    expect([fx.status, fx.outcome], "nobody advances").toEqual(["forfeited", { kind: "double_walkover" }]);
+  it("RB2, the pair: a KNOCKOUT match and a STEPLADDER rung whose double walkover FEEDS a next match are written, not held", async () => {
+    // Rebase review M-2: the stepladder rung is the shape whose answer differs from its last rung above — the same
+    // stage kind, held there and written here, decided by the feed edge alone.
+    let checked = 0;
+    for (const kind of ["knockout", "stepladder"] as const) {
+      const b = await openedBoard({ checkedIn: [], kind });
+      // A next match for the winner to go to — the feed edge W2b reads.
+      const [next] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+        values (${b.stageId}, ${b.divisionId}, ${b.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
+        returning id`;
+      await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
+      const report = await sweep(b, { now: b.at(45) });
+      expect(report.heldForOrganiser, kind).toBe(0);
+      expect((await bridgeOf(b.fixtureId))?.status, `${kind}: not held`).toBe("pending");
+      expect(report.noShows, kind).toBe(1);
+      expect(await forfeitsWritten(b.fixtureId), kind).toEqual([{ by: "both", reason: WALKOVER }]);
+      const fx = await fixtureRow(b.fixtureId);
+      expect([fx.status, fx.outcome], `${kind}: nobody advances`).toEqual(["forfeited", { kind: "double_walkover" }]);
+      checked++;
+    }
+    expect(checked, "feeding shapes checked").toBe(2);
   });
 
   it("only THAT code holds: any other refusal of a double walkover is a failure, and the board is not held", async () => {
