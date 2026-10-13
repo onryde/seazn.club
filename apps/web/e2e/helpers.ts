@@ -11,6 +11,7 @@ import {
 // rather than re-declaring it is what keeps a new rung from needing a sixth
 // hand-maintained list.
 import type { PassKey } from "../src/lib/currency";
+import { routes } from "../src/lib/routes";
 // The one VALUE import from the app, and deliberately so: lib/platform-fee.ts
 // has zero imports of its own (no server-only, no db, no Redis), so nothing of
 // the app's runtime follows it in. Sharing the decoder is the point — the
@@ -1024,7 +1025,8 @@ export async function matchRoomPathBySql(fixtureId: string, personId: string): P
     throw new Error(`matchRoomPathBySql: fixture ${fixtureId}'s round is not opened — no invite link exists yet (D12)`);
   }
   const token = await mintMatchRoomLink({ fixtureId, personId, roundOpenId: row.open_id, openedAt: new Date(row.opened_at) });
-  return `/shared/${row.org}/${row.comp}/${row.div}/fixtures/${fixtureId}/play?t=${encodeURIComponent(token)}`;
+  // The builder invite.ts mints the emailed link with (T17 review M10).
+  return routes.sharedFixturePlay(row.org, row.comp, row.div, fixtureId, token);
 }
 
 /** `stage_round_opens.opened_at` for one (stage, round), or null — the D12

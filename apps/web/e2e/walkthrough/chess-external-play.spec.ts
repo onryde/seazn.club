@@ -80,6 +80,7 @@ import {
 } from "../realtimekit-fixture-server";
 import { DEADLINE_AFTER_MS, LICHESS_TIMEOUT_MS, WINDOW_OPEN_LEAD_MS } from "../../src/server/external-play/window";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../../src/lib/consent";
+import { routes } from "../../src/lib/routes";
 
 test.describe.configure({ mode: "parallel" });
 // A synthetic camera, so getUserMedia resolves in a player's page (Task 17).
@@ -226,6 +227,36 @@ const NOT_POINTED = (what: string) =>
   `the real service — set LICHESS_BASE_URL=http://127.0.0.1:${LICHESS_FIXTURE_PORT}, ` +
   `REALTIMEKIT_BASE_URL=http://127.0.0.1:${REALTIMEKIT_FIXTURE_PORT} and the five REALTIMEKIT_FIXTURE_ENV ` +
   `credentials on the SERVER process (docs/runbooks/e2e-local.md), not just on this runner`;
+
+/** T17 review M3: no create call reaching the stub has a second cause the environment message would hide — the server
+ *  never TRIED. So the poll's failure reads the bridge row as it stands and names the cause it shows: `token_unavailable`
+ *  (measured 2026-10-13 with the runner on another LICHESS_TOKEN_KEK: the server cannot open the tokens this runner
+ *  sealed), or a hold; only a clean row is blamed on where the server points. */
+async function expectLichessReached(calls: () => number, fixtureId: string, timeout: number): Promise<void> {
+  try {
+    await expect.poll(calls, { timeout }).toBeGreaterThan(0);
+  } catch (e) {
+    const row = await bridgeRow(fixtureId);
+    const seen = row === null ? "no bridge row at all" : JSON.stringify({ status: row.status, last_error: row.last_error, needs_reason: row.needs_reason });
+    const cause =
+      row?.last_error === "token_unavailable"
+        ? "it could not open the players' sealed Lichess tokens: the SERVER's LICHESS_TOKEN_KEK is not this runner's (docs/runbooks/e2e-local.md, step 5)"
+        : row?.needs_reason
+          ? `the product held the board (needs_reason ${row.needs_reason})`
+          : row?.last_error
+            ? `its create failed before reaching Lichess (last_error ${row.last_error})`
+            : null;
+    const why = cause === null ? NOT_POINTED("Lichess") : `the server under test made NO Lichess call because it never tried — ${cause}`;
+    throw new Error(`${why}. The bridge row reads ${seen}.\n${(e as Error).message}`);
+  }
+}
+
+/** T17 review M5: the bridge row and the stub hold the same clocks, both as at the last move, each stamped on its own
+ *  side of one local HTTP hop. A charged move's elapsed time differs by at most the difference of two such hops, and
+ *  each side has paid two moves by ply 6 — 2.5 s covers that under load, and stays under the 3 s increment, so a lost
+ *  increment or a centisecond/millisecond slip (x10) still reds. Measured 2026-10-13: 0-2 ms apart over two runs (the
+ *  pages' reads re-take Lichess's clocks, T11). */
+const CLOCK_TOLERANCE_MS = 2_500;
 
 const CRON = () => ({ "x-cron-secret": process.env.CRON_SECRET ?? "" });
 
@@ -415,7 +446,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // and offers no check-in.
     const ctx = await playerContext(browser);
     const p = await ctx.newPage();
-    const roomPath = `${r.publicBase}/fixtures/${board.fixtureId}/play`;
+    const roomPath = routes.sharedFixturePlay(r.slugs.org, r.slugs.comp, r.slugs.div, board.fixtureId);
     await loginUi(p, board.home.email, roomPath);
     await p.goto(roomPath);
     await expect(screen(p)).toHaveAttribute("data-screen", "notOpened", { timeout: 20_000 });
@@ -516,10 +547,15 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
 
     // The meeting now reports them present; Try again re-asks, and seats.
     video.setLivePublisher(participantOf(first), true);
+    const beforeRetry = video.calls.length;
     await p1.getByTestId("room-state-retry").click();
     await expect(screen(p1)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await expect(p1.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
     expect(await checkedInAt(boardA.fixtureId, first.personId), "seated on the meeting's word").not.toBeNull();
+    // M6: the seat came from a FRESH presence read, made after the press — not from the refusal's earlier answer.
+    const reAsked = video.calls.slice(beforeRetry).map((c) => c.route);
+    expect(reAsked, "Try again re-read the meeting's session").toContain("GET /meetings/:id/active-session");
+    expect(reAsked, "and who is in it").toContain("GET /sessions/:id/participants");
 
     // ── state 3: was live, is not — a reload re-asks ──────────────────────
     video.setLivePublisher(participantOf(first), false);
@@ -545,7 +581,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await p2.getByTestId("room-state-retry").click();
 
     // ── both seated: OUR server makes the game at Lichess ─────────────────
-    await expect.poll(() => lichessCallsFor([first, second]).length, { message: NOT_POINTED("Lichess"), timeout: 30_000 }).toBeGreaterThan(0);
+    await expectLichessReached(() => lichessCallsFor([first, second]).length, boardA.fixtureId, 30_000);
     await expect.poll(async () => (await bridgeRow(boardA.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
     gameA = (await bridgeRow(boardA.fixtureId))!.challenge_id!;
     A = await colours(boardA);
@@ -580,6 +616,27 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       await expect.poll(() => lichess.game(gameA)?.movesUci ?? [], { timeout: LICHESS_TIMEOUT_MS }).toEqual(OPENING.slice(0, i + 1));
       await expect.poll(async () => (await bridgeRow(boardA.fixtureId))?.move_count, { timeout: LICHESS_TIMEOUT_MS }).toBe(i + 1);
     }
+    // M5: the clocks our ledger holds are Lichess's (the stub's), as at the
+    // last move, both sides — White to move after six plies.
+    const atLichess = lichess.game(gameA)!;
+    const ours = (await bridgeRow(boardA.fixtureId))!;
+    expect(ours.move_count, "premise: the ledger holds all six").toBe(OPENING.length);
+    let clocksChecked = 0;
+    for (const side of ["white", "black"] as const) {
+      const mine = side === "white" ? ours.white_ms : ours.black_ms;
+      expect(mine, `${side}: a clock on the ledger`).not.toBeNull();
+      // From the rulebook: two charged moves each earned the increment, so
+      // nobody holds more than the base plus two increments.
+      expect(atLichess.clockMs[side]).toBeLessThanOrEqual((TC.base + 2 * TC.increment) * 1000);
+      expect(Math.abs(mine! - atLichess.clockMs[side]), `${side}: ours ${mine} vs Lichess ${atLichess.clockMs[side]}`).toBeLessThanOrEqual(CLOCK_TOLERANCE_MS);
+      clocksChecked += 1;
+    }
+    expect(clocksChecked, "anti-vacuity: both clocks").toBe(2);
+    test.info().annotations.push({
+      type: "clocks-after-six",
+      description: `ours ${ours.white_ms}/${ours.black_ms} vs Lichess ${atLichess.clockMs.white}/${atLichess.clockMs.black}`,
+    });
+
     // Placement, side to move and castling rights, from the rules — the move
     // counters are bookkeeping two correct writers may disagree on.
     const position = rules.fen().split(" ").slice(0, 3).join(" ");
@@ -619,7 +676,11 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // Generate is refused now (and board 1 is decided), so a pairing that ran
     // early cannot hide behind the later assertions.
     const early = await apiJson(page.request, `/api/v1/stages/${round.stageId}/generate`, "POST", {});
-    expect(early.status, `generate with board 2 open: ${JSON.stringify(early.error)}`).toBeGreaterThanOrEqual(400);
+    // T17 review M2: the refusal is the engine's, by name — a 401, 403 or 500 is not "round 2 cannot pair yet".
+    expect({ status: early.status, code: early.error?.code }, `generate with board 2 open: ${JSON.stringify(early.error)}`).toEqual({
+      status: 422,
+      code: "STAGE_NOT_READY",
+    });
 
     // Both seated through the room's own claim, the camera on the meeting's
     // word (the UI half of this was board 1's), then two plies on the board.
@@ -643,6 +704,13 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await nobodyReadItForAnHour(boardB.fixtureId);
     const s1 = await sweep(page);
     expect(s1.reconciled, "the pass read the board").toBeGreaterThanOrEqual(1);
+    // M8 (spec §5.2): board 1's game ended at its resign, so this pass took its
+    // room down — deactivated at RealtimeKit, then stamped.
+    const [meetingA] = await withDb((sql) => sql<{ meeting_id: string; ended_at: Date | null }[]>`
+      select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${boardA.fixtureId}`);
+    expect(meetingA, "board 1 had a meeting").toBeDefined();
+    expect(video.meetingStatus(meetingA!.meeting_id), "board 1's room is closed at RealtimeKit").toBe("INACTIVE");
+    expect(meetingA!.ended_at, "and stamped ended").not.toBeNull();
     // MEASURED (gamefull-expired-1 then -2): the first read after expiry still
     // says `started`, White at 0, and settles the flag at Lichess. We declare
     // no flag from our own arithmetic, so the fixture is not decided yet.

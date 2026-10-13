@@ -98,6 +98,8 @@ REALTIMEKIT_API_TOKEN=e2e-rtk-api-token \
 REALTIMEKIT_APP_ID=e2e-rtk-app \
 REALTIMEKIT_PLAYER_PRESET=e2e_chess_player \
 REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter \
+LICHESS_TOKEN_KEK=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
+CRON_SECRET=e2e-local-cron-secret \
   node .next/standalone/apps/web/server.js
 ```
 
@@ -115,7 +117,7 @@ REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter \
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Only for `payments-hardening.spec.ts`, which posts signed synthetic webhooks at the real route. CI dummies; no real Stripe call is made. |
 | `LICHESS_BASE_URL`, `REALTIMEKIT_BASE_URL` | The online-chess walkthrough (`walkthrough/chess-external-play.spec.ts`) starts a Lichess fixture server on 4321 and a RealtimeKit one on 4322 (`e2e/lichess-fixture-server.ts`, `e2e/realtimekit-fixture-server.ts`); the server must point at both. **An unset `LICHESS_BASE_URL` means the server calls lichess.org for real** (and an unset `REALTIMEKIT_BASE_URL`, Cloudflare), with the suite's fake tokens. The spec's first assertion of each names these variables when its fixture sees no traffic. |
 | `CLOUDFLARE_ACCOUNT_ID`, `REALTIMEKIT_API_TOKEN`, `REALTIMEKIT_APP_ID`, `REALTIMEKIT_PLAYER_PRESET`, `REALTIMEKIT_ARBITER_PRESET` | The video fixture's own credentials (`REALTIMEKIT_FIXTURE_ENV`; anything else is refused 401 / routed nowhere). Without all five the server never calls video at all ("unconfigured"), and the walkthrough's camera states cannot be reached. |
-| `LICHESS_TOKEN_KEK`, `CRON_SECRET` | The chess walkthrough seals each player's Lichess token and fires the external-play sweep itself, so the RUNNER needs the server's values too: the CI ones are in `scripts/ci-local.sh`'s `common_env` and e2e.yml (`CRON_SECRET` in e2e.yml only). `AUTH_SECRET` likewise: the runner mints the players' room links. |
+| `LICHESS_TOKEN_KEK`, `CRON_SECRET` | The chess walkthrough seals each player's Lichess token and fires the external-play sweep itself, so the RUNNER needs the server's values too (step 5 carries them): the CI ones are in `scripts/ci-local.sh`'s `common_env` and e2e.yml (`CRON_SECRET` in e2e.yml only). `AUTH_SECRET` likewise: the runner mints the players' room links, and refuses to mint without it. A KEK that differs between the two is not an environment red the spec can name for you: the server cannot open the sealed tokens, never calls the Lichess fixture, and the walkthrough's poll then prints the bridge row's `last_error`. |
 
 `NEXT_PUBLIC_*` values are baked at **build** time — set them for step 2 as well
 as step 4.
@@ -125,9 +127,15 @@ as step 4.
 ```bash
 cd apps/web
 DATABASE_URL="…" DATABASE_SSL=disable E2E_PROD_TARGET=1 \
+AUTH_SECRET=e2e-local-secret \
+LICHESS_TOKEN_KEK=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
+CRON_SECRET=e2e-local-cron-secret \
 PLAYWRIGHT_BASE=http://localhost:3100 \
   npm run test:e2e            # parallel, then serial --workers=1, then both mobile projects
 ```
+
+The three secrets are the SERVER's (step 4), byte for byte: the runner signs
+room links, seals Lichess tokens and fires the sweep with them.
 
 Single spec / project:
 
