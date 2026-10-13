@@ -646,6 +646,16 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       expect(label, `seat ${seat}: the assignment email names her in her seat, marked`).toBe(vs(marked));
       expect(me, `seat ${seat}: the official's finished duty names her in her seat`).toEqual(want);
       expect(meWithdrew, `seat ${seat}: and flags her seat alone as withdrawn`).toEqual(want.map((x) => x === her));
+      if (flip) {
+        // Design audit 4.2: the email joins the sides in the org's language — French reads "contre", never a typed
+        // English " vs " (an English org cannot tell the two apart). One seat suffices: the join is seat-blind.
+        const frUi = (key: string, vars?: Record<string, string | number>) => msgFor("fr", key as MessageKey, vars);
+        expect(frUi("schedule.vs"), "premise: French joins with its own word").not.toBe(enUi("schedule.vs"));
+        await sql`update organizations set default_locale = 'fr' where id = ${s.auth.orgId}`;
+        const fr = await appoint(s.auth, sib.parentId);
+        const frMarked = want.map((x) => (x === her ? frUi("schedule.withdrawnSide", { name: her }) : x));
+        expect(fr.label, `seat ${seat}: a French org's email, marked and joined in French`).toBe(frMarked.join(` ${frUi("schedule.vs")} `));
+      }
     }
     expect([...seats].sort(), "both seats reached").toEqual([1, 2]);
 
