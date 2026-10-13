@@ -25,7 +25,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { Chess } from "chess.js";
 import type { RoomSnapshot } from "../src/components/public-site/match-room/room-snapshot";
 import { apiJson, createStageAndGenerate, linkLichessBySql, linkPersonToUserBySql, TAG, withDb } from "./helpers";
@@ -493,4 +493,55 @@ export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; h
     expect(res.count, `bridge row for ${board.fixtureId} (was the round opened?)`).toBe(1);
   });
   return { fen: rules.fen() };
+}
+
+// ─── the board, as a player's finger meets it (T17) ─────────────────────────
+// The same reading match-room.spec.ts uses (its helpers are local to that
+// file): a square's centre from the board surface's box and the player's
+// orientation, a click there, and a board that is PAINTED, not just mounted.
+
+const FILES = "abcdefgh";
+
+export async function squareCentre(page: Page, sq: string, orientation: "white" | "black"): Promise<{ x: number; y: number }> {
+  const box = await page.getByTestId("room-board-surface").boundingBox();
+  if (!box) throw new Error("the board has no box");
+  const file = FILES.indexOf(sq[0]!);
+  const rank = Number(sq[1]) - 1;
+  const col = orientation === "white" ? file : 7 - file;
+  const row = orientation === "white" ? 7 - rank : rank;
+  const size = box.width / 8;
+  return { x: box.x + (col + 0.5) * size, y: box.y + (row + 0.5) * size };
+}
+
+/** Play `uci` by two taps (from, to), as a player does on a phone. Each tap
+ *  is hit-tested first: a square under a banner or a notice would swallow
+ *  the tap and read, much later, as "the move never reached Lichess". */
+export async function tapMove(page: Page, uci: string, orientation: "white" | "black"): Promise<void> {
+  for (const sq of [uci.slice(0, 2), uci.slice(2, 4)]) {
+    const { x, y } = await squareCentre(page, sq, orientation);
+    const over = await page.evaluate(
+      (p) => {
+        const el = document.elementFromPoint(p.x, p.y);
+        return el?.closest("cg-board") ? null : (el?.outerHTML.slice(0, 120) ?? "nothing");
+      },
+      { x, y },
+    );
+    if (over !== null) throw new Error(`the tap on ${sq} lands on ${over}, not on the board`);
+    await page.mouse.click(x, y);
+  }
+}
+
+export async function boardPainted(page: Page): Promise<void> {
+  await expect(page.locator("[data-testid=room-board-surface] cg-board piece").first()).toBeAttached({ timeout: 20_000 });
+  await expect
+    .poll(async () => {
+      const b = await page.locator("[data-testid=room-board-surface] cg-board").boundingBox();
+      return b ? Math.round(b.height) > 100 && Math.abs(b.height - b.width) <= 2 : false;
+    })
+    .toBe(true);
+  const hit = await page.getByTestId("room-board-surface").evaluate((surface) => {
+    const r = surface.getBoundingClientRect();
+    return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest("cg-board");
+  });
+  expect(hit, "a tap on the board lands on the board").toBe(true);
 }
