@@ -295,23 +295,49 @@ describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
     expect(checked).toBe(3);
   });
 
-  // Loop-F R-4: the sentence names the way out, in every locale — the route withdrawal-w2b.test.ts "R-4" drives: void
-  // back into play, then a forfeit for either side with the engine's own reason value `disqualified` (the console's
-  // Forfeit… prompt takes the value itself, so it is never translated). A disqualification of BOTH is no event (the
-  // engine's core.forfeit admits `by: "both"` only as a walkover), so no locale offers it.
-  it("R-4: the no-choice sentence names the way out in every locale — void back into play, then a disqualification forfeit", () => {
-    const DQ: (typeof FORFEIT_REASONS)[number] = "disqualified";
-    expect(FORFEIT_REASONS, "the engine declares the reason the sentence names").toContain(DQ);
+  // Loop-F R-4, rewritten by Loop R M-12: the sentence names the way out in every locale — the route
+  // withdrawal-w2b.test.ts "R-4" drives: void back into play, then a forfeit. It names the console's own controls by
+  // their own labels: "Void last entry", "Forfeit…", and in the forfeit dialog "Both sides" (offered only while nothing
+  // is played: a double walkover is a walkover, R2) or a side with the reason that fits, which after play is a
+  // retirement or a disqualification (D3; PF-2 keeps the withdrawal the cascade's own). It once told the organiser to
+  // record a disqualification that never happened, quoting the engine's raw value «disqualified» in es/fr/nl (the
+  // dialog has said "Disqualification: …" since design audit 1.2) and naming a retirement ("abandono", "opgave") as the
+  // forfeit in es/nl. Every label is read from the dictionary the dialog renders, never typed here; a reason label's
+  // word is its noun, the part before the "Noun: gloss" colon.
+  it("R-4 / M-12: the no-choice sentence names the console's real options by their own labels, in every locale", () => {
     const LOCALES: [string, Record<string, string>][] = [["en", en], ["es", es], ["fr", fr], ["nl", nl]];
+    const noun = (label: string | undefined) => {
+      expect(label, "the dialog's label exists").toBeTruthy();
+      const at = label!.indexOf(":");
+      expect(at, `"${label}" keeps its "Noun: gloss" form`).toBeGreaterThan(0);
+      return label!.slice(0, at).trim();
+    };
     const lines = new Set<string>();
+    let labels = 0;
     let checked = 0;
     for (const [locale, dict] of LOCALES) {
       const line = dict["score.needsDecision.noChoice"]!;
-      expect(line.includes(DQ), `${locale}: names the forfeit reason the console takes`).toBe(true);
+      const owed = [
+        dict["score.voidLast"]!.replace(/^[^\p{L}]+/u, ""), // the console's "⟲ Void last entry", without its glyph
+        dict["score.forfeit"]!,
+        dict["forfeitDialog.who.both"]!,
+        noun(dict["forfeitDialog.reason.retired"]),
+        noun(dict["forfeitDialog.reason.disqualified"]),
+      ];
+      for (const label of owed) {
+        expect(label, `${locale}: a label to name`).toBeTruthy();
+        expect(line.includes(label), `${locale}: names the control "${label}" by its own label`).toBe(true);
+        labels++;
+      }
+      // No raw engine reason value: the dialog never shows one.
+      for (const code of FORFEIT_REASONS) {
+        expect(new RegExp(`\\b${code}\\b`, "u").test(line), `${locale}: no raw reason value "${code}"`).toBe(false);
+      }
       lines.add(line);
       checked++;
     }
     expect(checked).toBe(4);
+    expect(labels).toBe(4 * 5);
     expect(lines.size, "four translations, not one sentence copied").toBe(4);
   });
 

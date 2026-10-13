@@ -2610,7 +2610,7 @@
   "score.needsDecision.settle": "Trancher le match",
   "score.needsDecision.dialogTitle": "Trancher le match",
   "score.needsDecision.whoAdvances": "Qui se qualifie ?",
-  "score.needsDecision.noChoice": "Les deux participants ont quitté la compétition : aucun ne peut se qualifier à l'issue de ce match. Pour le clore, annulez la dernière entrée pour rouvrir le jeu, puis enregistrez le forfait de l'un ou l'autre avec le motif « disqualified » : personne ne se qualifie.",
+  "score.needsDecision.noChoice": "Les deux participants ont quitté la compétition : aucun ne peut se qualifier à l'issue de ce match. Pour le clore, utilisez « Annuler la dernière entrée » pour rouvrir le jeu, puis « Forfait… » : « Les deux » si rien n'a été joué, sinon un côté et le motif qui convient, « Abandon » ou « Disqualification ». Personne ne se qualifie.",
   "score.needsDecision.noChoice.place": "Les deux participants ont quitté la compétition : la place que décide ce match ne peut revenir à aucun d'eux. Laissez le match ouvert : tout résultat enregistré ici, forfait compris, attribuerait cette place à quelqu'un qui a quitté la compétition.",
   "score.needsDecision.why": "Pourquoi ?",
   "score.needsDecision.method.lot": "Tirage au sort",

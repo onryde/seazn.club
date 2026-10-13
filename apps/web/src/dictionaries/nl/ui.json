@@ -2565,7 +2565,7 @@
   "score.needsDecision.settle": "Wedstrijd beslissen",
   "score.needsDecision.dialogTitle": "Wedstrijd beslissen",
   "score.needsDecision.whoAdvances": "Wie gaat door?",
-  "score.needsDecision.noChoice": "Beide deelnemers doen niet meer mee, dus niemand kan vanuit deze wedstrijd doorgaan. Sluit haar af: vernietig de laatste invoer om het spel te heropenen en leg daarna voor een van beide een opgave vast met de reden ‘disqualified’ — niemand gaat door.",
+  "score.needsDecision.noChoice": "Beide deelnemers doen niet meer mee, dus niemand kan vanuit deze wedstrijd doorgaan. Sluit haar af: kies „Laatste invoer vernietigen” om het spel te heropenen en daarna „Opgeven…”: „Beide kanten” als er niets gespeeld is, anders één kant en de reden die past, „Opgave” of „Diskwalificatie”. Niemand gaat door.",
   "score.needsDecision.noChoice.place": "Beide deelnemers doen niet meer mee, dus de plaats die deze wedstrijd beslist kan naar geen van beiden gaan. Laat de wedstrijd open: elke uitslag die je hier vastlegt, ook een opgave, zou die plaats toekennen aan iemand die niet meer meedoet.",
   "score.needsDecision.why": "Waarom?",
   "score.needsDecision.method.lot": "Door loting",
