@@ -122,6 +122,21 @@ describe.skipIf(!HAS_DB)("listOpenRounds — what the Open round control reads",
     expect(checked, "anti-vacuity: empty cases checked").toBe(4);
   });
 
+  // T16 fix round 2, N3 (M4's twin): `seq_in_round` is NOT NULL, so a board's number is always its own — the old
+  // `seq ?? i + 1` position fallback could never run and is gone. Numbers that differ from the positions (3 and 5, not
+  // 1 and 2) are what tell the two apart.
+  it("N3: a board's number is its own seq_in_round — never its position in the round; the schema refuses a board without one", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    await expect(sql`update fixtures set seq_in_round = null where id = ${r.boards[0]!.fixtureId}`).rejects.toMatchObject({ code: "23502" });
+    await sql`update fixtures set seq_in_round = 3 where id = ${r.boards[0]!.fixtureId}`;
+    await sql`update fixtures set seq_in_round = 5 where id = ${r.boards[1]!.fixtureId}`;
+    const [v] = await view(r, T0);
+    expect(v!.pairings.map((p) => [p.fixtureId, p.boardNo])).toEqual([
+      [r.boards[0]!.fixtureId, 3],
+      [r.boards[1]!.fixtureId, 5],
+    ]);
+  });
+
   it("paired, not opened: every pairing by colour, by the PERSON's name, each still to invite — and the press opens it", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });
     // F5: the entrant row's display name is not the name on the board.

@@ -35,7 +35,9 @@ type Row = {
   stageId: string;
   stageName: string;
   roundNo: number;
-  seq: number | null;
+  /** `fixtures.seq_in_round`, NOT NULL in the schema: every board has its own number (N3, T16 fix round 2 — as M4 for
+   *  the arbiter: an `i + 1` fallback could never run). */
+  seq: number;
   status: string;
   homeEntrantId: string | null;
   awayEntrantId: string | null;
@@ -183,7 +185,7 @@ export async function listOpenRounds(
   const out: OpenRoundView[] = [];
   for (const f of shown) {
     const pairings: OpenRoundPairing[] = [];
-    for (const [i, b] of f.boards.entries()) {
+    for (const b of f.boards) {
       const whiteSide = whiteSideByFixture.get(b.fixtureId)!;
       const white = nameOf(whiteSide === "home" ? b.homeEntrantId : b.awayEntrantId);
       const black = nameOf(whiteSide === "home" ? b.awayEntrantId : b.homeEntrantId);
@@ -191,7 +193,7 @@ export async function listOpenRounds(
       const invitedAt = stamped.length === 0 ? null : new Date(Math.max(...stamped.map((d) => d.getTime()))).toISOString();
       pairings.push({
         fixtureId: b.fixtureId,
-        boardNo: b.seq ?? i + 1,
+        boardNo: b.seq,
         whiteName: white,
         blackName: black,
         invitedAt,
