@@ -276,7 +276,7 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts`. */
   config_snapshot: unknown;
-  /** W2c (V439) — the match's own format override, resolved last (`fixture-cfg.ts`). */
+  /** W2c (V443) — the match's own format override, resolved last (`fixture-cfg.ts`). */
   rules_override: unknown;
   /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
    *  fixture's lane and thirdPlace status. */

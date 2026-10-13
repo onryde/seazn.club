@@ -7,7 +7,20 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SmokeSelectionError, selectSmokeSuites } from "../smoke-select.ts";
 
-const KNOWN = ["streamTargets", "v1", "captureV2", "captureRecord", "bracketFinish", "walkoverCredit", "streamOverlay", "matchRoom", "arbiter", "onlineChessDesk"] as const;
+const KNOWN = [
+  "streamTargets",
+  "v1",
+  "captureV2",
+  "captureRecord",
+  "bracketFinish",
+  "walkoverCredit",
+  "streamOverlay",
+  "matchRoom",
+  "arbiter",
+  "onlineChessDesk",
+  "w2cStageRules",
+  "divisionSettings",
+] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
   it("UNSET means run everything, and unset is the default: CI's FULL smoke never sets SMOKE_ONLY, so it is unchanged — the one SMOKE_ONLY in CI is the R2004 composed step's own, on its second server", () => {
@@ -51,7 +64,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // against smoke.ts with this registry inserted: 2 names, ["streamTargets", "v1"]; captureV2 joined it (capture QR v2 T12), captureRecord after it (capture record upload),
     // bracketFinish and walkoverCredit after that (format matrix W2b T18: their own orgs, nothing from SubsetCtx), and
     // streamOverlay after those (R2007 step 12: its own orgs too), then matchRoom (chess T14), arbiter (chess T15) and
-    // onlineChessDesk (chess T16).
+    // onlineChessDesk (chess T16); w2cStageRules (own org) and divisionSettings (SubsetCtx.admin) after those (format
+    // matrix W2c T10).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);

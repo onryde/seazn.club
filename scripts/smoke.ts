@@ -7199,7 +7199,8 @@ async function stageRulesFormatSmoke(): Promise<void> {
  * plan bump, keyless-safe.
  *
  * Task 10's own change (`fixtures.rules_override` through every resolver caller) has no HTTP writer until Task 14,
- * whose smoke check covers the override; its first check is Task 2's owed one.
+ * whose smoke check covers the override; its first check is Task 2's owed one. SMOKE_ONLY=w2cStageRules runs it
+ * alone (SELECTABLE_SUITES).
  */
 async function w2cStageRulesSuite(): Promise<void> {
   const owner = newSession();
@@ -8835,7 +8836,8 @@ async function paymentMethodSuite(): Promise<void> {
 /** v8 (spec 2026-07-13): the format is editable until a stage that inherits it
  *  starts (W2c owner P-2), then PATCH rejects with DIVISION_FORMAT_LOCKED naming
  *  that stage; the stage structure PUT still locks once fixtures exist
- *  (FORMAT_LOCKED); the logo upload URL mints for editors. */
+ *  (FORMAT_LOCKED); the logo upload URL mints for editors. SMOKE_ONLY=divisionSettings
+ *  runs it alone (SELECTABLE_SUITES). */
 async function divisionSettingsSuite(admin: Session): Promise<void> {
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -22336,6 +22338,8 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   matchRoom: () => matchRoomSuite(),
   arbiter: () => arbiterSuite(),
   onlineChessDesk: () => onlineChessDeskSuite(),
+  w2cStageRules: () => w2cStageRulesSuite(),
+  divisionSettings: (c) => divisionSettingsSuite(c.admin),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
