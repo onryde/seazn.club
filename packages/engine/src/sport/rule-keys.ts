@@ -81,7 +81,9 @@ function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown,
   if (bound === "off_or_shorter") return offOrShorter(o, s);
   if (bound === "off") return o === false ? null : s === true ? "it can only be switched off for one match" : OFF_AT_STAGE;
   if (typeof s !== "number") return OFF_AT_STAGE;
-  return typeof o === "number" && o <= s ? null : NOT_LONGER;
+  // Shorter = the smaller of the two. The bound only sees a CHANGED leaf, so `o` never equals `s` (an `o <= s` would
+  // carry an untestable `<` twin), and a non-number never equals the number Math.min returns.
+  return Math.min(o as number, s) === o ? null : NOT_LONGER;
 }
 
 export type OverrideCheck =

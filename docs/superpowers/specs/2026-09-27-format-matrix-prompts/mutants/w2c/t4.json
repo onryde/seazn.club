@@ -79,8 +79,8 @@
   {
     "id": "t4-decider-shorter",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "typeof o === \"number\" && o <= s ? null",
-    "replace": "typeof o === \"number\" ? null",
+    "find": "Math.min(o as number, s) === o ? null",
+    "replace": "true ? null",
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
   },
   {
