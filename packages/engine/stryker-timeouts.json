@@ -7,7 +7,7 @@
   "competition-6": 93,
   "competition-7": 60,
   "core-1": 100,
-  "core-2": 126,
+  "core-2": 300,
   "core-3": 18,
   "modules-1": 10,
   "modules-2": 10,
@@ -70,7 +70,7 @@
   "sports-nested-3": 137,
   "sports-nested-4": 278,
   "sports-nested-5": 57,
-  "sports-nested-6": 38,
+  "sports-nested-6": 300,
   "sports-nested-7": 135,
   "sports-nested-8": 96,
   "sports-other-1": 213,
@@ -78,7 +78,7 @@
   "sports-other-3": 128,
   "sports-other-4": 271,
   "sports-other-5": 299,
-  "sports-other-6": 106,
+  "sports-other-6": 300,
   "sports-other-7": 218,
   "probe": 96
 }
