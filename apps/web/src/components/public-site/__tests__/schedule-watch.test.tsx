@@ -7,6 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { msgFor } from "@/lib/messages-i18n";
+import publicEn from "@/dictionaries/en/public.json";
+import publicEs from "@/dictionaries/es/public.json";
+import publicFr from "@/dictionaries/fr/public.json";
+import publicNl from "@/dictionaries/nl/public.json";
 import { publicWatchCopy } from "@/server/public-site/schedule-copy";
 import type { PublicFixture } from "@/server/public-site/data";
 import type { PublicWatchLink } from "@/server/external-play/public-view";
@@ -105,6 +109,22 @@ describe("Schedule — the online watch links (I4)", () => {
       checked += 1;
     }
     expect(checked).toBe(4);
+  });
+
+  // T17 owner ruling (2026-10-13): Spanish reads "A punto de empezar" (was "Por empezar"); fr and nl stay as authored.
+  // The list's label and the fixture page's scorebug chip are ONE word in every locale, so the two surfaces cannot
+  // describe one board two ways.
+  it("starting: the owner's words — es 'A punto de empezar', fr and nl unchanged — and the list says what the scorebug chip says, in every locale", () => {
+    const OWNER: Record<(typeof LOCALES)[number], string> = { en: "Starting", es: "A punto de empezar", fr: "Va commencer", nl: "Begint zo" };
+    const PUBLIC = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const copy = publicWatchCopy((k) => msgFor(loc, k));
+      expect(copy.starting, `${loc}: the list's label`).toBe(OWNER[loc]);
+      expect(PUBLIC[loc]!["matchCentre.status.starting"], `${loc}: the scorebug chip`).toBe(OWNER[loc]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
   });
 
   // T17 owner change (2026-10-13): from the round's open until the first move the row says the board is starting —
