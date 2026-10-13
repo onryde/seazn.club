@@ -479,11 +479,23 @@ test("re-review N-1: /me's results print a finalized double walkover's tag, neve
     const woCell = woLine.locator("span.app-display");
     await expect(woCell, `${width}: the walkover keeps its credited score`).toHaveText(/\d+\s*[–—-]\s*\d+/);
     // Fix round 3: the line names Pat first, so it reads the score from her side — she won that walkover, so her
-    // credited score comes first whichever seat she held (the stored headline reads home first).
-    const [mine, theirs] = (await woCell.innerText()).split(/\s*[–—-]\s*/).map(Number);
+    // credited score comes first whichever seat she held (the stored headline reads home first). The score is the
+    // cell's own text, before the tag (Loop R M-11).
+    const scoreText = await woCell.evaluate((el) => [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join(""));
+    const [mine, theirs] = scoreText.split(/\s*[–—-]\s*/).map(Number);
     expect(mine! > theirs!, `${width}: Pat won the walkover, so her score leads (${mine} — ${theirs}, she was ${wo.home_entrant_id === patE ? "home" : "away"})`).toBe(true);
     await expect(woLine.locator("p").first(), `${width}: her side named first`).toHaveText(new RegExp(`^${names[0]}\\b`));
-    await expect(woCell.getByRole("img"), `${width}: and no tag`).toHaveCount(0);
+    // Loop R M-11: after its score, the walkover says so — the house tag, one symbol named by the full words, its own
+    // case (innerText, so `.app-display`'s uppercase would show). It printed "2 — 0" with no word of why.
+    const woSymbol = woCell.getByRole("img");
+    await expect(woSymbol, `${width}: the walkover's tag after its score`).toHaveCount(1);
+    await expect(woSymbol, `${width}: named by the full words`).toHaveAccessibleName(word(UI_EN, "forfeit.tagFull.walkover"));
+    expect(await woSymbol.innerText(), `${width}: in its own case`).toBe(word(UI_EN, "forfeit.tag.walkover"));
+    // On the score's line, at every width: the tag's box sits inside the cell's one line box.
+    const [cellBox, tagBox] = [(await woCell.boundingBox())!, (await woSymbol.boundingBox())!];
+    const lineHeight = await woCell.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight));
+    expect(cellBox.height, `${width}: the cell is one line (${cellBox.height}px, line ${lineHeight}px)`).toBeLessThan(lineHeight * 1.5);
+    expect(tagBox.y >= cellBox.y - 1 && tagBox.y + tagBox.height <= cellBox.y + cellBox.height + 1, `${width}: the tag inside the cell's line`).toBe(true);
     await expectNoHorizontalScroll(me);
     const box = me.locator("section").filter({ has: dwLine });
     await box.screenshot({ path: shots ? `${shots}/me-results-double-walkover-${width}.png` : testInfo.outputPath(`me-results-dw-${width}.png`) });

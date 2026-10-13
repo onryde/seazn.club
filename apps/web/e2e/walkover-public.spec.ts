@@ -472,6 +472,14 @@ test.describe("W2b — a credited result says which one, on every public surface
       expect(got.dw, `slideshow ${kind}: never the stored 0 / 0`).not.toMatch(/0\s*[–—-]\s*0/);
       expect(got.other, `slideshow ${kind}: the probe's pair — the walkover keeps its credited score`).toMatch(/\d+\s*[–—-]\s*\d+/);
     }
+    // Loop R M-11 — the results slide's status cell names the walkover's reason (it read "Forfeit" for every reason),
+    // its case kept: innerText applies the cell's uppercase, so a lost `normal-case` reads "W/O". The double walkover's
+    // tag is its score's, so its status cell keeps the status word — never the tag twice.
+    const woWord = UI["forfeit.tag.walkover"]!;
+    const forfeitWord = UI["slideshow.status.forfeit"]!.toUpperCase();
+    expect(seen.results!.other.endsWith(` ${woWord}`), `M-11: the walkover's status cell: "${seen.results!.other}"`).toBe(true);
+    expect(seen.results!.other, "M-11: never the bare status word").not.toContain(forfeitWord);
+    expect(seen.results!.dw.endsWith(` ${forfeitWord}`), `M-11: the double walkover keeps its status word: "${seen.results!.dw}"`).toBe(true);
   });
 
   // Owner ruling 116 and R116-1 (W2b Task 16): a semi-final winner withdraws while the final's other seat is TBD, so her
