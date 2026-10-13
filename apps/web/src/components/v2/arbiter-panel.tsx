@@ -20,7 +20,7 @@ import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { boardIsOver, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
+import { boardIsOver, offersSettle, type ArbiterBoard, type ArbiterFlag, type ArbiterRound } from "@/lib/arbiter-view";
 import { formatClock, remainingMs } from "@/components/public-site/match-room/clock-math";
 import { browserBandPollDeps, startBandPolling } from "./desk/band-poll";
 import {
@@ -572,7 +572,7 @@ function Decision({
   const canGoOn = board.flags.length > 0;
   // Settled here when an online game is on file (a bridge row); a board
   // nobody reached has none, and keeps T15's way to its match page.
-  const canSettle = !over && (board.canSettle || board.fixtureNo !== null);
+  const canSettle = offersSettle(board);
   // The reducer owns "a notice belongs to the board on screen" (R4: a switch
   // clears it, an answer for the board left behind shows nothing).
   const notice = decision.notice;

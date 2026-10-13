@@ -190,6 +190,7 @@ export type DictionaryKey =
   | "arbiter.notice.needsWinner"
   | "arbiter.notice.notPlayable"
   | "arbiter.notice.notRequired"
+  | "arbiter.notice.onlineGameOver"
   | "arbiter.notice.overridden"
   | "arbiter.notice.ownBoard"
   | "arbiter.notice.resyncFailed"

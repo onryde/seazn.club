@@ -138,6 +138,7 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 403 ARBITER_PLAYS_THIS_BOARD: the organiser plays on it (T15's seated
  *    predicate) — another organiser must settle it;
  *  - 409 ALREADY_RESOLVED: the board already has its result when this settle reads it;
+ *  - 409 ONLINE_GAME_OVER: the online game is over but the fixture is open (a voided result): the scoring pad's;
  *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
  *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
@@ -156,7 +157,12 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     await closeBridge(fixtureId);
     throw new HttpError(409, "This board already has its result", "ALREADY_RESOLVED");
   }
-  if (b.bridgeStatus === "finished") throw new HttpError(409, "This board already has its result", "ALREADY_RESOLVED");
+  // The online game is over while the fixture is open again: its result was voided on the pad (or a level result
+  // entered there waits for its tie-break). The bridge cannot reopen a game Lichess ended, and the board has no result
+  // to be "already" settled — the pad is where it is decided (T16 fix round 3, N4).
+  if (b.bridgeStatus === "finished") {
+    throw new HttpError(409, "This board's online game is over — record its result on the scoring pad", "ONLINE_GAME_OVER");
+  }
   if (b.homeEntrantId === null || b.awayEntrantId === null) {
     // An online board is paired by construction (guard.ts); a seat emptied
     // since is not one to give a result to.
