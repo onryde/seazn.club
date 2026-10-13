@@ -204,6 +204,7 @@ export type DictionaryKey =
   | "arbiter.notice.goOnOwnBoard"
   | "arbiter.notice.knockoutNeedsWinner"
   | "arbiter.notice.needsWinner"
+  | "arbiter.notice.noResultChanged"
   | "arbiter.notice.notPlayable"
   | "arbiter.notice.notRequired"
   | "arbiter.notice.onlineGameOver"

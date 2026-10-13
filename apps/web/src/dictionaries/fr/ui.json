@@ -6246,6 +6246,7 @@
   "arbiter.notice.needsWinner": "Une partie à élimination directe nulle exige un vainqueur. Choisissez qui se qualifie.",
   "arbiter.notice.knockoutNeedsWinner": "Une partie à élimination directe exige un vainqueur — arbitrez-la ou attribuez-la.",
   "arbiter.notice.swissNeedsResult": "Une ronde suisse exige que chaque partie soit décidée — arbitrez-la ou attribuez-la.",
+  "arbiter.notice.noResultChanged": "La présence des joueurs sur cet échiquier a changé pendant que vous décidiez — rechargez pour voir vos choix.",
   "arbiter.notice.settleOwnBoard": "Vous jouez sur cet échiquier : un autre organisateur doit en régler le résultat.",
   "arbiter.notice.overridden": "Cet échiquier se joue désormais sans vidéo. C'est inscrit au journal d'audit.",
   "arbiter.notice.notPlayable": "Cet échiquier n'est plus en jeu.",

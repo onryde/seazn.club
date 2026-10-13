@@ -48,7 +48,7 @@ import {
   type ReconcileTrigger,
 } from "../external-play/reconcile";
 import { holdForOrganiser } from "../external-play/result";
-import { resolveExternalPlay } from "../external-play/resolve";
+import { RESOLVE_KINDS, resolveExternalPlay } from "../external-play/resolve";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { offersSettle } from "@/lib/arbiter-view";
 import { scoreEvent } from "../scoring";
@@ -2487,11 +2487,11 @@ describe.runIf(HAS_DB)("an online game over, its result voided on the pad (N4)",
 
     // Every way to settle gets the same true answer, and none writes.
     let refused = 0;
-    for (const kind of ["home_wins", "away_wins", "draw", "no_result"] as const) {
+    for (const kind of RESOLVE_KINDS) {
       expect(await refusalOf(resolveExternalPlay(organiser, g.fixtureId, kind)), kind).toEqual({ refused: [409, "ONLINE_GAME_OVER"] });
       refused++;
     }
-    expect(refused, "anti-vacuity: every settle kind asked").toBe(4);
+    expect(refused, "anti-vacuity: every settle kind asked").toBe(RESOLVE_KINDS.length);
     const [{ n: after }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${g.fixtureId}`;
     expect(after, "nothing written").toBe(before);
     expect((await rowOf(g.fixtureId)).status).toBe("finished");

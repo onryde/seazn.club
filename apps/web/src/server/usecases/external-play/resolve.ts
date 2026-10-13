@@ -49,7 +49,7 @@ import { getFixtureState } from "../fixtures";
 import { EngineError } from "@seazn/engine/core";
 import { scoreEvent } from "../scoring";
 import { whiteSideOf, type Side } from "./guard";
-import { NO_RESULT_REFUSAL, noResultEvent, noResultOffer } from "./no-result";
+import { NO_RESULT_CHANGED, NO_RESULT_REFUSAL, noResultEvent, noResultOffer } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
 import { foldPhaseOf, holdOwedTiebreak, tiebreakIsPending } from "./result";
 import { isSeatedOn } from "./seated";
@@ -172,9 +172,10 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 409 ALREADY_RESOLVED: the board already has its result when this settle reads it;
  *  - 409 ONLINE_GAME_OVER: the online game is over but the fixture is open (a voided result): the scoring pad's;
  *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
- *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled); or the
- *    board's offer in place of a winner is no longer the one asked for (M-7: `no_result` asked of a board that now
- *    offers the double walkover, or the reverse — a stale screen's);
+ *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
+ *  - 409 NO_RESULT_CHANGED (M-7, fix round 4): the board's offer in place of a winner is no longer the one asked
+ *    for — `no_result` asked of a board that now offers the double walkover, or the reverse: who turned up changed
+ *    under a stale screen. The board stays held;
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw, no result or double walkover for a board whose
  *    tie-break is owed;
  *  - 409 KNOCKOUT_NEEDS_WINNER (I-3): No result in any knockout — every stage kind where a level result is forbidden,
@@ -236,7 +237,9 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     }
     // M-7 (fix round 4): the request names the outcome the organiser was shown. A board whose hold has moved since
     // (a void offered, a double walkover now — or the reverse) is a stale screen's: refused, nothing written.
-    if (offer.kind !== (kind === "no_result" ? "void" : "double_walkover")) throw boardChanged();
+    if (offer.kind !== (kind === "no_result" ? "void" : "double_walkover")) {
+      throw new HttpError(409, NO_RESULT_CHANGED.message, NO_RESULT_CHANGED.code);
+    }
     // I-3: VOID (an abandon), or — both players absent — the double walkover; either whether or not play is recorded
     // (W2b admits an abandon and a chess walkover before the game and after the Start, ruling 118). So no Start is
     // written for it: a board nobody played stays unplayed, and one with a Start keeps it.

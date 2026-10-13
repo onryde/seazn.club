@@ -206,7 +206,10 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
                   ? f.t("arbiter.notice.knockoutNeedsWinner")
                   : n.code === "SWISS_NEEDS_RESULT"
                     ? f.t("arbiter.notice.swissNeedsResult")
-                    : f.t("arbiter.notice.failed");
+                    : // M-7: the screen's No result / double walkover is no longer the board's (who turned up changed).
+                      n.code === "NO_RESULT_CHANGED"
+                      ? f.t("arbiter.notice.noResultChanged")
+                      : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":

@@ -6246,6 +6246,7 @@
   "arbiter.notice.needsWinner": "Een knock-outpartij in remise heeft een winnaar nodig. Kies wie doorgaat.",
   "arbiter.notice.knockoutNeedsWinner": "Een knock-outpartij heeft een winnaar nodig — beslis haar of ken haar toe.",
   "arbiter.notice.swissNeedsResult": "Een Zwitserse ronde heeft van elke partij een uitslag nodig — beslis haar of ken haar toe.",
+  "arbiter.notice.noResultChanged": "Wie er op dit bord kwam, is veranderd terwijl je besliste — herlaad om je keuzes nu te zien.",
   "arbiter.notice.settleOwnBoard": "Je speelt op dit bord, dus een andere organisator moet de uitslag vaststellen.",
   "arbiter.notice.overridden": "Dit bord speelt nu zonder video. Het staat in het auditlogboek.",
   "arbiter.notice.notPlayable": "Dit bord wordt niet meer gespeeld.",

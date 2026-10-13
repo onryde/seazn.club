@@ -65,6 +65,14 @@ export function noResultOffer(board: { stageKind: string | null; reason: NeedsRe
   return { kind: "refused", why: knockout ? "knockout" : "swiss" };
 }
 
+/** M-7 (fix round 4): the settle asked for the void and the board now offers the double walkover, or the reverse —
+ *  who turned up changed under the organiser's screen. Its own code, never BOARD_CHANGED (another writer's decision
+ *  landing first): the organiser reloads to see the choice the board takes now. */
+export const NO_RESULT_CHANGED = {
+  code: "NO_RESULT_CHANGED",
+  message: "Who turned up on this board changed while you were deciding — reload to see your choices now",
+} as const;
+
 /** The settle's 409 for each refusal: its code (the readers' notice) and its message. */
 export const NO_RESULT_REFUSAL = {
   knockout: { code: "KNOCKOUT_NEEDS_WINNER", message: "A knockout game needs a winner — adjudicate it or award it" },
