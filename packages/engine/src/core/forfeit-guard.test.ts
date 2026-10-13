@@ -457,6 +457,19 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
     expect([walkoversAfterBareStart, walkoversRefusedAfterPlay].every((n) => n > 0), `after a bare start ${walkoversAfterBareStart}, refused after play ${walkoversRefusedAfterPlay}, sport events accepted ${playsAccepted}`).toBe(true);
   });
 
+  it("Loop R M-15: a forfeit carrying an undeclared key never folds — INVALID_EVENT in every sport, where the same forfeit without it is the walkover (ruling 112: after a bare start)", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const l = defaultLineupPair(m.positions);
+      const forfeit = { by: l.away.entrantId, reason: "walkover" };
+      const fold = (payload: unknown) => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", payload)]);
+      expect(outcomeOf(m as never, fold(forfeit) as never), `${m.key}: the positive pair`).toEqual({ kind: "award", winner: l.home.entrantId, loser: l.away.entrantId, reason: "walkover" });
+      expect(codeOf(() => fold({ ...forfeit, note: "late" })), m.key).toBe("INVALID_EVENT");
+      checked++;
+    });
+    expect(checked).toBe(builtinModules.length);
+  });
+
   it("Review Focus 2 oracle: forfeit A, void it, forfeit H — the loser is H, every sport (the void restores the undecided match)", () => {
     let checked = 0;
     forEachSport(({ module: m }) => {

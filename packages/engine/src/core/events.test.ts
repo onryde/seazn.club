@@ -273,6 +273,27 @@ describe("core event payloads", () => {
     );
   });
 
+  it("Loop R M-15: a core.forfeit carrying a key the schema does not declare is INVALID_EVENT, naming the key — every reason, and the double walkover; the same payload without it is accepted", () => {
+    const issuesOf = (payload: unknown) => {
+      try {
+        validateCoreEvent(env(0, "core.forfeit", payload));
+        return null;
+      } catch (error) {
+        expect(EngineError.is(error, "INVALID_EVENT")).toBe(true);
+        return ((error as EngineError).data as { issues: { code: string; keys?: string[] }[] }).issues;
+      }
+    };
+    const payloads = [...FORFEIT_REASONS.map((reason) => ({ by: "H", reason })), { by: "both", reason: "walkover" }];
+    let checked = 0;
+    for (const p of payloads) {
+      expect(issuesOf(p), `${JSON.stringify(p)}: the positive pair is accepted`).toBeNull();
+      const issues = issuesOf({ ...p, extra: 1 });
+      expect(issues?.filter((i) => i.code === "unrecognized_keys").map((i) => i.keys), `${JSON.stringify(p)} + extra`).toEqual([["extra"]]);
+      checked++;
+    }
+    expect(checked).toBe(FORFEIT_REASONS.length + 1);
+  });
+
   it("rejects malformed core payloads with zod issues attached", () => {
     try {
       validateCoreEvent(env(0, "core.forfeit", { by: "H" }));

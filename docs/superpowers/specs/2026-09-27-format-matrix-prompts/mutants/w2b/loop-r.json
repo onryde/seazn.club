@@ -680,5 +680,27 @@
     "name": "the other order"
    }
   ]
+ },
+ {
+  "id": "lr-m15-forfeit-schema-not-strict",
+  "file": "packages/engine/src/core/events.ts",
+  "find": "  .strictObject({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })\n",
+  "replace": "  .object({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/events.test.ts"
+    ],
+    "name": "Loop R M-15"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/core/forfeit-guard.test.ts"
+    ],
+    "name": "Loop R M-15"
+   }
+  ]
  }
 ]
