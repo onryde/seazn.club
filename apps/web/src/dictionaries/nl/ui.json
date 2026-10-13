@@ -5983,6 +5983,7 @@
   "externalPlay.queue.matchUnknown": "Wedstrijd",
   "externalPlay.resolve.draw": "Remise",
   "externalPlay.resolve.noResult": "Geen uitslag",
+  "externalPlay.resolve.doubleWalkover": "Geen van beiden kwam — dubbele walk-over",
   "externalPlay.resolve.failed": "Uitslag opslaan mislukt. Probeer opnieuw.",
   "externalPlay.resolve.abandonReason.no_show_white": "wit niet verschenen",
   "externalPlay.resolve.abandonReason.no_show_black": "zwart niet verschenen",

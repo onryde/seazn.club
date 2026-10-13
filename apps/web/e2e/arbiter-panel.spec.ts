@@ -388,7 +388,7 @@ test.describe("arbiter panel", () => {
   // division's queue — and the settle says why. The knockout board here FEEDS a next match: the hiding is the
   // knockout's, not a final's. The pairs: a league board offers it, and settling it reads back as No result; a winner
   // still settles the knockout board, through the real server.
-  test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line that feeds a next match No result is hidden and the settle says why, panel and queue; no sideways scroll at 320, 768 or 1280", async ({
+  test("I-3: a league board settles No result as VOID; in a Swiss and on a knockout line No result is hidden and the settle says why, panel and queue; both players absent, a knockout line that feeds a next match offers W2b's double walkover by name and writes it, a final hides it; no sideways scroll at 320, 768 or 1280", async ({
     page,
     request,
   }) => {
@@ -488,16 +488,43 @@ test.describe("arbiter panel", () => {
     await shoot(page, "arbiter-knockout-settle");
     expect(await noSidewaysScroll(page, [320, 768, 1280]), "the panel").toBe(3);
 
-    // The pair: a winner settles the knockout board.
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await choices2.filter({ hasText: winners[0]! }).click();
-    await expect(status(page)).toHaveText(uiEn["arbiter.notice.settled"]);
-    const settled = await withDb(async (sql) => {
-      const [x] = await sql<{ kind: string | null; homeWon: boolean }[]>`
-        select outcome->>'kind' as kind, (outcome->>'winner') = home_entrant_id::text as "homeWon" from fixtures where id = ${b2.fixtureId}`;
-      return x!;
+    // Both players absent (fix round 3): W2b's double walkover, wherever W2b takes one. On a FINAL W2b refuses it (D19),
+    // so it is hidden there — the knockout sentence stands in its place.
+    const next = feeds[0]!.w!;
+    await withDb(async (sql) => {
+      await sql`update fixture_external_play set needs_reason = 'no_show_both' where fixture_id = ${b2.fixtureId}`;
+      await sql`update fixtures set winner_to_fixture = null where id = ${b2.fixtureId}`;
     });
-    expect(settled).toEqual({ kind: "win", homeWon: true });
+    const onFinal = await settleOn(b2.fixtureId);
+    await expect(onFinal).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.knockoutNeedsWinner"]!);
+
+    // On a line that feeds a next match it is offered, by its own name, and the settle writes it.
+    await withDb((sql) => sql`update fixtures set winner_to_fixture = ${next} where id = ${b2.fixtureId}`);
+    const dwRow = await queueSettle(b2.fixtureId);
+    await expect(dwRow.getByTestId("external-play-settle").getByRole("button")).toHaveText([
+      ...winners,
+      uiEn["externalPlay.resolve.draw"]!,
+      uiEn["externalPlay.resolve.doubleWalkover"]!,
+    ]);
+    const choices3 = await settleOn(b2.fixtureId);
+    await expect(choices3).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!, uiEn["externalPlay.resolve.doubleWalkover"]!]);
+    await expect(page.getByTestId("arbiter-settle-guidance")).toHaveCount(0);
+    await shoot(page, "arbiter-knockout-double-walkover");
+    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the panel offering the double walkover").toBe(3);
+    // Its label is never cut short (a row of its own): the button shows all of it.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const dw = choices3.filter({ hasText: uiEn["externalPlay.resolve.doubleWalkover"]! });
+    expect(await dw.evaluate((el) => el.scrollWidth <= el.clientWidth), "the double walkover label fits").toBe(true);
+    await dw.click();
+    await expect(status(page)).toHaveText(uiEn["arbiter.notice.settled"]);
+    const walkedOver = await withDb(async (sql) => {
+      const [f] = await sql<{ status: string; kind: string | null }[]>`select status, outcome->>'kind' as kind from fixtures where id = ${b2.fixtureId}`;
+      const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${b2.fixtureId} order by seq`;
+      return { fixture: f!, ledger };
+    });
+    expect(walkedOver.fixture, "W2b's double walkover").toEqual({ status: "forfeited", kind: "double_walkover" });
+    expect(walkedOver.ledger).toEqual([{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
   });
 
   test("I2: the panel hands each watch back — on a board switch, and when the tab goes away", async ({ page, request }) => {

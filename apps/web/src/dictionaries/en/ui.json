@@ -5983,6 +5983,7 @@
   "externalPlay.queue.matchUnknown": "Match",
   "externalPlay.resolve.draw": "Draw",
   "externalPlay.resolve.noResult": "No result",
+  "externalPlay.resolve.doubleWalkover": "Neither turned up — double walkover",
   "externalPlay.resolve.failed": "Could not save the result. Try again.",
   "externalPlay.resolve.abandonReason.no_show_white": "White did not show",
   "externalPlay.resolve.abandonReason.no_show_black": "Black did not show",

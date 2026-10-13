@@ -648,7 +648,7 @@ function Decision({
                     onClick={() => on.settle(c.choice)}
                     disabled={busy}
                     aria-busy={decision.busy?.kind === "settle" || undefined}
-                    className={`${BUTTON_QUIET} min-w-0 truncate`}
+                    className={`${BUTTON_QUIET} min-w-0 ${c.wide ? "min-[360px]:col-span-2 break-words py-2" : "truncate"}`}
                   >
                     {c.label}
                   </button>

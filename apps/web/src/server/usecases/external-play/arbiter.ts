@@ -79,8 +79,11 @@ type BoardRow = {
   hasMeeting: boolean;
   meetingEndedAt: Date | null;
   evidenceAt: Date | null;
-  /** I-3: what the settle offers in place of a winner is read from the stage kind and the hold (no-result.ts). */
+  /** I-3: what the settle offers in place of a winner is read from the stage kind, the hold and the line's two feed
+   *  edges (no-result.ts). */
   stageKind: string | null;
+  winnerToFixture: string | null;
+  loserToFixture: string | null;
 };
 
 type FlagRow = {
@@ -240,7 +243,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            ep.game_over_at as "gameOverAt", ep.video_override_at as "overrideAt",
            m.fixture_id is not null as "hasMeeting", m.ended_at as "meetingEndedAt",
            m.camera_evidence_at as "evidenceAt",
-           s.kind as "stageKind"
+           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
@@ -349,7 +352,11 @@ async function boardOf(
     whiteSide,
     tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
     // I-3 — the settle's own reading (no-result.ts), so the panel never offers a No result the server refuses.
-    noResultOffer: noResultOffer({ stageKind: r.stageKind, reason: r.needsReason === null ? null : readNeedsReason(r.needsReason) }),
+    noResultOffer: noResultOffer({
+      stageKind: r.stageKind,
+      reason: r.needsReason === null ? null : readNeedsReason(r.needsReason),
+      edges: { winner_to_fixture: r.winnerToFixture, loser_to_fixture: r.loserToFixture },
+    }),
     flags,
   };
 }

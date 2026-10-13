@@ -158,7 +158,7 @@ export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, slugs 
                 on(row.fixtureId, false);
                 void runner.settle(row.fixtureId, c.choice);
               }}
-              className={`${BUTTON_QUIET} min-w-0 break-words`}
+              className={`${BUTTON_QUIET} min-w-0 break-words${c.wide ? " min-[360px]:col-span-2 py-2" : ""}`}
             >
               {c.label}
             </button>

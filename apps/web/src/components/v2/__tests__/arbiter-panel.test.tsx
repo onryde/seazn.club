@@ -672,6 +672,36 @@ describe("your decision", () => {
     expect(league).not.toContain('data-testid="arbiter-settle-guidance"');
   });
 
+  // I-3, fix round 3: both players absent, on a board W2b takes a double walkover on — the choice in place of a winner
+  // is that double walkover, labelled as what it writes (never "No result"), on a row of its own so the longer label
+  // is never cut short.
+  it("both players absent: the settle offers W2b's double walkover by its own name, on its own row, uncut — every locale, counted; the void's button keeps \"No result\"", () => {
+    const b = { ...ROUND.boards[2]!, whiteSide: "away" as const };
+    const open = (board: typeof b, loc?: keyof typeof LOCALES) =>
+      html(props({ round: { ...ROUND, boards: [board] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
+    const button = (h: string) => h.match(/<button([^>]*)data-settle="no_result"([^>]*)>(.*?)<\/button>/);
+    let locales = 0;
+    for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const dict = LOCALES[loc] as Record<string, string>;
+      const h = open({ ...b, noResultOffer: { kind: "double_walkover" } }, loc);
+      expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw", "no_result"]);
+      const dw = button(h);
+      expect(dw, `${loc}: the double walkover renders`).not.toBeNull();
+      expect(text(dw![3]!), loc).toBe(dict["externalPlay.resolve.doubleWalkover"]);
+      expect(text(dw![3]!), `${loc}: never "No result"`).not.toBe(dict["externalPlay.resolve.noResult"]);
+      const cls = `${dw![1]} ${dw![2]}`;
+      expect(cls, `${loc}: a row of its own`).toMatch(/\bmin-\[360px\]:col-span-2\b/);
+      expect(cls, `${loc}: never cut short`).not.toMatch(/\btruncate\b/);
+      expect(h, loc).not.toContain('data-testid="arbiter-settle-guidance"');
+      locales++;
+    }
+    expect(locales).toBe(4);
+    // The pair: the void's button says "No result", in the grid's own cell.
+    const v = button(open({ ...b, noResultOffer: { kind: "void" } }));
+    expect(text(v![3]!)).toBe(EN["externalPlay.resolve.noResult"]);
+    expect(`${v![1]} ${v![2]}`).not.toMatch(/col-span-2/);
+  });
+
   it("a board nobody reached (no online game on file) keeps T15's way to its match page — no settle buttons; closed, the disclosure paints none", () => {
     const none = { ...ROUND.boards[2]!, canSettle: false };
     const h = html(props({ round: { ...ROUND, boards: [none] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));

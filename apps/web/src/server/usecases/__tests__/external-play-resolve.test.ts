@@ -31,6 +31,7 @@ import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
 import type { PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { doubleWalkoverNeedsNextMatch, doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { NoResultOffer } from "@/lib/arbiter-view";
@@ -598,12 +599,13 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
 // group stage's round-robin (a table completes over a void). Typed from the ruling, never from no-result.ts.
 const VOID_SAFE: ReadonlySet<string> = new Set(["league", "group"]);
 
-/** What the rulings offer in place of a winner on a board of `kind` held for `hold` — never read from no-result.ts:
- *  both players absent ⇒ W2b's double walkover outside a bracket; otherwise the void where VOID_SAFE says, and a
- *  refusal elsewhere — a knockout game needs a winner (every kind the engine forbids a level result in), a Swiss round
- *  needs every game decided (the rest). */
-function rulingOffer(kind: StageKind, hold: NeedsReason): NoResultOffer {
-  if (BOTH_ABSENT.includes(hold)) return BRACKET_KINDS.has(kind) ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
+/** What the rulings offer in place of a winner on a board of `kind` held for `hold`, on a line that does or does not
+ *  feed a next match — never read from no-result.ts: both players absent ⇒ W2b's double walkover wherever W2b takes
+ *  one (fix round 3 — W2b's OWN predicate, D19, is the authority for where it does not: a bracket line that feeds no
+ *  next match); otherwise the void where VOID_SAFE says, and a refusal elsewhere — a knockout game needs a winner (every
+ *  kind the engine forbids a level result in), a Swiss round needs every game decided (the rest). */
+function rulingOffer(kind: StageKind, hold: NeedsReason, feeds: boolean): NoResultOffer {
+  if (BOTH_ABSENT.includes(hold)) return doubleWalkoverRefused(kind, feeds) ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
   if (VOID_SAFE.has(kind)) return { kind: "void" };
   return { kind: "refused", why: BRACKET_KINDS.has(kind) ? "knockout" : "swiss" };
 }
@@ -649,9 +651,9 @@ async function bridgeFor(orgId: string, fixtureId: string) {
 }
 
 describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage kind (I-3, fix round 3)", () => {
-  const sweep = { kinds: 0, void: 0, doubleWalkover: 0, knockout: 0, swiss: 0 };
+  const sweep = { kinds: 0, void: 0, doubleWalkover: 0, knockout: 0, swiss: 0, bracketDoubleWalkover: 0, w2bRefusedDoubleWalkover: 0 };
   for (const kind of StageKind.options) {
-    it(`sweep, ${kind}: the panel and the queue carry the ruling's offer, and the settle does exactly that — a void abandons, a double walkover forfeits both, a refusal writes nothing and a winner still settles the board`, async () => {
+    it(`sweep, ${kind}: the panel and the queue carry the ruling's offer, and the settle does exactly that — a void abandons, a double walkover forfeits both (where W2b takes one), a refusal writes nothing and a winner still settles the board`, async () => {
       const bracket = BRACKET_KINDS.has(kind);
       // A bracket kind sweeps both lines: one that feeds a next match, and a final.
       const cells = (bracket ? [true, false] : [false]).flatMap((feeds) =>
@@ -668,7 +670,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
       for (const [i, c] of cells.entries()) {
         const b = r.boards[i]!;
         const label = `${kind}, ${c.feeds ? "a line that feeds a next match" : "a board with no next match"}, ${c.hold}`;
-        const offer = rulingOffer(kind, c.hold);
+        const offer = rulingOffer(kind, c.hold, c.feeds);
         expect(queue.find((q) => q.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the queue`).toEqual(offer);
         expect(panel.find((x) => x.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the panel`).toEqual(offer);
         if (offer.kind === "refused") {
@@ -676,6 +678,15 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
           expect(await ledgerOf(b.fixtureId), `${label}: nothing written`).toEqual([]);
           expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "scheduled", outcome: null });
           expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: c.hold });
+          if (BOTH_ABSENT.includes(c.hold)) {
+            // The witness: W2b's own append guard refuses this double walkover too — hidden exactly where W2b refuses.
+            await expect(
+              scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.forfeit", payload: { by: "both", reason: "walkover" } }),
+              `${label}: W2b refuses it`,
+            ).rejects.toMatchObject({ code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" });
+            expect(await ledgerOf(b.fixtureId), `${label}: still nothing written`).toEqual([]);
+            sweep.w2bRefusedDoubleWalkover += 1;
+          }
           expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins"), `${label}: a winner still settles it`).toEqual({ status: "finished" });
           sweep[offer.why] += 1;
         } else {
@@ -686,6 +697,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
           } else {
             expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "forfeited", outcome: { kind: "double_walkover" } });
             sweep.doubleWalkover += 1;
+            if (bracket) sweep.bracketDoubleWalkover += 1;
           }
         }
       }
@@ -697,12 +709,20 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
     const all = StageKind.options.length;
     const bracket = BRACKET_KINDS.size;
     expect(bracket + DRAW_KINDS.size, "premise: the engine's two halves cover every kind").toBe(all);
+    // The bracket kinds whose double walkover must send somebody to a next match (W2b's D19 declaration): on their
+    // final line it is refused; every other bracket line takes it.
+    const needsNext = [...BRACKET_KINDS].filter((k) => doubleWalkoverNeedsNextMatch(k)).length;
+    expect(needsNext, "premise: D19 refuses somewhere, and not everywhere").toBeGreaterThan(0);
+    expect(needsNext).toBeLessThan(bracket);
     expect(sweep).toEqual({
       kinds: all,
       void: VOID_SAFE.size,
-      doubleWalkover: all - bracket,
-      // Both lines, both holds.
-      knockout: bracket * 2 * 2,
+      // Every kind outside a bracket, every bracket line that feeds a next match, every final D19 does not refuse.
+      doubleWalkover: all - bracket + bracket + (bracket - needsNext),
+      bracketDoubleWalkover: bracket + (bracket - needsNext),
+      w2bRefusedDoubleWalkover: needsNext,
+      // Both lines held not_started, plus the finals D19 refuses a double walkover on.
+      knockout: bracket * 2 + needsNext,
       swiss: all - bracket - VOID_SAFE.size,
     });
   });

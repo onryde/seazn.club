@@ -224,11 +224,13 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
  *  players; the server settles by side. A drawn knockout game takes a winner
  *  only (spec §3.6). The choice in place of a winner is the server's own
  *  reading, carried on the row (`noResultOffer`, I-3): "No result" where the
- *  void is offered, nothing where it is refused. */
+ *  void is offered; where both players stayed away, W2b's double walkover by
+ *  its own name — `wide`, a row of its own, so the longer label is never cut
+ *  (fix round 3); nothing where it is refused. */
 export function settleChoices(
   board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; noResultOffer: NoResultOffer },
   f: Fmt,
-): { choice: SettleChoice; label: string }[] {
+): { choice: SettleChoice; label: string; wide?: true }[] {
   const white: SettleChoice = board.whiteSide === "home" ? "home_wins" : "away_wins";
   const black: SettleChoice = board.whiteSide === "home" ? "away_wins" : "home_wins";
   if (board.tiebreakOwed) {
@@ -241,7 +243,11 @@ export function settleChoices(
     { choice: white, label: f.t("externalPlay.settle.wins", { name: board.whiteName }) },
     { choice: black, label: f.t("externalPlay.settle.wins", { name: board.blackName }) },
     { choice: "draw", label: f.t("externalPlay.resolve.draw") },
-    ...(board.noResultOffer.kind === "refused" ? [] : [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]),
+    ...(board.noResultOffer.kind === "void"
+      ? [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]
+      : board.noResultOffer.kind === "double_walkover"
+        ? [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.doubleWalkover"), wide: true as const }]
+        : []),
   ];
 }
 
