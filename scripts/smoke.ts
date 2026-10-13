@@ -2294,8 +2294,10 @@ async function bracketFinishSuite(): Promise<void> {
     outcome: { kind: string; winner?: string; method?: string } | null;
   };
   const fixture = async (id: string) => v1data<BfFixture>(await v1(owner, `/api/v1/fixtures/${id}`));
+  // `?.`, as walkoverCreditSuite's: a fixture id that never arrived reads no state, and the check reds instead of main().
   const seqOf = async (id: string, headers: Record<string, string> = {}) =>
-    v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${id}/state`, "GET", undefined, headers)).last_seq;
+    v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/state`, "GET", undefined, headers))
+      ?.last_seq;
   const post = async (id: string, type: string, payload: unknown = {}) =>
     v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload });
 
@@ -2456,6 +2458,7 @@ async function bracketFinishSuite(): Promise<void> {
     `bracket finish (generic): the refused result changed nothing — seq ${genBefore?.seq}→${genAfter?.seq}, status ${genBefore?.fx.status}→${genAfter?.fx.status}`,
     genBefore !== undefined &&
       genAfter !== undefined &&
+      typeof genBefore.seq === "number" &&
       genAfter.seq === genBefore.seq &&
       genAfter.fx.status === genBefore.fx.status &&
       genAfter.fx.status === "in_play" &&
@@ -2513,6 +2516,7 @@ async function bracketFinishSuite(): Promise<void> {
     `bracket finish (device link): the refused settle changed nothing — seq ${dlBefore?.seq}→${dlAfter?.seq}, status ${dlAfter?.fx.status}, outcome ${JSON.stringify(dlAfter?.fx.outcome)}`,
     dlBefore !== undefined &&
       dlAfter !== undefined &&
+      typeof dlBefore.seq === "number" &&
       dlAfter.seq === dlBefore.seq &&
       dlAfter.fx.status === "needs_decision" &&
       dlAfter.fx.outcome?.kind === "draw",
@@ -2529,10 +2533,12 @@ async function bracketFinishSuite(): Promise<void> {
  *  2. HK-WO-1: a hockey league walkover reaches the table at `awardScore.goals`-0 — 5-0 from the declared
  *     `fih-outdoor` cfg;
  *  3. X-DW-2: a semi-final's double walkover advances nobody, so the other semi's winner takes the final as a bye award
- *     and is the champion on the public hub;
+ *     and is the champion on the public hub — in BOTH orders: the double walkover first (the winner's decision settles
+ *     the final), and the other semi first (the final already holds the winner, so the double walkover's own decision
+ *     is the one that has to settle it);
  *  4. D19: a final refuses a double walkover 409 DOUBLE_WALKOVER_NO_NEXT_MATCH and is unchanged (the positive pair: one
  *     side's walkover of the same final is accepted);
- *  5. X-WD-1 / R14: a chess semi drawn into its tie-break (held: the decider is owed) is walked over by the away side's
+ *  5. BG-WO-3 / R14: a chess semi drawn into its tie-break (held: the decider is owed) is walked over by the away side's
  *     withdrawal — the cascade reports one held line walked over, the award names who withdrew, and the home side is
  *     seated in the final;
  *  6. X-BL-1: with the table competition at its division cap, archiving the division whose only fixture is a double
@@ -2540,14 +2546,19 @@ async function bracketFinishSuite(): Promise<void> {
  *     walkover keeps it spent (the next create is refused 402) — the positive pair, run first.
  * Expected values come from the engine's declarations (the cfgs, `AWARD_REASONS`, the error code), never typed. Every
  * refusal is judged on the body's error code, not only the HTTP status. Every list read states its count, and a zero
- * count fails.
+ * count fails. Flows 3, 4 and 6 run on the generic sport alone: the double-walkover cascade reads the feed graph and
+ * the quota reads `division_has_results`, never the sport — the sport-specific credit is flows 1, 2 and 5.
  */
 async function walkoverCreditSuite(): Promise<void> {
   type Reason = (typeof AWARD_REASONS)[number];
   const WALKOVER: Reason = "walkover";
   const WITHDREW: Reason = "withdrew";
   const BYE: Reason = "bye";
-  const reasonsDeclared = [WALKOVER, WITHDREW, BYE].every((r) => (AWARD_REASONS as readonly string[]).includes(r));
+  const declared = [WALKOVER, WITHDREW, BYE].filter((r) => (AWARD_REASONS as readonly string[]).includes(r));
+  check(
+    `walkover credit: the award reasons this suite writes and reads are the engine's own — ${declared.length} of 3 (${[WALKOVER, WITHDREW, BYE].join(", ")}) in AWARD_REASONS (${AWARD_REASONS.length} declared)`,
+    declared.length === 3,
+  );
   const QUOTA = "divisions.per_competition.max";
   const featureKey = (r: V1Res) => (r.json.error as { feature_key?: string } | undefined)?.feature_key;
 
@@ -2582,7 +2593,10 @@ async function walkoverCreditSuite(): Promise<void> {
   };
   type WcRow = { entrantId: string; metrics: Record<string, number> };
   const fixture = async (id: string) => v1data<WcFixture | undefined>(await v1(owner, `/api/v1/fixtures/${id}`));
-  const seqOf = async (id: string) => v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${id}/state`)).last_seq;
+  // `?.`: a fixture id that never arrived ("") reads no state; the write then carries no seq and is refused, so the check
+  // that needed it reds instead of a TypeError ending main() and skipping every later suite.
+  const seqOf = async (id: string) =>
+    v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/state`))?.last_seq;
   const post = async (id: string, type: string, payload: unknown = {}) =>
     v1(owner, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await seqOf(id), type, payload });
   const tableOf = async (stageId: string) =>
@@ -2691,7 +2705,7 @@ async function walkoverCreditSuite(): Promise<void> {
   });
   check(
     `walkover credit (badminton): the away side's walkover reaches the table at ${games}-0 in games, each ${bwf.setTo}-0 (the declared bwf cfg: Best of ${bwf.bestOf}) — fixture ${bdWo.after?.status} ${JSON.stringify(bdWo.after?.outcome)}; [games won, lost, points won, lost] home ${JSON.stringify(bdWo.got.home)}, away ${JSON.stringify(bdWo.got.away)} (${bdWo.table.value.length} table row(s), ${bdWo.table.reads} read(s))`,
-    reasonsDeclared && games > 0 && bwf.setTo > 0 && bdWo.awarded && bdWo.table.value.length === 2 && bdWo.matches,
+    games > 0 && bwf.setTo > 0 && bdWo.awarded && bdWo.table.value.length === 2 && bdWo.matches,
   );
 
   // --- 2. HK-WO-1: a hockey walkover credits `awardScore.goals`-0. ---
@@ -2739,6 +2753,52 @@ async function walkoverCreditSuite(): Promise<void> {
       cupKo?.championFixtureId === cup.finalId,
   );
 
+  // --- 3b. X-DW-2, the other order: the other semi first, so the double walkover lands beside a half-seated final. ---
+  // Above, the winner's own decision ran the cascade that settled the final. Here the final already holds the winner
+  // when the double walkover lands, so the double walkover's decision is the only one left to settle it.
+  const rev = await knockoutOfFour("WC Cup Reversed", GENERIC);
+  const [revSf1, revSf2] = rev.semis;
+  const revWin = revSf2 ? await post(revSf2.id, "generic.result", { p1Score: 2, p2Score: 1 }) : undefined;
+  const revChampion = (revSf2 ? await fixture(revSf2.id) : undefined)?.outcome?.winner ?? "";
+  const revHalf = await until(
+    () => fixture(rev.finalId),
+    (f) => revChampion !== "" && (f?.home_entrant_id === revChampion || f?.away_entrant_id === revChampion),
+  );
+  const revSeats = [revHalf.value?.home_entrant_id, revHalf.value?.away_entrant_id];
+  // The order's own precondition, its own check: a final that was not half-seated here would make this the DW-first
+  // order again, and the outcome below could not tell.
+  check(
+    `walkover credit (double walkover, the other semi first): before the double walkover the final holds the other semi's winner and one open seat — other semi ${revWin?.status}; final ${revHalf.value?.status} seats ${JSON.stringify(revSeats)} (${revHalf.reads} read(s))`,
+    revWin?.status === 201 &&
+      revChampion !== "" &&
+      revHalf.value?.status === "scheduled" &&
+      revSeats.filter((s) => s === revChampion).length === 1 &&
+      revSeats.filter((s) => s === null).length === 1,
+  );
+  const revDw = revSf1 ? await post(revSf1.id, "core.forfeit", { by: "both", reason: WALKOVER }) : undefined;
+  const revDwAfter = revSf1 ? await fixture(revSf1.id) : undefined;
+  const revFinal = await until(
+    () => fixture(rev.finalId),
+    (f) => f?.status === "forfeited",
+  );
+  const revHub = await until(hubKnockouts, (kos) =>
+    kos.some((k) => k.rounds.some((r) => r.fixtureIds.includes(rev.finalId)) && k.championFixtureId === rev.finalId),
+  );
+  const revKo = revHub.value.find((k) => k.rounds.some((r) => r.fixtureIds.includes(rev.finalId)));
+  const revOutcome = revFinal.value?.outcome;
+  check(
+    `walkover credit (double walkover, the other semi first): the double walkover landing beside the half-seated final still gives it to the other semi's winner as a ${BYE} award, the hub's champion — semi ${revDw?.status} → ${revDwAfter?.status} ${JSON.stringify(revDwAfter?.outcome)}; final ${revFinal.value?.status} ${JSON.stringify(revOutcome)} (${revFinal.reads} read(s)); hub champion ${revKo?.championFixtureId ?? "(none)"} of ${revHub.value.length} knockout(s) (${revHub.reads} read(s))`,
+    revDw?.status === 201 &&
+      revDwAfter?.status === "forfeited" &&
+      revDwAfter.outcome?.kind === "double_walkover" &&
+      revFinal.value?.status === "forfeited" &&
+      revOutcome?.kind === "award" &&
+      revOutcome.winner === revChampion &&
+      revOutcome.loser === null &&
+      revOutcome.reason === BYE &&
+      revKo?.championFixtureId === rev.finalId,
+  );
+
   // --- 4. D19: a final refuses a double walkover; one side's walkover of it is accepted. ---
   const NO_NEXT_MATCH: EngineErrorCode = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
   const fin = await knockoutOfFour("WC Final", GENERIC);
@@ -2759,6 +2819,7 @@ async function walkoverCreditSuite(): Promise<void> {
       !!finBefore.fx.away_entrant_id &&
       finDw.status === 409 &&
       finDw.json.error?.code === NO_NEXT_MATCH &&
+      typeof finBefore.seq === "number" &&
       finAfter.seq === finBefore.seq &&
       finAfter.fx?.status === "scheduled" &&
       finAfter.fx.outcome === null,
@@ -2774,7 +2835,7 @@ async function walkoverCreditSuite(): Promise<void> {
       finDone.outcome.reason === WALKOVER,
   );
 
-  // --- 5. X-WD-1 / R14: a withdrawal walks a held chess semi over. ---
+  // --- 5. BG-WO-3 / R14: a withdrawal walks a chess semi held on its owed tie-break over. ---
   const chess = await knockoutOfFour("WC Chess", { sport_key: "boardgame", variant_key: "classical" });
   const chessSf = chess.semis[0];
   const staying = chessSf?.home_entrant_id ?? "";
@@ -2786,7 +2847,7 @@ async function walkoverCreditSuite(): Promise<void> {
   }
   const chessHeld = chessSf ? await fixture(chessSf.id) : undefined;
   check(
-    `walkover credit (chess): a drawn knockout game waiting on its tie-break is held — ${chessWrites.length} write(s) accepted, status ${chessHeld?.status}, outcome ${JSON.stringify(chessHeld?.outcome)}`,
+    `walkover credit (chess, BG-WO-3 / R14): a drawn knockout game waiting on its tie-break is held — ${chessWrites.length} write(s) accepted, status ${chessHeld?.status}, outcome ${JSON.stringify(chessHeld?.outcome)}`,
     chessWrites.length === 2 && chessWrites.every((s) => s === 201) && chessHeld?.status === "in_play" && chessHeld.outcome === null,
   );
   const withdraw = leaving !== "" ? await v1(owner, `/api/v1/entrants/${leaving}/withdraw`, "POST") : undefined;
@@ -2797,7 +2858,7 @@ async function walkoverCreditSuite(): Promise<void> {
     (f) => staying !== "" && (f?.home_entrant_id === staying || f?.away_entrant_id === staying),
   );
   check(
-    `walkover credit (chess): the away side's withdrawal walks the held semi over — withdraw ${withdraw?.status}: ${cascade?.walkovers} walkover(s), ${cascade?.walked_over_held} of them held; semi ${chessAfter?.status} ${JSON.stringify(chessAfter?.outcome)}; the final seats the home side after ${chessSeat.reads} read(s)`,
+    `walkover credit (chess, BG-WO-3 / R14): the away side's withdrawal walks the semi held on its owed tie-break over — withdraw ${withdraw?.status}: ${cascade?.walkovers} walkover(s), ${cascade?.walked_over_held} of them held; semi ${chessAfter?.status} ${JSON.stringify(chessAfter?.outcome)}; the final seats the home side after ${chessSeat.reads} read(s)`,
     withdraw !== undefined &&
       withdraw.status < 300 &&
       cascade?.walkovers === 1 &&
@@ -2833,20 +2894,27 @@ async function walkoverCreditSuite(): Promise<void> {
       featureKey(over) === QUOTA,
   );
   const archive = (divId: string) => v1(owner, `/api/v1/divisions/${divId}/archive`, "POST");
+  /** The archive's own row: a 200 alone does not prove the division was archived (an idempotent no-op answers 200). */
+  const archivedAt = (r: V1Res) => v1data<{ archived_at?: string | null } | undefined>(r)?.archived_at ?? null;
   const keptArchive = await archive(bd.divId);
   const kept = await mkDiv(tablesId, "WC After Walkover");
   check(
-    `walkover credit (quota, the positive pair): archiving the division whose only fixture is a single walkover keeps its slot spent — archive ${keptArchive.status}, the next create refused ${kept.status} ${featureKey(kept)}`,
-    bdWo.awarded && keptArchive.status === 200 && kept.status === 402 && featureKey(kept) === QUOTA,
+    `walkover credit (quota, the positive pair): archiving the division whose only fixture is a single walkover keeps its slot spent — archive ${keptArchive.status} (archived_at ${archivedAt(keptArchive)}), the next create refused ${kept.status} ${featureKey(kept)}`,
+    bdWo.awarded &&
+      keptArchive.status === 200 &&
+      archivedAt(keptArchive) !== null &&
+      kept.status === 402 &&
+      featureKey(kept) === QUOTA,
   );
   const refundArchive = await archive(dw.divId);
   const refunded = await mkDiv(tablesId, "WC After Neither");
   check(
-    `walkover credit (quota): archiving the division whose only fixture is a double walkover refunds its slot — double walkover ${dwWrite?.status} (${dwAfter?.status} ${JSON.stringify(dwAfter?.outcome)}), archive ${refundArchive.status}, the next create ${refunded.status} ${featureKey(refunded) ?? ""}`,
+    `walkover credit (quota): archiving the division whose only fixture is a double walkover refunds its slot — double walkover ${dwWrite?.status} (${dwAfter?.status} ${JSON.stringify(dwAfter?.outcome)}), archive ${refundArchive.status} (archived_at ${archivedAt(refundArchive)}), the next create ${refunded.status} ${featureKey(refunded) ?? ""}`,
     dwWrite?.status === 201 &&
       dwAfter?.status === "forfeited" &&
       dwAfter.outcome?.kind === "double_walkover" &&
       refundArchive.status === 200 &&
+      archivedAt(refundArchive) !== null &&
       refunded.status === 201,
   );
 }
