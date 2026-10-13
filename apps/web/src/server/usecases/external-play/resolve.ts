@@ -28,6 +28,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "../fixtures";
+import { EngineError } from "@seazn/engine/core";
 import { scoreEvent } from "../scoring";
 import { whiteSideOf, type Side } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
@@ -103,13 +104,36 @@ function readReason(raw: string | null): NeedsReason | null {
   return r;
 }
 
+/** The idempotency key of ONE organiser decision on this board at this point of its ledger. It names the decision
+ *  (T16 fix round 1, M10): keyed on the ledger position alone, two organisers settling at the same moment with
+ *  DIFFERENT decisions shared a key, so the loser's write replayed the winner's event and was told its own decision
+ *  was recorded. The same decision pressed twice still shares its key, and is recorded once. */
+function decisionKey(fixtureId: string, seq: number, kind: ResolveKind): string {
+  return `extplay:resolve:${fixtureId}:${seq}:${kind}`;
+}
+
+/** A settle's ledger write. Another writer committing between this settle's read and its write (another organiser's
+ *  settle, the sweep's result) is the board changing under the organiser: answered as ALREADY_RESOLVED with "reload",
+ *  never as a bare ledger conflict — and nothing of this settle is written. */
+async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<typeof scoreEvent>[2]): Promise<void> {
+  try {
+    await scoreEvent(auth, fixtureId, input);
+  } catch (err) {
+    if (err instanceof EngineError && err.code === "SEQ_CONFLICT") {
+      throw new HttpError(409, "This board changed while you were settling it — reload and try again", "ALREADY_RESOLVED");
+    }
+    throw err;
+  }
+}
+
 /**
  * Settle one online board. Refusals, each before anything is written:
  *  - 403 ORGANISER_SESSION_REQUIRED: not a signed-in person;
  *  - 404 NOT_FOUND: not this club's online board;
  *  - 403 ARBITER_PLAYS_THIS_BOARD: the organiser plays on it (T15's seated
  *    predicate) — another organiser must settle it;
- *  - 409 ALREADY_RESOLVED: the board already has its result;
+ *  - 409 ALREADY_RESOLVED: the board already has its result, or another writer settled it while this settle was on
+ *    its way (two organisers at once: one decision is recorded, the other is told the board changed);
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
  *    tie-break is owed.
  */
@@ -144,11 +168,11 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     if (winner === null) {
       throw new HttpError(409, "A drawn knockout game needs a winner to go through", "TIEBREAK_NEEDS_WINNER");
     }
-    await scoreEvent(auth, fixtureId, {
+    await settleWrite(auth, fixtureId, {
       expected_seq: fs.last_seq,
       type: "core.settle",
       payload: { winner, method: "organiser" },
-      idempotency_key: `extplay:resolve:${fixtureId}:${fs.last_seq}`,
+      idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
     });
     await closeBridge(fixtureId);
     return { status: "finished" };
@@ -173,18 +197,18 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   let seq = fs.last_seq;
   const phase = foldPhaseOf(fs.state);
   if (phase === "pre") {
-    await scoreEvent(auth, fixtureId, { expected_seq: seq, type: "core.start", payload: {} });
+    await settleWrite(auth, fixtureId, { expected_seq: seq, type: "core.start", payload: {} });
     seq += 1;
   } else if (phase !== "live") {
     // A playable fixture's fold is pre, live or a pending tie-break (answered
     // above): anything else is a writer that committed in between.
     throw new HttpError(409, "This board changed while you were settling it — reload and try again", "ALREADY_RESOLVED");
   }
-  await scoreEvent(auth, fixtureId, {
+  await settleWrite(auth, fixtureId, {
     expected_seq: seq,
     type: "boardgame.result",
     payload,
-    idempotency_key: `extplay:resolve:${fixtureId}:${seq}`,
+    idempotency_key: decisionKey(fixtureId, seq, kind),
   });
 
   if (kind === "draw" && (await holdOwedTiebreak(fixtureId, auth, "the organiser recorded a draw in a bracket: the tie-break is owed"))) {
