@@ -168,20 +168,20 @@ describe("resolveExternalPlay — structure", () => {
 });
 
 describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
-  // The method each decision is written with, from the rulebook (FIDE Laws
+  // The shape each decision is written with, from the rulebook (FIDE Laws
   // Art. 6.7: a player absent at the start loses by default — a forfeit; any
   // other decision of the arbiter is an adjudication). Home is White here.
   // RB4 (W2b spec §5.2, D15): a default is `core.forfeit {by: the absent
   // loser, reason: "walkover"}` — the sweep's own no-show shape — with no
   // Start; an adjudication is a Start and `boardgame.result`.
-  const cases: { hold: "no_show_white" | "no_show_black" | "no_show_both" | "not_started" | "token_revoked"; kind: "home_wins" | "away_wins"; method: "forfeit" | "adjudication" }[] = [
-    { hold: "no_show_black", kind: "home_wins", method: "forfeit" }, // Black (away) stayed away and loses
-    { hold: "no_show_black", kind: "away_wins", method: "adjudication" }, // the present player loses: a ruling
-    { hold: "no_show_white", kind: "away_wins", method: "forfeit" },
-    { hold: "no_show_white", kind: "home_wins", method: "adjudication" },
-    { hold: "no_show_both", kind: "home_wins", method: "forfeit" },
-    { hold: "not_started", kind: "away_wins", method: "adjudication" }, // both came: nobody defaulted
-    { hold: "token_revoked", kind: "home_wins", method: "adjudication" },
+  const cases: { hold: "no_show_white" | "no_show_black" | "no_show_both" | "not_started" | "token_revoked"; kind: "home_wins" | "away_wins"; written: "walkover" | "adjudication" }[] = [
+    { hold: "no_show_black", kind: "home_wins", written: "walkover" }, // Black (away) stayed away and loses
+    { hold: "no_show_black", kind: "away_wins", written: "adjudication" }, // the present player loses: a ruling
+    { hold: "no_show_white", kind: "away_wins", written: "walkover" },
+    { hold: "no_show_white", kind: "home_wins", written: "adjudication" },
+    { hold: "no_show_both", kind: "home_wins", written: "walkover" },
+    { hold: "not_started", kind: "away_wins", written: "adjudication" }, // both came: nobody defaulted
+    { hold: "token_revoked", kind: "home_wins", written: "adjudication" },
   ];
 
   it("each hold × winner: the result, its method, the bridge closed, the queue emptied — and the ledger names who settled", async () => {
@@ -206,7 +206,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       const loser = c.kind === "home_wins" ? b.away.entrantId : b.home.entrantId;
       const ledger = await ledgerOf(b.fixtureId);
       const want: [string, unknown][] =
-        c.method === "forfeit"
+        c.written === "walkover"
           ? [["core.forfeit", { by: loser, reason: "walkover" }]]
           : [
               ["core.start", {}],
@@ -225,7 +225,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       const f = await fixtureOf(b.fixtureId);
       expect(f.outcome, JSON.stringify(c)).toEqual(boardgame.outcome(state));
       expect(f.outcome, `${JSON.stringify(c)}: the winner`).toMatchObject({ winner });
-      expect(f.status, JSON.stringify(c)).toBe(c.method === "forfeit" ? "forfeited" : "decided");
+      expect(f.status, JSON.stringify(c)).toBe(c.written === "walkover" ? "forfeited" : "decided");
       expect(await bridgeOf(b.fixtureId), JSON.stringify(c)).toMatchObject({ status: "finished", needs_reason: null, revoked_seat: null });
       expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), `${c.hold}: the queue no longer lists it`).toEqual([]);
       // What the organiser and the spectators read back: the engine's lines and method, home (White) first.
@@ -307,7 +307,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     expect(played(await ledgerOf(b.fixtureId)), "premise: play is recorded").toBe(true);
     // The premise the controller's arm 2 rested on, measured: the legacy shape is no longer writable.
     expect(
-      await engineCodeOf(scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } })),
+      await engineCodeOf(scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } })), // legacy method: refused on write (D15)
       "W2b D15: a chess forfeit is not a game result",
     ).toBe("INVALID_EVENT");
 

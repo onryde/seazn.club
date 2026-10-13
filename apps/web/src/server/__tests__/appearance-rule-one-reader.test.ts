@@ -87,6 +87,19 @@ const EXEMPT: readonly Exemption[] = [
   { file: "src/app/score/[token]/page.tsx", fn: "ScorePadPage", sites: 1, reason: "the device pad's fixture and squads; credits nothing" },
   { file: "src/server/usecases/match-reports.ts", fn: "myFixtureSquad", sites: 1, reason: "the official's match-report person picker over both squads; credits nothing" },
   { file: "src/server/public-site/revalidate.ts", fn: "firePersonRevalidate", sites: 1, reason: "cache invalidation: every fixture naming the person, over-inclusive by design; credits nothing" },
+  // Online chess (external play): who sits at a board, or whose Lichess game a fixture is — never who appeared.
+  {
+    file: "src/server/usecases/external-play/seated.ts",
+    fn: "fixturesSeating",
+    sites: 1,
+    reason: "D7 safeguarding: does this user PLAY on these boards (so the arbiter panel never shows a player their opponent's camera); broad on purpose, credits nothing",
+  },
+  {
+    file: "src/server/usecases/external-play/create-game.ts",
+    fn: "findSentGame",
+    sites: 1,
+    reason: "Lichess create recovery: another fixture of the same two players with a create in flight (a peer), so an ambiguous challenge is held, never adopted; credits nothing",
+  },
   // Registration finds a person in the player lane (persons_org_user_lane_uq).
   { file: "src/server/usecases/registrations.ts", fn: "resolvePlayerPerson", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },
   { file: "src/server/usecases/registrations.ts", fn: "findPlayerPersonByEmail", sites: 1, reason: "registration's person lookup in the player lane; credits nothing" },

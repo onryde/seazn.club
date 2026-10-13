@@ -90,8 +90,8 @@ describe("resultFor (review I7: the outcome and score are the ENGINE's — T12's
       method: "agreement",
       score: "½–½",
     });
-    const both = resultFor({ ...seats, winnerEntrantId: null, method: "double_forfeit", myColour: "black" });
-    expect(both).toEqual({ outcome: "no_result", method: "double_forfeit", score: "0–0" });
+    const both = resultFor({ ...seats, winnerEntrantId: null, method: "double_forfeit", myColour: "black" }); // legacy (pre-W2b) row: replays, refused on write (D15)
+    expect(both).toEqual({ outcome: "no_result", method: "double_forfeit", score: "0–0" }); // the legacy row's method, read back
   });
 
   it("every winner × my colour: won/lost from MY entrant, the score always White-first", () => {
