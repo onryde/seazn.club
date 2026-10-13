@@ -772,7 +772,7 @@
   {
     "id": "m4-page-dw-prints-score",
     "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
-    "find": "  return fixture.outcome?.kind === \"double_walkover\";",
+    "find": "  return outcomeCreditsNobody(fixture.outcome);",
     "replace": "  return false;",
     "killers": [
       {
