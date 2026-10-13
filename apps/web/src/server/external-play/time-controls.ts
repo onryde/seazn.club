@@ -51,6 +51,22 @@ export function isBoardApiPlayable(tc: TimeControl): boolean {
   return estimatedSeconds(tc) >= BOARD_API_MIN_ESTIMATED_SECONDS;
 }
 
+/** The speeds Lichess names a game by (scalachess `Speed.scala`). */
+export type LichessSpeed = "ultraBullet" | "bullet" | "blitz" | "rapid" | "classical" | "correspondence";
+
+/** The speed Lichess files a time control under — its rating pool, and the word its own pages show beside the game:
+ *  scalachess `Speed.scala`'s ranges (read 2026-10-13: Bullet 30–179, Blitz 180–479, Rapid 480–1499, Classical
+ *  1500–21599) on the same estimate M13 measured. T17 round B, C: the public format word of an online division. */
+export function lichessSpeedOf(tc: TimeControl): LichessSpeed {
+  const s = estimatedSeconds(tc);
+  if (s < 30) return "ultraBullet";
+  if (s < 180) return "bullet";
+  if (s < 480) return "blitz";
+  if (s < 1500) return "rapid";
+  if (s < 21_600) return "classical";
+  return "correspondence";
+}
+
 /** Ship-1 (§3.7; 10+0 and 15+0 added by owner ruling 2026-10-09, both
  *  measured playable in b3-spike.log). Frozen: a caller must not be able to
  *  push an unverified entry into the shared catalogue, which would walk

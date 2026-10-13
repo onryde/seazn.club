@@ -11,6 +11,7 @@ import {
   assertTimeControl,
   estimatedSeconds,
   isBoardApiPlayable,
+  lichessSpeedOf,
 } from "../time-controls";
 import type { TimeControl } from "../time-controls";
 import type { BoardgameClockInput } from "../clock";
@@ -227,5 +228,44 @@ describe("assertTimeControl — the setup gate, on the clock the division STORES
     expect(isBoardApiPlayable(off)).toBe(true);
     expect(documentedCreatable(off.limitSeconds)).toBe(true);
     expect(() => assertTimeControl({ base: 1200, increment: 0 })).toThrow();
+  });
+});
+
+// T17 round B, C: the match centre said "Classical" over a 10+5 game, because the label was the division's declared
+// clock family, which nothing ties to the time control. Online, the game is a Lichess game, and Lichess names its
+// speed from the time control alone. The rulebook here is scalachess `core/src/main/scala/Speed.scala` (read
+// 2026-10-13): Bullet 30–179, Blitz 180–479, Rapid 480–1499, Classical 1500–21599, on the estimate limit + 40 × increment.
+describe("lichessSpeedOf — the speed Lichess names a time control by", () => {
+  it("every ship-1 entry, as Lichess's own lobby names it", () => {
+    const LICHESS_NAMES: Record<string, string> = {
+      "3+0": "blitz", "3+2": "blitz", "5+0": "blitz", "5+3": "blitz",
+      "10+0": "rapid", "10+5": "rapid", "15+0": "rapid", "15+10": "rapid",
+    };
+    let checked = 0;
+    for (const tc of SHIP1_TIME_CONTROLS) {
+      expect(lichessSpeedOf(tc), tc.key).toBe(LICHESS_NAMES[tc.key]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: the whole catalogue").toBe(SHIP1_KEYS.length);
+  });
+
+  it("the edges of Speed.scala's ranges — and the increment counts 40 times, so 2+9 is rapid though 2 minutes is not", () => {
+    const at = (limitSeconds: number, incrementSeconds = 0): TimeControl => ({ key: "edge", limitSeconds, incrementSeconds });
+    const cells: [TimeControl, string][] = [
+      [at(179), "bullet"],
+      [at(180), "blitz"],
+      [at(479), "blitz"],
+      [at(480), "rapid"],
+      [at(1499), "rapid"],
+      [at(1500), "classical"],
+      [at(120, 9), "rapid"],
+      [at(1200, 8), "classical"],
+    ];
+    let checked = 0;
+    for (const [tc, speed] of cells) {
+      expect(lichessSpeedOf(tc), `${tc.limitSeconds}+${tc.incrementSeconds}`).toBe(speed);
+      checked += 1;
+    }
+    expect(checked).toBe(cells.length);
   });
 });

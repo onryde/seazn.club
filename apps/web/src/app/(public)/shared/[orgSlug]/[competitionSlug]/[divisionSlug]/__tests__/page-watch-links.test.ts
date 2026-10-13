@@ -90,3 +90,22 @@ describe("public division page — the watch links (I4)", () => {
     expect(checked, "anti-vacuity: sports swept").toBeGreaterThan(3);
   });
 });
+
+// T17 round B, C: the division's format badge over an online division is its time control's speed (variant-label.ts),
+// the same word the fixture page's header prints — a "Classical" division played at 10+5 is Rapid.
+describe("public division page — the format badge of an online chess division", () => {
+  const badgeTexts = async (config: unknown) => {
+    getPublicDivision.mockResolvedValue(divisionData("boardgame", config));
+    const root = await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "cup", divisionSlug: "open" }) });
+    return elements(root)
+      .filter((el) => typeof (el.props as { className?: unknown }).className === "string" && (el.props as { className: string }).className.includes("bg-accent-soft"))
+      .map((el) => (el.props as { children?: unknown }).children);
+  };
+  it("online at 10+5 reads the speed; over the board the declared family stands", async () => {
+    const rapid = msgFor("fr", "variant.boardgame.rapid");
+    const classical = msgFor("fr", "variant.boardgame.classical");
+    expect(rapid, "premise: two different words").not.toBe(classical);
+    expect(await badgeTexts({ variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } })).toEqual([rapid]);
+    expect(await badgeTexts({ variant: "classical", onlinePlay: "off", clock: { base: 600, increment: 5 } })).toEqual([classical]);
+  });
+});

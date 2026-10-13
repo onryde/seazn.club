@@ -499,7 +499,7 @@ export default async function DivisionHomePage({ params }: Props) {
           </span>
           <span className="rounded-full bg-accent-soft px-2 py-0.5 uppercase text-accent-strong">
             {variantLabel(
-              { sportKey: division.sport_key, variantKey: division.variant_key, storedName: division.variant_name ?? null },
+              { sportKey: division.sport_key, variantKey: division.variant_key, storedName: division.variant_name ?? null, config: division.config },
               lookup,
             )}
           </span>
