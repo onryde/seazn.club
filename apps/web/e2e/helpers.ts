@@ -970,6 +970,93 @@ export async function seedFixtureExternalPlaySql(
   });
 }
 
+/** Link a Seazn user to a Lichess account WITH a play token the server can
+ *  open (Task 17). The walkthrough's server unseals it (`openPlayerToken`) and
+ *  sends it to the Lichess fixture server as the bearer, so the token is
+ *  sealed for real (e2e/lichess-token-seal.ts, proven against the product's
+ *  reader in e2e-seams.test.ts) — the T14 kit's one-byte token is unopenable
+ *  on purpose and right only for specs that must never reach Lichess. Columns
+ *  are V433's: `access_token_enc` bytea, `scopes` text[], `consented_at`. */
+export async function linkLichessBySql(
+  userId: string,
+  lichessId: string,
+  token: string,
+  scopes: string[],
+): Promise<void> {
+  const { sealLichessTokenForE2e } = await import("./lichess-token-seal");
+  const sealed = sealLichessTokenForE2e(token);
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into user_external_accounts (user_id, provider, external_user_id, username, access_token_enc, scopes, consented_at)
+      values (${userId}, 'lichess', ${lichessId}, ${lichessId}, ${sealed}, ${scopes}, now())
+      on conflict (user_id, provider) do update set
+        external_user_id = excluded.external_user_id,
+        username = excluded.username,
+        access_token_enc = excluded.access_token_enc,
+        scopes = excluded.scopes,
+        consented_at = excluded.consented_at`;
+    if (res.count !== 1) throw new Error(`linkLichessBySql: wrote no row for ${userId}`);
+  });
+}
+
+/** The personal match-room path for one player of one fixture —
+ *  `/shared/{org}/{comp}/{div}/fixtures/{id}/play?t=<link>` — with the link
+ *  bound to the round's OPEN (T14), as invite.ts mints it. The plan's
+ *  `/play/<token>` path and schedule-bound (`sat`) token went with T14.
+ *  A round nobody opened has no link to mint: that is refused by name, so a
+ *  caller wanting the unopened room signs the player in and opens the bare
+ *  path instead. */
+export async function matchRoomPathBySql(fixtureId: string, personId: string): Promise<string> {
+  const { mintMatchRoomLink } = await import("./match-room-link");
+  const row = await withDb(async (sql) => {
+    const [r] = await sql<{ org: string; comp: string; div: string; open_id: string | null; opened_at: Date | null }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div, ro.id as open_id, ro.opened_at
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        join competitions c on c.id = d.competition_id
+        join organizations o on o.id = c.org_id
+        left join stage_round_opens ro on ro.stage_id = f.stage_id and ro.round_no = f.round_no
+       where f.id = ${fixtureId}`;
+    return r;
+  });
+  if (!row) throw new Error(`matchRoomPathBySql: no fixture ${fixtureId}`);
+  if (row.open_id === null || row.opened_at === null) {
+    throw new Error(`matchRoomPathBySql: fixture ${fixtureId}'s round is not opened — no invite link exists yet (D12)`);
+  }
+  const token = await mintMatchRoomLink({ fixtureId, personId, roundOpenId: row.open_id, openedAt: new Date(row.opened_at) });
+  return `/shared/${row.org}/${row.comp}/${row.div}/fixtures/${fixtureId}/play?t=${encodeURIComponent(token)}`;
+}
+
+/** `stage_round_opens.opened_at` for one (stage, round), or null — the D12
+ *  stamp. The table is sealed to the app role; this runner's client is the
+ *  owner's. */
+export async function roundOpenedAtSql(stageId: string, roundNo: number): Promise<Date | null> {
+  return withDb(async (sql) => {
+    const [r] = await sql<{ opened_at: Date }[]>`
+      select opened_at from stage_round_opens where stage_id = ${stageId} and round_no = ${roundNo}`;
+    return r ? new Date(r.opened_at) : null;
+  });
+}
+
+/** `core.forfeit` events on a fixture's ledger. A Lichess timeout or resign
+ *  is a normal result, never a forfeit (spec §3.6) — only a no-show is. */
+export async function forfeitEventCountSql(fixtureId: string): Promise<number> {
+  return withDb(async (sql) => {
+    const [r] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId} and type = 'core.forfeit'`;
+    return r!.n;
+  });
+}
+
+/** `boardgame.result` events on a fixture's ledger — the result T12 writes. */
+export async function resultEventCountSql(fixtureId: string): Promise<number> {
+  return withDb(async (sql) => {
+    const [r] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId} and type = 'boardgame.result'`;
+    return r!.n;
+  });
+}
+
 /** Force a fixture's `scheduled_at` directly, bypassing the schedule engine
  *  (H2 e2e, final review round 3): a division that has only been PUBLISHED
  *  (`publishSchedule`, status 'scheduled') never got that far through the
