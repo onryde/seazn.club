@@ -5106,7 +5106,7 @@ Spec §9 P8; §11; Global Constraints. The P8 step is **BLOCKED until `feat/ches
 
 ## Appendix A — rule rows W2c adds or changes (signed in Task 0, written in Task 3)
 
-Wording is proposed from spec Appendix A, with ids corrected (finding 6). The owner signs each row in Task 0. A row stays in `AWAITING_PROOF` until the batch-end proof commit of the batch that proves it fills its `proved-by` (**Execution**). Task 23 checks that the map is empty.
+Wording is from spec Appendix A, with ids corrected (finding 6). **Owner signed all rows 2026-10-13 ("sign all"), GN-AB-2 with the P-5 sentence.** A row stays in `AWAITING_PROOF` until the batch-end proof commit of the batch that proves it fills its `proved-by` (**Execution**). Task 23 checks that the map is empty.
 
 | Id | File | Rule (proposed wording) | Enforced at | Proved by |
 |---|---|---|---|---|
@@ -5124,7 +5124,7 @@ Wording is proposed from spec Appendix A, with ids corrected (finding 6). The ow
 | **CK-SO-1** | `cricket.md` | A cricket knockout's super over is a stage default the organiser can switch off. Switched on in a league stage, it is played on every tie. | cricket `stageDefaults` (Task 6) | Task 6 |
 | HK-AB-2 | `hockey.md` | Under `q4_stands` (hockey only; ice hockey is never offered it), an abandoned match is replayed if the 4th quarter had not started. From the 4th quarter on, including a shoot-out, the result stands; a level score in a format with no draws is no result (ruling 117). The option exists only for four-quarter formats. | period kernel (Task 7) | Task 7 |
 | **CA-AB-2** | `carrom.md` | An abandoned carrom league match is replayed or the points are shared, as the stage says. | carrom module (Task 7) | Task 7 |
-| **GN-AB-2** | `generic.md` | An abandoned generic league match is replayed or the points are shared, as the stage says. (GN-AB-1 exists on W2b.) | generic module (Task 7) | Task 7 |
+| **GN-AB-2** | `generic.md` | An abandoned generic league match is replayed or the points are shared, as the stage says. Sharing the points needs draws to be allowed (owner P-5). (GN-AB-1 exists on W2b.) | generic module (Task 7) | Task 7 |
 | IH-KO-1 | `icehockey.md` | An ice-hockey knockout stage starts with overtime and a shootout. | icehockey `stageDefaults` (Task 6) | Task 6 |
 | FB-SO-1 | `football.md` | A football shootout is 5 kicks each before sudden death; youth variants 3. The count is the match-scoped `shootoutAttempts`. | football `shootoutAttempts` (Task 6) | Task 6 |
 
