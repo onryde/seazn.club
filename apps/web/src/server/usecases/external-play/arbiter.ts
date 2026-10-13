@@ -41,7 +41,7 @@ import {
 import { roundOpenAt } from "@/server/external-play/round-open";
 import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
-import { gameClocks, resultFor, turnAfter } from "@/components/public-site/match-room/room-snapshot";
+import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
@@ -387,24 +387,17 @@ async function flagView(
   }
 }
 
-/** The recorded result, White first ("1–0"), as the engine folds it — or
- *  null when none is on the ledger (a settled board without a result). */
+/** The recorded result, White first ("1–0"), as the engine folds it — from the event that decided the board: a
+ *  boardgame.result or (W2b spec §5.2) a core.forfeit — or null when neither is on the ledger (a settled board
+ *  without a result). */
 async function scoreOf(r: BoardRow, whiteEntrantId: string, blackEntrantId: string): Promise<string | null> {
-  const [row] = await sql<{ payload: { winner?: string | null; method?: string } }[]>`
-    select e.payload from score_events e
-     where e.fixture_id = ${r.fixtureId} and e.type = 'boardgame.result'
+  const [row] = await sql<DecisiveEvent[]>`
+    select e.type, e.payload from score_events e
+     where e.fixture_id = ${r.fixtureId} and e.type in ('boardgame.result', 'core.forfeit')
        and not exists (select 1 from score_events v where v.voids_event_id = e.id)
      order by e.seq desc limit 1`;
   if (!row) return null;
-  return (
-    resultFor({
-      winnerEntrantId: row.payload.winner ?? null,
-      method: row.payload.method ?? null,
-      myEntrantId: whiteEntrantId,
-      opponentEntrantId: blackEntrantId,
-      myColour: "white",
-    })?.score ?? null
-  );
+  return decisiveResultFor(row, { myEntrantId: whiteEntrantId, opponentEntrantId: blackEntrantId, myColour: "white" })?.score ?? null;
 }
 
 // ---------------------------------------------------------------------------

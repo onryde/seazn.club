@@ -86,7 +86,9 @@ export function publicResultOf(row: Pick<PublicFixtureRow, "outcome" | "summary"
     if (winner === null) return null;
     kind = "win";
   } else if (o.kind === "draw" || o.kind === "tie") kind = "draw";
-  else if (o.kind === "no_result") kind = "no_result";
+  // W2b BG-DW-1: a double forfeit folds to a double walkover now (the organiser's No result, both players absent) —
+  // still no result to the spectator, as qualification-view.ts reads the two alike.
+  else if (o.kind === "no_result" || o.kind === "double_walkover") kind = "no_result";
   else return null;
   const lineOf = (entrant: string | null) => row.summary?.perSide?.find((p) => p.entrantId === entrant)?.line ?? null;
   const whiteFirst = row.white_side === "away" ? [row.away_entrant_id, row.home_entrant_id] : [row.home_entrant_id, row.away_entrant_id];

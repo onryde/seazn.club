@@ -19,8 +19,15 @@ import "server-only";
 //                 a bracket the engine opens the tie-break, and the board is
 //                 held `tiebreak_owed` by the same rule as a game's draw (R2):
 //                 a knockout draw is never decided;
-//   - "No result" — `{winner: null, method: double_forfeit}`, the engine's
-//                 no_result (never a tie-break);
+//   - "No result" — a double walkover, `core.forfeit {by: "both", reason:
+//                 "walkover"}` (RB1, controller ruling 2026-10-13; W2b spec
+//                 §5.2: a chess forfeit is a core.forfeit, and W2b D15 refuses
+//                 the old `boardgame.result{double_forfeit}` from every
+//                 writer). Never a Start: before play the board stays unplayed
+//                 (ruling 118 reads chess's play from an active Start), after
+//                 it the Start stands. Never a tie-break; on a line that feeds
+//                 no next match W2b D19 refuses it
+//                 (DOUBLE_WALKOVER_NO_NEXT_MATCH) and nothing is written;
 //   - a board whose tie-break is owed takes a winner only, written as the
 //     organiser's settle (`core.settle {method: organiser}`, W2a).
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -142,7 +149,9 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
  *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
- *    tie-break is owed.
+ *    tie-break is owed;
+ *  - 409 DOUBLE_WALKOVER_NO_NEXT_MATCH (W2b D19, the engine's own refusal, mapped by v1's ENGINE_HTTP): No result on
+ *    a bracket line that feeds no next match — a final, a last rung, a third-place match. The board stays held.
  */
 export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind: ResolveKind): Promise<ResolveOutcome> {
   if (!(RESOLVE_KINDS as readonly string[]).includes(kind)) {
@@ -190,9 +199,22 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     return { status: "finished" };
   }
 
-  let payload: { winner: string | null; method: "forfeit" | "adjudication" | "double_forfeit" };
+  if (kind === "no_result") {
+    // RB1: the same double walkover whether or not play is recorded — W2b admits a chess walkover before the game
+    // and after the Start (walkoverPhases, ruling 118), and `by: "both"` is a walkover only (CoreForfeit). So no
+    // Start is written for it: a board nobody played stays unplayed, and one with a Start keeps it.
+    await settleWrite(auth, fixtureId, {
+      expected_seq: fs.last_seq,
+      type: "core.forfeit",
+      payload: { by: "both", reason: "walkover" },
+      idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
+    });
+    await closeBridge(fixtureId);
+    return { status: "finished" };
+  }
+
+  let payload: { winner: string | null; method: "forfeit" | "adjudication" };
   if (kind === "draw") payload = { winner: null, method: "adjudication" };
-  else if (kind === "no_result") payload = { winner: null, method: "double_forfeit" };
   else {
     const absent = reason === null ? undefined : ABSENT_BY_REASON[reason];
     let loserAbsent = absent === "both";

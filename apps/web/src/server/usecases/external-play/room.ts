@@ -40,7 +40,8 @@ import {
   frozenFor,
   gameClocks,
   realtimeExpiry,
-  resultFor,
+  decisiveResultFor,
+  type DecisiveEvent,
   roomPhaseWire,
   turnAfter,
   windowWire,
@@ -199,15 +200,16 @@ async function roomFacts(fixtureId: string): Promise<RoomFacts> {
   return row;
 }
 
-/** The latest boardgame.result on the ledger that nothing voided. */
-async function recordedResult(fixtureId: string): Promise<{ winner: string | null; method: string | null } | null> {
-  const [row] = await sql<{ payload: { winner?: string | null; method?: string } }[]>`
-    select e.payload from score_events e
-     where e.fixture_id = ${fixtureId} and e.type = 'boardgame.result'
+/** The latest event on the ledger that nothing voided and that decided the game: a boardgame.result, or — W2b spec
+ *  §5.2 records every chess forfeit this way — a core.forfeit (a no-show's walkover, the organiser's default win or
+ *  No result). */
+async function recordedResult(fixtureId: string): Promise<DecisiveEvent | null> {
+  const [row] = await sql<DecisiveEvent[]>`
+    select e.type, e.payload from score_events e
+     where e.fixture_id = ${fixtureId} and e.type in ('boardgame.result', 'core.forfeit')
        and not exists (select 1 from score_events v where v.voids_event_id = e.id)
      order by e.seq desc limit 1`;
-  if (!row) return null;
-  return { winner: row.payload.winner ?? null, method: row.payload.method ?? null };
+  return row ?? null;
 }
 
 /** Who the opponent is in the fixture's meeting (review I8): their player
@@ -273,13 +275,7 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
   const result =
     recorded === null
       ? null
-      : resultFor({
-          winnerEntrantId: recorded.winner,
-          method: recorded.method,
-          myEntrantId: player.entrantId,
-          opponentEntrantId: opponent.entrantId,
-          myColour: mine,
-        });
+      : decisiveResultFor(recorded, { myEntrantId: player.entrantId, opponentEntrantId: opponent.entrantId, myColour: mine });
 
   // T11 M7: a token_revoked hold freezes a seat (or both, when none was
   // recorded); the other player's board stays live. A WRITTEN result ends
