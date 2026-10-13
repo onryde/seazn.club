@@ -438,6 +438,9 @@ test("re-review N-1: /me's results print a finalized double walkover's tag, neve
   const dw = meets(dwOpp!);
   const wo = meets(woOpp!);
   expect([dw, wo].every(Boolean), "Pat meets both opponents").toBe(true);
+  // Fix round 3 premise: Pat holds the walkover's AWAY seat, the one where the stored home-first score reads wrong
+  // beside her name. Should the generator ever seat her home, this reds rather than the orientation check going vacuous.
+  expect(wo.away_entrant_id, "premise: Pat is the walkover's away side").toBe(patE);
   for (const [f, by] of [[dw, "both"], [wo, woOpp!]] as const) {
     const seq = { n: 0 };
     await post(page.request, f.id, seq, "core.forfeit", { by, reason: "walkover" });
