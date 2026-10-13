@@ -175,6 +175,17 @@ describe("where the answer shows", () => {
     expect(refresh, "a refusal changes nothing to refresh").not.toHaveBeenCalled();
   });
 
+  it("N2: a board another organiser settled at the same moment — told it CHANGED, by its own code, not that it has its result", async () => {
+    const ui = mount({ held: [HELD("h1")] });
+    click(settleButton(ui.tree(), "external-play-queue-row-h1", "home_wins"));
+    net.calls[0]!.reject(new ApiV1Error("x", 409, "BOARD_CHANGED"));
+    await flush();
+    const notices = byTestId(ui.tree(), "external-play-row-notice");
+    expect(notices).toHaveLength(1);
+    expect(textOf(notices[0])).toBe(EN_UI["arbiter.notice.boardChanged"]);
+    expect(textOf(notices[0])).not.toBe(EN_UI["arbiter.notice.alreadyResolved"]);
+  });
+
   it("the sequence: settle the LAST held board → the refresh removes its row → the answer is still on screen; the empty queue keeps only that", async () => {
     const ui = mount({ held: [HELD("h1")] });
     click(settleButton(ui.tree(), "external-play-queue-row-h1", "home_wins"));

@@ -112,16 +112,21 @@ function decisionKey(fixtureId: string, seq: number, kind: ResolveKind): string 
   return `extplay:resolve:${fixtureId}:${seq}:${kind}`;
 }
 
-/** A settle's ledger write. Another writer committing between this settle's read and its write (another organiser's
- *  settle, the sweep's result) is the board changing under the organiser: answered as ALREADY_RESOLVED with "reload",
- *  never as a bare ledger conflict — and nothing of this settle is written. */
+/** The board changed between this settle's read and its write: another writer committed in between (another
+ *  organiser's settle, the sweep's result). Its own code (T16 fix round 2, N2): the board need not have its result —
+ *  a knockout draw leaves the tie-break owed — so "already has its result" would be wrong. Nothing of this settle is
+ *  written; the organiser reloads to see what changed. */
+function boardChanged(): HttpError {
+  return new HttpError(409, "This board changed while you were deciding — reload to see it", "BOARD_CHANGED");
+}
+
+/** A settle's ledger write. A ledger conflict is the board changing under the organiser (`boardChanged`), never a
+ *  bare engine error. */
 async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<typeof scoreEvent>[2]): Promise<void> {
   try {
     await scoreEvent(auth, fixtureId, input);
   } catch (err) {
-    if (err instanceof EngineError && err.code === "SEQ_CONFLICT") {
-      throw new HttpError(409, "This board changed while you were settling it — reload and try again", "ALREADY_RESOLVED");
-    }
+    if (err instanceof EngineError && err.code === "SEQ_CONFLICT") throw boardChanged();
     throw err;
   }
 }
@@ -132,8 +137,9 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 404 NOT_FOUND: not this club's online board;
  *  - 403 ARBITER_PLAYS_THIS_BOARD: the organiser plays on it (T15's seated
  *    predicate) — another organiser must settle it;
- *  - 409 ALREADY_RESOLVED: the board already has its result, or another writer settled it while this settle was on
- *    its way (two organisers at once: one decision is recorded, the other is told the board changed);
+ *  - 409 ALREADY_RESOLVED: the board already has its result when this settle reads it;
+ *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
+ *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
  *    tie-break is owed.
  */
@@ -202,7 +208,7 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   } else if (phase !== "live") {
     // A playable fixture's fold is pre, live or a pending tie-break (answered
     // above): anything else is a writer that committed in between.
-    throw new HttpError(409, "This board changed while you were settling it — reload and try again", "ALREADY_RESOLVED");
+    throw boardChanged();
   }
   await settleWrite(auth, fixtureId, {
     expected_seq: seq,

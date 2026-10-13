@@ -193,11 +193,13 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
     case "settle_failed":
       return n.code === "ALREADY_RESOLVED"
         ? f.t("arbiter.notice.alreadyResolved")
-        : n.code === "TIEBREAK_NEEDS_WINNER"
-          ? f.t("arbiter.notice.needsWinner")
-          : n.code === "ARBITER_PLAYS_THIS_BOARD"
-            ? f.t("arbiter.notice.settleOwnBoard")
-            : f.t("arbiter.notice.failed");
+        : n.code === "BOARD_CHANGED"
+          ? f.t("arbiter.notice.boardChanged")
+          : n.code === "TIEBREAK_NEEDS_WINNER"
+            ? f.t("arbiter.notice.needsWinner")
+            : n.code === "ARBITER_PLAYS_THIS_BOARD"
+              ? f.t("arbiter.notice.settleOwnBoard")
+              : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":

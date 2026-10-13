@@ -46,7 +46,9 @@ type Op =
   | { kind: "look" }
   | { kind: "close"; by: 0 | 1 | 2 }
   | { kind: "resolve"; as: ResolveKind; by?: 0 | 2 }
-  | { kind: "race"; a: ResolveKind; b: ResolveKind }
+  /** `ordered`: `a` reaches the board's write lock first (both have read the board) — the race is staged in that
+   *  order, so the case names its loser instead of accepting either. */
+  | { kind: "race"; a: ResolveKind; b: ResolveKind; ordered?: true }
   | { kind: "hold" };
 
 /** `live`: the game has begun on the ledger (core.start) — a settle then writes the result at once, with no start. */
@@ -54,7 +56,9 @@ type Board = { kind: "league" | "knockout"; live?: boolean };
 /** The actors: 0 and 1 are organisers who play nowhere; 2 is an organiser SEATED on the board (its home player). */
 const SEATED = 2;
 const SEATED_REFUSAL: Answer = { refused: [403, "ARBITER_PLAYS_THIS_BOARD"] };
-const STALE: Answer = { refused: [409, "ALREADY_RESOLVED"] };
+/** A race's loser: the board changed between its read and its write (T16 fix round 2, N2 ruling) — its own code, never
+ *  ALREADY_RESOLVED ("already has its result"), which is wrong when the winner's draw left a knockout tie-break owed. */
+const STALE: Answer = { refused: [409, "BOARD_CHANGED"] };
 
 /** The model: what the rulings say the board is. */
 type Model = {
@@ -99,12 +103,13 @@ function expectResolve(board: Board, m: Model, as: ResolveKind): Answer {
 
 type Counters = Record<
   | "lateStaysOpen" | "reclosedNoop" | "emptyCloseRefused" | "secondSettleRefused" | "tiebreakHeld" | "tiebreakNeedsWinner"
-  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "steps",
+  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "raceToldChangedTiebreak" | "steps",
   number
 >;
 const zero = (): Counters => ({
   lateStaysOpen: 0, reclosedNoop: 0, emptyCloseRefused: 0, secondSettleRefused: 0, tiebreakHeld: 0,
-  tiebreakNeedsWinner: 0, holdAfterSettleNoop: 0, seatedRefused: 0, raceOneRecorded: 0, raceSameOnce: 0, steps: 0,
+  tiebreakNeedsWinner: 0, holdAfterSettleNoop: 0, seatedRefused: 0, raceOneRecorded: 0, raceSameOnce: 0,
+  raceToldChangedTiebreak: 0, steps: 0,
 });
 const total: Counters = zero();
 
@@ -132,8 +137,9 @@ function raceOutcomes(board: Board, m: Model, a: ResolveKind, b: ResolveKind): {
 
 /** Start every call, wait until each has either parked behind a held write lock on the fixture (transitively — the
  *  second parks behind the first) or already answered, then release the lock. Deterministic: both read the board
- *  before either writes (a bare Promise.all mostly serialises on its own). */
-async function parked(fixtureId: string, calls: (() => Promise<unknown>)[]): Promise<Answer[]> {
+ *  before either writes (a bare Promise.all mostly serialises on its own). `ordered`: each call starts only once the
+ *  one before it has parked, so the lock's wait queue (first come, first served) hands it out in the calls' order. */
+async function parked(fixtureId: string, calls: (() => Promise<unknown>)[], ordered = false): Promise<Answer[]> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   let holding!: (pid: number) => void;
@@ -146,22 +152,34 @@ async function parked(fixtureId: string, calls: (() => Promise<unknown>)[]): Pro
   });
   const holderPid = await held;
   let answered = 0;
-  const running = calls.map((c) => answer(c()).finally(() => void (answered += 1)));
+  const running: Promise<Answer>[] = [];
+  const start = (c: () => Promise<unknown>) => running.push(answer(c()).finally(() => void (answered += 1)));
   const deadline = Date.now() + 15_000;
-  for (;;) {
-    const [{ n }] = await sql<{ n: number }[]>`
-      with recursive behind(pid) as (
-        select pid from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))
-        union
-        select a.pid from pg_stat_activity a join behind b on b.pid = any(pg_blocking_pids(a.pid))
-      ) select count(*)::int as n from behind`;
-    if (n + answered >= calls.length) break;
-    if (Date.now() > deadline) {
-      release();
-      await holder;
-      throw new Error(`race: only ${n} parked and ${answered} answered of ${calls.length}`);
+  const until = async (k: number) => {
+    for (;;) {
+      const [{ n }] = await sql<{ n: number }[]>`
+        with recursive behind(pid) as (
+          select pid from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))
+          union
+          select a.pid from pg_stat_activity a join behind b on b.pid = any(pg_blocking_pids(a.pid))
+        ) select count(*)::int as n from behind`;
+      if (n + answered >= k) return;
+      if (Date.now() > deadline) {
+        release();
+        await holder;
+        throw new Error(`race: only ${n} parked and ${answered} answered of ${k}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  };
+  if (ordered) {
+    for (const c of calls) {
+      start(c);
+      await until(running.length);
+    }
+  } else {
+    calls.forEach(start);
+    await until(calls.length);
   }
   release();
   await holder;
@@ -252,11 +270,13 @@ async function run(board: Board, ops: Op[]): Promise<void> {
         break;
       }
       case "race": {
-        const got = await parked(b.fixtureId, [
-          () => resolveExternalPlay(actors[0]!, b.fixtureId, op.a),
-          () => resolveExternalPlay(actors[1]!, b.fixtureId, op.b),
-        ]);
-        const options = raceOutcomes(board, m, op.a, op.b);
+        const got = await parked(
+          b.fixtureId,
+          [() => resolveExternalPlay(actors[0]!, b.fixtureId, op.a), () => resolveExternalPlay(actors[1]!, b.fixtureId, op.b)],
+          op.ordered === true,
+        );
+        // Ordered: `a` writes first, so the only ruled answer is `a`'s decision recorded and `b` told the board changed.
+        const options = raceOutcomes(board, m, op.a, op.b).filter((o) => !op.ordered || (o.stale && "ok" in o.answers[0]));
         const hit = options.find((o) => JSON.stringify(o.answers) === JSON.stringify(got));
         expect(hit, `${label}: ${JSON.stringify(got)} is one of ${JSON.stringify(options.map((o) => o.answers))}`).toBeDefined();
         m = hit!.model;
@@ -264,6 +284,8 @@ async function run(board: Board, ops: Op[]): Promise<void> {
         // race answer alike when the first settles the board; the parked KO draw answers only as a race).
         if (op.a !== op.b && got.filter((g) => "ok" in g).length === 1) c.raceOneRecorded++;
         if (hit!.same) c.raceSameOnce++;
+        // N2: the loser of a race whose winner left a knockout tie-break owed — told the board CHANGED.
+        if (hit!.stale && m.tiebreak && !m.settled) c.raceToldChangedTiebreak++;
         break;
       }
       case "hold": {
@@ -333,6 +355,10 @@ const PREFIXES: { name: keyof Counters; board: Board; ops: Op[] }[] = [
   { name: "raceOneRecorded", board: { kind: "league", live: true }, ops: [{ kind: "race", a: "home_wins", b: "away_wins" }] },
   { name: "raceOneRecorded", board: { kind: "knockout" }, ops: [{ kind: "race", a: "draw", b: "away_wins" }] },
   { name: "raceSameOnce", board: { kind: "league", live: true }, ops: [{ kind: "race", a: "draw", b: "draw" }] },
+  // N2: the knockout race's loser, with the winner's draw first — staged in order, on a board not begun and on one
+  // being played (no core.start to race on), so the loser meets the tie-break owed.
+  { name: "raceToldChangedTiebreak", board: { kind: "knockout" }, ops: [{ kind: "race", a: "draw", b: "home_wins", ordered: true }] },
+  { name: "raceToldChangedTiebreak", board: { kind: "knockout", live: true }, ops: [{ kind: "race", a: "draw", b: "away_wins", ordered: true }] },
 ];
 const RUNS_PER_PREFIX = 6;
 
@@ -375,6 +401,10 @@ describe.runIf(HAS_DB)("the organiser's decisions — transitions", () => {
     // M10: two organisers at once — and the organiser who plays on the board.
     { from: "two organisers settle a game being played at once, differently ⇒ one recorded, the other told it changed", board: { kind: "league", live: true }, ops: [{ kind: "race", a: "home_wins", b: "away_wins" }] },
     { from: "two organisers press the same settle at once ⇒ recorded once", board: { kind: "league" }, ops: [{ kind: "race", a: "no_result", b: "no_result" }] },
+    // N2: the knockout race's loser is told the board CHANGED (its tie-break now owed), never "already has its result";
+    // the screens after the step read tiebreak_owed (run's per-step checks). Then the winner it was racing settles it.
+    { from: "KO: a draw and a winner at once, the draw first ⇒ tie-break owed, the other told BOARD_CHANGED; then a winner settles it", board: { kind: "knockout", live: true }, ops: [{ kind: "race", a: "draw", b: "home_wins", ordered: true }, { kind: "resolve", as: "home_wins" }] },
+    { from: "league: a winner and the other winner at once, in order ⇒ one recorded, the other told BOARD_CHANGED; a third told ALREADY_RESOLVED", board: { kind: "league", live: true }, ops: [{ kind: "race", a: "home_wins", b: "away_wins", ordered: true }, { kind: "resolve", as: "draw" }] },
     { from: "a seated organiser is refused, held and settled alike", board: { kind: "league" }, ops: [{ kind: "resolve", as: "draw", by: SEATED }, { kind: "resolve", as: "home_wins" }, { kind: "resolve", as: "away_wins", by: SEATED }] },
   ];
   it("each transition lands where the rulings say (counted)", async () => {
