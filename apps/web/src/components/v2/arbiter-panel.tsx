@@ -640,21 +640,25 @@ function Decision({
                 {settleChoices(
                   { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, noResultOffer: board.noResultOffer },
                   f,
-                ).map((c) => (
-                  <button
-                    key={c.choice}
-                    type="button"
-                    data-settle={c.choice}
-                    onClick={() => on.settle(c.choice)}
-                    disabled={busy}
-                    aria-busy={decision.busy?.kind === "settle" || undefined}
-                    // M-5: the side column is narrow, so no label is ever cut — each wraps; a winner takes a row
-                    // of its own (the name in full, then its verb), as the wide double walkover does.
-                    className={`${BUTTON_QUIET} min-w-0 break-words py-2${c.wide || c.choice === "home_wins" || c.choice === "away_wins" ? " min-[360px]:col-span-2" : ""}`}
-                  >
-                    {c.label}
-                  </button>
-                ))}
+                ).map((c, _i, all) => {
+                  // M-5: the side column is narrow, so no label is ever cut — each wraps, and each takes a row of its
+                  // own (a winner's name in full, then its verb) except Draw and No result, the one pair that shares a
+                  // row. A Draw with no No result beside it spans too, never left half-width alone.
+                  const sharesRow = (c.choice === "draw" || c.choice === "no_result") && all.some((x) => x.choice === "no_result");
+                  return (
+                    <button
+                      key={c.choice}
+                      type="button"
+                      data-settle={c.choice}
+                      onClick={() => on.settle(c.choice)}
+                      disabled={busy}
+                      aria-busy={decision.busy?.kind === "settle" || undefined}
+                      className={`${BUTTON_QUIET} min-w-0 break-words py-2${sharesRow ? "" : " min-[360px]:col-span-2"}`}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
               </div>
               {guidance !== null && (
                 <p data-testid="arbiter-settle-guidance" data-why={guidance} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
