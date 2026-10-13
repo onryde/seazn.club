@@ -3029,6 +3029,8 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 ---
 ### Task 12: Stage creation writes the presets; the API takes `config.rules`; carry merges (server)
 
+> **Carried from the batch-2 re-review (concern A).** `rule-locks.ts:~116` exempts a stage that carries ANY `deciderKeysFor` key at its top level (`cfg[key]`), but the resolver reads only `shootout`/`extraTime` there (`stage-cfg.ts`) — the I-1 class. Unreachable today (StageConfig is strict; no template carries the others). When converting/deleting that branch: until it goes, restrict it to the keys the resolver actually reads, and **invert or delete** the t20 `superOver` test that seeds the top-level key by raw SQL and asserts `refused: []` (it pins the wrong answer: the division change still reaches that stage's unplayed fixtures).
+
 > **Carried from Task 5 review (M2).** `rule-locks.ts:~104` reads a decider at the stage's TOP level (pre-D3 storage). When this task moves deciders into `stages.config.rules`, convert that branch, its test and its mutant to read the new storage (or delete them if `stage.rules` already covers it). Grep `-a` for every other top-level decider read.
 
 > **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses. Forward `EngineError.data` for `CONFIG_INVALID` in `api-v1/http.ts` so `issues`/`refused` reach HTTP clients (with a route test). Fix stale comments `pad-cfg-resolution.test.ts:99-102`, `schemas.ts:490-491`.
@@ -3356,6 +3358,8 @@ The badminton `short` and generic `score` variants are re-confirmed as in Task 2
 ---
 
 ### Task 13b: Delete the top-level decider overlay — resolver code (Opus; after Tasks 12+13, same batch)
+
+> **Carried from the batch-2 re-review.** The overlay grep `config\??\.(shootout|extraTime)` misses computed reads like `cfg[key]` (`rule-locks.ts`); also grep `deciderKeysFor` call sites and every `[key]` read of a stage config.
 
 > **Carried from Task 4 review (G1).** Confirm after the overlay deletion that NO sport's `bracketDeciders` overwrites a decider the stage stored as off (Q7 "B": all deciders off allowed, X-SR-6: held for the organiser). Sweep every sport × bracket kind with every decider off in `stage.rules`: the resolved cfg has them off. Count the cells; zero = fail.
 
