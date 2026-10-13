@@ -9,5 +9,9 @@ export {
   BoardgameScoring,
   BOARDGAME_TIEBREAKERS,
   TIEBREAK_RUNGS,
+  ARMAGEDDON_RESULTS,
+  BoardgameTiebreak,
+  effectiveRungs,
   type BoardgameState,
+  type TiebreakRung,
 } from "./boardgame.ts";

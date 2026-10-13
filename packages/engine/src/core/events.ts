@@ -669,6 +669,12 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // 4, so a decided fixture answers with the decider's own refusal, never
   // ALREADY_DECIDED. Optional; absent reads as "no decider types".
   deciderTypes?: readonly string[];
+  // W2c D7 (D-R7): the entrant a decider event (one of `deciderTypes`) would advance, read from its payload and the
+  // fixture's two entrants. The server's withdrawn-entrant guard asks it instead of reading `payload.winner`, because
+  // a decider need not carry a winner: chess's Armageddon records Black and the result, and the engine derives who
+  // advances. Undefined = the payload names nobody (the fold refuses it with its own code). Optional; absent reads as
+  // "the payload's `winner`".
+  deciderWinner?(payload: unknown, entrants: { readonly home: string; readonly away: string }): string | undefined;
   // W2b (plan D3) — where in the match a forfeit is being recorded, read from the module's own phase union: "pre"
   // before play, "play" while it runs (a shoot-out and a super over included, ruling 102 Q5), "tiebreak" for a
   // pending decider (chess), "over" once done/final/abandoned. The kernel's phase guard judges every

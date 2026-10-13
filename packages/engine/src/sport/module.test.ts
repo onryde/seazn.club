@@ -263,6 +263,52 @@ describe("isPathRequired", () => {
   });
 });
 
+// W2c BG-KO-2 — `boardgame.tiebreak` is one event type with two payload shapes (rapid/blitz name the winner, an
+// Armageddon names Black and the result), registered as a discriminated union. `isPathRequired` therefore has to
+// resolve a path THROUGH the union's branches or the pad's Confirm gate (`required`) cannot be derived for it.
+describe("isPathRequired through a union", () => {
+  const Timed = z.strictObject({ rung: z.enum(["rapid", "blitz"]), winner: z.string().min(1), note: z.string().optional() });
+  const Armageddon = z.strictObject({ rung: z.literal("armageddon"), black: z.string().min(1), note: z.string() });
+  const Tiebreak = z.discriminatedUnion("rung", [Timed, Armageddon]);
+
+  it("a key only one branch declares takes that branch's requiredness — each branch's own key, both ways", () => {
+    expect(isPathRequired(Tiebreak, "winner")).toBe(true);
+    expect(isPathRequired(Tiebreak, "black")).toBe(true);
+    const lenient = z.discriminatedUnion("rung", [
+      z.strictObject({ rung: z.literal("a"), x: z.string().optional() }),
+      z.strictObject({ rung: z.literal("b"), y: z.string() }),
+    ]);
+    expect(isPathRequired(lenient, "x")).toBe(false); // the positive pair: an optional key stays optional through the union
+    expect(isPathRequired(lenient, "y")).toBe(true);
+  });
+
+  it("a key several branches declare is required only when EVERY declaring branch requires it", () => {
+    expect(isPathRequired(Tiebreak, "rung")).toBe(true);
+    expect(isPathRequired(Tiebreak, "note")).toBe(false); // optional in one branch, required in the other
+    const both = z.discriminatedUnion("k", [
+      z.strictObject({ k: z.literal("a"), v: z.string() }),
+      z.strictObject({ k: z.literal("b"), v: z.string() }),
+    ]);
+    expect(isPathRequired(both, "v")).toBe(true);
+  });
+
+  it("resolves through a union nested under an object field, and through a plain z.union", () => {
+    expect(isPathRequired(z.strictObject({ t: Tiebreak }), "t.black")).toBe(true);
+    expect(isPathRequired(z.union([z.strictObject({ a: z.string() }), z.strictObject({ b: z.string().optional() })]), "b")).toBe(false);
+    expect(isPathRequired(z.union([z.strictObject({ a: z.string() }), z.strictObject({ b: z.string().optional() })]), "a")).toBe(true);
+  });
+
+  it("a key no branch declares still throws, naming the missing field (a typo never reads as optional)", () => {
+    expect(() => isPathRequired(Tiebreak, "doesNotExist")).toThrow(/no field "doesNotExist" found/);
+    expect(() => isPathRequired(z.strictObject({ t: Tiebreak }), "t.doesNotExist")).toThrow(/no field "doesNotExist" found/);
+  });
+
+  it("an enum is still a leaf — its `.options` are strings, not branches, and nothing resolves beneath it", () => {
+    const withEnum = z.strictObject({ kind: z.enum(["a", "b"]) });
+    expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/not an object schema/);
+  });
+});
+
 describe("stampAttributionRequired", () => {
   const EVENT_SCHEMAS = {
     "x.toss": z.strictObject({ wonBy: z.string().min(1) }),

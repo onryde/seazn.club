@@ -91,6 +91,8 @@ export const EngineErrorCode = z.enum([
   // sport shows). The WRITE path's refusal only (core/events.ts, beside LINEUP_INVALID); a ledger that already holds one still
   // folds. Appended last, existing order frozen.
   "LINEUP_NOT_SUPPORTED",
+  // W2c BG-KO-2 (D7): a boardgame.tiebreak Armageddon that does not say who had Black. data.rung names the rung.
+  "TIEBREAK_COLOUR_REQUIRED",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

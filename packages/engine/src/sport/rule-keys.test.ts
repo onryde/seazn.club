@@ -122,7 +122,6 @@ const Q5 = {
 } as const satisfies Record<RuleScope, readonly string[]>;
 /** Q5 names no engine cfg holds yet, each with the task that adds it; the sweep fails once one lands, so its row goes. */
 const Q5_PENDING: Readonly<Record<string, string>> = {
-  tiebreakRungs: "W2c Task 8 adds the chess tie-break rungs",
 };
 /** Where a Q5 name lives in an engine cfg: the schema path it names, and the declared key owning that path (default:
  *  the path itself). A sport row wins over the shared one. */
@@ -315,7 +314,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(whole).toBeGreaterThan(0);
   });
 
-  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreak (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
+  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreak and tiebreakRungs (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
     const ck = sport("cricket");
     const ckVariants = ck.variants as Record<string, object>;
     const variantsWhere = (on: Record<string, unknown>): string[] =>
@@ -326,6 +325,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       "carrom.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
       "generic.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
       "boardgame.tiebreak": { stageKinds: sorted(BRACKET_KINDS) },
+      "boardgame.tiebreakRungs": { stageKinds: sorted(BRACKET_KINDS) }, // W2c BG-KO-3: the rung list is a bracket stage's, like the tie-break it orders
       "cricket.superOver": { variants: variantsWhere({ superOver: true }) },
       "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
     };
@@ -394,7 +394,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     // any value here would be the test's own invention. Pinned, so the skip stays visible and a new one goes red.
     expect(sorted(noOnValue)).toEqual(sorted([
       "football.maxSubs", "football.subWindows", "football.sinBinMinutes", "football.concussionSubs",
-      "boardgame.clock", "volleyball.cap",
+      "boardgame.clock", "boardgame.tiebreakRungs", "volleyball.cap", // tiebreakRungs: absent = every rung; no declared cfg lists any
       // W2c Task 7: a policy, not an on/off switch - `share` is one of two values, and no declared cfg sets either.
       "carrom.abandonPolicy", "generic.abandonPolicy",
     ]));
@@ -504,16 +504,24 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(stageKeysFor(carrom, null, null)).toContain("tieBoard"); // division level: not narrowed
   });
 
-  it("chess tiebreak applies to bracket kinds only", () => {
-    // Single-sport: the tie-break games exist only where someone must advance (boardgame's bracketDeciders).
+  it("chess tiebreak and tiebreakRungs apply to bracket kinds only", () => {
+    // Single-sport: the tie-break games exist only where someone must advance (boardgame's bracketDeciders), and the
+    // rung list (W2c BG-KO-3, spec §4.1 Q5) orders exactly those games.
     const chess = sport("boardgame");
-    let shown = 0;
-    for (const k of KINDS) {
-      const has = stageKeysFor(chess, k, null).includes("tiebreak");
-      expect(has, k).toBe(BRACKET_KINDS.has(k));
-      if (has) shown++;
+    for (const key of ["tiebreak", "tiebreakRungs"]) {
+      let shown = 0;
+      for (const k of KINDS) {
+        const has = stageKeysFor(chess, k, null).includes(key);
+        expect(has, `${key} @ ${k}`).toBe(BRACKET_KINDS.has(k));
+        if (has) shown++;
+      }
+      expect(shown, key).toBe(BRACKET_KINDS.size);
+      expect(stageKeysFor(chess, null, null), `${key} @ division`).toContain(key); // not narrowed before a stage exists
     }
-    expect(shown).toBe(BRACKET_KINDS.size);
+    // The rung list is stage-scope only: never a per-match key, never a decider (the stage's list is authoritative, and
+    // an EMPTY list is the organiser's choice that bracketDeciders must not overwrite).
+    expect(chess.ruleKeys!.tiebreakRungs).toEqual({ scope: "stage", appliesTo: { stageKinds: [...BRACKET_KINDS] } });
+    expect(Object.hasOwn(chess.bracketDeciders(chess.configSchema.parse({})) as object, "tiebreakRungs")).toBe(false);
   });
 
   it("ruleKeyApplies narrows by variant too; a null kind or variant is not narrowed", () => {

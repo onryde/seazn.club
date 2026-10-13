@@ -507,6 +507,9 @@ const MAX_WRAPPER_HOPS = 8;
  */
 type ObjectShapeLookup =
   | { readonly kind: "shape"; readonly shape: Record<string, z.ZodTypeAny> }
+  // W2c: a (discriminated) union of payloads — chess's `boardgame.tiebreak` is rapid/blitz OR Armageddon. Each branch is
+  // looked up in turn; see `fieldsNamed`.
+  | { readonly kind: "union"; readonly branches: readonly z.ZodTypeAny[] }
   | { readonly kind: "not-object" }
   | { readonly kind: "too-deep" };
 
@@ -521,6 +524,11 @@ function objectShapeOf(t: z.ZodTypeAny): ObjectShapeLookup {
     const shaped = cursor as { shape?: unknown };
     if (shaped !== null && typeof shaped === "object" && shaped.shape !== undefined && typeof shaped.shape === "object") {
       return { kind: "shape", shape: shaped.shape as Record<string, z.ZodTypeAny> };
+    }
+    // A union's `.options` are schemas; an enum's are strings, and an enum is a leaf, so test the elements.
+    const unioned = cursor as { options?: unknown };
+    if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === "object" && o !== null)) {
+      return { kind: "union", branches: unioned.options as z.ZodTypeAny[] };
     }
     const wrapped = cursor as { unwrap?: () => z.ZodTypeAny };
     if (typeof wrapped.unwrap === "function") {
@@ -562,34 +570,45 @@ function objectShapeOf(t: z.ZodTypeAny): ObjectShapeLookup {
  */
 export function isPathRequired(schema: z.ZodTypeAny, path: string): boolean {
   const segments = path.split(".");
-  let cursor: z.ZodTypeAny = schema;
+  // One cursor per union branch that declares the path so far; a plain object schema keeps exactly one.
+  let cursors: z.ZodTypeAny[] = [schema];
   for (const [index, segment] of segments.entries()) {
     const prefix = `isPathRequired: cannot resolve payload path "${path}" against its schema — `;
     const at = index === 0 ? "the payload schema" : `"${segments.slice(0, index).join(".")}"`;
-    const lookup = objectShapeOf(cursor);
-    if (lookup.kind === "too-deep") {
-      throw new Error(
-        `${prefix}${at} still wraps something after ${MAX_WRAPPER_HOPS} modifier hops, so the walk gave up ` +
-          `before it could look for "${segment}" (this is a WRAPPER-DEPTH bound, not a missing field — "${segment}" ` +
-          `may well exist; unwrap the schema or raise MAX_WRAPPER_HOPS in sport/module.ts)`,
-      );
-    }
-    if (lookup.kind === "not-object") {
-      throw new Error(
-        `${prefix}${at} is not an object schema and does not wrap one, so nothing can be resolved beneath it ` +
-          `(a PadAttributionItem/PadField path must not walk past a leaf value)`,
-      );
-    }
-    const field = lookup.shape[segment];
-    if (field === undefined) {
+    const found = cursors.flatMap((cursor) => fieldsNamed(cursor, segment, prefix, at));
+    if (found.length === 0) {
       throw new Error(
         `${prefix}no field "${segment}" found while walking it ` +
           `(a PadAttributionItem/PadField path must name a real payload key)`,
       );
     }
-    cursor = field;
+    cursors = found;
   }
-  return !cursor.isOptional();
+  // W2c: through a union, required means every branch that declares the key requires it — an optional branch keeps the
+  // item skippable (the (g) conformance property is the behavioural half that would catch the over-claim).
+  return cursors.every((cursor) => !cursor.isOptional());
+}
+
+/** Every field named `segment` directly under `t`, descending through union branches. Empty = nothing declares it
+ *  (the caller reports that); a leaf or an over-wrapped schema throws its own, different, message. */
+function fieldsNamed(t: z.ZodTypeAny, segment: string, prefix: string, at: string): z.ZodTypeAny[] {
+  const lookup = objectShapeOf(t);
+  if (lookup.kind === "too-deep") {
+    throw new Error(
+      `${prefix}${at} still wraps something after ${MAX_WRAPPER_HOPS} modifier hops, so the walk gave up ` +
+        `before it could look for "${segment}" (this is a WRAPPER-DEPTH bound, not a missing field — "${segment}" ` +
+        `may well exist; unwrap the schema or raise MAX_WRAPPER_HOPS in sport/module.ts)`,
+    );
+  }
+  if (lookup.kind === "not-object") {
+    throw new Error(
+      `${prefix}${at} is not an object schema and does not wrap one, so nothing can be resolved beneath it ` +
+        `(a PadAttributionItem/PadField path must not walk past a leaf value)`,
+    );
+  }
+  if (lookup.kind === "union") return lookup.branches.flatMap((branch) => fieldsNamed(branch, segment, prefix, at));
+  const field = lookup.shape[segment];
+  return field === undefined ? [] : [field];
 }
 
 /**

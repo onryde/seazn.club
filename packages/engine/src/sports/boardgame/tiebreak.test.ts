@@ -8,7 +8,7 @@ import { aggregatePlayerStats, type PlayerStatsFoldCtx } from "../../stats/stats
 import { defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { generic } from "../generic/index.ts";
 import { builtinModules } from "../index.ts";
-import { boardgame, BoardgameMethod, BoardgameTiebreak, CHESS_SCORE, effectiveRungs, TIEBREAK_RUNGS, type TiebreakRung } from "./boardgame.ts";
+import { ARMAGEDDON_RESULTS, boardgame, BoardgameArmageddon, BoardgameMethod, BoardgameRungTiebreak, BoardgameTiebreak, CHESS_SCORE, effectiveRungs, TIEBREAK_RUNGS, type TiebreakRung } from "./boardgame.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload }, voids);
 const lineups = defaultLineupPair(boardgame.positions);
@@ -270,7 +270,9 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
   });
 
   it("review Minor 4: the tie-break winner is the same entrant-id schema core.settle names its winner with", () => {
-    expect(BoardgameTiebreak.shape.winner).toBe(CoreSettle.shape.winner);
+    expect(BoardgameRungTiebreak.shape.winner).toBe(CoreSettle.shape.winner);
+    expect(BoardgameArmageddon.shape.black).toBe(CoreSettle.shape.winner); // W2c: Black is an entrant, the same schema
+    expect(BoardgameTiebreak.options).toEqual([BoardgameRungTiebreak, BoardgameArmageddon]); // the union is exactly these two shapes
   });
 
   it("ruling D-C6 (FIDE practice): a drawn bracket game counts as a DRAW in player stats even when a tie-break or a settle decides who advances; a won game credits the win", () => {
@@ -304,8 +306,17 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     const action = tb!.actions.find((a) => a.type === "boardgame.tiebreak")!;
     expect(tb!.labelKey).toEqual({ key: "pad.boardgame.panel.tiebreak", label: "Tie-break" });
     expect(action.labelKey).toEqual({ key: "pad.boardgame.action.tiebreak", label: "Tie-break" });
-    expect(action.fields).toEqual([{ kind: "enum", path: "rung", values: TIEBREAK_RUNGS }]);
-    expect(action.attribution.map((i) => [i.kind, i.path])).toEqual([["side", "winner"]]);
+    // Two actions of the one event type (W2c): rapid/blitz name the winner; an Armageddon names Black and the result.
+    const timedRungs = TIEBREAK_RUNGS.filter((r) => r !== "armageddon");
+    expect(action.fields).toEqual([{ kind: "enum", path: "rung", values: timedRungs }]);
+    expect(action.attribution.map((i) => [i.kind, i.path, i.required])).toEqual([["side", "winner", true]]);
+    const armageddon = tb!.actions.find((a) => a.type === "boardgame.tiebreak" && a !== action)!;
+    expect(armageddon.fields).toEqual([
+      { kind: "enum", path: "rung", values: ["armageddon"] },
+      { kind: "enum", path: "result", values: ARMAGEDDON_RESULTS },
+    ]);
+    expect(armageddon.attribution.map((i) => [i.kind, i.path, i.required])).toEqual([["side", "black", true]]); // Confirm waits for Black
+    expect(tb!.actions).toHaveLength(2);
     // Behaviour, through the pad's own evaluator: a live bracket game offers the result panels, a drawn one only the
     // tie-break.
     const shown = (events: EventEnvelope[]) => {
@@ -334,7 +345,7 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
       seen.winner.add(advancerOf(p as never));
       if (p.rung === "armageddon") {
         // The Armageddon shape: Black and the result, never a winner or a score.
-        expect(Object.keys(p).sort(), `seed ${seed}`).toEqual(["black", "rung", "result"]);
+        expect(Object.keys(p).sort(), `seed ${seed}`).toEqual(["black", "result", "rung"]);
         seen.black.add(String(p.black));
         seen.result.add(String(p.result));
       } else seen.score.add(typeof p.score === "string" ? p.score : "(none)");
@@ -570,6 +581,14 @@ describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine hal
   it("an Armageddon without black is refused TIEBREAK_COLOUR_REQUIRED", () => {
     expect(codeOf(() => fold(koWith(["armageddon"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", result: "draw" })]))).toBe("TIEBREAK_COLOUR_REQUIRED");
   });
+  it("BG-KO-3: a colourless Armageddon in a stage that does not list it is told that first — the rung list outranks the colour", () => {
+    const colourless = ev(3, "boardgame.tiebreak", { rung: "armageddon", result: "draw" });
+    for (const unlisted of [["rapid"], ["blitz", "rapid"]] as const) {
+      expect(codeOf(() => fold(koWith([...unlisted]), [...drawn, colourless])), unlisted.join(",")).toBe("TIEBREAK_NOT_APPLICABLE");
+    }
+    // …and the same event where it IS listed is the colour refusal (the pair that makes the order observable).
+    expect(codeOf(() => fold(koWith(["rapid", "armageddon"]), [...drawn, colourless]))).toBe("TIEBREAK_COLOUR_REQUIRED");
+  });
   it("a refused colourless Armageddon changes nothing: Black recorded next is accepted", () => {
     const cfg = koWith(["armageddon"]);
     const colourless = ev(3, "boardgame.tiebreak", { rung: "armageddon", result: "draw" });
@@ -582,7 +601,9 @@ describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine hal
     expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", black: A, result: "tie" })]))).toBe("INVALID_EVENT");
     expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", black: A, result: "draw", winner: H })]))).toBe("INVALID_EVENT");
     expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", black: A, result: "draw", score: "1½–½" })]))).toBe("INVALID_EVENT");
-    expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner: A })]))).toBe("INVALID_EVENT"); // the old shape is gone (greenfield)
+    // The old shape is gone (greenfield): it names no Black, so it is refused for the colour it lacks, and with a Black
+    // beside it the winner is a field the schema does not have.
+    expect(codeOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner: A })]))).toBe("TIEBREAK_COLOUR_REQUIRED");
     // …and rapid/blitz carry no colour or result.
     expect(codeOf(() => fold(koWith(["rapid"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: A, black: A })]))).toBe("INVALID_EVENT");
     expect(codeOf(() => fold(koWith(["rapid"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", black: A, result: "draw" })]))).toBe("INVALID_EVENT");
