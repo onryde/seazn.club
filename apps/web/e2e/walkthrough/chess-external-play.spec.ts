@@ -1,25 +1,92 @@
 /**
- * Task 9 — chess external-play UI regression:
- * - OTB (onlinePlay absent): the public fixture page has no watch panel and no
- *   Your board door; the pad still loads.
- * - A live online board (T16): the public page WATCHES the game here — the
- *   position from the ledger, view-only — and links to NO Lichess game
- *   (D3 deleted the lichess.org mode).
- * - needs_organiser: division queue visible and resolve settles the fixture.
+ * Online chess on OUR page, end to end (design 2026-10-09) — and the Task 9
+ * public-page regressions it grew from.
+ *
+ * Task 9 (kept, unchanged): an OTB board has no watch panel and no door to a
+ * room; a live online board is WATCHED on the public page and links to no
+ * Lichess game (D3); a held board is settled from the organiser's queue.
+ *
+ * Task 17 (the serial describe below): the product-level proof of the venue.
+ * The organiser OPENS a Swiss round through the run sheet (D12); four players
+ * seat themselves through the SERVER-verified camera preflight (states 2, 3
+ * and 4 on the way, 9 on the board); our server creates each Lichess game and
+ * submits both sides' moves; a resign and an unwatched flag are written as
+ * results — never as forfeits; round 2 waits for the organiser, and is
+ * opened by the same control. Plus D12's negative: a round paired but never
+ * opened, long past its scheduled time, seats and forfeits nobody.
+ *
+ * Both outside services are LOCAL fixture servers the spec starts —
+ * e2e/lichess-fixture-server.ts (4321) and e2e/realtimekit-fixture-server.ts
+ * (4322) — and the SERVER UNDER TEST must already point at them:
+ * LICHESS_BASE_URL, REALTIMEKIT_BASE_URL and REALTIMEKIT_FIXTURE_ENV's five
+ * credentials (e2e.yml, ci-local.sh, docs/runbooks/e2e-local.md). Unset, the
+ * server would call lichess.org and Cloudflare with fake tokens; the first
+ * call each half makes is asserted with a message that names the variables.
+ * The runner and the server share LICHESS_TOKEN_KEK, AUTH_SECRET and
+ * CRON_SECRET (the tokens are sealed and the links minted here).
+ *
+ * Nothing leaves the machine. The real RealtimeKit SDK is handed the video
+ * fixture's opaque participant token, which it refuses at `init` before any
+ * network call (measured: not one off-machine request), so the player's own
+ * camera fails CLOSED in the page (camera state "failed") — which is what
+ * makes state 2's card and state 9's banner reachable. Each player's browser
+ * context also aborts every request and websocket to any host but the app's,
+ * the backstop for anything else (realtime, telemetry). Presence is told to
+ * the fixture by `setLivePublisher`, the ONLY way anyone is present there —
+ * the seat is the SERVER's call on the meeting's word, never the page's.
+ * Expected values come from the moves and clock this spec chooses, the
+ * dictionary, or the fixture's own record of what it was sent — never from
+ * the code under test.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { Chess } from "chess.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   apiJson,
   divisionPath,
   fixturePath,
+  forfeitEventCountSql,
+  loginUi,
+  matchRoomPathBySql,
+  resultEventCountSql,
+  roundOpenedAtSql,
   seedFixtureExternalPlaySql,
   seedRosteredFixture,
+  setFixtureScheduledAtSql,
   TAG,
+  withDb,
 } from "../helpers";
 import { publicFixturePath } from "../spectator-public-helpers";
-import { seedGameSql, seedMatchRoom } from "../match-room-kit";
+import {
+  boardPainted,
+  bridgeRow,
+  checkedInAt,
+  fill,
+  seedGameSql,
+  seedMatchRoom,
+  seedOnlineRound,
+  tapMove,
+  uiEn,
+  type RoundBoard,
+  type RoundPlayer,
+  type SeededRound,
+} from "../match-room-kit";
+import { LICHESS_FIXTURE_PORT, startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
+import {
+  REALTIMEKIT_FIXTURE_PORT,
+  startRealtimeKitFixtureServer,
+  type RealtimeKitFixtureServer,
+} from "../realtimekit-fixture-server";
+import { DEADLINE_AFTER_MS, LICHESS_TIMEOUT_MS, WINDOW_OPEN_LEAD_MS } from "../../src/server/external-play/window";
+import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../../src/lib/consent";
 
 test.describe.configure({ mode: "parallel" });
+// A synthetic camera, so getUserMedia resolves in a player's page (Task 17).
+// It does NOT grant a seat — realtimekit-fixture-server.ts's design note. A
+// launch option, so file-wide (Playwright refuses it per describe); the Task 9
+// tests open no camera.
+test.use({ launchOptions: { args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] } });
 
 async function sharedPath(
   request: import("@playwright/test").APIRequestContext,
@@ -120,4 +187,541 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
   expect(state.status).toBe(200);
   expect(state.data?.status).toBe("decided");
   expect(state.data?.outcome).toMatchObject({ kind: "draw" });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 17 — the venue, end to end, on the local fixture servers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A curated control nobody has played LIVE yet (controller addendum 2: 3+0,
+ *  10+5, 10+0 and 15+0 were): 5+3 — Lichess's estimate 300 + 40 x 3 = 420 s,
+ *  blitz, so the Board API plays it (M12's line is 180 s). */
+const TC = { base: 300, increment: 3 } as const;
+const OPENING = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6"] as const;
+
+/** The room's poll cadences, read from its source (a client module the runner
+ *  cannot import), so the budget below moves when they do. */
+const USE_ROOM = readFileSync(
+  fileURLToPath(new URL("../../src/components/public-site/match-room/use-room.ts", import.meta.url)),
+  "utf8",
+);
+const constant = (name: string): number => {
+  const m = new RegExp(`export const ${name} = ([\\d_]+);`).exec(USE_ROOM);
+  if (!m) throw new Error(`use-room.ts no longer exports ${name} as a literal`);
+  return Number(m[1]!.replace(/_/g, ""));
+};
+const LIVE_POLL_MS = constant("LIVE_POLL_MS");
+const IDLE_POLL_MS = constant("IDLE_POLL_MS");
+
+// The budget, DERIVED (AGENTS.md failure class 20): every scripted action is a
+// round trip through our server that may wait out one Lichess call, and the
+// OTHER player's page learns of it on its next poll. A flat timeout beside
+// those costs would report a blown clock as "expected 6 plies, received 5".
+const PER_ACTION_MS = LICHESS_TIMEOUT_MS / 2 + LIVE_POLL_MS + 2_000;
+const SEED_MS = 60_000;
+const budget = (actions: number) => Math.max(120_000, SEED_MS + actions * PER_ACTION_MS + 2 * IDLE_POLL_MS);
+
+const NOT_POINTED = (what: string) =>
+  `the server under test made NO ${what} call to the local fixture server. It is almost certainly still pointed at ` +
+  `the real service — set LICHESS_BASE_URL=http://127.0.0.1:${LICHESS_FIXTURE_PORT}, ` +
+  `REALTIMEKIT_BASE_URL=http://127.0.0.1:${REALTIMEKIT_FIXTURE_PORT} and the five REALTIMEKIT_FIXTURE_ENV ` +
+  `credentials on the SERVER process (docs/runbooks/e2e-local.md), not just on this runner`;
+
+const CRON = () => ({ "x-cron-secret": process.env.CRON_SECRET ?? "" });
+
+type SweepReport = { skipped: boolean; reconciled: number; noShows: number; failures: unknown[] };
+
+/** One pass of the 5-minute cron, as the cron repo fires it. A pass that
+ *  found another holding the lock did NOTHING (`skipped`), so it is retried,
+ *  never counted as a pass that looked. */
+async function sweep(page: Page): Promise<SweepReport> {
+  for (let i = 0; i < 10; i++) {
+    const res = await page.request.post("/api/cron/external-play", { headers: CRON() });
+    expect(res.status(), "CRON_SECRET must be the server's (docs/runbooks/e2e-local.md)").toBe(200);
+    const report = ((await res.json()) as { data: SweepReport }).data;
+    if (!report.skipped) return report;
+    await page.waitForTimeout(1_000);
+  }
+  throw new Error("the sweep's lock was held for 10 s: another pass never finished");
+}
+
+/** The cron fires every five minutes and re-reads a board at most once a
+ *  tick, backing off to hourly for a board that tells it nothing
+ *  (sweep.ts reReadAfterMs). A test cannot wait a tick, so it ages the
+ *  board's last read past the longest of those waits — "nobody has looked
+ *  for an hour" — and the next pass reads it as the cron's would. */
+async function nobodyReadItForAnHour(fixtureId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      update fixture_external_play set last_polled_at = now() - interval '61 minutes' where fixture_id = ${fixtureId}`;
+    if (res.count !== 1) throw new Error(`no bridge row to age for ${fixtureId}`);
+  });
+}
+
+test.describe("online chess on our page — the venue, end to end (Task 17)", () => {
+  test.describe.configure({ mode: "serial" });
+  let lichess: LichessFixtureServer;
+  let video: RealtimeKitFixtureServer;
+  let round: SeededRound;
+  const contexts: BrowserContext[] = [];
+  /** Every off-machine host a player's browser tried, and was refused. */
+  const blocked = new Set<string>();
+
+  test.beforeAll(async () => {
+    lichess = await startLichessFixtureServer();
+    video = await startRealtimeKitFixtureServer();
+  });
+  test.afterAll(async () => {
+    for (const c of contexts) await c.close().catch(() => undefined);
+    await lichess?.close();
+    await video?.close();
+  });
+
+  /** A player's browser: no session (the invite link is the identity), a
+   *  camera grant, and NOTHING reachable but the app. */
+  async function playerContext(browser: Browser): Promise<BrowserContext> {
+    const base = test.info().project.use.baseURL!;
+    const app = new URL(base).host;
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: base, permissions: ["camera"] });
+    // The site's cookie notice, answered as a player answers it on arrival —
+    // otherwise it sits over the board's bottom-left squares (g8 from Black's
+    // side) and swallows the tap.
+    await ctx.addInitScript(
+      (a: { k: string; vk: string; v: string }) => {
+        try {
+          window.localStorage.setItem(a.k, "rejected");
+          window.localStorage.setItem(a.vk, a.v);
+        } catch {
+          // storage refused: the notice shows; tapMove's hit test says so
+        }
+      },
+      { k: CONSENT_KEY, vk: CONSENT_VERSION_KEY, v: COOKIE_POLICY_VERSION },
+    );
+    await ctx.route(
+      (u) => u.host !== app,
+      (r) => {
+        blocked.add(new URL(r.request().url()).host);
+        return r.abort("internetdisconnected");
+      },
+    );
+    await ctx.routeWebSocket(
+      (u) => u.host !== app,
+      (ws) => {
+        blocked.add(`ws:${new URL(ws.url()).host}`);
+        return ws.close();
+      },
+    );
+    contexts.push(ctx);
+    return ctx;
+  }
+
+  async function openRoom(ctx: BrowserContext, board: RoundBoard, player: RoundPlayer, width = 1280): Promise<Page> {
+    const page = await ctx.newPage();
+    await page.setViewportSize({ width, height: 900 });
+    const res = await page.goto(await matchRoomPathBySql(board.fixtureId, player.personId));
+    expect(res?.status(), "the room renders").toBe(200);
+    await expect(page.getByTestId("match-room")).toBeVisible();
+    return page;
+  }
+
+  const screen = (page: Page) => page.getByTestId("match-room");
+
+  // The cron sweep is GLOBAL — it reads every game on file, in every org —
+  // so a Lichess call made for another spec's board is not this board's. A
+  // call FOR these players carries one of their tokens (sealed by this spec)
+  // or names one of their accounts.
+  const lichessCallsFor = (players: RoundPlayer[]) =>
+    lichess.calls.filter((c) =>
+      players.some((p) => (p.lichessToken !== null && c.token === p.lichessToken) || c.path.includes(p.lichessId)),
+    );
+  /** Meetings and participants on file for a board, and participants minted
+   *  at the video fixture for its players — every trace a video call leaves. */
+  async function videoTracesFor(board: RoundBoard): Promise<number> {
+    const [row] = await withDb(
+      (sql) => sql<{ n: number }[]>`
+        select ((select count(*) from fixture_video_meetings where fixture_id = ${board.fixtureId})
+              + (select count(*) from fixture_video_participants where fixture_id = ${board.fixtureId}))::int as n`,
+    );
+    const minted = [board.home, board.away].filter((p) => video.participantFor(p.personId) !== null).length;
+    return row!.n + minted;
+  }
+  const participantOf = (p: RoundPlayer) => {
+    const rec = video.participantFor(p.personId);
+    if (!rec) throw new Error(`no RealtimeKit participant was minted for ${p.name}`);
+    return rec.id;
+  };
+
+  async function claimByLink(page: Page, board: RoundBoard, p: RoundPlayer) {
+    const path = await matchRoomPathBySql(board.fixtureId, p.personId);
+    const t = new URL(path, "http://x").searchParams.get("t")!;
+    const res = await page.request.post(`/api/v1/fixtures/${board.fixtureId}/external-play/room?t=${encodeURIComponent(t)}`);
+    expect(res.status(), `claim for ${p.name}`).toBe(200);
+    return ((await res.json()) as { data: { seat: { seated: boolean; reason?: string } | null } }).data;
+  }
+
+  async function actByLink(page: Page, board: RoundBoard, p: RoundPlayer, body: unknown) {
+    const path = await matchRoomPathBySql(board.fixtureId, p.personId);
+    const t = new URL(path, "http://x").searchParams.get("t")!;
+    const res = await page.request.post(`/api/v1/fixtures/${board.fixtureId}/external-play/room/act?t=${encodeURIComponent(t)}`, { data: body });
+    expect(res.status(), `act ${JSON.stringify(body)} for ${p.name}`).toBe(200);
+    return ((await res.json()) as { data: { ok: boolean } }).data;
+  }
+
+  /** Which seat of a board plays White — recorded on the game (T9). */
+  async function colours(board: RoundBoard): Promise<{ white: RoundPlayer; black: RoundPlayer }> {
+    const side = await withDb(async (sql) => {
+      const [r] = await sql<{ white_side: "home" | "away" | null }[]>`
+        select white_side from fixture_external_play where fixture_id = ${board.fixtureId}`;
+      return r?.white_side ?? null;
+    });
+    if (side === null) throw new Error(`no colours recorded for ${board.fixtureId}`);
+    return side === "home" ? { white: board.home, black: board.away } : { white: board.away, black: board.home };
+  }
+
+  async function fixtureState(page: Page, fixtureId: string) {
+    const s = await apiJson<{ status: string; outcome: unknown }>(page.request, `/api/v1/fixtures/${fixtureId}/state`);
+    expect(s.status).toBe(200);
+    return s.data!;
+  }
+
+  async function lastResultWinner(fixtureId: string): Promise<string | null> {
+    return withDb(async (sql) => {
+      const [r] = await sql<{ winner: string | null }[]>`
+        select payload->>'winner' as winner from score_events
+         where fixture_id = ${fixtureId} and type = 'boardgame.result' order by seq desc limit 1`;
+      return r?.winner ?? null;
+    });
+  }
+
+  test("D12: a round PAIRED but never OPENED, long past its scheduled time, seats nobody and forfeits nobody", async ({ page, browser, request }) => {
+    test.setTimeout(budget(2));
+    const r = await seedOnlineRound(request, [`Una Opened ${TAG}`, `Vic Unopened ${TAG}`], {
+      open: false,
+      camera: "required",
+      playable: true,
+      clock: TC,
+    });
+    const board = r.boards[0]!;
+    // Past BOTH the T-10 lead and the T+20 deadline: a window anchored on
+    // scheduled_at instead of the open would read "closed, nobody came".
+    const longPast = new Date(Date.now() - (WINDOW_OPEN_LEAD_MS + DEADLINE_AFTER_MS + 60_000)).toISOString();
+    await setFixtureScheduledAtSql(board.fixtureId, longPast);
+    expect(await roundOpenedAtSql(r.stageId, 1), "premise: paired, NOT opened").toBeNull();
+    // No invite exists for an unopened round, so there is no link to mint.
+    await expect(matchRoomPathBySql(board.fixtureId, board.home.personId)).rejects.toThrow(/not opened/);
+    for (const p of [board.home, board.away]) lichess.registerToken(p.lichessToken!, p.lichessId);
+
+    // The player signed in (the session entry) finds the room shut, says why,
+    // and offers no check-in.
+    const ctx = await playerContext(browser);
+    const p = await ctx.newPage();
+    const roomPath = `${r.publicBase}/fixtures/${board.fixtureId}/play`;
+    await loginUi(p, board.home.email, roomPath);
+    await p.goto(roomPath);
+    await expect(screen(p)).toHaveAttribute("data-screen", "notOpened", { timeout: 20_000 });
+    await expect(p.getByTestId("room-state-not-opened")).toBeVisible();
+    await expect(p.getByTestId("room-checkin-cta")).toHaveCount(0);
+    // And the seat itself, asked for directly, is refused for the same reason.
+    const claim = await p.request.post(`/api/v1/fixtures/${board.fixtureId}/external-play/room`);
+    expect(claim.status()).toBe(200);
+    expect(((await claim.json()) as { data: { seat: { reason?: string } | null } }).data.seat).toMatchObject({ seated: false, reason: "round_not_open" });
+
+    // The sweep — the thing that would mark a field absent — forfeits nobody.
+    await sweep(page);
+    expect(
+      await forfeitEventCountSql(board.fixtureId),
+      "the sweep forfeited a board whose round was never opened — it is anchoring on scheduled_at, not the open",
+    ).toBe(0);
+    const bridge = await bridgeRow(board.fixtureId);
+    expect(bridge?.challenge_id ?? null, "no game was asked for").toBeNull();
+    expect(bridge?.create_sent_at ?? null, "no create was sent").toBeNull();
+    const sent = lichessCallsFor([board.home, board.away]);
+    expect(sent.map((c) => `${c.method} ${c.path}`), "nothing reached Lichess for this board").toEqual([]);
+    expect(await videoTracesFor(board), "nothing reached the video service for this board").toBe(0);
+    await ctx.close();
+  });
+
+  test("the organiser opens Swiss round 1 from the run sheet: the stamp and the invites, and nothing reaches Lichess or video yet", async ({ page, request }) => {
+    test.setTimeout(budget(2));
+    round = await seedOnlineRound(request, [`Ada White ${TAG}`, `Bo Black ${TAG}`, `Cy Third ${TAG}`, `Di Fourth ${TAG}`], {
+      open: false,
+      camera: "required",
+      stage: "swiss",
+      playable: true,
+      clock: TC,
+    });
+    expect(round.boards, "four players pair into two boards").toHaveLength(2);
+    for (const b of round.boards) {
+      for (const p of [b.home, b.away]) lichess.registerToken(p.lichessToken!, p.lichessId);
+    }
+    expect(await roundOpenedAtSql(round.stageId, 1), "the empty case: nothing opened").toBeNull();
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(round.fixturesTab);
+    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 1 }) }) });
+    await expect(control).toHaveAttribute("data-state", "paired", { timeout: 30_000 });
+    await control.getByTestId("open-round-cta").click();
+    await page.getByTestId("open-round-confirm-confirm").click();
+    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+
+    const stamp = await roundOpenedAtSql(round.stageId, 1);
+    expect(stamp, "the open stamped stage_round_opens").not.toBeNull();
+    let rows = 0;
+    for (const b of round.boards) {
+      expect(await bridgeRow(b.fixtureId), "a bridge row per board, waiting for its players").toMatchObject({
+        status: "pending",
+        challenge_id: null,
+      });
+      rows++;
+    }
+    expect(rows).toBe(2);
+    // D12 couples the stamp and the invites — and nothing else. A game is asked
+    // for only when both players are seated; a meeting only when one arrives.
+    const everyone = round.boards.flatMap((b) => [b.home, b.away]);
+    expect(lichessCallsFor(everyone).length, "opening a round makes no Lichess call").toBe(0);
+    let traces = 0;
+    for (const b of round.boards) traces += await videoTracesFor(b);
+    expect(traces, "opening a round makes no video call").toBe(0);
+  });
+
+  let white: Page;
+  let black: Page;
+  let boardA: RoundBoard;
+  let A: { white: RoundPlayer; black: RoundPlayer };
+  let gameA: string;
+
+  test("board 1 seats only on the SERVER's word: camera required (2), lost (3), video down (4) — then both in, and the game made at Lichess", async ({ browser }) => {
+    test.setTimeout(budget(10));
+    boardA = round.boards[0]!;
+    // Colours are recorded at creation (T9), so the players are first and
+    // second here, White and Black only once the game exists.
+    const first = boardA.home;
+    const second = boardA.away;
+
+    // ── state 2: required, nobody live ────────────────────────────────────
+    const ctx1 = await playerContext(browser);
+    const p1 = await openRoom(ctx1, boardA, first);
+    await expect(screen(p1)).toHaveAttribute("data-screen", "checkin");
+    await p1.getByTestId("room-checkin-cta").click();
+    await expect.poll(() => video.participantFor(first.personId) !== null, { message: NOT_POINTED("RealtimeKit"), timeout: 20_000 }).toBe(true);
+    await expect(screen(p1), "the meeting reports nobody: the seat is refused").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    await expect(p1.getByTestId("room-state-camera-required")).toBeVisible();
+    // The server ASKED the meeting — it did not trust the page.
+    const asked = video.calls.map((c) => c.route);
+    expect(asked).toContain("POST /meetings");
+    expect(asked).toContain("POST /meetings/:id/participants");
+    expect(asked).toContain("GET /meetings/:id/active-session");
+    expect(await checkedInAt(boardA.fixtureId, first.personId), "a refused seat stamps nothing").toBeNull();
+    expect(lichessCallsFor([first, second]).length, "one seat asks Lichess for nothing").toBe(0);
+
+    // The meeting now reports them present; Try again re-asks, and seats.
+    video.setLivePublisher(participantOf(first), true);
+    await p1.getByTestId("room-state-retry").click();
+    await expect(screen(p1)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    await expect(p1.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
+    expect(await checkedInAt(boardA.fixtureId, first.personId), "seated on the meeting's word").not.toBeNull();
+
+    // ── state 3: was live, is not — a reload re-asks ──────────────────────
+    video.setLivePublisher(participantOf(first), false);
+    await p1.reload();
+    await expect(screen(p1), "a player who HAD passed is told the camera was lost").toHaveAttribute("data-screen", "cameraLost", { timeout: 30_000 });
+    await expect(p1.getByTestId("room-state-camera-lost")).toBeVisible();
+    video.setLivePublisher(participantOf(first), true);
+    await p1.getByTestId("room-state-retry").click();
+    await expect(screen(p1)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+
+    // ── state 4: the video service is down — never "camera off" ───────────
+    video.setUnavailable(true);
+    const ctx2 = await playerContext(browser);
+    const p2 = await openRoom(ctx2, boardA, second);
+    await p2.getByTestId("room-checkin-cta").click();
+    await expect(screen(p2)).toHaveAttribute("data-screen", "videoDown", { timeout: 30_000 });
+    await expect(p2.getByTestId("room-state-video-down")).toBeVisible();
+    expect(lichessCallsFor([first, second]).length, "nothing is created while a seat is refused").toBe(0);
+    video.setUnavailable(false);
+    await p2.getByTestId("room-state-retry").click();
+    await expect(screen(p2), "back up: the camera is asked for, not assumed").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    video.setLivePublisher(participantOf(second), true);
+    await p2.getByTestId("room-state-retry").click();
+
+    // ── both seated: OUR server makes the game at Lichess ─────────────────
+    await expect.poll(() => lichessCallsFor([first, second]).length, { message: NOT_POINTED("Lichess"), timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await bridgeRow(boardA.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    gameA = (await bridgeRow(boardA.fixtureId))!.challenge_id!;
+    A = await colours(boardA);
+    const challenges = lichessCallsFor([first, second]).filter((c) => c.method === "POST" && c.path.startsWith("/api/challenge/"));
+    expect(challenges.map((c) => c.path), "one challenge, one accept").toEqual([`/api/challenge/${A.black.lichessId}`, `/api/challenge/${gameA}/accept`]);
+    // White's token challenges Black's account; Black's token accepts — each
+    // the token THIS spec sealed for that player, opened by the server.
+    expect(challenges[0]!.token).toBe(A.white.lichessToken);
+    expect(challenges[1]!.token).toBe(A.black.lichessToken);
+    // The clock this spec chose, as Lichess was asked for it.
+    expect(challenges[0]!.body).toMatchObject({ "clock.limit": String(TC.base), "clock.increment": String(TC.increment), rated: "false" });
+    expect(lichess.game(gameA)).toMatchObject({ status: "started", white: A.white.lichessId, black: A.black.lichessId });
+
+    white = A.white === first ? p1 : p2;
+    black = A.white === first ? p2 : p1;
+    for (const pg of [white, black]) {
+      await expect(screen(pg)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
+    }
+  });
+
+  test("six moves tapped on OUR board reach Lichess exactly as played, both boards agree, and the camera-off banner (9) stays up", async () => {
+    test.setTimeout(budget(OPENING.length + 2));
+    const rules = new Chess();
+    for (const [i, uci] of OPENING.entries()) {
+      const mover = i % 2 === 0 ? white : black;
+      const orientation = i % 2 === 0 ? "white" : "black";
+      await expect(mover.getByTestId("room-board")).toHaveAttribute("data-ply", String(i), { timeout: LIVE_POLL_MS + 10_000 });
+      await boardPainted(mover);
+      await tapMove(mover, uci, orientation);
+      rules.move({ from: uci.slice(0, 2), to: uci.slice(2, 4) });
+      // What Lichess was sent is what was played, in order.
+      await expect.poll(() => lichess.game(gameA)?.movesUci ?? [], { timeout: LICHESS_TIMEOUT_MS }).toEqual(OPENING.slice(0, i + 1));
+      await expect.poll(async () => (await bridgeRow(boardA.fixtureId))?.move_count, { timeout: LICHESS_TIMEOUT_MS }).toBe(i + 1);
+    }
+    // Placement, side to move and castling rights, from the rules — the move
+    // counters are bookkeeping two correct writers may disagree on.
+    const position = rules.fen().split(" ").slice(0, 3).join(" ");
+    for (const pg of [white, black]) {
+      await expect(pg.getByTestId("room-board")).toHaveAttribute("data-ply", String(OPENING.length), { timeout: LIVE_POLL_MS + 10_000 });
+      const fen = await pg.getByTestId("room-board-surface").getAttribute("data-fen");
+      expect(fen?.split(" ").slice(0, 3).join(" ")).toBe(position);
+      // State 9: the camera duty stands and this browser's camera never came
+      // up (the SDK's join is refused at the browser's edge) — the banner sits
+      // ON the live board, never instead of it.
+      await expect(pg.getByTestId("room-camera-off")).toBeVisible();
+    }
+    // Whatever the pages tried to reach off the machine (and were refused),
+    // on the record — measured 2026-10-13: nothing (see the file header).
+    test.info().annotations.push({ type: "blocked-hosts", description: [...blocked].join(", ") || "none" });
+  });
+
+  test("White resigns: Lichess's resign IS the result — Black wins, nothing is forfeited, written once", async ({ page }) => {
+    test.setTimeout(budget(3));
+    await white.getByTestId("room-resign").click();
+    await white.getByTestId("room-resign-confirm-confirm").click();
+    await expect.poll(() => lichess.game(gameA)?.status, { timeout: LICHESS_TIMEOUT_MS }).toBe("resign");
+    expect(lichess.game(gameA)?.winner, "M9's late branch: two plies and more is a resign").toBe("black");
+    await expect.poll(async () => (await fixtureState(page, boardA.fixtureId)).status, { timeout: 30_000 }).toBe("decided");
+    expect(await lastResultWinner(boardA.fixtureId), "the winner is Black's entrant").toBe(A.black.entrantId);
+    expect(await forfeitEventCountSql(boardA.fixtureId), "a resign was written as a forfeit").toBe(0);
+    expect(await resultEventCountSql(boardA.fixtureId)).toBe(1);
+    for (const pg of [white, black]) {
+      await expect(screen(pg)).toHaveAttribute("data-screen", "over", { timeout: IDLE_POLL_MS + 10_000 });
+    }
+  });
+
+  test("a live game nobody is watching is closed by the cron sweep — on the read AFTER the one that settles the flag", async ({ page }) => {
+    test.setTimeout(budget(8));
+    const boardB = round.boards[1]!;
+    // Round 2 cannot pair while a round-1 board is unresolved: the organiser's
+    // Generate is refused now (and board 1 is decided), so a pairing that ran
+    // early cannot hide behind the later assertions.
+    const early = await apiJson(page.request, `/api/v1/stages/${round.stageId}/generate`, "POST", {});
+    expect(early.status, `generate with board 2 open: ${JSON.stringify(early.error)}`).toBeGreaterThanOrEqual(400);
+
+    // Both seated through the room's own claim, the camera on the meeting's
+    // word (the UI half of this was board 1's), then two plies on the board.
+    for (const p of [boardB.home, boardB.away]) {
+      expect((await claimByLink(page, boardB, p)).seat).toMatchObject({ seated: false, reason: "camera_required" });
+      video.setLivePublisher(participantOf(p), true);
+      await claimByLink(page, boardB, p);
+    }
+    await expect.poll(async () => (await bridgeRow(boardB.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    const gameB = (await bridgeRow(boardB.fixtureId))!.challenge_id!;
+    const B = await colours(boardB);
+    expect(await actByLink(page, boardB, B.white, { kind: "move", uci: "d2d4" })).toMatchObject({ ok: true });
+    expect(await actByLink(page, boardB, B.black, { kind: "move", uci: "d7d5" })).toMatchObject({ ok: true });
+    expect(lichess.game(gameB)?.movesUci).toEqual(["d2d4", "d7d5"]);
+
+    // Nobody is watching: no page is open on this board, so no poll, clock
+    // tick or move can fire a reconcile — the sweep is the only trigger left.
+    // White is to move and White's clock runs out at Lichess.
+    lichess.expireClock(gameB);
+
+    await nobodyReadItForAnHour(boardB.fixtureId);
+    const s1 = await sweep(page);
+    expect(s1.reconciled, "the pass read the board").toBeGreaterThanOrEqual(1);
+    // MEASURED (gamefull-expired-1 then -2): the first read after expiry still
+    // says `started`, White at 0, and settles the flag at Lichess. We declare
+    // no flag from our own arithmetic, so the fixture is not decided yet.
+    expect(lichess.game(gameB)?.status, "the sweep's read settled the flag at Lichess").toBe("outoftime");
+    expect((await fixtureState(page, boardB.fixtureId)).status, "decided on the read that SAW started").not.toBe("decided");
+
+    await nobodyReadItForAnHour(boardB.fixtureId);
+    const s2 = await sweep(page);
+    expect(s2.reconciled).toBeGreaterThanOrEqual(1);
+    expect((await fixtureState(page, boardB.fixtureId)).status).toBe("decided");
+    expect(await lastResultWinner(boardB.fixtureId), "out of time: the side NOT to move wins").toBe(B.black.entrantId);
+    // A Lichess timeout is a NORMAL win, not a forfeit (§3.6).
+    expect(await forfeitEventCountSql(boardB.fixtureId), "a timeout was written as a forfeit").toBe(0);
+    // And exactly once: a third sweep is a no-op.
+    const once = await resultEventCountSql(boardB.fixtureId);
+    expect(once).toBe(1);
+    await nobodyReadItForAnHour(boardB.fixtureId);
+    await sweep(page);
+    expect(await resultEventCountSql(boardB.fixtureId), "the sweep wrote the result twice").toBe(once);
+  });
+
+  test("round 2 waits for the organiser: paired on Generate, silent until opened, then opened by the same control and played", async ({ page, browser }) => {
+    test.setTimeout(budget(8));
+    const stamp1 = await roundOpenedAtSql(round.stageId, 1);
+    const round2 = () =>
+      withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away from fixtures
+         where stage_id = ${round.stageId} and round_no = 2 order by seq_in_round`);
+    // A Swiss round is NOT paired by the last result of the round before: it
+    // waits for the organiser's Generate (swiss STAGE_NOT_READY until then).
+    const seated2 = <R extends { home: string | null; away: string | null }>(rows: R[]) => rows.filter((f) => f.home !== null && f.away !== null);
+    expect(seated2(await round2()), "round 2 paired itself").toHaveLength(0);
+
+    const everyone = round.boards.flatMap((b) => [b.home, b.away]);
+    const callsBefore = lichessCallsFor(everyone).length;
+    const paired = await apiJson(page.request, `/api/v1/stages/${round.stageId}/generate`, "POST", {});
+    expect(paired.status, `generate round 2: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
+    const boards2 = seated2(await round2());
+    expect(boards2.length, "four players pair into two round-2 boards").toBe(2);
+    // Paired is not opened: no stamp, no invite, no call — each alone could
+    // be satisfied by the other being broken.
+    expect(await roundOpenedAtSql(round.stageId, 2)).toBeNull();
+    for (const f of boards2) expect(await bridgeRow(f.id), `no bridge for ${f.id} before the open`).toBeNull();
+    expect(lichessCallsFor(everyone).length - callsBefore, "pairing round 2 called Lichess for its players").toBe(0);
+    for (const f of boards2) {
+      const [v] = await withDb((sql) => sql<{ n: number }[]>`
+        select (select count(*) from fixture_video_meetings where fixture_id = ${f.id})::int as n`);
+      expect(v!.n, `pairing round 2 made a meeting for ${f.id}`).toBe(0);
+    }
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(round.fixturesTab);
+    const control = page.getByTestId("open-round").filter({ has: page.getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) }) });
+    await expect(control).toHaveAttribute("data-state", "paired", { timeout: 30_000 });
+    await control.getByTestId("open-round-cta").click();
+    await page.getByTestId("open-round-confirm-confirm").click();
+    await expect(control.getByTestId("open-round-notice")).toBeVisible({ timeout: 20_000 });
+    const stamp2 = await roundOpenedAtSql(round.stageId, 2);
+    expect(stamp2, "round 2 opened").not.toBeNull();
+    expect(stamp2!.getTime(), "a NEW stamp, after round 1's").toBeGreaterThan(stamp1!.getTime());
+    for (const f of boards2) expect(await bridgeRow(f.id)).toMatchObject({ status: "pending" });
+
+    // Both halves wired to each other: round 2's first board is played — its
+    // two players seat on the meeting's word and the game is made.
+    const players = new Map(round.boards.flatMap((b) => [b.home, b.away]).map((p) => [p.entrantId, p]));
+    const b2: RoundBoard = { fixtureId: boards2[0]!.id, home: players.get(boards2[0]!.home!)!, away: players.get(boards2[0]!.away!)! };
+    const ctx = await playerContext(browser);
+    const p = await openRoom(ctx, b2, b2.home);
+    await p.getByTestId("room-checkin-cta").click();
+    await expect(screen(p)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
+    video.setLivePublisher(participantOf(b2.home), true);
+    await p.getByTestId("room-state-retry").click();
+    await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
+    expect((await claimByLink(page, b2, b2.away)).seat).toMatchObject({ seated: false, reason: "camera_required" });
+    video.setLivePublisher(participantOf(b2.away), true);
+    await claimByLink(page, b2, b2.away);
+    await expect.poll(async () => (await bridgeRow(b2.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    const game2 = (await bridgeRow(b2.fixtureId))!.challenge_id!;
+    expect(lichess.game(game2)?.status, "round 2's game is live at Lichess").toBe("started");
+    await expect(screen(p)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
+  });
 });
