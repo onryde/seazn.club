@@ -8,6 +8,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { backendPid, pollWaitersBehind, waitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
@@ -726,6 +727,7 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, cameraPolicy: "required" });
     const fixtureId = r.boards[0]!.fixtureId;
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       race.afterEnsure = async () => {
         await holder`begin`;
@@ -735,14 +737,8 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
       const p = organiserOverrideVideo({ fixtureId, actorUserId: r.ownerUserId, note: "vendor outage" }).finally(
         () => (done = true),
       );
-      let waited = false;
-      for (let i = 0; i < 100 && !waited && !done; i++) {
-        const [w] = await sql<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-           where datname = current_database() and wait_event_type = 'Lock' and query ilike '%from fixtures%for share%'`;
-        waited = w!.n > 0;
-        if (!waited) await new Promise((res) => setTimeout(res, 50));
-      }
+      // I-3: only a session blocked by OUR holder counts — another suite's lock waiter never does.
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%from fixtures%for share%", finished: () => done })) > 0;
       expect(waited, "the override never waited on the fixture first").toBe(true);
       // The clear's next lock: the bridge row. Free, because the override
       // took nothing before the fixture.
@@ -950,21 +946,12 @@ describe.skipIf(!HAS_DB)("openRound — the real producer feeds the real consume
     // under the same lock) and refuse. Read before its transaction, it would
     // have seen no open and committed the tightening behind a live round.
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
-    const advisoryWaiters = async () => {
-      const [w] = await sql<{ n: number }[]>`
-        select count(*)::int as n from pg_stat_activity
-         where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
-      return w!.n;
-    };
-    const until = async (n: number, what: string) => {
-      let seen = 0;
-      for (let i = 0; i < 100 && seen < n; i++) {
-        seen = await advisoryWaiters();
-        if (seen < n) await new Promise((res) => setTimeout(res, 50));
-      }
-      expect(seen, what).toBeGreaterThanOrEqual(n);
+    // I-3: only sessions blocked by OUR holder count — another suite's lock waiter never does.
+    const until = async (holderPid: number, n: number, what: string) => {
+      expect(await pollWaitersBehind(holderPid, { atLeast: n, queryLike: "%pg_advisory_xact_lock%" }), what).toBeGreaterThanOrEqual(n);
     };
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
@@ -972,11 +959,11 @@ describe.skipIf(!HAS_DB)("openRound — the real producer feeds the real consume
         (v) => ({ ok: true as const, v }),
         (e: unknown) => ({ ok: false as const, e }),
       );
-      await until(1, "the open never queued on the division lock");
+      await until(holderPid, 1, "the open never queued on the division lock");
       const upgrading = refusal(patchDivision(r.owner, r.divisionId, { camera_policy: "required" })).catch(
         (e: unknown) => ({ status: -1, code: String(e) }),
       );
-      await until(2, "the upgrade never queued on the division lock (its gate was read outside it)");
+      await until(holderPid, 2, "the upgrade never queued on the division lock (its gate was read outside it)");
       await holder`commit`;
       const o = await opening;
       expect(o.ok && o.v).toEqual({ opened: true, invited: 2, skipped: [] });
@@ -1033,6 +1020,7 @@ describe.skipIf(!HAS_DB)("openRound — the round changing underneath (assumptio
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
     const fixtureId = r.boards[0]!.fixtureId;
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
@@ -1040,14 +1028,8 @@ describe.skipIf(!HAS_DB)("openRound — the round changing underneath (assumptio
         (v) => ({ ok: true as const, v }),
         (e: unknown) => ({ ok: false as const, e }),
       );
-      let waited = false;
-      for (let i = 0; i < 100 && !waited; i++) {
-        const [w] = await sql<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-           where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
-        waited = w!.n > 0;
-        if (!waited) await new Promise((res) => setTimeout(res, 50));
-      }
+      // I-3: only a session blocked by OUR holder counts — another suite's lock waiter never does.
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%pg_advisory_xact_lock%" })) > 0;
       expect(waited, "openRound never waited on the division lock").toBe(true);
       await holder`update fixtures set away_entrant_id = ${r.spares[0]!.away.entrantId} where id = ${fixtureId}`;
       await holder`commit`;
@@ -1231,12 +1213,9 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     const seenByT9 = (await loadOnlinePlayFixture(b))!;
     expect(seenByT9.bridge, "premise: B has no row").toBeNull();
 
-    const waiting = async (pattern: string) => {
-      const [w] = await sql<{ n: number }[]>`
-        select count(*)::int as n from pg_stat_activity
-         where datname = current_database() and wait_event_type = 'Lock' and query ilike ${pattern}`;
-      return w!.n > 0;
-    };
+    // I-3: only sessions blocked by OUR holder count, directly or down the chain (the mint waits on the unpair, which
+    // waits on the holder) — another suite's lock waiter never does.
+    const waiting = async (holderPid: number, pattern: string) => (await waitersBehind(holderPid, pattern)) > 0;
     const settle = <T,>(p: Promise<T>) => {
       const box = { done: false, out: undefined as unknown as { ok: true; v: T } | { ok: false; e: unknown } };
       const done = p.then(
@@ -1247,6 +1226,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     };
 
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`select 1 from fixture_external_play where fixture_id = ${a} for update`;
@@ -1254,7 +1234,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
       let paused = false;
       for (let i = 0; i < 100 && !paused; i++) {
         // Paused locking the round's bridge rows — after the fixtures.
-        paused = await waiting("%from fixture_external_play%for update%");
+        paused = await waiting(holderPid, "%from fixture_external_play%for update%");
         if (!paused) await new Promise((res) => setTimeout(res, 50));
       }
       expect(paused, "the unpair never paused mid-clear").toBe(true);
@@ -1262,7 +1242,7 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
       const mint = settle(ensureBridgeRow(seenByT9));
       let mintWaited = false;
       for (let i = 0; i < 60 && !mintWaited && !mint.box.done; i++) {
-        mintWaited = await waiting("%insert into fixture_external_play%");
+        mintWaited = await waiting(holderPid, "%insert into fixture_external_play%");
         if (!mintWaited) await new Promise((res) => setTimeout(res, 50));
       }
       expect(mint.box.done, "the mint ran THROUGH a seat clear in progress").toBe(false);
