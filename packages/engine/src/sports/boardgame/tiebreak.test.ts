@@ -631,12 +631,14 @@ describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine hal
   it("a tie-break payload that is not an object is an invalid event, never a crash in the colour guard (null, a list, a string, a number)", () => {
     const cfg = koWith(["rapid", "armageddon"]);
     let checked = 0;
-    for (const junk of [null, [], ["armageddon"], "armageddon", 7, true]) {
-      const refused = errOf(() => fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", junk)]));
-      expect(refused.code, JSON.stringify(junk)).toBe("INVALID_EVENT");
+    for (const junk of [null, undefined, [], ["armageddon"], "armageddon", 7, true]) {
+      // `ev` defaults an absent payload to {}, so the envelope is rebuilt to carry a real undefined.
+      const refused = errOf(() => fold(cfg, [...drawn, { ...ev(3, "boardgame.tiebreak"), payload: junk }]));
+      // undefined is the one primitive the guard must not destructure: a TypeError here would be a crash, not a refusal.
+      expect(refused.code, String(junk)).toBe("INVALID_EVENT");
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
     // The positive pair: a well-formed Armageddon on the same cfg is accepted.
     expect(fold(cfg, [...drawn, arm(3, H, "draw")]).outcome).toMatchObject({ kind: "win", winner: H });
   });
@@ -705,11 +707,12 @@ describe("D-R7 / BG-KO-2: the decider's winner is read from the event, for the s
   });
   it("a payload that names no advancer reads as undefined (the fold refuses it with its own code): no colour, a stranger as Black, junk", () => {
     let checked = 0;
-    for (const bad of [{ rung: "armageddon", result: "draw" }, { rung: "armageddon", black: "nobody", result: "draw" }, { rung: "rapid" }, { rung: "lots", winner: A }, null, "x", 7]) {
+    for (const bad of [{ rung: "armageddon", result: "draw" }, { rung: "armageddon", black: "nobody", result: "draw" }, { rung: "armageddon", black: "nobody", result: "white" }, { rung: "armageddon", black: "nobody", result: "black" }, { rung: "rapid" }, { rung: "lots", winner: A }, null, undefined, "x", 7]) {
+      // A stranger as Black must read as nobody for EVERY result: "white" would otherwise flip to the opposite side's entrant.
       expect(boardgame.deciderWinner!(bad, entrants), JSON.stringify(bad)).toBeUndefined();
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(10);
   });
 });
 
