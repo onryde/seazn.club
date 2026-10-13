@@ -73,7 +73,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
         seated: false,
         // A league board: W2b D19 never refuses No result here (the shape-by-shape differential against the server's
         // own refusal lives in external-play-resolve.test.ts).
-        noNextMatch: false,
+        knockout: false,
       },
     ]);
   });

@@ -90,6 +90,8 @@ interface Props {
 export interface ScheduleWatchCopy {
   live: string;
   final: string;
+  /** I-3: an abandoned board's link — VOID, no score. */
+  noResult: string;
   notOpened: string;
   /** T17 owner change (2026-10-13): the round open, no move yet. */
   starting: string;
@@ -245,7 +247,14 @@ function WatchChip({ link, copy }: { link: PublicWatchLink; copy: ScheduleWatchC
         data-kind="final"
         className={`${base} inline-flex items-center gap-2 rounded-md border border-accent-line bg-surface px-2 py-0.5 text-xs font-semibold text-ink`}
       >
-        {link.score !== "" ? <span className="font-display text-base font-bold leading-none tabular-nums">{link.score}</span> : null}
+        {link.noResult ? (
+          <>
+            <span data-testid="schedule-watch-no-result">{copy.noResult}</span>
+            <span aria-hidden>·</span>
+          </>
+        ) : link.score !== "" ? (
+          <span className="font-display text-base font-bold leading-none tabular-nums">{link.score}</span>
+        ) : null}
         {copy.final}
       </span>
     );

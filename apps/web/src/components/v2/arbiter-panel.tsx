@@ -42,7 +42,7 @@ import {
   MUTED,
   noticeSentence,
   settleChoices,
-  settleNoNextMatchGuidance,
+  settleKnockoutGuidance,
   SOFT,
   useFmt,
   type Fmt,
@@ -406,9 +406,11 @@ function BoardStatus({ board, f }: { board: ArbiterBoard; f: Fmt }) {
           ? f.t("arbiter.status.onHold")
           : board.state.kind === "cancelled"
             ? f.t("arbiter.status.cancelled")
-            : board.state.score !== null
-            ? f.t("arbiter.status.result", { score: board.state.score })
-            : f.t("arbiter.status.over");
+            : board.state.noResult
+              ? f.t("arbiter.status.noResult")
+              : board.state.score !== null
+                ? f.t("arbiter.status.result", { score: board.state.score })
+                : f.t("arbiter.status.over");
   return <span className={`shrink-0 text-[13px] font-semibold lg:text-sm ${SOFT}`}>{word}</span>;
 }
 
@@ -634,7 +636,7 @@ function Decision({
               </p>
               <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
                 {settleChoices(
-                  { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, noNextMatch: board.noNextMatch },
+                  { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, knockout: board.knockout },
                   f,
                 ).map((c) => (
                   <button
@@ -650,9 +652,9 @@ function Decision({
                   </button>
                 ))}
               </div>
-              {settleNoNextMatchGuidance(board) && (
-                <p data-testid="arbiter-settle-no-next-match" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
-                  {f.t("arbiter.decide.noNextMatch")}
+              {settleKnockoutGuidance(board) && (
+                <p data-testid="arbiter-settle-knockout" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+                  {f.t("arbiter.decide.knockoutNeedsWinner")}
                 </p>
               )}
             </fieldset>

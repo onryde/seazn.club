@@ -40,6 +40,7 @@ import {
   frozenFor,
   gameClocks,
   realtimeExpiry,
+  ABANDONED_RESULT,
   decisiveResultFor,
   type DecisiveEvent,
   roomPhaseWire,
@@ -271,11 +272,15 @@ async function compose(r: Resolved, now: Date, deps: RoomDeps): Promise<RoomSnap
     };
   }
 
-  const recorded = f.fixtureStatus === "scheduled" || f.fixtureStatus === "in_play" ? null : await recordedResult(f.fixtureId);
+  // I-3: an abandoned board decided nobody — No result, whatever event the ledger last decided with.
+  const recorded =
+    f.fixtureStatus === "scheduled" || f.fixtureStatus === "in_play" || f.fixtureStatus === "abandoned" ? null : await recordedResult(f.fixtureId);
   const result =
-    recorded === null
-      ? null
-      : decisiveResultFor(recorded, { myEntrantId: player.entrantId, opponentEntrantId: opponent.entrantId, myColour: mine });
+    f.fixtureStatus === "abandoned"
+      ? ABANDONED_RESULT
+      : recorded === null
+        ? null
+        : decisiveResultFor(recorded, { myEntrantId: player.entrantId, opponentEntrantId: opponent.entrantId, myColour: mine });
 
   // T11 M7: a token_revoked hold freezes a seat (or both, when none was
   // recorded); the other player's board stays live. A WRITTEN result ends

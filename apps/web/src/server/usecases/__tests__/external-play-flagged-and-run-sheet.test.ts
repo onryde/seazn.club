@@ -147,7 +147,7 @@ describe.runIf(HAS_DB)("listFlaggedExternalPlay — the queue's Flagged list", (
       [two.fixtureId, 2, stage!.name, [second]],
     ]);
     // The finished board reads as its result (White, home, won: 1–0).
-    expect(boards[0]!.state).toEqual({ kind: "result", score: "1–0" });
+    expect(boards[0]!.state).toEqual({ kind: "result", score: "1–0", noResult: false });
     expect(boards[1]!.state.kind).not.toBe("result");
   });
 

@@ -122,7 +122,7 @@ function listCases(): Record<string, string> {
     F({ id: "f3", seq_in_round: 3 }),
     F({ id: "f4", seq_in_round: 4, scheduled_at: null }),
   ];
-  const links: Record<string, PublicWatchLink> = { f1: { kind: "live" }, f2: { kind: "final", score: "1–0" }, f3: { kind: "not_opened" } };
+  const links: Record<string, PublicWatchLink> = { f1: { kind: "live" }, f2: { kind: "final", score: "1–0", noResult: false }, f3: { kind: "not_opened" } };
   const render = (watch?: Parameters<typeof Schedule>[0]["watch"]) =>
     renderToStaticMarkup(
       <Schedule

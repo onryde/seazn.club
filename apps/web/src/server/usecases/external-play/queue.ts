@@ -4,13 +4,12 @@ import "server-only";
 // pre-redesign reader was deleted in 340dce7ed together with the schema it
 // read. Same shape the page already consumes, plus `reason` — V439 moved the
 // why out of free-text `last_error` into the `needs_reason` vocabulary.
-import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { withTenant } from "@/lib/db";
-import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
+import { noResultRefused } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
 import { fixturesSeating } from "./seated";
 
@@ -35,9 +34,9 @@ export type NeedsOrganiserExternalPlayRow = {
   canResync: boolean;
   /** The viewer plays on this board: another organiser settles it (C). */
   seated: boolean;
-  /** W2b D19: the server refuses a double walkover on this line (it feeds no next match), so the settle does not
-   *  offer "No result" — the append guard's own reading (`doubleWalkoverRefused`). */
-  noNextMatch: boolean;
+  /** I-3: a knockout — the server refuses No result here (a knockout game needs a winner), so the settle does not
+   *  offer it. The settle's own reading (`noResultRefused`, no-result.ts). */
+  knockout: boolean;
 };
 
 const REVOKED_SEATS = ["white", "black", "both"] as const;
@@ -93,8 +92,6 @@ export async function listNeedsOrganiserExternalPlay(
         seq_in_round: number | null;
         stage_name: string;
         stage_kind: string | null;
-        winner_to_fixture: string | null;
-        loser_to_fixture: string | null;
       }[]
     >`
       select f.id as fixture_id, f.fixture_no, f.status as fixture_status,
@@ -102,7 +99,7 @@ export async function listNeedsOrganiserExternalPlay(
              f.scheduled_at, ep.needs_reason, ep.last_error,
              ep.white_side, ep.revoked_seat, ep.challenge_id,
              f.round_no, f.seq_in_round, s.name as stage_name,
-             s.kind as stage_kind, f.winner_to_fixture, f.loser_to_fixture
+             s.kind as stage_kind
         from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id
         join stages s on s.id = f.stage_id
@@ -136,7 +133,7 @@ export async function listNeedsOrganiserExternalPlay(
       stageName: r.stage_name,
       canResync: r.challenge_id !== null,
       seated: seated.has(r.fixture_id),
-      noNextMatch: doubleWalkoverRefused(r.stage_kind, feedsNextMatch(r)),
+      knockout: noResultRefused(r.stage_kind),
     })),
   );
 }

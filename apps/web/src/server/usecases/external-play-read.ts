@@ -72,8 +72,14 @@ export function publicHoldOf(reason: string | null): PublicExternalPlay["hold"] 
 }
 
 /** The fixture's result as the finished board's header states it — from the fixture's engine outcome and its
- *  public summary, White's score first. Null while the fixture has none (or one this header cannot word). */
-export function publicResultOf(row: Pick<PublicFixtureRow, "outcome" | "summary" | "home_entrant_id" | "away_entrant_id" | "white_side" | "finished_at">): PublicGameResult | null {
+ *  public summary, White's score first. Null while the fixture has none (or one this header cannot word). An
+ *  ABANDONED fixture (I-3: VOID — the engine folds an abandon to no outcome) is No result, with no method or score. */
+export function publicResultOf(
+  row: Pick<PublicFixtureRow, "fixture_status" | "outcome" | "summary" | "home_entrant_id" | "away_entrant_id" | "white_side" | "finished_at">,
+): PublicGameResult | null {
+  if (row.fixture_status === "abandoned") {
+    return { kind: "no_result", winner: null, method: null, score: "", recordedAt: row.finished_at?.toISOString() ?? null };
+  }
   const o = row.outcome;
   if (o === null || typeof o.kind !== "string") return null;
   const sideOf = (entrant: string | undefined): "home" | "away" | null =>
@@ -179,7 +185,7 @@ export function watchLinkOf(row: WatchLinkRow): PublicWatchLink | null {
     return starting ? { kind: "starting" } : null;
   }
   if (!open || row.status === "finished" || hold === "tiebreak") {
-    return { kind: "final", score: publicResultOf(row)?.score ?? "" };
+    return { kind: "final", score: publicResultOf(row)?.score ?? "", noResult: row.fixture_status === "abandoned" };
   }
   if ((row.status === "live" || row.status === "needs_organiser") && hold === null) return { kind: "live" };
   return null;

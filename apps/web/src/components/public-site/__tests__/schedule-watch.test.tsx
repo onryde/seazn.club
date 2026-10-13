@@ -48,7 +48,7 @@ const COPY: ScheduleCopy = {
 const FIXTURES = [F("f1", { status: "in_play" }), F("f2", { status: "decided" }), F("f3"), F("f4")];
 const LINKS: Record<string, PublicWatchLink> = {
   f1: { kind: "live" },
-  f2: { kind: "final", score: "1–0" },
+  f2: { kind: "final", score: "1–0", noResult: false },
   f3: { kind: "not_opened" },
 };
 const esc = (x: string) => x.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;");
@@ -218,7 +218,24 @@ describe("Schedule — the online watch links (I4)", () => {
 
   it("a final position with no recorded score shows the words alone", () => {
     const copy = publicWatchCopy((k) => msgFor("en", k));
-    const r = rows(render({ links: { f2: { kind: "final", score: "" } }, copy }));
+    const r = rows(render({ links: { f2: { kind: "final", score: "", noResult: false } }, copy }));
     expect(r.f2).toMatch(new RegExp(`data-kind="final"[^>]*>${esc(copy.final)}</span>`));
+  });
+
+  it("I-3: an abandoned board's final position says No result, never a score — in every locale; a decided one beside it keeps its score", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const copy = publicWatchCopy((k) => msgFor(loc, k));
+      expect(copy.noResult, `${loc}: the dictionary's own words`).toBe(msgFor(loc, "externalPlay.watch.list.noResult"));
+      const r = rows(render({ links: { f2: { kind: "final", score: "", noResult: true }, f1: { kind: "final", score: "1–0", noResult: false } }, copy }));
+      expect(r.f2, loc).toContain(`data-testid="schedule-watch-no-result">${esc(copy.noResult)}</span>`);
+      expect(r.f2, `${loc}: still the final position's link`).toContain(esc(copy.final));
+      expect(r.f2, `${loc}: no score`).not.toContain("tabular-nums");
+      // The pair: the decided board shows its score and no No result.
+      expect(r.f1, loc).toContain("1–0");
+      expect(r.f1, loc).not.toContain("schedule-watch-no-result");
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 });

@@ -18,17 +18,22 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { EngineError, foldMatch, playRecorded } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, foldMatch, playRecorded } from "@seazn/engine/core";
+import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
+import EN from "@/dictionaries/en/ui.json";
+import FR from "@/dictionaries/fr/ui.json";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { loadPublicExternalPlay } from "../external-play-read";
+import { recomputeStandings } from "@/server/engine-db/competition";
+import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import { loadDivisionWatch, loadPublicExternalPlay } from "../external-play-read";
 import { loadArbiterRound } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { RESOLVE_KINDS, resolveExternalPlay, type ResolveKind } from "../external-play/resolve";
-import { holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, tiebreakIsPending } from "../external-play/result";
+import { HOLD_REASONS, holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, tiebreakIsPending, type HoldReason } from "../external-play/result";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { makeUser } from "./_seed";
@@ -112,24 +117,46 @@ function engineFold(b: SeedRoundBoard, type: string, payload: unknown) {
   return { outcome: boardgame.outcome(state), summary: boardgame.summary(state) };
 }
 
-/** An engine refusal's code (W2b's refusals reach the route as EngineErrors; v1's http.ts maps them). */
-async function engineCodeOf(p: Promise<unknown>): Promise<string> {
-  try {
-    await p;
-  } catch (err) {
-    if (err instanceof EngineError) return err.code;
-    throw err;
-  }
-  throw new Error("expected an engine refusal");
-}
-
-/** W2b D19's feed edge: a next match for this line's winner, so a double walkover has somewhere to send "nobody". */
+/** A feed edge: a next match for this line's winner (a knockout line that is not a final). */
 async function feedsNextMatch(r: SeedOnlineChessRoundResult, b: SeedRoundBoard): Promise<void> {
   const [next] = await sql<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
     values (${r.stageId}, ${r.divisionId}, ${r.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
     returning id`;
   await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
+}
+
+/** I-3 (controller ruling, fix round 2): the two holds where BOTH players stayed away. Their No result stays W2b's
+ *  double walkover; every other hold's, and a board's with no hold, is VOID. Typed from the ruling, not resolve.ts. */
+const BOTH_ABSENT: readonly NeedsReason[] = ["no_show_both", "double_walkover_blocked"];
+const VOID_HOLDS: readonly (NeedsReason | null)[] = [...NEEDS_REASONS.filter((x) => !BOTH_ABSENT.includes(x)), null];
+
+/** The abandon's reason as the DICTIONARY words it (`null`: a board settled with no hold), in one locale. */
+function abandonReasonText(dict: Record<string, string>, hold: NeedsReason | null): string {
+  const key = `externalPlay.resolve.abandonReason.${hold ?? "none"}`;
+  const text = dict[key];
+  expect(text, `${key}: the copy exists`).toBeTypeOf("string");
+  expect(text!.length, `${key}: and says something`).toBeGreaterThan(0);
+  return text!;
+}
+
+/** Hold `board` for the organiser with `reason` through its REAL producer where one takes it — holdForOrganiser's
+ *  reasons, the sweep's no-show writer — and a stand-in row for the snapshot-only ones (aborted, mismatch, fair_play,
+ *  tiebreak_owed: reconcile's and T12's, driven for real in their own suites). `null`: a game still being played. */
+async function holdAs(r: SeedOnlineChessRoundResult, b: SeedRoundBoard, reason: NeedsReason | null, opts: { bridgeExists?: true } = {}) {
+  if (reason === null) return gameBridge(r, b, "live");
+  if (!opts.bridgeExists) await pendingBridge(r, b);
+  if ((HOLD_REASONS as readonly string[]).includes(reason)) {
+    await holdForOrganiser({ fixtureId: b.fixtureId, reason: reason as HoldReason, detail: "TEST" });
+  } else if (reason === "no_show_white" || reason === "no_show_black" || reason === "no_show_both") {
+    const absent = reason === "no_show_white" ? "white" : reason === "no_show_black" ? "black" : "both";
+    await holdRefusedNoShow({ fixtureId: b.fixtureId, absent, detail: "sweep: refused 3 passes running (TEST)" });
+  } else {
+    await sql`
+      update fixture_external_play set status = 'needs_organiser', needs_reason = ${reason}, last_error = 'TEST stand-in'
+       where fixture_id = ${b.fixtureId}`;
+  }
+  expect(await bridgeOf(b.fixtureId), `premise: held ${reason}`).toMatchObject({ status: "needs_organiser", needs_reason: reason });
 }
 
 /** An organiser of the club who is ALSO a player on `board` (C1). */
@@ -232,7 +259,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       const summary = boardgame.summary(state);
       const line = (entrant: string) => summary.perSide.find((p) => p.entrantId === entrant)!.line;
       const score = `${line(b.home.entrantId)}–${line(b.away.entrantId)}`;
-      expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state, JSON.stringify(c)).toEqual({ kind: "result", score });
+      expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state, JSON.stringify(c)).toEqual({ kind: "result", score, noResult: false });
       expect((await loadPublicExternalPlay(b.fixtureId))?.result, JSON.stringify(c)).toMatchObject({
         kind: "win",
         winner: c.kind === "home_wins" ? "home" : "away",
@@ -256,79 +283,161 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "finished", needs_reason: null });
   });
 
-  it("RB1: No result with NOTHING played ⇒ the double walkover W2b records it as — `core.forfeit {by: both, reason: walkover}`, no Start — a held board and a Lichess game on file alike", async () => {
-    // Controller ruling RB1 (2026-10-13) over W2b spec §5.2: a chess forfeit is a core.forfeit; "both" is a walkover.
-    // RB3 keeps core.start off the ledger until a result is written, so a board whose Lichess game is being played
-    // has nothing PLAYED on our ledger either (ruling 118 reads chess's play from an active Start): the same arm.
+  it("I-3: No result on every hold but the two both-absent ones — and on a board still being played — is VOID: `core.abandon` with the hold's reason in plain words, no Start; the fixture abandoned with no outcome; the chess readers say No result", async () => {
+    // Controller ruling I-3 (fix round 2): "No result" is VOID — no points, no absence. BOTH_ABSENT and the reason copy
+    // come from the ruling and the dictionary, never from resolve.ts.
     let checked = 0;
-    for (const board of ["held, no game", "a Lichess game on file"] as const) {
+    for (const hold of VOID_HOLDS) {
       const r = await round();
       const b = r.boards[0]!;
-      if (board === "held, no game") {
-        await pendingBridge(r, b);
-        await holdForOrganiser({ fixtureId: b.fixtureId, reason: "provider_error", detail: "lichess 502 (TEST)" });
-      } else {
-        await gameBridge(r, b, "live");
-      }
-      expect(played(await ledgerOf(b.fixtureId)), `${board}: premise, nothing played`).toBe(false);
+      await holdAs(r, b, hold);
+      const text = abandonReasonText(EN, hold);
+      expect(played(await ledgerOf(b.fixtureId)), `${hold}: premise, nothing played`).toBe(false);
 
-      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), board).toEqual({ status: "finished" });
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), String(hold)).toEqual({ status: "finished" });
 
       const ledger = await ledgerOf(b.fixtureId);
-      expect(ledger.map((e) => [e.type, e.payload]), `${board}: one forfeit, no Start`).toEqual([["core.forfeit", { by: "both", reason: "walkover" }]]);
+      expect(ledger.map((e) => [e.type, e.payload]), `${hold}: one abandon, no Start`).toEqual([["core.abandon", { reason: text }]]);
       expect(ledger[0]!.recorded_by, "the ledger names who settled").toBe(r.ownerUserId);
-      expect(played(ledger), `${board}: still nothing played`).toBe(false);
+      expect(played(ledger), `${hold}: still nothing played`).toBe(false);
+      expect(engineFold(b, "core.abandon", { reason: text }).outcome, "premise: the engine's fold of an abandon decides nobody").toBeNull();
+      expect(await fixtureOf(b.fixtureId), String(hold)).toEqual({ status: "abandoned", outcome: null });
+      expect(await bridgeOf(b.fixtureId), String(hold)).toMatchObject({ status: "finished", needs_reason: null });
+      expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), `${hold}: not the queue's any more`).toEqual([]);
+      // The chess-owned readers: the spectators' header and the arbiter panel say No result, with no score.
+      expect((await loadPublicExternalPlay(b.fixtureId))?.result, `${hold}: the public header`).toMatchObject({ kind: "no_result", winner: null, method: null, score: "" });
+      expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state, `${hold}: the panel`).toEqual({ kind: "result", score: null, noResult: true });
+      checked += 1;
+    }
+    // Anti-vacuity: every hold reason but the two both-absent ones, plus the no-hold board.
+    expect(checked).toBe(NEEDS_REASONS.length - BOTH_ABSENT.length + 1);
+  });
+
+  it("I-3: the division Fixtures list's link for a VOID board with moves on file is its final position saying No result — through the real list reader; a decided board beside it keeps its score", async () => {
+    const r = await round({ fixtures: 2 });
+    const [voided, won] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    for (const b of [voided, won]) {
+      await gameBridge(r, b, "live");
+      await sql`update fixture_external_play set moves_uci = ${["e2e4", "e7e5"]}, move_count = 2 where fixture_id = ${b.fixtureId}`;
+    }
+    await resolveExternalPlay(r.owner, voided.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, won.fixtureId, "home_wins");
+    const { links } = await loadDivisionWatch(r.divisionId);
+    expect(links[voided.fixtureId]).toEqual({ kind: "final", score: "", noResult: true });
+    expect(links[won.fixtureId]).toMatchObject({ kind: "final", noResult: false });
+    expect((links[won.fixtureId] as { score: string }).score, "the pair: a decided board keeps its score").not.toBe("");
+  });
+
+  it("I-3: the abandon's reason is stored in the club's own language (its default locale), as the public 'Abandoned (…)' prints it", async () => {
+    const r = await round();
+    const b = r.boards[0]!;
+    await sql`update organizations set default_locale = 'fr' where id = ${r.orgId}`;
+    await holdAs(r, b, "not_started");
+    const fr = abandonReasonText(FR, "not_started");
+    expect(fr, "premise: the differential — French copy, not the English").not.toBe(abandonReasonText(EN, "not_started"));
+    await resolveExternalPlay(r.owner, b.fixtureId, "no_result");
+    expect((await ledgerOf(b.fixtureId)).map((e) => e.payload)).toEqual([{ reason: fr }]);
+  });
+
+  it("I-3 both absent (no_show_both, double_walkover_blocked): No result stays W2b's double walkover — `core.forfeit {by: both, reason: walkover}`, no Start — read by the panel as the engine's own lines", async () => {
+    let checked = 0;
+    for (const hold of BOTH_ABSENT) {
+      const r = await round();
+      const b = r.boards[0]!;
+      await holdAs(r, b, hold);
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), hold).toEqual({ status: "finished" });
+      const ledger = await ledgerOf(b.fixtureId);
+      expect(ledger.map((e) => [e.type, e.payload]), `${hold}: one forfeit, no Start`).toEqual([["core.forfeit", { by: "both", reason: "walkover" }]]);
       const fold = engineFold(b, "core.forfeit", { by: "both", reason: "walkover" });
-      expect(fold.outcome, "premise: the engine folds a double walkover — never a draw, never a win").toEqual({ kind: "double_walkover" });
-      const f = await fixtureOf(b.fixtureId);
-      expect(f.outcome, `${board}: the engine's own outcome`).toEqual(fold.outcome);
-      expect(f.status, `${board}: a forfeit`).toBe("forfeited");
+      expect(fold.outcome, "premise: the engine folds a double walkover").toEqual({ kind: "double_walkover" });
+      expect(await fixtureOf(b.fixtureId), hold).toEqual({ status: "forfeited", outcome: fold.outcome });
       expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "finished", needs_reason: null });
-      expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).toEqual([]);
-      // The spectators' header: no result, the engine's own lines and method (never "Forfeited · 0–0" as a win).
       const lines = fold.summary.perSide;
-      expect((await loadPublicExternalPlay(b.fixtureId))?.result, `${board}: the public header`).toMatchObject({
+      const line = (entrant: string) => lines.find((l) => l.entrantId === entrant)!.line;
+      expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state, `${hold}: the panel`).toEqual({
+        kind: "result",
+        score: `${line(b.home.entrantId)}–${line(b.away.entrantId)}`,
+        noResult: false,
+      });
+      expect((await loadPublicExternalPlay(b.fixtureId))?.result, `${hold}: the public header`).toMatchObject({
         kind: "no_result",
-        winner: null,
         method: (fold.summary.detail as { method?: string }).method,
-        score: `${lines.find((l) => l.entrantId === b.home.entrantId)!.line}–${lines.find((l) => l.entrantId === b.away.entrantId)!.line}`,
       });
       checked += 1;
     }
-    expect(checked, "anti-vacuity: boards settled").toBe(2);
+    expect(checked).toBe(2);
   });
 
-  it("RB1: No result AFTER play (a Start on the ledger) is the same double walkover, and the board still reads as PLAYED — W2b D15 refuses the old boardgame.result{double_forfeit} from every writer", async () => {
-    const r = await round();
-    const b = r.boards[0]!;
-    await gameBridge(r, b, "live");
-    // The Start through the real scoring write (the pad's producer): chess's play (ruling 118).
-    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-    expect(played(await ledgerOf(b.fixtureId)), "premise: play is recorded").toBe(true);
-    // The premise the controller's arm 2 rested on, measured: the legacy shape is no longer writable.
-    expect(
-      await engineCodeOf(scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } })), // legacy method: refused on write (D15)
-      "W2b D15: a chess forfeit is not a game result",
-    ).toBe("INVALID_EVENT");
+  it("I-3 after the Start (play recorded): the abandon keeps the Start — the board still reads as played, which is true — and decides nobody; a league and a Swiss board alike", async () => {
+    let checked = 0;
+    for (const kind of ["league", "swiss"] as const) {
+      const r = await round();
+      if (kind === "swiss") await sql`update stages set kind = 'swiss' where id = ${r.stageId}`;
+      const b = r.boards[0]!;
+      await gameBridge(r, b, "live");
+      await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+      expect(played(await ledgerOf(b.fixtureId)), `${kind}: premise, play is recorded`).toBe(true);
+      // A fair-play hold arrives after the Start (reconcile's snapshot-only reason; a stand-in row, see holdAs).
+      await holdAs(r, b, "fair_play", { bridgeExists: true });
 
-    expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result")).toEqual({ status: "finished" });
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), kind).toEqual({ status: "finished" });
 
-    const ledger = await ledgerOf(b.fixtureId);
-    expect(ledger.map((e) => [e.type, e.payload])).toEqual([
-      ["core.start", {}],
-      ["core.forfeit", { by: "both", reason: "walkover" }],
-    ]);
-    expect(played(ledger), "the Start stands: the board reads as played, which is true").toBe(true);
-    // The engine's own fold of the same two events (W2b: chess admits a walkover after the Start, ruling 118).
-    const state = foldMatch(
-      boardgame,
-      boardgame.configSchema.parse({}),
-      { home: { entrantId: b.home.entrantId, slots: [] }, away: { entrantId: b.away.entrantId, slots: [] } },
-      ledger.map((e, i) => ({ id: e.id, fixtureId: b.fixtureId, seq: i + 1, type: e.type, payload: e.payload, recordedAt: "2026-10-13T10:00:00.000Z", recordedBy: null })),
-    );
-    expect(await fixtureOf(b.fixtureId)).toEqual({ status: "forfeited", outcome: boardgame.outcome(state) });
-    expect(boardgame.outcome(state), "premise: a double walkover, never a draw").toEqual({ kind: "double_walkover" });
-    expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "finished", needs_reason: null });
+      const ledger = await ledgerOf(b.fixtureId);
+      expect(ledger.map((e) => [e.type, e.payload]), kind).toEqual([
+        ["core.start", {}],
+        ["core.abandon", { reason: abandonReasonText(EN, "fair_play") }],
+      ]);
+      expect(played(ledger), `${kind}: the Start stands`).toBe(true);
+      expect(await fixtureOf(b.fixtureId), kind).toEqual({ status: "abandoned", outcome: null });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("I-3 standings: a VOID board leaves both players' rows untouched — 0 played, 0 points; a double walkover charges each a game played and lost; a win scores — each from the engine's own declarations", async () => {
+    const r = await round({ fixtures: 3 });
+    const [voided, walkedOver, won] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
+    await holdAs(r, voided, "not_started");
+    await holdAs(r, walkedOver, "no_show_both");
+    await holdAs(r, won, "not_started");
+    const rowsOf = async () => new Map((await recomputeStandings(r.orgId, r.stageId)).map((row) => [row.entrantId, row]));
+    const before = await rowsOf();
+    expect(before.size, "premise: every entrant has a row").toBe(6);
+
+    await resolveExternalPlay(r.owner, voided.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, won.fixtureId, "home_wins");
+    const after = await rowsOf();
+
+    const pick = (row: StandingsRow | undefined) => row && { played: row.played, won: row.won, drawn: row.drawn, lost: row.lost, points: row.points };
+    const [divRow] = await sql<{ config: unknown }[]>`select config from divisions where id = ${r.divisionId}`;
+    const cfg = boardgame.configSchema.parse(divRow!.config);
+    let checked = 0;
+    // VOID: the engine folds an abandon to no outcome, and the table scores only outcomes — the rows do not move.
+    for (const e of [voided.home.entrantId, voided.away.entrantId]) {
+      expect(pick(after.get(e)), "the void board's player").toEqual(pick(before.get(e)));
+      expect(pick(after.get(e))).toEqual({ played: 0, won: 0, drawn: 0, lost: 0, points: 0 });
+      checked += 1;
+    }
+    // The double walkover and the win: the engine's own standingsDelta for the engine's own fold.
+    const deltaOf = (b: SeedRoundBoard, type: string, payload: unknown) => {
+      const state = foldMatch(
+        boardgame,
+        cfg,
+        { home: { entrantId: b.home.entrantId, slots: [] }, away: { entrantId: b.away.entrantId, slots: [] } },
+        [{ id: "e0", fixtureId: b.fixtureId, seq: 0, type, payload, recordedAt: "2026-10-13T10:00:00.000Z", recordedBy: null }],
+      );
+      return boardgame.standingsDelta(boardgame.outcome(state)!, cfg, { kind: "league" }, state);
+    };
+    const dw = deltaOf(walkedOver, "core.forfeit", { by: "both", reason: "walkover" });
+    const win = deltaOf(won, "core.forfeit", { by: won.away.entrantId, reason: "walkover" });
+    for (const d of [...dw, ...win]) {
+      expect(pick(after.get(d.entrantId)), d.entrantId).toEqual({ played: d.played, won: d.won, drawn: d.drawn, lost: d.lost, points: d.points });
+      checked += 1;
+    }
+    expect(dw.map((d) => [d.played, d.lost, d.points]), "premise: a double walkover is a game played and lost, at 0 points").toEqual([[1, 1, 0], [1, 1, 0]]);
+    expect(win[0]!.points, "premise: the positive pair — a win scores").toBeGreaterThan(0);
+    expect(checked).toBe(6);
   });
 
   it("a second settle is refused ALREADY_RESOLVED, and writes nothing — whatever it asks for", async () => {
@@ -389,22 +498,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a board still being played (the 
     const after = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
     expect(after.playable).toBe(false);
     expect(after.canSettle, "…and no longer once it is settled").toBe(false);
-    expect(after.state).toEqual({ kind: "result", score: "1–0" });
-  });
-});
-
-describe.runIf(HAS_DB)("RB1 — the arbiter panel reads a board settled No result as its result, from the engine's fold", () => {
-  it("the panel's score is the double walkover's own lines, White first (W2b: the forfeit is the decisive event now)", async () => {
-    const r = await round();
-    const b = r.boards[0]!;
-    await gameBridge(r, b, "live");
-    await resolveExternalPlay(r.owner, b.fixtureId, "no_result");
-    const lines = engineFold(b, "core.forfeit", { by: "both", reason: "walkover" }).summary.perSide;
-    const line = (entrant: string) => lines.find((l) => l.entrantId === entrant)!.line;
-    const after = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
-    expect(after.playable).toBe(false);
-    // home is White on gameBridge's board.
-    expect(after.state).toEqual({ kind: "result", score: `${line(b.home.entrantId)}–${line(b.away.entrantId)}` });
+    expect(after.state).toEqual({ kind: "result", score: "1–0", noResult: false });
   });
 });
 
@@ -451,78 +545,42 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "pending", needs_reason: null });
   });
 
-  it("RB1 in a knockout: No result is never a tie-break (ruling T15-R1) — a line that feeds a next match records the double walkover; a final is refused DOUBLE_WALKOVER_NO_NEXT_MATCH (W2b D19) and writes nothing", async () => {
-    let checked = 0;
-    for (const line of ["feeds a next match", "a final"] as const) {
-      const r = await round({ knockout: true });
-      const b = r.boards[0]!;
-      if (line === "feeds a next match") await feedsNextMatch(r, b);
-      await pendingBridge(r, b);
-      await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
-      if (line === "feeds a next match") {
-        expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result")).toEqual({ status: "finished" });
-        expect(await fixtureOf(b.fixtureId), line).toEqual({
-          status: "forfeited",
-          outcome: engineFold(b, "core.forfeit", { by: "both", reason: "walkover" }).outcome,
-        });
-        expect((await ledgerOf(b.fixtureId)).map((e) => e.type)).toEqual(["core.forfeit"]);
-        expect(await listNeedsOrganiserExternalPlay(r.owner, r.divisionId), "settled: not this queue's").toEqual([]);
-      } else {
-        expect(await engineCodeOf(resolveExternalPlay(r.owner, b.fixtureId, "no_result")), line).toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
-        expect(await ledgerOf(b.fixtureId), "nothing written").toEqual([]);
-        expect(await fixtureOf(b.fixtureId)).toEqual({ status: "scheduled", outcome: null });
-        expect(await bridgeOf(b.fixtureId), "still the organiser's").toMatchObject({ status: "needs_organiser", needs_reason: "not_started" });
-        expect((await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((q) => q.reason)).toEqual(["not_started"]);
-        // The pair: a winner still settles the final.
-        expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins")).toEqual({ status: "finished" });
+  it("I-3 knockout: in EVERY kind the engine declares a level result forbidden in, No result is refused KNOCKOUT_NEEDS_WINNER before anything is written — a line that feeds a next match as much as a final, both players absent included — and a winner still settles it; the panel and the queue hide No result by the same predicate, and every draw kind offers it", async () => {
+    // The kinds come from the ENGINE's declarations (core/types.ts BRACKET_KINDS, DRAW_KINDS), never a list typed here.
+    const readings = { refused: 0, offered: 0 };
+    for (const kind of [...BRACKET_KINDS, ...DRAW_KINDS]) {
+      const bracket = BRACKET_KINDS.has(kind);
+      for (const line of bracket ? (["feeds a next match", "a final"] as const) : (["a board"] as const)) {
+        const label = `${kind}, ${line}`;
+        const r = await round();
+        await sql`update stages set kind = ${kind} where id = ${r.stageId}`;
+        const b = r.boards[0]!;
+        if (line === "feeds a next match") await feedsNextMatch(r, b);
+        // Both absent on a feeding line: the hold whose No result was a double walkover before this ruling.
+        await holdAs(r, b, line === "feeds a next match" ? "no_show_both" : "not_started");
+        const reason = (await bridgeOf(b.fixtureId))!.needs_reason;
+        const queue = (await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).filter((q) => q.fixtureId === b.fixtureId);
+        const panel = (await loadArbiterRound(r.owner, r.divisionId))!.boards.filter((x) => x.fixtureId === b.fixtureId);
+        expect([queue.length, panel.length], `${label}: premise, both readers list the board`).toEqual([1, 1]);
+        expect(queue[0]!.knockout, `${label}: the queue's reading`).toBe(bracket);
+        expect(panel[0]!.knockout, `${label}: the panel's reading`).toBe(bracket);
+        if (bracket) {
+          expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, "no_result")), label).toEqual([409, "KNOCKOUT_NEEDS_WINNER"]);
+          expect(await ledgerOf(b.fixtureId), `${label}: nothing written`).toEqual([]);
+          expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "scheduled", outcome: null });
+          expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: reason });
+          // The pair: a winner still settles it.
+          expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins"), label).toEqual({ status: "finished" });
+          readings.refused += 1;
+        } else {
+          expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), label).toEqual({ status: "finished" });
+          expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "abandoned", outcome: null });
+          readings.offered += 1;
+        }
       }
-      checked += 1;
     }
-    expect(checked).toBe(2);
-  });
-
-  it("the panel and the queue offer No result exactly where the server takes it: their noNextMatch is the server's own D19 reading, shape by shape", async () => {
-    // Each shape's answer comes from the SERVER's refusal of No result (W2b D19, append-event.ts), never a table typed
-    // here: the readers' flag must agree with it on every shape, both ways.
-    const shapes = [
-      { label: "a league board", kind: "league", wire: "none" },
-      { label: "a knockout line that feeds a next match", kind: "knockout", wire: "winner" },
-      { label: "a knockout final", kind: "knockout", wire: "none" },
-      { label: "a stepladder's last rung", kind: "stepladder", wire: "none" },
-      { label: "a grand final with a bracket reset (both edges into its own rematch)", kind: "double_elim", wire: "reset" },
-    ] as const;
-    const readings = { offered: 0, refused: 0 };
-    for (const shape of shapes) {
-      const r = await round();
-      await sql`update stages set kind = ${shape.kind} where id = ${r.stageId}`;
-      const b = r.boards[0]!;
-      if (shape.wire !== "none") {
-        const [next] = await sql<{ id: string }[]>`
-          insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
-          values (${r.stageId}, ${r.divisionId}, ${r.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
-          returning id`;
-        if (shape.wire === "winner") await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
-        else await sql`update fixtures set winner_to_fixture = ${next!.id}, loser_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
-      }
-      await pendingBridge(r, b);
-      await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
-      const queue = (await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).filter((q) => q.fixtureId === b.fixtureId);
-      const panel = (await loadArbiterRound(r.owner, r.divisionId))!.boards.filter((x) => x.fixtureId === b.fixtureId);
-      expect([queue.length, panel.length], `${shape.label}: premise, both readers list the board`).toEqual([1, 1]);
-      let refused: boolean;
-      try {
-        await resolveExternalPlay(r.owner, b.fixtureId, "no_result");
-        refused = false;
-      } catch (err) {
-        expect(err instanceof EngineError && err.code, `${shape.label}: refused only by D19`).toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
-        refused = true;
-      }
-      expect(queue[0]!.noNextMatch, `${shape.label}: the queue's reading`).toBe(refused);
-      expect(panel[0]!.noNextMatch, `${shape.label}: the panel's reading`).toBe(refused);
-      readings[refused ? "refused" : "offered"]++;
-    }
-    // Anti-vacuity: both answers reached.
-    expect(readings).toEqual({ offered: 2, refused: 3 });
+    // Anti-vacuity: both answers reached, every declared kind swept.
+    expect(readings).toEqual({ refused: BRACKET_KINDS.size * 2, offered: DRAW_KINDS.size });
   });
 });
 
