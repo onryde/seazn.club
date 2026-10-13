@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { SUPERUSER_ONLY } from "../../../../../../scripts/rls-exempt.ts";
 
 const CHECK_VIOLATION = "23514";
 const FK_VIOLATION = "23503";
@@ -283,6 +284,53 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
     expect(await attempt(sql`delete from users where id = ${userId}`)).toEqual({
       accepted: false, code: FK_VIOLATION,
       constraint: "online_chess_audit_actor_user_id_fkey",
+    });
+  });
+  // CI's RLS guard (scripts/check-rls.ts, and rls-coverage.test.ts beside it) exempts a table by NAME, in
+  // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
+  // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
+  // never silently empty.
+  describe("sealed tables (V439, V442): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+    /** Typed from the migrations' own words (V439: "Sealed like V410's tables … no app_user policy"; stage_round_opens
+     *  and V442's guard faults enable + force with no policy), never read from the catalogue. */
+    const SEALED = [
+      "fixture_play_flags", "fixture_video_guard_faults", "fixture_video_meetings",
+      "fixture_video_participants", "online_chess_audit", "stage_round_opens",
+    ];
+    /** The four with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). */
+    const WITH_ORG_ID = ["fixture_play_flags", "fixture_video_meetings", "online_chess_audit", "stage_round_opens"];
+    const ANY_PRIVILEGE = "select, insert, update, delete, truncate, references, trigger";
+
+    it("each is sealed: enabled AND forced, zero policies, and app_user holds no privilege on it", async () => {
+      const rows = await sql<{ name: string; enabled: boolean; forced: boolean; policies: number; granted: boolean; hasOrgId: boolean }[]>`
+        select c.relname as name, c.relrowsecurity as enabled, c.relforcerowsecurity as forced,
+               (select count(*)::int from pg_policies p where p.tablename = c.relname and p.schemaname = n.nspname) as policies,
+               has_table_privilege('app_user', c.oid, ${ANY_PRIVILEGE}) as granted,
+               exists (select 1 from information_schema.columns col
+                        where col.table_schema = n.nspname and col.table_name = c.relname
+                          and col.column_name = 'org_id') as "hasOrgId"
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = current_schema() and c.relkind = 'r' and c.relname = any(${SEALED}::text[])
+         order by c.relname`;
+      expect(rows.map((r) => r.name), "tables checked").toEqual(SEALED);
+      for (const r of rows) {
+        expect({ name: r.name, enabled: r.enabled, forced: r.forced, policies: r.policies, granted: r.granted })
+          .toEqual({ name: r.name, enabled: true, forced: true, policies: 0, granted: false });
+      }
+      expect(rows.filter((r) => r.hasOrgId).map((r) => r.name)).toEqual(WITH_ORG_ID);
+    });
+
+    it("the pair: the same probe reads app_user's grant on fixture_external_play, V439's one TENANT table", async () => {
+      const [t] = await sql<{ granted: boolean; policies: number }[]>`
+        select has_table_privilege('app_user', c.oid, ${ANY_PRIVILEGE}) as granted,
+               (select count(*)::int from pg_policies p where p.tablename = c.relname and p.schemaname = n.nspname) as policies
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = current_schema() and c.relname = 'fixture_external_play'`;
+      expect(t).toEqual({ granted: true, policies: 1 });
+    });
+
+    it("the four with org_id are exempt by name, so the RLS guard reads them as sealed rather than as missing a policy", () => {
+      expect(WITH_ORG_ID.filter((t) => SUPERUSER_ONLY.has(t))).toEqual(WITH_ORG_ID);
     });
   });
 });
