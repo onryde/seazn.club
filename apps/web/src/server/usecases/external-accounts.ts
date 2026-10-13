@@ -74,7 +74,10 @@ async function readStoredToken(
   const rows = await sql<{ access_token_enc: Uint8Array | null }[]>`
     select access_token_enc from user_external_accounts
      where user_id = ${userId} and provider = 'lichess'`;
-  const enc = rows[0]?.access_token_enc ?? null;
+  return openSealed(rows[0]?.access_token_enc ?? null);
+}
+
+async function openSealed(enc: Uint8Array | null): Promise<{ token: string } | { failure: TokenOpenFailure } | null> {
   if (!enc) return null;
   try {
     return { token: await openPlayerToken(Buffer.from(enc).toString("base64")) };
@@ -108,6 +111,14 @@ export async function getLichessAccessToken(userId: string): Promise<string | nu
   return stored.token;
 }
 
+/** Lichess's `/api/token`, on the same base the Board API uses (LICHESS_BASE_URL, read per call; lichess.org when
+ *  unset — the same URL as `LICHESS_TOKEN_URL`), so a revoke reaches the e2e's Lichess fixture as every other call
+ *  does. */
+function lichessTokenUrl(): string {
+  const base = process.env.LICHESS_BASE_URL;
+  return base ? `${base.replace(/\/$/, "")}/api/token` : LICHESS_TOKEN_URL;
+}
+
 /** Best-effort `DELETE /api/token`: null when Lichess accepted it, else why
  *  not — a classification, so a caller can report a grant left live without
  *  ever handling the token. */
@@ -115,7 +126,7 @@ async function revokeAtLichess(
   token: string,
 ): Promise<null | { reason: "revoke_rejected"; status: number } | { reason: "revoke_unreachable" }> {
   try {
-    const res = await fetch(LICHESS_TOKEN_URL, {
+    const res = await fetch(lichessTokenUrl(), {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
@@ -138,22 +149,31 @@ export async function upsertLichessLink(
   link: { externalUserId: string; username: string; scopes: string[]; token: string },
 ): Promise<void> {
   const sealed = Buffer.from(await sealPlayerToken(link.token), "base64");
+  // M-2: the token this write replaces, read under the row's lock so a concurrent re-link cannot slip between.
+  let replaced: Uint8Array | null = null;
   try {
-    await sql`
-      insert into user_external_accounts (
-        user_id, provider, external_user_id, username,
-        access_token_enc, scopes, consented_at, updated_at
-      ) values (
-        ${userId}, 'lichess', ${link.externalUserId}, ${link.username},
-        ${sealed}, ${link.scopes}, now(), now()
-      )
-      on conflict (user_id, provider) do update set
-        external_user_id = excluded.external_user_id,
-        username         = excluded.username,
-        access_token_enc = excluded.access_token_enc,
-        scopes           = excluded.scopes,
-        consented_at     = excluded.consented_at,
-        updated_at       = now()`;
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ access_token_enc: Uint8Array | null }[]>`
+        select access_token_enc from user_external_accounts
+         where user_id = ${userId} and provider = 'lichess'
+           for update`;
+      replaced = prior?.access_token_enc ?? null;
+      await tx`
+        insert into user_external_accounts (
+          user_id, provider, external_user_id, username,
+          access_token_enc, scopes, consented_at, updated_at
+        ) values (
+          ${userId}, 'lichess', ${link.externalUserId}, ${link.username},
+          ${sealed}, ${link.scopes}, now(), now()
+        )
+        on conflict (user_id, provider) do update set
+          external_user_id = excluded.external_user_id,
+          username         = excluded.username,
+          access_token_enc = excluded.access_token_enc,
+          scopes           = excluded.scopes,
+          consented_at     = excluded.consented_at,
+          updated_at       = now()`;
+    });
   } catch (err) {
     const pg = err as { code?: string; constraint_name?: string };
     if (pg.code === "23505" && pg.constraint_name === ALREADY_LINKED_CONSTRAINT) {
@@ -164,6 +184,30 @@ export async function upsertLichessLink(
       );
     }
     throw err;
+  }
+  await revokeReplacedGrant(userId, replaced, link.token);
+}
+
+/** M-2: the grant a committed re-link replaced, revoked at Lichess — best effort, like unlink, and never silent: a token
+ *  we cannot open and a revoke that fails both leave a move-capable grant live, reported by user id and reason, never
+ *  the token. The same token stored again is the grant we keep, and is never sent. */
+async function revokeReplacedGrant(userId: string, replaced: Uint8Array | null, current: string): Promise<void> {
+  const old = await openSealed(replaced);
+  if (old === null) return;
+  if ("failure" in old) {
+    log.error(
+      { userId, reason: old.failure },
+      "lichess: re-link could not open the replaced token — the old grant was NOT revoked at Lichess and stays live until the player revokes it there",
+    );
+    return;
+  }
+  if (old.token === current) return;
+  const failure = await revokeAtLichess(old.token);
+  if (failure) {
+    log.error(
+      { userId, ...failure },
+      "lichess: re-link could not revoke the replaced grant at Lichess — it stays live until the player revokes it there",
+    );
   }
 }
 

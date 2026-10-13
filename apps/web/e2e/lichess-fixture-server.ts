@@ -138,6 +138,7 @@ const ROUTES = [
   /^\/api\/challenge\/[A-Za-z0-9]+\/(accept|cancel)$/,
   /^\/api\/board\/game\/stream\/[A-Za-z0-9]+$/,
   /^\/api\/board\/game\/[A-Za-z0-9]+\/(move\/[^/]+|resign|abort|draw\/(yes|no))$/,
+  /^\/api\/token$/,
 ];
 
 /** M5: what Lichess keeps of a UCI string — its legal prefix. */
@@ -391,6 +392,13 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
       // Everything else is a Board API / challenge call and carries a token.
       if (token === null || revoked.has(token) || !tokens.has(token)) return send(NO_SUCH_TOKEN, 401);
       const me = tokens.get(token)!;
+
+      // lila OAuth.tokenRevoke (read from source, 2026-10-14): the bearer revokes ITSELF, 204 NoContent. A bearer it
+      // does not know is Scoped's 401, above. Final review M-2: a re-link revokes the grant it replaced.
+      if (path === "/api/token" && method === "DELETE") {
+        revoked.add(token);
+        return res.writeHead(204).end();
+      }
 
       if (path === "/api/challenge" && method === "GET") {
         const all = [...games.values()].filter((g) => listed(g, now));

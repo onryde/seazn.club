@@ -869,12 +869,22 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     await waitUntilQueued(s.fixtureId);
     const { upsertLichessLink } = await import("../external-accounts");
     const relinked = `b-${randomUUID().slice(0, 8)}`;
-    await upsertLichessLink(s.away.userId, {
-      externalUserId: relinked,
-      username: relinked,
-      scopes: [...PLAY_SCOPES],
-      token: `lio_seed_${relinked}`,
-    });
+    // M-2: the re-link revokes the replaced grant at Lichess — answered here, never sent to the real lichess.org.
+    const revoke = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", revoke);
+    try {
+      await upsertLichessLink(s.away.userId, {
+        externalUserId: relinked,
+        username: relinked,
+        scopes: [...PLAY_SCOPES],
+        token: `lio_seed_${relinked}`,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(revoke.mock.calls.map((c) => new Headers((c as unknown as [string, RequestInit])[1].headers).get("authorization")), "the old account's grant").toEqual([
+      `Bearer lio_seed_${s.away.lichessId}`,
+    ]);
     await blocker.release();
     expect(await pending).toEqual({ created: false, reason: "not_ready" });
     noHttp();

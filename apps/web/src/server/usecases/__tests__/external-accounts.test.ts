@@ -11,6 +11,8 @@ import {
   unlinkLichess,
   upsertLichessLink,
 } from "../external-accounts";
+import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
+import { backendPid, pollWaitersBehind } from "../external-play/__tests__/_lock-waiters";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A Lichess id nobody else can hold. `(provider, external_user_id)` is
@@ -279,6 +281,159 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
 // rotated, or the ciphertext damaged — is a different fact from a row with no
 // token. Each case below seals under key A and then reaches the open with the
 // key changed, so the decrypt genuinely fails; nothing is mocked in crypto.
+// Final review M-2: re-linking overwrote the sealed token and left the replaced grant live at Lichess — a move-capable
+// token nobody holds any more. The re-link now revokes it, best effort, AFTER its own write commits: a re-link that
+// fails (409 below) revokes nothing, so the grant still stored keeps working.
+describe.skipIf(!HAS_DB)("external-accounts — a re-link revokes the grant it replaces (M-2)", () => {
+  type Call = [string, RequestInit];
+  const deletes = (): Call[] =>
+    (fetch as unknown as { mock: { calls: Call[] } }).mock.calls.filter(([, i]) => i.method === "DELETE");
+  const bearerOf = (c: Call) => new Headers(c[1].headers).get("authorization");
+  const link = (userId: string, externalUserId: string, token: string) =>
+    upsertLichessLink(userId, { externalUserId, username: "R", scopes: [...PLAY_SCOPES], token });
+
+  it("revokes the OLD token at Lichess, once, after the new one is stored — and says nothing when it worked", async () => {
+    const userId = await newUser("m2-relink");
+    const account = lid("lid-m2");
+    await link(userId, account, "lio_m2_old");
+    expect(deletes(), "premise: a first link revokes nothing").toEqual([]);
+    const storedAtRevoke: (string | null)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      storedAtRevoke.push(await getLichessAccessToken(userId));
+      return new Response(null, { status: 204 });
+    }));
+    await link(userId, account, "lio_m2_new");
+    expect(deletes().map(bearerOf)).toEqual(["Bearer lio_m2_old"]);
+    expect(deletes()[0]![0]).toBe("https://lichess.org/api/token");
+    expect(storedAtRevoke, "the revoke runs after the new token is committed").toEqual(["lio_m2_new"]);
+    expect(await getLichessAccessToken(userId)).toBe("lio_m2_new");
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("a re-link to a DIFFERENT Lichess account revokes the old account's grant too", async () => {
+    const userId = await newUser("m2-other");
+    await link(userId, lid("lid-m2a"), "lio_m2_a");
+    await link(userId, lid("lid-m2b"), "lio_m2_b");
+    expect(deletes().map(bearerOf)).toEqual(["Bearer lio_m2_a"]);
+  });
+
+  it("the SAME token re-stored is never revoked — it is the grant we keep", async () => {
+    const userId = await newUser("m2-same");
+    const account = lid("lid-m2s");
+    await link(userId, account, "lio_m2_same");
+    await link(userId, account, "lio_m2_same");
+    expect(deletes()).toEqual([]);
+    expect(await getLichessAccessToken(userId)).toBe("lio_m2_same");
+  });
+
+  it("a legacy identity-only row has no token to revoke: the re-link sends no DELETE", async () => {
+    const userId = await newUser("m2-legacy");
+    const account = lid("lid-m2l");
+    await sql`
+      insert into user_external_accounts (user_id, provider, external_user_id, username)
+      values (${userId}, 'lichess', ${account}, 'Legacy')`;
+    await link(userId, account, "lio_m2_fresh");
+    expect(deletes()).toEqual([]);
+    expect(await getLichessAccessToken(userId)).toBe("lio_m2_fresh");
+  });
+
+  it("a re-link REFUSED (the account is someone else's) revokes nothing: the grant still stored keeps working", async () => {
+    const owner = await newUser("m2-owner");
+    const shared = lid("lid-m2-shared");
+    await link(owner, shared, "lio_m2_owner");
+    const other = await newUser("m2-claimant");
+    await link(other, lid("lid-m2-own"), "lio_m2_claimant_old");
+    await expect(link(other, shared, "lio_m2_claimant_new")).rejects.toMatchObject({ code: "LICHESS_ALREADY_LINKED" });
+    expect(deletes()).toEqual([]);
+    expect(await getLichessAccessToken(other)).toBe("lio_m2_claimant_old");
+  });
+
+  it("a revoke that fails never blocks the re-link, and is reported by user id with its reason — never the token", async () => {
+    const outcomes: [string, () => Promise<Response>, Record<string, unknown>][] = [
+      ["unreachable", async () => { throw new Error("network down"); }, { reason: "revoke_unreachable" }],
+      ["refused", async () => new Response(null, { status: 400 }), { reason: "revoke_rejected", status: 400 }],
+    ];
+    let checked = 0;
+    for (const [tag, answer, logged] of outcomes) {
+      errorSpy.mockClear();
+      const userId = await newUser(`m2-${tag}`);
+      const account = lid(`lid-m2-${tag}`);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+      await link(userId, account, `lio_m2_${tag}_old`);
+      vi.stubGlobal("fetch", vi.fn(answer));
+      await expect(link(userId, account, `lio_m2_${tag}_new`), tag).resolves.toBeUndefined();
+      expect(await getLichessAccessToken(userId), tag).toBe(`lio_m2_${tag}_new`);
+      expect(errorSpy, tag).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]![0], tag).toEqual({ userId, ...logged });
+      expect(loggedText(), tag).not.toContain(`lio_m2_${tag}_old`);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("through the Lichess fixture (LICHESS_BASE_URL, as e2e runs): the re-link's revoke kills the old grant there and the new one plays; unlink then kills the new one", async () => {
+    vi.unstubAllGlobals(); // the real fetch, to a real server
+    const fx = await startLichessFixtureServer(0);
+    try {
+      vi.stubEnv("LICHESS_BASE_URL", fx.url);
+      const userId = await newUser("m2-fixture");
+      const account = lid("lid-m2-fx");
+      fx.registerToken("lio_fx_old", account);
+      fx.registerToken("lio_fx_new", account);
+      const playing = async (token: string) =>
+        (await fetch(`${fx.url}/api/account/playing`, { headers: { Authorization: `Bearer ${token}` } })).status;
+      await link(userId, account, "lio_fx_old");
+      expect([await playing("lio_fx_old"), await playing("lio_fx_new")], "premise: both grants live").toEqual([200, 200]);
+      await link(userId, account, "lio_fx_new");
+      expect(fx.calls.filter((c) => c.method === "DELETE").map((c) => [c.path, c.token])).toEqual([["/api/token", "lio_fx_old"]]);
+      expect([await playing("lio_fx_old"), await playing("lio_fx_new")]).toEqual([401, 200]);
+      await unlinkLichess(userId);
+      expect(await playing("lio_fx_new"), "unlink revokes through the same base").toBe(401);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      await fx.close();
+    }
+  });
+
+  it("two re-links at once each revoke the grant THEY replaced (the row lock): every token but the one left stored is revoked, none twice", async () => {
+    const userId = await newUser("m2-race");
+    const account = lid("lid-m2-race");
+    await link(userId, account, "lio_race_0");
+    // Staged, never raced at t=0: a holder takes the row lock, both re-links queue behind it, then it lets go.
+    const holder = await sql.reserve();
+    try {
+      await holder`begin`;
+      await holder`select 1 from user_external_accounts where user_id = ${userId} and provider = 'lichess' for update`;
+      const holderPid = await backendPid(holder);
+      let done = 0;
+      const both = Promise.all(["lio_race_1", "lio_race_2"].map((t) => link(userId, account, t).finally(() => (done += 1))));
+      expect(await pollWaitersBehind(holderPid, { atLeast: 2, finished: () => done > 0 }), "premise: both re-links wait on the holder").toBe(2);
+      await holder`rollback`;
+      await both;
+    } finally {
+      holder.release();
+    }
+    const stored = await getLichessAccessToken(userId);
+    const revoked = deletes().map(bearerOf);
+    expect(revoked, "one revoke per replaced grant").toHaveLength(2);
+    expect(new Set(revoked).size, `none revoked twice: ${JSON.stringify(revoked)}`).toBe(2);
+    expect(new Set([...revoked, `Bearer ${stored}`])).toEqual(new Set(["Bearer lio_race_0", "Bearer lio_race_1", "Bearer lio_race_2"]));
+  });
+
+  it("an old token we cannot open (KEK rotated) is reported, not sent: the re-link still stores the new one", async () => {
+    const userId = await newUser("m2-rotated");
+    const account = lid("lid-m2-rot");
+    await link(userId, account, "lio_m2_rot_old");
+    vi.stubEnv("LICHESS_TOKEN_KEK", randomBytes(32).toString("hex"));
+    await link(userId, account, "lio_m2_rot_new");
+    expect(deletes()).toEqual([]);
+    expect(await getLichessAccessToken(userId)).toBe("lio_m2_rot_new");
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "decrypt_failed" });
+    expect(loggedText()).not.toContain("lio_m2_rot");
+  });
+});
+
 describe.skipIf(!HAS_DB)("external-accounts — a stored token we cannot open", () => {
   const otherKey = (): string => randomBytes(32).toString("hex");
 
