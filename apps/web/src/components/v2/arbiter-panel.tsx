@@ -42,6 +42,7 @@ import {
   MUTED,
   noticeSentence,
   settleChoices,
+  settleNoNextMatchGuidance,
   SOFT,
   useFmt,
   type Fmt,
@@ -632,7 +633,10 @@ function Decision({
                 {board.tiebreakOwed ? f.t("arbiter.decide.tiebreakBody") : f.t("arbiter.decide.settleBody")}
               </p>
               <div className="grid min-w-0 grid-cols-1 gap-2 min-[360px]:grid-cols-2">
-                {settleChoices({ whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed }, f).map((c) => (
+                {settleChoices(
+                  { whiteSide: board.whiteSide, whiteName: board.white.name, blackName: board.black.name, tiebreakOwed: board.tiebreakOwed, noNextMatch: board.noNextMatch },
+                  f,
+                ).map((c) => (
                   <button
                     key={c.choice}
                     type="button"
@@ -646,6 +650,11 @@ function Decision({
                   </button>
                 ))}
               </div>
+              {settleNoNextMatchGuidance(board) && (
+                <p data-testid="arbiter-settle-no-next-match" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
+                  {f.t("arbiter.decide.noNextMatch")}
+                </p>
+              )}
             </fieldset>
           )}
         </>

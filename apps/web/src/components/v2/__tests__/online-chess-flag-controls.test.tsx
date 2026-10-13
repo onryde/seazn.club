@@ -219,6 +219,7 @@ describe("needs-a-result queue: nothing on it starts play, so it takes no flag",
     stageName: "League",
     canResync: true,
     seated: false,
+    noNextMatch: false,
   };
   it("no Resend at all; the four settle buttons and Resync — the controls that FINISH a board", () => {
     const tree = renderIsland(ExternalPlayNeedsResultQueue, { held: [ROW], flagged: [], ownFlagged: 0, slugs: { org: "o", comp: "c", div: "d" } }).tree();

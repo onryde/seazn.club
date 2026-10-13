@@ -56,6 +56,7 @@ const HELD = (fixtureId: string, over: Partial<HeldRow> = {}): HeldRow => ({
   stageName: "League",
   canResync: true,
   seated: false,
+  noNextMatch: false,
   reason: "aborted",
   ...over,
 });
@@ -76,6 +77,7 @@ const FLAGGED = (fixtureId: string, over: Partial<FlaggedBoard> = {}): FlaggedBo
     canSettle: true,
     whiteSide: "home",
     tiebreakOwed: false,
+    noNextMatch: false,
     flags: [
       { id: `${fixtureId}-a`, kind: "out_of_band_play", at: "2026-10-12T19:00:00.000Z", plies: null },
       { id: `${fixtureId}-b`, kind: "out_of_band_play", at: "2026-10-12T19:01:00.000Z", plies: null },

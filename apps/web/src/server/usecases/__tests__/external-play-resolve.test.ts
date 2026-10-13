@@ -480,6 +480,50 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     }
     expect(checked).toBe(2);
   });
+
+  it("the panel and the queue offer No result exactly where the server takes it: their noNextMatch is the server's own D19 reading, shape by shape", async () => {
+    // Each shape's answer comes from the SERVER's refusal of No result (W2b D19, append-event.ts), never a table typed
+    // here: the readers' flag must agree with it on every shape, both ways.
+    const shapes = [
+      { label: "a league board", kind: "league", wire: "none" },
+      { label: "a knockout line that feeds a next match", kind: "knockout", wire: "winner" },
+      { label: "a knockout final", kind: "knockout", wire: "none" },
+      { label: "a stepladder's last rung", kind: "stepladder", wire: "none" },
+      { label: "a grand final with a bracket reset (both edges into its own rematch)", kind: "double_elim", wire: "reset" },
+    ] as const;
+    const readings = { offered: 0, refused: 0 };
+    for (const shape of shapes) {
+      const r = await round();
+      await sql`update stages set kind = ${shape.kind} where id = ${r.stageId}`;
+      const b = r.boards[0]!;
+      if (shape.wire !== "none") {
+        const [next] = await sql<{ id: string }[]>`
+          insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+          values (${r.stageId}, ${r.divisionId}, ${r.orgId}, 2, 1, ${`nx-${randomUUID().slice(0, 6)}`}, 'scheduled')
+          returning id`;
+        if (shape.wire === "winner") await sql`update fixtures set winner_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
+        else await sql`update fixtures set winner_to_fixture = ${next!.id}, loser_to_fixture = ${next!.id} where id = ${b.fixtureId}`;
+      }
+      await pendingBridge(r, b);
+      await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
+      const queue = (await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).filter((q) => q.fixtureId === b.fixtureId);
+      const panel = (await loadArbiterRound(r.owner, r.divisionId))!.boards.filter((x) => x.fixtureId === b.fixtureId);
+      expect([queue.length, panel.length], `${shape.label}: premise, both readers list the board`).toEqual([1, 1]);
+      let refused: boolean;
+      try {
+        await resolveExternalPlay(r.owner, b.fixtureId, "no_result");
+        refused = false;
+      } catch (err) {
+        expect(err instanceof EngineError && err.code, `${shape.label}: refused only by D19`).toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
+        refused = true;
+      }
+      expect(queue[0]!.noNextMatch, `${shape.label}: the queue's reading`).toBe(refused);
+      expect(panel[0]!.noNextMatch, `${shape.label}: the panel's reading`).toBe(refused);
+      readings[refused ? "refused" : "offered"]++;
+    }
+    // Anti-vacuity: both answers reached.
+    expect(readings).toEqual({ offered: 2, refused: 3 });
+  });
 });
 
 describe.runIf(HAS_DB)("resolveExternalPlay — who may settle", () => {

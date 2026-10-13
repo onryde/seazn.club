@@ -383,6 +383,61 @@ test.describe("arbiter panel", () => {
     expect(await noSidewaysScroll(page, [320, 768, 1280])).toBe(3);
   });
 
+  // W2b D19: a double walkover is refused on a bracket line that feeds no next match, so "No result" (which W2b
+  // records as one) is not offered there — on the panel or on the division's queue — and the settle says why. The
+  // stage is a knockout whose round-1 lines feed nothing: each board is a final by D19's own reading
+  // (lib/double-walkover-next-match.ts). The pair: a winner still settles it, through the real server.
+  test("W2b D19: on a final the settle offers no No result and says why, panel and queue; no sideways scroll at 320, 768 or 1280", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const r = await seedRound(request, ["Ines Duarte", "Tomasz Wrona", longName(), "Chen Wei"]);
+    const [b1, b2] = r.boards;
+    await gameOn(b1, { moves: LINE });
+    await gameOn(b2, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    await flagBoard(r, b2);
+    const feeds = await withDb(async (sql) => {
+      await sql`update stages set kind = 'knockout' where id = (select stage_id from fixtures where id = ${b2.fixtureId})`;
+      return sql<{ w: string | null; l: string | null }[]>`select winner_to_fixture as w, loser_to_fixture as l from fixtures where id = ${b2.fixtureId}`;
+    });
+    expect(feeds, "premise: the line feeds no next match").toEqual([{ w: null, l: null }]);
+    const winners = [fill("externalPlay.settle.wins", { name: b2.home.name }), fill("externalPlay.settle.wins", { name: b2.away.name })];
+
+    // The division's queue: the held card's settle, opened.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.fixturesTab);
+    const row = page.getByTestId(`external-play-queue-row-${b2.fixtureId}`);
+    await row.getByTestId("external-play-settle-toggle").click();
+    await expect(row.getByTestId("external-play-settle").getByRole("button")).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(row.getByTestId("external-play-settle-no-next-match")).toHaveText(uiEn["arbiter.decide.noNextMatch"]!);
+    await shoot(page, "queue-final-settle");
+    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the queue").toBe(3);
+
+    // The arbiter panel: the same three, the same sentence.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${r.arbiterPath}?fixture=${b2.fixtureId}`);
+    const settle = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+    await settle.click();
+    await expect(settle).toHaveAttribute("aria-expanded", "true");
+    const choices = page.getByTestId("arbiter-settle").getByRole("button");
+    await expect(choices).toHaveText([...winners, uiEn["externalPlay.resolve.draw"]!]);
+    await expect(page.getByTestId("arbiter-settle-no-next-match")).toHaveText(uiEn["arbiter.decide.noNextMatch"]!);
+    await shoot(page, "arbiter-final-settle");
+    expect(await noSidewaysScroll(page, [320, 768, 1280]), "the panel").toBe(3);
+
+    // The pair: a winner settles the final.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await choices.filter({ hasText: winners[0]! }).click();
+    await expect(status(page)).toHaveText(uiEn["arbiter.notice.settled"]);
+    const settled = await withDb(async (sql) => {
+      const [x] = await sql<{ kind: string | null; homeWon: boolean }[]>`
+        select outcome->>'kind' as kind, (outcome->>'winner') = home_entrant_id::text as "homeWon" from fixtures where id = ${b2.fixtureId}`;
+      return x!;
+    });
+    expect(settled).toEqual({ kind: "win", homeWon: true });
+  });
+
   test("I2: the panel hands each watch back — on a board switch, and when the tab goes away", async ({ page, request }) => {
     test.setTimeout(120_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);

@@ -125,6 +125,10 @@ export type ArbiterBoard = {
   /** T16: a drawn knockout game waits for the organiser to pick who goes
    *  through (held `tiebreak_owed`): the settle offers a winner only. */
   tiebreakOwed: boolean;
+  /** W2b D19: the server refuses a double walkover here — a bracket line that feeds no next match (a final, a last
+   *  rung, a third-place match, a reset grand final) — so the settle does not offer "No result". The server's own
+   *  reading (`doubleWalkoverRefused`, lib/double-walkover-next-match.ts), never re-derived on the client. */
+  noNextMatch: boolean;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };
