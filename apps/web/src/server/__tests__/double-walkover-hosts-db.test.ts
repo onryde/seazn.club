@@ -20,7 +20,8 @@ import { fixtureRow, post, tip } from "@/server/engine-db/__tests__/helpers/w2b-
 import { finalizeFixture } from "@/server/usecases/scoring";
 import { listMyFixtures } from "@/server/usecases/me";
 import { createPerson } from "@/server/usecases/persons";
-import { creditsNobody } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -163,6 +164,15 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
     expect((row(dwId)!.summary as { headline?: string } | null)?.headline, "premise: beside the stored headline it must not print").toMatch(/\d/);
     expect(creditsNobody(row(woId)!.outcome), "the pair: the walkover credits its winner").toBe(false);
     expect((row(woId)!.summary as { headline?: string } | null)?.headline, "and keeps its credited score").toBe(woHeadline);
+    // Loop R M-11: the row carries what the page's tag reads — the seats and the active abandon's reason (none here) —
+    // so the walkover's line says "w/o" after its score; the double walkover's tag is its score, read as above.
+    const wo = sides.find((f) => f.id === woId)!;
+    expect([row(woId)!.home_entrant_id, row(woId)!.away_entrant_id, row(woId)!.abandon_reason], "the walkover's seats, no abandon").toEqual([wo.home_entrant_id, wo.away_entrant_id, null]);
+    const msg = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("en", k, v);
+    expect(
+      outcomeTagWords(msg, row(woId)!.outcome, forfeitLedgerOfReason(row(woId)!.abandon_reason), row(woId)!),
+      "the page's reader over the real row: the walkover's words",
+    ).toEqual({ word: msgFor("en", "forfeit.tag.walkover"), full: msgFor("en", "forfeit.tagFull.walkover") });
     // Fix round 3: the row says which side the player holds — the stored headline reads home first.
     expect([row(dwId)!.player_home, row(woId)!.player_home], "the home players' rows").toEqual([true, true]);
     const awayRow = (await listMyFixtures(players[`${woId}:away`]!)).results.find((r) => r.id === woId);

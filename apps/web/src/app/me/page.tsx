@@ -27,7 +27,10 @@ import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { creditsNobody } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
+import type { Dict } from "@/lib/i18n-constants";
+import type { ReactNode } from "react";
 import { headlineFrom } from "@/lib/headline-from";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -300,6 +303,7 @@ export default async function MePage({
                   ) : (
                     <span className="app-display text-lg font-bold text-slate-700">
                       {headline(r) ?? "—"}
+                      {resultTag(r, ui)}
                     </span>
                   )}
                 </li>
@@ -478,6 +482,20 @@ function headline(r: MyResult): string | null {
   const stored = storedHeadline(r);
   if (stored === null) return null;
   return headlineFrom(stored, r.player_home ? "home" : "away") ?? stored;
+}
+
+/** Loop R M-11 — a credited result keeps its score and says why after it: the house tag ("w/o", "ret.", "Aband. ·
+ *  DLS", UI-2) from `outcomeTagWords`, the one reader, over the row's outcome, its active abandon's reason and its
+ *  seats, in the page's locale; nothing for a played result. Muted, a symbol named by the full words, its case kept on
+ *  its own span (`.app-display` uppercases and is unlayered, re-review N-1). */
+function resultTag(r: MyResult, ui: Dict): ReactNode {
+  const tag = outcomeTagWords((key, vars) => t(ui, key, vars), r.outcome, forfeitLedgerOfReason(r.abandon_reason), r);
+  if (tag === null) return null;
+  return (
+    <span role="img" aria-label={tag.full} title={tag.full} className="ml-1.5 normal-case text-slate-500">
+      {tag.word}
+    </span>
+  );
 }
 
 /** The line's two names in the order its score reads: hers first, unless her away score could not be turned. */

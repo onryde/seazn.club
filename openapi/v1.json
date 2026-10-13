@@ -16373,6 +16373,40 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "home_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "abandon_reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -16390,7 +16424,10 @@
                               "player_home",
                               "scheduled_at",
                               "summary",
-                              "outcome"
+                              "outcome",
+                              "home_entrant_id",
+                              "away_entrant_id",
+                              "abandon_reason"
                             ],
                             "additionalProperties": false
                           }
@@ -16496,7 +16533,10 @@
                         "player_home": true,
                         "scheduled_at": "example",
                         "summary": null,
-                        "outcome": null
+                        "outcome": null,
+                        "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "abandon_reason": "example"
                       }
                     ],
                     "teams": [

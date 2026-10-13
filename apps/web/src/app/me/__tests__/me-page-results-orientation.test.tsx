@@ -31,16 +31,20 @@ const result = (id: string, entrant: string, opponent: string, playerHome: boole
   entrant_name: entrant, opponent_name: opponent, player_home: playerHome, scheduled_at: null,
   // `MyResult.summary` is typed `string | null`, but the jsonb column arrives as the object the page reads.
   summary: { headline } as unknown as MyResult["summary"], outcome,
+  home_entrant_id: null, away_entrant_id: null, abandon_reason: null,
 });
 const WIN = (w: string) => ({ kind: "win", winner: w });
 const WO = (w: string, l: string) => ({ kind: "award", winner: w, loser: l, reason: "walkover" });
+/** Loop R M-11: a walkover's turned score is followed by its house tag (me-page-results-forfeit.test.tsx pins the tag
+ *  itself; here it only rides along after the score this test is about). */
+const WO_TAG = msgFor("en", "forfeit.tag.walkover");
 /** Each row: the player's side, the stored (home-first) headline, and what the player's line must read. */
 const ROWS = [
   // Home: the stored order IS her order.
   { r: result("h-played", "Owls", "Ravens", true, "2 — 0 · 21–10, 21–12", WIN("e-owls")), names: ["Owls", "Ravens"], score: "2 — 0 · 21–10, 21–12" },
-  { r: result("h-wo", "Kites", "Crows", true, "2 — 0", WO("e-kites", "e-crows")), names: ["Kites", "Crows"], score: "2 — 0" },
+  { r: result("h-wo", "Kites", "Crows", true, "2 — 0", WO("e-kites", "e-crows")), names: ["Kites", "Crows"], score: `2 — 0${WO_TAG}` },
   // Away: a walkover she won is stored "0 — 2" — the defect read exactly that beside her name.
-  { r: result("a-wo", "Lions", "Tigers", false, "0 — 2", WO("e-lions", "e-tigers")), names: ["Lions", "Tigers"], score: "2 — 0" },
+  { r: result("a-wo", "Lions", "Tigers", false, "0 — 2", WO("e-lions", "e-tigers")), names: ["Lions", "Tigers"], score: `2 — 0${WO_TAG}` },
   // Away, played, lost: the heads and every set turn, the tiebreak loser's points stay bracketed.
   { r: result("a-played", "Wrens", "Herons", false, "2 — 1 · 6–3 6–7(3) 7–6(5)", WIN("e-herons")), names: ["Wrens", "Herons"], score: "1 — 2 · 3–6 7–6(3) 6–7(5)" },
   // Away, a stored headline in no known shape: never guessed — the names take the stored (home-first) order instead.

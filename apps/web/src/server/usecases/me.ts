@@ -34,6 +34,7 @@ import { playerLinkId } from "@/lib/name-display";
 // single-org tenant tx this file never opens); see that helper's own doc
 // comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
+import { activeAbandonReasonSql } from "@/server/engine-db/recorded-abandon";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
 
@@ -88,6 +89,12 @@ export interface MyResult {
   scheduled_at: string | null;
   summary: string | null;
   outcome: unknown;
+  /** Loop R M-11 — the fixture's seats and its active abandon's reason (`activeAbandonReasonSql`): with `outcome`, all
+   *  `outcomeTagWords` reads for the line's tag ("w/o", "ret.", "Aband. · DLS"). The seats name the reason of an award
+   *  stored before W2b (which carried it only beside two seats). */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  abandon_reason: string | null;
 }
 
 export interface MyTeam {
@@ -165,7 +172,8 @@ export async function listMyFixtures(userId: string): Promise<{
            o.name as org_name, o.slug as org_slug,
            e.display_name as entrant_name, opp.display_name as opponent_name,
            (f.home_entrant_id = e.id) as player_home,
-           f.scheduled_at, m.summary, f.outcome
+           f.scheduled_at, m.summary, f.outcome,
+           f.home_entrant_id, f.away_entrant_id, ${activeAbandonReasonSql(sql, "f")} as abandon_reason
     from persons p
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}

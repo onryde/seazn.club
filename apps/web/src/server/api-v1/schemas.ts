@@ -877,6 +877,11 @@ export const MyResult = z.object({
   scheduled_at: z.string().nullable(),
   summary: z.unknown().nullable(),
   outcome: z.unknown().nullable(),
+  /** Loop R M-11 — the seats and the active abandon's reason, which with `outcome` say which credited result this is
+   *  (a walkover, a retirement, an abandon decided by DLS): /me prints its tag after the score. */
+  home_entrant_id: Uuid.nullable(),
+  away_entrant_id: Uuid.nullable(),
+  abandon_reason: z.string().nullable(),
 });
 
 export const MyTeam = z.object({

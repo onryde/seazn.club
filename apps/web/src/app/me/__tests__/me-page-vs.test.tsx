@@ -35,6 +35,7 @@ const resultRow: MyResult = {
   id: "r1", fixture_no: 3, competition_name: "Cup", competition_slug: "cup", competition_visibility: "public",
   division_name: "Open", division_slug: "open", org_name: "Club", org_slug: "club",
   entrant_name: "Lions", opponent_name: "Tigers", player_home: true, scheduled_at: null, summary: null, outcome: null,
+  home_entrant_id: null, away_entrant_id: null, abandon_reason: null,
 };
 
 vi.mock("@/server/usecases/me", () => ({
