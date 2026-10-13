@@ -67,7 +67,8 @@ const PERIOD_UNSET = {
 } as const;
 const SET_UNSET = { records: "stat-recording flags, not a format rule" } as const;
 const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  volleyball: SET_UNSET, badminton: SET_UNSET, tabletennis: SET_UNSET,
+  volleyball: SET_UNSET, badminton: SET_UNSET,
+  tabletennis: { ...SET_UNSET, cap: "ITTF has no cap (the preset's cap is null: deuce runs on until a two-point lead); the set kernel's key exists, table tennis narrows it out" },
   tennis: { interruptions: BOOKKEEPING },
   football: {
     periodSeconds: PERIOD_SECONDS,
@@ -377,7 +378,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     // any value here would be the test's own invention. Pinned, so the skip stays visible and a new one goes red.
     expect(sorted(noOnValue)).toEqual(sorted([
       "football.maxSubs", "football.subWindows", "football.sinBinMinutes", "football.concussionSubs",
-      "boardgame.clock", "volleyball.cap", "tabletennis.cap",
+      "boardgame.clock", "volleyball.cap",
     ]));
   });
 

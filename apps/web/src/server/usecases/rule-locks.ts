@@ -9,7 +9,7 @@ import "server-only";
 import type { Tx } from "@/lib/db";
 import type { RefusedField } from "@/lib/rule-errors";
 import { DRAW_KINDS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, type AnySportModule } from "@seazn/engine/sport";
+import { deciderKeysFor, pointsKeysFor, type AnySportModule } from "@seazn/engine/sport";
 
 /**
  * Division config keys that are TABLE rules (Q3); every other key is match format (Q4). Derived from the engine's own
@@ -20,15 +20,17 @@ import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, type AnySportModule } fr
 export const tableRuleKeys = (module: AnySportModule, variant: string | null): ReadonlySet<string> =>
   new Set([...pointsKeysFor(module, null, variant), "pointsMap"]);
 
-/** The top segment of a declared key: `periods.minutes` is a `periods` rule to a division config that stores `periods`. */
-const topOf = (key: string): string => key.split(".")[0]!;
-
-/** Whether the engine says a division key applies to a stage of this kind and variant. A key it never declares (tennis
- *  `interruptions`, a config key the form does not edit) has no narrowing, so it applies to every stage, as it always did. */
-function appliesToStage(module: AnySportModule, key: string, kind: StageKind, variant: string): boolean {
-  const facts = Object.entries(module.ruleKeys ?? {}).filter(([k]) => topOf(k) === key).map(([, f]) => f);
-  return facts.length === 0 || facts.some((f) => ruleKeyApplies(f, kind, variant));
-}
+/**
+ * The table keys a stage PointsRule REPLACES. `applyPointsRule` (engine competition/points.ts) re-derives `delta.points`
+ * from the rule and leaves the sport's metrics ledger untouched, so a stage with its own `config.points` no longer reads
+ * the division's keys that feed `delta.points`: the per-sport win/draw/loss (`points`), the set sports' `pointsMap`,
+ * a board game's `scoring`. The other points-scope keys are NOT replaced and a stage rule does not make them stop
+ * mattering: football's and the period sports' `awardScore` sets the goal credit of a forfeit in their own ledger
+ * (gf/ga/gd), where the rule's own award score writes for/against/diff beside it, never over it; a board game's
+ * `byeScore` is declared and read nowhere. Anything not named here stays locked, which is the safe side for a key a
+ * future module declares. Pinned against the engine's declarations in division-locks.test.ts.
+ */
+export const STAGE_POINTS_REPLACES: ReadonlySet<string> = new Set(["points", "pointsMap", "scoring"]);
 
 /**
  * "Which of these stages have already started?" — THE format-lock predicate,
@@ -106,12 +108,14 @@ export async function divisionRefusals(
     const s = first((st) => {
       const cfg = st.config ?? {};
       if (table && !DRAW_KINDS.has(st.kind)) return false;        // a knockout has no table to protect
-      if (table) return cfg.points == null;                       // a stage PointsRule replaces division points
-      if (!appliesToStage(module, key, st.kind, variantKey)) return false;
+      if (table && cfg.points != null && STAGE_POINTS_REPLACES.has(key)) return false; // the stage's own PointsRule replaces it
+      // NOT `appliesTo`: that says where the engine OFFERS a key, and the fold reads cfg whatever the stage kind (boardgame
+      // `tiebreak` is listed for bracket kinds, yet a league game folds to the tie-break phase when the division says so).
+      // What a stage truly ignores is a key it FORCES.
       if (forbidsLevelResult(st.kind) && forced.has(key)) return false;
       if (deciderKeysFor(module, st.kind, variantKey).includes(key) && cfg[key] !== undefined) return false; // the stage carries its own decider
       const rules = (cfg.rules ?? {}) as Record<string, unknown>;
-      return rules[key] === undefined;                             // the stage inherits this key
+      return rules[key] == null;                                   // the stage inherits this key (a null is "inherit", stage-cfg.ts)
     });
     if (s) out.push({ field: key, code: table ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED", stageId: s.id, stageName: s.name });
   }

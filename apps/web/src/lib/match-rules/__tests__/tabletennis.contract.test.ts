@@ -4,12 +4,8 @@ import { TABLETENNIS_RULES } from "../tabletennis.ts";
 import { runContract } from "./run-contract.ts";
 
 runContract(tabletennis, TABLETENNIS_RULES, {
-  noWebFieldYet: {
-    // The set kernel declares `cap` for all three set sports, but the table-tennis table has never offered it: a game is
-    // always won by two, with no hard ceiling (badminton and volleyball carry one). Add a field to tabletennis.ts and
-    // delete this row if an organiser should be able to set one.
-    cap: "a table-tennis game has no hard cap (always win by two), and the form has never offered one",
-  },
+  // No noWebFieldYet row: the engine offers table tennis no `cap` (ITTF has none; the module narrows the set kernel's key out,
+  // W2c fix round 2 M-3), so every key it offers has a field.
   // The engine's schema gives these no maximum (`.positive().int()` only), so the web's range is its own choice and cannot be
   // checked against the engine; the contract lists them so a bound the engine adds later is noticed.
   noEngineMax: ["setTo", "finalSetTo", "winBy"],
