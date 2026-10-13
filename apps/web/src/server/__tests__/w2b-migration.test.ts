@@ -1,6 +1,7 @@
-// W2b Task 9 (spec §5.4; plan D12, D13) — the W2b delta: (1) an UNSETTLED held bracket fixture whose active result is
-// the legacy chess double forfeit is re-classified as a double walkover (BG-DW-1), (2) `division_has_results` counts
-// only results with a verdict (W2b-R13). The delta is read by GLOB, never by number (it is renumbered at merge), and
+// W2b Task 9 (spec §5.4; plan D12, D13) — the W2b delta: (1) it REFUSES to apply while an UNSETTLED held bracket
+// fixture's active result is the legacy chess double forfeit (Loop R M-6, W2b-R12: fail closed — a stored
+// re-classification seats nobody, asks nothing of a final and leaves match_states behind; the console's own writes put
+// such a row right), (2) `division_has_results` counts only results with a verdict (W2b-R13). The delta is read by GLOB, never by number (it is renumbered at merge), and
 // its OWN statements run here — inside rolled-back transactions on a dedicated client, because the block and the
 // function act on the whole shared test DB (a BYPASSRLS `unsafe` would otherwise rewrite sibling suites' rows).
 import { readdirSync, readFileSync } from "node:fs";
@@ -10,11 +11,6 @@ import { afterAll, describe, expect, it } from "vitest";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { connectionOptions, sql } from "@/lib/db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import {
-  W2B_RECLASSIFY_NOTICE,
-  reclassifiedStagesOf,
-  resolveReclassifiedStagesIn,
-} from "@/server/migration/w2b-double-walkover-resolve";
 import { scoreEvent } from "@/server/usecases/scoring";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -66,19 +62,38 @@ async function rolledBack<T>(body: (tx: Tx, notices: readonly string[]) => Promi
   return { value: value as T, notices };
 }
 
-/** The block's one notice. */
-function noticeOf(notices: readonly string[]): string {
-  const mine = notices.filter((n) => n.startsWith(W2B_RECLASSIFY_NOTICE));
-  expect(mine, "exactly one W2b notice").toHaveLength(1);
-  return mine[0]!;
+/** The block's verdict as it reports it: its refusal (`raise exception`) parsed, or its one pass notice. Under
+ *  `orgId` the block runs as the app's tenant role (`withTenant`'s `app_user` + `app.current_org`), so RLS shows it that
+ *  org's rows alone — the shared test DB holds other suites' legacy rows, and only a scoped run has a deterministic
+ *  empty case. Without it, the block runs as the migration does: over the whole DB. Assumptions are guards: an error or
+ *  a notice that is not the block's is thrown, never read as a verdict. */
+const NOTICE = "W2b legacy double forfeit held";
+interface Verdict {
+  refused: boolean;
+  examined: number;
+  fixtures: string[];
+  stages: string[];
+  hint: string | null;
 }
-/** The block's one notice, parsed: its two counts and the stages it names (`reclassifiedStagesOf`, the one-off's own
- *  reader). */
-function counts(notices: readonly string[]): { examined: number; changed: number; stages: string[] } {
-  const notice = noticeOf(notices);
-  const m = /examined=(\d+) changed=(\d+) /.exec(notice);
-  expect(m, notice).not.toBeNull();
-  return { examined: Number(m![1]), changed: Number(m![2]), stages: reclassifiedStagesOf(notice) };
+async function verdict(opts: { orgId?: string; setup?: (tx: Tx) => Promise<void> } = {}): Promise<Verdict> {
+  const { value } = await rolledBack(async (tx, notices): Promise<Verdict> => {
+    await opts.setup?.(tx);
+    if (opts.orgId !== undefined) {
+      await tx`select set_config('app.current_org', ${opts.orgId}, true)`;
+      await tx`set local role app_user`;
+    }
+    try {
+      await tx.unsafe(BLOCK!);
+    } catch (e) {
+      const m = new RegExp(`^${NOTICE}: examined=(\\d+) fixtures=([0-9a-f,-]*) stages=([0-9a-f,-]*)$`).exec((e as Error).message);
+      if (!m) throw e;
+      const list = (x: string) => (x === "" ? [] : x.split(","));
+      return { refused: true, examined: Number(m[1]), fixtures: list(m[2]!), stages: list(m[3]!), hint: (e as { hint?: string }).hint ?? null };
+    }
+    expect(notices.filter((n) => n.startsWith(NOTICE)), "the block's one pass notice").toEqual([`${NOTICE}: examined=0`]);
+    return { refused: false, examined: 0, fixtures: [], stages: [], hint: null };
+  });
+  return value;
 }
 
 const chess = { sport: "boardgame", variant: declaredVariant("boardgame", "classical") };
@@ -101,9 +116,6 @@ async function ledger(tx: Tx, fixtureId: string, rows: { type: string; payload: 
 }
 const held = (tx: Tx, id: string) =>
   tx`update fixtures set status = 'needs_decision', outcome = ${tx.json(LEGACY_HELD as never)} where id = ${id}`;
-const rowOf = async (tx: Tx, id: string) =>
-  (await tx<{ status: string; outcome: unknown; finished: boolean }[]>`
-    select status, outcome, finished_at is not null as finished from fixtures where id = ${id}`)[0]!;
 
 describe("W2b migration — its text (no DB)", () => {
   it("the delta exists exactly once, by name pattern, and holds the block and the function", () => {
@@ -118,118 +130,82 @@ describe("W2b migration — its text (no DB)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("W2b migration — BG-DW-1 re-classification (plan D12)", () => {
-  it("empty case first: with our row NOT held the block examines none of ours, and the test FAILS unless the seeded held row is examined (exactly one more)", async () => {
+describe.skipIf(!HAS_DB)("W2b migration — a held legacy chess double forfeit fails the delta closed (Loop R M-6, W2b-R12)", () => {
+  const START = { type: "core.start", payload: {} };
+  const LEGACY_DF = { type: "boardgame.result", payload: DF };
+
+  it("M-6 fail closed — empty case first: with no held legacy double forfeit the block passes and says so; with one it refuses, naming exactly that fixture and its stage, with the remedy", async () => {
     const s = await seedBracket({ ...chess, stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
-    const run = (hold: boolean) =>
-      rolledBack(async (tx) => {
-        if (hold) {
-          await ledger(tx, id, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
-          await held(tx, id);
-        }
-        await tx.unsafe(BLOCK!);
-        return rowOf(tx, id);
-      });
-    const idle = await run(false);
-    const seeded = await run(true);
-    const [a, b] = [counts(idle.notices), counts(seeded.notices)];
-    expect(idle.value.status, "the empty case touches nothing of ours").toBe("scheduled");
-    expect(b.examined - a.examined, "the seeded row is examined — exactly one more than without it").toBe(1);
-    expect(b.changed - a.changed).toBe(1);
-    expect([a.examined, a.changed, b.examined >= 1]).toEqual([a.changed, a.examined, true]);
-    // The notice names the stage of every row it moved (I-4): ours only when ours moved.
-    expect([a.stages.includes(s.stageId), b.stages.includes(s.stageId)], "the stage list: idle, then seeded").toEqual([false, true]);
-    expect(b.stages.length - a.stages.length).toBe(1);
+    const hold = async (tx: Tx) => {
+      await ledger(tx, id, [START, LEGACY_DF]);
+      await held(tx, id);
+    };
+    expect(await verdict({ orgId: s.auth.orgId }), "the empty case: nothing to refuse").toEqual({ refused: false, examined: 0, fixtures: [], stages: [], hint: null });
+    const seeded = await verdict({ orgId: s.auth.orgId, setup: hold });
+    expect({ ...seeded, hint: null }, "the one held row, by name").toEqual({ refused: true, examined: 1, fixtures: [id], stages: [s.stageId], hint: null });
+    expect(seeded.hint, "the remedy").toMatch(/void each fixture double forfeit and record the double walkover/);
+    // Over the whole DB, as the migration really runs: the same row is refused beside whatever else the DB holds, and
+    // the list it names is as long as the count it reports.
+    const wide = await verdict({ setup: hold });
+    expect([wide.refused, wide.fixtures.includes(id), wide.stages.includes(s.stageId), wide.fixtures.length]).toEqual([true, true, true, wide.examined]);
   });
 
-  it("BG-DW-1 migration: an unsettled held chess double forfeit becomes forfeited double_walkover; a settled one is untouched; a voided double forfeit is untouched; a non-bracket row is untouched", async () => {
+  it("BG-DW-1 migration: the refusal names an unsettled held chess double forfeit (also when a later result was voided), never a settled one, a voided double forfeit or a non-bracket row", async () => {
     // Five rows, one per predicate. The settled and the league rows are HELD on purpose — the only thing that
-    // separates them from the row that moves is the predicate under test (a settle; the stage kind).
+    // separates them from a refused row is the predicate under test (a settle; the stage kind). Over the whole DB, so
+    // the stage kinds of two orgs are read together; membership, not a count (the shared DB holds other suites' rows).
     const ko = await seedBracket({ ...chess, stageKind: "knockout", entrants: 8 });
     const lg = await seedBracket({ ...chess, stageKind: "league", entrants: 2 });
     const [unsettled, laterVoided, settled, voidedDf] = ko.fixtureIds;
     const league = lg.fixtureIds[0]!;
-    const { value, notices } = await rolledBack(async (tx) => {
-      await ledger(tx, unsettled!, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
-      // The double forfeit is the ACTIVE result: a later result was entered and voided.
-      const [w] = await tx<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${laterVoided!}`;
-      await ledger(tx, laterVoided!, [
-        { type: "core.start", payload: {} },
-        { type: "boardgame.result", payload: DF },
-        { type: "boardgame.result", payload: { winner: w!.home, method: "resign" } },
-        { type: "core.void", payload: {}, voids: 3 },
-      ]);
-      const [h] = await tx<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${settled!}`;
-      await ledger(tx, settled!, [
-        { type: "core.start", payload: {} },
-        { type: "boardgame.result", payload: DF },
-        { type: "core.settle", payload: { winner: h!.home, method: "organiser" } },
-      ]);
-      // The double forfeit was voided; the active result is a later agreed draw (a real held level result).
-      await ledger(tx, voidedDf!, [
-        { type: "core.start", payload: {} },
-        { type: "boardgame.result", payload: DF },
-        { type: "core.void", payload: {}, voids: 2 },
-        { type: "boardgame.result", payload: { winner: null, method: "agreement" } },
-      ]);
-      await ledger(tx, league, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
-      for (const id of [unsettled!, laterVoided!, settled!, voidedDf!, league]) await held(tx, id);
-      await tx.unsafe(BLOCK!);
-      return Object.fromEntries(
-        await Promise.all(
-          ([["unsettled", unsettled!], ["laterVoided", laterVoided!], ["settled", settled!], ["voidedDf", voidedDf!], ["league", league]] as const).map(
-            async ([k, id]) => [k, await rowOf(tx, id)] as const,
-          ),
-        ),
-      );
+    const v = await verdict({
+      setup: async (tx) => {
+        await ledger(tx, unsettled!, [START, LEGACY_DF]);
+        // The double forfeit is the ACTIVE result: a later result was entered and voided.
+        const [w] = await tx<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${laterVoided!}`;
+        await ledger(tx, laterVoided!, [START, LEGACY_DF, { type: "boardgame.result", payload: { winner: w!.home, method: "resign" } }, { type: "core.void", payload: {}, voids: 3 }]);
+        const [h] = await tx<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${settled!}`;
+        await ledger(tx, settled!, [START, LEGACY_DF, { type: "core.settle", payload: { winner: h!.home, method: "organiser" } }]);
+        // The double forfeit was voided; the active result is a later agreed draw (a real held level result).
+        await ledger(tx, voidedDf!, [START, LEGACY_DF, { type: "core.void", payload: {}, voids: 2 }, { type: "boardgame.result", payload: { winner: null, method: "agreement" } }]);
+        await ledger(tx, league, [START, LEGACY_DF]);
+        for (const id of [unsettled!, laterVoided!, settled!, voidedDf!, league]) await held(tx, id);
+      },
     });
-    const DW = { status: "forfeited", outcome: { kind: "double_walkover" }, finished: true };
-    const HELD = { status: "needs_decision", outcome: LEGACY_HELD, finished: true };
-    expect(value).toEqual({ unsettled: DW, laterVoided: DW, settled: HELD, voidedDf: HELD, league: HELD });
-    const c = counts(notices);
-    expect(c.changed, "the notice counts what moved").toBe(c.examined);
-    expect(c.changed).toBeGreaterThanOrEqual(2);
+    expect(v.refused, "the delta refuses").toBe(true);
+    const named = Object.fromEntries(
+      ([["unsettled", unsettled!], ["laterVoided", laterVoided!], ["settled", settled!], ["voidedDf", voidedDf!], ["league", league]] as const).map(([k, id]) => [k, v.fixtures.includes(id)]),
+    );
+    expect(named).toEqual({ unsettled: true, laterVoided: true, settled: false, voidedDf: false, league: false });
+    expect([v.stages.includes(ko.stageId), v.stages.includes(lg.stageId)], "the stages it names").toEqual([true, false]);
   });
 
-  it("D12 / I-4: the notice names the re-classified row's stage, and the one-off resolve of the stages it names walks the other semi's winner over the final with no organiser step", async () => {
-    // The sibling semi was decided BEFORE the migration, so no later score in this stage will run the cascade: without
-    // the one-off the final would wait on its dead seat for good. The resolve runs in the same rolled-back transaction
-    // as the block (the block acts on the whole shared DB), over the stages the notice names — never a stage id the
-    // test supplies.
+  it("M-6: the remedy it names, through the console — void the double forfeit, record the double walkover — clears the row, and the cascade a stored re-classification never ran walks the other semi's winner over the final", async () => {
     const s = await seedBracket({ ...chess, stageKind: "knockout", entrants: 4 });
-    const rows = await sql<{ id: string; home: string; winner_to_fixture: string; winner_to_slot: number }[]>`
-      select id, home_entrant_id as home, winner_to_fixture, winner_to_slot from fixtures
+    const rows = await sql<{ id: string; home: string; winner_to_fixture: string }[]>`
+      select id, home_entrant_id as home, winner_to_fixture from fixtures
       where stage_id = ${s.stageId} and home_entrant_id is not null and away_entrant_id is not null order by seq_in_round`;
     expect(rows, "rig: two seated semis").toHaveLength(2);
     const [sf1, sf2] = rows;
     await scoreEvent(s.auth, sf2!.id, { expected_seq: 0, type: "core.start", payload: {} });
     await scoreEvent(s.auth, sf2!.id, { expected_seq: 1, type: "boardgame.result", payload: { winner: sf2!.home, method: "resign" } });
-    const { value } = await rolledBack(async (tx, notices) => {
-      await ledger(tx, sf1!.id, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
-      await held(tx, sf1!.id);
-      await tx.unsafe(BLOCK!);
-      const named = reclassifiedStagesOf(noticeOf(notices));
-      const before = await rowOf(tx, sf1!.winner_to_fixture);
-      const resolved = await resolveReclassifiedStagesIn(tx as never, named);
-      return { named, before, resolved, after: await rowOf(tx, sf1!.winner_to_fixture) };
+    // The legacy row, COMMITTED — the console acts on stored rows only. The write path refuses the retired method now.
+    const ids = await sql.begin(async (tx) => {
+      const out = await ledger(tx as never, sf1!.id, [START, LEGACY_DF]);
+      await held(tx as never, sf1!.id);
+      return out;
     });
-    expect(value.named, "the notice names our stage").toContain(s.stageId);
-    expect(value.before.status, "the block itself seats nobody").toBe("scheduled");
-    expect(value.resolved.find((r) => r.stageId === s.stageId)?.touched, "the one-off changed the final").toContain(sf1!.winner_to_fixture);
-    expect(value.after).toEqual({
+    expect(await verdict({ orgId: s.auth.orgId }), "the delta refuses the stored row").toMatchObject({ refused: true, fixtures: [sf1!.id] });
+    await scoreEvent(s.auth, sf1!.id, { expected_seq: 2, type: "core.void", payload: { event_id: ids[1]! } } as never);
+    const dw = await scoreEvent(s.auth, sf1!.id, { expected_seq: 3, type: "core.forfeit", payload: { by: "both", reason: "walkover" } } as never);
+    expect([dw.status, dw.outcome], "the double walkover, recorded").toEqual(["forfeited", { kind: "double_walkover" }]);
+    expect((await verdict({ orgId: s.auth.orgId })).refused, "the delta now applies").toBe(false);
+    const [final] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${sf1!.winner_to_fixture}`;
+    expect(final, "the cascade walked the other semi's winner over the final").toEqual({
       status: "forfeited",
       outcome: { kind: "award", winner: sf2!.home, loser: null, reason: "bye" },
-      finished: true,
     });
-  });
-
-  it("reclassifiedStagesOf: an empty list reads as none; a notice that is not the delta's, or carries no list, throws", () => {
-    expect(reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=0 changed=0 stages=`)).toEqual([]);
-    const ids = ["0b5e2c1a-0000-4000-8000-000000000001", "0b5e2c1a-0000-4000-8000-000000000002"];
-    expect(reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=2 changed=2 stages=${ids.join(",")}`)).toEqual(ids);
-    expect(() => reclassifiedStagesOf("V432 needs_decision backfill: moved=0")).toThrow(/not the W2b reclassify notice/);
-    expect(() => reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=0 changed=0`)).toThrow(/no stage list/);
   });
 });
 

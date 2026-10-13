@@ -300,32 +300,17 @@
   ]
  },
  {
-  "id": "r1-i4-no-resolve",
-  "file": "apps/web/src/server/migration/w2b-double-walkover-resolve.ts",
-  "find": "touched: await resolveBracketSeats(tx, stageId)",
-  "replace": "touched: []",
-  "killers": [
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/__tests__/w2b-migration.test.ts"
-    ],
-    "name": "D12 / I-4"
-   }
-  ]
- },
- {
   "id": "r1-i4-notice-fixture-ids",
   "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
-  "find": "string_agg(distinct stage_id::text, ',' order by stage_id::text)",
-  "replace": "string_agg(distinct id::text, ',' order by id::text)",
+  "find": "string_agg(distinct f.stage_id::text, ',' order by f.stage_id::text)",
+  "replace": "string_agg(distinct f.id::text, ',' order by f.id::text)",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/__tests__/w2b-migration.test.ts"
     ],
-    "name": "D12 / I-4"
+    "name": "M-6 fail closed"
    }
   ]
  },

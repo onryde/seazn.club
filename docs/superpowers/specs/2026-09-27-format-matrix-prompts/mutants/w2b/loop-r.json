@@ -702,5 +702,34 @@
     "name": "Loop R M-15"
    }
   ]
+ },
+ {
+  "id": "lr-m6-fails-open",
+  "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
+  "find": "  if examined > 0 then\n",
+  "replace": "  if false then\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "M-6 fail closed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "BG-DW-1 migration"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/w2b-migration.test.ts"
+    ],
+    "name": "M-6: the remedy"
+   }
+  ]
  }
 ]

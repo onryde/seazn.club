@@ -2,7 +2,7 @@
  {
   "id": "mig-settled-too",
   "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
-  "find": "\n       and not exists (select 1 from score_events st\n                        where st.fixture_id = f.id and st.type = 'core.settle'\n                          and not exists (select 1 from score_events v3 where v3.voids_event_id = st.id));",
+  "find": "\n     and not exists (select 1 from score_events st\n                      where st.fixture_id = f.id and st.type = 'core.settle'\n                        and not exists (select 1 from score_events v3 where v3.voids_event_id = st.id));",
   "replace": ";",
   "killers": [
    {
@@ -17,7 +17,7 @@
  {
   "id": "mig-voided-too",
   "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
-  "find": "\n                                      and not exists (select 1 from score_events v2 where v2.voids_event_id = r2.id)))",
+  "find": "\n                                    and not exists (select 1 from score_events v2 where v2.voids_event_id = r2.id)))",
   "replace": "))",
   "killers": [
    {
@@ -32,8 +32,8 @@
  {
   "id": "mig-any-kind",
   "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
-  "find": "     where s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')\n       and f.status = 'needs_decision'",
-  "replace": "     where f.status = 'needs_decision'",
+  "find": "   where s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')\n     and f.status = 'needs_decision'",
+  "replace": "   where f.status = 'needs_decision'",
   "killers": [
    {
     "cwd": "apps/web",
@@ -92,8 +92,8 @@
  {
   "id": "mig-notice-miscounts",
   "file": "db/migration/deltas/V438__w2b_double_walkover_and_results.sql",
-  "find": "  get diagnostics changed = row_count;",
-  "replace": "  changed := 0;",
+  "find": "  select count(*),\n",
+  "replace": "  select count(*) + 1,\n",
   "killers": [
    {
     "cwd": "apps/web",
