@@ -23,10 +23,12 @@ import "server-only";
 // sheet is not an appearance. Of the settled ones, only a match played in
 // players' stats is listed — the engine's reader, through the same
 // `fixturesPlayedInStats` the career count asks (R115-1): a walkover, a
-// withdrawal, a double walkover, a disqualification with nothing played or an
-// abandon with nothing played before it is no appearance and earns no
-// "won"/"lost" badge (X-PS-1, ruling 115, ruling 120); an abandon after play is
-// one, its badge the result it carries (none for an abandon that decided nobody).
+// double walkover, and a disqualification, a withdrawal or an abandon with
+// nothing played before it is no appearance and earns no "won"/"lost" badge
+// (X-PS-1, rulings 115, 120, 127); an abandon after play is one, its badge the
+// result it carries (none for an abandon that decided nobody); a withdrawal after
+// play is one with NO badge (ruling 127: no personal W/L — the engine's
+// `resultInStats`, read beside "played" by `fixturesStatsReading`).
 //
 // CRICKET FIGURES HAVE ONE AUTHORITY: the engine's `deriveCricketScorecard`,
 // the fold the match centre renders, over exactly the inputs the server fold
@@ -73,7 +75,7 @@ import {
 } from "@/server/appearances";
 import { resolveModule } from "@/server/engine-db/registry";
 import { log } from "@/server/logger";
-import { fixturesPlayedInStats, STATS_MATCH_STATUSES } from "@/server/usecases/player-stats";
+import { fixturesStatsReading, STATS_MATCH_STATUSES } from "@/server/usecases/player-stats";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { maskPublicEntrantNames, playerCardNameMask, withCourtVenueNames } from "./data";
 import { publicRoundNamer, type NamedFixture } from "./feeder-slot-label";
@@ -321,8 +323,8 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
     order by coalesce(f.scheduled_at, ms.updated_at) desc nulls last, f.id`;
   if (rows.length === 0) return [];
   const settled = rows.filter((r) => r.status !== "in_play");
-  const played = await fixturesPlayedInStats(sql, settled.map((r) => ({ id: r.id, sport_key: r.sport_key, module_version: r.module_version })));
-  const appearances = rows.filter((r) => r.status === "in_play" || played.has(r.id));
+  const reading = await fixturesStatsReading(sql, settled.map((r) => ({ id: r.id, sport_key: r.sport_key, module_version: r.module_version })));
+  const appearances = rows.filter((r) => r.status === "in_play" || reading.get(r.id)?.played === true);
   if (appearances.length === 0) return [];
 
   const opponentNames = await maskedOpponentNames(sql, appearances);
@@ -336,7 +338,7 @@ export async function readPlayerMatchSeeds(sql: Sql, args: MatchArgs): Promise<P
       scheduledAt: isoDateTime(r.scheduled_at),
       tz: resolveVenueTz(r.division_tz, r.org_tz),
       opponentName: (opponentId !== null ? opponentNames.get(opponentId) : undefined) ?? NO_FIGURES,
-      result: playerMatchResult(r.status, r.outcome, r.my_entrant_id),
+      result: r.status === "in_play" || reading.get(r.id)?.result === true ? playerMatchResult(r.status, r.outcome, r.my_entrant_id) : null,
       sportKey: r.sport_key,
       status: r.status,
       lastSeq: r.last_seq,

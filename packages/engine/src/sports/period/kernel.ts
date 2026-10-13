@@ -1673,10 +1673,10 @@ export function periodKeeperStatsFold(
           return p === undefined ? undefined : { personId: p, conceded: false };
         })(),
       };
-      // W2b (X-PS-1; ruling 120): no clean sheet in a fixture that is no match played — a walkover, a withdrawal, a double
-      // walkover, a disqualification with nothing played, an abandon with nothing played before it (whatever its result)
-      // — the one players'-stats reader; a retirement, an in-match disqualification and an abandon after play were
-      // played and keep them (X-PS-2).
+      // W2b (X-PS-1; rulings 120, 127): no clean sheet in a fixture that is no match played — a walkover, a double
+      // walkover, a disqualification, a withdrawal or an abandon with nothing played before it (whatever its result) —
+      // the one players'-stats reader; a retirement, an in-match disqualification, a withdrawal after play (ruling 127)
+      // and an abandon after play were played and keep them (X-PS-2).
       const unplayed = !playedInStats(events, play());
       const closeSpell = (side: SideKey): void => {
         const spell = open[side];

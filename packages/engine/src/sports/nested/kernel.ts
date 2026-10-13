@@ -1909,9 +1909,9 @@ function nestedMatchOutcomesFold(
 
       // W2b (X-PS-1/2; R115 review M3): a match for both sides' players is `playedInStats`, the one reader every other
       // surface asks (the shared fold's appearance, apps/web's career count) — never a local "was anything scored". A
-      // walkover, a withdrawal, a double walkover, a disqualification with nothing played and an abandon with nothing
-      // played before it are none (rulings 115, 120); a retirement, an in-match disqualification and an abandon after
-      // play are one, scored or not (X-PS-2, ruling 114).
+      // walkover, a double walkover, and a disqualification, a withdrawal or an abandon with nothing played before it are
+      // none (rulings 115, 120, 127); a retirement, an in-match disqualification, a withdrawal after play (ruling 127) and
+      // an abandon after play are one, scored or not (X-PS-2, ruling 114).
       if (playedInStats(events, play())) {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);

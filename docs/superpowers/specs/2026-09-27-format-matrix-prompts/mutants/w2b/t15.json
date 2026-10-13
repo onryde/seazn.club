@@ -437,8 +437,8 @@
  {
   "id": "ref-credit-statsmatch-dq",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
-  "replace": "const statsMatch = c.reason === \"retired\";",
+  "find": "const statsMatch = c.reason === \"retired\" || ((c.reason === \"disqualified\" || c.reason === \"withdrew\") && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\" || (c.reason === \"withdrew\" && playedAny);",
   "killers": [
    {
     "cwd": "packages/reference",
@@ -1202,8 +1202,8 @@
  {
   "id": "xc-engine-stats-withdrew-played",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\";",
-  "replace": "    else role = dqUnplayed || by === \"both\" || reason === \"walkover\" ? \"unplayed\" : \"played\";",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "(reason === \"disqualified\" && !afterPlay)) role = \"unplayed\";",
   "killers": [
    {
     "cwd": ".",

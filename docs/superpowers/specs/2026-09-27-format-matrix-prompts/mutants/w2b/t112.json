@@ -803,8 +803,8 @@
  {
   "id": "r115-dq-played-ignored",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
-  "replace": "    const dqUnplayed = false;\n",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "(reason === \"withdrew\" && !afterPlay)) role = \"unplayed\";",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -839,8 +839,8 @@
  {
   "id": "r115-dq-always-unplayed",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
-  "replace": "    const dqUnplayed = reason === \"disqualified\";\n",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "reason === \"disqualified\" || (reason === \"withdrew\" && !afterPlay)) role = \"unplayed\";",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -875,8 +875,8 @@
  {
   "id": "r115-dq-played-whole-ledger",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
-  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events, module);\n",
+  "find": "playRecorded(events.slice(0, index), module);",
+  "replace": "playRecorded(events, module);",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -890,8 +890,8 @@
  {
   "id": "r115-dq-played-before-last",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index), module);\n",
-  "replace": "    const dqUnplayed = reason === \"disqualified\" && !playRecorded(events.slice(0, index - 1), module);\n",
+  "find": "playRecorded(events.slice(0, index), module);",
+  "replace": "playRecorded(events.slice(0, index - 1), module);",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -912,8 +912,8 @@
  {
   "id": "r115-dq-unplayed-not-read",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "    else role = dqUnplayed || by === \"both\"",
-  "replace": "    else role = by === \"both\"",
+  "find": " || ((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": ") role = \"unplayed\";",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -941,8 +941,8 @@
  {
   "id": "r115-ref-dq-played-ignored",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
-  "replace": "const statsMatch = c.reason === \"retired\" || c.reason === \"disqualified\";",
+  "find": "const statsMatch = c.reason === \"retired\" || ((c.reason === \"disqualified\" || c.reason === \"withdrew\") && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\" || c.reason === \"disqualified\" || (c.reason === \"withdrew\" && playedAny);",
   "killers": [
    {
     "cwd": "packages/reference",
@@ -970,8 +970,8 @@
  {
   "id": "r115-ref-dq-never-a-match",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "const statsMatch = c.reason === \"retired\" || (c.reason === \"disqualified\" && playedAny);",
-  "replace": "const statsMatch = c.reason === \"retired\";",
+  "find": "const statsMatch = c.reason === \"retired\" || ((c.reason === \"disqualified\" || c.reason === \"withdrew\") && playedAny);",
+  "replace": "const statsMatch = c.reason === \"retired\" || (c.reason === \"withdrew\" && playedAny);",
   "killers": [
    {
     "cwd": "packages/reference",
@@ -1045,8 +1045,8 @@
  {
   "id": "r1151-web-filter-keeps-all",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": "    if (isPlayed) played.add(f.id);\n",
-  "replace": "    played.add(f.id);\n",
+  "find": "[...reading].filter(([, r]) => r.played)",
+  "replace": "[...reading].filter(() => true)",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1060,8 +1060,8 @@
  {
   "id": "r1151-web-no-ledger-played",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": " : hasLedger.has(f.id) || playedInStats([], sportModule);",
-  "replace": " : true;",
+  "find": "const isPlayed = hasLedger.has(f.id) || playedInStats([], sportModule);",
+  "replace": "const isPlayed = true;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1090,7 +1090,7 @@
  {
   "id": "r1151-list-keeps-all",
   "file": "apps/web/src/server/public-site/public-player-matches.ts",
-  "find": "rows.filter((r) => r.status === \"in_play\" || played.has(r.id));",
+  "find": "rows.filter((r) => r.status === \"in_play\" || reading.get(r.id)?.played === true);",
   "replace": "rows.filter(() => true);",
   "killers": [
    {
@@ -1187,8 +1187,8 @@
  {
   "id": "r1153-bye-web-no-ledger-played",
   "file": "apps/web/src/server/usecases/player-stats.ts",
-  "find": " : hasLedger.has(f.id) || playedInStats([], sportModule);",
-  "replace": " : true;",
+  "find": "const isPlayed = hasLedger.has(f.id) || playedInStats([], sportModule);",
+  "replace": "const isPlayed = true;",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1547,8 +1547,8 @@
  {
   "id": "r120-carrom-wins-forfeit-only",
   "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (!played) {\n        // nothing: the match was not played",
-  "replace": "if (!played && events.some((e) => e.type === \"core.forfeit\")) {\n        // nothing: the match was not played",
+  "find": "if (!resultInStats(events, carrom)) {",
+  "replace": "if (!resultInStats(events, carrom) && events.some((e) => e.type === \"core.forfeit\")) {",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -1592,8 +1592,8 @@
  {
   "id": "r120-generic-wdl-forfeit-only",
   "file": "packages/engine/src/sports/generic/generic.ts",
-  "find": "if (!playedInStats(events, generic)) {",
-  "replace": "if (!playedInStats(events, generic) && events.some((e) => e.type === \"core.forfeit\")) {",
+  "find": "if (!resultInStats(events, generic)) {",
+  "replace": "if (!resultInStats(events, generic) && events.some((e) => e.type === \"core.forfeit\")) {",
   "killers": [
    {
     "cwd": "packages/engine",

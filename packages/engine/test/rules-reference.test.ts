@@ -42,7 +42,10 @@ const OPEN = "⬜ open";
  *    the same text, so neither is in AMENDED_TEXT;
  *  - GN-RT-1 carries owner ruling 124 (2026-10-13, amends 87): football's FB-RT-1 rule — the walkover credit unless the
  *    recorded score is worse for the offender. Appendix A carries the same text, so it is not in AMENDED_TEXT;
- *  - CK-WO-2 carries owner ruling 125 (2026-10-13), which signed PF-6's row as built (its text unchanged). */
+ *  - CK-WO-2 carries owner ruling 125 (2026-10-13), which signed PF-6's row as built (its text unchanged);
+ *  - X-PS-1 carries owner ruling 127 (2026-10-13), which amends it after 115: a withdrawal counts as a match in players'
+ *    stats if and only if play was recorded before it, still with no personal W/L. Appendix A carries the same text, so
+ *    it is not in AMENDED_TEXT. */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
     "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
@@ -50,7 +53,7 @@ const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(118, "2026-10-12"),
     "X-AB-1": signed(120, "2026-10-12"), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
-    "X-PS-1": signed(115, "2026-10-12"), "X-PS-2": signed(120, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
+    "X-PS-1": signed(127, "2026-10-13"), "X-PS-2": signed(120, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),
     "X-BL-1": signed(98, "2026-10-09"), "X-WD-6": signed(113, "2026-10-11"),
   },
   "football.md": { "FB-WO-1": signed(86), "FB-RT-1": signed(87), "FB-AB-1": signed(88) },

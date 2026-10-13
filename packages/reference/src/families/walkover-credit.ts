@@ -343,10 +343,11 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   else if (chess) credit = chessCredit();
   else if (c.sport === "carrom") credit = carromCredit(c.cfg, sp);
   else credit = genericCredit(c.cfg, sp);
-  // X-PS-1: a walkover or a withdrawal is never a match played in players' stats; X-PS-2: a retirement or an in-match
-  // disqualification is, W/L as decided. Ruling 115: a disqualification with nothing played — an empty scoresheet, or
-  // none — is treated like a walkover, so it is no match played either (ruling 118: a chess Start is play).
-  const statsMatch = c.reason === "retired" || (c.reason === "disqualified" && playedAny);
+  // X-PS-1: a walkover is never a match played in players' stats; X-PS-2: a retirement or an in-match disqualification
+  // is, W/L as decided. Ruling 115: a disqualification with nothing played — an empty scoresheet, or none — is treated
+  // like a walkover, so it is no match played either (ruling 118: a chess Start is play). Ruling 127 (amends X-PS-1): a
+  // withdrawal is a match played if and only if play was recorded before it — still with no personal W/L.
+  const statsMatch = c.reason === "retired" || ((c.reason === "disqualified" || c.reason === "withdrew") && playedAny);
   return { winner: credit.winner, loser: credit.loser, excluded: credit.excluded, points: "win", statsMatch };
 }
 

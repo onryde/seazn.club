@@ -54,14 +54,14 @@ describe("walkover-credit: the empty case first", () => {
     // retires from a match never played, and a disqualification or a withdrawal there is credited as before play.
     // Ruling 115: a disqualification with nothing played is treated like a walkover, so it is no match played (X-PS-1).
     // Ruling 118: in chess the Start is play — its retirement and disqualification are a game played (X-PS-2) at the
-    // one chess forfeit credit (BG-WO-1's 1-0); its withdrawal is still no game (X-PS-1).
+    // one chess forfeit credit (BG-WO-1's 1-0); ruling 127: so is its withdrawal (still no personal W/L).
     let checked = 0;
     let chess = 0;
     for (const sport of CREDIT_SPORTS) {
       for (const { name } of WALKOVER_CREDIT_DATA[sport]?.cfgs ?? []) {
         const walk = wo(sport, name);
         expect(walk.statsMatch, `${sport} ${name}`).toBe(false);
-        expect(ret(sport, name, [], [], "home", "withdrew"), `${sport} ${name} withdrew`).toEqual(walk);
+        expect(ret(sport, name, [], [], "home", "withdrew"), `${sport} ${name} withdrew`).toEqual(sport === START_IS_PLAY ? { ...walk, statsMatch: true } : walk);
         if (sport === START_IS_PLAY) {
           expect(ret(sport, name, [], [], "away", "retired"), `${sport} ${name} retired`).toEqual({ ...walk, statsMatch: true });
           expect(ret(sport, name, [], [], "away", "disqualified"), `${sport} ${name} disqualified`).toEqual({ ...walk, statsMatch: true });
@@ -177,15 +177,17 @@ describe("walkover-credit: the Appendix A examples (brief Step 1)", () => {
     expect(sports).toBe(11);
     expect(checked).toBe(44);
   });
-  it("X-PS-2: retired and an in-match disqualification credit statsMatch true; X-PS-1 + ruling 115: a walkover, a withdrawal and a disqualification with nothing played never count as a match played", () => {
+  it("X-PS-2: retired and an in-match disqualification credit statsMatch true; X-PS-1 + rulings 115 and 127: a walkover never counts as a match played, nor do a disqualification or a withdrawal with nothing played — after play they do", () => {
     let checked = 0;
     const dq = { played: 0, nothingPlayed: 0 };
+    const withdrew = { played: 0, nothingPlayed: 0 };
     for (const c of enumerateCreditCases()) {
       // Something played = the case's scoresheet holds a unit (ruling 112); ruling 115 reads the disqualification by it.
       // Ruling 118: in chess, any scoresheet — its Start — is play.
       const something = c.played !== undefined && (c.sport === START_IS_PLAY || c.played.home.length > 0 || c.played.away.length > 0);
-      const want = c.reason === "retired" || (c.reason === "disqualified" && something);
+      const want = c.reason === "retired" || ((c.reason === "disqualified" || c.reason === "withdrew") && something);
       if (c.reason === "disqualified") dq[something ? "played" : "nothingPlayed"]++;
+      if (c.reason === "withdrew") withdrew[something ? "played" : "nothingPlayed"]++;
       expect(walkoverCredit(c).statsMatch, c.label).toBe(want);
       checked++;
     }
@@ -194,6 +196,9 @@ describe("walkover-credit: the Appendix A examples (brief Step 1)", () => {
     // play — generic's untouched win/loss tally (ruling 113), which ruling 115 reads as a walkover. Chess's empty sheet
     // is its Start, which is play (ruling 118).
     expect(dq).toEqual({ played: 26, nothingPlayed: 1 });
+    // Ruling 127: both readings of the withdrawal are reached too.
+    expect(withdrew.played, "withdrawals after play").toBeGreaterThan(0);
+    expect(withdrew.nothingPlayed, "withdrawals with nothing played").toBeGreaterThan(0);
   });
 });
 
@@ -377,10 +382,10 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
     expect(new Set(played.map((c) => c.sport)).size).toBe(11);
   });
 
-  it("X-WD-1 + PF-7: a withdrawal after play started takes the sport's retirement credit; before start, the walkover credit — never a match in players' stats", () => {
+  it("X-WD-1 + PF-7: a withdrawal after play started takes the sport's retirement credit; before start, the walkover credit — a match in players' stats once play was recorded (ruling 127), as the retirement is", () => {
     let after = 0;
     for (const c of played) {
-      expect(walkoverCredit({ ...c, reason: "withdrew" }), c.label).toEqual({ ...walkoverCredit(c), statsMatch: false });
+      expect(walkoverCredit({ ...c, reason: "withdrew" }), c.label).toEqual({ ...walkoverCredit(c), statsMatch: true });
       after++;
     }
     expect(after).toBe(26);

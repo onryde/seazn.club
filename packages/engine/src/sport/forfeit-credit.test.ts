@@ -788,9 +788,11 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
           expect([home.won, home.lost, away.won, away.lost], `${m.key}/${name} ${s.name}`).toEqual([1, 0, 0, 1]);
           // Ruling 115 (X-PS-1): with nothing played, no match in players' stats — the disqualification as the walkover.
           // Ruling 118: where the Start is play (chess) the disqualification after it is a game both played (X-PS-2);
-          // its credit is chess's one forfeit credit either way (the 1-0, BG-WO-1), so only the stats row moves.
+          // its credit is chess's one forfeit credit either way (the 1-0, BG-WO-1), so only the stats row moves. Ruling
+          // 127: so is a chess withdrawal after its Start (a game played, with no personal result) — the walkover stays
+          // unplayed (BG-WO-2: a no-show).
           const active = resolveVoids(ledger);
-          const unplayed = !(m.startIsPlay === true && s.reason === "disqualified");
+          const unplayed = !(m.startIsPlay === true && (s.reason === "disqualified" || s.reason === "withdrew"));
           expect(m.playerStats?.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed", `${m.key}/${name} ${s.name}: players' stats`).toBe(unplayed);
           checked++;
         }

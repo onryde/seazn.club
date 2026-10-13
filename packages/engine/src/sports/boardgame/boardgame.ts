@@ -662,9 +662,10 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
 /** The classical game's result — a `boardgame.result` — stands before any later forfeit (ruling D-C6, BG-WO-3). */
 const isGameResult = (event: EventEnvelope): boolean => event.type === "boardgame.result";
 
-/** W2b (X-PS-1; rulings 118, 120) — a chess fixture nobody played: a walkover, a withdrawal or a double walkover before
- *  any game result, or an abandon before the Start. A forfeit after the classical game (a tie-break walkover) leaves that
- *  game played, and so does an abandon after the Start (ruling 118: in chess the Start is play). The shared reading with
+/** W2b (X-PS-1; rulings 118, 120, 127) — a chess fixture nobody played: a walkover or a double walkover before any game
+ *  result, or a withdrawal or an abandon before the Start. A forfeit after the classical game (a tie-break walkover)
+ *  leaves that game played, and so do a withdrawal and an abandon after the Start (ruling 118: in chess the Start is
+ *  play) — the withdrawal with no personal result (ruling 127, `forfeitStatsRole` "appeared"). The shared reading with
  *  this module and the game's result, so the forfeit and abandon rules keep one copy. */
 function boardgameUnplayed(events: readonly EventEnvelope[]): boolean {
   return statsUnplayed(events, boardgame, isGameResult);

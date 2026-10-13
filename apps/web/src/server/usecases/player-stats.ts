@@ -6,6 +6,7 @@ import type postgres from "postgres";
 import {
   aggregatePlayerStatsWithDiagnostics,
   playedInStats,
+  resultInStats,
   STATS_FOLD_VERSION,
   sumPlayerStats,
   type PlayerStatRow,
@@ -967,9 +968,9 @@ export interface StatsFixture {
 /**
  * W2b (X-PS-1, X-PS-2; rulings 115, 120, R115-1) — which of these fixtures are a match played in players' stats. The
  * engine's one reader decides (`playedInStats`, @seazn/engine/stats), under each fixture's own module, over its stored
- * ledger: a walkover, a withdrawal, a double walkover, a disqualification with nothing played and an abandon with
- * nothing played before it (whatever its result or settle) are not; a retirement, an in-match disqualification and an
- * abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles without an
+ * ledger: a walkover, a double walkover, and a disqualification, a withdrawal (ruling 127) or an abandon with nothing
+ * played before it (whatever its result or settle) are not; a retirement, an in-match disqualification, a withdrawal
+ * after play and an abandon after play are; a fixture with no ledger at all (the byes and double walkovers stages.ts settles without an
  * event) is not. The snapshot fold reads the same function, so a person's match count and their snapshot figures
  * cannot disagree about which fixtures were played.
  *
@@ -980,8 +981,22 @@ export interface StatsFixture {
  * multiply this read by the events per match.
  */
 export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly StatsFixture[]): Promise<Set<string>> {
-  const played = new Set<string>();
-  if (fixtures.length === 0) return played;
+  const reading = await fixturesStatsReading(db, fixtures);
+  return new Set([...reading].filter(([, r]) => r.played).map(([id]) => id));
+}
+
+/** The engine's two players'-stats answers for one fixture: a match played (`playedInStats`), and a PERSONAL result
+ *  (`resultInStats` — ruling 127: a withdrawal after play is a match its players appeared in, with no win or loss). */
+export interface StatsReading {
+  played: boolean;
+  result: boolean;
+}
+
+/** `fixturesPlayedInStats`'s read, with both answers per fixture (same cost: the same ledgers are read). A forfeit-,
+ *  abandon- and void-free ledger is played with its result; an absent one neither. */
+export async function fixturesStatsReading(db: Queryable, fixtures: readonly StatsFixture[]): Promise<Map<string, StatsReading>> {
+  const out = new Map<string, StatsReading>();
+  if (fixtures.length === 0) return out;
   const ids = [...new Set(fixtures.map((f) => f.id))];
   const shapes = await db<{ fixture_id: string; read: boolean }[]>`
     select se.fixture_id, bool_or(se.type in ('core.forfeit', 'core.abandon', 'core.void')) as read
@@ -1005,10 +1020,14 @@ export async function fixturesPlayedInStats(db: Queryable, fixtures: readonly St
     // void-free one is played. `playedInStats([], …)` is asked rather than assumed, so the empty answer stays the
     // engine's. The reader takes the module itself (ruling 120 reads its `startIsPlay`), never a part of it.
     const sportModule = resolveModule(f.sport_key, f.module_version);
-    const isPlayed = ledger !== undefined ? playedInStats(ledger, sportModule) : hasLedger.has(f.id) || playedInStats([], sportModule);
-    if (isPlayed) played.add(f.id);
+    if (ledger !== undefined) {
+      out.set(f.id, { played: playedInStats(ledger, sportModule), result: resultInStats(ledger, sportModule) });
+    } else {
+      const isPlayed = hasLedger.has(f.id) || playedInStats([], sportModule);
+      out.set(f.id, { played: isPlayed, result: isPlayed });
+    }
   }
-  return played;
+  return out;
 }
 
 /** Completed fixtures a person — or, for a signed-in player, ANY of their

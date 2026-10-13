@@ -414,7 +414,7 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
@@ -429,7 +429,7 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
@@ -444,7 +444,7 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
@@ -504,7 +504,7 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
@@ -519,29 +519,14 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
  {
   "id": "carrom-ps-wl-skip",
   "file": "packages/engine/src/sports/carrom/carrom.ts",
-  "find": "if (!played) {\n        // nothing: the match was not played\n      } else if",
-  "replace": "if (false) {\n        // nothing: the match was not played\n      } else if",
-  "killers": [
-   {
-    "cwd": "packages/engine",
-    "files": [
-     "src/sport/player-stats-forfeit.test.ts"
-    ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
-   }
-  ]
- },
- {
-  "id": "generic-ps-wdl-skip",
-  "file": "packages/engine/src/sports/generic/generic.ts",
-  "find": "if (!playedInStats(events, generic)) {",
+  "find": "if (!resultInStats(events, carrom)) {",
   "replace": "if (false) {",
   "killers": [
    {
@@ -549,7 +534,22 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
+   }
+  ]
+ },
+ {
+  "id": "generic-ps-wdl-skip",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "if (!resultInStats(events, generic)) {",
+  "replace": "if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-forfeit.test.ts"
+    ],
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
@@ -564,30 +564,30 @@
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
  {
   "id": "stats-role-withdrew-played",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "reason === \"walkover\" || reason === \"withdrew\" ? \"unplayed\" : \"played\"",
-  "replace": "reason === \"walkover\" ? \"unplayed\" : \"played\"",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "(reason === \"disqualified\" && !afterPlay)) role = \"unplayed\";",
   "killers": [
    {
     "cwd": "packages/engine",
     "files": [
      "src/sport/player-stats-forfeit.test.ts"
     ],
-    "name": "X-PS-1: a walkover, a withdrawal or a double walkover"
+    "name": "X-PS-1: a walkover, a withdrawal with nothing played"
    }
   ]
  },
  {
   "id": "stats-role-decided-ignored",
   "file": "packages/engine/src/stats/stats.ts",
-  "find": "if (decided) role = null;\n    else role =",
-  "replace": "role =",
+  "find": "    if (decided) role = null;\n    else if (",
+  "replace": "    if (false) role = null;\n    else if (",
   "killers": [
    {
     "cwd": "packages/engine",

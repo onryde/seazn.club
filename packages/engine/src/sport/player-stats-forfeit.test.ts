@@ -1,5 +1,6 @@
 // W2b Task 4 (spec §5.2 "Player-stat folds", W2b-R9; Appendix A X-PS-1, X-PS-2, BG-WO-3). A walkover, a withdrawal or a
-// double walkover is not a match anybody played: no appearance, no personal win or loss. A retirement or an in-match
+// double walkover is not a match anybody played: no appearance, no personal win or loss — except, ruling 127, a
+// withdrawal after play (player-stats-ruling-127.test.ts). A retirement or an in-match
 // disqualification is: an appearance for both sides' players and the W/L as decided. Ruling 115 (2026-10-12): a
 // disqualification with nothing played is treated like a walkover (player-stats-ruling-115.test.ts sweeps it over every
 // declared cfg). The match-level keys below are
@@ -71,9 +72,11 @@ function unplayedStreams(key: string): Array<[string, Spec]> {
   const streams: Array<[string, Spec]> = [
     ["walkover", [...pre, ["core.forfeit", { by: A, reason: "walkover" }]]],
     ["withdrew before start", [...pre, ["core.forfeit", { by: A, reason: "withdrew" }]]],
-    ["withdrew after play", [...pre, ["core.start"], ...played, ["core.forfeit", { by: A, reason: "withdrew" }]]],
     ["double walkover", [...pre, ["core.forfeit", { by: "both", reason: "walkover" }]]],
   ];
+  // Ruling 127: a withdrawal after play is a match (player-stats-ruling-127.test.ts); one after a bare Start is not — but
+  // in chess the Start is play (ruling 118), so there it is a game played.
+  if (key !== "boardgame") streams.push(["withdrew after a bare start", [...pre, ["core.start"], ["core.forfeit", { by: A, reason: "withdrew" }]]]);
   // BG-WO-1: a chess no-show is a walkover after the session starts too (FIDE Laws 6.7.1).
   if (key === "boardgame") streams.push(["walkover after start", [...pre, ["core.start"], ["core.forfeit", { by: A, reason: "walkover" }]]]);
   return streams;
@@ -90,7 +93,7 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     expect(checked).toBeGreaterThanOrEqual(10);
   });
 
-  it("X-PS-1: a walkover, a withdrawal or a double walkover credits no appearance and no personal W/L — every sport", () => {
+  it("X-PS-1: a walkover, a withdrawal with nothing played (ruling 127) or a double walkover credits no appearance and no personal W/L — every sport", () => {
     let streams = 0;
     let sportsWithKeys = 0;
     let noMatchKey = 0;

@@ -371,7 +371,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expect(() => expectAgreement(empty, "no case")).toThrow(/zero compared/);
   });
 
-  it("X-RS-1 + X-RT-1 + X-WD-1 + X-PS-1 — ruling 115: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine and neither is a match in players' stats, and retired is refused by both (ruling 113) — but in chess, whose Start is play (ruling 118), the retirement and the disqualification agree as a game played", () => {
+  it("X-RS-1 + X-RT-1 + X-WD-1 + X-PS-1 — ruling 115: an EMPTY scoresheet (play started, nothing scored) — every cfg the family holds, both seats — disqualified and withdrew agree with the engine and neither is a match in players' stats, and retired is refused by both (ruling 113) — but in chess, whose Start is play (ruling 118), the retirement, the disqualification and (ruling 127) the withdrawal agree as a game played", () => {
     const cases: CreditCase[] = [];
     for (const [sport, data] of Object.entries(WALKOVER_CREDIT_DATA)) {
       for (const e of data.cfgs) {
@@ -408,16 +408,16 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     expectAgreement(s, "the empty scoresheet");
     // Ruling 115 (X-PS-1): nothing played, so neither side counts a match in players' stats — the disqualification as
     // the withdrawal. Ruling 118 (X-PS-2): in chess the Start is play, so its retirement and disqualification ARE a game
-    // played; its withdrawal is not. Asserted on both answers, not only on their agreement.
+    // played; ruling 127 (amends X-PS-1): so is its withdrawal. Asserted on both answers, not only on their agreement.
     const counts = { notAMatch: 0, chessGame: 0 };
     for (const i of items.filter((x) => !refusedHere(x))) {
-      const want = startIsPlay(i.c.sport) && i.c.reason !== "withdrew";
+      const want = startIsPlay(i.c.sport);
       expect(walkoverCredit(i.c).statsMatch, `${i.label}: the reference`).toBe(want);
       const eng = engineAnswer(i, engineCfgOf(i.c), []);
       expect(typeof eng === "string" ? eng : eng.statsMatch, `${i.label}: the engine`).toBe(want);
       counts[want ? "chessGame" : "notAMatch"]++;
     }
-    expect(counts).toEqual({ notAMatch: 44 * 2 * 2 - 4 * 2, chessGame: 4 * 2 * 2 });
+    expect(counts).toEqual({ notAMatch: (44 - 4) * 2 * 2, chessGame: 4 * 3 * 2 }); // chess: retired, disqualified, withdrew × 2 seats
   });
 
   it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 212 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {

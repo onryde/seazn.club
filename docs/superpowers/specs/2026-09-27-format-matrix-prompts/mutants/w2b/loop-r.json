@@ -517,5 +517,124 @@
     "name": "ruling 126"
    }
   ]
+ },
+ {
+  "id": "lr-127-withdrawal-always-unplayed",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "((reason === \"disqualified\" || reason === \"withdrew\") && !afterPlay)) role = \"unplayed\";",
+  "replace": "(reason === \"disqualified\" && !afterPlay) || reason === \"withdrew\") role = \"unplayed\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-withdrawal-after-play-keeps-wl",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "    else role = reason === \"withdrew\" ? \"appeared\" : \"played\";\n",
+  "replace": "    else role = \"played\";\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-result-reader-ignores-withdrawal",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "  return forfeitStatsRole(resolveVoids([...events]), undefined, module) !== \"appeared\";\n",
+  "replace": "  return true;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-carrom-wins-on-played",
+  "file": "packages/engine/src/sports/carrom/carrom.ts",
+  "find": "      if (!resultInStats(events, carrom)) {\n",
+  "replace": "      if (!played) {\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "every declared cfg of every sport"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-web-badge-on-played",
+  "file": "apps/web/src/server/public-site/public-player-matches.ts",
+  "find": "reading.get(r.id)?.result === true ? playerMatchResult(",
+  "replace": "reading.get(r.id)?.played === true ? playerMatchResult(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "generic"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-web-reading-result-is-played",
+  "file": "apps/web/src/server/usecases/player-stats.ts",
+  "find": "result: resultInStats(ledger, sportModule) });",
+  "replace": "result: playedInStats(ledger, sportModule) });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/player-stats-ruling-127.test.ts"
+    ],
+    "name": "badminton"
+   }
+  ]
+ },
+ {
+  "id": "lr-127-fold-version-not-bumped",
+  "file": "packages/engine/src/stats/stats.ts",
+  "find": "export const STATS_FOLD_VERSION = 6;",
+  "replace": "export const STATS_FOLD_VERSION = 5;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/player-stats-ruling-127.test.ts"
+    ],
+    "name": "fold version"
+   }
+  ]
  }
 ]
