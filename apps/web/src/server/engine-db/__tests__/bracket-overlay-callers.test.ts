@@ -16,9 +16,21 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
+/** One stack per resolver call, in call order: which production line made it. `spy.mockClear()` does not touch it,
+ *  so the calls since the last clear are always its last `spy.mock.calls.length` entries. */
+const STACKS = vi.hoisted(() => [] as string[]);
 vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/engine-db/fixture-cfg")>();
-  return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
+  return {
+    ...real,
+    resolveFixtureCfg: vi.fn((...args: Parameters<typeof real.resolveFixtureCfg>) => {
+      const limit = Error.stackTraceLimit;
+      Error.stackTraceLimit = 50;
+      STACKS.push(new Error().stack ?? "");
+      Error.stackTraceLimit = limit;
+      return real.resolveFixtureCfg(...args);
+    }),
+  };
 });
 import { builtinModules } from "@seazn/engine/sports";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
@@ -72,13 +84,27 @@ async function seedOverride(where: { fixtureId: string } | { stageId: string }):
       : await sql`update fixtures set rules_override = ${sql.json(OVERRIDE as never)} where stage_id = ${where.stageId}`;
   expect(n.count, "the override was written").toBeGreaterThan(0);
 }
+/** The production call site (repo-relative `file:line:col`) that made a resolver call, read off the call's own stack:
+ *  the first frame under apps/web/src that is neither a test nor the resolver itself. */
+function callSite(stack: string): string {
+  for (const line of stack.split("\n")) {
+    const m = /(apps\/web\/src\/[^\s():?]+\.tsx?)(?:\?[^\s:)]*)?:(\d+):(\d+)/.exec(line);
+    if (m && !m[1]!.includes("/__tests__/") && !m[1]!.endsWith("engine-db/fixture-cfg.ts")) return `${m[1]}:${m[2]}:${m[3]}`;
+  }
+  throw new Error(`no production frame in the resolver call's stack:\n${stack}`);
+}
+/** M3 (review): every call site a case DROVE with the override, as the spy saw it — never a case's own claim. */
+const DRIVEN = new Set<string>();
 /** Every call the entry made carried the fixture row's override (the brief's `calls.at(-1)` check, on every call);
- *  returns how many calls that was, which is never 0. */
+ *  returns how many calls that was, which is never 0. Each call's site goes into DRIVEN. */
 function expectOverrideArg(): number {
   const calls = spy.mock.calls;
   expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
   expect(spy.mock.calls.at(-1)![0]).toMatchObject({ rules_override: OVERRIDE });
   for (const c of calls) expect(c[0], JSON.stringify(c[0])).toMatchObject({ rules_override: OVERRIDE });
+  const stacks = STACKS.slice(-calls.length);
+  expect(stacks, "one stack per call since the last clear").toHaveLength(calls.length);
+  for (const st of stacks) DRIVEN.add(callSite(st));
   return calls.length;
 }
 /** …and a call of `kind` handed back a LIVE cfg with the override merged (the fixture had no frozen snapshot). */
@@ -89,7 +115,8 @@ function expectOverrideOut(kind: string): void {
 
 const REPO = resolve(__dirname, "../../../../../..");
 const CALL = /\bresolveFixtureCfg\(/g;
-/** Comments are not call sites: admin-fixture-config.ts says "`resolveFixtureCfg(null, …)` rather than…" in prose. */
+/** Comments are not call sites: admin-fixture-config.ts says "`resolveFixtureCfg({ config_snapshot: null, … }, …)`
+ *  rather than…" in prose. */
 const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 /** One row per production call site; `case` names the test that drives it. */
 const SITES: readonly { file: string; count: number; case: string }[] = [
@@ -351,6 +378,24 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expectOverlay("knockout");
     expectOverrideOut("knockout");
     expectOverrideArg();
+  });
+
+  // M3 (review): the ledger above pins the 12 sites in the SOURCE; this pins that the cases DROVE all 12 with the
+  // override. Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
+  // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
+  // with -t, in which case this one is filtered out too).
+  it.skipIf(!HAS_DB)("every one of the 12 call sites was driven with the override, per the spy's caller frames", () => {
+    const byFile = new Map<string, number>();
+    for (const site of DRIVEN) {
+      const file = site.replace(/:\d+:\d+$/, "");
+      byFile.set(file, (byFile.get(file) ?? 0) + 1);
+    }
+    const missing = SITES.filter((s) => (byFile.get(s.file) ?? 0) !== s.count).map(
+      (s) => `${s.file}: ${byFile.get(s.file) ?? 0} of ${s.count} driven`,
+    );
+    expect(missing, `NOT DRIVEN: ${missing.join("; ")} (driven: ${JSON.stringify([...DRIVEN].sort())})`).toEqual([]);
+    expect([...byFile.keys()].sort(), "and nothing outside the ledger").toEqual(SITES.map((s) => s.file).sort());
+    expect(DRIVEN.size, "anti-vacuity: the sites checked").toBe(12);
   });
 });
 

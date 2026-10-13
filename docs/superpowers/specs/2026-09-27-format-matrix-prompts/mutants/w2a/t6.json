@@ -17,8 +17,8 @@
   {
     "id": "freeze-loses",
     "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
-    "find": "if (hasFrozenCfg(snapshot)) return snapshot;",
-    "replace": "if (false) return snapshot;",
+    "find": "if (hasFrozenCfg(fixture.config_snapshot)) return fixture.config_snapshot;",
+    "replace": "if (false) return fixture.config_snapshot;",
     "killers": [
       {
         "cwd": "apps/web",
@@ -92,8 +92,8 @@
   {
     "id": "fold-kind-dropped",
     "file": "apps/web/src/server/engine-db/fold.ts",
-    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
-    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "find": "resolveFixtureCfg(fixture, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -107,8 +107,8 @@
   {
     "id": "append-kind-dropped",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
-    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "find": "resolveFixtureCfg(fixture, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -122,8 +122,8 @@
   {
     "id": "import-kind-dropped",
     "file": "apps/web/src/server/usecases/event-import.ts",
-    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
-    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "find": "resolveFixtureCfg(fixture, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture, division.config, stage && { kind: null, config: stage.config }, sportModule)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -137,8 +137,8 @@
   {
     "id": "competition-delta-kind-dropped",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
-    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
+    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
+    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
     "killers": [
       {
         "cwd": "apps/web",
@@ -152,8 +152,8 @@
   {
     "id": "competition-bye-kind-dropped",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
-    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
+    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
+    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
     "killers": [
       {
         "cwd": "apps/web",
@@ -212,8 +212,8 @@
   {
     "id": "admin-panel-kind-dropped",
     "file": "apps/web/src/server/usecases/admin-fixture-config.ts",
-    "find": "  const live = resolveFixtureCfg(\n    null,\n    row.division_config,\n    { kind: row.stage_kind, config: row.stage_config },",
-    "replace": "  const live = resolveFixtureCfg(\n    null,\n    row.division_config,\n    { kind: null, config: row.stage_config },",
+    "find": "  const live = resolveFixtureCfg(\n    { config_snapshot: null, rules_override: row.rules_override },\n    row.division_config,\n    { kind: row.stage_kind, config: row.stage_config },",
+    "replace": "  const live = resolveFixtureCfg(\n    { config_snapshot: null, rules_override: row.rules_override },\n    row.division_config,\n    { kind: null, config: row.stage_config },",
     "killers": [
       {
         "cwd": "apps/web",
@@ -227,8 +227,8 @@
   {
     "id": "admin-resnapshot-kind-dropped",
     "file": "apps/web/src/server/usecases/admin-fixture-config.ts",
-    "find": "    const live = resolveFixtureCfg(\n      null,\n      row.division_config,\n      { kind: row.stage_kind, config: row.stage_config },",
-    "replace": "    const live = resolveFixtureCfg(\n      null,\n      row.division_config,\n      { kind: null, config: row.stage_config },",
+    "find": "    const live = resolveFixtureCfg(\n      { config_snapshot: null, rules_override: row.rules_override },\n      row.division_config,\n      { kind: row.stage_kind, config: row.stage_config },",
+    "replace": "    const live = resolveFixtureCfg(\n      { config_snapshot: null, rules_override: row.rules_override },\n      row.division_config,\n      { kind: null, config: row.stage_config },",
     "killers": [
       {
         "cwd": "apps/web",
