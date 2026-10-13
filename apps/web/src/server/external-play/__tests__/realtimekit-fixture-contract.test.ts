@@ -268,5 +268,5 @@ describe("property: no HTTP request can make a participant live", () => {
     const me = await addParticipant({ meetingId: id, subject: "white", preset: "player" });
     fx.setLivePublisher(me.participantId, true);
     expect(await hasLiveVideoPublisher({ meetingId: id, participantId: me.participantId })).toBe(true);
-  }, 120_000);
+  });
 });

@@ -1671,283 +1671,295 @@ const scenario = fc
 const LOWER = { required: "optional", optional: "off", off: "off" } as const;
 
 describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade / late / create / start / end", () => {
-  it(
-    "nobody is seated under required without being live, nor before the round opens, nor past T+20 except by re-entry — and every claim matches the model",
-    async () => {
-      const totals = {
-        runs: 0,
-        actions: 0,
-        claims: 0,
-        roundNotOpen: 0,
-        seatedRequiredLive: 0,
-        cameraRequired: 0,
-        cameraLost: 0,
-        seatedOptional: 0,
-        seatedOff: 0,
-        downgrades: 0,
-        joinsApplied: 0,
-        leavesApplied: 0,
-        gamesCreated: 0,
-        gamesForeign: 0,
-        starts: 0,
-        ends: 0,
-        lateClaims: 0,
-        // Past T+20 and NOT re-entry, by the first of the three conditions
-        // that fails in the model.
-        lateNoGame: 0,
-        lateForeignGame: 0,
-        lateGameOver: 0,
-        // Past T+20 and re-entry, by outcome and by the bridge it re-entered on.
-        lateReentrySeated: 0,
-        lateReentryCameraRefused: 0,
-        lateReentryOnReady: 0,
-        lateReentryOnLive: 0,
-        // The controller's invariants, counted on their own.
-        violationsRequiredNotLive: 0,
-        violationsBeforeOpen: 0,
-        violationsOutsideWindow: 0,
-        // Fix round 2: the play grant.
-        narrows: 0,
-        relinks: 0,
-        reconsentRefused: 0,
-        lateReentryReconsentRefused: 0,
-        violationsSeatedWithoutGrant: 0,
-      };
+  const totals = {
+    runs: 0,
+    actions: 0,
+    claims: 0,
+    roundNotOpen: 0,
+    seatedRequiredLive: 0,
+    cameraRequired: 0,
+    cameraLost: 0,
+    seatedOptional: 0,
+    seatedOff: 0,
+    downgrades: 0,
+    joinsApplied: 0,
+    leavesApplied: 0,
+    gamesCreated: 0,
+    gamesForeign: 0,
+    starts: 0,
+    ends: 0,
+    lateClaims: 0,
+    // Past T+20 and NOT re-entry, by the first of the three conditions
+    // that fails in the model.
+    lateNoGame: 0,
+    lateForeignGame: 0,
+    lateGameOver: 0,
+    // Past T+20 and re-entry, by outcome and by the bridge it re-entered on.
+    lateReentrySeated: 0,
+    lateReentryCameraRefused: 0,
+    lateReentryOnReady: 0,
+    lateReentryOnLive: 0,
+    // The controller's invariants, counted on their own.
+    violationsRequiredNotLive: 0,
+    violationsBeforeOpen: 0,
+    violationsOutsideWindow: 0,
+    // Fix round 2: the play grant.
+    narrows: 0,
+    relinks: 0,
+    reconsentRefused: 0,
+    lateReentryReconsentRefused: 0,
+    violationsSeatedWithoutGrant: 0,
+  };
 
-      await fc.assert(
-        fc.asyncProperty(scenario, async (acts) => {
-          totals.runs += 1;
-          const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
-          const owner = await mintOrgOwnerAuth(s.orgId);
-          const rtk = fakeRealtimeKit();
-          // The model. Object fields, not locals: they change inside the
-          // loop, and a narrowed local would be read stale by the type checker.
-          const m: {
-            policy: "required" | "optional" | "off";
-            roundOpen: boolean;
-            late: boolean;
-            game: "none" | "players" | "others";
-            bridge: "none" | "ready" | "live" | "finished" | "needs_organiser";
-          } = { policy: "required", roundOpen: false, late: false, game: "none", bridge: "none" };
-          const token: Record<Side, string | null> = { home: null, away: null };
-          const pid: Record<Side, string | null> = { home: null, away: null };
-          const peers: Record<Side, number> = { home: 0, away: 0 };
-          const verified: Record<Side, boolean> = { home: false, away: false };
-          const grant: Record<Side, boolean> = { home: true, away: true };
+  // CI round 1 (G-1): run as ONE property the 80 orderings needed a 300 s pin, which overrides --testTimeout as
+  // surely as an inline one. The same seed now SAMPLES the 80 orderings once, they run in 4 rounds of their own,
+  // and the closing test holds the invariants and the per-path counts across every round. Every replay seeds a whole
+  // fixture, so there was never any shrinking to lose (endOnFailure); a failure names its sequence in its message.
+  const RUNS = 80;
+  const ROUNDS = 4;
+  const SCENARIOS = fc.sample(scenario, { seed: 20261009, numRuns: RUNS });
+  let roundsRun = 0;
+  const runScenario = async (acts: Act[]): Promise<void> => {
+    totals.runs += 1;
+    const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
+    const owner = await mintOrgOwnerAuth(s.orgId);
+    const rtk = fakeRealtimeKit();
+    // The model. Object fields, not locals: they change inside the
+    // loop, and a narrowed local would be read stale by the type checker.
+    const m: {
+      policy: "required" | "optional" | "off";
+      roundOpen: boolean;
+      late: boolean;
+      game: "none" | "players" | "others";
+      bridge: "none" | "ready" | "live" | "finished" | "needs_organiser";
+    } = { policy: "required", roundOpen: false, late: false, game: "none", bridge: "none" };
+    const token: Record<Side, string | null> = { home: null, away: null };
+    const pid: Record<Side, string | null> = { home: null, away: null };
+    const peers: Record<Side, number> = { home: 0, away: 0 };
+    const verified: Record<Side, boolean> = { home: false, away: false };
+    const grant: Record<Side, boolean> = { home: true, away: true };
 
-          /** One claim, checked against the model. Returns whether it seated. */
-          const check = async (sd: Side, where: string): Promise<boolean> => {
-            totals.claims += 1;
-            const httpBefore = rtk.http.length;
-            const adapterBefore = rtk.adapter.length;
-            const got = await claim(s, sd, rtk, m.late ? LATE : NOW);
-            const live = peers[sd] > 0;
-            const reentry = m.game === "players" && (m.bridge === "ready" || m.bridge === "live");
-            const carriesToken = "participant" in got && got.participant !== null;
+    /** One claim, checked against the model. Returns whether it seated. */
+    const check = async (sd: Side, where: string): Promise<boolean> => {
+      totals.claims += 1;
+      const httpBefore = rtk.http.length;
+      const adapterBefore = rtk.adapter.length;
+      const got = await claim(s, sd, rtk, m.late ? LATE : NOW);
+      const live = peers[sd] > 0;
+      const reentry = m.game === "players" && (m.bridge === "ready" || m.bridge === "live");
+      const carriesToken = "participant" in got && got.participant !== null;
 
-            // The invariants.
-            if (got.seated && !m.roundOpen) totals.violationsBeforeOpen += 1;
-            // No override is ever applied here, so EVERY seat under required
-            // needs a live player — a null tile is no exemption.
-            if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
-            if (m.late && !reentry && (got.seated || carriesToken)) totals.violationsOutsideWindow += 1;
-            if (got.seated && !grant[sd]) totals.violationsSeatedWithoutGrant += 1;
+      // The invariants.
+      if (got.seated && !m.roundOpen) totals.violationsBeforeOpen += 1;
+      // No override is ever applied here, so EVERY seat under required
+      // needs a live player — a null tile is no exemption.
+      if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
+      if (m.late && !reentry && (got.seated || carriesToken)) totals.violationsOutsideWindow += 1;
+      if (got.seated && !grant[sd]) totals.violationsSeatedWithoutGrant += 1;
 
-            if (!m.roundOpen) {
-              expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
-              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-              totals.roundNotOpen += 1;
-              return false;
-            }
-            if (m.late) totals.lateClaims += 1;
-            if (m.late && !reentry) {
-              expect(got, where).toEqual({ seated: false, reason: "window_closed" });
-              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-              if (m.game === "none") totals.lateNoGame += 1;
-              else if (m.game === "others") totals.lateForeignGame += 1;
-              else totals.lateGameOver += 1;
-              return false;
-            }
-            if (!grant[sd]) {
-              // After every check re-linking cannot cure; before any token.
-              expect(got, where).toEqual({ seated: false, reason: "lichess_reconsent_required" });
-              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-              totals.reconsentRefused += 1;
-              if (m.late) totals.lateReentryReconsentRefused += 1;
-              return false;
-            }
-            if (m.late) {
-              if (m.bridge === "ready") totals.lateReentryOnReady += 1;
-              if (m.bridge === "live") totals.lateReentryOnLive += 1;
-            }
-            if (m.policy === "off") {
-              expect(got, where).toEqual({ seated: true, participant: null });
-              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-              totals.seatedOff += 1;
-              if (m.late) totals.lateReentrySeated += 1;
-              return true;
-            }
-            const carried = "participant" in got ? got.participant : null;
-            expect(carried, `${where}: a token`).not.toBeNull();
-            if (pid[sd] === null) pid[sd] = carried!.participantId;
-            expect(carried!.participantId, `${where}: the caller's own, single participant`).toBe(pid[sd]);
-            const other: Side = sd === "home" ? "away" : "home";
-            if (pid[other] !== null) expect(carried!.participantId, `${where}: never the opponent's`).not.toBe(pid[other]);
-            token[sd] = carried!.authToken;
+      if (!m.roundOpen) {
+        expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
+        expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+        totals.roundNotOpen += 1;
+        return false;
+      }
+      if (m.late) totals.lateClaims += 1;
+      if (m.late && !reentry) {
+        expect(got, where).toEqual({ seated: false, reason: "window_closed" });
+        expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+        if (m.game === "none") totals.lateNoGame += 1;
+        else if (m.game === "others") totals.lateForeignGame += 1;
+        else totals.lateGameOver += 1;
+        return false;
+      }
+      if (!grant[sd]) {
+        // After every check re-linking cannot cure; before any token.
+        expect(got, where).toEqual({ seated: false, reason: "lichess_reconsent_required" });
+        expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+        totals.reconsentRefused += 1;
+        if (m.late) totals.lateReentryReconsentRefused += 1;
+        return false;
+      }
+      if (m.late) {
+        if (m.bridge === "ready") totals.lateReentryOnReady += 1;
+        if (m.bridge === "live") totals.lateReentryOnLive += 1;
+      }
+      if (m.policy === "off") {
+        expect(got, where).toEqual({ seated: true, participant: null });
+        expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+        totals.seatedOff += 1;
+        if (m.late) totals.lateReentrySeated += 1;
+        return true;
+      }
+      const carried = "participant" in got ? got.participant : null;
+      expect(carried, `${where}: a token`).not.toBeNull();
+      if (pid[sd] === null) pid[sd] = carried!.participantId;
+      expect(carried!.participantId, `${where}: the caller's own, single participant`).toBe(pid[sd]);
+      const other: Side = sd === "home" ? "away" : "home";
+      if (pid[other] !== null) expect(carried!.participantId, `${where}: never the opponent's`).not.toBe(pid[other]);
+      token[sd] = carried!.authToken;
 
-            if (m.policy === "optional") {
-              expect(got.seated, where).toBe(true);
-              expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
-                "hasLiveVideoPublisher",
-              );
-              totals.seatedOptional += 1;
-              if (m.late) totals.lateReentrySeated += 1;
-              return true;
-            }
-            if (live) {
-              expect(got.seated, where).toBe(true);
-              verified[sd] = true;
-              totals.seatedRequiredLive += 1;
-              if (m.late) totals.lateReentrySeated += 1;
-              return true;
-            }
-            const want = verified[sd] ? "camera_lost" : "camera_required";
-            expect(!got.seated && got.reason, where).toBe(want);
-            if (want === "camera_lost") totals.cameraLost += 1;
-            else totals.cameraRequired += 1;
-            if (m.late) totals.lateReentryCameraRefused += 1;
-            return false;
-          };
+      if (m.policy === "optional") {
+        expect(got.seated, where).toBe(true);
+        expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
+          "hasLiveVideoPublisher",
+        );
+        totals.seatedOptional += 1;
+        if (m.late) totals.lateReentrySeated += 1;
+        return true;
+      }
+      if (live) {
+        expect(got.seated, where).toBe(true);
+        verified[sd] = true;
+        totals.seatedRequiredLive += 1;
+        if (m.late) totals.lateReentrySeated += 1;
+        return true;
+      }
+      const want = verified[sd] ? "camera_lost" : "camera_required";
+      expect(!got.seated && got.reason, where).toBe(want);
+      if (want === "camera_lost") totals.cameraLost += 1;
+      else totals.cameraRequired += 1;
+      if (m.late) totals.lateReentryCameraRefused += 1;
+      return false;
+    };
 
-          for (const [i, x] of acts.entries()) {
-            totals.actions += 1;
-            const where = `${JSON.stringify(acts)} → #${i} ${JSON.stringify(x)}`;
-            if (x.kind === "open") {
-              if (!m.roundOpen) {
-                await sql`
-                  insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
-                  values (${s.stageId}, ${s.orgId}, 1, ${OPENED}, ${s.ownerUserId})`;
-                m.roundOpen = true;
-              }
-            } else if (x.kind === "join") {
-              if (token[x.side] !== null) {
-                rtk.joinWith(token[x.side]!);
-                peers[x.side] += 1;
-                totals.joinsApplied += 1;
-              }
-            } else if (x.kind === "leave") {
-              if (peers[x.side] > 0) {
-                rtk.leave(pid[x.side]!);
-                peers[x.side] -= 1;
-                totals.leavesApplied += 1;
-              }
-            } else if (x.kind === "downgrade") {
-              if (m.policy !== "off") {
-                m.policy = LOWER[m.policy];
-                await patchDivision(owner, s.divisionId, { camera_policy: m.policy });
-                totals.downgrades += 1;
-              }
-            } else if (x.kind === "late") {
-              m.late = true;
-            } else if (x.kind === "create") {
-              // T9: a game already on record is `already`; otherwise BOTH
-              // seats are re-verified through seatPlayer, and the game is
-              // recorded for the two accounts only if both pass.
-              if (m.game === "none") {
-                const home = await check("home", `${where} (T9 seats home)`);
-                const away = await check("away", `${where} (T9 seats away)`);
-                if (home && away) {
-                  await recordGame(s, { status: "ready" });
-                  m.game = "players";
-                  m.bridge = "ready";
-                  totals.gamesCreated += 1;
-                }
-              }
-            } else if (x.kind === "start") {
-              // T10: the first accepted move flips a `ready` bridge to `live`.
-              if (m.bridge === "ready") {
-                await setBridgeStatus(s, "live");
-                m.bridge = "live";
-                totals.starts += 1;
-              }
-            } else if (x.kind === "end") {
-              // The game is over, or handed to the organiser — the board
-              // itself stays `scheduled` until T12 writes a result.
-              if (m.bridge === "ready" || m.bridge === "live") {
-                await setBridgeStatus(s, x.to);
-                m.bridge = x.to;
-                totals.ends += 1;
-              }
-            } else if (x.kind === "narrow") {
-              if (grant[x.side]) {
-                await narrowGrant(s[x.side].userId);
-                grant[x.side] = false;
-                totals.narrows += 1;
-              }
-            } else if (x.kind === "relink") {
-              if (!grant[x.side]) {
-                await restoreGrant(s[x.side].userId);
-                grant[x.side] = true;
-                totals.relinks += 1;
-              }
-            } else if (x.kind === "foreign") {
-              if (m.game === "none") {
-                await recordGame(s, { status: "ready", white: `other-w-${RUN}`, black: `other-b-${RUN}` });
-                m.game = "others";
-                m.bridge = "ready";
-                totals.gamesForeign += 1;
-              }
-            } else {
-              await check(x.side, where);
-            }
+    for (const [i, x] of acts.entries()) {
+      totals.actions += 1;
+      const where = `${JSON.stringify(acts)} → #${i} ${JSON.stringify(x)}`;
+      if (x.kind === "open") {
+        if (!m.roundOpen) {
+          await sql`
+            insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+            values (${s.stageId}, ${s.orgId}, 1, ${OPENED}, ${s.ownerUserId})`;
+          m.roundOpen = true;
+        }
+      } else if (x.kind === "join") {
+        if (token[x.side] !== null) {
+          rtk.joinWith(token[x.side]!);
+          peers[x.side] += 1;
+          totals.joinsApplied += 1;
+        }
+      } else if (x.kind === "leave") {
+        if (peers[x.side] > 0) {
+          rtk.leave(pid[x.side]!);
+          peers[x.side] -= 1;
+          totals.leavesApplied += 1;
+        }
+      } else if (x.kind === "downgrade") {
+        if (m.policy !== "off") {
+          m.policy = LOWER[m.policy];
+          await patchDivision(owner, s.divisionId, { camera_policy: m.policy });
+          totals.downgrades += 1;
+        }
+      } else if (x.kind === "late") {
+        m.late = true;
+      } else if (x.kind === "create") {
+        // T9: a game already on record is `already`; otherwise BOTH
+        // seats are re-verified through seatPlayer, and the game is
+        // recorded for the two accounts only if both pass.
+        if (m.game === "none") {
+          const home = await check("home", `${where} (T9 seats home)`);
+          const away = await check("away", `${where} (T9 seats away)`);
+          if (home && away) {
+            await recordGame(s, { status: "ready" });
+            m.game = "players";
+            m.bridge = "ready";
+            totals.gamesCreated += 1;
           }
-          expect(await fixtureStatus(s), `${JSON.stringify(acts)}: the board was never started by the test`).toBe(
-            "scheduled",
-          );
-          // Per run: one stored player participant per side that ever claimed.
-          const rows = await participantRows(s.fixtureId);
-          for (const sd of ["home", "away"] as const) {
-            const mine = rows.filter((r) => r.person_id === s[sd].personId);
-            expect(mine.length, `${JSON.stringify(acts)}: ${sd} participants`).toBe(pid[sd] === null ? 0 : 1);
-          }
-        }),
-        // endOnFailure: every replay seeds a whole fixture, so shrinking is
-        // switched off; the failing sequence is printed in each message.
-        { numRuns: 80, seed: 20261009, endOnFailure: true },
-      );
+        }
+      } else if (x.kind === "start") {
+        // T10: the first accepted move flips a `ready` bridge to `live`.
+        if (m.bridge === "ready") {
+          await setBridgeStatus(s, "live");
+          m.bridge = "live";
+          totals.starts += 1;
+        }
+      } else if (x.kind === "end") {
+        // The game is over, or handed to the organiser — the board
+        // itself stays `scheduled` until T12 writes a result.
+        if (m.bridge === "ready" || m.bridge === "live") {
+          await setBridgeStatus(s, x.to);
+          m.bridge = x.to;
+          totals.ends += 1;
+        }
+      } else if (x.kind === "narrow") {
+        if (grant[x.side]) {
+          await narrowGrant(s[x.side].userId);
+          grant[x.side] = false;
+          totals.narrows += 1;
+        }
+      } else if (x.kind === "relink") {
+        if (!grant[x.side]) {
+          await restoreGrant(s[x.side].userId);
+          grant[x.side] = true;
+          totals.relinks += 1;
+        }
+      } else if (x.kind === "foreign") {
+        if (m.game === "none") {
+          await recordGame(s, { status: "ready", white: `other-w-${RUN}`, black: `other-b-${RUN}` });
+          m.game = "others";
+          m.bridge = "ready";
+          totals.gamesForeign += 1;
+        }
+      } else {
+        await check(x.side, where);
+      }
+    }
+    expect(await fixtureStatus(s), `${JSON.stringify(acts)}: the board was never started by the test`).toBe(
+      "scheduled",
+    );
+    // Per run: one stored player participant per side that ever claimed.
+    const rows = await participantRows(s.fixtureId);
+    for (const sd of ["home", "away"] as const) {
+      const mine = rows.filter((r) => r.person_id === s[sd].personId);
+      expect(mine.length, `${JSON.stringify(acts)}: ${sd} participants`).toBe(pid[sd] === null ? 0 : 1);
+    }
+  };
+  for (let k = 0; k < ROUNDS; k++) {
+    const chunk = SCENARIOS.slice((k * RUNS) / ROUNDS, ((k + 1) * RUNS) / ROUNDS);
+    it(`round ${k + 1} of ${ROUNDS}: 20 orderings, every claim checked against the model`, async () => {
+      let mine = 0;
+      for (const acts of chunk) {
+        await runScenario(acts);
+        mine++;
+      }
+      expect(mine, "anti-vacuity: this round's runs").toBe(RUNS / ROUNDS);
+      roundsRun++;
+    });
+  }
+  it(`nobody is seated under required without being live, nor before the round opens, nor past T+20 except by re-entry — and every claim matches the model — across every round`, () => {
+    expect(roundsRun, "anti-vacuity: rounds run").toBe(ROUNDS);
 
-      console.log(`PROPERTY_COUNTS ${JSON.stringify(totals)}`);
-      expect(totals.violationsBeforeOpen, "INVARIANT: nobody seated before the round opens").toBe(0);
-      expect(totals.violationsRequiredNotLive, "INVARIANT: nobody seated under required without being live").toBe(0);
-      expect(
-        totals.violationsOutsideWindow,
-        "INVARIANT: no token and no seat past T+20 except re-entry under exactly the three conditions",
-      ).toBe(0);
-      // Anti-vacuity: zero checked is a failure, per path the property is named for.
-      expect(totals.runs, "runs").toBeGreaterThanOrEqual(80);
-      expect(totals.claims, "claims").toBeGreaterThan(0);
-      expect(totals.roundNotOpen, "claims before the round opened").toBeGreaterThan(0);
-      expect(totals.seatedRequiredLive, "seats under required with a live player").toBeGreaterThan(0);
-      expect(totals.cameraRequired, "camera_required refusals").toBeGreaterThan(0);
-      expect(totals.cameraLost, "camera_lost refusals").toBeGreaterThan(0);
-      expect(totals.seatedOptional, "seats after a downgrade to optional").toBeGreaterThan(0);
-      expect(totals.seatedOff, "seats after a downgrade to off").toBeGreaterThan(0);
-      expect(totals.leavesApplied, "leaves").toBeGreaterThan(0);
-      expect(totals.gamesCreated, "games T9 created").toBeGreaterThan(0);
-      expect(totals.lateClaims, "claims past T+20").toBeGreaterThan(0);
-      expect(totals.lateNoGame, "past T+20, no game").toBeGreaterThan(0);
-      expect(totals.lateForeignGame, "past T+20, a game for other accounts").toBeGreaterThan(0);
-      expect(totals.lateGameOver, "past T+20, the game over (finished / needs_organiser)").toBeGreaterThan(0);
-      expect(totals.lateReentrySeated, "re-entry past T+20, seated").toBeGreaterThan(0);
-      expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
-      expect(totals.lateReentryOnReady, "re-entry on a `ready` bridge").toBeGreaterThan(0);
-      expect(totals.lateReentryOnLive, "re-entry on a `live` bridge").toBeGreaterThan(0);
-      expect(totals.violationsSeatedWithoutGrant, "INVARIANT: nobody seated without the full grant").toBe(0);
-      expect(totals.narrows, "grants gone stale").toBeGreaterThan(0);
-      expect(totals.relinks, "grants restored").toBeGreaterThan(0);
-      expect(totals.reconsentRefused, "re-consent refusals").toBeGreaterThan(0);
-      expect(totals.lateReentryReconsentRefused, "re-entry past T+20 refused on a stale grant").toBeGreaterThan(0);
-    },
-    300_000,
-  );
+    console.log(`PROPERTY_COUNTS ${JSON.stringify(totals)}`);
+    expect(totals.violationsBeforeOpen, "INVARIANT: nobody seated before the round opens").toBe(0);
+    expect(totals.violationsRequiredNotLive, "INVARIANT: nobody seated under required without being live").toBe(0);
+    expect(
+      totals.violationsOutsideWindow,
+      "INVARIANT: no token and no seat past T+20 except re-entry under exactly the three conditions",
+    ).toBe(0);
+    // Anti-vacuity: zero checked is a failure, per path the property is named for.
+    expect(totals.runs, "runs").toBe(RUNS);
+    expect(totals.claims, "claims").toBeGreaterThan(0);
+    expect(totals.roundNotOpen, "claims before the round opened").toBeGreaterThan(0);
+    expect(totals.seatedRequiredLive, "seats under required with a live player").toBeGreaterThan(0);
+    expect(totals.cameraRequired, "camera_required refusals").toBeGreaterThan(0);
+    expect(totals.cameraLost, "camera_lost refusals").toBeGreaterThan(0);
+    expect(totals.seatedOptional, "seats after a downgrade to optional").toBeGreaterThan(0);
+    expect(totals.seatedOff, "seats after a downgrade to off").toBeGreaterThan(0);
+    expect(totals.leavesApplied, "leaves").toBeGreaterThan(0);
+    expect(totals.gamesCreated, "games T9 created").toBeGreaterThan(0);
+    expect(totals.lateClaims, "claims past T+20").toBeGreaterThan(0);
+    expect(totals.lateNoGame, "past T+20, no game").toBeGreaterThan(0);
+    expect(totals.lateForeignGame, "past T+20, a game for other accounts").toBeGreaterThan(0);
+    expect(totals.lateGameOver, "past T+20, the game over (finished / needs_organiser)").toBeGreaterThan(0);
+    expect(totals.lateReentrySeated, "re-entry past T+20, seated").toBeGreaterThan(0);
+    expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
+    expect(totals.lateReentryOnReady, "re-entry on a `ready` bridge").toBeGreaterThan(0);
+    expect(totals.lateReentryOnLive, "re-entry on a `live` bridge").toBeGreaterThan(0);
+    expect(totals.violationsSeatedWithoutGrant, "INVARIANT: nobody seated without the full grant").toBe(0);
+    expect(totals.narrows, "grants gone stale").toBeGreaterThan(0);
+    expect(totals.relinks, "grants restored").toBeGreaterThan(0);
+    expect(totals.reconsentRefused, "re-consent refusals").toBeGreaterThan(0);
+    expect(totals.lateReentryReconsentRefused, "re-entry past T+20 refused on a stale grant").toBeGreaterThan(0);
+  });
 });

@@ -398,25 +398,36 @@ const PREFIXES: { name: keyof Counters; board: Board; ops: Op[] }[] = [
 const RUNS_PER_PREFIX = 6;
 
 describe.runIf(HAS_DB)("the organiser's decisions — any order of raise, look, close, resolve and hold", () => {
-  it(
-    "every answer and every screen matches the ruling model; each claim's path is reached",
-    async () => {
-      let runs = 0;
-      for (const p of PREFIXES) {
-        await fc.assert(
-          fc.asyncProperty(fc.array(op, { maxLength: 5 }), async (tail) => {
-            await run(p.board, [...p.ops, ...tail]);
-            runs++;
-          }),
-          { numRuns: RUNS_PER_PREFIX, seed: 0x7160 },
-        );
-      }
-      expect(runs, "anti-vacuity: runs").toBe(PREFIXES.length * RUNS_PER_PREFIX);
-      for (const p of PREFIXES) expect(total[p.name], `anti-vacuity: ${p.name}`).toBeGreaterThanOrEqual(RUNS_PER_PREFIX);
-      expect(total.steps).toBeGreaterThan(PREFIXES.reduce((n, p) => n + p.ops.length, 0) * RUNS_PER_PREFIX - 1);
-    },
-    240_000,
-  );
+  // One test per prefix (CI round 1, G-1): run as ONE test, the prefixes needed a 240 s pin, which overrides
+  // --testTimeout as surely as an inline one. Each prefix's runs are their own test now, and the closing test checks
+  // the totals across them, so a prefix that never ran is a failure, not a smaller sum.
+  let runs = 0;
+  let prefixesRun = 0;
+  for (const [i, p] of PREFIXES.entries()) {
+    const where = `${p.board.kind}${p.board.live ? ", live" : ""}`;
+    it(`prefix ${i + 1} of ${PREFIXES.length}, ${p.name} (${where}): every answer and every screen matches the ruling model`, async () => {
+      const before = total[p.name];
+      let mine = 0;
+      await fc.assert(
+        fc.asyncProperty(fc.array(op, { maxLength: 5 }), async (tail) => {
+          await run(p.board, [...p.ops, ...tail]);
+          mine++;
+        }),
+        { numRuns: RUNS_PER_PREFIX, seed: 0x7160 },
+      );
+      expect(mine, "anti-vacuity: this prefix's runs").toBe(RUNS_PER_PREFIX);
+      // The prefix ENDS with its claim, so every run reaches it.
+      expect(total[p.name] - before, `anti-vacuity: ${p.name}, once per run`).toBeGreaterThanOrEqual(RUNS_PER_PREFIX);
+      runs += mine;
+      prefixesRun++;
+    });
+  }
+  it("across the prefixes: every one ran, and every claim's path was reached", () => {
+    expect(prefixesRun, "anti-vacuity: prefixes run").toBe(PREFIXES.length);
+    expect(runs, "anti-vacuity: runs").toBe(PREFIXES.length * RUNS_PER_PREFIX);
+    for (const p of PREFIXES) expect(total[p.name], `anti-vacuity: ${p.name}`).toBeGreaterThanOrEqual(RUNS_PER_PREFIX);
+    expect(total.steps).toBeGreaterThan(PREFIXES.reduce((n, p) => n + p.ops.length, 0) * RUNS_PER_PREFIX - 1);
+  });
 });
 
 // The transitions, one row each (from the rulings), so a failure names the
@@ -445,12 +456,15 @@ describe.runIf(HAS_DB)("the organiser's decisions — transitions", () => {
     { from: "league: a winner and the other winner at once, in order ⇒ one recorded, the other told BOARD_CHANGED; a third told ALREADY_RESOLVED", board: { kind: "league", live: true }, ops: [{ kind: "race", a: "home_wins", b: "away_wins", ordered: true }, { kind: "resolve", as: "draw" }] },
     { from: "a seated organiser is refused, held and settled alike", board: { kind: "league" }, ops: [{ kind: "resolve", as: "draw", by: SEATED }, { kind: "resolve", as: "home_wins" }, { kind: "resolve", as: "away_wins", by: SEATED }] },
   ];
-  it("each transition lands where the rulings say (counted)", async () => {
-    let checked = 0;
-    for (const t of T) {
+  // One test per row (CI round 1, G-1): the 18 rows as one test needed a 120 s pin.
+  let checked = 0;
+  for (const t of T) {
+    it(`lands where the rulings say: ${t.from}`, async () => {
       await run(t.board, t.ops);
       checked++;
-    }
+    });
+  }
+  it("every transition ran (counted)", () => {
     expect(checked, "anti-vacuity: transitions").toBe(T.length);
-  }, 120_000);
+  });
 });
