@@ -11,6 +11,7 @@
 //   - GET /public/orgs/{org}/competitions/{slug}/hub                    use-live-competition.ts
 //   - GET /public/orgs/{org}/competitions/{slug}/players/{id}/matches   use-live-player-matches.ts
 //   - GET /public/orgs/{org}/live               org-live-chips.tsx
+//   - GET /public/fixtures/{id}/board           watch-panel.tsx (T16, an online chess board's view-only state)
 // Not polled: /public/fixtures/{id}/realtime-token is fetched once per
 // subscription (use-live-fixture.ts, use-fixture-stream.ts), never on a timer,
 // so it stays on the 60 bucket.
@@ -55,6 +56,7 @@ const usecase = vi.hoisted(() => ({
   withdrawRegistrationPublic: vi.fn(async () => ({ withdrawn: true })),
   resendRegistrationConfirmationPublic: vi.fn(async () => ({ sent: true })),
   fixtureRealtimeEligible: vi.fn(async () => true),
+  publicFixtureBoard: vi.fn(async () => ({ roundOpened: false, externalPlay: null })),
   mintPublicFixtureToken: vi.fn(async () => "token"),
 }));
 vi.mock("@/server/usecases/public", async (importOriginal) => ({
@@ -70,6 +72,10 @@ vi.mock("@/server/usecases/public", async (importOriginal) => ({
   publicSchedule: usecase.publicSchedule,
 }));
 vi.mock("@/server/overlay/load", () => ({ loadOverlayLiveData: usecase.loadOverlayLiveData }));
+vi.mock("@/server/usecases/external-play-read", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/external-play-read")>()),
+  publicFixtureBoard: usecase.publicFixtureBoard,
+}));
 vi.mock("@/server/usecases/player-stats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/player-stats")>()),
   publicDivisionStats: usecase.publicDivisionStats,
@@ -96,6 +102,7 @@ vi.mock("@/lib/realtime", async (importOriginal) => ({
 import { publicPollRateLimit, publicRateLimit } from "@/server/usecases/public";
 import { GET as fixture } from "../fixtures/[id]/route";
 import { GET as overlay } from "../fixtures/[id]/overlay/route";
+import { GET as board } from "../fixtures/[id]/board/route";
 import { GET as hub } from "../orgs/[orgSlug]/competitions/[slug]/hub/route";
 import { GET as playerMatches } from "../orgs/[orgSlug]/competitions/[slug]/players/[personId]/matches/route";
 import { GET as orgLive } from "../orgs/[orgSlug]/live/route";
@@ -137,6 +144,7 @@ const POLLED: Array<[string, Call]> = [
     (ip) => playerMatches(from(ip), params({ orgSlug: "o", slug: "c", personId: "p1" })),
   ],
   ["orgs/{org}/live", (ip) => orgLive(from(ip), params({ orgSlug: "o" }))],
+  ["fixtures/{id}/board", (ip) => board(from(ip), params({ id: "f1" }))],
 ];
 // A third element names the route's OWN tighter per-IP bucket, spent on top of
 // the 60 (bot hardening 2026-09-25); registrations/__tests__/route-rate-limits
@@ -176,9 +184,10 @@ describe("the polled public endpoints: their own per-IP bucket, 300 a minute", (
     expect(statuses[300], "the 301st").toBe(429);
   });
 
-  it("all five share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
+  it("all six share ONE poll bucket per IP (one page polling two of them is one budget)", async () => {
     const ip = "203.0.113.8";
-    for (const [, call] of POLLED) expect(await send(call, ip, 60)).not.toContain(429);
+    expect(POLLED, "premise: 300 splits evenly across the polled routes").toHaveLength(6);
+    for (const [, call] of POLLED) expect(await send(call, ip, 300 / POLLED.length)).not.toContain(429);
     expect(counters.get(`rl:pubv1poll:${ip}`)).toBe(300);
     expect((await POLLED[0]![1](ip)).status, "the 301st, across routes").toBe(429);
   });

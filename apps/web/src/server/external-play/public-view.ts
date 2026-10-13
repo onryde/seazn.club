@@ -32,6 +32,15 @@ export type PublicExternalPlay = {
   watch: PublicWatch | null;
 };
 
+/** What the watch island polls (GET /public/fixtures/{id}/board), and what the
+ *  page hands it first: whether the fixture's round is open (D12 — an unopened
+ *  round says so, spec §3.2), and the bridge's public snapshot, null until the
+ *  board has a bridge row. */
+export type PublicWatchDoc = {
+  roundOpened: boolean;
+  externalPlay: PublicExternalPlay | null;
+};
+
 /** Watchable means there is a board to render HERE. `status` alone is not
  *  enough: a `live` row whose `watch` is null would render an empty board,
  *  which reads as a game with no pieces rather than as "not started yet". */
