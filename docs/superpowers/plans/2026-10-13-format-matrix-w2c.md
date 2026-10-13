@@ -4608,6 +4608,8 @@ Notes:
 
 ### Task 19: S2 + S4 (match) — the match rules block on the fixture console, plus the run-sheet tag
 
+> **Carried from Task 5.** The football `extraTime` web field builds `{enabled, halfMinutes: 15}` on "On". As a match override against a stage whose extra time is shorter (or off), that is refused by the engine's `off_or_shorter` bound. The match form must seed extra time FROM THE STAGE's resolved value (and offer only off or shorter), never the field's default. Test: stage ET 2×10 → match form opens at 10, "On" with 15 is not offered.
+
 Spec items 2 and 3 (UI half); §5.3 S2, S4 (match); X-SR-2, X-SR-5 (UI); P5 (console half).
 
 **Files:**
