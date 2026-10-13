@@ -302,19 +302,19 @@
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3987:57 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:3988:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = cricketForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "cricketForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3989:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:3990:75 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3990:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:3991:75 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
