@@ -151,9 +151,15 @@ export function WatchPanelInner({ fixtureId, initial, names, details, pairedWhit
       className="mb-4 flex min-w-0 flex-col gap-3 rounded-xl border border-[#e7e3f3] bg-white p-3 shadow-sm md:p-4"
     >
       {finished ? <WatchResult result={result} names={names} ply={watch?.ply ?? 0} t={t} /> : null}
-      <div className={`grid min-w-0 gap-4 ${board !== null ? "lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)] lg:gap-6" : ""}`}>
+      {/* V3 (T17 fix round 2): one DOM. The heading row is the board column's grid SIBLING — after it in source, so
+          the one-column 768 keeps the board first; ordered first below md, so a phone reads heading, status line,
+          board, then the rest; and placed top-right at lg, where it sat inside the right-hand column. The row gap is
+          the aside's own gap-4, so at lg the heading sits as far above the rest as it did inside the aside. */}
+      <div
+        className={`grid min-w-0 gap-4 ${board !== null ? "lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-x-6" : ""}`}
+      >
         {board !== null ? (
-          <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 flex-col gap-3 lg:col-start-1 lg:row-span-2 lg:row-start-1">
             {status !== null ? <WatchStatus kind={status} t={t} /> : null}
             <WatchBoard watch={board} names={boardNames} nowMs={nowMs} t={t} />
             {finished && lastSan !== null ? (
@@ -164,17 +170,20 @@ export function WatchPanelInner({ fixtureId, initial, names, details, pairedWhit
             {note}
           </div>
         ) : null}
-        <aside className="flex min-w-0 flex-col gap-4">
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <h2 className="m-0 min-w-0 truncate text-lg font-semibold text-[#2e1065]">
-              {t(finished ? "externalPlay.watch.finalTitle" : "externalPlay.watch.title")}
-            </h2>
-            {board !== null ? (
-              <span className="shrink-0 rounded-full bg-[#f3effc] px-2.5 py-1 text-xs font-semibold text-[#4a3a6b]">
-                {t("externalPlay.watch.viewOnly")}
-              </span>
-            ) : null}
-          </div>
+        <div
+          data-testid="watch-heading"
+          className={`flex min-w-0 items-center justify-between gap-2${board !== null ? " max-md:order-first lg:col-start-2 lg:row-start-1" : ""}`}
+        >
+          <h2 className="m-0 min-w-0 truncate text-lg font-semibold text-[#2e1065]">
+            {t(finished ? "externalPlay.watch.finalTitle" : "externalPlay.watch.title")}
+          </h2>
+          {board !== null ? (
+            <span className="shrink-0 rounded-full bg-[#f3effc] px-2.5 py-1 text-xs font-semibold text-[#4a3a6b]">
+              {t("externalPlay.watch.viewOnly")}
+            </span>
+          ) : null}
+        </div>
+        <aside className={`flex min-w-0 flex-col gap-4${board !== null ? " lg:col-start-2 lg:row-start-2" : ""}`}>
           {view === "live" || view === "not_started" ? (
             <p className="m-0 text-sm leading-relaxed text-[#4a3a6b]">{t("externalPlay.watch.intro")}</p>
           ) : null}

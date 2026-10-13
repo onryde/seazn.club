@@ -237,7 +237,7 @@ describe("WatchPanel — first paint, every state", () => {
     const column = (html: string) => {
       const grid = html.match(/<div class="(grid [^"]*)"/)?.[1];
       const start = html.indexOf('data-testid="watch-status"');
-      const end = html.indexOf("<aside");
+      const end = html.indexOf('data-testid="watch-heading"'); // the board column ends where the heading row starts (V3)
       return { grid, ids: testids(html.slice(start, end)) };
     };
     const before = column(paint(docOf(null)));
@@ -246,6 +246,35 @@ describe("WatchPanel — first paint, every state", () => {
     expect(after.grid).toBe(before.grid);
     expect(before.ids).toEqual(["watch-status", "watch-board", "watch-clock-black", "watch-clock-white"]);
     expect(after.ids).toEqual(before.ids);
+  });
+
+  // T17 fix round 2, V3: at 320 the board sat ABOVE the panel's "Live board" heading and its View-only chip. On a
+  // phone the order is heading, status line, board, then the rest; at 768 (one column) and 1280 (two) nothing moves.
+  // One DOM: the heading row is the board column's SIBLING in the grid — after it in source order (so 768 keeps the
+  // board first), ordered first below md, and placed top-right at lg (where it sat inside the right-hand column). A
+  // node render cannot measure; the browser check (online-chess-desk.spec.ts) measures all three widths.
+  it("V3: the heading row is the board column's grid sibling — first on a phone, after the board at 768, top-right at lg — every state with a board, counted", () => {
+    const cls = (html: string, id: string) => html.match(new RegExp(`data-testid="${id}" class="([^"]*)"`))?.[1] ?? null;
+    const has = (classes: string | null, token: string) => (classes ?? "").split(/\s+/).includes(token);
+    let checked = 0;
+    for (const [label, doc] of [["not started", docOf(null)], ["live", live(board(3))], ["finished", finished()]] as const) {
+      const html = paint(doc);
+      const heading = cls(html, "watch-heading");
+      expect(heading, `${label}: the heading row is there`).not.toBeNull();
+      expect(has(heading, "max-md:order-first"), `${label}: first below md`).toBe(true);
+      expect(has(heading, "lg:col-start-2") && has(heading, "lg:row-start-1"), `${label}: top of the right column at lg`).toBe(true);
+      const at = (needle: string) => html.indexOf(needle);
+      expect(at('data-testid="watch-board"'), `${label}: the board comes first in source`).toBeLessThan(at('data-testid="watch-heading"'));
+      expect(at('data-testid="watch-heading"'), `${label}: the heading row is not inside the aside`).toBeLessThan(at("<aside"));
+      expect(html.slice(at('data-testid="watch-heading"'), at("<aside")), `${label}: it holds the title and the chip`)
+        .toContain(esc(s("en", "externalPlay.watch.viewOnly")));
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    // The empty case: with no board there is nothing to put the heading above — no phone reorder, no lg placement.
+    const none = cls(paint(docOf(null, false)), "watch-heading");
+    expect(none, "no board: the heading row is there").not.toBeNull();
+    expect(has(none, "max-md:order-first") || has(none, "lg:col-start-2"), "no board: plain source order").toBe(false);
   });
 
   it("the board names each side from White's side on file — the AWAY entrant plays White here", () => {
