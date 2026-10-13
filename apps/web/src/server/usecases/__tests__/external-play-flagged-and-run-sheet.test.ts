@@ -19,6 +19,7 @@ import { listFlaggedExternalPlay } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { holdForOrganiser } from "../external-play/result";
 import { listRunSheetOnlinePlay } from "../external-play/run-sheet";
+import { getCompetitionDesk } from "../competition-desk";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { addFixture } from "../stages";
@@ -286,6 +287,27 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — a round nobody has opened (D1
       checked += 1;
     }
     expect(checked, "anti-vacuity: boards checked after the open").toBe(2);
+  });
+
+  // T16 fix round 1, R4: the competition ledger (getCompetitionDesk → resolveAttention) asks the same question. A
+  // past-due board of an unopened online round is not a missing result; the open makes it one; over the board it
+  // always was one.
+  it("R4: the competition ledger's 'result missing' — not before the open, owed after it; over the board, owed", async () => {
+    const missing = async (r: SeedOnlineChessRoundResult) =>
+      (await getCompetitionDesk(r.owner, r.competitionId)).divisions
+        .get(r.divisionId)!
+        .attention.find((a) => a.kind === "result_missing");
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: PAST });
+    expect(await missing(r), "unopened: nothing owed").toBeUndefined();
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
+      values (${r.stageId}, ${r.orgId}, 1, ${r.ownerUserId}, now())`;
+    expect(await missing(r), "opened: both boards owe their result").toMatchObject({
+      count: 2,
+      fixtureIds: expect.arrayContaining(r.boards.map((b) => b.fixtureId)),
+    });
+    const otb = await seedOnlineChessRound({ fixtures: 1, onlinePlay: "off", scheduledAt: PAST });
+    expect(await missing(otb), "over the board: owed by the clock alone").toMatchObject({ count: 1 });
   });
 
   it("the grain is (stage, round): opening round 1 leaves round 2 unopened", async () => {

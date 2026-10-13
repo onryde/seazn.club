@@ -238,6 +238,9 @@ export default async function DivisionPage({
       // first of a fully drawn bracket.
       awaitsSeedDraw: fixtureAwaitsSeedDraw(f),
       awaitsSettle: awaitingSettle.has(f.id),
+      // T16 fix round 1, R4: unread by `resolvePhase` (only `resolveAttention`'s result_missing reads it, and this
+      // page calls only the former) — pinned by division-phase.test.ts's "resolvePhase never reads awaitsRoundOpen".
+      awaitsRoundOpen: false,
       eventCount: 0,
       // Final review minor fix: was a bare `?? 60`, retyping a number that
       // had already drifted from the desk's own schema-derived default (30).

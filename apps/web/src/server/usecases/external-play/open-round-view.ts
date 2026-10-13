@@ -24,7 +24,7 @@ import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import type { RoundOpenRow } from "@/server/external-play/round-open";
+import { roundKey, roundOpensOfDivisions, type RoundOpenRow } from "@/server/external-play/round-open";
 import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
@@ -117,21 +117,17 @@ export async function listOpenRounds(
   }
 
   // M8: the division's round opens, and which of them bound anyone, in two reads — not two per (stage, round).
-  const openRows = await sql<(RoundOpenRow & { stageId: string; roundNo: number })[]>`
-    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.stage_id as "stageId", o.round_no as "roundNo"
-      from stage_round_opens o
-      join stages s on s.id = o.stage_id
-     where s.division_id = ${divisionId}`;
-  const opens = new Map(openRows.map(({ stageId, roundNo, ...o }) => [`${stageId}:${roundNo}`, o as RoundOpenRow]));
+  const opens = await roundOpensOfDivisions(sql, [divisionId]);
+  const openIds = [...opens.values()].map((o) => o.id);
   // "Was anyone in this round invited?" — over EVERY bridge row bound to the open, whatever became of its board.
   const boundOpenIds =
-    openRows.length === 0
+    openIds.length === 0
       ? new Set<string>()
       : new Set(
           (
             await sql<{ id: string }[]>`
               select distinct round_open_id as id from fixture_external_play
-               where round_open_id = any(${openRows.map((o) => o.id)}::uuid[])`
+               where round_open_id = any(${openIds}::uuid[])`
           ).map((r) => r.id),
         );
 
@@ -143,7 +139,7 @@ export async function listOpenRounds(
     if (live.length === 0) continue; // openRound: no_fixtures
     if (live.some((r) => r.homeEntrantId === null || r.awayEntrantId === null)) continue; // openRound: not_paired
     const boards = live as Paired[];
-    const open = opens.get(`${first.stageId}:${first.roundNo}`) ?? null;
+    const open = opens.get(roundKey(first.stageId, first.roundNo)) ?? null;
     const owed = boards.reduce((n, b) => n + owedSeats(b, open), 0);
     const closed = open !== null && roomPhase(now, open.roundOpenedAt) === "closed";
     let press: OpenRoundPress;

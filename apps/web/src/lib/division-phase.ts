@@ -95,6 +95,11 @@ export interface PhaseFixture {
    *  computes this server-side from engine-db/recorded-abandon.ts (`abandonAwaitsSettle`, the one source) and this
    *  pure module never re-derives it. A table stage's abandoned match is a void and never sets it. */
   awaitsSettle: boolean;
+  /** T16 fix round 1, R4 (D12) — an ONLINE board whose (stage, round) nobody has opened: nobody is invited and nobody
+   *  can take a seat, so its slot passing owes no result. The caller reads it (`roundOpensOfDivisions`, the one
+   *  reader of `stage_round_opens`); false for every board of a division that does not play online. Status-free —
+   *  each attention arm already asks the status it needs. */
+  awaitsRoundOpen: boolean;
 }
 
 /** W2a — a fixture HELD for the organiser's settle: `needs_decision` (a level bracket result), or a recorded abandon
@@ -911,10 +916,12 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         elapsed >= NOT_RECORDING_GRACE_MINUTES
       ) {
         notRecording.push({ id: f.id, since: elapsed });
-      } else if (isResultMissing(f, nowMs)) {
+      } else if (!f.awaitsRoundOpen && isResultMissing(f, nowMs)) {
         // Behaviour unchanged: the predicate is the same three terms, now
         // EXPORTED so the run sheet's "Needs result" chip can ask this
-        // module the question instead of inventing its own answer.
+        // module the question instead of inventing its own answer. R4: never
+        // a board waiting on its online round's open (the run sheet's
+        // `owesResult` says the same through its `unopened` entry).
         resultMissing.push(f.id);
       }
     }
