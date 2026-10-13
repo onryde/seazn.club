@@ -26,7 +26,7 @@ import { restFloor } from "@seazn/engine/scheduling/rest-floor";
 // declarations rather than typed. Both entry points load under plain `node --experimental-strip-types` (probed).
 // W2b walkoverCreditSuite: the closed award reasons (`AWARD_REASONS`) and two sports' declared cfgs — the games a
 // badminton walkover credits and each game's target, hockey's `awardScore` — read the same way (probed too).
-import { AWARD_REASONS, settledMethod, type EngineErrorCode } from "@seazn/engine/core";
+import { AWARD_REASONS, settledMethod, type EngineErrorCode, type ForfeitReason } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { hockey } from "@seazn/engine/sports/hockey";
@@ -2550,10 +2550,11 @@ async function bracketFinishSuite(): Promise<void> {
  * the quota reads `division_has_results`, never the sport — the sport-specific credit is flows 1, 2 and 5.
  */
 async function walkoverCreditSuite(): Promise<void> {
-  type Reason = (typeof AWARD_REASONS)[number];
-  const WALKOVER: Reason = "walkover";
-  const WITHDREW: Reason = "withdrew";
-  const BYE: Reason = "bye";
+  // `core.forfeit` admits a ForfeitReason only (a "bye" is refused with 422), so the two reasons this suite WRITES are
+  // typed narrower than the award reason it only READS back.
+  const WALKOVER: ForfeitReason = "walkover";
+  const WITHDREW: ForfeitReason = "withdrew";
+  const BYE: (typeof AWARD_REASONS)[number] = "bye";
   const declared = [WALKOVER, WITHDREW, BYE].filter((r) => (AWARD_REASONS as readonly string[]).includes(r));
   check(
     `walkover credit: the award reasons this suite writes and reads are the engine's own — ${declared.length} of 3 (${[WALKOVER, WITHDREW, BYE].join(", ")}) in AWARD_REASONS (${AWARD_REASONS.length} declared)`,
