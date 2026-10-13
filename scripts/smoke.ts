@@ -21550,6 +21550,10 @@ async function cleanup(tag: string): Promise<void> {
     `delivered+capturev2_${tag}@resend.dev`,
     // captureRecordSuite's own Pro org — its fixture, stream code and capture records cascade with it.
     `delivered+caprecord_${tag}@resend.dev`,
+    // bracketFinishSuite's own Pro org (W2a T17) — its PUBLIC competition and its settled bracket cascade with it.
+    `delivered+bracketfinish_${tag}@resend.dev`,
+    // walkoverCreditSuite's own org (W2b T18) — its two competitions, one PUBLIC with walked-over and archived divisions.
+    `delivered+walkovercredit_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -21691,6 +21695,8 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   v1: (c) => v1Suite(c.admin, c.org2Id, c.org2Slug),
   captureV2: () => captureV2Suite(),
   captureRecord: () => captureRecordSuite(),
+  bracketFinish: () => bracketFinishSuite(),
+  walkoverCredit: () => walkoverCreditSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
