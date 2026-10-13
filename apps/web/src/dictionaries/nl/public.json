@@ -36,6 +36,7 @@
   "matchCentre.runRateShort": "RR {rate}",
   "matchCentre.status.decided": "Afgelopen",
   "matchCentre.status.scheduled": "Gepland",
+  "matchCentre.status.starting": "Begint zo",
   "matchCentre.status.notStarted": "Niet gestart",
   "matchCentre.status.other": "Niet gespeeld",
   "matchCentre.status.abandoned": "Gestaakt",

@@ -68388,6 +68388,10 @@
                                   },
                                   "updatedAt": {
                                     "type": "string"
+                                  },
+                                  "onlineStarting": {
+                                    "type": "boolean",
+                                    "const": true
                                   }
                                 },
                                 "required": [
@@ -70870,6 +70874,10 @@
                                 },
                                 "updatedAt": {
                                   "type": "string"
+                                },
+                                "onlineStarting": {
+                                  "type": "boolean",
+                                  "const": true
                                 }
                               },
                               "required": [

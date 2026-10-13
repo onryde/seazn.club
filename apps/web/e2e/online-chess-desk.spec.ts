@@ -31,7 +31,7 @@
  * Expected copy comes from the dictionary, expected positions from the rules
  * (chess.js) — never from the code under test.
  */
-import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { Chess } from "chess.js";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -95,6 +95,21 @@ async function roundOpenLine(page: Page): Promise<string> {
   const time = (await page.locator('[data-testid="watch-details"] [data-detail="round-opened"] dd').innerText()).trim();
   expect(time, "Match details prints the round's open").toMatch(/^\d{2}:\d{2}$/);
   return publicEn["matchCentre.status.roundOpened"]!.replace("{time}", time);
+}
+
+/** T17 owner change (2026-10-13): the Starting dot as the browser paints it — an empty ring (a border, no fill), where
+ *  Live's is filled. Read off the label's first child, the dot. */
+async function ringDot(label: Locator): Promise<{ filled: boolean; ringed: boolean }> {
+  return label.evaluate((el) => {
+    const dot = el.firstElementChild as HTMLElement | null;
+    if (dot === null) return { filled: false, ringed: false };
+    const cs = getComputedStyle(dot);
+    const bg = cs.backgroundColor;
+    return {
+      filled: !(bg === "transparent" || /rgba\(0, 0, 0, 0\)/.test(bg)),
+      ringed: Number.parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle === "solid" && dot.getBoundingClientRect().width > 0,
+    };
+  });
 }
 
 /** The division's public Fixtures list: each fixture row's own link, by the fixture it opens. */
@@ -695,9 +710,25 @@ test.describe("online chess — the public fixture page", () => {
     const ctx = await cold(browser);
     const page = await ctx.newPage();
     await page.setViewportSize({ width: 1280, height: 900 });
+    // T17 owner change (2026-10-13): from the round's open until the first move the division's Fixtures list says the
+    // board is starting — between "Round not opened yet" and "Watch live": an outlined label with an empty ring.
+    await page.goto(`${room.standingsPath}?tab=schedule`);
+    const listWatch = listRow(page, room.fixtureId).first().getByTestId("schedule-watch");
+    await expect(listWatch).toHaveAttribute("data-kind", "starting", { timeout: 30_000 });
+    await expect(listWatch).toHaveText(uiEn["externalPlay.watch.list.starting"]!);
+    expect(await ringDot(listWatch), "the list's dot is an empty ring").toEqual({ filled: false, ringed: true });
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "division-watch-starting");
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(room.fixturePath);
     const panel = page.getByTestId("watch-panel");
     await expect(panel).toHaveAttribute("data-state", "not_started", { timeout: 30_000 });
+    // ...and the header's chip reads Starting, not Scheduled and not yet Live — its dot an empty ring that never pulses.
+    const startingChip = page.getByTestId("mc-starting-pill");
+    await expect(startingChip).toHaveText(publicEn["matchCentre.status.starting"]!);
+    await expect(page.getByTestId("mc-result-chip")).toHaveCount(0);
+    await expect(page.getByTestId("mc-live-pill")).toHaveCount(0);
+    expect(await ringDot(startingChip), "the chip's dot is an empty ring").toEqual({ filled: false, ringed: true });
     const status = page.getByTestId("watch-status");
     await expect(status).toHaveAttribute("data-kind", "waiting");
     await expect(status).toHaveText(uiEn["externalPlay.watch.status.waiting"]!);
@@ -789,6 +820,7 @@ test.describe("online chess — the public fixture page", () => {
     // Premise of the comparison below: the header HAS folded live (R3) — measured before it does, a delta of 0
     // would prove nothing. Then V1: the line is unchanged; V2: the Summary says where the game is.
     await expect(page.getByTestId("mc-live-pill")).toHaveText(publicEn["matchCentre.status.live"]!, { timeout: POLL_MS + 15_000 });
+    await expect(startingChip, "from the first move the chip reads Live, never Starting").toHaveCount(0);
     await expect(subheading).toHaveText(opened);
     await expect(summaryEmpty).toHaveText(publicEn["matchCentre.empty.onlineInPlay"]!);
     let compared = 0;
@@ -833,6 +865,8 @@ test.describe("online chess — the public fixture page", () => {
     // R3, the other direction: no game being played — the header keeps "Scheduled", never Live.
     await expect(page.getByTestId("mc-live-pill")).toHaveCount(0);
     await expect(page.getByTestId("mc-result-chip")).toHaveText(publicEn["matchCentre.status.scheduled"]!);
+    // T17 owner change (2026-10-13), the other direction: before the round opens the board is Scheduled, never Starting.
+    await expect(page.getByTestId("mc-starting-pill")).toHaveCount(0);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "watch-not-opened");
 
@@ -853,6 +887,9 @@ test.describe("online chess — the public fixture page", () => {
     expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
     await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "not_started", { timeout: POLL_MS + 15_000 });
     await expect(page.getByTestId("mc-subheading")).toHaveText(await roundOpenLine(page));
+    // ...and the header's chip, through the same poll: Scheduled becomes Starting with no reload.
+    await expect(page.getByTestId("mc-starting-pill")).toHaveText(publicEn["matchCentre.status.starting"]!, { timeout: POLL_MS + 15_000 });
+    await expect(page.getByTestId("mc-result-chip")).toHaveCount(0);
     await ctx.close();
   });
 });

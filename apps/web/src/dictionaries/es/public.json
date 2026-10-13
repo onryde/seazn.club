@@ -36,6 +36,7 @@
   "matchCentre.runRateShort": "RR {rate}",
   "matchCentre.status.decided": "Finalizado",
   "matchCentre.status.scheduled": "Programado",
+  "matchCentre.status.starting": "Por empezar",
   "matchCentre.status.notStarted": "No iniciado",
   "matchCentre.status.other": "No jugado",
   "matchCentre.status.abandoned": "Abandonado",

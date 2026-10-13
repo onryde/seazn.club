@@ -161,6 +161,10 @@ export interface MatchCentreInput {
    *  list's "Watch live"). Nothing marks such a fixture in play, so without this the header said "Scheduled" over a
    *  game being watched. Lifts ONLY a `scheduled` fixture to the live state; absent is false. */
   onlineGameInPlay?: boolean;
+  /** T17 owner change (2026-10-13): the board's round is open and no move is on file (`loadOnlineHeader` — the
+   *  Fixtures list's "Starting"). Flags ONLY a fixture the header still reads `scheduled` (`header.onlineStarting`);
+   *  absent is false. */
+  onlineGameStarting?: boolean;
 }
 
 // --------------------------------------------------------------- constants
@@ -951,6 +955,7 @@ function buildHeader(
     unseatedForfeitLoser?: { readonly id: string; readonly name: string } | null;
   },
   onlineGameInPlay: boolean,
+  onlineGameStarting: boolean,
 ): MatchCentreHeaderT {
   // R3: a scheduled fixture whose online game is being played reads live; every other status keeps its own.
   const status = onlineGameInPlay && fixture.status === "scheduled" ? "in_play" : statusOf(fixture.status);
@@ -1170,6 +1175,8 @@ function buildHeader(
     pillNote,
     metaLine,
     updatedAt: now.toISOString(),
+    // Starting: only beside a header that still reads scheduled — never over R3's live fold, nor any settled state.
+    ...(onlineGameStarting && status === "scheduled" ? { onlineStarting: true as const } : {}),
   };
 }
 
@@ -1417,6 +1424,7 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     input.events,
     { resolveMsg: input.resolveMsg, doubleWalkoverNext: input.doubleWalkoverNext, unseatedForfeitLoser: input.unseatedForfeitLoser },
     input.onlineGameInPlay === true,
+    input.onlineGameStarting === true,
   );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 

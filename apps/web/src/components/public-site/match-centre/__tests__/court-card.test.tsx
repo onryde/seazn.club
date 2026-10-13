@@ -19,11 +19,15 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
 import { CourtCard } from "../court-card";
 
 const dict = en as Dict;
+const LOCALE_DICTS = [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as [string, Record<string, string>][];
 
 const liveHeader: MatchCentreHeaderT = {
   live: true,
@@ -103,6 +107,57 @@ describe("CourtCard", () => {
     expect(html).toContain(">Scheduled<");
     expect(html).not.toContain(">Ended<");
     expect(html).not.toContain('data-testid="mc-live-pill"');
+  });
+
+  // T17 owner change (2026-10-13): an online board whose round is open with no move yet reads STARTING — between
+  // Scheduled (a muted word, no dot) and Live (green, a filled dot that pulses): the full-strength word and an EMPTY
+  // green ring that never pulses (nothing is happening yet). Read only under `scheduled`; every other state keeps its
+  // own chip whatever the flag says.
+  it("starting: its own chip reading 'Starting' in all four locales — the ring dot, never the pulse, never Scheduled or Live", () => {
+    const starting: MatchCentreHeaderT = { ...scheduledHeader, onlineStarting: true };
+    let checked = 0;
+    for (const [locale, d] of LOCALE_DICTS) {
+      const word = d["matchCentre.status.starting"]!;
+      expect(word, `${locale}: the word is authored`).toBeTruthy();
+      expect(word, `${locale}: not the Scheduled word`).not.toBe(d["matchCentre.status.scheduled"]);
+      expect(word, `${locale}: not the Live word`).not.toBe(d["matchCentre.status.live"]);
+      const html = renderToStaticMarkup(<CourtCard header={starting} dict={d as Dict} />);
+      const chip = html.match(/<p data-testid="mc-starting-pill" class="([^"]*)">([^]*?)<\/p>/);
+      expect(chip, `${locale}: the starting chip`).not.toBeNull();
+      expect(chip![2].replace(/^<span[^>]*><\/span>/, ""), `${locale}: the dot, then exactly the word`).toBe(word);
+      expect(chip![2], `${locale}: one dot, an empty ring`).toMatch(/^<span aria-hidden="true" class="[^"]*\bborder-emerald-400\b[^"]*"><\/span>/);
+      expect(chip![2], `${locale}: not filled`).not.toContain("bg-emerald-400");
+      expect(html, `${locale}: nothing pulses`).not.toContain("animate-live-pulse");
+      expect(chip![1], `${locale}: the full-strength word, not Scheduled's muted one`).toMatch(/\btext-court-ink\b/);
+      expect(html).not.toContain('data-testid="mc-result-chip"');
+      expect(html).not.toContain('data-testid="mc-live-pill"');
+      // The start-time sentence stays: the board is still to start.
+      expect(html).toContain('data-testid="mc-status-line"');
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("the flag is read only under scheduled: Live, Ended and no-chip keep their own whatever it says; Scheduled without it", () => {
+    const cases: [string, MatchCentreHeaderT, string | null][] = [
+      ["in_play", { ...liveHeader, onlineStarting: true }, "mc-live-pill"],
+      ["decided", { ...decidedHeader, onlineStarting: true }, "mc-result-chip"],
+      ["other", { ...otherHeader, onlineStarting: true }, null],
+      ["scheduled, no flag", scheduledHeader, "mc-result-chip"],
+    ];
+    let checked = 0;
+    for (const [label, header, testId] of cases) {
+      const html = renderToStaticMarkup(<CourtCard header={header} dict={dict} />);
+      expect(html, label).not.toContain('data-testid="mc-starting-pill"');
+      if (testId !== null) expect(html, label).toContain(`data-testid="${testId}"`);
+      // Byte-identical to the same header with no flag at all.
+      const without: MatchCentreHeaderT = { ...header };
+      delete without.onlineStarting;
+      expect(html, label).toBe(renderToStaticMarkup(<CourtCard header={without} dict={dict} />));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(renderToStaticMarkup(<CourtCard header={scheduledHeader} dict={dict} />)).toContain(">Scheduled<");
   });
 
   it("other (postponed/abandoned/walkover/cancelled): NO chip at all, but statusLine still renders the reason", () => {
