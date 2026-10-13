@@ -442,7 +442,14 @@ export async function appendEventInTx(
   // boardgame.tiebreak), which a scorer may record on a held tie-break. The settle or the decider goes to the remaining
   // entrant; the auto-walkover of a held fixture is W2b's (spec §2.3).
   if (candidate.type === "core.settle" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {
-    const winner = (candidate.payload as { winner?: unknown } | null)?.winner;
+    // W2c D7: who a decider event ADVANCES is the sport's to say — chess's Armageddon records Black and the result, so
+    // its payload names no winner and the engine derives one (BG-KO-2). Read the payload's `winner` only for a settle,
+    // or for a sport that declares no `deciderWinner`; otherwise this guard would see nobody and wave the withdrawn
+    // entrant through.
+    const winner =
+      candidate.type !== "core.settle" && sportModule.deciderWinner !== undefined
+        ? sportModule.deciderWinner(candidate.payload, { home: fixture.home_entrant_id, away: fixture.away_entrant_id })
+        : (candidate.payload as { winner?: unknown } | null)?.winner;
     // Review N2: `entrants.id` is a uuid, so a malformed winner never reaches the lookup (Postgres 22P02 → a 500). It
     // names no entrant either way; the fold refuses it below with its own 4xx, as before D-R7.
     if (typeof winner === "string" && ENTRANT_ID_SHAPE.test(winner)) {

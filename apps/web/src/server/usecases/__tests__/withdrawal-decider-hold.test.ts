@@ -207,7 +207,9 @@ describe.skipIf(!HAS_DB)("R14 (supersedes D-R1): a withdrawal walks over a fixtu
 /** Each decider EVENT type the engine declares (`deciderTypes`), with the payload naming its winner. Derived set check
  *  below: a new decider type fails until it names its payload here. */
 const DECIDER_EVENT_PAYLOADS: Record<string, (winner: string) => unknown> = {
-  "boardgame.tiebreak": (winner) => ({ rung: "armageddon", winner }),
+  // W2c D7: an Armageddon records Black and the result, and a drawn one goes to Black (BG-KO-2) — so naming `winner` as
+  // Black with a draw advances them. The case where the advancer is NOT the one who had Black is the test below.
+  "boardgame.tiebreak": (winner) => ({ rung: "armageddon", black: winner, result: "draw" }),
 };
 
 /** scorers.test.ts's acceptOfficial (as organiser-only-events.test.ts copies it): a user with NO org role, accepted
@@ -313,6 +315,38 @@ describe.skipIf(!HAS_DB)("D-R7 (legacy rows, PF-8a): a held decider cannot seat 
     expect((await row(t.id)).status).toBe("decided");
     expect(await seated(t.next!)).toEqual([t.away]);
   });
+});
+
+describe.skipIf(!HAS_DB)("D-R7 + BG-KO-2: the withdrawn guard follows who the Armageddon ADVANCES, not who had Black", () => {
+  it("BG-KO-2 / D-R7: with the away side withdrawn, an Armageddon that advances them is refused withdrawn whoever had Black; one that advances the remaining side is accepted even when the withdrawn side had Black", async () => {
+    const t = await started("boardgame", "knockout", "classical");
+    await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
+    await legacyHold(t.away);
+    const scorer = await scorerOn(t.auth.orgId, t.id);
+    const before = await seq(t.id);
+    // Each of these advances the WITHDRAWN side (away): Black wins, Black draws, or White wins with the home side on Black.
+    const advancesAway = [
+      { black: t.away, result: "black" },
+      { black: t.away, result: "draw" },
+      { black: t.home, result: "white" },
+    ] as const;
+    let refused = 0;
+    for (const a of advancesAway) {
+      await expect(post(scorer, t.id, "boardgame.tiebreak", { rung: "armageddon", ...a }), JSON.stringify(a)).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+        data: { reason: "withdrawn", winner: t.away },
+      });
+      expect(await seq(t.id), `${JSON.stringify(a)}: the refusal wrote nothing`).toBe(before);
+      refused++;
+    }
+    expect(refused).toBe(advancesAway.length);
+    expect(await pendingDecider("boardgame", t.id), "still owed").toBe(true);
+    // The positive pair, the case that tells "follows the derived advancer" from "reads black": the withdrawn side had
+    // Black and LOST, so the remaining side advances.
+    await post(scorer, t.id, "boardgame.tiebreak", { rung: "armageddon", black: t.away, result: "white" });
+    expect((await row(t.id)).status).toBe("decided");
+    expect(await seated(t.next!)).toEqual([t.home]);
+  }, 120_000);
 });
 
 describe.skipIf(!HAS_DB)("D-R8: the withdrawn-winner refusal reaches both surfaces in its own words", () => {

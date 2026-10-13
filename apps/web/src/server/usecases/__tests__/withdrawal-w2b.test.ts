@@ -1740,8 +1740,9 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
               // score: the home side wins.
               await startIfNeeded(f);
               if (isChess) {
+                // A drawn Armageddon is Black's (BG-KO-2): naming the home side as Black advances it.
                 await ((await tiebreakPending(f.id))
-                  ? post(s.auth, f.id, "boardgame.tiebreak", { rung: "armageddon", winner: f.home_entrant_id })
+                  ? post(s.auth, f.id, "boardgame.tiebreak", { rung: "armageddon", black: f.home_entrant_id, result: "draw" })
                   : post(s.auth, f.id, "boardgame.result", { winner: f.home_entrant_id, method: "resign" }));
               } else {
                 for (let g = 0; g < 3 && (await fixtureRow(f.id)).status === "in_play"; g++) {
