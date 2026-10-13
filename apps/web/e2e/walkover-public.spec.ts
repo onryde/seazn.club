@@ -373,6 +373,63 @@ test.describe("W2b — a credited result says which one, on every public surface
       screens++;
     }
     expect(screens).toBe(WIDTHS.length * 4 + WIDTHS.filter((w) => w >= 1024).length);
+
+    // Review I-1 — the organiser's slideshow reads `match_states.summary` straight from the database, and painted the
+    // double walkover's stored 0 / 0. 1280 only: the board is `max-lg:hidden` behind the phone card below 1024
+    // (kiosk-phone-card.spec.ts covers that gate). The board rotates, so step with the arrow key until both the
+    // results slide and the bracket slide have been read. Pair: the other semi keeps its credited score on each.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/slideshow/divisions/${ko.divId}`);
+    const board = page.getByTestId("kiosk-board");
+    await expect(board).toBeVisible({ timeout: STEP_MS });
+    const sides = (f: typeof dw) => [ko.nameOf.get(f!.home_entrant_id!)!, ko.nameOf.get(f!.away_entrant_id!)!];
+    const UI = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+    const resultsTitle = UI["slideshow.slide.latestResults"]!;
+    expect(resultsTitle, "premise: the results slide's title").toBeTruthy();
+    const seen: Partial<Record<"results" | "bracket", { dw: string; other: string }>> = {};
+    await expect
+      .poll(
+        async () => {
+          const got = await board.evaluate(
+            (root, [dwN, otherN]) => {
+              const spans = (n: string) => [...root.querySelectorAll("span")].filter((x) => x.textContent?.trim() === n);
+              /** The smallest element holding one span named A and one named B — that fixture's row or node. */
+              const around = ([a, b]: string[]) => {
+                let best: string | null = null;
+                for (const x of spans(a!)) {
+                  for (const y of spans(b!)) {
+                    let el: Element | null = x;
+                    while (el && !el.contains(y)) el = el.parentElement;
+                    const text = el ? (el as HTMLElement).innerText.replace(/\s+/g, " ").trim() : null;
+                    if (text !== null && (best === null || text.length < best.length)) best = text;
+                  }
+                }
+                return best;
+              };
+              const slide = root.querySelector("h2")?.textContent?.trim() ?? "";
+              // The bracket slide's canvas: an svg of connector lines under the positioned nodes (`BracketSlide`).
+              return { slide, bracket: root.querySelector(".overflow-x-auto > .relative > svg") !== null, dw: around(dwN), other: around(otherN) };
+            },
+            [sides(dw), sides(other)] as const,
+          );
+          const kind = got.slide === resultsTitle ? "results" : got.bracket ? "bracket" : null;
+          if (kind && got.dw !== null && got.other !== null && !seen[kind]) {
+            seen[kind] = { dw: got.dw, other: got.other };
+            await crop(board, `slideshow-${kind}-double-walkover-1280`);
+          }
+          if (!seen.results || !seen.bracket) await page.keyboard.press("ArrowRight");
+          return Object.keys(seen).sort().join(",");
+        },
+        { timeout: 60_000, intervals: [400] },
+      )
+      .toBe("bracket,results");
+    for (const kind of ["results", "bracket"] as const) {
+      const got = seen[kind]!;
+      console.log(`I-1 slideshow ${kind}: double walkover "${got.dw}" / other semi "${got.other}"`);
+      expect(got.dw, `slideshow ${kind}: the double walkover prints its tag`).toContain(dwTag);
+      expect(got.dw, `slideshow ${kind}: never the stored 0 / 0`).not.toMatch(/0\s*[–—-]\s*0/);
+      expect(got.other, `slideshow ${kind}: the probe's pair — the walkover keeps its credited score`).toMatch(/\d+\s*[–—-]\s*\d+/);
+    }
   });
 
   // Owner ruling 116 and R116-1 (W2b Task 16): a semi-final winner withdraws while the final's other seat is TBD, so her
