@@ -63,4 +63,19 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   // it, in /admin (P7). Its link table capture_record_sessions has no org_id, so the guard never selects it; it is
   // enabled + forced all the same (rls-static.test.ts reads both).
   "capture_records",
+  // Online chess (V439, chess in-page board design §5): V410's pattern. RLS is FORCEd with ZERO policies, there is no
+  // trg_set_org and no app_user grant, so an app_user query is refused (42501), never silently empty. Every reader and
+  // writer is on the privileged pool: `sql`, `sql.begin`, or withTenant's privilegedPrelude, which runs BEFORE the
+  // role drops. Organisers and players see projections, never rows. Checked site by site, 2026-10-13: 58 SQL sites
+  // on V439/V442's six sealed tables, none inside a withTenant body. online-chess-video-schema.test.ts asserts all
+  // six are sealed and that app_user holds no privilege on them.
+  // The organiser's "Open round" stamp; the authority for a window that can forfeit a player.
+  "stage_round_opens",
+  // One RealtimeKit meeting per fixture (meeting ids); the room and the arbiter panel get a projection.
+  "fixture_video_meetings",
+  // Camera and out-of-band flags; the organiser reads and closes them through use-cases on the privileged client.
+  "fixture_play_flags",
+  // Video-override audit (D11): who overrode an outage, and on which fixture. An org must not be able to edit its own
+  // audit trail.
+  "online_chess_audit",
 ]);

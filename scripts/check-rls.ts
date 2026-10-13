@@ -70,7 +70,7 @@ try {
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
       "\nEvery table with an org_id column must enable+force RLS and have a" +
-        " policy, or be added to SUPERUSER_ONLY in scripts/check-rls.ts with a reason.",
+        " policy, or be added to SUPERUSER_ONLY in scripts/rls-exempt.ts with a reason.",
     );
     process.exitCode = 1;
   } else {
