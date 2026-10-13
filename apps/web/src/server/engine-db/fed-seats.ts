@@ -321,6 +321,24 @@ async function lockFixture(tx: Tx, id: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
 }
 
+/**
+ * W2b Loop R I-2 — the lock both bracket writers that judge a seat by ANOTHER line's stored decision take, held to
+ * commit: the void of a double walkover (`reviveDeadSeats`: what did that double walkover kill?) and a decision's
+ * cascade (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?). Each held only its own
+ * fixture's lock, so the decision could read the double walkover still standing while its void, parked between its
+ * read and its commit, had planned nothing — and both committed: the semi live again, the final a no-event walkover.
+ *
+ * Taken after the writer's OWN fixture lock and before any read of a seat it feeds; the void then locks its targets
+ * after it (own fixture → stage → targets: one order), and the decision takes no further advisory lock. The two-key
+ * form keeps it out of the single-key space every `fixture:` and `division:` lock lives in, so a hash collision can
+ * never make it one of those. Not taken by the plain un-fill (`releaseFedSeats`' release path): that path waits on a
+ * PLAYABLE target's lock (the match its winner was seated in) while it would hold this one, and that target's own
+ * decision holds its lock while it asks for this one.
+ */
+export async function lockStageSeats(tx: Tx, stageId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext('stage-seats'), hashtext(${stageId}))`;
+}
+
 /** Plan the seats `src` must give back when its winner and/or loser `moved`,
  *  appending to `plan`; throws the refusal the moment one seat cannot be.
  *  Every node is read here UNDER its lock — `locked` holds the ids already
@@ -551,6 +569,9 @@ async function writePlan(tx: Tx, plan: readonly Step[]): Promise<string[]> {
 async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
   const src = await readNode(tx, fixtureId);
   if (!src) return [];
+  // I-2: before the first read of a seat this double walkover killed — a sibling's decision must not judge it dead
+  // while this void is in flight, nor this void judge it before that decision's cascade has committed.
+  await lockStageSeats(tx, src.stage_id);
   const reach = new Map<string, Node>();
   await reachableRevive(tx, src, reach);
   const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

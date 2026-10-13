@@ -636,5 +636,49 @@
     "name": "fold version"
    }
   ]
+ },
+ {
+  "id": "lr-i2-revive-takes-no-stage-lock",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "  await lockStageSeats(tx, src.stage_id);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the void reads first and parks before its commit"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the other order"
+   }
+  ]
+ },
+ {
+  "id": "lr-i2-decision-takes-no-stage-lock",
+  "file": "apps/web/src/server/usecases/scoring.ts",
+  "find": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);",
+  "replace": "if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) void 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the void reads first and parks before its commit"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/void-dw-vs-sibling-fill-race.test.ts"
+    ],
+    "name": "the other order"
+   }
+  ]
  }
 ]

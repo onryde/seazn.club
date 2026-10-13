@@ -15,7 +15,7 @@ import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
-import { advancingSides } from "@/server/engine-db/fed-seats";
+import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
@@ -756,6 +756,10 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
+    // Loop R I-2: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's stored
+    // decision — so first the stage lock a double walkover's void holds while it revives (`lockStageSeats`). Own
+    // fixture, then stage: the void's order. A line that feeds nothing (a league, a group, a final) never waits.
+    if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);
     // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
     assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
     // W2b D20: a double walkover advances nobody, so a seat it feeds holding one of its entrants is the bug shape.
