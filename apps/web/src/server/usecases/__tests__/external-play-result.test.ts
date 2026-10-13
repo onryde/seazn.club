@@ -565,7 +565,7 @@ describe.runIf(HAS_DB)("writeResultFrom — M9: an early resign is an abort with
     expect(fx.status).not.toBe("forfeited");
     const b = await bridgeOf(g.fixtureId);
     expect(b!.status).toBe("needs_organiser");
-    expect(b!.needs_reason, "the existing V433 reason for exactly this").toBe("aborted");
+    expect(b!.needs_reason, "the existing V439 reason for exactly this").toBe("aborted");
   });
 
   it("the SAME resign after two moves DOES decide it — the pair that makes the case above non-vacuous", async () => {
@@ -1301,7 +1301,7 @@ describe.runIf(HAS_DB)("M7 — a token_revoked hold records the seat it froze (c
         await holdForOrganiser({ fixtureId: g.fixtureId, reason: "provider_error", detail: "the move list diverged at ply 3" }),
         "the answer is the STORED reason",
       ).toEqual({ wrote: "needs_organiser", reason: "token_revoked" });
-      // null is already "both frozen" (V436), and stays the unknown it was.
+      // null is already "both frozen" (V442), and stays the unknown it was.
       expect(await seatOf(g.fixtureId), String(seat)).toEqual({
         needs_reason: "token_revoked",
         revoked_seat: widened,
@@ -1331,7 +1331,7 @@ describe.runIf(HAS_DB)("M7 — a token_revoked hold records the seat it froze (c
     expect(checked).toBe(HOLD_REASONS.length - 1);
   });
 
-  it("the game's FINAL hold replaces a token_revoked hold and clears its seat (V436: a seat belongs to token_revoked only)", async () => {
+  it("the game's FINAL hold replaces a token_revoked hold and clears its seat (V442: a seat belongs to token_revoked only)", async () => {
     const g = await liveGame();
     await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "white" });
     // M9: Lichess's `aborted`, no winner — T12's own final hold.

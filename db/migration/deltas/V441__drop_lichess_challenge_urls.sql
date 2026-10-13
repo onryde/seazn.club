@@ -1,13 +1,13 @@
--- V435 — the creation bookkeeping T9 owns on fixture_external_play.
+-- V441 — the creation bookkeeping T9 owns on fixture_external_play.
 --
 -- 1. Drop url_white / url_black. Dead under the 2026-10-09 design (§3.3):
 --    White's token challenges Black's username and Black's token accepts, so
 --    there is no per-colour lichess.org link to hand a player (D3 deleted that
---    mode). V433 kept both columns nullable only because guard.ts and room.ts
+--    mode). V439 kept both columns nullable only because guard.ts and room.ts
 --    still read them; T9 removes the last reader in the same change as this
---    migration (controller ruling: T9 owns V435, T10 takes V436). Nothing
+--    migration (controller ruling: T9 owns V441, T10 takes V442). Nothing
 --    else depends on them: no index, constraint, policy, view or trigger in
---    V433/V434 names either column.
+--    V439/V440 names either column.
 --
 -- 2. create_sent_at — the durable "a create was sent" marker (T9 fix round 1,
 --    I2). Written as its own committed statement BEFORE the challenge HTTP
@@ -15,8 +15,8 @@
 --    a 429 that lila refused before acting). A claim that goes stale while it
 --    carries the marker belongs to a minter that may have died after Lichess
 --    answered 2xx and before our commit: it is never retaken blind — the next
---    claimant looks the game up first (create-game.ts). Amended into V435
---    rather than a new version because the branch is unmerged and V436 is
+--    claimant looks the game up first (create-game.ts). Amended into V441
+--    rather than a new version because the branch is unmerged and V442 is
 --    T10's.
 --
 -- 3. needs_reason gains 'create_outcome_unknown': the hold a lookup that
@@ -28,8 +28,8 @@
 --    bracket decider (W2a) then holds the fixture in_play in its tie-break
 --    phase — never decided. Ship 1 cannot create a tie-break Lichess game, so
 --    the bridge row tells the organiser the tie-break is owed. Amended into
---    V435 (the CHECK's latest declaration) rather than a new version because
---    the branch is unmerged; V436 is T10's move ledger.
+--    V441 (the CHECK's latest declaration) rather than a new version because
+--    the branch is unmerged; V442 is T10's move ledger.
 --
 -- 5. needs_reason gains 'fair_play' (T12 fix round 1, I2; addendum 1): Lichess
 --    ended the game for a fair-play violation (status `cheat`). The organiser

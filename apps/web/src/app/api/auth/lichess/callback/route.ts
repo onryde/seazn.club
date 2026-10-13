@@ -113,7 +113,7 @@ export async function GET(req: Request) {
       });
       linked = true;
     } catch (err) {
-      // V433's second unique constraint: this Lichess account is already
+      // V439's second unique constraint: this Lichess account is already
       // linked to a DIFFERENT Seazn user — never steal the link. The token
       // is still revoked below, because this exit stored nothing.
       if (err instanceof HttpError && err.code === "LICHESS_ALREADY_LINKED") {

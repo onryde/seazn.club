@@ -468,8 +468,10 @@ The sample is a mechanism reference, not a code source. Specifically rejected:
   implementer re-checks the gate as merged rather than coding against this paragraph.
 - **W3 owns Swiss colour alternation.** We read colour; we do not fix allocation.
 - Migrations: V405/V407 sit below main's high-water mark (V431) and `flyway.toml` sets no
-  `outOfOrder`, so they are refused on any DB past V431. **Amend them to V433/V434 as
-  part of this design's schema work** — do not enable `outOfOrder`.
+  `outOfOrder`, so they are refused on any DB past V431. **Amend them to V439/V440 as
+  part of this design's schema work** — do not enable `outOfOrder`. (Renumbered at the
+  2026-10-13 rebase onto W2b: main took V437 capture records and V438 W2b, so the branch's
+  four deltas V433–V436 became V439–V442 with their DDL unchanged.)
 
 ---
 

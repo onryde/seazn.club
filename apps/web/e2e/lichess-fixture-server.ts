@@ -90,7 +90,7 @@ export interface LichessFixtureGame {
   winner: Colour | null;
   /** Canonical UCI, as the board stream speaks it. */
   movesUci: string[];
-  /** Each side's time in ms AS AT `lastMoveAt` — the bridge row's own terms (V436). The stream's wtime/btime is the
+  /** Each side's time in ms AS AT `lastMoveAt` — the bridge row's own terms (V442). The stream's wtime/btime is the
    *  same for the side NOT to move, and counts the side to move down from `lastMoveAt` (T17 review M5). */
   clockMs: Record<Colour, number>;
   /** Epoch ms of the last move (the challenge's creation before one). */

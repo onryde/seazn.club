@@ -27,7 +27,7 @@ type Outcome =
   | { accepted: true; row: { status: string; needs_reason: string | null } }
   | { accepted: false; code: string | undefined; constraint: string | undefined };
 
-describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("external play schema (V439/V440)", () => {
   let orgId = "";
   let fixtureId = "";
   // D12 binding rig: the fixture's own (stage, round), a SECOND stage in the
@@ -113,7 +113,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     throw new Error("transaction committed — the rollback sentinel never fired");
   }
 
-  it("user_external_accounts carries the sealed token, scopes and consent (V433)", async () => {
+  it("user_external_accounts carries the sealed token, scopes and consent (V439)", async () => {
     expect(await columns("user_external_accounts")).toEqual([
       "access_token_enc", "consented_at", "created_at", "external_user_id",
       "id", "provider", "scopes", "updated_at", "user_id", "username",
@@ -132,7 +132,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
       await sql.begin(async (tx) => {
         const [u] = await tx<{ id: string }[]>`
           insert into users (email, display_name, email_verified)
-          values (${`v433-${randomUUID()}@test.local`}, 'V433', true) returning id`;
+          values (${`v433-${randomUUID()}@test.local`}, 'V439', true) returning id`;
         await tx`
           insert into user_external_accounts
             (user_id, provider, external_user_id, username, access_token_enc, scopes, consented_at)
@@ -168,7 +168,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   });
 
   // The EMPTY case, stated first in spirit: a legacy identity-only row — the
-  // state every already-linked player is in — must stay legal, or V433 cannot
+  // state every already-linked player is in — must stay legal, or V439 cannot
   // be applied to a database that has one.
   it("accepts a legacy identity-only row: no token, no scopes, no consent", async () => {
     expect(await tryAccount({ token: null, scopes: [], consentedAt: null }))
@@ -182,12 +182,12 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
-  it("fixture_external_play has exactly the design §3 + D12 columns (V433, V435, V436)", async () => {
+  it("fixture_external_play has exactly the design §3 + D12 columns (V439, V441, V442)", async () => {
     // D12 adds round_open_id ONLY: the invite stamps are the pre-existing
     // per-seat white_emailed_at / black_emailed_at — no second invite column.
-    // V435 drops url_white / url_black: under D3 there is no per-colour
-    // lichess.org link to hand a player. V435 also adds create_sent_at, T9's
-    // durable "a create was sent" marker (fix round 1, I2). V436 adds T10's
+    // V441 drops url_white / url_black: under D3 there is no per-colour
+    // lichess.org link to hand a player. V441 also adds create_sent_at, T9's
+    // durable "a create was sent" marker (fix round 1, I2). V442 adds T10's
     // move ledger: the seven columns of the plan's §3.4 contract plus the two
     // per-side offer plies lila's 20-ply re-offer rule needs, and (T11 fix
     // round 1, ruling M7) the seat a token_revoked hold froze, (T13,
@@ -406,7 +406,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   });
 
   // ---------------------------------------------------------------------------
-  // V436 — T10's move ledger. One named CHECK per guarded fact; each refusal
+  // V442 — T10's move ledger. One named CHECK per guarded fact; each refusal
   // below asserts SQLSTATE + constraint name and is paired with an accepted
   // row that differs from it in the one guarded value.
   const LEDGER_CHECK = "fixture_external_play_move_ledger_check";
@@ -462,32 +462,32 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   }
   const refusedBy = (constraint: string) => ({ accepted: false, code: CHECK_VIOLATION, constraint });
 
-  it("V436: a row that says nothing about moves is an EMPTY ledger (every existing row stays valid)", async () => {
+  it("V442: a row that says nothing about moves is an EMPTY ledger (every existing row stays valid)", async () => {
     expect(await tryLedger({})).toEqual({
       accepted: true,
       row: { moves_uci: [], move_count: 0, draw_offer_by: null, white_ms: null, black_ms: null },
     });
   });
 
-  it("V436: a ledger whose count equals its length is accepted", async () => {
+  it("V442: a ledger whose count equals its length is accepted", async () => {
     expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2 })).toMatchObject({
       accepted: true, row: { moves_uci: ["e2e4", "e7e5"], move_count: 2 },
     });
   });
 
-  it("V436: a count LONGER than the ledger is refused", async () => {
+  it("V442: a count LONGER than the ledger is refused", async () => {
     expect(await tryLedger({ moves: ["e2e4"], move_count: 2 })).toEqual(refusedBy(LEDGER_CHECK));
   });
 
-  it("V436: a count SHORTER than the ledger is refused (the other direction of the equality)", async () => {
+  it("V442: a count SHORTER than the ledger is refused (the other direction of the equality)", async () => {
     expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 1 })).toEqual(refusedBy(LEDGER_CHECK));
   });
 
-  it("V436: a ledger that is not a JSON array is refused by the ledger CHECK, not a 22023", async () => {
+  it("V442: a ledger that is not a JSON array is refused by the ledger CHECK, not a 22023", async () => {
     expect(await tryLedger({ moves: { e2: "e4" }, move_count: 0 })).toEqual(refusedBy(LEDGER_CHECK));
   });
 
-  it("V436: draw_offer_by takes exactly white or black", async () => {
+  it("V442: draw_offer_by takes exactly white or black", async () => {
     let checked = 0;
     const two = { moves: ["e2e4", "e7e5"], move_count: 2 };
     for (const side of ["white", "black"]) {
@@ -498,7 +498,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: accepted colours").toBe(2);
   });
 
-  it("V436: no offer STANDS before ply 2, from either side — lila registers none earlier (Game.scala playerCanOfferDraw)", async () => {
+  it("V442: no offer STANDS before ply 2, from either side — lila registers none earlier (Game.scala playerCanOfferDraw)", async () => {
     // The guard play.ts's draw broadcast relies on: every one is at ply >= 2,
     // where the clock runs (review m2).
     let checked = 0;
@@ -512,7 +512,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: 2 sides × plies 1 and 0").toBe(4);
   });
 
-  it("V436: a zero clock is a clock; a NEGATIVE one is refused, on each of the three columns", async () => {
+  it("V442: a zero clock is a clock; a NEGATIVE one is refused, on each of the three columns", async () => {
     expect(await tryLedger({ white_ms: 0, black_ms: 0, clock_increment_s: 0 })).toMatchObject({ accepted: true });
     let checked = 0;
     for (const col of ["white_ms", "black_ms", "clock_increment_s"] as const) {
@@ -522,7 +522,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: clock columns").toBe(3);
   });
 
-  it("V436: an offer ply within [2, move_count] is accepted, on each side", async () => {
+  it("V442: an offer ply within [2, move_count] is accepted, on each side", async () => {
     let checked = 0;
     const three = ["e2e4", "e7e5", "g1f3"];
     for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
@@ -533,7 +533,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: offer-ply columns").toBe(2);
   });
 
-  it("V436: an offer ply BELOW 2 is refused, on each side — lila registers no offer before ply 2 (Game.scala playerCanOfferDraw)", async () => {
+  it("V442: an offer ply BELOW 2 is refused, on each side — lila registers no offer before ply 2 (Game.scala playerCanOfferDraw)", async () => {
     let checked = 0;
     const three = ["e2e4", "e7e5", "g1f3"];
     for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
@@ -546,7 +546,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: 2 columns × 2 plies").toBe(4);
   });
 
-  it("V436: an offer ply BEYOND the ledger, or negative, is refused, on each side", async () => {
+  it("V442: an offer ply BEYOND the ledger, or negative, is refused, on each side", async () => {
     let checked = 0;
     for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
       expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 3 }), `${col}=3`)
@@ -558,7 +558,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   });
 
   // ---------------------------------------------------------------------------
-  // V436, T11 fix round 1 (ruling M7): the seat a token_revoked hold froze.
+  // V442, T11 fix round 1 (ruling M7): the seat a token_revoked hold froze.
   const SEAT_CHECK = "fixture_external_play_revoked_seat_check";
   type SeatOutcome =
     | { accepted: true; row: { needs_reason: string | null; revoked_seat: string | null } }
@@ -582,7 +582,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   }
   const seatRefused = { accepted: false, code: CHECK_VIOLATION, constraint: SEAT_CHECK };
 
-  it("V436 (M7): a token_revoked hold records white, black, both — or no seat (unknown: both frozen)", async () => {
+  it("V442 (M7): a token_revoked hold records white, black, both — or no seat (unknown: both frozen)", async () => {
     let checked = 0;
     for (const seat of ["white", "black", "both", null]) {
       expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: seat }), String(seat))
@@ -592,7 +592,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked, "anti-vacuity: three seats and none").toBe(4);
   });
 
-  it("V436 (M7): a seat on ANY other reason is refused — counted over NEEDS_REASONS", async () => {
+  it("V442 (M7): a seat on ANY other reason is refused — counted over NEEDS_REASONS", async () => {
     const others = NEEDS_REASONS.filter((r) => r !== "token_revoked");
     let checked = 0;
     for (const reason of others) {
@@ -603,7 +603,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("V436 (M7): a seat on a row that is not held — no reason at all — is refused (a NULL reason must not pass)", async () => {
+  it("V442 (M7): a seat on a row that is not held — no reason at all — is refused (a NULL reason must not pass)", async () => {
     let checked = 0;
     for (const status of ["pending", "ready", "live", "finished"]) {
       expect(await trySeat({ status, needs_reason: null, revoked_seat: "black" }), status).toEqual(seatRefused);
@@ -612,12 +612,12 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(4);
   });
 
-  it("V436 (M7): a seat outside white/black/both is refused", async () => {
+  it("V442 (M7): a seat outside white/black/both is refused", async () => {
     expect(await trySeat({ status: "needs_organiser", needs_reason: "token_revoked", revoked_seat: "home" })).toEqual(seatRefused);
   });
 
   // ---------------------------------------------------------------------------
-  // V436, T13 (carry M4): the sweep's count of consecutive no-truth reads.
+  // V442, T13 (carry M4): the sweep's count of consecutive no-truth reads.
   const NO_TRUTH_CHECK = "fixture_external_play_sweep_no_truth_reads_check";
   async function tryNoTruth(reads: number | undefined): Promise<
     { accepted: true; reads: number } | { accepted: false; code: string | undefined; constraint: string | undefined }
@@ -641,7 +641,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     throw new Error("transaction committed — the rollback sentinel never fired");
   }
 
-  it("V436 (T13 M4): a new row has read nothing yet — zero, never null — and zero and up are counts", async () => {
+  it("V442 (T13 M4): a new row has read nothing yet — zero, never null — and zero and up are counts", async () => {
     expect(await tryNoTruth(undefined), "the default").toEqual({ accepted: true, reads: 0 });
     let checked = 0;
     for (const n of [0, 1, 3, 40]) {
@@ -651,13 +651,13 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(4);
   });
 
-  it("V436 (T13 M4): a NEGATIVE count is refused by its own CHECK; NULL by NOT NULL", async () => {
+  it("V442 (T13 M4): a NEGATIVE count is refused by its own CHECK; NULL by NOT NULL", async () => {
     expect(await tryNoTruth(-1)).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: NO_TRUTH_CHECK });
     expect(await tryNoTruth(null as never)).toMatchObject({ accepted: false, code: "23502" });
   });
 
   // ---------------------------------------------------------------------------
-  // V436, T13 fix round 1. I1: when a read first found the GAME over, held or
+  // V442, T13 fix round 1. I1: when a read first found the GAME over, held or
   // not (the camera evidence ends there, never at the room's end). I4: the
   // move T10 is submitting, recorded BEFORE Lichess hears it, so a read
   // landing between Lichess's 200 and the append adopts it without a flag.
@@ -691,12 +691,12 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   }
   const AT = new Date("2026-10-11T10:00:00.000Z");
 
-  it("V436 (T13 I1): a new row has seen no game end; a game on file records one", async () => {
+  it("V442 (T13 I1): a new row has seen no game end; a game on file records one", async () => {
     expect(await tryBridge({}, ["game_over_at"])).toEqual({ accepted: true, row: { game_over_at: null } });
     expect(await tryBridge({ game_over_at: AT }, ["game_over_at"])).toEqual({ accepted: true, row: { game_over_at: AT } });
   });
 
-  it("V436 (T13 I1): a game end with NO game on file is refused by its own CHECK", async () => {
+  it("V442 (T13 I1): a game end with NO game on file is refused by its own CHECK", async () => {
     expect(await tryBridge({ status: "pending", challenge_id: null, game_over_at: AT }, ["game_over_at"]))
       .toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: GAME_OVER_CHECK });
   });
@@ -704,7 +704,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
   const PENDING = ["pending_move_ply", "pending_move_uci", "pending_move_at"] as const;
   /** A ledger of `n` plies (the CHECK reads its length, not its moves). */
   const ledgerOf = (n: number) => ({ moves_uci: sql.json(Array.from({ length: n }, () => "e2e4")), move_count: n });
-  it("V436 (T13 I4): no submission by default; a whole one — ply, canonical UCI, time — is accepted (counted)", async () => {
+  it("V442 (T13 I4): no submission by default; a whole one — ply, canonical UCI, time — is accepted (counted)", async () => {
     expect(await tryBridge({}, PENDING)).toEqual({
       accepted: true, row: { pending_move_ply: null, pending_move_uci: null, pending_move_at: null },
     });
@@ -718,7 +718,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(4);
   });
 
-  it("V436 (T13 I4): a submission is for the NEXT ply only — one at a ply the ledger has passed, or not reached, is refused (counted)", async () => {
+  it("V442 (T13 I4): a submission is for the NEXT ply only — one at a ply the ledger has passed, or not reached, is refused (counted)", async () => {
     // T10 sends at ply = the ledger's length; every ledger write spends the
     // submission it passes. So reconcile's write needs no ply condition, and
     // an excuse can only ever be read at the ply it was sent for.
@@ -732,7 +732,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(4);
   });
 
-  it("V436 (T13 I4): HALF a submission is refused — each of the three missing in turn (counted)", async () => {
+  it("V442 (T13 I4): HALF a submission is refused — each of the three missing in turn (counted)", async () => {
     const whole = { ...ledgerOf(4), pending_move_ply: 4, pending_move_uci: "g1f3", pending_move_at: AT };
     let checked = 0;
     for (const missing of PENDING) {
@@ -743,7 +743,7 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V433/V434)", (
     expect(checked).toBe(PENDING.length);
   });
 
-  it("V436 (T13 I4): a negative ply, a move that is not UCI, or a submission with no game on file is refused (counted)", async () => {
+  it("V442 (T13 I4): a negative ply, a move that is not UCI, or a submission with no game on file is refused (counted)", async () => {
     const refused = { accepted: false, code: CHECK_VIOLATION, constraint: PENDING_MOVE_CHECK };
     let checked = 0;
     for (const cols of [

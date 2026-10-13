@@ -739,7 +739,7 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 //
 // One settle per room: `camera_evidence_at` is stamped, conditionally on
 // null, in the SAME transaction as the flags — a re-run, or a pass racing
-// this one, writes no second flag (V436). A room whose reports never become
+// this one, writes no second flag (V442). A room whose reports never become
 // readable is settled after a day with no flag and REPORTED, never re-read
 // forever.
 

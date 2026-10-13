@@ -1,7 +1,7 @@
 // T16 — what the organiser's queue says about a HELD online board (canvas
 // HoldQueueDesktop/Phone): a short title for the chip, and a sentence naming
 // what happened. One entry per member of the needs_reason vocabulary
-// (`NEEDS_REASONS`, which V433/V435's CHECK pins): a `Record<NeedsReason, …>`
+// (`NEEDS_REASONS`, which V439/V441's CHECK pins): a `Record<NeedsReason, …>`
 // so a new reason cannot ship without its copy (tsc), and the copy sweep in
 // external-play-reason-map.test.ts reads every member in every locale.
 //
@@ -29,14 +29,14 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
 
 export type HeldCopyInput = {
   reason: NeedsReason;
-  /** V436: the seat a token_revoked hold froze. */
+  /** V442: the seat a token_revoked hold froze. */
   revokedSeat: "white" | "black" | "both" | null;
   whiteName: string;
   blackName: string;
 };
 
 /** The sentence's key and the name it carries, if any. A no-show names the
- *  colour that stayed away; a revoked token names the seat V436 recorded —
+ *  colour that stayed away; a revoked token names the seat V442 recorded —
  *  never a no-show (design §3.6) — and an unknown seat names nobody. */
 export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { name: string } } {
   switch (row.reason) {
@@ -65,7 +65,7 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
         case null:
           return { key: "externalPlay.reason.tokenRevoked" };
       }
-    // falls through only if V436's seat vocabulary grows — tsc refuses that
+    // falls through only if V442's seat vocabulary grows — tsc refuses that
     case "double_walkover_blocked":
       return { key: "externalPlay.reason.doubleWalkoverBlocked" };
     case "create_outcome_unknown":

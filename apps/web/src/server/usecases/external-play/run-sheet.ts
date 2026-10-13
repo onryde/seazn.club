@@ -45,7 +45,7 @@ export async function listRunSheetOnlinePlay(auth: AuthCtx, divisionId: string):
   >`
     select f.id as "fixtureId", f.stage_id as "stageId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason",
-           -- V433's CHECK names exactly three kinds, and each is its own chip: the player's lost camera (amber), OUR
+           -- V439's CHECK names exactly three kinds, and each is its own chip: the player's lost camera (amber), OUR
            -- side's connection problems (quiet — T16 fix round 1, I3), moves made off Seazn (amber).
            count(fl.id) filter (where fl.kind = 'camera_lost')::int as "cameraFlags",
            count(fl.id) filter (where fl.kind = 'camera_connection_problems')::int as "connectionProblems",

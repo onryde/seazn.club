@@ -19,7 +19,7 @@ export type ExternalPlayStatus =
   | "needs_organiser";
 
 /** Spec §9 / row `needs_reason` — why a fixture landed in `needs_organiser`.
- *  The SAME SET as the `needs_reason` CHECK (V433, as V435 re-declares it).
+ *  The SAME SET as the `needs_reason` CHECK (V439, as V441 re-declares it).
  *  `token_revoked` / `double_walkover_blocked` are §3.6: a revoked token is
  *  not a no-show; a blocked double walkover is its own state.
  *  external-play-needs-organiser.test.ts reads the CHECK back from
@@ -35,14 +35,14 @@ export const NEEDS_REASONS = [
   "provider_error",
   "token_revoked",
   "double_walkover_blocked",
-  // V435 (T9 fix round 1, I2): a stale create whose outcome a lookup could
+  // V441 (T9 fix round 1, I2): a stale create whose outcome a lookup could
   // not prove — held for an organiser, never re-created blind.
   "create_outcome_unknown",
-  // V435 (T12, spec §3.6; fix round 1, R2): a drawn game in a bracket stage,
+  // V441 (T12, spec §3.6; fix round 1, R2): a drawn game in a bracket stage,
   // written through the engine, whose fold now awaits its tie-break — ship 1
   // cannot create the tie-break game, so the organiser is told. Never decided.
   "tiebreak_owed",
-  // V435 (T12 fix round 1, I2): Lichess ended the game for a fair-play
+  // V441 (T12 fix round 1, I2): Lichess ended the game for a fair-play
   // violation (status `cheat`) — the organiser's fair-play queue.
   "fair_play",
 ] as const;

@@ -936,15 +936,15 @@ export async function seedFixtureExternalPlaySql(
   fixtureId: string,
   opts: {
     status: "pending" | "ready" | "live" | "finished" | "needs_organiser";
-    /** Required by V433's CHECK exactly when status is needs_organiser. */
+    /** Required by V439's CHECK exactly when status is needs_organiser. */
     needsReason?: string | null;
     lastError?: string | null;
     challengeId?: string | null;
   },
 ): Promise<void> {
-  // V433's columns (the 2026-10-09 model): there is no play URL any more
-  // (V435 dropped url_white/url_black; play_url / external_challenge_id were
-  // never in V433), and scheduled_at_basis is NOT NULL.
+  // V439's columns (the 2026-10-09 model): there is no play URL any more
+  // (V441 dropped url_white/url_black; play_url / external_challenge_id were
+  // never in V439), and scheduled_at_basis is NOT NULL.
   await withDb(async (sql) => {
     const [fx] = await sql<{ org_id: string; scheduled_at: Date | null }[]>`
       select org_id, scheduled_at from fixtures where id = ${fixtureId}`;
@@ -977,7 +977,7 @@ export async function seedFixtureExternalPlaySql(
  *  sealed for real (e2e/lichess-token-seal.ts, proven against the product's
  *  reader in e2e-seams.test.ts) — the T14 kit's one-byte token is unopenable
  *  on purpose and right only for specs that must never reach Lichess. Columns
- *  are V433's: `access_token_enc` bytea, `scopes` text[], `consented_at`. */
+ *  are V439's: `access_token_enc` bytea, `scopes` text[], `consented_at`. */
 export async function linkLichessBySql(
   userId: string,
   lichessId: string,

@@ -14,7 +14,7 @@ import {
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A Lichess id nobody else can hold. `(provider, external_user_id)` is
- *  globally unique in V433, so a fixed literal here passes once and then
+ *  globally unique in V439, so a fixed literal here passes once and then
  *  collides with the row the previous run left behind. */
 const lid = (tag: string): string => `${tag}-${randomUUID().slice(0, 8)}`;
 const newUser = async (tag: string): Promise<string> => {
@@ -158,7 +158,7 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
   });
 
   // The OTHER half of the same `if`, which the legacy row above cannot reach:
-  // scopes that look right with NO consent stamp — and therefore, by V433's
+  // scopes that look right with NO consent stamp — and therefore, by V439's
   // consent_token CHECK, no token to submit with either. Mutating the gate
   // proved it: dropping `consentedAt === null` left every other case green,
   // because a legacy row's empty scopes satisfied the second condition on its
@@ -414,7 +414,7 @@ describe.skipIf(!HAS_DB)("external-accounts — link identity", () => {
     expect(await personHasLichessLink(orgId, personId)).toBe(true);
   });
 
-  // Fix round 1 (review): V433's SECOND unique constraint,
+  // Fix round 1 (review): V439's SECOND unique constraint,
   // (provider, external_user_id) — a Lichess account can only ever be linked
   // to ONE Seazn user. Without a typed catch this surfaced as a raw,
   // uncaught 23505 (constraint user_external_accounts_provider_external_user_id_key).
