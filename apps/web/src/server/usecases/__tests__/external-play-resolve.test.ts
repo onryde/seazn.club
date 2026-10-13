@@ -203,8 +203,8 @@ describe("resolveExternalPlay — structure", () => {
     expect(src).not.toContain("onlineChessOffered");
   });
 
-  it("the four ways to settle are the canvas's four buttons, the empty-of-winner ones last", () => {
-    expect([...RESOLVE_KINDS]).toEqual(["home_wins", "away_wins", "draw", "no_result"]);
+  it("the ways to settle are the panel's buttons, the empty-of-winner ones last — No result (the void) and the double walkover each its OWN kind (fix round 4, M-7: two results with different consequences never share one wire value)", () => {
+    expect([...RESOLVE_KINDS]).toEqual(["home_wins", "away_wins", "draw", "no_result", "double_walkover"]);
   });
 });
 
@@ -349,7 +349,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     await holdAs(r, voided, "aborted");
     await holdAs(r, walkedOver, "no_show_both");
     await resolveExternalPlay(r.owner, voided.fixtureId, "no_result");
-    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "double_walkover");
     const [div] = await sql<{ sport_key: string; module_version: string }[]>`select sport_key, module_version from divisions where id = ${r.divisionId}`;
     const ctx: MatchCentreLoadCtx = {
       orgTz: null,
@@ -393,7 +393,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
       const r = await round();
       const b = r.boards[0]!;
       await holdAs(r, b, hold);
-      expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), hold).toEqual({ status: "finished" });
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, "double_walkover"), hold).toEqual({ status: "finished" });
       const ledger = await ledgerOf(b.fixtureId);
       expect(ledger.map((e) => [e.type, e.payload]), `${hold}: one forfeit, no Start`).toEqual([["core.forfeit", { by: "both", reason: "walkover" }]]);
       const fold = engineFold(b, "core.forfeit", { by: "both", reason: "walkover" });
@@ -453,7 +453,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     expect(before.size, "premise: every entrant has a row").toBe(6);
 
     await resolveExternalPlay(r.owner, voided.fixtureId, "no_result");
-    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "no_result");
+    await resolveExternalPlay(r.owner, walkedOver.fixtureId, "double_walkover");
     await resolveExternalPlay(r.owner, won.fixtureId, "home_wins");
     const after = await rowsOf();
 
@@ -576,11 +576,11 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     expect([owed.tiebreakOwed, owed.canSettle, owed.state.kind], "the panel offers a winner only").toEqual([true, true, "on_hold"]);
 
     let refused = 0;
-    for (const kind of ["draw", "no_result"] as const) {
+    for (const kind of ["draw", "no_result", "double_walkover"] as const) {
       expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, kind)), kind).toEqual([409, "TIEBREAK_NEEDS_WINNER"]);
       refused += 1;
     }
-    expect(refused).toBe(2);
+    expect(refused).toBe(3);
 
     expect(await resolveExternalPlay(r.owner, b.fixtureId, "away_wins")).toEqual({ status: "finished" });
     const ledger = await ledgerOf(b.fixtureId);
@@ -662,7 +662,7 @@ async function bridgeFor(orgId: string, fixtureId: string) {
 }
 
 describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage kind (I-3, fix round 3)", () => {
-  const sweep = { kinds: 0, void: 0, doubleWalkover: 0, knockout: 0, swiss: 0, bracketDoubleWalkover: 0, w2bRefusedDoubleWalkover: 0 };
+  const sweep = { kinds: 0, void: 0, doubleWalkover: 0, knockout: 0, swiss: 0, bracketDoubleWalkover: 0, w2bRefusedDoubleWalkover: 0, mismatch: 0 };
   for (const kind of StageKind.options) {
     it(`sweep, ${kind}: the panel and the queue carry the ruling's offer, and the settle does exactly that — a void abandons, a double walkover forfeits both (where W2b takes one), a refusal writes nothing and a winner still settles the board`, async () => {
       const bracket = BRACKET_KINDS.has(kind);
@@ -685,7 +685,10 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
         expect(queue.find((q) => q.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the queue`).toEqual(offer);
         expect(panel.find((x) => x.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the panel`).toEqual(offer);
         if (offer.kind === "refused") {
-          expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, "no_result")), label).toEqual([409, REFUSAL_CODE[offer.why]]);
+          // Refused whichever of the two the request names: the refusal is the stage's, before the request's kind.
+          for (const asked of ["no_result", "double_walkover"] as const) {
+            expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, asked)), `${label}, ${asked}`).toEqual([409, REFUSAL_CODE[offer.why]]);
+          }
           expect(await ledgerOf(b.fixtureId), `${label}: nothing written`).toEqual([]);
           expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "scheduled", outcome: null });
           expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: c.hold });
@@ -701,7 +704,14 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
           expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins"), `${label}: a winner still settles it`).toEqual({ status: "finished" });
           sweep[offer.why] += 1;
         } else {
-          expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), label).toEqual({ status: "finished" });
+          // M-7 (fix round 4): the request names the outcome the organiser was SHOWN. The other one is a stale
+          // screen's — a void asked of a double-walkover board, or the reverse — refused BOARD_CHANGED, nothing written.
+          const [asked, stale] = offer.kind === "void" ? (["no_result", "double_walkover"] as const) : (["double_walkover", "no_result"] as const);
+          expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, stale)), `${label}: ${stale} asked of a ${offer.kind} board`).toEqual([409, "BOARD_CHANGED"]);
+          expect(await ledgerOf(b.fixtureId), `${label}: the mismatch wrote nothing`).toEqual([]);
+          expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: c.hold });
+          sweep.mismatch += 1;
+          expect(await resolveExternalPlay(r.owner, b.fixtureId, asked), label).toEqual({ status: "finished" });
           if (offer.kind === "void") {
             expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "abandoned", outcome: null });
             sweep.void += 1;
@@ -735,7 +745,34 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
       // Both lines held not_started, plus the finals D19 refuses a double walkover on.
       knockout: bracket * 2 + needsNext,
       swiss: all - bracket - VOID_SAFE.size,
+      // Every cell that offers a void or a double walkover was also asked for the other one.
+      mismatch: VOID_SAFE.size + (all - bracket + bracket + (bracket - needsNext)),
     });
+  });
+
+  it("a STALE panel (M-7, fix round 4): the board's offer moves between the panel's read and the click — the click's kind is refused BOARD_CHANGED and nothing is written; the reloaded panel's offer settles it — both directions", async () => {
+    const r = await round({ fixtures: 2 });
+    const [toBoth, toOne] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await holdAs(r, toBoth, "not_started");
+    await holdAs(r, toOne, "no_show_both");
+    const offerOf = async (b: SeedRoundBoard) => (await loadArbiterRound(r.owner, r.divisionId))!.boards.find((x) => x.fixtureId === b.fixtureId)!.noResultOffer;
+    expect([await offerOf(toBoth), await offerOf(toOne)], "premise: the screen offers a void, and a double walkover").toEqual([{ kind: "void" }, { kind: "double_walkover" }]);
+    // The hold moves under the open screen (a stand-in for whichever writer moves it: the rule under test is the settle's).
+    await sql`update fixture_external_play set needs_reason = 'no_show_both' where fixture_id = ${toBoth.fixtureId}`;
+    await sql`update fixture_external_play set needs_reason = 'not_started' where fixture_id = ${toOne.fixtureId}`;
+    let checked = 0;
+    for (const [b, shown, now] of [[toBoth, "no_result", "double_walkover"], [toOne, "double_walkover", "no_result"]] as const) {
+      expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, shown)), `${shown}: the stale click`).toEqual([409, "BOARD_CHANGED"]);
+      expect(await ledgerOf(b.fixtureId), `${shown}: nothing written`).toEqual([]);
+      expect(await fixtureOf(b.fixtureId), shown).toEqual({ status: "scheduled", outcome: null });
+      expect(await bridgeOf(b.fixtureId), `${shown}: still held`).toMatchObject({ status: "needs_organiser" });
+      expect(await offerOf(b), `${shown}: the reloaded panel offers the other`).toEqual({ kind: now === "no_result" ? "void" : "double_walkover" });
+      expect(await resolveExternalPlay(r.owner, b.fixtureId, now), `${now}: the reloaded click`).toEqual({ status: "finished" });
+      checked += 1;
+    }
+    expect(await fixtureOf(toBoth.fixtureId)).toEqual({ status: "forfeited", outcome: { kind: "double_walkover" } });
+    expect(await fixtureOf(toOne.fixtureId)).toEqual({ status: "abandoned", outcome: null });
+    expect(checked).toBe(2);
   });
 
   it("Swiss: No result is refused SWISS_NEEDS_RESULT before anything is written; an adjudication, and both players' absence as W2b's double walkover, decide round 1 — and the REAL generator pairs round 2", async () => {
@@ -757,7 +794,7 @@ describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage 
     expect(await bridgeOf(held.id), "still the organiser's").toMatchObject({ status: "needs_organiser", needs_reason: "not_started" });
 
     expect(await resolveExternalPlay(s.owner, held.id, "home_wins")).toEqual({ status: "finished" });
-    expect(await resolveExternalPlay(s.owner, absent.id, "no_result"), "both absent: W2b's double walkover").toEqual({ status: "finished" });
+    expect(await resolveExternalPlay(s.owner, absent.id, "double_walkover"), "both absent: W2b's double walkover").toEqual({ status: "finished" });
     expect(await fixtureOf(absent.id)).toEqual({ status: "forfeited", outcome: { kind: "double_walkover" } });
 
     await generateStageFixtures(s.owner, s.stageId);

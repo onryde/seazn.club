@@ -177,18 +177,20 @@ describe("a held card", () => {
 
   // I-3, fix round 3: both players absent where W2b takes a double walkover — the queue offers it by its own name.
   it("both players absent: the settle offers W2b's double walkover by its own name, on its own row — every locale, counted; the void keeps \"No result\"", () => {
-    const button = (h: string) => h.match(/<button([^>]*)data-settle="no_result"([^>]*)>(.*?)<\/button>/);
+    // M-7 (fix round 4): each sends its OWN kind — the server refuses the other one as a stale screen's.
+    const button = (h: string, choice: "no_result" | "double_walkover") => h.match(new RegExp(`<button([^>]*)data-settle="${choice}"([^>]*)>(.*?)</button>`));
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as Locale[]) {
       const dict = LOCALES[locale] as Record<string, string>;
       const h = render({ held: [held({ fixtureId: "f1", reason: "no_show_both", noResultOffer: { kind: "double_walkover" } }), held({ fixtureId: "f2", reason: "not_started" })] }, locale);
-      const dw = button(card(h, "f1"));
+      const dw = button(card(h, "f1"), "double_walkover");
       expect(dw, `${locale}: the double walkover renders`).not.toBeNull();
       expect(text(dw![3]!), locale).toBe(dict["externalPlay.resolve.doubleWalkover"]);
       expect(`${dw![1]} ${dw![2]}`, `${locale}: a row of its own`).toMatch(/\bmin-\[360px\]:col-span-2\b/);
       expect(card(h, "f1"), locale).not.toContain("external-play-settle-guidance");
       // The pair: the void's button says "No result".
-      expect(text(button(card(h, "f2"))![3]!), locale).toBe(dict["externalPlay.resolve.noResult"]);
+      expect(text(button(card(h, "f2"), "no_result")![3]!), locale).toBe(dict["externalPlay.resolve.noResult"]);
+      expect(button(card(h, "f1"), "no_result"), `${locale}: the double walkover never sends no_result`).toBeNull();
       checked++;
     }
     expect(checked).toBe(4);

@@ -1412,12 +1412,13 @@ export const ExternalPlayLobbyOut = z.union([
 ]);
 
 /** POST /fixtures/{id}/external-play/resolve (T16) — the organiser settles
- *  an online board: the canvas's four buttons ("X wins", "Y wins", "Draw",
- *  "No result"). The kinds are resolve.ts's RESOLVE_KINDS (kept in step by
+ *  an online board: the panel's buttons ("X wins", "Y wins", "Draw", and in
+ *  place of a winner "No result" — the void — or the double walkover). The
+ *  kinds are resolve.ts's RESOLVE_KINDS (kept in step by
  *  fixtures/[id]/external-play/__tests__/decision-routes.test.ts). */
 export const ResolveExternalPlay = z
   .object({
-    kind: z.enum(["home_wins", "away_wins", "draw", "no_result"]),
+    kind: z.enum(["home_wins", "away_wins", "draw", "no_result", "double_walkover"]),
   })
   .strict();
 export type ResolveExternalPlay = z.infer<typeof ResolveExternalPlay>;

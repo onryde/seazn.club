@@ -679,13 +679,14 @@ describe("your decision", () => {
     const b = { ...ROUND.boards[2]!, whiteSide: "away" as const };
     const open = (board: typeof b, loc?: keyof typeof LOCALES) =>
       html(props({ round: { ...ROUND, boards: [board] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
-    const button = (h: string) => h.match(/<button([^>]*)data-settle="no_result"([^>]*)>(.*?)<\/button>/);
+    // M-7 (fix round 4): each sends its OWN kind — the server refuses the other one as a stale screen's.
+    const button = (h: string, choice: "no_result" | "double_walkover") => h.match(new RegExp(`<button([^>]*)data-settle="${choice}"([^>]*)>(.*?)</button>`));
     let locales = 0;
     for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
       const dict = LOCALES[loc] as Record<string, string>;
       const h = open({ ...b, noResultOffer: { kind: "double_walkover" } }, loc);
-      expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw", "no_result"]);
-      const dw = button(h);
+      expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw", "double_walkover"]);
+      const dw = button(h, "double_walkover");
       expect(dw, `${loc}: the double walkover renders`).not.toBeNull();
       expect(text(dw![3]!), loc).toBe(dict["externalPlay.resolve.doubleWalkover"]);
       expect(text(dw![3]!), `${loc}: never "No result"`).not.toBe(dict["externalPlay.resolve.noResult"]);
@@ -697,7 +698,7 @@ describe("your decision", () => {
     }
     expect(locales).toBe(4);
     // The pair: the void's button says "No result", in the grid's own cell.
-    const v = button(open({ ...b, noResultOffer: { kind: "void" } }));
+    const v = button(open({ ...b, noResultOffer: { kind: "void" } }), "no_result");
     expect(text(v![3]!)).toBe(EN["externalPlay.resolve.noResult"]);
     expect(`${v![1]} ${v![2]}`).not.toMatch(/col-span-2/);
   });

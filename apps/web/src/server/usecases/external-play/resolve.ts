@@ -54,7 +54,11 @@ import { isPlayableFixtureStatus } from "./preflight";
 import { foldPhaseOf, holdOwedTiebreak, tiebreakIsPending } from "./result";
 import { isSeatedOn } from "./seated";
 
-export const RESOLVE_KINDS = ["home_wins", "away_wins", "draw", "no_result"] as const;
+/** `no_result` is the VOID and `double_walkover` W2b's double walkover — the two settles in place of a winner, each its
+ *  own kind (fix round 4, M-7): they carry different consequences (no points, versus a game played and lost by both),
+ *  so the request names the one the organiser was shown, and the server refuses the other rather than pick by the
+ *  board's hold at click time. */
+export const RESOLVE_KINDS = ["home_wins", "away_wins", "draw", "no_result", "double_walkover"] as const;
 export type ResolveKind = (typeof RESOLVE_KINDS)[number];
 
 /** `finished`: the board has its result. `tiebreak_owed`: the organiser's
@@ -168,8 +172,10 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 409 ALREADY_RESOLVED: the board already has its result when this settle reads it;
  *  - 409 ONLINE_GAME_OVER: the online game is over but the fixture is open (a voided result): the scoring pad's;
  *  - 409 BOARD_CHANGED: another writer changed it while this settle was on its way (two organisers at once: one
- *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
- *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
+ *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled); or the
+ *    board's offer in place of a winner is no longer the one asked for (M-7: `no_result` asked of a board that now
+ *    offers the double walkover, or the reverse — a stale screen's);
+ *  - 409 TIEBREAK_NEEDS_WINNER: a draw, no result or double walkover for a board whose
  *    tie-break is owed;
  *  - 409 KNOCKOUT_NEEDS_WINNER (I-3): No result in any knockout — every stage kind where a level result is forbidden,
  *    a line that feeds a next match as much as a final. The board stays held;
@@ -222,12 +228,15 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
     return { status: "finished" };
   }
 
-  if (kind === "no_result") {
+  if (kind === "no_result" || kind === "double_walkover") {
     const offer = noResultOffer({ stageKind: b.stageKind, reason, edges: b });
     if (offer.kind === "refused") {
       const refusal = NO_RESULT_REFUSAL[offer.why];
       throw new HttpError(409, refusal.message, refusal.code);
     }
+    // M-7 (fix round 4): the request names the outcome the organiser was shown. A board whose hold has moved since
+    // (a void offered, a double walkover now — or the reverse) is a stale screen's: refused, nothing written.
+    if (offer.kind !== (kind === "no_result" ? "void" : "double_walkover")) throw boardChanged();
     // I-3: VOID (an abandon), or — both players absent — the double walkover; either whether or not play is recorded
     // (W2b admits an abandon and a chess walkover before the game and after the Start, ruling 118). So no Start is
     // written for it: a board nobody played stays unplayed, and one with a Start keeps it.
