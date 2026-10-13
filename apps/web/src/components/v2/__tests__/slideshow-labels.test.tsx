@@ -675,3 +675,37 @@ describe("public /present kiosk: the phone card (C1)", () => {
     expect(card).toContain("--ps-court:#0a0b0c");
   });
 });
+
+// Design review I-1 (audit 3.1 on the venue TV): a double walkover reaches the slides with no `line` and its `tag`
+// (slideshow-data.ts). Each place a score is drawn — the fixtures slide's centre slot and every bracket kind's node —
+// shows the tag in the muted "vs" voice, never "vs" (an unplayed match) and never nothing; a credited score keeps the
+// accent. Five render sites, counted.
+describe("<Slideshow> draws a double walkover's tag where the score would be (review I-1)", () => {
+  const TAG = "2× w/o";
+  const muted = new RegExp(`<span class="[^"]*text-court-muted[^"]*">${TAG}</span>`);
+  const render = (slide: Slide) =>
+    renderToStaticMarkup(createElement(Slideshow, { title: "Copa", slides: [slide], backHref: "/", liveHref: "/shared/o/c", labels: slideshowLabels("en") }));
+
+  it("the fixtures slide and every bracket kind: the tag, muted, once; the credited pair keeps its accent score", () => {
+    const sites: string[] = [];
+    const fixtures = render({
+      kind: "fixtures", division: "Open", title: "Latest results",
+      items: [{ ...item("forfeited", 1), line: null, tag: TAG }, { ...item("forfeited", 1, "3–0"), home: "Japan", away: "Ghana" }],
+    });
+    expect(fixtures, "fixtures slide: the tag in the score's slot").toMatch(new RegExp(`text-court-muted[^"]*">${TAG}</span>`));
+    expect(fixtures, "fixtures slide: the pair's score in the accent").toMatch(/text-accent-line[^"]*">3–0<\/span>/);
+    sites.push("fixtures");
+    for (const sl of EVERY_BRANCH.filter((x): x is Extract<Slide, { kind: "bracket" }> => x.kind === "bracket")) {
+      const [first, second, ...rest] = sl.fixtures;
+      const html = render({
+        ...sl,
+        fixtures: [{ ...first!, status: "forfeited", line: null, tag: TAG }, { ...second!, status: "forfeited", line: "3–0" }, ...rest],
+      });
+      expect(html, `${sl.stageKind}: the double walkover's node draws the tag, muted`).toMatch(muted);
+      expect(html.split(TAG).length - 1, `${sl.stageKind}: once`).toBe(1);
+      expect(html, `${sl.stageKind}: the pair's node keeps its accent score`).toMatch(/text-accent-line">3–0<\/span>/);
+      sites.push(String(sl.stageKind));
+    }
+    expect(sites, "every render site").toEqual(["fixtures", "knockout", "stepladder", "double_elim", "page_playoff"]);
+  });
+});

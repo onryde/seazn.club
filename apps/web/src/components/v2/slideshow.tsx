@@ -406,7 +406,8 @@ export function Slideshow({
                             : "text-2xl font-semibold text-court-muted"
                         }`}
                       >
-                        {f.line ?? labels.vs}
+                        {/* Review I-1: a double walkover has no score — its tag, in the "vs" voice. */}
+                        {f.line ?? f.tag ?? labels.vs}
                       </span>
                       <span className="flex min-w-0 items-center gap-3 font-display text-4xl font-semibold">
                         {f.awayLogo && (
@@ -494,6 +495,14 @@ export function Slideshow({
 // v13 (PROMPT-64) + G-audit: bracket slides for all three shapes — the
 // knockout tree, the double-elim lanes, the stepladder rungs — from the same
 // shared engine geometry as console / public / PDF.
+/** A bracket node's score — or, for a result that credits nobody (a double walkover, design review I-1), its tag in
+ *  the board's muted voice (the "vs" slot's `text-court-muted`): never a 0 / 0, never a blank that reads unplayed. */
+function NodeScore({ f }: { f: Pick<BracketSlideFixture, "line" | "tag"> }) {
+  if (f.line !== null) return <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>;
+  if (f.tag) return <span className="shrink-0 font-semibold text-court-muted">{f.tag}</span>;
+  return null;
+}
+
 function BracketSlide({
   fixtures,
   stageKind,
@@ -564,9 +573,7 @@ function BracketSlide({
                 </span>
                 <span className="flex items-center justify-between gap-2 text-white/80">
                   <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
-                  {f.line !== null && (
-                    <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>
-                  )}
+                  <NodeScore f={f} />
                 </span>
               </div>
             </div>
@@ -597,7 +604,7 @@ function LadderSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[]; la
                 </span>
                 <span className="flex items-center justify-between gap-3 text-white/80">
                   <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
-                  {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
+                  <NodeScore f={f} />
                 </span>
               </div>
             </div>
@@ -647,7 +654,7 @@ function DoubleElimSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[]
           </span>
           <span className="flex items-center justify-between gap-2 text-white/80">
             <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
-            {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
+            <NodeScore f={f} />
           </span>
         </div>
       </div>
@@ -746,7 +753,7 @@ function PagePlayoffSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[
                   </span>
                   <span className="flex items-center justify-between gap-2 text-white/80">
                     <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
-                    {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
+                    <NodeScore f={f} />
                   </span>
                 </div>
               </div>

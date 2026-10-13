@@ -188,6 +188,14 @@ export function unseatedForfeitLoser(
   return mine === null && theirs === winner && loser !== winner ? loser : null;
 }
 
+/** Design audit 3.1 — a double walkover credits nobody, but its summary carries a 0 / 0: a host that paints it reads
+ *  as an unplayed (or drawn) match. Every score-line host asks this before it paints a score — the hub, the schedule,
+ *  the bracket tile, the TV slides, the organiser's bracket, the poster, the overlay and the result-post drafter. The
+ *  ledger cannot change the answer (`forfeitTag` reads the double walkover off the outcome alone). */
+export function creditsNobody(outcome: unknown): boolean {
+  return forfeitTag(outcome, NO_LEDGER)?.kind === "double_walkover";
+}
+
 /** Design audit 4.1 — the empty seat names a side that WITHDREW: `unseatedForfeitLoser`'s seat, on an award whose reason
  *  is the withdrawal (ruling 116's shape). An organiser surface marks her name by it, as a departed entrant is marked
  *  elsewhere in the organiser UI; a seated loser, a bye and any other reason answer false. */

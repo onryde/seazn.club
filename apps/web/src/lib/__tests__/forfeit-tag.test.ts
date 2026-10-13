@@ -21,6 +21,7 @@ import {
   FORFEIT_SENTENCE_KEYS,
   FORFEIT_TAG_KEYS,
   NO_LEDGER,
+  creditsNobody,
   doubleWalkoverNextWinner,
   forfeitCopyLookup,
   forfeitCopyOf,
@@ -482,6 +483,31 @@ describe("unseatedWithdrew — the empty seat names a side that withdrew (audit 
     let checked = 0;
     for (const [name, r, want] of ROWS) {
       expect([unseatedWithdrew(r, "home"), unseatedWithdrew(r, "away")], name).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+});
+
+describe("creditsNobody — the one predicate every score-line host reads (audit 3.1, review I-1/M-1)", () => {
+  it("true for a double walkover alone — empty case first; every other stored outcome false", () => {
+    const ROWS: [name: string, outcome: unknown, want: boolean][] = [
+      ["no outcome", null, false],
+      ["undefined", undefined, false],
+      ["a non-object", "double_walkover", false],
+      ["a double walkover", { kind: "double_walkover" }, true],
+      ["a one-sided walkover", { kind: "award", winner: "w", loser: "l", reason: "walkover" }, false],
+      ["a withdrawal walkover", { kind: "award", winner: "w", loser: "l", reason: "withdrew" }, false],
+      ["a bye", { kind: "award", winner: "w", loser: null, reason: "bye" }, false],
+      ["a played win", { kind: "win", winner: "w", loser: "l" }, false],
+      ["a draw", { kind: "draw" }, false],
+      ["an abandon with no result", { kind: "no_result" }, false],
+    ];
+    let checked = 0;
+    for (const [name, outcome, want] of ROWS) {
+      expect(creditsNobody(outcome), name).toBe(want);
+      // The same reading the hub and the schedule make inline — one rule, never a fourth copy that can drift.
+      expect(creditsNobody(outcome), `${name}: agrees with forfeitTag`).toBe(forfeitTag(outcome, NO_LEDGER)?.kind === "double_walkover");
       checked++;
     }
     expect(checked).toBe(ROWS.length);

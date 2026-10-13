@@ -9,6 +9,9 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
+import { builtinModules } from "@seazn/engine/sports";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 
 const input = {
   division: { id: "d1", name: "Open" },
@@ -327,5 +330,59 @@ describe("buildPublicDivisionSlides — waiting sides name their feeder's ROUND;
     const slides = await buildPublicDivisionSlides(knockout);
     const titles = slides.filter((s) => s.kind === "fixtures").map((s) => (s as { title: string }).title);
     expect(titles).toEqual(TITLE_KEYS.map((k) => msgFor("en", k)));
+  });
+});
+
+// Design review I-1 (audit 3.1 on the venue TV): a double walkover credits nobody, but its summary carries a 0 / 0, and
+// the results and bracket slides painted it as a bold score ("Falcons 0 — 0 Hawks"). Each slide now shows the tag in
+// the score's place (the "vs" voice), and a one-sided walkover keeps its credited score. Every outcome is a REAL fold,
+// swept over the sport registry, with the 0 / 0 premise asserted per sport.
+describe("buildPublicDivisionSlides — a double walkover shows its tag, never its 0 / 0 (review I-1)", () => {
+  type Module = (typeof builtinModules)[number];
+  const fold = (m: Module, by: (l: ReturnType<typeof defaultLineupPair>) => string) => {
+    const cfg = m.configSchema.parse(Object.values(m.variants ?? {})[0] ?? {});
+    const l = defaultLineupPair(m.positions);
+    const events: EventEnvelope[] = [makeEnvelope(1, { type: "core.forfeit", payload: { by: by(l), reason: "walkover" } })];
+    const f = foldMatchWithStoppage(m as never, cfg as never, l, events);
+    return { l, outcome: outcomeOf(m as never, f), summary: m.summary(f.state as never) as { headline?: string } | null };
+  };
+  const TAG = msgFor("en", "forfeit.tag.doubleWalkover");
+
+  it("every sport that admits one: the results and bracket slides carry no line and the tag; the one-sided pair keeps its score", async () => {
+    const checked: string[] = [];
+    for (const m of builtinModules) {
+      let dw: ReturnType<typeof fold>, wo: ReturnType<typeof fold>;
+      try {
+        dw = fold(m, () => "both");
+        wo = fold(m, (l) => l.away.entrantId);
+      } catch {
+        continue;
+      }
+      if ((dw.outcome as { kind?: string } | null)?.kind !== "double_walkover") continue;
+      if ((wo.outcome as { kind?: string } | null)?.kind !== "award") continue;
+      const dwLine = dw.summary?.headline, woLine = wo.summary?.headline;
+      expect(typeof dwLine === "string" && dwLine !== "", `${m.key}: premise — the double walkover's summary carries a headline`).toBe(true);
+      expect(typeof woLine === "string" && woLine !== "", `${m.key}: premise — the walkover's summary carries one`).toBe(true);
+      const slides = await buildPublicDivisionSlides({
+        ...input,
+        fixtures: [
+          { id: "k1", stage_id: "sk", round_no: 0, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "forfeited", summary: dw.summary as never, outcome: dw.outcome },
+          { id: "k2", stage_id: "sk", round_no: 0, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4", status: "forfeited", summary: wo.summary as never, outcome: wo.outcome },
+          { id: "kf", stage_id: "sk", round_no: 1, seq_in_round: 1, home_entrant_id: null, away_entrant_id: "e3", status: "scheduled", summary: null },
+        ],
+      });
+      const results = slides.find((x) => x.kind === "fixtures" && x.title === "Latest results") as { items: FixtureSlideItem[] } | undefined;
+      expect(results, `${m.key}: a results slide`).toBeDefined();
+      const byHome = (h: string) => results!.items.find((i) => i.home === h)!;
+      expect([byHome("Mexico").line, byHome("Mexico").tag], `${m.key}: the results slide's double walkover`).toEqual([null, TAG]);
+      expect([byHome("Japan").line, byHome("Japan").tag ?? null], `${m.key}: the results slide's walkover keeps its score`).toEqual([woLine, null]);
+      const bracket = slides.find((x) => x.kind === "bracket") as { fixtures: { id: string; line: string | null; tag?: string | null }[] } | undefined;
+      expect(bracket, `${m.key}: a bracket slide`).toBeDefined();
+      const node = (id: string) => bracket!.fixtures.find((f) => f.id === id)!;
+      expect([node("k1").line, node("k1").tag], `${m.key}: the bracket slide's double walkover`).toEqual([null, TAG]);
+      expect([node("k2").line, node("k2").tag ?? null], `${m.key}: the bracket slide's walkover keeps its score`).toEqual([woLine, null]);
+      checked.push(m.key);
+    }
+    expect(checked.length, `sports checked: ${checked.join(", ")}`).toBeGreaterThanOrEqual(5);
   });
 });

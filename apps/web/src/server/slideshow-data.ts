@@ -13,7 +13,7 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { creditsNobody, unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
@@ -124,6 +124,10 @@ export interface FixtureSlideItem {
   awayLogo: string | null;
   /** Display-ready score headline from match_states, e.g. "2 – 1" or "21-15, 21-18". */
   line: string | null;
+  /** Design review I-1 (audit 3.1): a result that credits nobody (a double walkover) carries no `line` — its 0 / 0 would
+   *  read as a played draw — and this, the forfeit tag in the org's locale, drawn where the score would be. Absent on
+   *  every other row. */
+  tag?: string | null;
   status: string;
   round: number;
   /** N1d d4 — the fixture's round NAME in the org's locale ("Losers' round 1"),
@@ -152,6 +156,8 @@ export interface BracketSlideFixture {
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   line: string | null;
+  /** As `FixtureSlideItem.tag` (review I-1): the double walkover's tag, its `line` null. */
+  tag?: string | null;
   status: string;
 }
 
@@ -330,6 +336,9 @@ export async function buildDivisionSlides(
             where fixture_id = any(${ids})`,
         );
   const lineOf = new Map(summaries.map((s) => [s.fixture_id, s.summary?.headline ?? null]));
+  // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
+  const scoreOf = (f: (typeof fixtures)[number]): { line: string | null; tag?: string } =>
+    creditsNobody(f.outcome) ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") } : { line: lineOf.get(f.id) ?? null };
 
   // Fix round 3 (Important 4): `lookup` (this org's REAL locale, resolved
   // above from `orgLocale`) — was `msg` (client-safe English, always),
@@ -352,7 +361,7 @@ export async function buildDivisionSlides(
       : seatText(f, "away"),
     homeLogo: logos[f.home_entrant_id ?? ""] ?? null,
     awayLogo: logos[f.away_entrant_id ?? ""] ?? null,
-    line: lineOf.get(f.id) ?? null,
+    ...scoreOf(f),
     status: f.status,
     round: f.round_no,
   });
@@ -403,7 +412,7 @@ export async function buildDivisionSlides(
             : (unseatedName(f, "away") ?? resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd")),
           home_slot_label: f.home_slot_label,
           away_slot_label: f.away_slot_label,
-          line: lineOf.get(f.id) ?? null,
+          ...scoreOf(f),
           status: f.status,
         })),
       });
@@ -595,6 +604,9 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     return label === null ? resolveSlotLabel(null, lookup, "bracket.tbd") : namer.seat(f.id, which, label);
   };
 
+  // Design review I-1 (audit 3.1): a double walkover credits nobody — no 0 / 0 on the TV; its tag in the score's place.
+  const publicScoreOf = (f: PublicSlideInput["fixtures"][number]): { line: string | null; tag?: string } =>
+    creditsNobody(f.outcome) ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") } : { line: f.summary?.headline ?? null };
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
@@ -606,7 +618,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
       : (standIn(f, "away") ?? namer.seat(f.id, "away", f.away_slot_label ?? null)),
     homeLogo: null,
     awayLogo: null,
-    line: f.summary?.headline ?? null,
+    ...publicScoreOf(f),
     status: f.status,
     round: f.round_no,
     // N1d d4 — the row's round as the hub's rail names it, never the board's
@@ -650,7 +662,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
           away: f.away_entrant_id ? (names[f.away_entrant_id] ?? null) : bracketSeat(f, "away"),
           home_slot_label: f.home_slot_label ?? null,
           away_slot_label: f.away_slot_label ?? null,
-          line: f.summary?.headline ?? null,
+          ...publicScoreOf(f),
           status: f.status,
         })),
       });
