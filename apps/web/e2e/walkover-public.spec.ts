@@ -756,6 +756,17 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
       const header = await quote(s.header);
       expect(header.indexOf(pair[0]!) < header.indexOf(pair[1]!), `${width}: her name in her seat (${header})`).toBe(true);
       expect(header, `${width}: the console's header prints no bye word`).not.toMatch(BYE);
+      // Design review M-4 (audit 4.1): the header marks her as the run sheet does — the Withdrawn chip, once, whole
+      // inside the header's line at every width (a whole-line truncate cut it to "With…" at 320).
+      const chip = s.header.locator('[data-testid="console-withdrawn"]');
+      await expect(chip, `${width}: the console marks her as withdrawn`).toHaveCount(1);
+      await expect(chip, `${width}: in the entrant status's own word`).toHaveText(UI["entrants.status.withdrawn"]!);
+      const chipFits = await chip.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const line = el.closest("h1")!.getBoundingClientRect();
+        return { whole: el.scrollWidth <= el.clientWidth + 0.5, inside: r.left >= line.left - 0.5 && r.right <= line.right + 0.5 };
+      });
+      expect(chipFits, `${width}: the chip is whole, inside the header line`).toEqual({ whole: true, inside: true });
       await expectNoHorizontalScroll(page);
       await crop(s.header.locator("xpath=ancestor::header[1]"), `organiser-console-withdrew-final-${width}`);
       console.log(`R116-4 ${width} console header: ${header}`);
@@ -803,6 +814,7 @@ test.describe("W2b R116-4 — the organiser's console, board card and officials 
     await expect(d.header, "DQ: the console's header keeps the bye word").toContainText(BYE, { timeout: STEP_MS, useInnerText: true });
     await expect(d.header, "DQ: and names the arriving side").toContainText(dqArrivingName);
     await expect(d.header, "DQ: never her").not.toContainText(dqName);
+    await expect(d.header.locator('[data-testid="console-withdrawn"]'), "DQ: and marks nobody as withdrawn (review M-4)").toHaveCount(0);
     console.log(`R116-4 DQ console header: ${await quote(d.header)}`);
     await d.openBoard();
     const dqCard = await quote(d.card);

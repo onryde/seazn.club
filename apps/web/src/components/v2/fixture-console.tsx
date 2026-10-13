@@ -35,7 +35,7 @@ import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
-import { forfeitLedgerOf, forfeitTag } from "@/lib/forfeit-tag";
+import { forfeitLedgerOf, forfeitTag, unseatedWithdrew } from "@/lib/forfeit-tag";
 import { outcomeTagWords, outcomeText } from "@/lib/outcome-text";
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { scoreStatusLabel } from "@/lib/score-status-label";
@@ -999,6 +999,29 @@ export function FixtureConsole({
   // `lib/entrant-name.ts`.
   const homeName = home ? entrantDisplayName(home) : null;
   const awayName = away ? entrantDisplayName(away) : null;
+  // Design review M-4 (audit 4.1): the side the page names in a dead seat (R116-4) may have WITHDRAWN — the run sheet
+  // row that links here marks her (`run-sheet-row.tsx` `seatName`), so the header does too, in the same composition:
+  // her name muted, the entrant status's own word in a chip, each name a `min-w-0 truncate` span, the chip and "vs"
+  // `shrink-0` — a whole-line truncate cut the chip to "With…" at 320. Read off the live outcome and the seats.
+  const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
+  const seatWithdrew = (seat: "home" | "away") =>
+    (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
+  const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
+  const headerName = (seat: "home" | "away", name: string) =>
+    !withdrawnSeat ? (
+      name
+    ) : seatWithdrew(seat) ? (
+      <>
+        <span className="min-w-0 truncate text-slate-500">{name}</span>
+        <span className="shrink-0">
+          <span data-testid="console-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+            {msg("entrants.status.withdrawn")}
+          </span>
+        </span>
+      </>
+    ) : (
+      <span className="min-w-0 truncate">{name}</span>
+    );
   // Feed name map: entrant ids AND every rostered person, so person-carrying
   // events (core.award MOTM, cards, subs) render names instead of "Unknown".
   const entrantNames: Record<string, string> = {};
@@ -1129,11 +1152,11 @@ export function FixtureConsole({
       <header className="card p-5 max-md:p-3">
         <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
           <h1
-            className={`text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
-              detailsOpen ? "" : "max-md:truncate"
+            className={`${withdrawnSeat ? "flex min-w-0 items-baseline " : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+              detailsOpen || withdrawnSeat ? "" : "max-md:truncate"
             }`}
           >
-            {homeName ?? fixture.home_unseated_name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd")}{" "}
+            {headerName("home", homeName ?? fixture.home_unseated_name ?? resolveSlotLabel(fixture.home_slot_label ?? null, msg, "schedule.tbd"))}{" "}
             {/* R3.5 accessibility fix — was text-slate-400 (~2.6:1 on white,
                 under the WCAG AA 4.5:1 floor for normal text); text-slate-600
                 is the token this codebase already uses for legible secondary
@@ -1141,8 +1164,8 @@ export function FixtureConsole({
                 the badge/label convention throughout components/v2). Ratio
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
-            <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
-            {awayName ?? fixture.away_unseated_name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
+            <span className={withdrawnSeat ? "mx-1.5 shrink-0 text-slate-600" : "text-slate-600"}>{msg("schedule.vs")}</span>{" "}
+            {headerName("away", awayName ?? fixture.away_unseated_name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd"))}
           </h1>
           {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
           <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>
