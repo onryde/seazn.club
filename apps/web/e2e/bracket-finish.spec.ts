@@ -164,15 +164,19 @@ function countSettlePosts(page: Page): () => number {
  * names. The suite has no official storage state, so it is minted here — the same rows `acceptedOfficialCovers`
  * (usecases/scorers.ts) reads, and nothing more.
  */
-async function officialScorerPage(browser: Browser, fixtureId: string): Promise<{ page: Page; close: () => Promise<void> }> {
+async function officialScorerPage(browser: Browser, fixtureId: string): Promise<{ page: Page; close: () => Promise<void>; hasSeat: () => Promise<boolean> }> {
   const tag = Math.random().toString(36).slice(2, 8);
   const email = `delivered+w2a-official-${TAG}-${tag}@resend.dev`;
+  let orgId = "";
+  let userId = "";
   await withDb(async (sql) => {
     const [u] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified) values (${email}, ${"W2a Official " + tag}, true) returning id`;
     const [o] = await sql<{ org_id: string }[]>`
       select c.org_id from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
        where f.id = ${fixtureId}`;
+    orgId = o!.org_id;
+    userId = u!.id;
     await sql`insert into org_members (org_id, user_id, role) values (${o!.org_id}, ${u!.id}, 'viewer')`;
     const [p] = await sql<{ id: string }[]>`
       insert into persons (org_id, full_name, user_id, lane) values (${o!.org_id}, ${"W2a Official " + tag}, ${u!.id}, 'official') returning id`;
@@ -186,7 +190,24 @@ async function officialScorerPage(browser: Browser, fixtureId: string): Promise<
   const page = await context.newPage();
   await loginUi(page, email);
   await page.request.post("/api/onboarding/complete", { data: {} }).catch(() => undefined);
-  return { page, close: () => context.close() };
+  // The viewer row is a TEAM SEAT in the shared org (Pro `members.max` = 10, counted by `grantInvite`), and a shard runs every
+  // spec against ONE org: a seat left behind by this helper starves invite-claim.spec.ts of the seats its claims need. So the
+  // seat lives exactly as long as the page: `close()` frees it. (The official/person/fixture_officials rows stay: they take no
+  // seat, and no foreign key points at org_members.)
+  const seatRows = () => withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from org_members where org_id = ${orgId} and user_id = ${userId}`);
+  return {
+    page,
+    close: async () => {
+      try {
+        await context.close();
+      } finally {
+        await withDb(async (sql) => {
+          await sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`;
+        });
+      }
+    },
+    hasSeat: async () => (await seatRows())[0]!.n === 1,
+  };
 }
 
 test.describe("W2a — the console settles a held bracket fixture (Task 11)", () => {
@@ -369,9 +390,11 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
         }
         await crop(p, "console-official-held", w);
       }
+      expect(await official.hasSeat(), "while the official's page is open it holds a team seat (so the release below is not vacuous)").toBe(true);
     } finally {
       await official.close();
     }
+    expect(await official.hasSeat(), "closing the official's page frees the team seat it took (Pro members.max is one pool for the whole shard)").toBe(false);
   });
 
   test("M9 (fix round 1): on an IN-PLAY fixture the organiser is offered Forfeit and Abandon; an official scorer is offered neither", async ({ browser, page, request }) => {
