@@ -712,11 +712,10 @@ describe("ruling 30 — M4a/M4b: ABANDON_RESULTS agrees with the real engine's a
     expect(yes).toBeLessThan(judged);
   });
   it("every ABANDON_RESULTS arm has a config under which the engine really yields a result (no inert arm)", () => {
-    // Engine-declared switches, not organiser reachability: abandonPolicy is an
-    // API-only key (false premise 10), so it is passed as a raw override here.
+    // Engine-declared switches, passed as raw overrides (the variant sweep above judges the editor's own values).
     const on: Record<string, { preset?: string; overrides?: Record<string, unknown>; values?: Record<string, string> }[]> = {
       football: [{ overrides: { abandonPolicy: "award" } }],
-      hockey: [{ overrides: { abandonPolicy: "award" } }],
+      hockey: [{ overrides: { abandonPolicy: "award" } }, { overrides: { abandonPolicy: "q4_stands" } }],
       icehockey: [{ overrides: { abandonPolicy: "award" } }],
       cricket: [{ values: { dls: "on" } }, { preset: "test" }],
     };
@@ -727,7 +726,7 @@ describe("ruling 30 — M4a/M4b: ABANDON_RESULTS agrees with the real engine's a
       expect(resultOnAbandon(s, cfg), `${s} ${JSON.stringify(c)}`).toBe(true);
       judged++;
     }
-    expect(judged).toBe(5);
+    expect(judged).toBe(6);
   });
   it("M4b binds only through a committed variant, and drops every sport the organiser cannot reach (configKeysFor, the editor's own key set)", () => {
     let judged = 0;

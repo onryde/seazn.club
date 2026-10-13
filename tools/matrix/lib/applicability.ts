@@ -209,7 +209,9 @@ const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
 
 /** Ruling 30, M4b: the cfg lets an abandon YIELD A RESULT (engine applyAbandon).
  *  football/hockey/icehockey only under abandonPolicy "award" (football.ts:1657,
- *  period/kernel.ts:1450; every schema defaults to "replay"). Cricket when DLS
+ *  period/kernel.ts:1450; every schema defaults to "replay"), and hockey also
+ *  under "q4_stands" once the last regulation period has started (kernel.ts
+ *  applyAbandon; W2c Task 7). Cricket when DLS
  *  is on (a chase past minOversForResult, cricket.ts:1152-1161) or at two
  *  innings a side (a draw, cricket.ts:1143). Every other sport's abandon
  *  replays (null) or records no_result. Keys recorded and pinned against each
@@ -217,7 +219,9 @@ const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
  *  real fold (applicability.test.ts). */
 export const ABANDON_RESULTS: Readonly<Record<string, (cfg: Readonly<Record<string, unknown>>) => boolean>> = Object.freeze({
   football: (c) => c.abandonPolicy === "award",
-  hockey: (c) => c.abandonPolicy === "award",
+  // W2c Task 7 (HK-AB-2): hockey's q4_stands lets the abandon stand once the last regulation period has started - a
+  // result - so it is a second switch; ice hockey does not offer it.
+  hockey: (c) => c.abandonPolicy === "award" || c.abandonPolicy === "q4_stands",
   icehockey: (c) => c.abandonPolicy === "award",
   cricket: (c) => (c.dls as { enabled?: unknown } | undefined)?.enabled === true || c.inningsPerSide === 2,
 });
@@ -301,7 +305,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   // default (replay → null, or no_result below cricket's minimum overs) —
   // a guard in applicability.test.ts folds it for every sport.
   M4a: ALWAYS,
-  M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
+  M4b: rule(abandonWithResult, "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets (W2c Q10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
   M5: rule(
     or(drawRefusedHere, tieInBracket),
     "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
