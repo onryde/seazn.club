@@ -109,10 +109,8 @@ import nlPublic from "@/dictionaries/nl/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import { registry, type AnySportModule } from "@seazn/engine/sport";
+import { competitionTag, divisionTag, orgTag } from "../cache-tags";
 import {
-  competitionTag,
-  divisionTag,
-  orgTag,
   REVALIDATE_FAST,
   type PublicCompetition,
   type PublicDivision,
