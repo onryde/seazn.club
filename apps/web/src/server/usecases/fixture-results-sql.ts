@@ -51,13 +51,21 @@ type Tx = postgres.TransactionSql;
  * which `fixtures.status` is NOT — `fixtureStatusFromFold` walks a fixture
  * back to `scheduled` when a `core.start` is voided, so a status test alone
  * can silently stop refusing.
+ *
+ * One `match_states` row is no evidence (Loop R M-8): the state F14's departed-qualifier walkover gets at generation
+ * (`writeAwardedMatchState`) — `last_seq` 0, folding no event, beside an award over TWO seated sides. That is the
+ * generator's own line N2 (below) rules is no result, and its score does not make it one. Ruling 116's walkover over
+ * a dead seat writes the same kind of row with HER SEAT EMPTY (`awardSeededByes`); that one stays evidence, held on
+ * the board as any walkover is (R116-3). Every other row — a seq-0 row beside no award included — still is evidence.
  */
 export function fixtureEvidenceSql(tx: Tx, on = "f") {
   const f = tx(on);
   return tx`
     ${f}.config_snapshot is not null
     or exists (select 1 from score_events se where se.fixture_id = ${f}.id)
-    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id)
+    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id
+                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)
+                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))
     or exists (select 1 from match_reports mr where mr.fixture_id = ${f}.id)
     or exists (select 1 from official_marks om where om.fixture_id = ${f}.id)
     or exists (select 1 from suspensions s where s.fixture_id = ${f}.id)`;

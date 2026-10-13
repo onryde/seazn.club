@@ -28,6 +28,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { generateSingleElim } from "@seazn/engine/scheduling";
+import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -81,7 +82,11 @@ interface Rig {
  *  writes when an `on_complete` progression resolves (stages.ts ~line 3504),
  *  written directly here so the test drives the generation branch under
  *  change rather than a league play-out that only reaches it incidentally. */
-async function seedQualifiedStage(field: number, kind: "knockout" | "league"): Promise<Rig> {
+async function seedQualifiedStage(
+  field: number,
+  kind: "knockout" | "league",
+  sport: { key: string; variant: string; config: Record<string, unknown> } = { key: "generic", variant: "score", config: GENERIC_CONFIG },
+): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -92,9 +97,9 @@ async function seedQualifiedStage(field: number, kind: "knockout" | "league"): P
   const division = await createDivision(auth, comp.id, {
     name: "Open",
     slug: "open-" + randomUUID().slice(0, 6),
-    sport_key: "generic",
-    variant_key: "score",
-    config: GENERIC_CONFIG,
+    sport_key: sport.key,
+    variant_key: sport.variant,
+    config: sport.config,
   });
   const entrants = await createEntrants(
     auth,
@@ -250,6 +255,44 @@ describe.runIf(HAS_DB)("a qualifier who departs before Generate — walkover, no
     expect(rebuilt.removed).toBeGreaterThan(0);
     expect(await walkovers()).toHaveLength(1);
   });
+
+  it("M-8 (b): withdraw then generate stores the walkover's score as well — the same match state the cascade's walkover writes once the bracket exists", async () => {
+    // single-sport: badminton (its walkover credits a game score, BD-WO-1). The score is the awarded-state writer's,
+    // swept over every sport in engine-db/__tests__/awarded-state.test.ts; this pins that F14's generation calls it.
+    const bwf = builtinModules.find((m) => m.key === "badminton")!;
+    const BADMINTON = { key: "badminton", variant: "bwf", config: bwf.variants.bwf as Record<string, unknown> };
+    const lineOf = async (rig: Rig, departed: string) => {
+      const [row] = await sql<{ id: string; ext_key: string; status: string; outcome: { kind?: string; reason?: string } | null }[]>`
+        select id, ext_key, status, outcome from fixtures
+        where stage_id = ${rig.stageId} and round_no = 1 and ${departed} in (home_entrant_id, away_entrant_id)`;
+      const [state] = await sql<{ last_seq: number; summary: unknown }[]>`select last_seq, summary from match_states where fixture_id = ${row!.id}`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${row!.id}`;
+      return { extKey: row!.ext_key, verdict: [row!.status, row!.outcome?.kind, row!.outcome?.reason], state, events: n };
+    };
+    // The reference: generate, then withdraw — the cascade records the walkover (`core.forfeit{by, "withdrew"}`).
+    const ref = await seedQualifiedStage(8, "knockout", BADMINTON);
+    await generateStageFixtures(ref.auth, ref.stageId);
+    await sql`update divisions set status = 'active' where id = ${ref.divisionId}`;
+    await withdrawEntrantCascade(ref.auth, ref.idOf("E3"));
+    const cascaded = await lineOf(ref, ref.idOf("E3"));
+    expect([cascaded.verdict, cascaded.events, cascaded.state?.last_seq], "rig: the cascade's recorded walkover").toEqual([["forfeited", "award", "withdrew"], 1, 1]);
+    // Withdraw, then generate: F14 bakes the same award at generation.
+    const f14 = await seedQualifiedStage(8, "knockout", BADMINTON);
+    await withdrawEntrantCascade(f14.auth, f14.idOf("E3"));
+    await generateStageFixtures(f14.auth, f14.stageId);
+    const baked = await lineOf(f14, f14.idOf("E3"));
+    expect([baked.extKey, baked.verdict], "the same line, the same award").toEqual([cascaded.extKey, cascaded.verdict]);
+    expect(baked.state, "a match state is written beside the award").toBeDefined();
+    // Nobody played it: no event, the state at seq 0 (X-PS-1) — and the score every surface reads is the walkover's.
+    expect([baked.events, baked.state?.last_seq]).toEqual([0, 0]);
+    // The two rigs seat different entrants: each summary is read with its rig's ids as their names (E1…E8).
+    const named = (rig: Rig, summary: unknown) => {
+      let text = JSON.stringify(summary);
+      for (const id of rig.qualified) text = text.replaceAll(id, rig.nameOf(id)!);
+      return JSON.parse(text) as unknown;
+    };
+    expect(named(f14, baked.state?.summary), "the same walkover score either way round").toEqual(named(ref, cascaded.state?.summary));
+  }, 120_000);
 
   it("promotes nobody: no qualifier inherits another's seed", async () => {
     const rig = await seedQualifiedStage(8, "knockout");

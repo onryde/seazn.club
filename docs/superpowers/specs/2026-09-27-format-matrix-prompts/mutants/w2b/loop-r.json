@@ -915,5 +915,95 @@
     "name": "M-5: both finalists gone after play on the final"
    }
   ]
+ },
+ {
+  "id": "lr-m8-dw-takes-colour",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    if (o?.kind !== \"award\" && o?.kind !== \"double_walkover\") {\n",
+  "replace": "    if (o?.kind !== \"award\") {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/swiss-colour-history-double-walkover.test.ts"
+    ],
+    "name": "both round-1 boards double walkovers"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-f14-no-awarded-state",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      if (r.status === \"forfeited\" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);\n",
+  "replace": "      if (false) await writeAwardedMatchState(tx, r.id);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "withdraw then generate stores the walkover"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-f14-bye-gets-state",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      if (r.status === \"forfeited\" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);\n",
+  "replace": "      if (r.status === \"forfeited\") await writeAwardedMatchState(tx, r.id);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "a departed qualifier holding a BYE"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-counts-f14",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id\n                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)\n                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))",
+  "replace": "    or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/departed-qualifier-walkover.test.ts"
+    ],
+    "name": "an F14 walkover is not a result"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-drops-r116",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)\n                          and ${f}.home_entrant_id is not null and ${f}.away_entrant_id is not null))",
+  "replace": "                 and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "R116-3: the organiser's exports name her in her dead seat"
+   }
+  ]
+ },
+ {
+  "id": "lr-m8-evidence-null-trap",
+  "file": "apps/web/src/server/usecases/fixture-results-sql.ts",
+  "find": "coalesce(${f}.outcome ->> 'kind' = 'award', false)",
+  "replace": "${f}.outcome ->> 'kind' = 'award'",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/swiss-shell-fixtures.test.ts"
+    ],
+    "name": "Unpair refuses a match_state with no score_events"
+   }
+  ]
  }
 ]

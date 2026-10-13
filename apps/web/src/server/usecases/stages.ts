@@ -1176,7 +1176,9 @@ async function swissGen(
     inRound.set(f.round_no, forRound);
     // A forfeited game takes no colour — the engine's colour history skips
     // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
-    if (o?.kind !== "award") {
+    // Loop R M-8: a double walkover is a forfeit too (nobody played; boardgame's
+    // `colorOf` reads `state.forfeited`), so it holds no colour either.
+    if (o?.kind !== "award" && o?.kind !== "double_walkover") {
       (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
       (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
     }
@@ -2607,6 +2609,13 @@ async function generateStageFixturesWrite(
       });
     if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
     for (const r of newRows) byKey.set(r.ext_key, r.id);
+    // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a
+    // withdrawal would record as `core.forfeit{by, "withdrew"}` once the bracket exists — shows that walkover's score
+    // too, so "withdraw then generate" reads as "generate then withdraw" does. No event records it (nobody played,
+    // X-PS-1): the award's state is written beside it, as `awardSeededByes` writes its own. A bye credits no score.
+    for (const r of newRows) {
+      if (r.status === "forfeited" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);
+    }
     // Pair next reports seated shell rows as `created` for UI notices.
     const created = newRows.length + swissSeatedCount;
     const createdIds = newRows.map((r) => r.id);
