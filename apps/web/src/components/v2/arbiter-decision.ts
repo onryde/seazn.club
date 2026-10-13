@@ -13,9 +13,11 @@ import { ApiV1Error } from "@/lib/client-v1";
 
 export type ArbiterRequestKind = "resync" | "override" | "goOn" | "settle";
 
-/** The four buttons of "Settle the result now…" (resolve.ts RESOLVE_KINDS:
- *  restated here because a client component cannot import server code). */
-export type SettleChoice = "home_wins" | "away_wins" | "draw" | "no_result";
+/** The buttons of "Settle the result now…" (resolve.ts RESOLVE_KINDS:
+ *  restated here because a client component cannot import server code).
+ *  `no_result` is the void and `double_walkover` W2b's — each sent by its own
+ *  button, so a stale screen is refused rather than given the other (M-7). */
+export type SettleChoice = "home_wins" | "away_wins" | "draw" | "no_result" | "double_walkover";
 
 export type ArbiterNotice =
   | { boardId: string; kind: "resynced"; adopted: number }

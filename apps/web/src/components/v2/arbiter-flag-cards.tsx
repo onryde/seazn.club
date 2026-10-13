@@ -225,8 +225,9 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
  *  only (spec §3.6). The choice in place of a winner is the server's own
  *  reading, carried on the row (`noResultOffer`, I-3): "No result" where the
  *  void is offered; where both players stayed away, W2b's double walkover by
- *  its own name — `wide`, a row of its own, so the longer label is never cut
- *  (fix round 3); nothing where it is refused. */
+ *  its own name and its own kind (`double_walkover`, fix round 4 M-7: the
+ *  server refuses the other one) — `wide`, a row of its own, so the longer
+ *  label is never cut (fix round 3); nothing where it is refused. */
 export function settleChoices(
   board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; noResultOffer: NoResultOffer },
   f: Fmt,
@@ -246,7 +247,7 @@ export function settleChoices(
     ...(board.noResultOffer.kind === "void"
       ? [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]
       : board.noResultOffer.kind === "double_walkover"
-        ? [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.doubleWalkover"), wide: true as const }]
+        ? [{ choice: "double_walkover" as const, label: f.t("externalPlay.resolve.doubleWalkover"), wide: true as const }]
         : []),
   ];
 }
