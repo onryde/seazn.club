@@ -8,6 +8,8 @@ import { z } from "zod";
 // does, so the wire schema reuses the engine's zod rather than restating it —
 // a second declaration is a second thing to drift.
 import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/scheduling";
+// Loop R M-14: the award's closed reason vocabulary, the engine's own list (loads bare under strip-types).
+import { AWARD_REASONS } from "@seazn/engine/core";
 // Type-only (erased under strip-types, so openapi-gen.ts still loads this
 // file bare): the TakeRuleSchema tie below compares against it.
 import type { TakeRule } from "@seazn/engine/competition";
@@ -5471,8 +5473,13 @@ export const PublicFixtureOutcome = z
   .object({
     kind: z.string().optional(),
     winner: z.string().optional(),
-    loser: z.string().optional(),
+    // W2b (D2): an award's loser, `null` for a bye — nobody lost to the side that advanced.
+    loser: z.string().nullable().optional(),
     method: z.string().optional(),
+    /** W2b (D1, D2; Loop R M-14) — WHY an award was given, from the engine's closed vocabulary (`AWARD_REASONS`: the
+     *  four forfeit reasons and the system's `bye`). Present on every award the engine writes; absent on every other
+     *  kind, and on an award stored before W2b (which carried its reason as `method`). */
+    reason: z.enum(AWARD_REASONS).optional(),
   })
   .nullable();
 

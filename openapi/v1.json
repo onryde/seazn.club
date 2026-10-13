@@ -65774,10 +65774,27 @@
                                   "type": "string"
                                 },
                                 "loser": {
-                                  "type": "string"
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 },
                                 "method": {
                                   "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "walkover",
+                                    "retired",
+                                    "disqualified",
+                                    "withdrew",
+                                    "bye"
+                                  ]
                                 }
                               },
                               "additionalProperties": false
