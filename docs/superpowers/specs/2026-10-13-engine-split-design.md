@@ -1,6 +1,6 @@
 # Engine split — design
 
-**Status: WRITTEN, awaiting owner review of this file (2026-10-13).** Every
+**Status: APPROVED by the owner (2026-10-13, "approve"), including D29.** Every
 decision below was ruled by the owner in chat, one question at a time; the
 ledger (§16) records each with the owner's words. No code moves until W2e
 merges (ruling 131), except Phase 1, which the owner explicitly allowed (D7).
@@ -615,4 +615,4 @@ Flip visibility on any of the three repos, then:
 | D26 | 2026-10-13 | Per-sport fold epoch (`FOLD_EPOCH`) refines D15: phones send `{sport, epoch}`; the server refuses only the sport that moved. In-progress-match behaviour owed to capture S2. | OWNER | "Ok" to Section 1 |
 | D27 | 2026-10-13 | Web gets the gRPC client by vendoring the proto into `packages/scheduler` (`VENDORED.json` `{placementCommit, sha256, imageTag}`) and generating stubs; placement CI runs `buf breaking`; placement publishes **only a container image** to GHCR, which web CI, e2e and bench pull. | OWNER | "Ok" to the D27 amendment |
 | D28 | 2026-10-13 | CI per repo per §10, including registry auth (§10.4) and the going-private delta (§13). | OWNER | "approve" to Section 2 |
-| D29 | 2026-10-13 | Spec-writing defaults, NOT separately ruled — flagged for the owner's review of this file: `solve` and `log` are **required** fields (§5.1, inert-seam reason); package renamed in Phase 1 with a pnpm workspace alias (§5.2); `publishConfig.exports` keeps the workspace on source until 2b (§5.2); min-epoch refusal is HTTP 426 `engine_outdated`, and a capture request without an epoch is refused `engine_epoch_missing` (§5.6); weekly Stryker gets its own `STRYKER_WEEKLY_ENABLED` (§10.1); **D20.3's overlap replaced by ordering** — the monorepo Stryker copy cannot outlive `packages/engine`, so the cutover PR merges only after the engine repo's cold run passes parity, which keeps the freeze at ~1 day (§7, §11.3). | REC | this file |
+| D29 | 2026-10-13 | Spec-writing defaults, approved with the spec: `solve` and `log` are **required** fields (§5.1, inert-seam reason); package renamed in Phase 1 with a pnpm workspace alias (§5.2); `publishConfig.exports` keeps the workspace on source until 2b (§5.2); min-epoch refusal is HTTP 426 `engine_outdated`, and a capture request without an epoch is refused `engine_epoch_missing` (§5.6); weekly Stryker gets its own `STRYKER_WEEKLY_ENABLED` (§10.1); **D20.3's overlap replaced by ordering** — the monorepo Stryker copy cannot outlive `packages/engine`, so the cutover PR merges only after the engine repo's cold run passes parity, which keeps the freeze at ~1 day (§7, §11.3). | OWNER | "approve" to the written spec |
