@@ -524,6 +524,68 @@ test.describe("online chess — the public fixture page", () => {
     await anon.close();
   });
 
+  // T17 round B, D: a full-page capture draws the site's sticky header wherever the capture's viewport ended, which
+  // put it across the "Your board" card in a 320 shot. This reads the live page instead: what a tap at each of the
+  // card's lines meets, at rest and with the card scrolled up to the header.
+  test("D: at 320 the site's sticky header sits over no line of Your board — at rest, and scrolled up to it", async ({ browser, request }) => {
+    test.setTimeout(180_000);
+    const room = await seedMatchRoom(request, { names: [longName(), "Bo Lindqvist"] });
+    const ctx = await cold(browser);
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width: 320, height: 700 });
+    await loginUi(p, room.white.email, room.fixturePath);
+    await p.waitForURL((u) => u.pathname === room.fixturePath);
+    const card = p.getByTestId("your-board");
+    await expect(card).toHaveAttribute("data-state", "check_in", { timeout: 30_000 });
+    /** Each line of the card that is fully on screen, hit-tested at its left, centre and right: a hit that lands in
+     *  the sticky header is a line the header hides. */
+    const read = () =>
+      p.evaluate(() => {
+        const header = document.querySelector("header.sticky")!.getBoundingClientRect();
+        const cardEl = document.querySelector('[data-testid="your-board"]')!;
+        const lines = [...cardEl.querySelectorAll("p"), ...cardEl.querySelectorAll('[data-testid="your-board-link"]')];
+        let checked = 0;
+        const hidden: string[] = [];
+        for (const line of lines) {
+          const r = line.getBoundingClientRect();
+          if (r.top < 0 || r.bottom > window.innerHeight) continue;
+          for (const x of [r.left + 4, r.left + r.width / 2, r.right - 4]) {
+            const top = document.elementFromPoint(x, r.top + r.height / 2);
+            if (top === null || !(top === line || line.contains(top))) hidden.push(`${line.textContent} at x=${Math.round(x)}`);
+            checked += 1;
+          }
+        }
+        return { headerTop: Math.round(header.top), headerBottom: Math.round(header.bottom), cardTop: Math.round(cardEl.getBoundingClientRect().top), lines: lines.length, checked, hidden };
+      });
+
+    await p.evaluate(() => window.scrollTo(0, 0));
+    const rest = await read();
+    expect(rest.lines, "anti-vacuity: title, state and the link").toBe(3);
+    expect(rest.checked, "every line on screen at rest").toBe(9);
+    expect(rest.headerTop, "at rest the header is at the top").toBe(0);
+    expect(rest.cardTop, "the card starts below it").toBeGreaterThanOrEqual(rest.headerBottom);
+    expect(rest.hidden).toEqual([]);
+    if (SHOTS) await p.screenshot({ path: join(SHOTS, "d-your-board-rest-320.png"), caret: "initial" });
+
+    // Scrolled until the card's top meets the header's bottom: the header stays put and the card reads in full.
+    await p.evaluate(() => {
+      const header = document.querySelector("header.sticky")!.getBoundingClientRect();
+      window.scrollBy(0, document.querySelector('[data-testid="your-board"]')!.getBoundingClientRect().top - header.bottom);
+    });
+    const scrolled = await read();
+    expect(scrolled.headerTop, "premise: the page did scroll, and the header stuck").toBe(0);
+    expect(scrolled.cardTop, "premise: the card is up against the header").toBe(scrolled.headerBottom);
+    expect(scrolled.checked).toBe(9);
+    expect(scrolled.hidden).toEqual([]);
+    if (SHOTS) await p.screenshot({ path: join(SHOTS, "d-your-board-scrolled-320.png"), caret: "initial" });
+
+    // The positive pair: 24px further, the title's middle is under the header — and the hit-test says so.
+    await p.evaluate(() => window.scrollBy(0, 24));
+    const under = await read();
+    expect(under.hidden.some((h) => h.startsWith(uiEn["externalPlay.yourBoard.title"]!)), JSON.stringify(under.hidden)).toBe(true);
+    await ctx.close();
+  });
+
   test("the watch panel: the game's position, view-only, no Lichess link, kept current by the poll — at 320, 768 and 1280", async ({
     browser,
     request,
@@ -637,6 +699,10 @@ test.describe("online chess — the public fixture page", () => {
     await expect(page.getByTestId("watch-clock-black")).toContainText(initial);
     await expect(panel).toContainText(uiEn["externalPlay.watch.viewOnly"]);
     await expect(page.locator('a[href*="lichess.org"]')).toHaveCount(0);
+    // C: the header names the format by the time control — the kit's division declares Classical, and Lichess plays
+    // 10+5 as Rapid.
+    await expect(page.getByTestId("mc-meta-line")).toContainText(uiEn["variant.boardgame.rapid"]!);
+    await expect(page.getByTestId("mc-meta-line")).not.toContainText(uiEn["variant.boardgame.classical"]!);
     expect(await noSidewaysScroll(page)).toBe(3);
     await shoot(page, "b-not-started");
 
