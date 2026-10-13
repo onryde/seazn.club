@@ -15,7 +15,7 @@
 // Anti-vacuity: the sweeps count what they checked and fail on zero.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Chess } from "chess.js";
+import { Chess, type Square } from "chess.js";
 import fc from "fast-check";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -91,7 +91,7 @@ describe("lichess fixture server — the measured facts", () => {
     expect(call?.body).toMatchObject({ "clock.limit": "300", "clock.increment": "3", rated: "false", color: "white", variant: "standard" });
   });
 
-  it("the challenge is pending in the challenger's outgoing list until accepted, then the game is in BOTH players' ongoing lists", async () => {
+  it("a fresh challenge is pending in the challenger's outgoing list (it leaves after ~30 s unaccepted: the OFFLINE case below), and once accepted the game is in BOTH players' ongoing lists", async () => {
     const made = await api.createChallengeToUser({ whiteToken: W.token, blackUsername: B.id, limitSeconds: 300, incrementSeconds: 3 });
     if (!made.ok) throw new Error("create refused");
     const before = await api.listOutgoingChallenges(W.token);
@@ -132,6 +132,45 @@ describe("lichess fixture server — the measured facts", () => {
     expect(await bad.json()).toEqual({ ok: true });
     const read = await api.readGameStream({ token: W.token, gameId: id });
     expect(read.ok && read.game.movesUci).toEqual(["e2e4", "e7e6"]);
+  });
+
+  // I1 (T17 review): the stub used to test an always-truthy object, so an illegal move answered 200 and still stamped a
+  // clock entry — which shifts every later M11 clock onto the wrong side. Lichess refuses an illegal move; its body is
+  // not measured, so the stub's is a named `fixture:` 400 (header).
+  it("I1: an ILLEGAL move is refused with a 400, and changes nothing — moves, the export's clocks, lastMoveAt", async () => {
+    const id = await startGame(300, 3);
+    await play(id, "e2e4", "e7e5", "g1f3");
+    const exportOf = async () => (await (await fetch(`${fx.url}/game/export/${id}`)).json()) as { moves: string; clocks: number[]; lastMoveAt: number };
+    const before = await exportOf();
+    expect(before.clocks, "premise: one clock per ply").toHaveLength(3);
+    // Black's king two squares forward: the syntax is fine (assertUci passes it), the position refuses it.
+    const r = await api.submitMove({ token: B.token, gameId: id, uci: "e8e6" });
+    expect(r).toMatchObject({ ok: false });
+    expect(!r.ok && r.raw).toContain("fixture: illegal move");
+    const raw = await rawPost(`/api/board/game/${id}/move/e8e6`, B.token);
+    expect(raw.status).toBe(400);
+    const read = await api.readGameStream({ token: W.token, gameId: id });
+    expect(read.ok && read.game.movesUci).toEqual(["e2e4", "e7e5", "g1f3"]);
+    expect(await exportOf(), "moves, clocks and lastMoveAt as they were").toEqual(before);
+    // The next legal move is still Black's, and its clock lands as the 4th entry — still one per ply.
+    expect(await api.submitMove({ token: B.token, gameId: id, uci: "b8c6" })).toEqual({ ok: true });
+    const after = await exportOf();
+    expect(after.moves.split(" ")).toHaveLength(4);
+    expect(after.clocks).toHaveLength(4);
+  });
+
+  // M1 (T17 review): DERIVED FROM SOURCE, not measured — scalachess core/src/main/scala/format/Uci.scala:42 reads the
+  // fifth character as `move.lift(4).flatMap(Role.promotable)`, so a non-promotable one is None and the pawn queens
+  // (the same rule that queens a bare `b7a8`). Raw: our adapter's assertUci refuses `b7a8x` before the wire.
+  it("M1: a junk suffix on a promotion is dropped and the pawn queens — b7a8x is played as b7a8q", async () => {
+    const id = await startGame();
+    await play(id, "a2a4", "b7b5", "a4b5", "a7a6", "b5a6", "c8b7", "a6b7", "h7h6");
+    const r = await rawPost(`/api/board/game/${id}/move/b7a8x`, W.token);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true });
+    const read = await api.readGameStream({ token: B.token, gameId: id });
+    expect(read.ok && read.game.movesUci.at(-1)).toBe("b7a8q");
+    expect(read.ok && read.game.movesUci).toHaveLength(9);
   });
 
   it("M6: out-of-turn and game-over answer ONE 400 body, verbatim — the stub does not disambiguate them either", async () => {
@@ -299,6 +338,63 @@ describe("lichess fixture server — the measured facts", () => {
     const done = (await (await fetch(`${fx.url}/game/export/${id}`)).json()) as Record<string, unknown>;
     expect(done.status).toBe("draw"); // spike-battery2.log §E
     expect("winner" in done).toBe(false);
+  });
+
+  // I2 (T17 review): the draw rules as MEASURED live (t17-live-lichess.md §2, 2026-10-13; lila BotPlayer.scala:84-90 /
+  // Game.playerCanOfferDraw agree). Every call answers 200 {"ok":true} — the stream's wdraw/bdraw is the only witness.
+  const offers = async (id: string) => {
+    const r = await api.readGameStream({ token: B.token, gameId: id });
+    if (!r.ok) throw new Error("stream refused");
+    return r.game.drawOffer;
+  };
+  const drawCall = (id: string, by: { token: string }, accept: boolean) => api.offerOrAcceptDraw({ token: by.token, gameId: id, accept });
+
+  it("I2 'no (offerer)' / 'no (opponent)': the offerer's own draw/no leaves the offer standing; the opponent's clears it", async () => {
+    const id = await startGame();
+    await play(id, "e2e4", "e7e5");
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await offers(id)).toEqual({ white: true, black: false });
+    expect(await drawCall(id, W, false), "200 either way").toEqual({ ok: true });
+    expect(await offers(id), "the offerer's no is a no-op").toEqual({ white: true, black: false });
+    expect(await drawCall(id, B, false)).toEqual({ ok: true });
+    expect(await offers(id), "the opponent's no declines it").toEqual({ white: false, black: false });
+  });
+
+  it("I2 'a'–'d': no offer before ply 2; a re-offer within 20 plies of the side's last offer is a silent no-op — refused at 4 and at 22, allowed at 23 (2 < 23 - 20)", async () => {
+    // A Ruy Lopez main line: 23 plies and no position repeated.
+    const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6", "e1g1", "f8e7", "f1e1", "b7b5",
+      "a4b3", "d7d6", "c2c3", "e8g8", "h2h3", "c6b8", "d2d4", "b8d7", "b1d2", "c8b7", "b3c2"];
+    const id = await startGame(900, 10);
+    // a, b: no offer before ply 2, from either side — and a no-op there is not recorded as an offer (c, below).
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await offers(id), "ply 0: no-op").toEqual({ white: false, black: false });
+    expect(await api.submitMove({ token: W.token, gameId: id, uci: LINE[0]! })).toEqual({ ok: true });
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await drawCall(id, B, true)).toEqual({ ok: true });
+    expect(await offers(id), "ply 1: no-op for both").toEqual({ white: false, black: false });
+    expect(await api.submitMove({ token: B.token, gameId: id, uci: LINE[1]! })).toEqual({ ok: true });
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await offers(id), "ply 2: offered").toEqual({ white: true, black: false });
+    expect(await api.submitMove({ token: W.token, gameId: id, uci: LINE[2]! })).toEqual({ ok: true });
+    expect(await offers(id), "e1: White's own move keeps White's offer").toEqual({ white: true, black: false });
+    expect(await api.submitMove({ token: B.token, gameId: id, uci: LINE[3]! })).toEqual({ ok: true });
+    expect(await offers(id), "e2: Black's move declined it").toEqual({ white: false, black: false });
+    expect(await drawCall(id, W, true), "ply 4: 200").toEqual({ ok: true });
+    expect(await offers(id), "ply 4: no-op (2 >= 4 - 20)").toEqual({ white: false, black: false });
+    expect(await drawCall(id, B, true)).toEqual({ ok: true });
+    expect(await offers(id), "c: Black never offered, so Black may").toEqual({ white: false, black: true });
+    expect(await drawCall(id, B, false)).toEqual({ ok: true });
+    expect(await offers(id), "Black's own no: still standing").toEqual({ white: false, black: true });
+    for (const [i, m] of LINE.slice(4, 22).entries()) {
+      const r = await api.submitMove({ token: (4 + i) % 2 === 0 ? W.token : B.token, gameId: id, uci: m });
+      if (!r.ok) throw new Error(`ply ${5 + i} ${m} refused: ${r.code} ${r.raw}`);
+    }
+    expect(await offers(id), "White's move at ply 5 declined Black's offer").toEqual({ white: false, black: false });
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await offers(id), "ply 22: no-op (2 >= 22 - 20)").toEqual({ white: false, black: false });
+    expect(await api.submitMove({ token: W.token, gameId: id, uci: LINE[22]! })).toEqual({ ok: true });
+    expect(await drawCall(id, W, true)).toEqual({ ok: true });
+    expect(await offers(id), "ply 23: allowed (2 < 23 - 20), on the opponent's turn").toEqual({ white: true, black: false });
   });
 
   it("a checkmate ends the game as `mate`, won by the mover", async () => {
@@ -513,89 +609,160 @@ describe("recorded payloads, through the REAL parser (§8.7)", () => {
 //
 // A tiny model of the MEASURED rules, written here and nowhere near the stub:
 // moves alternate (M6 refuses the other side's and any move after the end);
-// a resign before ply 2 aborts with no winner, from ply 2 the other side wins
-// (M9); an abort is allowed before ply 2 (lila `abortable`); a yes to the
-// opponent's standing offer draws (spike §E), and a move declines it. Legal
-// moves come from chess.js, an independent library, on the model's own board.
+// an illegal move by the side to move is refused and changes nothing (I1); a
+// resign before ply 2 aborts with no winner, from ply 2 the other side wins
+// (M9); an abort is allowed before ply 2 (lila `abortable`). Draws follow the
+// LIVE table (t17-live-lichess.md §2, 2026-10-13): no offer before ply 2; a yes
+// to the opponent's standing offer draws (spike §E); a yes while one's own
+// offer stands, or within 20 plies of one's last offer, is a no-op; `no`
+// declines only the opponent's offer; a move declines the opponent's offer
+// and keeps the mover's own. Legal moves come from chess.js, an independent
+// library, on the model's own board.
 type Act =
-  | { kind: "move"; by: "white" | "black"; pick: number }
+  | { kind: "move" | "illegal"; by: "white" | "black"; pick: number }
   | { kind: "resign" | "abort" | "drawYes" | "drawNo"; by: "white" | "black" };
 
+const side = fc.constantFrom("white" as const, "black" as const);
 const actArb: fc.Arbitrary<Act> = fc.oneof(
-  { weight: 6, arbitrary: fc.record({ kind: fc.constant("move" as const), by: fc.constantFrom("white" as const, "black" as const), pick: fc.nat(40) }) },
-  { weight: 1, arbitrary: fc.record({ kind: fc.constantFrom("resign" as const, "abort" as const, "drawYes" as const, "drawNo" as const), by: fc.constantFrom("white" as const, "black" as const) }) },
+  { weight: 8, arbitrary: fc.record({ kind: fc.constant("move" as const), by: side, pick: fc.nat(40) }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("illegal" as const), by: side, pick: fc.nat(4095) }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("drawYes" as const), by: side }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("drawNo" as const), by: side }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constantFrom("resign" as const, "abort" as const), by: side }) },
 );
 
+const FILES = "abcdefgh";
+const SQUARES = [...FILES].flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((r) => `${f}${r}`));
+/** A move the rules refuse on `board`: no legal move shares its from/to, and it is not a king onto its own rook (which
+ *  lila reads as a castle). Syntactically valid UCI, so our adapter sends it. */
+function illegalOn(board: Chess, pick: number): string {
+  const legal = new Set(board.moves({ verbose: true }).map((m) => m.from + m.to));
+  for (let i = 0; i < 64 * 64; i++) {
+    const n = (pick + i) % (64 * 64);
+    const from = SQUARES[Math.floor(n / 64)]!;
+    const to = SQUARES[n % 64]!;
+    if (from === to || legal.has(from + to)) continue;
+    const piece = board.get(from as Square);
+    const target = board.get(to as Square);
+    if (piece?.type === "k" && target?.type === "r" && target.color === piece.color) continue;
+    return from + to;
+  }
+  throw new Error("illegalOn: no illegal move found");
+}
+
+type Paths = { illegalRefused: number; offered: number; accepted: number; ownOfferNoKept: number; windowNoOp: number; opponentNoCleared: number };
+type Ends = { resign: number; aborted: number; draw: number; mate: number; running: number };
+
+/** Plays `acts` against a fresh game through the real adapter and checks the stub against the model after EVERY
+ *  action; counts the model paths it took into `paths` and how the game ended into `ends`. */
+async function runActs(acts: Act[], paths: Paths, ends: Ends): Promise<number> {
+  fx.reset();
+  fx.registerToken(W.token, W.id);
+  fx.registerToken(B.token, B.id);
+  const id = await startGame();
+  const board = new Chess();
+  const model = { status: "started", winner: null as null | "white" | "black", offer: null as null | "white" | "black", plies: [] as string[] };
+  const lastOffer: Record<"white" | "black", number | null> = { white: null, black: null };
+  const tok = (c: "white" | "black") => (c === "white" ? W.token : B.token);
+  const other = (c: "white" | "black") => (c === "white" ? "black" : "white");
+  let actions = 0;
+  for (const a of acts) {
+    actions++;
+    const over = model.status !== "started";
+    const turn = board.turn() === "w" ? "white" : "black";
+    if (a.kind === "move" || a.kind === "illegal") {
+      const legal = board.moves({ verbose: true });
+      const mv = a.kind === "move" ? legal[a.pick % Math.max(1, legal.length)] : undefined;
+      const uci = a.kind === "illegal" ? illegalOn(board, a.pick) : mv ? mv.from + mv.to + (mv.promotion ?? "") : "a1a1";
+      const r = await api.submitMove({ token: tok(a.by), gameId: id, uci });
+      if (over || a.by !== turn) {
+        expect(r, "M6").toMatchObject({ ok: false, code: "not_your_turn_or_over" });
+      } else if (a.kind === "illegal" || !mv) {
+        expect(r, `I1: ${uci} refused`).toMatchObject({ ok: false });
+        expect(!r.ok && r.raw).toContain("fixture: illegal move");
+        paths.illegalRefused++;
+      } else {
+        expect(r).toEqual({ ok: true });
+        board.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
+        model.plies.push(uci);
+        if (model.offer === other(a.by)) model.offer = null;
+        if (board.isCheckmate()) { model.status = "mate"; model.winner = a.by; }
+        else if (board.isStalemate()) model.status = "stalemate";
+        else if (board.isInsufficientMaterial()) model.status = "draw";
+      }
+    } else if (a.kind === "resign") {
+      const r = await api.resignGame({ token: tok(a.by), gameId: id });
+      if (over) expect(r.ok).toBe(false);
+      else if (model.plies.length < 2) { expect(r.ok).toBe(true); model.status = "aborted"; }
+      else { expect(r.ok).toBe(true); model.status = "resign"; model.winner = other(a.by); }
+      if (model.status !== "started") model.offer = null;
+    } else if (a.kind === "abort") {
+      const r = await api.abortGame({ token: tok(a.by), gameId: id });
+      if (!over && model.plies.length < 2) { expect(r.ok).toBe(true); model.status = "aborted"; }
+      else expect(r.ok).toBe(false);
+    } else {
+      const r = await api.offerOrAcceptDraw({ token: tok(a.by), gameId: id, accept: a.kind === "drawYes" });
+      if (over) { expect(r.ok).toBe(false); continue; }
+      expect(r, "every draw call answers 200, a no-op too").toEqual({ ok: true });
+      const ply = model.plies.length;
+      const last = lastOffer[a.by];
+      if (a.kind === "drawNo") {
+        if (model.offer === other(a.by)) { model.offer = null; paths.opponentNoCleared++; }
+        else if (model.offer === a.by) paths.ownOfferNoKept++;
+      } else if (model.offer === other(a.by)) {
+        model.status = "draw"; model.offer = null; paths.accepted++;
+      } else if (model.offer === null && ply >= 2) {
+        if (last === null || last < ply - 20) { model.offer = a.by; lastOffer[a.by] = ply; paths.offered++; }
+        else paths.windowNoOp++;
+      }
+    }
+    const read = await api.readGameStream({ token: W.token, gameId: id });
+    expect(read.ok).toBe(true);
+    if (!read.ok) return actions;
+    expect(read.game.status).toBe(model.status);
+    expect(read.game.winner).toBe(model.winner);
+    expect(read.game.movesUci).toEqual(model.plies);
+    if (model.status === "started") {
+      expect(read.game.drawOffer).toEqual({ white: model.offer === "white", black: model.offer === "black" });
+    }
+  }
+  const k = model.status === "started" ? "running" : model.status === "stalemate" ? "draw" : model.status;
+  ends[k as keyof Ends]++;
+  return actions;
+}
+
 describe("property: the stub follows the measured rules over any action sequence", () => {
-  it("status, winner and the move list agree with the model after every action", async () => {
-    const ends = { resign: 0, aborted: 0, draw: 0, mate: 0, running: 0 };
-    let actions = 0;
-    await fc.assert(
-      fc.asyncProperty(fc.array(actArb, { minLength: 1, maxLength: 24 }), async (acts) => {
-        fx.reset();
-        fx.registerToken(W.token, W.id);
-        fx.registerToken(B.token, B.id);
-        const id = await startGame();
-        const board = new Chess();
-        const model = { status: "started", winner: null as null | "white" | "black", offer: null as null | "white" | "black", plies: [] as string[] };
-        const tok = (c: "white" | "black") => (c === "white" ? W.token : B.token);
-        const other = (c: "white" | "black") => (c === "white" ? "black" : "white");
-        for (const a of acts) {
-          actions++;
-          const over = model.status !== "started";
-          if (a.kind === "move") {
-            const legal = board.moves({ verbose: true });
-            const mv = legal[a.pick % Math.max(1, legal.length)];
-            const turn = board.turn() === "w" ? "white" : "black";
-            const uci = mv ? mv.from + mv.to + (mv.promotion ?? "") : "a1a1";
-            const r = await api.submitMove({ token: tok(a.by), gameId: id, uci });
-            if (over || a.by !== turn || !mv) {
-              expect(r, "M6").toMatchObject({ ok: false, code: "not_your_turn_or_over" });
-            } else {
-              expect(r).toEqual({ ok: true });
-              board.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
-              model.plies.push(uci);
-              if (model.offer === other(a.by)) model.offer = null;
-              if (board.isCheckmate()) { model.status = "mate"; model.winner = a.by; }
-              else if (board.isStalemate()) model.status = "stalemate";
-              else if (board.isInsufficientMaterial()) model.status = "draw";
-            }
-          } else if (a.kind === "resign") {
-            const r = await api.resignGame({ token: tok(a.by), gameId: id });
-            if (over) expect(r.ok).toBe(false);
-            else if (model.plies.length < 2) { expect(r.ok).toBe(true); model.status = "aborted"; }
-            else { expect(r.ok).toBe(true); model.status = "resign"; model.winner = other(a.by); }
-          } else if (a.kind === "abort") {
-            const r = await api.abortGame({ token: tok(a.by), gameId: id });
-            if (!over && model.plies.length < 2) { expect(r.ok).toBe(true); model.status = "aborted"; }
-            else expect(r.ok).toBe(false);
-          } else {
-            const r = await api.offerOrAcceptDraw({ token: tok(a.by), gameId: id, accept: a.kind === "drawYes" });
-            if (over) { expect(r.ok).toBe(false); continue; }
-            expect(r.ok).toBe(true);
-            if (a.kind === "drawNo") model.offer = null;
-            else if (model.offer === other(a.by)) { model.status = "draw"; model.offer = null; }
-            else if (model.plies.length >= 2) model.offer = a.by; // lila: no offer before ply 2
-          }
-          const read = await api.readGameStream({ token: W.token, gameId: id });
-          expect(read.ok).toBe(true);
-          if (!read.ok) return;
-          expect(read.game.status).toBe(model.status);
-          expect(read.game.winner).toBe(model.winner);
-          expect(read.game.movesUci).toEqual(model.plies);
-          if (model.status === "started") {
-            expect(read.game.drawOffer).toEqual({ white: model.offer === "white", black: model.offer === "black" });
-          }
-        }
-        const k = model.status === "started" ? "running" : model.status === "stalemate" ? "draw" : model.status;
-        ends[k as keyof typeof ends]++;
-      }),
-      { numRuns: 60 },
-    );
-    expect(actions, "zero actions checked is a FAILURE").toBeGreaterThan(0);
-    // Path-specific anti-vacuity: the terminal branches the model owns were
-    // each actually reached.
-    expect(ends.resign + ends.aborted, `ends ${JSON.stringify(ends)}`).toBeGreaterThan(0);
-    expect(ends.running, `ends ${JSON.stringify(ends)}`).toBeGreaterThan(0);
-  }, 120_000);
+  const mv = (by: "white" | "black"): Act => ({ kind: "move", by, pick: 0 });
+  const yes = (by: "white" | "black"): Act => ({ kind: "drawYes", by });
+  const no = (by: "white" | "black"): Act => ({ kind: "drawNo", by });
+  // Each prefix ENDS with the rule it exists for, and runs a fixed number of times with a random tail after it, so
+  // every rule is reached whatever the seed (a free-running property reached the offerer's own `no` in 0 of 80 runs).
+  const PREFIXES: [keyof Paths, Act[]][] = [
+    ["illegalRefused", [{ kind: "illegal", by: "white", pick: 0 }]],
+    ["offered", [mv("white"), mv("black"), yes("white")]],
+    ["accepted", [mv("white"), mv("black"), yes("white"), yes("black")]],
+    ["ownOfferNoKept", [mv("white"), mv("black"), yes("white"), no("white")]],
+    ["opponentNoCleared", [mv("white"), mv("black"), yes("white"), no("black")]],
+    ["windowNoOp", [mv("white"), mv("black"), yes("white"), no("black"), yes("white")]],
+  ];
+  const RUNS = 12;
+  for (const [claim, prefix] of PREFIXES) {
+    it(`${claim}, then anything: status, winner, the move list and the draw offers agree with the model after every action`, async () => {
+      const paths: Paths = { illegalRefused: 0, offered: 0, accepted: 0, ownOfferNoKept: 0, windowNoOp: 0, opponentNoCleared: 0 };
+      const ends: Ends = { resign: 0, aborted: 0, draw: 0, mate: 0, running: 0 };
+      let actions = 0;
+      let runs = 0;
+      await fc.assert(
+        fc.asyncProperty(fc.array(actArb, { minLength: 0, maxLength: 30 }), async (tail) => {
+          actions += await runActs([...prefix, ...tail], paths, ends);
+          runs++;
+        }),
+        { numRuns: RUNS },
+      );
+      expect(runs, "anti-vacuity: runs").toBe(RUNS);
+      expect(actions, "zero actions checked is a FAILURE").toBeGreaterThanOrEqual(RUNS * prefix.length);
+      // The prefix's own claim was taken on EVERY run.
+      expect(paths[claim], `${claim}: ${JSON.stringify(paths)}`).toBeGreaterThanOrEqual(RUNS);
+    }, 120_000);
+  }
 });

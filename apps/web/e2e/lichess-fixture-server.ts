@@ -27,6 +27,13 @@
 //   T11  A read SETTLES an expired clock, visible on the NEXT read: the first
 //        board-stream read after expiry still says `started` with the flagged
 //        side's time at 0 (gamefull-expired-1.ndjson, then -2).
+//   D    Draws (T17 live probe, t17-live-lichess.md §2): every draw call answers
+//        200 {"ok":true}; the stream's wdraw/bdraw is the only witness. No
+//        offer before ply 2; a yes to the opponent's standing offer draws; a
+//        side's re-offer within 20 plies of its last offer is a silent no-op
+//        (refused at 22, allowed at 23 after an offer at 2); `draw/no` declines
+//        only the OPPONENT's offer; a move declines the opponent's offer and
+//        keeps the mover's own.
 //   L1   GET /api/challenge (T17 live probe, 2026-10-13): the LIVE entry shape
 //        (challenge-list-{white,black}.json) — NO `createdAt` — and an
 //        unaccepted challenge leaves both lists ~30 s after creation (listed
@@ -34,10 +41,12 @@
 //        cancellable. Modelled at CHALLENGE_LISTED_MS, inside that bracket.
 //
 // What is NOT measured, and is modelled from lila's source or left plain:
-// illegal moves, aborts
+// illegal moves (refused before any clock or lastMoveAt is touched), aborts
 // after ply 2 and acts on a finished game answer named `fixture:` 400s rather
-// than an invented Lichess sentence; a stranger's token on someone else's game
-// is a named 404. Every unexpected route is a 404 that names itself.
+// than an invented Lichess sentence; a junk promotion suffix is dropped and the
+// pawn queens (scalachess Uci.scala:42, `Role.promotable`); a stranger's token
+// on someone else's game is a named 404. Every unexpected route is a 404 that
+// names itself.
 //
 // What it does NOT prove: that lichess.org still behaves this way. The
 // recorded-payload half of lichess-fixture-contract.test.ts is the check on
@@ -159,7 +168,13 @@ type Game = {
   plyClocksCs: number[];
   lastMoveAt: number;
   drawOffer: Colour | null;
+  /** The ply at which each side's last offer registered (lila `lastDrawOffer`): the 20-ply re-offer window. */
+  lastOfferPly: Record<Colour, number | null>;
 };
+
+/** lila Game.playerHasOfferedDrawRecently: a side may not offer again while its last offer is this recent
+ *  (measured: offer at ply 2, refused at 22, allowed at 23). */
+const DRAW_REOFFER_PLIES = 20;
 
 const other = (c: Colour): Colour => (c === "white" ? "black" : "white");
 
@@ -407,7 +422,7 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
         const g: Game = {
           id: gameId(), white: me, black: dest, limit, increment, createdAt: now, challengedAt: now, status: "created", winner: null,
           chess: new Chess(), uci: [], san: [], remaining: { white: limit * 1000, black: limit * 1000 },
-          plyClocksCs: [], lastMoveAt: now, drawOffer: null,
+          plyClocksCs: [], lastMoveAt: now, drawOffer: null, lastOfferPly: { white: null, black: null },
         };
         games.set(g.id, g);
         // T9 measured: the ChallengeJson at the TOP level (`id`), not wrapped
@@ -473,7 +488,9 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
           }
           const plyBefore = g.uci.length;
           const spent = plyBefore >= 2 ? now - g.lastMoveAt : 0;
-          if (!applyMove(g, decodeURIComponent(act[3]))) return send({ error: `fixture: illegal move ${act[3]}` }, 400);
+          // I1: refused BEFORE any clock or lastMoveAt is touched — an entry with no move would put every later
+          // M11 clock on the wrong side.
+          if (!applyMove(g, decodeURIComponent(act[3])).ok) return send({ error: `fixture: illegal move ${act[3]}` }, 400);
           if (plyBefore >= 2) g.remaining[colour] = Math.max(0, g.remaining[colour] - spent) + g.increment * 1000;
           g.plyClocksCs.push(Math.round(g.remaining[colour] / 10));
           g.lastMoveAt = now;
@@ -495,14 +512,19 @@ export async function startLichessFixtureServer(port: number = LICHESS_FIXTURE_P
           finish(g, "aborted", null);
           return send({ ok: true });
         }
-        // draw/yes | draw/no. lila registers no offer before ply 2
-        // (Game.playerCanOfferDraw); a yes to the standing offer draws.
+        // draw/yes | draw/no — D in the header (t17-live-lichess.md §2). Every
+        // outcome answers 200 {"ok":true}, a no-op too.
+        const ply = g.uci.length;
+        const last = g.lastOfferPly[colour];
         if (act[4] === "no") {
-          g.drawOffer = null;
+          if (g.drawOffer === other(colour)) g.drawOffer = null; // only the opponent's offer is declined
         } else if (g.drawOffer === other(colour)) {
           finish(g, "draw", null);
-        } else if (g.uci.length >= 2) {
+        } else if (ply >= 2 && (last === null || last < ply - DRAW_REOFFER_PLIES)) {
+          // A side's own standing offer needs no guard of its own: it is at most a ply old (the opponent's next
+          // move declines it), so the window already makes a repeat a no-op ("d (standing)").
           g.drawOffer = colour;
+          g.lastOfferPly[colour] = ply;
         }
         return send({ ok: true });
       }
