@@ -301,6 +301,10 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     const path = await fixturePath(request, held.id);
     const division = path.split("/f/")[0]!;
     await page.goto(`${division}?tab=fixtures`);
+    // The sibling in play makes the division "Live", whose default run-sheet filter is "Today" - and an untimed abandoned
+    // match is not "today" (nor "needs result": that filter has never counted a held row, in a bracket either). "All" shows
+    // every row, which is what this test is about: the HOLD on the row.
+    await page.getByRole("button", { name: "All", exact: true }).first().click();
     const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
     await expect(row.getByTestId("run-sheet-held-chip"), "the run sheet holds the abandoned league match").toHaveText("Needs a decision");
     await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
@@ -339,7 +343,10 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     expect(after.outcome).toMatchObject({ kind: "win", winner: held.home_entrant_id, method: "settled_lot" });
     // The desk row no longer holds it.
     await page.goto(`${division}?tab=fixtures`);
-    await expect(page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`).getByTestId("run-sheet-held-chip")).toHaveCount(0);
+    await page.getByRole("button", { name: "All", exact: true }).first().click();
+    const settledRow = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
+    await expect(settledRow, "rig: the row is on the sheet under All").toBeVisible();
+    await expect(settledRow.getByTestId("run-sheet-held-chip")).toHaveCount(0);
   });
 
   test("Review Focus 2: a double submit of the settle dialog sends one settle", async ({ page, request }) => {
