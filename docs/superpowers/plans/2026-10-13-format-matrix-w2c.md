@@ -7,7 +7,7 @@
 > - **Task 3 is the rebase** onto main with W2b merged. Everything after it waits for it.
 > - **BLOCKED until rebase on W2b merge**, because they build on W2b code:
 >   - Task 3 itself.
->   - Task 9: the stage-points walkover split reads W2b's `awardReasonOf`.
+>   - Task 9: the stage-points forfeit reads W2b's `playRecorded` and changes W2b's `applyPointsRule` callers and `qualification-view.ts`.
 >   - Task 10: it changes the `engine-db/awarded-state.ts` caller (re-read after the merge) and takes a migration number above V438 (re-checked on main at the rebase).
 > - **The other post-rebase tasks** are not blocked by W2b *code*, but they edit files W2b also edits: every sport module, `sport/module.ts`, `stages.ts`, `fixture-console.tsx`, the dictionaries, `mobile.spec.ts`, `smoke.ts`. Building them before the rebase would only manufacture merge conflicts.
 
@@ -28,7 +28,7 @@
 - **One resolver, compiler-enforced.** `resolveFixtureCfg` takes the fixture row (`{config_snapshot, rules_override}`, both required keys), so every caller must select the override. The order is `snapshot ?? (division ⊕ stage.rules ⊕ bracketDeciders(kind) ⊕ rules_override)`, frozen at the first event as today.
 - **Three write paths, one "started" predicate:**
   - `putStageRules` (every sport, plus stage points);
-  - the new `writeFixtureRulesOverride(fixtureIds[], fragment)`: unstarted → write; live or held → refold check, then re-freeze; finalized or cancelled → refused. A re-freeze advances the fixture's rules version (`config_snapshot_at`). Every open pad sends the version it loaded with each append; a stale one is refused `FIXTURE_RULES_CHANGED` before anything is written, and the pad reloads its rules and says so (spec §4.5 item 2 as amended at `8a0c4bd52`);
+  - the new `writeFixtureRulesOverride(fixtureIds[], fragment)`: unstarted → write; live or held → refold check, then re-freeze; finalized or cancelled → refused. A correction (or a staff re-freeze) increments the new `fixtures.rules_version int not null default 0`. The scoring pads send the version they loaded with each tap; a stale one is refused `FIXTURE_RULES_CHANGED` before anything is written, and the pad reloads its rules and says so. The server checks the version ONLY when the sender includes it, so settle, forfeit, finalize, withdrawal and import are never blocked (spec §4.5 item 2 at `1b757c6cb`, owner P-1 "A");
   - the division save, which refuses by name what a started inheriting stage depends on.
 - **Engine behaviour:**
   - knockout presets: football ET plus pens with per-stage attempts, hockey shoot-out, ice hockey 10' OT plus GWS, cricket super over;
@@ -51,41 +51,45 @@
 **Spec:** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-design.md`. The owner approved it 2026-10-13 and amended it twice the same day:
 - `f1a3da356`: rule facts move to the engine, and web is split per sport (§4.1, §5.1, §9 P1).
 - `8a0c4bd52`: open pads follow a correction (§2.1 #3, §4.5, §7, §9 P5), plus the **no live users** greenfield stance (§11). The owner's verbatim answers are in the gitignored `/Users/ashokhein/github/seazn.club/.superpowers/handoff/2026-10-12-w2c/w2c-state.md`.
+- `1b757c6cb`: the owner's answers P-1..P-4 to the plan review (§1 division edits, §2.1 #11, §4.5 item 2, §5.2 migration, Appendix X-PT-1). This plan revision applies them and the review `/Users/ashokhein/github/seazn.club/.superpowers/handoff/2026-10-12-w2c/w2c-plan-review.md` (C1-C2, I1-I13, M1-M12). Each fix is cited by its review id where it lands.
 - Rules: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_RULES.md` R1–R29.
 - House rules: `AGENTS.md` (classes 1–23, the phone composition), `docs/superpowers/RULES.md` (four test types, never a full local suite, 1280/768/320 verdicts, both owner checklists), `docs/superpowers/TEST-STRATEGY.md` (rules 1–10, the reviewer's four questions).
 - Style: `docs/superpowers/plans/2026-10-08-format-matrix-w2a.md`, and the W2b plan on `feat/format-matrix-w2b` (`docs/superpowers/plans/2026-10-09-format-matrix-w2b.md`).
 
-Where the spec and the tree disagree, the tree wins, and the disagreement is a numbered entry in **Plan findings** at the end. Findings that change an owner decision are listed again under **Owner open questions**. The tasks that depend on them do not start until the owner answers.
+Where the spec and the tree disagree, the tree wins, and the disagreement is a numbered entry in **Plan findings** at the end. Findings that need an owner decision are listed under **Owner answers and open questions**; a task that depends on an OPEN question does not start until the owner answers.
 
 ---
 
-## Owner open questions (asked in chat by the orchestrator in Task 0, one at a time, each with this recommendation; class 17)
+## Owner answers and open questions
 
-- **OQ-1 (blocks Task 2 and Task 20) — the division lock already exists and is stricter than Q3/Q4.** Finding 1.
-  - `patchDivision` refuses ANY variant or config change with `409 FORMAT_LOCKED` as soon as any stage owns a fixture, generated or started (`apps/web/src/server/usecases/divisions.ts:820-856`). That covers match format and table points alike, since both live in `divisions.config`.
-  - `division-settings.test.ts:586-640` pins this as a known limitation ("F2b").
-  - Only the `tiebreakers` column (`:899`) has no lock at all.
-  - Implementing Q3/Q4 as written therefore LOOSENS the config lock from "fixtures exist" to "an inheriting stage has started".
-  - **Recommendation: A — implement Q3/Q4 as ruled.**
-    - The config lock becomes per started inheriting stage and is named (`DIVISION_FORMAT_LOCKED`, `DIVISION_TABLE_RULES_LOCKED`). Other fields still save.
-    - The `tiebreakers` column gains the Q3 lock it never had.
-    - `replaceStages`' own `FORMAT_LOCKED` is untouched (stage points rely on it, spec §4.3).
-    - Owner value: an organiser who generated fixtures but has not started can still fix the division format (today they must regenerate), and tie-breaks can never again silently re-order a live table.
-    - Cost: the F2b pin is rewritten for `patchDivision` (kept for `replaceStages`).
-  - **B** — keep today's division-wide lock for config and add only the tie-break lock, with the new names and wording. Smaller, but the organiser keeps the "regenerate to fix a typo" trap.
-- **OQ-2 (blocks Task 9) — which stage-points awards are "forfeits".** Finding 11.
-  - Q9 says "only a `walkover` reason is a forfeit". Two shapes sit beside it on W2b:
-    - X-WD-6 and X-RT-1 (ruling 115) credit a withdrawal or a DQ **with nothing played** as a walkover, but keep their own reason (`withdrew`, `disqualified`).
-    - A **bye** (`awardReasonOf` → `"bye"`) is an `award` that `isForfeit` counts today (`points.ts:57-59`; `competition.ts:115` on W2b). So a stage rule's `forfeit.winnerPoints` and `awardScore` reach byes.
-  - **Recommendation:**
-    - (a) A forfeit is an award with nothing played: walkover, or withdrew/disqualified before play. Read it from W2b's own phase marker if the stored outcome carries one. If it carries none, use the literal "reason `walkover`" and record the gap.
-    - (b) A bye keeps today's points (the rule's forfeit row when set) but never receives the awarded score.
-    - Owner value: the S3 sentence "Walkover (nothing played)" is then true for every unplayed award, and a Swiss table does not move on deploy.
-- **OQ-3 (blocks Task 14) — a correction that would end a live match.** Finding 23.
-  - Q11 refuses a correction that the recorded play contradicts. It is silent on a correction the play FITS but that ends the match (best of 3 → best of 1 after one completed set). The refold would decide the match with no event recorded.
-  - **Recommendation: refuse** with `FORMAT_DOES_NOT_FIT_PLAY` and the reason "this format would end the match as it stands".
-    - Owner value: a correction never seats anyone or changes a table by itself; the status, seating and standings pipeline stays owned by the event path.
-    - Reversible later.
+The owner answered the plan review's four questions on 2026-10-13, in chat to the orchestrator. The answers below are the OWNER'S, recorded verbatim in substance (class 17: they are not the planner's recommendations relabelled). Spec commit `1b757c6cb` carries them. OQ-1..3 are closed.
+
+- **P-1 "A" — the rules version (replaces the first D14 mechanism; fixes review C1 and C2).**
+  - New column `fixtures.rules_version int not null default 0`, in the same migration as `rules_override` (Task 10).
+  - It is incremented ONLY by a Q11 correction (Task 14) or a staff re-freeze (`resnapshotFixtureConfig`, Task 14's extracted `refreezeFixture`).
+  - The server checks it ONLY WHEN THE SENDER INCLUDES IT. The scoring pads always send it: the console pad via `transport.ts:355`, the remote pad via `device-score-pad.tsx:318`, and any other scoring-tap sender. A stale one → `409 FIXTURE_RULES_CHANGED` before any write; the pad reloads and shows the banner.
+  - Console settle/forfeit/finalize (`fixture-console.tsx:634`), `americano-panel.tsx:154`/`:160`, and the server writers (`withdrawal.ts`, `scoring.ts:873` `finalizeFixture`, `event-import.ts:354`) do not send it and are never blocked.
+  - A source-scan test enumerates EVERY `/api/v1/fixtures/${…}/events` POST site, classifies each as scoring-pad (must send) or not, and fails on an unclassified new site.
+  - DB tests: withdrawal, finalize, settle and import after a correction all succeed. The second-device case: version 0 with no correction is accepted.
+- **P-2 "A" — division locks (was OQ-1).** Implement Q3/Q4 as ruled.
+  - The `patchDivision` config lock (`divisions.ts:820-856`) LOOSENS to per started inheriting stage, named `DIVISION_FORMAT_LOCKED` / `DIVISION_TABLE_RULES_LOCKED`.
+  - The `tiebreakers` column GAINS the Q3 lock. `replaceStages`' `FORMAT_LOCKED` is untouched.
+  - Includes review I1 (re-parse after restore; a refused variant drops its preset keys) and I2 (the `smoke.ts:8378-8385` and `division-settings.test.ts:726-738` pins; the smoke edit goes in a loop that owns `smoke.ts`, i.e. after the rebase — Task 10's lane F).
+- **P-3 "A" — stage-points forfeits (was OQ-2, reworded per review I7).**
+  - A forfeit under a stage `PointsRule` = an award with NOTHING PLAYED, whatever the reason (walkover, or withdrew/DQ before play).
+  - It is decided from `score_events` with the engine's existing "was anything played" predicate — `playRecorded(ledger, module)` in `packages/engine/src/core/events.ts` on W2b (rulings 112–115, 118, 120). One authority; no second predicate.
+  - The caller passes a `played` flag into `applyPointsRule` (signature change). Every caller is fixed: W2b's `engine-db/competition.ts:395` and the bye path `:115`, plus `packages/engine/src/testkit/scenarios.ts:377` and `tools/bench/lib/validate-pack.ts` (finding 33).
+  - After play → normal points (Q9). A bye keeps today's points for the advancer but NEVER gets `awardScore`. `awardScore` REPLACES the credit.
+  - `public-site/qualification-view.ts` (W2b `:179`, `:187-199`) is updated in Task 9, with a parity test against `applyPointsRule`.
+- **P-4 "A" — a correction that would end the match (was OQ-3).** Refused `FORMAT_DOES_NOT_FIT_PLAY` with "This format would end the match as it stands." Task 14 writes the real ledgers (review I8).
+- **Already decided, not re-asked:** ruling 74's creation refusal is amended by the owner's Q7 "B" (all deciders off is allowed, with a notice, and held) — review M10; the S1 layout is the owner's "A" — review M8.
+
+### Open (new in this revision)
+
+- **OQ-4 (blocks Task 7's `share` step only) — `share` on a sport that refuses draws.** Finding 34.
+  - Generic can be configured `allowDraws: false` (`generic.ts:38`; carrom has no such key, and `share` applies to table kinds only, so the bracket refusal cannot arise). A `share` abandon folds to a draw at the score as it stood, and `appendEvent` refuses a draw under `allowDraws: false` (`DRAW_NOT_ALLOWED`, `append-event.ts:405-424`; re-pin after the rebase). Task 7 now pins this with an appendEvent-level test with a non-zero score.
+  - **Recommendation: refuse at config time.** The stage/division parse refuses `abandonPolicy: "share"` when `allowDraws` is false (`CONFIG_INVALID`, reason "Sharing the points needs draws to be allowed"), and the S1 picker does not offer it then. Owner value: the organiser learns it when choosing the option, not when a match is abandoned in the rain.
+  - Alternative B: allow it, and an abandon under `share` with draws refused is held `needs_decision` for the organiser.
 
 ---
 
@@ -117,8 +121,8 @@ Where the spec and the tree disagree, the tree wins, and the disagreement is a n
   - `PUT /api/v1/fixtures/{id}/rules {rules}` replaces the fixture's whole fragment. `null` or `{}` clears the column to SQL `null`.
   - `writeFixtureRulesOverride(auth, fixtureIds[], fragment)` is all-or-nothing in one transaction and names the first fixture that blocked it.
 - **D6 — Q11 correction.** Under the fixture advisory lock `appendEventInTx` takes, the writer refolds the recorded ledger with `foldFrom(fixtureId, {...inputs, cfg: corrected})` (`engine-db/fold.ts:165`).
-  - It refuses `FORMAT_DOES_NOT_FIT_PLAY` when the fold throws (the engine's message is the reason), or when the corrected outcome differs from the recorded one (OQ-3 recommendation).
-  - Otherwise it writes `rules_override` and re-freezes `config_snapshot` + `config_snapshot_at` to the corrected resolved cfg.
+  - It refuses `FORMAT_DOES_NOT_FIT_PLAY` when the fold throws (the engine's message is the reason), or when the corrected outcome differs from the recorded one — including a correction the play fits but that would END the match ("This format would end the match as it stands", owner P-4 "A").
+  - Otherwise it writes `rules_override`, re-freezes `config_snapshot` + `config_snapshot_at` to the corrected resolved cfg, and increments `rules_version` (owner P-1).
   - It upserts `match_states` through the helper the staff re-snapshot uses (extracted from `admin-fixture-config.ts:212-338` into `engine-db/refreeze.ts`).
   - It writes one `competition_events` row `fixture.rules_override` with `{fixture_id, before, after, started}`.
 - **D7 — every Armageddon records its colours (greenfield).**
@@ -131,30 +135,29 @@ Where the spec and the tree disagree, the tree wins, and the disagreement is a n
   - An empty list sends no game to phase `tiebreak`: a drawn bracket game is level, and the server holds it `needs_decision` (ruling 79).
   - A `boardgame.tiebreak` event whose rung is not in the list is refused `TIEBREAK_NOT_APPLICABLE` (an existing code).
 - **D9 — abandon options (Q10).** The engine key is `abandonPolicy`.
-  - Period kernel: `["replay", "award", "q4_stands"]`, with `q4_stands` refined to `periods.count === 4`.
+  - Period kernel: `["replay", "award", "q4_stands"]`, with `q4_stands` refined to `periods.count === 4`. **`q4_stands` is a hockey-only option** (review I5): the offered options are a per-SPORT list (`abandonOptions` on the module: hockey declares all three, ice hockey declares `["replay", "award"]`), and ice hockey's parse refuses `q4_stands`. **It stands once the last regulation period has started, including in overtime and the shoot-out** (review I4): it replays only an abandon in `pre` or in a regulation period before the last (`period/kernel.ts:651-665`, `:708` replay otherwise).
   - Football keeps `["replay", "award"]` ("Result stands" = `award`, W2b's FB-AB-1 semantics).
   - Carrom and generic gain `abandonPolicy: z.enum(["replay", "share"]).optional()` (absent = replay). `share` folds an abandon to a `draw` at the score as it stood. Its `ruleKeys` entry has `appliesTo.stageKinds = DRAW_KINDS`.
   - Hockey's `fih-shootout` preset gains `abandonPolicy: "q4_stands"`.
-  - The web picker reads the options from the schema enum (`module.configSchema.shape.abandonPolicy`), so a lookup table, not an if/else chain, decides per sport.
+  - The engine declares the offered list per sport (`SportModule.abandonOptions?: readonly string[]`, beside `ruleKeys`), and each module's parse refuses a policy outside its own list. The web picker (`abandonOptions(module)` in `lib/match-rules/shared.ts`) reads that list through the `ABANDON_LABELS` lookup table, so no if/else chain decides per sport and ice hockey is never offered `q4_stands`.
 - **D10 — codes.**
   - New server codes are `HttpError` codes: `DIVISION_TABLE_RULES_LOCKED`, `DIVISION_FORMAT_LOCKED`, `FIXTURE_FORMAT_LOCKED`, `FORMAT_DOES_NOT_FIT_PLAY`, `RULE_NOT_SETTABLE`, `POINTS_RULE_INEXPRESSIBLE`, `FIXTURE_RULES_CHANGED` (D14). They are declared once in `apps/web/src/lib/rule-errors.ts` with their HTTP status.
   - `TIEBREAK_COLOUR_REQUIRED` is an `EngineErrorCode` (appended; `ENGINE_HTTP` 422).
   - Organiser copy lives under `ruleLock.<CODE>` in `ui.json` (4 locales). The server's English message is the same sentence.
   - OpenAPI has no code enum (finding 8), so each route's summary lists its codes.
-- **D11 — the division lock (after OQ-1).** Under recommendation A:
+- **D11 — the division lock (owner P-2 "A").**
   - Table rules are the division config keys whose `ruleKeys` scope is `"points"` (`pointsKeysFor`), plus `pointsMap`, plus the `tiebreakers` column. Every other changed key is match format.
   - A key is locked when a stage that INHERITS it has started (`lockedStageIdsAmong`). A stage inherits a format key unless its `config.rules` sets that key, and inherits table rules unless its `config.points` is set.
   - Refused keys are dropped from the write and listed in the response as `refused: [{field, code, stageId, stageName}]`; the rest saves.
-- **D12 — one points describer.** `pointsLine(rule)` (Task 16) lives in the client-safe `apps/web/src/lib/points-line.ts`. `describe-rules.ts` (pure, `:10`) and the S3 preview both call it (spec §8).
-- **D14 — the rules version (spec §4.5 item 2 as amended).** The version is `fixtures.config_snapshot_at` (existing column; `null` while unfrozen). There is no new column.
-  - **What the pad sends.** `loadFixturePadCfg` returns `rulesVersion`, and both pads (console and `/score/[token]`) send it as `rules_version` on every `POST /api/v1/fixtures/{id}/events`. That is the one append route: `transport.ts:355`. An offline replay sends the version captured when the tap was made, exactly as it keeps the original `expected_seq`.
-  - **The check.** It runs in `appendEventInTx` under the fixture lock, BEFORE the insert. It refuses `409 FIXTURE_RULES_CHANGED` with `extra: {rules_version, format}` when either holds:
-    - (a) the request carries a version and it differs from the stored one;
-    - (b) the request carries `null`/no version and the fixture has been RE-frozen.
-
-    "Re-frozen" means `config_snapshot_at` differs from the first event's `recorded_at`; V347's own column comment says they diverge only after a re-snapshot. Rule (b) is what lets two scorers who both loaded before the first event keep scoring after a normal first freeze, while a correction still stops them (finding 28).
-  - **Optional field.** `rules_version` is optional in `AppendEventRequest`, and absent counts as `null`, so API-v1 clients and the many e2e/smoke helpers that append over HTTP are unaffected unless a correction happened. A source-scan test pins that `transport.ts` always sends it.
-  - **The response.** Every accepted append returns `rules_version`. When it differs from the pad's loaded version, the pad reloads its rules (`GET /api/v1/fixtures/{id}/rules`, new, returning `{cfg, rules_version, format_line}`). If the format line changed, it shows the banner "The organiser changed this match's format: {format}".
+  - **Re-parse after restore (review I1).** The write is built in two steps: (1) apply the requested change, (2) put every refused key back to its stored value. The FINAL config is then parsed once more by `module.configSchema` (`CONFIG_INVALID` on failure), so a restore can never write an unvalidated combination. When `variant_key` is refused, the preset keys that variant would have written are dropped as well (computed as the keys where `variants[requested]` differs from `variants[stored]`), and each is listed in `refused` under the variant's stage.- **D12 — one points describer.** `pointsLine(rule)` (Task 16) lives in the client-safe `apps/web/src/lib/points-line.ts`. `describe-rules.ts` (pure, `:10`) and the S3 preview both call it (spec §8).
+- **D14 — the rules version (spec §4.5 item 2 at `1b757c6cb`; owner P-1 "A").** Replaces this plan's first mechanism (`config_snapshot_at` compared with the first event's `recorded_at`), which the review showed can never compare equal: Postgres `now()` in µs against the app's `new Date()` in ms, and `event-import` passes the historical `ev.at` (review C1, finding 28).
+  - **The column.** `fixtures.rules_version int not null default 0`, added in Task 10's migration beside `rules_override`. Greenfield: no backfill is needed, because the default 0 is correct for every existing fixture (none was ever corrected).
+  - **Who increments it.** ONLY `refreezeFixture` (Task 14), which both the Q11 correction and the staff `resnapshotFixtureConfig` call: `rules_version = rules_version + 1` in the same statement as the snapshot write. The first freeze at the first event does NOT touch it.
+  - **Who sends it.** The scoring pads, always: `transport.ts:355` (the console's v3 pad pipeline) and `device-score-pad.tsx:318` (the remote `/score/[token]` pad). Both load it through `loadFixturePadCfg` (`rulesVersion`). An offline replay sends the version captured when the tap was made, exactly as it keeps its original `expected_seq`.
+  - **Who does not send it, and is never blocked.** The console chrome's own `send()`/`post()` (`fixture-console.tsx:634`: start, void, settle, forfeit, abandon, finalize), `americano-panel.tsx:154`/`:160`, and the server's own writers that call `appendEvent` directly (`withdrawal.ts:121-160`, `scoring.ts:873` `finalizeFixture`, `event-import.ts:354`). API-v1 clients that omit it are unaffected (review C2).
+  - **The check.** In `appendEventInTx`, under the fixture advisory lock and BEFORE the insert: if the request carries `rules_version` (a number) and it differs from the stored column, refuse `409 FIXTURE_RULES_CHANGED` with `extra: {rules_version: <stored>, format: <format line>}`. Absent means unchecked. There is no rule (b).
+  - **The source scan.** One test enumerates every `/api/v1/fixtures/${…}/events` POST site under `apps/web/src` (excluding `__tests__`) and classifies each in a table: `pad` (must send `rules_version`) or `other` (named reason). A new unclassified site fails, and a `pad` site whose body lacks `rules_version` fails.
+  - **The response.** Every accepted append returns the stored `rules_version`. When it differs from the pad's loaded version, the pad reloads its rules (`GET /api/v1/fixtures/{id}/rules`, new, returning `{cfg, rules_version, format_line}`) and, if the format line changed, shows the banner "The organiser changed this match's format: {format}".
 - **D13 — stage creation.**
   - `withStageDefaults(module, kind, variant, config)` (new, `usecases/stage-defaults.ts`) is called at both stage insert sites (`stages.ts:458`, `templates.ts:345`). It returns `rules = stageDefaults(kind, variant) ⊕ provided rules` (provided wins), validated as in D3.
   - `replaceStages`' carry merges `defaults ⊕ carried` per key instead of replacing `rules` (`stages.ts:548-560`).
@@ -213,9 +216,18 @@ Where the spec and the tree disagree, the tree wins, and the disagreement is a n
 | e2e helpers `apiJson :312`, `addEntrantsViaApi :1978`, `createStageAndGenerate :1995`, `fixturePath :1959`, `expectNoHorizontalScroll :56`, `screenshotAtWidths :447`, `TAG :258` | `apps/web/e2e/helpers.ts` |
 | width projects all `testMatch: /mobile\.spec\.ts/` | `apps/web/playwright.config.ts:191-258` |
 | smoke `check :135`, suites called from `main :185` | `scripts/smoke.ts` |
-| the one append route; its body schema; the pad transport posting it | `W/app/api/v1/fixtures/[id]/events/route.ts:11-18`; `AppendEventRequest` `W/server/api-v1/schemas.ts:1828-1833`; `W/components/v2/scorepad/transport.ts:355`, wire body `W/components/v2/scorepad/pipeline.ts:152`, `:203` |
+| the append route and its body schema | `W/app/api/v1/fixtures/[id]/events/route.ts:11-18`; `AppendEventRequest` `W/server/api-v1/schemas.ts:1828-1833` |
+| every client POST to that route (review C2; the scan in Task 15 enumerates them): scoring pads `W/components/v2/scorepad/transport.ts:355` (wire body `pipeline.ts:152`, `:203`) and `W/components/v2/device-score-pad.tsx:318`; not pads: `W/components/v2/fixture-console.tsx:634` (the console chrome's `post()`: start, void, settle, forfeit, abandon, finalize), `W/components/v2/americano-panel.tsx:154`, `:160` | per file |
+| server writers that call `appendEvent` directly | `W/server/usecases/withdrawal.ts:121-160`; `W/server/usecases/scoring.ts:873` (`finalizeFixture`); `W/server/usecases/event-import.ts:354` (passes the historical `ev.at`) |
 | both pads load cfg through `loadFixturePadCfg` | console `f/[no]/page.tsx:79`; remote `W/app/score/[token]/page.tsx:265-270` |
-| `config_snapshot_at` diverges from the first event's `recorded_at` only after a re-snapshot | `db/migration/deltas/V347__fixture_config_snapshot.sql` column comment |
+| the freeze clocks differ: `config_snapshot_at` is Postgres `now()` (µs, `append-event.ts:451`), the event's `recorded_at` is the app's `new Date()` (ms, `:258`) — why D14 uses a counter (review C1) | `W/server/engine-db/append-event.ts` |
+| draw refusals at append (`DRAW_NOT_ALLOWED`, `LEVEL_RESULT_IN_BRACKET`) | `W/server/engine-db/append-event.ts:405-424` |
+| W2b "was anything played": `playRecorded(ledger, module)` (rulings 112–115, 118, 120) | W2b `E/core/events.ts:354` |
+| `applyPointsRule` callers on W2b: `W/server/engine-db/competition.ts:395` and the bye path `:115`; `E/testkit/scenarios.ts:377`; `tools/bench/lib/validate-pack.ts`. Mirror reader: W2b `W/server/public-site/qualification-view.ts:179`, `:187-199` | per file |
+| period abandon phase test (`q4_stands` predicate base) | `E/sports/period/kernel.ts:651-665`, `:708` |
+| pins that P-2 turns red: smoke `scripts/smoke.ts:8378-8385` (whole-config `FORMAT_LOCKED` after generation); `W/server/usecases/__tests__/division-settings.test.ts:726-738` (and the F2b block `:586-640`) | per file |
+| old Armageddon senders (review I10): `W/server/usecases/__tests__/withdrawal-decider-hold.test.ts:214`; `scripts/smoke.ts:2406`; three `E/sports/boardgame/tiebreak.test.ts` cases | per file |
+| the hand-mutant runner has NO Playwright mode (`Killer :14`; validation `:105-121`) | `scripts/mutate.ts` |
 | highest delta on main | `db/migration/deltas/V437__capture_records.sql`; W2b adds `V438__w2b_double_walkover_and_results.sql` |
 
 Before building on any line above, the implementer re-opens it (AGENTS class 5). After Task 3, every pin above is re-taken on the rebased tree. A moved line is a note in the task report; a changed MEANING is a new plan finding.
@@ -324,7 +336,12 @@ Before building on any line above, the implementer re-opens it (AGENTS class 5).
   cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2c-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"
   ```
   - Expected: `survived: 0, noCoverage: 0`. A survivor gets a killing test, or an equivalence row the reviewer agrees with. Never `// Stryker disable`.
-  - E2E and smoke never appear in a `MUT/*.json`. A guard whose only witness is a browser gets a pure helper with a unit killer.
+  - E2E and smoke never appear in a `MUT/*.json` (`scripts/mutate.ts` has no Playwright mode). A guard whose only witness is a browser gets a pure helper (a `*-model.ts` beside the component) with a unit killer, and the component renders the helper's answer (review I9).
+  - **Every `MUT/t<N>.json` must parse** before it is run or committed (review I3):
+    ```bash
+    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && for f in docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2c/t*.json; do jq -e 'type=="array" and length>0 and all(.[]; (.id|type)=="string" and (.killers|length)>0)' "$f" >/dev/null || echo "BAD $f"; done; echo EXIT=$?
+    ```
+    No `BAD` line may print, and each file's ids start with its own `t<N>-`.
 - **Rule-10 sequences.** Ordered-action surfaces this wave touches get a fast-check sequence test with invariants after every step:
   - stage rules edits × fixture start × void (Task 11);
   - override write × start × correction × void × finalize (Task 14);
@@ -352,9 +369,22 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
 
 ---
 
-## Execution model
+## Execution
 
-- **Models and effort** come from `.claude/agents/*.md` (`implementer`, `reviewer`, `scout`). **No dispatch sets `model:`.**
+**Owner ruling, 2026-10-13, verbatim: "A Sonnet with those 4 tasks on Opus".** It is recorded in `docs/superpowers/RULES.md` § Agent topology (commit `41dac8db8`) as a W2c-only exception. The standing Opus-minimum rule is unchanged for every other wave, and the `*-sonnet` agents are deleted when W2c closes (Task 23).
+
+- **Agents.**
+  - An ordinary task is implemented by `implementer-sonnet` and reviewed by `reviewer-sonnet`.
+  - Exactly four pieces of work stay on the Opus `implementer` + `reviewer`. If a piece spans tasks, every part of it is Opus:
+
+    | Owner's item | Task(s) | Why these |
+    |---|---|---|
+    | (1) engine `ruleKeys` + the `resolveFixtureCfg` change across every caller | **4** (engine `ruleKeys`, helpers, override check) and **10** (the migration, the resolver and its 12 caller sites) | Task 4 declares the keys; Task 10 carries the new signature through every caller. Task 5 (the web reader of the keys) is NOT part of it and stays Sonnet. |
+    | (2) the Q11 refold/correction | **14** (the override writer, `refreezeFixture`, the correction, the admin hatch through it) | One task owns the writer and the refold. |
+    | (3) the `rules_version` check | **15** (the append-time check, the pad senders, the POST-site scan, the writers test) | The column is created in Task 10 and incremented in Task 14, both already Opus. |
+    | (4) the stage-points forfeit rule | **9** (`points.ts`, the four `applyPointsRule` callers, `qualification-view.ts`) | Task 13 (the stage points write path and its entitlement) does not decide what a forfeit is, so it stays Sonnet. |
+
+  - **No dispatch sets `model:`.** The agent type carries the model (`.claude/agents/{implementer,reviewer,implementer-sonnet,reviewer-sonnet,scout}.md`).
 - **Every dispatch carries five things** (AGENTS.md):
   - exact file paths;
   - acceptance criteria: the task's red and green, with the rule ids;
@@ -362,7 +392,25 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
   - the verify command;
   - the output cap: "final message under 15 lines — counts, paths, deviations, blockers; no file contents or diffs".
 - **UI dispatches (Tasks 15 (pad banner), 17–21)** must invoke `frontend-design:frontend-design` and apply it (spacing, hierarchy, the house design system already in `components/v2`), not cite it.
-- **Raw counts.** The orchestrator never accepts "done, tests pass" without the judge's JSON line, and re-runs the scoped gate itself at each loop boundary.
+- **Raw counts.** The orchestrator never accepts "done, tests pass" without the judge's JSON line.
+
+### Batches
+
+Each task runs implementer → its own reviewer → fixes, as usual. **Every batch then ends with ONE Opus `reviewer` pass over the whole batch diff** (`git diff <batch-start-sha>..HEAD`), and the orchestrator re-runs the batch's SCOPED gate itself: the union of the batch's tasks' Step 4 commands, never the full suite. The next batch starts only after both are clean. Record `<batch-start-sha>` in `IDX` when the batch begins.
+
+| Batch | Tasks (lane) | Implementer → reviewer per task | Starts when |
+|---|---|---|---|
+| 1 — before the rebase | 0 (orchestrator); 1 (A, `WT`); 2 (B, lane) — 1 and 2 in parallel | 1: Sonnet. 2: Sonnet | now |
+| — | 3 (orchestrator: rebase onto W2b, re-pin, rule rows) | orchestrator | W2b merged, batch 1 closed |
+| 2 — the key declaration and the resolver | 4 (C, `WT`) and 10 (F, lane) in parallel; then 5 (C, `WT`) after 4 | 4: **Opus**. 10: **Opus**. 5: Sonnet | Task 3 done |
+| 3 — engine rules | 6 + 7 (E1, `WT`, one loop); 8 (E2, lane); 9 (E3, lane) — all three in parallel | 6+7: Sonnet. 8: Sonnet. 9: **Opus** | batch 2 closed (Task 5 landed; lane F merged, which E3 needs) |
+| 4 — server writers | 11 (G); then 12 + 13 (H, one loop); then 14 (I) — sequential | 11: Sonnet. 12+13: Sonnet. 14: **Opus** | batch 3 closed |
+| 5 — pads and public labels | 15 (I2); then 16 (J) — sequential | 15: **Opus**. 16: Sonnet | batch 4 closed |
+| 6 — UI and close-out | 17 + 18 (K, one loop); 19 (L); 20 + 21 (M, one loop, two reviewer sections); then 22 (N); then 23 (orchestrator) — sequential | all Sonnet; 23 orchestrator | batch 5 closed |
+
+- Batches follow the parallel groups and lanes in **Loops and lanes**. A lane in a batch merges into `WT` before the batch-end review, so that review sees the merged tree.
+- Batch 6's Opus review runs before Task 23's PR, over Tasks 17–22. Task 23's own gates follow it.
+- A batch-end finding is fixed by the agent type that owns the task the finding is in (an Opus task's fix goes to `implementer`, any other to `implementer-sonnet`), then the batch-end review re-runs on the fix diff.
 
 ## Loops and lanes
 
@@ -376,19 +424,19 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
 
 | Loop | Tasks | Where | Files | Waits on |
 |---|---|---|---|---|
-| — orchestrator | 0 setup, OQ-1..3, rule-row signing | `WT` | `MUT/.gitkeep` only | nothing |
+| — orchestrator | 0 setup, P-1..P-4 recorded, OQ-4, rule-row signing | `WT` | `MUT/.gitkeep` only | nothing |
 | A | 1 web `match-rules` split per sport (pure move) | `WT` | `W/lib/match-rules.ts` → `W/lib/match-rules/{index,types,shared,<11 sports>}.ts`, `W/lib/match-rules/__tests__/split-equality.test.ts` (temporary, deleted in the task) | Task 0 |
-| B (lane) | 2 division locks, server | worktree `format-matrix-w2c-divlock` | `W/server/usecases/{divisions,rule-locks}.ts` (`rule-locks.ts` new), `W/server/usecases/stage-rules.ts` (moves one function out, imports it back), `W/lib/rule-errors.ts` (new), `W/server/usecases/__tests__/{division-locks,division-settings}.test.ts`, `MUT/t2.json` | OQ-1 answered. **Parallel with A** (no shared file) |
+| B (lane) | 2 division locks, server | worktree `format-matrix-w2c-divlock` | `W/server/usecases/{divisions,rule-locks}.ts` (`rule-locks.ts` new), `W/server/usecases/stage-rules.ts` (moves one function out, imports it back), `W/lib/rule-errors.ts` (new), `W/server/usecases/__tests__/{division-locks,division-settings}.test.ts` (incl. the `:726-738` pin, review I2), `MUT/t2.json`. NOT `scripts/smoke.ts`: its `:8378-8385` pin is moved by Task 10 in lane F, which owns `smoke.ts` after the rebase | P-2 answered "A". **Parallel with A** (no shared file) |
 | — orchestrator | 3 rebase onto W2b, re-pin, rule rows | `WT` | rebase; `RULES/*.md`; `rules-reference.test.ts` `AWAITING_PROOF`; `IDX` | **BLOCKED until W2b merges** |
-| C | 4 engine `ruleKeys` + helpers + engine P1 sweep; then 5 web `edits` + per-sport contract tests + `rule-scope.ts` | `WT` | 4: `E/sport/{module,rule-keys,index}.ts`, `E/sport/rule-keys.test.ts`, every `E/sports/**/<module>.ts` (one `ruleKeys` property each), `E/sports/setbased/kernel.ts`, `E/sports/period/kernel.ts`, `MUT/t4.json`. 5: `W/lib/match-rules/**`, `W/lib/rule-scope.ts` (new), `W/lib/__tests__/rule-scope.test.ts`, `W/server/usecases/rule-locks.ts` (`TABLE_RULE_KEYS` derivation), `MUT/t5.json` | Task 3 |
-| E1 | 6 `stageDefaults` + KO presets + football attempts; 7 abandon options | `WT` | `E/sports/{football,hockey,icehockey,cricket,carrom,generic}/**`, `E/sports/period/{kernel,shootout}.ts`, their `*.schema.json`, `E/sport/stage-defaults.test.ts`, `E/sport/abandon-options.test.ts`, `W/lib/match-rules/{football,hockey,icehockey,cricket,carrom,generic}.ts` + their contract tests, `MUT/t6.json`, `MUT/t7.json` | Task 5 |
-| E2 (lane) | 8 chess rungs + Armageddon colours | worktree `format-matrix-w2c-chess` | `E/sports/boardgame/**` (incl. golden + schema), `E/core/errors.ts`, `E/core/errors.test.ts`, `E/testkit/golden.ts` (one COVERAGE entry), `W/lib/match-rules/boardgame.ts` + its contract test, `W/server/api-v1/http.ts` (one row), `W/lib/scoring-vocab.ts` (one row), 4 × `ui.json` (one key), `MUT/t8.json` | Task 5. **Parallel with E1, E3, F** |
-| E3 (lane) | 9 stage points walkover split + inexpressible | worktree `format-matrix-w2c-points` | `E/competition/points.ts`, `E/competition/points-w2c.test.ts`, `MUT/t9.json` | Task 3, OQ-2. **BLOCKED until rebase.** Parallel with C, E1, E2, F |
-| F (lane) | 10 migration + resolver through every caller + `w2cStageRulesSuite` | worktree `format-matrix-w2c-resolver` | `db/migration/deltas/V<next>__fixture_rules_override.sql`, `W/server/engine-db/fixture-cfg.ts`, the 10 caller files, `W/server/engine-db/__tests__/{fixture-cfg,bracket-overlay-callers,fixture-cfg-order}.test.ts`, `scripts/smoke.ts`, `MUT/t10.json` | Task 3. **BLOCKED until rebase** (migration number, `awarded-state.ts`). Parallel with C, E1, E2, E3 |
+| C | 4 engine `ruleKeys` + helpers + engine P1 sweep; then 5 web `edits` + per-sport contract tests + `rule-scope.ts` | `WT` | 4: `E/sport/{module,rule-keys,index}.ts` (incl. the optional `SportModule.abandonOptions` TYPE), `E/sport/rule-keys.test.ts`, every `E/sports/**/<module>.ts` (one `ruleKeys` property each), `E/sports/setbased/kernel.ts`, `E/sports/period/kernel.ts`, `MUT/t4.json`. 5: `W/lib/match-rules/**` (incl. `types.ts`'s `"sequence"` kind and `shared.ts`'s `ABANDON_LABELS` + `abandonOptions`, moved here so E1/E2 never touch them, review M12), `W/lib/rule-scope.ts` (new), `W/lib/__tests__/rule-scope.test.ts`, `W/server/usecases/{rule-locks,divisions}.ts` (`TABLE_RULE_KEYS` derivation and its one reader, review M4), `MUT/t5.json` | Task 3 |
+| E1 | 6 `stageDefaults` + KO presets + football attempts; 7 abandon options | `WT` | `E/sports/{football,hockey,icehockey,cricket,carrom,generic}/**`, `E/sports/period/{kernel,shootout}.ts`, their `*.schema.json`, `E/sport/stage-defaults.test.ts`, `E/sport/abandon-options.test.ts`, `E/sports/cricket/cricket.test.ts` (CK-SO-1), `W/server/engine-db/__tests__/abandon-share.test.ts` (new, review I6), `W/lib/match-rules/{football,hockey,icehockey,cricket,carrom,generic}.ts` + their contract tests, `MUT/t6.json`, `MUT/t7.json` | Task 5 |
+| E2 (lane) | 8 chess rungs + Armageddon colours | worktree `format-matrix-w2c-chess` | `E/sports/boardgame/**` (incl. golden + schema), `W/server/usecases/__tests__/withdrawal-decider-hold.test.ts` (one old-shape sender, review I10), `E/core/errors.ts`, `E/core/errors.test.ts`, `E/testkit/golden.ts` (one COVERAGE entry), `W/lib/match-rules/boardgame.ts` + its contract test, `W/server/api-v1/http.ts` (one row), `W/lib/scoring-vocab.ts` (one row), 4 × `ui.json` (one key), `MUT/t8.json` | Task 5. **Parallel with E1 and E3** |
+| E3 (lane) | 9 stage points walkover split + inexpressible | worktree `format-matrix-w2c-points` | `E/competition/points.ts`, `E/competition/points-w2c.test.ts`, `E/testkit/scenarios.ts` (one caller), `tools/bench/lib/validate-pack.ts` (one caller), `W/server/engine-db/competition.ts` (two callers), `W/server/public-site/qualification-view.ts` + its parity test, `MUT/t9.json` | Task 3 and lane F merged (both edit `engine-db/competition.ts`), P-3 answered "A". **BLOCKED until rebase.** Parallel with C, E1, E2 |
+| F (lane) | 10 migration + resolver through every caller + `w2cStageRulesSuite` | worktree `format-matrix-w2c-resolver` | `db/migration/deltas/V<next>__fixture_rules_override.sql`, `W/server/engine-db/fixture-cfg.ts`, the 10 caller files, `W/server/engine-db/__tests__/{fixture-cfg,bracket-overlay-callers,fixture-cfg-order}.test.ts`, `scripts/smoke.ts` (creates `w2cStageRulesSuite`; moves the P-2 pin `:8378-8385`), `MUT/t10.json` | Task 3. **BLOCKED until rebase** (migration number, `awarded-state.ts`). Parallel with C, E1, E2 |
 | G | 11 stage rules for every sport | `WT` | `W/server/usecases/stage-rules.ts`, `W/server/engine-db/stage-cfg.ts` (one export), the division `page.tsx` (one condition), `W/server/usecases/__tests__/stage-rules{,-every-sport}.test.ts`, `scripts/smoke.ts`, `MUT/t11.json` | C, E1, E2, F merged |
 | H | 12 stage creation defaults + SC-P8 + carry; 13 stage points server | `WT` | `W/server/usecases/{stages,templates,stage-defaults,stage-rules}.ts`, `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, tests, `scripts/smoke.ts`, `MUT/t12.json`, `MUT/t13.json` | G, E3 merged |
-| I | 14 the override writer + Q11 correction | `WT` | `W/server/usecases/fixture-rules.ts` (new), `W/server/engine-db/refreeze.ts` (new), `W/server/usecases/admin-fixture-config.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (new), `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, tests, `scripts/smoke.ts`, `MUT/t14.json` | H merged, OQ-3 |
-| I2 | 15 open pads follow a correction (`FIXTURE_RULES_CHANGED`) | `WT` | `W/server/engine-db/append-event.ts` (version check), `W/server/api-v1/schemas.ts` (`rules_version`), `W/server/usecases/{fixtures,scoring}.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (GET added), `W/components/v2/scorepad/{transport,pipeline,use-pad-pipeline,refusal-copy}.ts`, the pad banner component, both pad pages, 4 × `ui.json`, `openapi/*.json`, `e2e/remote-pad-rules-w2c.spec.ts` (new), tests, `scripts/smoke.ts`, `MUT/t15.json` | I merged |
+| I | 14 the override writer + Q11 correction | `WT` | `W/server/usecases/fixture-rules.ts` (new), `W/server/engine-db/refreeze.ts` (new), `W/server/usecases/admin-fixture-config.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (new), `W/server/api-v1/{schemas,openapi}.ts`, `openapi/*.json`, tests, `scripts/smoke.ts`, `MUT/t14.json` | H merged (P-4 answered "A") |
+| I2 | 15 open pads follow a correction (`FIXTURE_RULES_CHANGED`) | `WT` | `W/server/engine-db/append-event.ts` (version check), `W/server/api-v1/schemas.ts` (`rules_version`), `W/server/usecases/{fixtures,scoring}.ts`, `W/app/api/v1/fixtures/[id]/rules/route.ts` (GET added), `W/components/v2/scorepad/{transport,pipeline,use-pad-pipeline,refusal-copy}.ts`, `W/components/v2/device-score-pad.tsx` (sends the version), the pad banner component, both pad pages, `W/components/v2/__tests__/events-post-sites.test.ts` (new source scan), `W/server/usecases/__tests__/rules-version-writers.test.ts` (new), 4 × `ui.json`, `openapi/*.json`, `e2e/remote-pad-rules-w2c.spec.ts` (new), tests, `scripts/smoke.ts`, `MUT/t15.json` | I merged |
 | J | 16 public labels | `WT` | `W/server/public-site/{describe-rules,stage-format-lines,data}.ts`, `W/lib/points-line.ts` (new), 4 × `public.json`, tests, `scripts/smoke.ts`, `MUT/t16.json` | I2 merged |
 | K | 17 S1 + S4 (stage); 18 S3 | `WT` | `W/components/v2/{stages-panel,match-rules}.tsx`, `W/components/v2/stage-rules/*.tsx` (new), 4 × `ui.json`, `e2e/stage-rules-w2c.spec.ts` (new), `e2e/mobile.spec.ts`, `MUT/t17.json`, `MUT/t18.json` | J merged |
 | L | 19 S2 + S4 (match) + run-sheet tag | `WT` | `W/components/v2/fixture-console.tsx`, `W/components/v2/match-rules-block.tsx` (new), the fixture page, `W/server/usecases/fixtures.ts` (loader), `desk/run-sheet-row.tsx`, 4 × `ui.json`, `e2e/match-rules-w2c.spec.ts` (new), `e2e/mobile.spec.ts`, `MUT/t19.json` | K merged |
@@ -398,8 +446,8 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
 
 - **Parallel groups.**
   - Before the rebase: **{A, B}**.
-  - After Task 3: **{C, E3, F}** start together. C runs Task 4 then Task 5 in `WT`, while E3 and F run in lane worktrees. When Task 5 lands, **{E1, E2}** join: E1 in `WT`, E2 in a lane.
-  - E1 and E2 are disjoint because the web presentation is one file per sport. E1 owns football, hockey, ice hockey, cricket, carrom and generic; E2 owns boardgame. Neither touches `index.ts`, `shared.ts` or `types.ts`.
+  - After Task 3: **{C, F}** start together. C runs Task 4 then Task 5 in `WT`, while F runs in a lane worktree. When F merges, **E3** starts in its lane (both edit `engine-db/competition.ts`). When Task 5 lands, **{E1, E2}** join: E1 in `WT`, E2 in a lane.
+  - E1 and E2 are disjoint because the web presentation is one file per sport. E1 owns football, hockey, ice hockey, cricket, carrom and generic; E2 owns boardgame. Neither touches `index.ts`, `shared.ts` or `types.ts`: the `"sequence"` field kind and the abandon option table both land in Task 5 (review M12).
   - **Everything from G on is sequential.** G–N share `schemas.ts`/`openapi`, `smoke.ts`, the four dictionaries and `mobile.spec.ts`, none of which is provably disjoint.
 - **Lanes** branch from `feat/format-matrix-w2c` and merge back with a merge commit (never a squash). The lane's scoped gate re-runs on the merged tree:
   ```bash
@@ -410,8 +458,7 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
   - A lane edit outside its file set stops the lane (R2).
   - Lanes never write `IDX` or rules files; they report the lines, and the orchestrator commits them.
   - Lane B is cut from `WT` BEFORE the rebase, so lane B merges into `WT` before Task 3 starts. The rebase then carries it.
-- **Batching** (RULES.md). Each of these pairs runs as one implementer loop:
-  - Tasks 4+5: engine declaration, then its web reader.
+- **Batching** (RULES.md). Each of these pairs runs as one implementer loop (the agent split in **Execution** keeps Task 4 on Opus and Task 5 on Sonnet, so they are two loops back to back, not one):
   - Tasks 6+7: they share module files.
   - Tasks 12+13: they share `stage-rules.ts` and `schemas.ts`.
   - Tasks 17+18: they share `stages-panel.tsx`.
@@ -474,7 +521,7 @@ The orchestrator records `TASK_BASE=$(git rev-parse HEAD)` before dispatching ea
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - the owner's answers to OQ-1..3, recorded verbatim;
+  - the owner's answer to OQ-4, recorded verbatim (P-1..P-4 are already answered and recorded; see **Owner answers and open questions**);
   - the signed wording of every rule row in **Appendix A (as amended by this plan)**;
   - the `MUT` directory that every later task writes `t<N>.json` into.
 
@@ -486,16 +533,15 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && ln -sf /Use
 ```
 Expected: `EXIT=0` twice, and the engine path starts with `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/`.
 
-- [ ] **Step 2: Ask OQ-1, OQ-2 and OQ-3 in chat, one at a time.**
-  - Give each one its recommendation and owner value exactly as written under **Owner open questions**.
-  - Record each answer verbatim, with the date, in `w2c-state.md` under "Plan-time answers".
-  - Never label a recommendation as an answer (class 17).
-  - Task 2 waits on OQ-1, Task 9 on OQ-2, Task 14 on OQ-3.
+- [ ] **Step 2: Record P-1..P-4 and ask OQ-4.**
+  - Copy the owner's P-1..P-4 answers (as given to the orchestrator in chat, 2026-10-13) into `w2c-state.md` under "Plan-time answers", verbatim, if they are not already there.
+  - Ask OQ-4 in chat with its recommendation and owner value exactly as written under **Open**. Record the answer verbatim. Never label a recommendation as an answer (class 17). Only Task 7's `share` step waits on it.
+  - Do NOT re-ask ruling 74 (settled by Q7 "B", review M10) or the S1 layout (the owner chose "A", review M8).
 
 - [ ] **Step 3: Sign the rule rows.**
   - Show the owner **Appendix A (as amended)** at the end of this plan. It carries the corrected ids (finding 6): `CK-SO-1` not `CR-SO-1`; `CA-AB-2` not `CM-AB-1`; and `GN-AB-2`, because `GN-AB-1` already exists on W2b.
   - Record the signed wording verbatim in `w2c-state.md`.
-  - The rows are written into `packages/engine/rules/*.md` in Task 3, not now: four of the files exist only on W2b (finding 5).
+  - The rows are written into `packages/engine/rules/*.md` in Task 3, not now: three of the files (`hockey.md`, `icehockey.md`, `football.md`) exist only on W2b (finding 5; review M11).
 
 - [ ] **Step 4: Create the mutant directory and commit**
 
@@ -640,16 +686,17 @@ Message: `refactor(match-rules): split per sport behind a registry (pure move)`.
 **Sequence cases:** N/A for a pure move. The dump probes every option value of every field, including min and max for numbers.
 
 ---
-### Task 2: Division locks by name — server (lane B, pre-rebase, **waits on OQ-1**)
+### Task 2: Division locks by name — server (lane B, pre-rebase; owner P-2 "A")
 
-Implements item 4 (Q3, Q4), D12, X-SR-4. Written for OQ-1 = A. **If the owner answers B**, Step 3 keeps today's `formatLocked()` throws in `patchDivision` unchanged and only adds Step 3's `tiebreakers` lock (with `DIVISION_TABLE_RULES_LOCKED` and the stage name). Steps 1, 4, 5 then drop the three "format narrows" cases, and the F2b pin stays as is.
+Implements item 4 (Q3, Q4), D11, X-SR-4, as the owner answered P-2 "A": the `patchDivision` config lock LOOSENS to per started inheriting stage; `tiebreakers` GAINS the lock; `replaceStages`' `FORMAT_LOCKED` is untouched. Includes review I1 (re-parse after restore; a refused variant drops its preset keys) and I2 (the pins this turns red).
 
 **Files:**
 - Create: `apps/web/src/server/usecases/rule-locks.ts` (`lockedStageIdsAmong` moves here unchanged; `stage-rules.ts` imports it)
 - Create: `apps/web/src/lib/rule-errors.ts`
 - Modify: `apps/web/src/server/usecases/divisions.ts:795-856` (config branch) and `:899` (tiebreakers)
 - Modify: `apps/web/src/server/usecases/stage-rules.ts:40-58` (delete the moved function; add an import)
-- Modify: `apps/web/src/server/usecases/__tests__/division-settings.test.ts:586-640` (F2b pin: rewrite the `patchDivision` half only)
+- Modify: `apps/web/src/server/usecases/__tests__/division-settings.test.ts:586-640` (F2b pin: rewrite the `patchDivision` half only) and `:726-738` (review I2: it pins the whole-config `FORMAT_LOCKED` after generation; it now starts a fixture first and expects the named code, or expects success when nothing has started — whichever its title promises)
+- NOT here: the smoke pin `scripts/smoke.ts:8378-8385` (same whole-config `FORMAT_LOCKED`). `smoke.ts` is a W2b file, so Task 10 (lane F, after the rebase) rewrites it; until then smoke is red on that one check, which is acceptable because smoke runs on PRs only and the PR opens in Task 23
 - Create: `apps/web/src/server/usecases/__tests__/division-locks.test.ts`
 - Create: `MUT/t2.json`
 - Do NOT touch: `stages.ts` (`replaceStages`' `FORMAT_LOCKED` stays, spec §4.3), `schemas.ts`/`openapi` (W2b edits them; the response's `refused` field reaches OpenAPI in Task 12), any UI.
@@ -685,7 +732,7 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { appendEvent } from "@/server/engine-db";
+import { appendEvent, resolveLatestModule } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -725,7 +772,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.refused).toEqual([]);
   });
 
-  it("generated but NOT started: a match-format change saves (the old division-wide FORMAT_LOCKED narrowed, OQ-1 A)", async () => {
+  it("generated but NOT started: a match-format change saves (the old division-wide FORMAT_LOCKED narrowed, P-2 A)", async () => {
     const r = await rig("badminton", "short");
     const before = await getDivision(r.auth, r.divisionId);
     const out = await patchDivision(r.auth, r.divisionId, { config: { ...(before.config as object), setTo: 15 } });
@@ -793,7 +840,39 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
   it("variant change refused DIVISION_FORMAT_LOCKED when any stage started", async () => {
     const r = await rig("generic", "score");
     await start(r.auth, r.fixtureId);
-    await expect(patchDivision(r.auth, r.divisionId, { variant_key: "sets" })).rejects.toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
+    await expect(patchDivision(r.auth, r.divisionId, { variant_key: "win_loss" })).rejects.toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
+  });
+
+  it("I1: a refused variant also drops its preset keys — the stored config is byte-for-byte the old one", async () => {
+    const r = await rig("generic", "score");
+    await start(r.auth, r.fixtureId);
+    const before = await getDivision(r.auth, r.divisionId);
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", variant_key: "win_loss" });
+    expect(out.name).toBe("Renamed");
+    expect(out.variant_key).toBe(before.variant_key);
+    expect(out.config).toEqual(before.config);              // no preset key of "win_loss" (resultMode, allowDraws) leaked through
+    // Every key the requested variant would have changed is listed, each under the started stage.
+    const m = resolveLatestModule("generic");
+    const fromVariant = Object.keys(m.variants["win_loss"] ?? {}).filter((k) => JSON.stringify((m.variants["win_loss"] as Record<string, unknown>)[k]) !== JSON.stringify((before.config as Record<string, unknown>)[k]));
+    expect(fromVariant.length, "generic 'win_loss' differs from 'score' on at least one key").toBeGreaterThan(0);
+    for (const k of fromVariant) expect(out.refused).toContainEqual(expect.objectContaining({ field: k, stageName: "Pool A" }));
+    expect(out.refused).toContainEqual(expect.objectContaining({ field: "variant_key" }));
+  });
+
+  it("I1: the config left after restoring refused keys is parsed again — an invalid mix is CONFIG_INVALID and nothing is written", async () => {
+    const r = await rig("badminton", "short");
+    const m = resolveLatestModule("badminton");
+    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown> & { setTo: number; finalSetTo: number };
+    // The kernel refines cap >= max(setTo, finalSetTo) (setbased/kernel.ts:129). Pool A sets `cap` itself (so cap is NOT inherited and saves) but inherits setTo (refused once started).
+    await putStageRules(r.auth, r.s1.id, { rules: { cap: before.cap } });
+    await start(r.auth, r.fixtureId);
+    const requested = { ...before, setTo: before.setTo - 4, finalSetTo: before.finalSetTo - 4, cap: before.setTo - 2 };
+    const restored = { ...before, cap: before.setTo - 2 };
+    // Preconditions from the engine's own schema, so the case cannot pass vacuously:
+    expect(m.configSchema.safeParse(requested).success, "the requested pair is valid").toBe(true);
+    expect(m.configSchema.safeParse(restored).success, "the restored mix is invalid (cap below setTo)").toBe(false);
+    await expect(patchDivision(r.auth, r.divisionId, { config: requested })).rejects.toMatchObject({ status: 422, code: "CONFIG_INVALID" });
+    expect((await getDivision(r.auth, r.divisionId)).config).toEqual(before);
   });
 });
 ```
@@ -862,7 +941,8 @@ In `patchDivision` (`divisions.ts:795-856`), replace the `locked` query and ever
 1. Compute `changedKeys`: the top-level keys where `canonicalJson(finalConfig[k]) !== canonicalJson(current.config[k])`, excluding `entrants` (its existing door). Compute `variantChanged = patch.variant_key !== undefined && patch.variant_key !== current.variant_key`. Re-sending the current variant still resets config to the preset, so it is treated as a change of every preset key that differs: `changedKeys` already captures those.
 2. Compute `tiebreakersChanged = patch.tiebreakers !== undefined && canonicalJson(patch.tiebreakers) !== canonicalJson(currentTiebreakers)`.
 3. Call `refused = await divisionRefusals(tx, id, {configKeys: changedKeys, variant: variantChanged, tiebreakers: tiebreakersChanged})`.
-4. For each refused config key, restore `finalConfig[k] = current.config[k]` (delete it when absent). If `variant_key` is refused, keep `current.variant_key`. If `tiebreakers` is refused, drop it from the write.
+4. For each refused config key, restore `finalConfig[k] = current.config[k]` (delete it when absent). If `variant_key` is refused, keep `current.variant_key` AND restore every key the requested variant's preset changed (`presetDelta = keys where variants[requested][k] differs from current.config[k]`), adding each to `refused` under the same stage (review I1). If `tiebreakers` is refused, drop it from the write.
+4a. **Re-parse the final config** with `module.configSchema` (review I1). A failure throws the existing `422 CONFIG_INVALID` and nothing is written: a restore must never store a combination nobody validated.
 5. If the patch has NO accepted change left (every changed field refused and no other column in `patch`), throw `new HttpError(409, ruleErrorMessage(refused[0].code, {stage: refused[0].stageName, field: refused[0].field}), refused[0].code, { refused })`.
 6. Return `{...row, refused}`.
 
@@ -883,21 +963,27 @@ const EN: Record<RuleErrorCode, (p: { stage?: string; field?: string; reason?: s
 export const ruleErrorMessage = (code: RuleErrorCode, p: { stage?: string; field?: string; reason?: string }) => EN[code](p);
 ```
 
-- [ ] **Step 4: Run** `division-locks.test.ts`, `division-settings.test.ts` and `stage-rules.test.ts` (it imports the moved function) → judge `files == 3`, green, `pending == 0`. Then `tsc` and eslint on the changed files.
+- [ ] **Step 4: Run** `division-locks.test.ts`, `division-settings.test.ts` (incl. the rewritten `:586-640` and `:726-738` pins) and `stage-rules.test.ts` (it imports the moved function) → judge `files == 3`, green, `pending == 0`. Then `tsc` and eslint on the changed files. If the I1 re-parse case's second precondition fails, the set kernel has no cap-versus-setTo refinement: read its `superRefine` and rebuild the pair from a refinement it DOES declare (the case must stay non-vacuous), and record that as a task note.
 
 - [ ] **Step 5: Mutate once** — `MUT/t2.json`:
 
 ```json
 [
-  { "id": t3-inherit-format", "file": "apps/web/src/server/usecases/rule-locks.ts",
+  { "id": "t2-inherit-format", "file": "apps/web/src/server/usecases/rule-locks.ts",
     "find": "return rules[key] === undefined;", "replace": "return true;",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "sets the key itself does not inherit" }] },
-  { "id": t3-tiebreak-lock", "file": "apps/web/src/server/usecases/rule-locks.ts",
+  { "id": "t2-tiebreak-lock", "file": "apps/web/src/server/usecases/rule-locks.ts",
     "find": "if (change.tiebreakers) {", "replace": "if (false) {",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "table rules: tiebreakers refused" }] },
-  { "id": t3-started-only", "file": "apps/web/src/server/usecases/rule-locks.ts",
+  { "id": "t2-started-only", "file": "apps/web/src/server/usecases/rule-locks.ts",
     "find": "const live = stages.filter((s) => started.has(s.id));", "replace": "const live = stages;",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "generated but NOT started" }] }
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "generated but NOT started" }] },
+  { "id": "t2-reparse", "file": "apps/web/src/server/usecases/divisions.ts",
+    "find": "const reparsed = module.configSchema.safeParse(finalConfig);", "replace": "const reparsed = { success: true as const, data: finalConfig };",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "I1: the config left after restoring" }] },
+  { "id": "t2-variant-preset", "file": "apps/web/src/server/usecases/divisions.ts",
+    "find": "for (const k of presetDelta)", "replace": "for (const k of [])",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/division-locks.test.ts"], "name": "I1: a refused variant also drops" }] }
 ]
 ```
 
@@ -906,10 +992,10 @@ export const ruleErrorMessage = (code: RuleErrorCode, p: { stage?: string; field
 **Test types:**
 - Unit: `division-locks.test.ts`, a DB suite (the predicate is SQL).
 - E2E: Task 20, `e2e/division-locks-w2c.spec.ts` "X-SR-4 a started pool locks the division format with its name".
-- Smoke: `w2c: division table rules lock names the started stage`, added to `w2cStageRulesSuite` in Task 10. Smoke cannot run before then (`smoke.ts` is a W2b file).
+- Smoke: `w2c: division table rules lock names the started stage`, added to `w2cStageRulesSuite` in Task 10, which also rewrites the `smoke.ts:8378-8385` pin (review I2). Smoke cannot run before then (`smoke.ts` is a W2b file).
 - Regression: `division-settings.test.ts` (F2b rewritten as above) and `stage-rules.test.ts`.
 
-**Sequence cases:** empty patch; not started; started; second call with the same value; after a void; another sport; the stage sets the key itself (the positive pair of "inherits").
+**Sequence cases:** empty patch; not started; started; second call with the same value; after a void; another sport; the stage sets the key itself (the positive pair of "inherits"); a refused variant; a restore that leaves an invalid mix.
 
 ---
 
@@ -920,11 +1006,11 @@ export const ruleErrorMessage = (code: RuleErrorCode, p: { stage?: string; field
 - Modify: `packages/engine/rules/{cross-sport,boardgame,cricket,hockey,carrom,generic,icehockey,football}.md` (the signed rows), `packages/engine/test/rules-reference.test.ts` (`AWAITING_PROOF`), `IDX`.
 
 **Interfaces:**
-- Consumes: the signed rows (Task 0), OQ-2's answer, and lane B (Task 2) already merged into `WT`.
+- Consumes: the signed rows (Task 0), the owner's P-3 answer, and lane B (Task 2) already merged into `WT`.
 - Produces:
   - the rebased tree;
   - the migration number `V<next>` for Task 10;
-  - the confirmed W2b names Task 9 reads (`awardReasonOf`, the forfeit phase marker);
+  - the confirmed W2b names Task 9 reads (`playRecorded` in `E/core/events.ts`, `awardReasonOf`) and every `applyPointsRule` caller;
   - every W2c rule id present in a rules file and in `AWAITING_PROOF` until its proving test lands.
 
 - [ ] **Step 1: Confirm the merge and rebase.**
@@ -941,11 +1027,11 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git fetch o
 - [ ] **Step 3: Re-pin.**
   - Re-run the Step 0 greps and record every moved line in `IDX` under the W2c row:
     ```bash
-    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git grep -n -a 'resolveFixtureCfg(' -- apps/web/src | grep -v __tests__ | wc -l && ls db/migration/deltas | sort -V | tail -3 && git grep -n -a 'export function awardReasonOf\|forfeitPhase\|walkoverPhases' -- packages/engine/src | head
+    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git grep -n -a 'resolveFixtureCfg(' -- apps/web/src | grep -v __tests__ | wc -l && ls db/migration/deltas | sort -V | tail -3 && git grep -n -a 'export function awardReasonOf\|export function playRecorded' -- packages/engine/src && git grep -n -a 'applyPointsRule(' -- apps/web/src packages/engine/src tools | grep -v '\.test\.'
     ```
-  - Expected: 12 caller sites (11 + `awarded-state.ts`), the highest delta `V438__…` (or higher if main moved), and the W2b names.
+  - Expected: 12 caller sites (11 + `awarded-state.ts`), the highest delta `V438__…` (or higher if main moved), `awardReasonOf` and `playRecorded` found, and the caller list.
   - Write `V<next>` = the highest + 1 into the Task 10 dispatch.
-  - Open `awarded-state.ts:76-115` and W2b's `forfeit-credit.ts`. Record which phase marker a stored outcome carries; Task 9's predicate uses it (OQ-2).
+  - Record the `applyPointsRule` callers (expected four: `engine-db/competition.ts` twice, `testkit/scenarios.ts`, `tools/bench/lib/validate-pack.ts`) for Task 9. A stored award outcome carries NO played marker (review I7), which is why Task 9 reads `playRecorded` from the ledger.
 
 - [ ] **Step 4: Write the signed rule rows.** Use each rules file's existing row format (copy the shape of the row above it) and the wording exactly as signed in Task 0. Add every new id to `AWAITING_PROOF` in `rules-reference.test.ts:12`, each with the owning task number as its reason (for example `"X-SR-5": "W2c Task 14"`). The checker then stays green until the proving test lands, and each task deletes its own entry.
 
@@ -954,7 +1040,7 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/packages/engin
 ```
 Judge: green. **Mutation:** temporarily delete one new `AWAITING_PROOF` entry (`X-SR-7`) and re-run: it must go red naming `X-SR-7`. Then restore it.
 
-- [ ] **Step 5: Update `IDX`** (W2c row: rebased, re-pinned; ruling 124 folded from W2b's progress notes, finding 20), then commit with explicit paths:
+- [ ] **Step 5: Update `IDX`** (W2c row: rebased, re-pinned; ruling 124 — W2b's generic retirement credit, which amends ruling 87 — folded from W2b's design notes if W2b's merge did not already add it, finding 20), then commit with explicit paths:
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git commit -F "$TMPDIR/w2c-msg.txt" -- packages/engine/rules packages/engine/test/rules-reference.test.ts docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md; echo EXIT=$?
@@ -972,7 +1058,7 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && git commit 
 Spec §4.1 and §5.1 as amended; D1. Rule facts move into the engine.
 
 **Files:**
-- Modify: `packages/engine/src/sport/module.ts`: add the types and two optional members, beside `variants :753` and `bracketDeciders :834`.
+- Modify: `packages/engine/src/sport/module.ts`: add the types and three optional members (`ruleKeys`, `stageDefaults`, and `abandonOptions` — its TYPE only; Task 7 fills it per sport, D9), beside `variants :753` and `bracketDeciders :834`.
 - Create: `packages/engine/src/sport/rule-keys.ts`
 - Modify: `packages/engine/src/sport/index.ts`: `export * from "./rule-keys.ts";`
 - Modify, one `ruleKeys` property each:
@@ -1000,6 +1086,7 @@ Spec §4.1 and §5.1 as amended; D1. Rule facts move into the engine.
   // on SportModule<Cfg>:
   //   ruleKeys?: RuleKeys;
   //   stageDefaults?(kind: StageKind, variant: string | null): Partial<Cfg>;
+  //   abandonOptions?: readonly string[];   // D9: the abandon policies THIS sport offers (Task 7 fills it)
   export function ruleKeyApplies(fact: RuleKeyFact, kind: StageKind | null, variant: string | null): boolean;
   export function stageKeysFor(m: AnySportModule, kind: StageKind | null, variant: string | null): readonly string[];   // scope stage|match, applying
   export function fixtureKeysFor(m: AnySportModule, kind: StageKind | null, variant: string | null): readonly string[]; // scope match, applying
@@ -1017,17 +1104,19 @@ Spec §4.1 and §5.1 as amended; D1. Rule facts move into the engine.
 
 **The declaration (spec §4.1 Q5, by ENGINE key).** The web field that edits each key is in brackets. Scope `points` covers the table-points keys (D11). Every top-level schema key not listed is either a Q5 key under its engine name or is added to the test's `UNSETTABLE` table with a one-line reason. A key that fits neither, and that today's division form sets, stops the task: it is a plan finding for the owner (spec: "any key that moves is flagged").
 
-| Module | match | stage | points |
-|---|---|---|---|
-| set kernel → volleyball, badminton, tabletennis | `bestOf`, `setTo`, `finalSetTo`, `cap`, `winBy` | — | `pointsMap` |
-| tennis | `bestOf`, `set` [setType], `finalSet` and the keys its branching build writes, `game.noAd` [noAd], `tiebreak.winBy` [tiebreakWinBy] | — | — |
-| football | `halfMinutes`, `extraTime` (`matchBound: "off_or_shorter"`) | `shootout`, and the engine keys of `teamSize`, `maxSubs`, `subWindows`, `sinBinMinutes` | `points` [shootoutWin, shootoutLoss] |
-| cricket | `ballsPerInnings` [overs], `maxOversPerBowler` | `superOver` (any kind, CK-SO-1), `dls`, `playersPerSide` | `points` |
-| period kernel → icehockey | `periods.minutes` [periodMinutes], `overtime.minutes` [overtimeMinutes], `shootout.attempts` [shootoutAttempts] | `overtime` [overtime, overtimeSkaters], `shootout` | `points` |
-| hockey (narrows the kernel: no `overtime`, no `overtime.minutes`) | `periods.minutes` [quarterMinutes], `shootout.attempts` | `shootout` | `points` |
-| boardgame | — | `variant`, `clock` [clockBaseMinutes, clockIncrementSeconds, clockDelaySeconds] (item 14) | — |
-| carrom | the keys `gameTo`'s build writes, `maxBoards`, `bestOf` | `queenPoints`, `queenCapAt`, `queenFollowsBoard`, `tieBoard` (`appliesTo.stageKinds: DRAW_KINDS`, item 9) | `points` |
-| generic | — | `resultMode`, `allowDraws` | `points` |
+| Module | match | stage | points | UNSETTABLE (test-side, with reason) |
+|---|---|---|---|---|
+| set kernel → volleyball, badminton, tabletennis | `bestOf`, `setTo`, `finalSetTo`, `cap`, `winBy` | — | `pointsMap` | `records` |
+| tennis | `bestOf`, `set` [setType and the shape keys its build writes], `finalSet`, `game.noAd` [noAd], `tiebreak.winBy` [tiebreakWinBy] | — | `points` | `interruptions` |
+| football | `halfMinutes`, `extraTime` (`matchBound: "off_or_shorter"`), `shootoutAttempts` (Task 6) | `shootout`, `teamSize`, `maxSubs`, `subWindows`, `sinBinMinutes`, `rollingSubs`, `concussionSubs`, `abandonPolicy` (Task 7) | `points` [shootoutWin, shootoutLoss], `awardScore` | `periodSeconds`, `halves`, `fairPlay` |
+| cricket | `ballsPerInnings` [overs], `maxOversPerBowler` | `superOver` (any kind, CK-SO-1), `superOverStillTied`, `dls`, `minOversForResult`, `playersPerSide` | `points` | `inningsPerSide`, `ballsPerOver`, `followOn`, `reviews`, `lineupChanges` |
+| period kernel → icehockey | `periods.minutes` [periodMinutes], `overtime.minutes` [overtimeMinutes], `shootout.attempts` [shootoutAttempts] | `overtime` [overtime, overtimeSkaters], `shootout`, `abandonPolicy` (Task 7) | `points`, `awardScore` | `setPieceKinds`, `goalkeeper`, `periodSeconds`, `suspensions`, `strength`, `goalKinds`, `assists` |
+| hockey (narrows the kernel: no `overtime`, no `overtime.minutes`) | `periods.minutes` [quarterMinutes], `shootout.attempts` | `shootout`, `abandonPolicy` (Task 7) | `points`, `awardScore` | as ice hockey, plus `overtime` |
+| boardgame | — | `variant`, `clock` [clockBaseMinutes, clockIncrementSeconds, clockDelaySeconds] (item 14), `tiebreak` (`appliesTo.stageKinds: BRACKET_KINDS`), `tiebreakRungs` (Task 8) | `scoring`, `byeScore` | `colors` |
+| carrom | `gameTo`, `maxBoards`, `bestOf` | `queenPoints`, `queenCapAt`, `queenFollowsBoard`, `pointsPerCoin`, `tieBoard` (`appliesTo.stageKinds: DRAW_KINDS`, item 9), `abandonPolicy` (Task 7) | `points` | — |
+| generic | — | `resultMode`, `allowDraws`, `abandonPolicy` (Task 7) | `points` | `progressScore` |
+
+The top-level keys above are every key each module's schema declares on main `a6cc1f038` (listed 2026-10-13 by walking `configSchema`'s shape for all 11 `builtinModules`; review I8). Task 4 Step 1 re-lists them on the rebased tree, and any key W2b added is classified in the same step before the sweep is called green. Two guards keep the UNSETTABLE column honest: the engine sweep below fails on any top-level key in neither column, and Task 5's web contract fails if a key the division form sets TODAY (`configKeysFor`) is not a declared rule key — so nothing settable now can be quietly classed unsettable.
 
 - [ ] **Step 1: Write the failing test** — `packages/engine/src/sport/rule-keys.test.ts`
 
@@ -1047,8 +1136,30 @@ const KINDS = StageKind.options;
 /** Top-level cfg keys an organiser never sets, per sport, each with its reason.
  *  Reviewed line by line; a new schema key fails the sweep until it is either
  *  declared in ruleKeys or listed here. */
+const VARIANT = "a variant fact: set by the variant preset, never edited per stage or match (not in spec §4.1 Q5's settable list)";
+const BOOKKEEPING = "scorer bookkeeping or pad vocabulary, not a format rule";
+const PERIOD_UNSET = {
+  setPieceKinds: BOOKKEEPING, goalkeeper: BOOKKEEPING, periodSeconds: VARIANT, suspensions: VARIANT,
+  strength: VARIANT, goalKinds: BOOKKEEPING, assists: BOOKKEEPING,
+} as const;
+const SET_UNSET = { records: "stat-recording flags, not a format rule" } as const;
 const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  // filled in Step 3 from each module's schema; the sweep prints the missing keys
+  volleyball: SET_UNSET, badminton: SET_UNSET, tabletennis: SET_UNSET,
+  tennis: { interruptions: BOOKKEEPING },
+  football: {
+    periodSeconds: VARIANT,
+    halves: "picks the phase machine (2 halves or 4 quarters); a variant fact",
+    fairPlay: "card tracking for the FIFA fair-play tie-break; the tie-break cascade is W2d's",
+  },
+  cricket: {
+    inningsPerSide: VARIANT, ballsPerOver: VARIANT, followOn: VARIANT,
+    reviews: BOOKKEEPING, lineupChanges: "team-sheet policy, owned by the lineups programme (W4)",
+  },
+  icehockey: PERIOD_UNSET,
+  hockey: { ...PERIOD_UNSET, overtime: "hockey has no overtime (FIH); the kernel key exists, hockey narrows it out" },
+  boardgame: { colors: "home = White (chess.md §2); the in-page chess contract owns colours (do not touch colorOfHome)" },
+  carrom: {},
+  generic: { progressScore: "a pad display switch, not a result rule" },
 };
 
 describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
@@ -1287,9 +1398,9 @@ export function checkFixtureOverride(
 }
 ```
 
-  - In `module.ts`, add the three types and the two optional members, with doc comments citing spec §4.1.
+  - In `module.ts`, add the three types and the three optional members, with doc comments citing spec §4.1 (and D9 for `abandonOptions`).
   - Declare `ruleKeys` in each module per the table, as `ruleKeys: { ...SET_RULE_KEYS }` and so on.
-  - Fill `UNSETTABLE`: run the sweep, read every `is neither a ruleKey nor UNSETTABLE` message, and classify each key with its reason. Paste the final per-sport counts into the task report.
+  - `UNSETTABLE` is written out in Step 1 (review I8). After the rebase, any `is neither a ruleKey nor UNSETTABLE` message names a key W2b added: classify it into the table and the literal with its reason, or stop and raise it (finding 27). Paste the final per-sport counts (declared, unsettable) into the task report.
 
 - [ ] **Step 4: Run** the test (judge green), engine `tsc`, and `packages/engine/test/rules-reference.test.ts` (titles carry X-SR-1/2; delete their `AWAITING_PROOF` entries). Then run the existing module suites that exercise every module's shape:
 
@@ -1333,7 +1444,8 @@ If `src/sport/module.test.ts` does not exist, the implementer names the suite th
 Spec §4.1 as amended (web side), D2, D11.
 
 **Files:**
-- Modify: `apps/web/src/lib/match-rules/types.ts`: `RuleField` gains `edits: readonly string[]`, REQUIRED, so the compiler lists every field.
+- Modify: `apps/web/src/lib/match-rules/types.ts`: `RuleField` gains `edits: readonly string[]`, REQUIRED, so the compiler lists every field; `RuleField.kind` gains `"sequence"` (an ordered list, value = comma-joined option values). Both land here, not in Tasks 7–8, so lanes E1/E2 never touch `types.ts` (review M12).
+- Modify: `apps/web/src/lib/match-rules/shared.ts`: add `ABANDON_LABELS` (D9's lookup table: `replay`, `award`, `q4_stands`, `share`) and `abandonOptions(module): {value, label}[]`, which reads `module.abandonOptions ?? []` (Task 4's type; Task 7 fills it) through the table and throws on an unmapped value. Unit-tested in `rule-scope.test.ts` with a fake module (review M12: E1 then never touches `shared.ts`).
 - Modify: all 11 `apps/web/src/lib/match-rules/<sport>.ts` files: one `edits` per field (the bracketed web keys in Task 4's table).
 - Create: `apps/web/src/lib/match-rules/__tests__/run-contract.ts`
 - Create: `apps/web/src/lib/match-rules/__tests__/<sport>.contract.test.ts` × 11
@@ -1370,7 +1482,10 @@ import { fixtureKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine
 import type { RuleField } from "../types";
 
 const probes = (f: RuleField): string[] =>
-  f.kind === "select" ? (f.options ?? []).map((o) => o.value) : f.kind === "bool" ? ["on", "off"] : [String(f.min ?? 1)];
+  f.kind === "select" ? (f.options ?? []).map((o) => o.value)
+  : f.kind === "bool" ? ["on", "off"]
+  : f.kind === "sequence" ? ["", (f.options ?? []).map((o) => o.value).join(","), [...(f.options ?? [])].reverse().map((o) => o.value).join(",")]
+  : [String(f.min ?? 1)];
 
 export function runContract(m: AnySportModule, fields: readonly RuleField[]): void {
   const declared = new Set(Object.keys(m.ruleKeys ?? {}));
@@ -1424,7 +1539,8 @@ export function runContract(m: AnySportModule, fields: readonly RuleField[]): vo
           for (const k of f.edits) expect(match.has(k), `${f.key} mixes ${k}`).toBe(true);
           checked++;
         }
-      expect(checked).toBeGreaterThanOrEqual(0); // boardgame and generic have no match fields
+      // boardgame and generic declare no match keys; every other sport must have at least one match field (never a vacuous pass)
+      expect(checked > 0, `${m.key}: match fields iff match keys`).toBe(match.size > 0);
     });
   });
 }
@@ -1449,7 +1565,9 @@ For the set sports, import from `@seazn/engine/sports/setbased` (`volleyball`, `
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { DRAW_KINDS, StageKind } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { buildMatchFragment, matchFieldsFor, moduleFor, stageFieldsFor, type RuleContext } from "@/lib/rule-scope";
+import { abandonOptions } from "@/lib/match-rules/shared";
 
 const ice = (): RuleContext => ({ module: moduleFor("icehockey")!, stageKind: "knockout", variant: null });
 const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5, suddenDeath: true } };
@@ -1481,6 +1599,12 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
   it("buildMatchFragment writes nothing under a stage decider that is off", () => {
     expect(buildMatchFragment(ice(), { overtimeMinutes: "5" }, { ...stage, overtime: null })).toEqual({});
   });
+  it("abandonOptions reads the module's own list through ABANDON_LABELS, in its order; empty stays empty; an unmapped value throws", () => {
+    const fake = (o: string[]) => ({ key: "fake", abandonOptions: o }) as unknown as AnySportModule;
+    expect(abandonOptions(fake(["q4_stands", "replay"])).map((x) => x.value)).toEqual(["q4_stands", "replay"]);
+    expect(abandonOptions(fake([]))).toEqual([]);
+    expect(() => abandonOptions(fake(["nope"]))).toThrow();
+  });
   it("another sport: tennis noAd keeps the stage's other game leaves", () => {
     const t: RuleContext = { module: moduleFor("tennis")!, stageKind: "league", variant: null };
     expect(buildMatchFragment(t, { noAd: "on" }, { game: { noAd: false, other: 1 } })).toEqual({ game: { noAd: true, other: 1 } });
@@ -1491,7 +1615,7 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
 Extend `division-locks.test.ts` with one case: "table rule keys come from the engine: an ice hockey `points` edit is table rules, a `periods` edit is match format". Its expected codes come from `pointsKeysFor(icehockey, null, null)`.
 
 - [ ] **Step 2: Run to verify red.** `RuleField.edits` does not exist yet, so add it as OPTIONAL for this step only, and stub `rule-scope.ts` exports to throw. Then:
-  `cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/apps/web && rm -f "$TMPDIR/w2c-t5.json" && npx vitest run src/lib/match-rules/__tests__ src/lib/__tests__/rule-scope.test.ts --reporter=json --outputFile="$TMPDIR/w2c-t5.json"; echo EXIT=$?`
+  `cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/apps/web && rm -f "$TMPDIR/w2c-t5.json" && npx vitest run src/lib/match-rules/__tests__/volleyball.contract.test.ts src/lib/match-rules/__tests__/badminton.contract.test.ts src/lib/match-rules/__tests__/tabletennis.contract.test.ts src/lib/match-rules/__tests__/tennis.contract.test.ts src/lib/match-rules/__tests__/football.contract.test.ts src/lib/match-rules/__tests__/cricket.contract.test.ts src/lib/match-rules/__tests__/icehockey.contract.test.ts src/lib/match-rules/__tests__/hockey.contract.test.ts src/lib/match-rules/__tests__/boardgame.contract.test.ts src/lib/match-rules/__tests__/carrom.contract.test.ts src/lib/match-rules/__tests__/generic.contract.test.ts src/lib/__tests__/rule-scope.test.ts --reporter=json --outputFile="$TMPDIR/w2c-t5.json"; echo EXIT=$?`
   Expected: `files == 12`, `failedSuites == 0`, and the failures are `edits` length or `not implemented`.
 
 - [ ] **Step 3: Implement.**
@@ -1578,6 +1702,7 @@ Spec items 6, 7, 8; X-SR-6, FB-SO-1, IH-KO-1, CK-SO-1; §4.2.
 - Modify: `packages/engine/src/sports/football/football.schema.json` (via `schema:snapshot`).
 - Modify: `apps/web/src/lib/match-rules/football.ts`: new field `shootoutAttempts` (number 1–10, label "Shoot-out kicks each", `edits: ["shootoutAttempts"]`, build `{shootoutAttempts: Number(v)}`). The `shootout` field's help becomes "Penalties decide a level knockout match."
 - Modify: `apps/web/src/lib/match-rules/cricket.ts`: the `superOver` help becomes "Plays a super over whenever a match ends tied — in any stage where it is On." (CR-11).
+- Modify: `packages/engine/src/sports/cricket/cricket.test.ts`: one case (CK-SO-1 "league-on plays every tie", review M3).
 - Create: `packages/engine/src/sport/stage-defaults.test.ts`
 - Create: `MUT/t6.json`
 - Do NOT touch: `stage.ts`, `progression.ts`; any golden stream; boardgame, carrom and generic (other tasks).
@@ -1679,6 +1804,19 @@ describe("hockey, ice hockey and cricket knockout presets", () => {
 });
 ```
 
+In `cricket.test.ts`, inside the existing describe "cricket golden (d): tied T20 super over policies" (it owns `tiedMain`, `fold` and `t20`), beside "league tie without a super over stands as a tie":
+
+```ts
+it("CK-SO-1 a league stage with the super over ON plays it on every tie (ICC), never a plain tie", () => {
+  const { cfg, events } = tiedMain("repeat");       // superOver: true — what a league stage stores when the organiser turns it on
+  const state = fold(cfg, events);
+  expect(state.outcome).toBeNull();                  // not { kind: "tie" }: the super over is owed
+  expect(state.superOver).not.toBeNull();
+  expect(fold(t20, events).outcome).toEqual({ kind: "tie" }); // positive pair: off → the tie stands
+});
+```
+The engine fold is stage-kind blind (the cfg decides), so this pins the league half of CK-SO-1 without a new code path; it should be GREEN on first run (a characterisation, not a red), and the mutation in Step 5 must kill it.
+
 Before Step 2, confirm the cricket `t20` and football `youth` keys in each module's `variants`. If a name differs, the assertion uses the declared key; the rule row's wording is what fixes the VALUE.
 
 - [ ] **Step 2: Run it to verify it fails.**
@@ -1715,7 +1853,10 @@ Before Step 2, confirm the cricket `t20` and football `youth` keys in each modul
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/stage-defaults.test.ts"], "name": "FB-SO-1 the shoot-out is decided after the stage" }] },
   { "id": "t6-ko-only", "file": "packages/engine/src/sports/football/football.ts",
     "find": "(BRACKET_KINDS as readonly string[]).includes(kind)", "replace": "true",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/stage-defaults.test.ts"], "name": "table kinds get no preset" }] }
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/stage-defaults.test.ts"], "name": "table kinds get no preset" }] },
+  { "id": "t6-league-superover", "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "  if (state.cfg.superOver) {", "replace": "  if (false) {",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sports/cricket/cricket.test.ts"], "name": "CK-SO-1 a league stage with the super over ON" }] }
 ]
 ```
 
@@ -1733,34 +1874,35 @@ Before Step 2, confirm the cricket `t20` and football `youth` keys in each modul
 
 ### Task 7: Engine — "If a match is abandoned" options (E1, same loop as Task 6)
 
-Spec item 12; Q10; D9; HK-AB-2, CA-AB-2, GN-AB-2; ruling 117.
+Spec item 12; Q10; D9; HK-AB-2, CA-AB-2, GN-AB-2; ruling 117. Review fixes I4 (the Q4 predicate), I5 (ice hockey is never offered `q4_stands`), I6 (`share` under `allowDraws: false`; OQ-4).
 
 **Files:**
-- Modify: `packages/engine/src/sports/period/kernel.ts`: `abandonPolicy: z.enum(["replay", "award", "q4_stands"])` with `.superRefine` refusing `q4_stands` unless `periods.count === 4`; `applyAbandon` (`:1447`); `PERIOD_RULE_KEYS.abandonPolicy` (stage).
-- Modify: `packages/engine/src/sports/hockey/hockey.ts`: `fih-shootout` preset gains `abandonPolicy: "q4_stands"`.
-- Modify: `packages/engine/src/sports/football/football.ts`: `ruleKeys.abandonPolicy` (stage). The enum is unchanged (`replay | award`).
-- Modify: `packages/engine/src/sports/carrom/carrom.ts`, `generic/generic.ts`: `abandonPolicy: z.enum(["replay", "share"]).optional()`; `applyAbandon` honours `share`; `ruleKeys.abandonPolicy` (stage, `appliesTo.stageKinds: DRAW_KINDS`).
-- Modify: the four affected `*.schema.json` (snapshot).
-- Modify, web presentation: `apps/web/src/lib/match-rules/{football,hockey,icehockey,carrom,generic}.ts` each gain one `abandon` field. Its options are built from the module's schema enum through one shared helper, `abandonOptions(module)` in `apps/web/src/lib/match-rules/shared.ts`, a lookup table from enum value to canonical English label:
-
-```ts
-export const ABANDON_LABELS: Readonly<Record<string, string>> = {
-  replay: "Replay the match",
-  award: "Result stands",
-  q4_stands: "Result stands from the 4th quarter, otherwise replay",
-  share: "Share the points",
-};
-```
-  - Each field is `{key: "abandon", label: "If a match is abandoned", kind: "select", edits: ["abandonPolicy"], options: <enum values mapped through ABANDON_LABELS>, build: (v) => ({abandonPolicy: v})}`.
-  - The web contract (Task 5) then requires a label for every enum value: an unmapped value fails the `build()` parse sweep, because the option list would be empty.
+- Modify: `packages/engine/src/sports/period/kernel.ts`:
+  - `abandonPolicy: z.enum(["replay", "award", "q4_stands"])`, with a `.superRefine` that refuses `q4_stands` unless `periods.count === 4`, AND refuses any policy outside the sport's own `abandonOptions` list. Each period sport passes its list when it builds its schema from the kernel; re-read how `hockey.ts` and `icehockey.ts` construct their `configSchema` from the kernel (top of each file) and thread the list through that same construction.
+  - `applyAbandon` (`:1447`).
+  - `PERIOD_RULE_KEYS.abandonPolicy` (stage).
+- Modify: `packages/engine/src/sports/hockey/hockey.ts`: `abandonOptions: ["replay", "award", "q4_stands"]`; the `fih-shootout` preset gains `abandonPolicy: "q4_stands"`.
+- Modify: `packages/engine/src/sports/icehockey/icehockey.ts`: `abandonOptions: ["replay", "award"]` (review I5: `q4_stands` is a hockey rule).
+- Modify: `packages/engine/src/sports/football/football.ts`: `abandonOptions: ["replay", "award"]`; `ruleKeys.abandonPolicy` (stage). The enum is unchanged.
+- Modify: `packages/engine/src/sports/carrom/carrom.ts`, `generic/generic.ts`: `abandonPolicy: z.enum(["replay", "share"]).optional()`; `abandonOptions: ["replay", "share"]`; `applyAbandon` honours `share`; `ruleKeys.abandonPolicy` (stage, `appliesTo.stageKinds: DRAW_KINDS`). **Generic, per OQ-4:** under recommendation A, generic's schema also refuses `share` when `allowDraws` is false (`"Sharing the points needs draws to be allowed"`). Under B, no schema change; the append test below pins the hold instead.
+- Modify: the five affected `*.schema.json` (snapshot).
+- Modify, web presentation: `apps/web/src/lib/match-rules/{football,hockey,icehockey,carrom,generic}.ts` each gain one `abandon` field: `{key: "abandon", label: "If a match is abandoned", kind: "select", edits: ["abandonPolicy"], options: abandonOptions(<module>), build: (v) => ({abandonPolicy: v})}`. `abandonOptions` and `ABANDON_LABELS` already exist in `shared.ts` from Task 5, so this task does not touch `shared.ts` (review M12). The web contract (Task 5) parses each option through the module's schema, so an option the schema refuses fails there.
 - Create: `packages/engine/src/sport/abandon-options.test.ts`
+- Create: `apps/web/src/server/engine-db/__tests__/abandon-share.test.ts` (review I6: the append-level case)
 - Create: `MUT/t7.json`
 
 **Interfaces:**
-- Consumes: W2b's award-policy abandon semantics: a win or draw on the real score, and HK-AB-1 (ruling 117), a level abandon where the cfg refuses a draw → `no_result`. **Re-read `applyAbandon` on the rebased tree before Step 3** (W2b changed it).
-- Produces: `abandonPolicy` for every listed sport, in `ruleKeys` as stage scope. The web `abandon` field.
+- Consumes:
+  - Task 4's `SportModule.abandonOptions` type;
+  - Task 5's `abandonOptions(module)` web helper;
+  - W2b's award-policy abandon semantics: a win or draw on the real score, and HK-AB-1 (ruling 117), a level abandon where the cfg refuses a draw → `no_result`.
 
-- [ ] **Step 1: Write the failing test** — `packages/engine/src/sport/abandon-options.test.ts`
+  **Re-read `applyAbandon` and the phase list (`period/kernel.ts:651-665`, `:708`) on the rebased tree before Step 3** (W2b changed them).
+- Produces: `abandonOptions` on football, hockey, icehockey, carrom and generic; `abandonPolicy` in `ruleKeys` as stage scope; the web `abandon` field.
+
+**The `q4_stands` predicate (review I4).** An abandon REPLAYS only when the last regulation period has not started: phase `pre`, or a regulation period before the last (and the interval before the last quarter, if the kernel has one). Once the 4th quarter has started, the result STANDS through the award path, and that includes overtime and the shoot-out. A level score there in a no-draw cfg is `no_result` (ruling 117). The first draft keyed on "phase !== last regulation period", which replayed an abandon during the shoot-out; that is the defect.
+
+- [ ] **Step 1: Write the failing tests** — `packages/engine/src/sport/abandon-options.test.ts`
 
 ```ts
 // P9 (spec §9) — every abandon option per sport. Expected outcomes come from
@@ -1769,6 +1911,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../core/events.ts";
 import { DRAW_KINDS } from "../core/types.ts";
 import { hockey } from "../sports/hockey/index.ts";
+import { icehockey } from "../sports/icehockey/index.ts";
 import { carrom } from "../sports/carrom/index.ts";
 import { generic } from "../sports/generic/index.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -1781,10 +1924,18 @@ const HH = hk.home.entrantId;
 const fih = (extra: object = {}) => hockey.configSchema.parse({ ...hockey.variants["fih-shootout"], ...extra });
 const goal = (by: string): [string, unknown] => ["hockey.goal", { by }];
 const adv = (to: string): [string, unknown] => ["hockey.period.advance", { to }];
+// The shoot-out phase label is the kernel's own (period/kernel.ts:651-665). Import it if exported; otherwise use the
+// literal found there, with a comment citing the line.
+const SO = "SO";
+const toQ4 = (): Array<[string, unknown?]> => [["core.start"], adv("Q2"), adv("Q3"), adv("Q4")];
 
-describe("HK-AB-2 hockey: result stands from Q4, else replay", () => {
+describe("HK-AB-2 hockey: replay before the 4th quarter, the result stands from it on", () => {
   it("the fih-shootout preset carries q4_stands", () => {
     expect(fih().abandonPolicy).toBe("q4_stands");
+  });
+  it("abandoned before the start (pre) → replay", () => {
+    const s = foldMatch(hockey, fih(), hk, ev([["core.abandon", {}]]));
+    expect(s).toMatchObject({ phase: "abandoned", replayFlagged: true });
   });
   it("abandoned in Q3 → replay (no outcome, replay flagged)", () => {
     const s = foldMatch(hockey, fih(), hk, ev([["core.start"], goal(HH), adv("Q2"), adv("Q3"), ["core.abandon", {}]]));
@@ -1796,24 +1947,44 @@ describe("HK-AB-2 hockey: result stands from Q4, else replay", () => {
     expect(s.outcome).toMatchObject({ winner: HH });
   });
   it("ruling 117: abandoned level in Q4 in a no-draw cfg → no result", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([["core.start"], adv("Q2"), adv("Q3"), adv("Q4"), ["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), ["core.abandon", {}]]));
     expect(s.outcome).toEqual({ kind: "no_result" });
+  });
+  it("I4: abandoned in the SHOOT-OUT → stands (never a replay); level → no result", () => {
+    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), adv(SO), ["core.abandon", {}]]));
+    expect((s as { replayFlagged?: boolean }).replayFlagged ?? false).toBe(false);
+    expect(s.outcome).toEqual({ kind: "no_result" });
+  });
+  it("I4: the overtime branch is unreachable for hockey — no hockey variant has overtime (an assumption made a guard)", () => {
+    let checked = 0;
+    for (const [v, preset] of Object.entries(hockey.variants)) {
+      expect(hockey.configSchema.parse(preset).overtime ?? null, v).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(hockey.variants).length);
   });
   it("q4_stands is refused for a cfg without four periods", () => {
     expect(hockey.configSchema.safeParse({ ...hockey.variants["fih-shootout"], periods: { count: 2, minutes: 35 } }).success).toBe(false);
   });
 });
 
-describe("CA-AB-2 GN-AB-2 opt-in shared points on an abandon; default replay", () => {
+describe("I5 q4_stands is a hockey option only", () => {
+  it("hockey offers it; ice hockey neither offers nor parses it", () => {
+    expect(hockey.abandonOptions).toContain("q4_stands");
+    expect(icehockey.abandonOptions).not.toContain("q4_stands");
+    let checked = 0;
+    for (const preset of Object.values(icehockey.variants)) {
+      expect(icehockey.configSchema.safeParse({ ...preset, abandonPolicy: "q4_stands" }).success).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(icehockey.variants).length);
+  });
+});
+
+describe("CA-AB-2 GN-AB-2 opt-in shared points on an abandon; default unchanged", () => {
   for (const m of [carrom, generic]) {
-    it(`${m.key}: absent policy keeps today's replay`, () => {
+    it(`${m.key}: absent policy keeps today's outcome`, () => {
       expect(m.configSchema.parse({}).abandonPolicy).toBeUndefined();
-    });
-    it(`${m.key}: share folds an abandon to a draw at the score as it stood`, () => {
-      const lu = defaultLineupPair(m.positions);
-      const cfg = m.configSchema.parse({ abandonPolicy: "share" });
-      const s = foldMatch(m as never, cfg as never, lu, ev([["core.start"], ["core.abandon", {}]]));
-      expect((s as { outcome: unknown }).outcome).toMatchObject({ kind: "draw" });
     });
     it(`${m.key}: share is offered in table stages only`, () => {
       let checked = 0;
@@ -1824,43 +1995,124 @@ describe("CA-AB-2 GN-AB-2 opt-in shared points on an abandon; default replay", (
       expect(checked).toBe(2);
     });
   }
+  it("generic: share folds an abandon to a draw and KEEPS the non-zero score as it stood (2–1)", () => {
+    const lu = defaultLineupPair(generic.positions);
+    const cfg = generic.configSchema.parse({ ...generic.variants["score"], allowDraws: true, abandonPolicy: "share" });
+    const s = foldMatch(generic, cfg, lu, ev([
+      ["core.start"],
+      ["generic.score", { by: lu.home.entrantId, points: 2 }],
+      ["generic.score", { by: lu.away.entrantId, points: 1 }],
+      ["core.abandon", {}],
+    ]));
+    expect(s.outcome).toMatchObject({ kind: "draw" });
+    expect(generic.summary(s).headline).toContain("2");          // the score as it stood, not rewritten to level
+  });
+  it("carrom: share folds an abandon to a draw", () => {
+    const lu = defaultLineupPair(carrom.positions);
+    const cfg = carrom.configSchema.parse({ abandonPolicy: "share" });
+    const s = foldMatch(carrom as never, cfg as never, lu, ev([["core.start"], ["core.abandon", {}]]));
+    expect((s as { outcome: unknown }).outcome).toMatchObject({ kind: "draw" });
+  });
+  it("OQ-4 = A: generic refuses share when draws are not allowed (config time)", () => {
+    expect(generic.configSchema.safeParse({ ...generic.variants["score"], allowDraws: false, abandonPolicy: "share" }).success).toBe(false);
+    expect(generic.configSchema.safeParse({ ...generic.variants["score"], allowDraws: true, abandonPolicy: "share" }).success).toBe(true); // positive pair
+  });
 });
 
-describe("P9 sweep: every declared abandon option folds an abandon without throwing", () => {
-  it("each sport × each enum value (counted)", () => {
+describe("P9 sweep: every offered abandon option folds an abandon without throwing", () => {
+  it("each sport × each of ITS options (counted against the declared lists)", () => {
     let checked = 0;
+    let offered = 0;
     for (const m of builtinModules) {
-      const shape = (m.configSchema as unknown as { shape?: Record<string, { options?: string[]; unwrap?: () => { options?: string[] } }> }).shape;
-      const field = shape?.abandonPolicy;
-      const values = field?.options ?? field?.unwrap?.().options ?? [];
-      for (const v of values) {
-        const cfg = m.configSchema.safeParse({ ...(Object.values(m.variants)[0] ?? {}), abandonPolicy: v });
-        if (!cfg.success) continue; // q4_stands on a 3-period preset: refused by design (asserted above)
-        expect(() => foldMatch(m as never, cfg.data as never, defaultLineupPair(m.positions), ev([["core.start"], ["core.abandon", {}]]))).not.toThrow();
+      for (const v of m.abandonOptions ?? []) {
+        offered++;
+        const preset = Object.values(m.variants).find((p) => m.configSchema.safeParse({ ...p, abandonPolicy: v }).success);
+        expect(preset, `${m.key}: no variant accepts its own option ${v}`).toBeDefined();
+        const cfg = m.configSchema.parse({ ...preset, abandonPolicy: v });
+        expect(() => foldMatch(m as never, cfg as never, defaultLineupPair(m.positions), ev([["core.start"], ["core.abandon", {}]]))).not.toThrow();
         checked++;
       }
     }
-    expect(checked).toBeGreaterThanOrEqual(2 + 2 + 3); // football 2, carrom/generic 2 each, period kernel ≥ 3 across hockey/icehockey
+    expect(offered).toBe(2 + 3 + 2 + 2 + 2); // football, hockey, icehockey, carrom, generic — from the Files list above
+    expect(checked).toBe(offered);
   });
 });
 ```
-The carrom and generic `start → abandon` streams use each module's own required first events. If `core.start` alone does not open play for a module, prepend the minimal opening its existing abandon test uses (`git grep -n -a abandon -- packages/engine/src/sports/<m>/<m>.test.ts`) and cite that line in a comment.
+The carrom stream uses carrom's own required first events. If `core.start` alone does not open play, prepend the minimal opening its existing abandon test uses (`git grep -n -a abandon -- packages/engine/src/sports/carrom/carrom.test.ts`) and cite that line in a comment. `generic.summary(...).headline` is the module's own score line; if the module names it differently, read it from `generic.ts`'s `summary`.
 
-- [ ] **Step 2: Run to verify red** (`src/sport/abandon-options.test.ts`; judge). Expected: `q4_stands` is not in the enum, so the preset assertion fails; `share` parses as an unknown key.
+**OQ-4 = B instead:** replace the last generic case with `expect(generic.configSchema.safeParse({ …, allowDraws: false, abandonPolicy: "share" }).success).toBe(true)`, and the append test below asserts the hold.
+
+`apps/web/src/server/engine-db/__tests__/abandon-share.test.ts` (review I6 — the refusal lives at append time, so only an append-level test can see it):
+
+```ts
+import { afterAll, describe, expect, it } from "vitest";
+import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
+import { seedBracket } from "./helpers/seed-bracket";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
+
+async function liveGeneric(allowDraws: boolean) {
+  const b = await seedBracket({ sport: "generic", variant: "score", stageKind: "league", entrants: 2 });
+  // Division cfg carries the policy until Task 12 lets a stage store it; set it the way the division form would.
+  await sql`update divisions d set config = d.config || ${sql.json({ allowDraws, abandonPolicy: "share" })}
+            from stages s join fixtures f on f.stage_id = s.id where f.id = ${b.fixtureIds[0]!} and d.id = s.division_id`;
+  const id = b.fixtureIds[0]!;
+  const [f] = await sql<{ home: string; away: string }[]>`select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${id}`;
+  await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+  await appendEvent(b.auth.orgId, id, 1, { type: "generic.score", payload: { by: f!.home, points: 2 } });
+  await appendEvent(b.auth.orgId, id, 2, { type: "generic.score", payload: { by: f!.away, points: 1 } });
+  return { b, id };
+}
+
+describe.skipIf(!HAS_DB)("GN-AB-2 share at append time (review I6)", () => {
+  it("allowDraws on: a 2–1 abandon under share is accepted as a draw and decided", async () => {
+    const { b, id } = await liveGeneric(true);
+    const r = await appendEvent(b.auth.orgId, id, 3, { type: "core.abandon", payload: {} });
+    expect(r.outcome).toMatchObject({ kind: "draw" });
+    expect(r.status).toBe("decided");
+  });
+  it("allowDraws off (OQ-4 = A): the cfg never reaches a fixture — the freeze refuses it, so the first append is refused CONFIG_INVALID and nothing is written", async () => {
+    const b = await seedBracket({ sport: "generic", variant: "score", stageKind: "league", entrants: 2 });
+    await sql`update divisions d set config = d.config || ${sql.json({ allowDraws: false, abandonPolicy: "share" })}
+              from stages s join fixtures f on f.stage_id = s.id where f.id = ${b.fixtureIds[0]!} and d.id = s.division_id`;
+    await expect(appendEvent(b.auth.orgId, b.fixtureIds[0]!, 0, { type: "core.start", payload: {} })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    const [n] = await sql<{ n: string }[]>`select count(*)::text n from score_events where fixture_id = ${b.fixtureIds[0]!}`;
+    expect(n!.n).toBe("0");
+  });
+});
+```
+- The SQL write stands in for the division form, which validates on save; the second case proves the engine is the backstop.
+- Under OQ-4 = B, the second case becomes: `liveGeneric(false)`, then the abandon is accepted and held `needs_decision`, never refused `DRAW_NOT_ALLOWED`.
+- Before writing the second case, read how `appendEventInTx` reacts to a cfg its module refuses at the freeze (`append-event.ts` freeze `:297`). If the code is not `CONFIG_INVALID`, assert the code it actually uses and record it.
+
+- [ ] **Step 2: Run to verify red** (`src/sport/abandon-options.test.ts`; judge; then the web DB file). Expected:
+  - `q4_stands` is not in the enum, so the preset assertion fails;
+  - `abandonOptions` is undefined;
+  - `share` parses as an unknown key;
+  - the append test's first case gets `no_result` (today's generic abandon, `generic.ts:570-575`).
 
 - [ ] **Step 3: Implement.** In the period kernel's `applyAbandon`, prepend:
   ```ts
   if (state.cfg.abandonPolicy === "q4_stands") {
-    const regs = periodLabels(state.cfg);
-    if (state.phase !== regs[regs.length - 1]) return { ...state, phase: "abandoned", replayFlagged: true };
-    // otherwise fall through to the award path below (ruling 117's level → no_result included)
+    const regs = periodLabels(state.cfg);                       // regulation periods in order (re-read :651-665)
+    const last = regs[regs.length - 1];
+    const lastStarted = state.phase === last || phaseAfterRegulation(state.phase); // pre, earlier quarters and intervals → false
+    if (!lastStarted) return { ...state, phase: "abandoned", replayFlagged: true };
+    // the 4th quarter has started (or play is in OT / the shoot-out): fall through to the award path (ruling 117's level → no_result included)
   }
   ```
-  Carrom and generic: `share` returns `{...end, phase: "done", outcome: {kind: "draw"}}`, keeping the score as it stood in the state (no score rewrite). Then the presets, the `ruleKeys` entries, the web fields, and `schema:snapshot`.
+  - `phaseAfterRegulation(phase)` is a small exported kernel helper: true for the kernel's overtime and shoot-out phases, read from the same phase list. It is unit-tested by the shoot-out case above.
+  - An interval phase between Q3 and Q4, if the kernel has one, counts as before Q4.
+  - The `.superRefine` refusing a policy outside the module's `abandonOptions`.
+  - Carrom and generic: `share` returns `{...state, phase: "done", outcome: {kind: "draw"}}`, keeping the score as it stood (no score rewrite).
+  - Generic under OQ-4 = A: `.superRefine` refusing `share` with `allowDraws: false`.
+  - Then the presets, `abandonOptions`, the `ruleKeys` entries, the web fields, and `schema:snapshot`.
 
 - [ ] **Step 4: Run.**
   - Engine: the new test; `src/sport/rule-keys.test.ts`; `src/sports/period/period.test.ts`, `src/sports/carrom/carrom.test.ts`, `src/sports/generic/generic.test.ts` (they hold today's abandon cases); the golden replay.
-  - Web: `npx vitest related --run src/lib/match-rules/football.ts src/lib/match-rules/hockey.ts src/lib/match-rules/icehockey.ts src/lib/match-rules/carrom.ts src/lib/match-rules/generic.ts --reporter=json --outputFile="$TMPDIR/w2c-t7.json"`. The contract names must be exactly those five sports.
+  - Web: `abandon-share.test.ts` (DB; `pending == 0`). Then `npx vitest related --run src/lib/match-rules/football.ts src/lib/match-rules/hockey.ts src/lib/match-rules/icehockey.ts src/lib/match-rules/carrom.ts src/lib/match-rules/generic.ts --reporter=json --outputFile="$TMPDIR/w2c-t7.json"`. The contract names must be exactly those five sports.
   - `tsc` both sides; `rules-reference.test.ts` after deleting the proven ids from `AWAITING_PROOF`.
 
 - [ ] **Step 5: Mutate once** — `MUT/t7.json`, plus changed-lines Stryker (`sports-period-*`, `sports-other-3..7`):
@@ -1868,23 +2120,38 @@ The carrom and generic `start → abandon` streams use each module's own require
 ```json
 [
   { "id": "t7-q4-gate", "file": "packages/engine/src/sports/period/kernel.ts",
-    "find": "if (state.phase !== regs[regs.length - 1]) return", "replace": "if (false) return",
+    "find": "if (!lastStarted) return", "replace": "if (false) return",
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/abandon-options.test.ts"], "name": "abandoned in Q3" }] },
+  { "id": "t7-q4-shootout", "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "phaseAfterRegulation(state.phase)", "replace": "false",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/abandon-options.test.ts"], "name": "I4: abandoned in the SHOOT-OUT" }] },
+  { "id": "t7-ice-options", "file": "packages/engine/src/sports/icehockey/icehockey.ts",
+    "find": "abandonOptions: [\"replay\", \"award\"]", "replace": "abandonOptions: [\"replay\", \"award\", \"q4_stands\"]",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/abandon-options.test.ts"], "name": "I5 q4_stands is a hockey option only" }] },
   { "id": "t7-share-kind", "file": "packages/engine/src/sports/carrom/carrom.ts",
     "find": "appliesTo: { stageKinds: DRAW_KINDS }", "replace": "appliesTo: undefined",
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/abandon-options.test.ts"], "name": "carrom: share is offered in table stages only" }] }
 ]
 ```
+If `period/kernel.ts` does not take the sport's option list in a form the third mutant can reach, it targets the kernel's `.superRefine` line that checks the list instead. Its killer stays the same.
 
 - [ ] **Step 6: Commit** `feat(engine): abandon options per stage — replay, result stands, Q4 rule, share (HK-AB-2, CA-AB-2, GN-AB-2)`.
 
 **Test types:**
-- Unit: above.
+- Unit: above, including the append-level `abandon-share.test.ts`.
 - E2E: Task 17 "X-SR-1 abandon options follow the sport" (the select's option list per sport).
 - Smoke: Task 11 `w2c: a hockey stage saves q4_stands`.
 - Regression: the period, carrom and generic suites; golden replay; HK-AB-1 (W2b's) proving test unchanged.
 
-**Sequence cases:** absent policy (today) first; each option; Q3 vs Q4; level vs leading; another sport (carrom, generic, football); a preset that cannot take `q4_stands`.
+**Sequence cases:**
+- the absent policy (today) first;
+- each option;
+- pre, Q3, Q4 and the shoot-out;
+- level vs leading;
+- a non-zero score under `share`;
+- `allowDraws` off;
+- another sport (carrom, generic, football, ice hockey);
+- a preset that cannot take `q4_stands`.
 
 ---
 
@@ -1896,15 +2163,17 @@ Spec item 13; BG-KO-3, BG-KO-2 (enforced); D7, D8; P8 engine half.
 - Modify: `packages/engine/src/sports/boardgame/boardgame.ts`:
   - cfg (`:84` area): `tiebreakRungs: z.array(z.enum(TIEBREAK_RUNGS)).max(TIEBREAK_RUNGS.length).optional()` refined to unique;
   - `BoardgameTiebreak` (`:195-203`): a discriminated union. Rapid and blitz keep `{rung, winner, score?}`; Armageddon becomes `{rung: "armageddon", black: EntrantId, result: "white" | "black" | "draw"}`;
-  - `applyTiebreak` (`:354-366`): the winner for Armageddon is DERIVED (`result === "white"` → the non-black entrant, `"black"` or `"draw"` → `black`). The Armageddon colour is stored in a NEW fold field `armageddonBlack` (never `colorOfHome`). A rung outside the cfg's list is refused `TIEBREAK_NOT_APPLICABLE`;
+  - `applyTiebreak` (`:354-366`): the winner for Armageddon is DERIVED (`result === "white"` → the non-black entrant, `"black"` or `"draw"` → `black`). The Armageddon colour is stored in a NEW OPTIONAL fold field `armageddonBlack?: EntrantId`, ABSENT from the state until an Armageddon is recorded (never `null` in init), so every existing boardgame golden state replays byte-identical (review I11). Never `colorOfHome`. A rung outside the cfg's list is refused `TIEBREAK_NOT_APPLICABLE`;
   - the phase switch (`:297`): a draw goes to phase `tiebreak` only when the effective rung list (cfg value ?? `TIEBREAK_RUNGS`) is non-empty;
   - `awaitingDecider` (`:879`): unchanged predicate (`phase === "tiebreak"`), now unreachable for an empty list;
   - `ruleKeys.tiebreakRungs` (stage, `appliesTo.stageKinds: BRACKET_KINDS`).
+  - `export function effectiveRungs(cfg): readonly TiebreakRung[]` = `cfg.tiebreakRungs ?? TIEBREAK_RUNGS`, IN THE STAGE'S ORDER (never re-sorted to `TIEBREAK_RUNGS` order). The phase gate, the rung check and Task 21's sheet all read it (review I12).
 - Modify: `packages/engine/src/core/errors.ts`: append `TIEBREAK_COLOUR_REQUIRED` (last, so the frozen-order test only grows); `packages/engine/src/core/errors.test.ts`: append it to the frozen list.
 - Modify: `packages/engine/src/sports/boardgame/tiebreak.test.ts`: the three cases that send the old Armageddon shape are updated to `{black, result}` (greenfield, finding 24).
+- Modify: `apps/web/src/server/usecases/__tests__/withdrawal-decider-hold.test.ts:214`: its Armageddon sender moves to `{black, result}` (review I10). The other old-shape sender, `scripts/smoke.ts:2406`, is moved by Task 11, which owns `smoke.ts` (this lane may run while lane F edits it).
 - Modify: `packages/engine/src/sports/boardgame/boardgame.schema.json` (snapshot); `packages/engine/src/testkit/golden.ts` (`COVERAGE_CONFIGS` gains one bracket cfg with `tiebreakRungs: ["armageddon"]`), committed alone with `EXTEND_GOLDEN=1`.
 - Modify: `apps/web/src/server/api-v1/http.ts:22` (`TIEBREAK_COLOUR_REQUIRED: 422`); `apps/web/src/lib/scoring-vocab.ts:596` (its `engineError.TIEBREAK_COLOUR_REQUIRED` key); `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` (`engineError.TIEBREAK_COLOUR_REQUIRED`: en "Record who had Black." with es/fr/nl translations); then `pnpm i18n:gen-keys`.
-- Modify: `apps/web/src/lib/match-rules/boardgame.ts`: field `tiebreakRungs`. This is a new `kind: "sequence"` control: an ordered subset of fixed options. `RuleField.kind` gains `"sequence"` in `types.ts`, and the field has `options` = the three rungs with labels "Rapid game", "Blitz game", "Armageddon", `edits: ["tiebreakRungs"]`, and `build: (v) => ({tiebreakRungs: v === "" ? [] : v.split(",")})`. The value travels as a comma-joined string, so `values: Record<string,string>` is unchanged.
+- Modify: `apps/web/src/lib/match-rules/boardgame.ts`: field `tiebreakRungs`. This is a `kind: "sequence"` control (the kind itself was added to `types.ts` by Task 5, review M12): an ordered subset of fixed options. The field has `options` = the three rungs with labels "Rapid game", "Blitz game", "Armageddon", `edits: ["tiebreakRungs"]`, and `build: (v) => ({tiebreakRungs: v === "" ? [] : v.split(",")})`. The value travels as a comma-joined string, so `values: Record<string,string>` is unchanged.
 - Create: `MUT/t8.json`
 - Do NOT touch: `colorOfHome`, `boardgame.tsx` skin (Task 21), any other sport.
 
@@ -1912,12 +2181,12 @@ Spec item 13; BG-KO-3, BG-KO-2 (enforced); D7, D8; P8 engine half.
 - Consumes: Task 4/5 contracts.
 - Produces:
   - `BoardgameTiebreak` (the union above);
-  - fold field `armageddonBlack: EntrantId | null`;
+  - fold field `armageddonBlack?: EntrantId` (optional, absent unless set);
+  - `effectiveRungs(cfg)`;
   - `TIEBREAK_COLOUR_REQUIRED`;
-  - `RuleField.kind` adds `"sequence"`;
   - the boardgame `tiebreakRungs` web field.
 
-- [ ] **Step 1: Write the failing tests.** Append to `packages/engine/src/sports/boardgame/tiebreak.test.ts`, which reuses its own `ev`, `lineups`, `H`, `A`, `ko`, `drawn`, `fold`, `codeOf` helpers (`:1-25`):
+- [ ] **Step 1: Write the failing tests.** Append to `packages/engine/src/sports/boardgame/tiebreak.test.ts`, which reuses its own `ev`, `lineups`, `H`, `A`, `ko`, `drawn`, `fold`, `codeOf` helpers (`:1-25`); add `effectiveRungs` and `TIEBREAK_RUNGS` to its `./boardgame.ts` import:
 
 ```ts
 const koWith = (rungs: readonly string[]) => boardgame.configSchema.parse({ ...boardgame.bracketDeciders(boardgame.configSchema.parse({})), tiebreakRungs: rungs });
@@ -1941,6 +2210,12 @@ describe("BG-KO-3 a stage chooses its tie-break rungs and their order", () => {
     expect(boardgame.configSchema.safeParse({ tiebreakRungs: ["blitz", "blitz"] }).success).toBe(false);
     expect(koWith(["blitz", "rapid"]).tiebreakRungs).toEqual(["blitz", "rapid"]);
   });
+  it("I12: the stage's order is the order played — [blitz, rapid] is NOT re-sorted to TIEBREAK_RUNGS order", () => {
+    expect(TIEBREAK_RUNGS.indexOf("rapid")).toBeLessThan(TIEBREAK_RUNGS.indexOf("blitz")); // precondition: the canonical order differs
+    expect(effectiveRungs(koWith(["blitz", "rapid"]))).toEqual(["blitz", "rapid"]);
+    expect(effectiveRungs(koWith([]))).toEqual([]);
+    expect(effectiveRungs(boardgame.configSchema.parse({}))).toEqual([...TIEBREAK_RUNGS]);
+  });
 });
 
 describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine half)", () => {
@@ -1959,6 +2234,10 @@ describe("BG-KO-2 a drawn Armageddon is won by the recorded Black (P8 engine hal
     const before = fold(koWith(["armageddon"]), drawn) as { colorOfHome?: unknown };
     expect(s.armageddonBlack).toBe(A);
     expect(s.colorOfHome).toEqual(before.colorOfHome);
+  });
+  it("I11: a fold with no Armageddon carries NO armageddonBlack key (goldens replay byte-identical)", () => {
+    expect(Object.hasOwn(fold(ko, drawn), "armageddonBlack")).toBe(false);
+    expect(Object.hasOwn(fold(koWith(["rapid"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })]), "armageddonBlack")).toBe(false);
   });
   it("an Armageddon without black is refused TIEBREAK_COLOUR_REQUIRED", () => {
     expect(codeOf(() => fold(koWith(["armageddon"]), [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", result: "draw" })]))).toBe("TIEBREAK_COLOUR_REQUIRED");
@@ -2006,12 +2285,12 @@ describe("rule 10 — rungs × draw × tiebreak events", () => {
 - [ ] **Step 3: Implement** as listed in **Files**. The effective list is `cfg.tiebreakRungs ?? TIEBREAK_RUNGS`. Then:
   - `schema:snapshot`;
   - the golden coverage entry, as a commit of its own with `EXTEND_GOLDEN=1`;
-  - the web field and `kind: "sequence"`. `MatchRuleFields` renders "sequence" in Task 17; until then, `match-rules.tsx` renders nothing for an unknown kind. Confirm that by reading its switch and record it;
+  - the web field (the `"sequence"` kind exists since Task 5). `MatchRuleFields` renders "sequence" in Task 17; until then, `match-rules.tsx` renders nothing for an unknown kind. Confirm that by reading its switch and record it;
   - the http/vocab/dictionary rows and `pnpm i18n:gen-keys`.
 
 - [ ] **Step 4: Run.**
-  - Engine: `tiebreak.test.ts`, `boardgame.test.ts`, `errors.test.ts`, `rule-keys.test.ts`, the golden replay.
-  - Web: `npx vitest related --run src/lib/match-rules/boardgame.ts …` (contract names: exactly `boardgame`), `src/lib/__tests__/scoring-vocab*.test.ts` (the vocab coverage test, found with `git grep -l -a ENGINE_ERROR_KEY -- apps/web/src/lib/__tests__`), and `pnpm i18n:check`.
+  - Engine: `tiebreak.test.ts`, `boardgame.test.ts`, `errors.test.ts`, `rule-keys.test.ts`, the golden replay. Every pre-existing boardgame golden stream must replay BYTE-IDENTICAL (review I11); a diff there means `armageddonBlack` leaked into init.
+  - Web: `withdrawal-decider-hold.test.ts` (DB, `pending == 0`); `npx vitest related --run src/lib/match-rules/boardgame.ts …` (contract names: exactly `boardgame`), `src/lib/__tests__/scoring-vocab*.test.ts` (the vocab coverage test, found with `git grep -l -a ENGINE_ERROR_KEY -- apps/web/src/lib/__tests__`), and `pnpm i18n:check`.
   - `tsc` both sides; `rules-reference.test.ts`.
 
 - [ ] **Step 5: Mutate once** — `MUT/t8.json`, plus changed-lines Stryker (`sports-other-1/2`):
@@ -2026,7 +2305,10 @@ describe("rule 10 — rungs × draw × tiebreak events", () => {
     "killers": [{ "cwd": "packages/engine", "files": ["src/sports/boardgame/tiebreak.test.ts"], "name": "empty list: a drawn bracket game is level" }] },
   { "id": "t8-colour-required", "file": "packages/engine/src/sports/boardgame/boardgame.ts",
     "find": "throw new EngineError(\"TIEBREAK_COLOUR_REQUIRED\"", "replace": "if (false) throw new EngineError(\"TIEBREAK_COLOUR_REQUIRED\"",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sports/boardgame/tiebreak.test.ts"], "name": "without black is refused" }] }
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sports/boardgame/tiebreak.test.ts"], "name": "without black is refused" }] },
+  { "id": "t8-order", "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "cfg.tiebreakRungs ?? TIEBREAK_RUNGS", "replace": "TIEBREAK_RUNGS.filter((r) => (cfg.tiebreakRungs ?? TIEBREAK_RUNGS).includes(r))",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sports/boardgame/tiebreak.test.ts"], "name": "I12: the stage's order is the order played" }] }
 ]
 ```
 The `find` strings assume the implementation uses `rungs.length > 0` for the phase gate and the derivation `result === "white" ? <non-black> : black`. The implementer writes the code in that form, so the mutants address it.
@@ -2042,48 +2324,59 @@ The `find` strings assume the implementation uses `rungs.length > 0` for the pha
 **Sequence cases:** absent list first; empty list; a single rung; a reordered list; draw → Armageddon → void → awaiting again; another rung refused; another sport unaffected (the frozen `errors.test.ts` covers every module's codes).
 
 ---
-### Task 9: Engine — stage points: only an unplayed award is a forfeit; the awarded score replaces; inexpressible rules (lane E3, **BLOCKED until rebase on W2b merge**, waits on OQ-2)
+### Task 9: Stage points — a forfeit is an award with NOTHING PLAYED; the awarded score replaces; inexpressible rules (lane E3, **BLOCKED until rebase on W2b merge and lane F merged**)
 
-Spec items 10 (refusal half) and 11; Q1, Q9; X-PT-1; P6. Builds on W2b's `awardReasonOf` (`E/sport/forfeit-credit.ts:17`), which exists only after Task 3.
+Spec items 10 (refusal half) and 11 as amended at `1b757c6cb`; Q1, Q9; owner P-3 "A"; X-PT-1; P6. Review fix I7: the first draft's premise was false. A stored award outcome `{kind, winner, loser|null, reason}` carries NO played marker (`core/types.ts:136-195`), so the played fact must come from the ledger.
 
 **Files:**
-- Modify: `packages/engine/src/competition/points.ts`: `isForfeit` (`:57`), the `awardScore` block (W2b `:149-154`); new `pointsRuleExpressible`.
+- Modify: `packages/engine/src/competition/points.ts`: `applyPointsRule(outcome, pair, rule, played)` (new REQUIRED 4th parameter, so `tsc` lists every caller); `isForfeit` (`:57`) becomes `isUnplayedForfeit(outcome, played)`; the `awardScore` block (W2b `:149-154`) REPLACES; new `pointsRuleExpressible`.
+- Modify, every caller (Task 3 Step 3's list; `tsc` is the check):
+  - `apps/web/src/server/engine-db/competition.ts:395` (the standings fold): pass the fixture's played fact, computed with W2b's `playRecorded(ledger, module)` (`E/core/events.ts:354`; rulings 112–115, 118, 120) over the fixture's `score_events`. Load the ledgers of the AWARD fixtures only, with one query per stage (`select fixture_id, id, type, voids_event_id as voids from score_events where fixture_id = any(${awardIds}) order by fixture_id, seq`). If W2b's `engine-db/awarded-state.ts` already derives this fact for a fixture, call that instead: one authority, never a second predicate.
+  - `:115` (the bye path): `played = false`. A bye is told apart by `isBye`, not by the flag.
+  - `packages/engine/src/testkit/scenarios.ts:377`: compute `playRecorded` over the scenario's own events.
+  - `tools/bench/lib/validate-pack.ts`: compute `playRecorded` over the pack fixture's events if the pack carries them. If a pack carries only outcomes, pass `false` (an award with no ledger had nothing played) and say so in a comment citing this task. (Do-not-touch covers only `run-suite.ts` / `PackSchema`.)
+- Modify: `apps/web/src/server/public-site/qualification-view.ts` (W2b `:179`, `:187-199`). `ruleScoresForfeits` today assumes "every award carries" the rule's score, ADDED. It becomes a per-fixture `ruleScoreReaches(f, meta)`: true only for an unplayed, non-bye award under a rule with a non-zero `awardScore`. `QualFixture` gains `played: boolean`, set by its loader from the same `playRecorded` read (re-read the loader on the rebased tree: `git grep -n -a "QualFixture" -- apps/web/src/server`).
 - Create: `packages/engine/src/competition/points-w2c.test.ts`
+- Create: `apps/web/src/server/public-site/__tests__/qualification-points-parity.test.ts`
+- Modify: `apps/web/src/server/engine-db/__tests__/` — the standings suite that covers awards (`git grep -l -a "awardScore" -- apps/web/src/server/engine-db/__tests__`) gains one DB case (below).
 - Create: `MUT/t9.json`
-- Do NOT touch: `competition.ts` callers (their behaviour follows the function); the module `forfeitCredit` hooks (W2b's); `stage.ts`.
+- Do NOT touch: the module `forfeitCredit` hooks (W2b's); `stage.ts`; `playRecorded` itself.
 
 **Interfaces:**
 - Consumes:
+  - `playRecorded(ledger, module)` (W2b, `@seazn/engine/core`);
   - `awardReasonOf(outcome)` → `"walkover" | "retired" | "disqualified" | "withdrew" | "bye"`;
-  - the nothing-played marker Task 3 Step 3 recorded;
   - `PointsRule`, `FixtureResult`, `MatchOutcome`.
 - Produces:
   ```ts
-  /** OQ-2 (as answered): an award with nothing played. A bye is NOT a forfeit (OQ-2 b). */
-  export function isUnplayedForfeit(outcome: MatchOutcome): boolean;
+  /** P-3 "A": a forfeit under a stage PointsRule is an award with NOTHING PLAYED, whatever its reason; never a bye. */
+  export function isUnplayedForfeit(outcome: MatchOutcome, played: boolean): boolean;
+  export function applyPointsRule(outcome: MatchOutcome, pair: FixtureResult, rule: PointsRule, played: boolean): FixtureResult;
   export type Expressible = { readonly ok: true } | { readonly ok: false; readonly keys: readonly string[]; readonly reason: string };
   /** Q1: a stage PointsRule (win/draw/loss + bonuses + forfeit) cannot express the division's split points. */
   export function pointsRuleExpressible(divisionCfg: unknown): Expressible;
+  // qualification-view.ts
+  export function ruleScoreReaches(f: Pick<QualFixture, "outcome" | "played" | "home_entrant_id" | "away_entrant_id">, meta: StageQualMeta): boolean;
   ```
-  `applyPointsRule`'s signature is unchanged.
 
-**Behaviour under OQ-2's recommendation.** If the owner answers otherwise, the table changes, and the tests below change with it before Step 3.
+**Behaviour (owner P-3 "A"; spec X-PT-1 at `1b757c6cb`).**
 
-| Outcome | Stage rule `forfeit` set | Points | Metrics |
-|---|---|---|---|
-| award `walkover` | yes | `forfeit.winnerPoints` / `loserPoints` | `awardScore` **replaces** for/against/diff when set; otherwise the sport's credit stands |
-| award `withdrew` or `disqualified`, nothing played | yes | as walkover | as walkover |
-| award `retired`, or `withdrew`/`disqualified` after play | yes | `base.win` / `base.loss` (the note in S3: "retirement, DQ or withdrawal after play earns normal points") | the sport's credit (ruling 124) |
-| award `bye` | yes | `forfeit.winnerPoints` (today's) | never `awardScore` |
-| win, method `walkover` or `forfeit` (football/kernel) | yes | as walkover | as walkover |
+| Outcome | `played` | Stage rule `forfeit` set | Points | Metrics |
+|---|---|---|---|---|
+| award, any reason except `bye` (walkover, withdrew, disqualified, retired) | false | yes | `forfeit.winnerPoints` / `loserPoints` | `awardScore` **replaces** for/against/diff when set; otherwise the sport's credit stands |
+| award, any reason except `bye` | true | yes | `base.win` / `base.loss` (S3's note: "retirement, DQ or withdrawal after play earns normal points") | the sport's credit (ruling 124 for generic) |
+| award `bye` | false | yes | `forfeit.winnerPoints` for the advancer (today's) | NEVER `awardScore` |
+| win, method `walkover` or `forfeit` (football/kernel) | false | yes | as an unplayed award | as an unplayed award |
+| any | any | no forfeit row | base points | unchanged |
 
-- [ ] **Step 1: Write the failing test** — `packages/engine/src/competition/points-w2c.test.ts`
+- [ ] **Step 1: Write the failing tests.** `packages/engine/src/competition/points-w2c.test.ts`:
 
 ```ts
-// X-PT-1 (Q9) and Q1. Expected values come from the signed rule row and the
-// rule's own fields; the award shapes come from W2b's AWARD_REASONS.
+// X-PT-1 (Q9, owner P-3 "A") and Q1. Expected values come from the signed rule row and the rule's own fields;
+// the award shapes from W2b's AWARD_REASONS; the played fact from W2b's playRecorded over a real ledger.
 import { describe, expect, it } from "vitest";
 import { AWARD_REASONS, type MatchOutcome } from "../core/types.ts";
+import { playRecorded } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { applyPointsRule, isUnplayedForfeit, pointsRuleExpressible, PointsRule } from "./points.ts";
 
@@ -2091,38 +2384,61 @@ const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { w
 const delta = (entrantId: string, won: 0 | 1, lost: 0 | 1, gf: number, ga: number) =>
   ({ entrantId, won, drawn: 0, lost, points: 0, metrics: { for: gf, against: ga, diff: gf - ga } });
 const pair = (gf: number, ga: number) => [delta("H", 1, 0, gf, ga), delta("A", 0, 1, ga, gf)] as never;
-const award = (reason: string, played: boolean): MatchOutcome =>
-  ({ kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason, ...(played ? {} : {}) }) as never;
+const award = (reason: string): MatchOutcome => ({ kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason }) as never;
+type D = ReturnType<typeof delta>;
+const apply = (o: MatchOutcome, p: never, played: boolean, r = rule) => applyPointsRule(o, p, r, played) as unknown as D[];
 
-describe("X-PT-1 under a stage points rule only an unplayed award is a forfeit", () => {
+// The played fact is read from ledgers through the ONE authority, never typed in:
+const football = builtinModules.find((m) => m.key === "football")!;
+const NOTHING = playRecorded([{ id: "1", type: "core.start" }, { id: "2", type: "core.forfeit" }], football);
+const SOMETHING = playRecorded([{ id: "1", type: "core.start" }, { id: "2", type: "football.goal" }, { id: "3", type: "core.forfeit" }], football);
+
+describe("X-PT-1 a forfeit is an award with nothing played, whatever its reason", () => {
+  it("preconditions: the ledgers read as intended through playRecorded", () => {
+    expect(NOTHING).toBe(false);
+    expect(SOMETHING).toBe(true);
+  });
   it("covers every award reason W2b declares (counted)", () => {
     expect([...AWARD_REASONS].sort()).toEqual(["bye", "disqualified", "retired", "walkover", "withdrew"]);
   });
-  it("a walkover pays the forfeit row and its awarded score REPLACES the credited score", () => {
-    const [h, a] = applyPointsRule(award("walkover", false), pair(3, 0), rule) as unknown as ReturnType<typeof delta>[];
-    expect([h.points, a.points]).toEqual([2, -1]);
-    expect(h.metrics).toEqual({ for: 5, against: 0, diff: 5 }); // replaced, not 3+5
-    expect(a.metrics).toEqual({ for: 0, against: 5, diff: -5 });
+  it("every non-bye reason with nothing played pays the forfeit row, and its awarded score REPLACES the credit", () => {
+    let checked = 0;
+    for (const reason of AWARD_REASONS.filter((r) => r !== "bye")) {
+      const [h, a] = apply(award(reason), pair(3, 0), NOTHING);
+      expect([h.points, a.points], reason).toEqual([rule.forfeit!.winnerPoints, rule.forfeit!.loserPoints]);
+      expect(h.metrics, reason).toEqual({ for: 5, against: 0, diff: 5 }); // replaced: not 3 + 5
+      expect(a.metrics, reason).toEqual({ for: 0, against: 5, diff: -5 });
+      checked++;
+    }
+    expect(checked).toBe(AWARD_REASONS.length - 1);
   });
-  it("a retirement after play earns normal points and keeps the sport's credit (ruling 124 owns the score)", () => {
-    const [h, a] = applyPointsRule(award("retired", true), pair(2, 1), rule) as unknown as ReturnType<typeof delta>[];
-    expect([h.points, a.points]).toEqual([rule.base.win, rule.base.loss]);
-    expect(h.metrics).toEqual({ for: 2, against: 1, diff: 1 });
+  it("every non-bye reason AFTER play earns normal points and keeps the sport's credit (Q9)", () => {
+    let checked = 0;
+    for (const reason of AWARD_REASONS.filter((r) => r !== "bye")) {
+      const [h, a] = apply(award(reason), pair(2, 1), SOMETHING);
+      expect([h.points, a.points], reason).toEqual([rule.base.win, rule.base.loss]);
+      expect(h.metrics, reason).toEqual({ for: 2, against: 1, diff: 1 });
+      checked++;
+    }
+    expect(checked).toBe(AWARD_REASONS.length - 1);
   });
-  it("a bye keeps the forfeit row's points but never the awarded score (OQ-2 b)", () => {
-    const [h] = applyPointsRule(award("bye", false), pair(0, 0), rule) as unknown as ReturnType<typeof delta>[];
-    expect(h.points).toBe(2);
+  it("a bye keeps the forfeit row's points but NEVER the awarded score", () => {
+    const [h] = apply(award("bye"), pair(0, 0), NOTHING);
+    expect(h.points).toBe(rule.forfeit!.winnerPoints);
     expect(h.metrics).toEqual({ for: 0, against: 0, diff: 0 });
-    expect(isUnplayedForfeit(award("bye", false))).toBe(false);
+    expect(isUnplayedForfeit(award("bye"), NOTHING)).toBe(false);
   });
-  it("a rule with no forfeit row pays base points to every award", () => {
+  it("a rule with no forfeit row pays base points to every award (the empty case)", () => {
     const plain = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 } });
-    const [h] = applyPointsRule(award("walkover", false), pair(0, 0), plain) as unknown as ReturnType<typeof delta>[];
-    expect(h.points).toBe(3);
+    expect(apply(award("walkover"), pair(0, 0), NOTHING, plain)[0]!.points).toBe(plain.base.win);
   });
-  it("a football walkover win method is a forfeit too", () => {
-    expect(isUnplayedForfeit({ kind: "win", winner: "H", loser: "A", method: "walkover" } as never)).toBe(true);
-    expect(isUnplayedForfeit({ kind: "win", winner: "H", loser: "A", method: "regulation" } as never)).toBe(false);
+  it("a football walkover win method is a forfeit; a regulation win is not", () => {
+    expect(isUnplayedForfeit({ kind: "win", winner: "H", loser: "A", method: "walkover" } as never, NOTHING)).toBe(true);
+    expect(isUnplayedForfeit({ kind: "win", winner: "H", loser: "A", method: "regulation" } as never, SOMETHING)).toBe(false);
+  });
+  it("a double walkover stays 0 points for both whatever the flag (X-DW-4 unchanged)", () => {
+    const [h, a] = apply({ kind: "double_walkover" } as never, pair(0, 0), NOTHING);
+    expect([h.points, a.points]).toEqual([0, 0]);
   });
 });
 
@@ -2149,27 +2465,73 @@ describe("Q1 pointsRuleExpressible — refused, never silently dropped", () => {
   });
 });
 ```
-The `played` flag in `award()` stands for W2b's nothing-played marker. Before Step 2, the implementer rewrites `award()` to set the real marker field Task 3 recorded. The `retired` case must carry "played", and a new case "withdrew with nothing played pays the forfeit row" is added with the marker set. Both are required, not optional: they are the OQ-2 (a) pair.
+Re-read the ice-hockey split keys (`otWin`, `otLoss`) from its `points` schema before running; the refusal must name the keys the schema actually declares.
 
-- [ ] **Step 2: Run to verify red** (judge). Expected: the walkover metrics come back `{for: 8, …}` (added); the bye gets `for: 5`; `isUnplayedForfeit` and `pointsRuleExpressible` are undefined.
+`apps/web/src/server/public-site/__tests__/qualification-points-parity.test.ts` — the public calculator and the standings fold must agree (one rule, two readers):
+
+```ts
+import { describe, expect, it } from "vitest";
+import { AWARD_REASONS } from "@seazn/engine/core";
+import { applyPointsRule, PointsRule } from "@seazn/engine/competition";
+import { ruleScoreReaches } from "../qualification-view";
+
+const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } });
+const meta = { pointsRule: rule } as never;
+const pair = [
+  { entrantId: "H", won: 1, drawn: 0, lost: 0, points: 0, metrics: { for: 1, against: 0, diff: 1 } },
+  { entrantId: "A", won: 0, drawn: 0, lost: 1, points: 0, metrics: { for: 0, against: 1, diff: -1 } },
+] as never;
+
+describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awarded score lands", () => {
+  it("every award reason × played (counted): ruleScoreReaches ⇔ applyPointsRule changed the score", () => {
+    let checked = 0;
+    for (const reason of AWARD_REASONS)
+      for (const played of [false, true]) {
+        const outcome = { kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason } as never;
+        const f = { outcome, played, home_entrant_id: "H", away_entrant_id: reason === "bye" ? null : "A" };
+        const out = applyPointsRule(outcome, pair, rule, played) as unknown as { metrics: { for: number } }[];
+        const changed = out[0]!.metrics.for !== 1;
+        expect(ruleScoreReaches(f as never, meta), `${reason}/played=${played}`).toBe(changed);
+        checked++;
+      }
+    expect(checked).toBe(AWARD_REASONS.length * 2);
+  });
+  it("a rule with a zero awarded score reaches nothing (the empty case)", () => {
+    const zero = { pointsRule: PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } }) } as never;
+    expect(ruleScoreReaches({ outcome: { kind: "award", winner: "H", loser: "A", reason: "walkover" }, played: false, home_entrant_id: "H", away_entrant_id: "A" } as never, zero)).toBe(false);
+  });
+});
+```
+`@seazn/engine/competition` is the package subpath (Global Constraints); confirm `applyPointsRule` and `PointsRule` are exported there.
+
+The DB case in the standings suite drives the seam through real `score_events`:
+- a badminton league stage with a `forfeit: {winnerPoints: 2, loserPoints: 0, awardScore: [21, 0]}` rule;
+- fixture 1: `core.start` → `core.forfeit {reason: "withdrew"}` (nothing played) → the winner's row has 2 points and `for` 21;
+- fixture 2: `core.start` → one rally event → `core.forfeit {reason: "withdrew"}` → base points and the rally score, no 21.
+
+Copy the seeding and the forfeit payload from the suite's existing award case.
+
+- [ ] **Step 2: Run to verify red** (engine file, then the two web files; judge). Expected: `applyPointsRule` takes 3 arguments (a tsc error is NOT a red: add the 4th parameter as optional and unused for the red run, so the assertions fail); the walkover metrics come back added (`for: 8`); the bye gets `for: 5`; a withdrew-with-nothing-played gets base points; the parity test fails on byes and played awards.
 
 - [ ] **Step 3: Implement.**
 
 ```ts
-export function isUnplayedForfeit(outcome: MatchOutcome): boolean {
-  if (outcome.kind === "win") return outcome.method === "walkover" || outcome.method === "forfeit";
-  if (outcome.kind !== "award") return false;
-  const reason = awardReasonOf(outcome);
-  if (reason === "walkover") return true;
-  if (reason === "withdrew" || reason === "disqualified") return playedNothing(outcome); // the marker Task 3 recorded
-  return false;
-}
 const isBye = (o: MatchOutcome) => o.kind === "award" && awardReasonOf(o) === "bye";
+export function isUnplayedForfeit(outcome: MatchOutcome, played: boolean): boolean {
+  if (played) return false;
+  if (outcome.kind === "win") return outcome.method === "walkover" || outcome.method === "forfeit";
+  return outcome.kind === "award" && !isBye(outcome);
+}
 ```
-In `applyPointsRule`:
-- `const forfeit = isUnplayedForfeit(outcome)`;
+In `applyPointsRule(outcome, pair, rule, played)`:
+- `const forfeit = isUnplayedForfeit(outcome, played)`;
 - the forfeit-points branch fires on `(forfeit || isBye(outcome)) && rule.forfeit !== undefined`;
-- the awardScore block fires on `forfeit && rule.forfeit?.awardScore !== undefined` and assigns `metrics.for = mine; metrics.against = theirs; metrics.diff = mine - theirs`.
+- the awardScore block fires on `forfeit && rule.forfeit?.awardScore !== undefined` and ASSIGNS `metrics.for = mine; metrics.against = theirs; metrics.diff = mine - theirs`.
+
+Then:
+- make the 4th parameter required and fix the four callers;
+- `ruleScoreReaches` in `qualification-view.ts`, with `ruleScoresForfeits`' callers moved to it per fixture;
+- `QualFixture.played` from the loader.
 
 `pointsRuleExpressible`:
 
@@ -2182,7 +2544,11 @@ export function pointsRuleExpressible(divisionCfg: unknown): Expressible {
 }
 ```
 
-- [ ] **Step 4: Run** the new test, `src/competition/points.test.ts`, the competition suites that call `applyPointsRule` (`git grep -l -a applyPointsRule -- packages/engine/src '*.test.ts'`), and `rules-reference.test.ts` (delete X-PT-1 from `AWAITING_PROOF`). Then engine `tsc`.
+- [ ] **Step 4: Run.**
+  - Engine: the new test, `src/competition/points.test.ts`, the suites that call `applyPointsRule` (`git grep -l -a applyPointsRule -- packages/engine/src '*.test.ts'`), `testkit` scenario tests, and `rules-reference.test.ts` (delete X-PT-1 from `AWAITING_PROOF`).
+  - Web: the parity test; the standings suite with the new DB case (`pending == 0`); the existing qualification-view suites (`git grep -l -a qualification-view -- apps/web/src '*.test.ts'`).
+  - Bench: `tools/bench`'s own validate-pack test, if one exists (`git grep -l -a validate-pack -- tools/bench '*.test.ts'`).
+  - `tsc` for engine and web.
 
 - [ ] **Step 5: Mutate once** — `MUT/t9.json`, plus changed-lines Stryker (group `competition-2`):
 
@@ -2190,34 +2556,46 @@ export function pointsRuleExpressible(divisionCfg: unknown): Expressible {
 [
   { "id": "t9-replace", "file": "packages/engine/src/competition/points.ts",
     "find": "metrics.for = mine;", "replace": "metrics.for = (metrics.for ?? 0) + mine;",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "REPLACES the credited score" }] },
-  { "id": "t9-retired-normal", "file": "packages/engine/src/competition/points.ts",
-    "find": "if (reason === \"walkover\") return true;", "replace": "if (reason !== \"bye\") return true;",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "retirement after play earns normal points" }] },
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "REPLACES the credit" }] },
+  { "id": "t9-played", "file": "packages/engine/src/competition/points.ts",
+    "find": "  if (played) return false;", "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "AFTER play earns normal points" }] },
   { "id": "t9-bye-no-score", "file": "packages/engine/src/competition/points.ts",
-    "find": "if (forfeit && rule.forfeit?.awardScore !== undefined)", "replace": "if ((forfeit || isBye(outcome)) && rule.forfeit?.awardScore !== undefined)",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "a bye keeps the forfeit row" }] }
+    "find": "return outcome.kind === \"award\" && !isBye(outcome);", "replace": "return outcome.kind === \"award\";",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/competition/points-w2c.test.ts"], "name": "a bye keeps the forfeit row" }] },
+  { "id": "t9-qual-parity", "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "!f.played", "replace": "true",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/public-site/__tests__/qualification-points-parity.test.ts"], "name": "ruleScoreReaches" }] }
 ]
 ```
+`ruleScoreReaches` is written with the literal `!f.played` so the last mutant addresses it.
 
-- [ ] **Step 6: Commit** `feat(engine): stage points — only an unplayed award is a forfeit; awarded score replaces (X-PT-1, Q1)`.
+- [ ] **Step 6: Commit** `feat(engine): stage points — a forfeit is an award with nothing played; awarded score replaces (X-PT-1, Q1)`.
 
 **Test types:**
-- Unit: above.
-- E2E: Task 18 `e2e/stage-rules-w2c.spec.ts` "X-PT-1 a stage walkover shows the forfeit points in the table". It is driven through the product: a walkover recorded by `core.forfeit` and a table read.
+- Unit: the engine file and the parity test.
+- E2E: Task 18 `e2e/stage-rules-w2c.spec.ts` "ST-G8 stage points: preview, save, walkover row in the table (X-PT-1)". It is driven through the product: a walkover recorded by `core.forfeit` and a table read.
 - Smoke: Task 13 `w2c: stage points walkover pays the forfeit row`.
-- Regression: `points.test.ts` and the competition suites. Any test that pinned the additive awardScore or byes-as-forfeits is updated (greenfield), with the change named in the task report.
+- Regression: `points.test.ts`, the competition suites, and the qualification-view suites. Any test that pinned the additive awardScore or byes-as-score-carriers is updated (greenfield) and named in the task report. The DB standings case is the seam proof.
 
-**Sequence cases:** a rule with no forfeit row (empty case) first; walkover; retired; withdrew before and after play; bye; another sport's win-method walkover; empty division cfg.
+**Sequence cases:**
+- a rule with no forfeit row (empty) first;
+- every reason with nothing played;
+- every reason after play;
+- a bye;
+- a double walkover;
+- another sport's win-method walkover;
+- an empty division cfg;
+- a zero awarded score.
 
 ---
 
-### Task 10: Migration + one resolver through every caller (lane F, **BLOCKED until rebase on W2b merge**)
+### Task 10: Migration + one resolver through every caller (lane F, **BLOCKED until rebase on W2b merge**; Opus)
 
-Spec item 2 (resolution half); §4.4; D4; P2, P3; Review Focus 2. Creates `w2cStageRulesSuite`.
+Spec item 2 (resolution half); §4.4; §5.2 at `1b757c6cb` (both columns); D4, D14; P2, P3; Review Focus 2; owner P-1 (the column) and P-2 (the smoke pin, review I2). Creates `w2cStageRulesSuite`.
 
 **Files:**
-- Create: `db/migration/deltas/V<next>__fixture_rules_override.sql` (`V<next>` from Task 3 Step 3)
+- Create: `db/migration/deltas/V<next>__fixture_rules_override.sql` (`V<next>` from Task 3 Step 3): `rules_override jsonb` AND `rules_version int not null default 0` (P-1; nothing writes or reads the version until Tasks 14 and 15)
 - Modify: `apps/web/src/server/engine-db/fixture-cfg.ts`: `FixtureCfgSource`; `resolveFixtureCfg(fixture, divisionCfg, stage, module)`.
 - Modify: every caller (12 sites in 10 files after W2b). Each one's SQL select adds `f.rules_override`, and it passes `{config_snapshot, rules_override}`:
   - `engine-db/fold.ts`, `engine-db/append-event.ts`, `engine-db/competition.ts` (2 sites), `engine-db/awarded-state.ts`;
@@ -2226,7 +2604,9 @@ Spec item 2 (resolution half); §4.4; D4; P2, P3; Review Focus 2. Creates `w2cSt
 - Modify: `apps/web/src/server/engine-db/__tests__/bracket-overlay-callers.test.ts`: SITES ledger + one override assertion per caller.
 - Modify: `apps/web/src/server/engine-db/__tests__/fixture-cfg.test.ts` (or create it if absent): the order and signature.
 - Create: `apps/web/src/server/engine-db/__tests__/fixture-cfg-order.test.ts`
-- Modify: `scripts/smoke.ts`: `w2cStageRulesSuite` (new), called from `main()` after `stageRulesFormatSmoke` (`:1242`).
+- Modify: `scripts/smoke.ts`:
+  - `w2cStageRulesSuite` (new), called from `main()` after `stageRulesFormatSmoke` (`:1242`);
+  - the pin "v8 format 409s once fixtures exist" (`:8378-8385` on main; re-pin on the rebased tree), rewritten for P-2 (below).
 - Create: `MUT/t10.json`
 
 **Interfaces:**
@@ -2301,10 +2681,16 @@ In `bracket-overlay-callers.test.ts`:
     -- fixture plays its stage's rules. Greenfield (spec §11): nullable, no default,
     -- no backfill.
     alter table fixtures add column if not exists rules_override jsonb;
+    -- W2c P-1 (spec §4.5 item 2): bumped ONLY by a Q11 correction or a staff re-freeze
+    -- (refreezeFixture). A scoring pad sends it with each event; append-event refuses a
+    -- stale one FIXTURE_RULES_CHANGED. Senders that omit it are never checked.
+    alter table fixtures add column if not exists rules_version int not null default 0;
     comment on column fixtures.rules_override is
       'W2c: match-scoped rule override (engine ruleKeys scope "match"). Resolved as '
       'snapshot ?? (division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override); frozen '
       'into config_snapshot with everything else at the first event.';
+    comment on column fixtures.rules_version is
+      'W2c: incremented by a rules correction or staff re-freeze only; checked at append time when the sender includes it.';
     ```
   - Resolver: the D4 signature, with the override merged last:
     ```ts
@@ -2312,7 +2698,7 @@ In `bracket-overlay-callers.test.ts`:
     return typeof ov === "object" && ov !== null && !Array.isArray(ov) ? { ...decided, ...(ov as object) } : decided;
     ```
   - Each caller's select gains `f.rules_override`. `tsc` lists every caller that does not compile, which is the point of D4.
-  - Apply the migration to the label DB: `$S rebuild --label w2c` (it runs `db:apply`). Confirm with `psql "$DATABASE_URL" -Atc "select column_name from information_schema.columns where table_name='fixtures' and column_name='rules_override'"`, which prints `rules_override`.
+  - Apply the migration to the label DB: `$S rebuild --label w2c` (it runs `db:apply`). Confirm with `psql "$DATABASE_URL" -Atc "select column_name from information_schema.columns where table_name='fixtures' and column_name in ('rules_override','rules_version') order by 1"`, which prints both names, and `select column_default, is_nullable from information_schema.columns where table_name='fixtures' and column_name='rules_version'`, which prints `0|NO`.
   - Smoke suite:
     ```ts
     async function w2cStageRulesSuite(): Promise<void> {
@@ -2325,11 +2711,29 @@ In `bracket-overlay-callers.test.ts`:
     }
     ```
     `w2cSeedStartedPool` is a local helper in the same file. It POSTs a competition, a division (`badminton`, `short`), two entrants, one league stage named "Pool A" via `/stages`, then `/generate`, then one `core.start` through `/api/v1/fixtures/{id}/events` with `expected_seq: 0`. It copies the call shapes of `stageRulesFormatSmoke` (`:6652`) and the events POST at `:2045`, and returns the ids.
+  - The P-2 smoke pin (review I2). Today it asserts a whole-config `FORMAT_LOCKED` as soon as fixtures exist. Under P-2 the lock is per STARTED inheriting stage, so generating fixtures alone no longer locks the variant. Rewrite the block as two checks, keeping its seeding (`div`, `stage`, the `/generate` call):
+    ```ts
+    const early = await raw(admin, `/api/v1/divisions/${div.id}`, "PATCH", { variant_key: "score" });
+    check("v8 format: a variant change is accepted while no stage has started (P-2)", early.status === 200);
+    const [first] = (await v1(admin, `/api/v1/stages/${stage.id}/fixtures`, "GET")) as { id: string }[];
+    await raw(admin, `/api/v1/fixtures/${first!.id}/events`, "POST", { expected_seq: 0, event: { type: "core.start", payload: {} } });
+    const post = await raw(admin, `/api/v1/divisions/${div.id}`, "PATCH", { variant_key: "win_loss" });
+    check(
+      "v8 format 409s once an inheriting stage has started (P-2)",
+      post.status === 409 &&
+        (post.json.error as { code?: string } | undefined)?.code === "DIVISION_FORMAT_LOCKED" &&
+        JSON.stringify(post.json).includes("\"L\""),   // names the started stage
+    );
+    ```
+    - The division's sport and variants are the ones the block already seeds; read them first. If its sport is not generic, use two of that sport's own variant keys in place of `score` / `win_loss`.
+    - Copy the fixture list and events POST shapes from the block's neighbours (the events POST at `:2045`). Do not invent routes: if `GET /stages/{id}/fixtures` does not exist, read the fixture id the way `stageRulesFormatSmoke` does.
+    - `structSwap` below it is unchanged. Re-read it on the rebased tree: if it relied on the variant still being `score`, keep `early` as the last variant write.
 
 - [ ] **Step 4: Run.** The two tests plus every caller's own suite: `git grep -l -a "resolveFixtureCfg\|loadFoldInputs\|loadFixturePadCfg" -- apps/web/src '*.test.ts'`. Pass that exact list and judge `files` against it. Then web `tsc` and eslint. Then the smoke suite alone against the label server:
   ```bash
   cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c && eval "$(~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label w2c)" && SMOKE_ONLY=w2cStageRulesSuite pnpm test:smoke; echo EXIT=$?
   ```
+  The rewritten P-2 pin lives in another suite (the one holding "v8 format"); select that suite as well, the same way.
   If `smoke.ts` has no `SMOKE_ONLY` switch, read `main()` (`:185`) for its existing selection mechanism. If none exists, run the full smoke against the label server ONCE at this task's gate, which is the house smoke command, not the vitest suite. Record which applied.
 
 - [ ] **Step 5: Mutate once** — `MUT/t10.json`:
@@ -2350,7 +2754,7 @@ In `bracket-overlay-callers.test.ts`:
 **Test types:**
 - Unit: above, including the DB per-caller suite.
 - E2E: Task 19 `e2e/match-rules-w2c.spec.ts` "X-SR-2 an overridden match plays best of 1 on the pad".
-- Smoke: the suite's first check, which is Task 2's. There is no override HTTP path until Task 14, whose smoke covers the override.
+- Smoke: the suite's first check, which is Task 2's, and the two rewritten "v8 format" checks (P-2). There is no override HTTP path until Task 14, whose smoke covers the override.
 - Regression: each caller's own suite.
 
 **Sequence cases:** no override (null) first; an override; a non-object override; a frozen snapshot plus an override; a stage edit after an override (Review Focus 2); another sport (carrom, football).
@@ -2860,13 +3264,13 @@ The badminton `short` and generic `score` variants are re-confirmed as in Task 2
 
 ---
 
-### Task 14: The one override writer and the live correction (Q11) (server, waits on OQ-3)
+### Task 14: The one override writer and the live correction (Q11) (server; Opus)
 
-Spec items 2, 3; §4.5 item 2; D5, D6; X-SR-2, X-SR-5; P5 (server half); Review Focus 1; the §8 seam "the override is folded through every caller from a real `writeFixtureRulesOverride` write".
+Spec items 2, 3; §4.5 item 2 at `1b757c6cb`; D5, D6, D14; owner P-1 (the version bump) and P-4 (a correction that ends the match is refused); X-SR-2, X-SR-5; P5 (server half); review I8 (real ledgers), M9 (the race assertion); Review Focus 1; the §8 seam "the override is folded through every caller from a real `writeFixtureRulesOverride` write".
 
 **Files:**
-- Create: `apps/web/src/server/engine-db/refreeze.ts`: `refreezeFixture(tx, fixtureId, cfg)`, extracted verbatim from `admin-fixture-config.ts:212-338` (the snapshot write plus the `match_states` upsert).
-- Modify: `apps/web/src/server/usecases/admin-fixture-config.ts`: call `refreezeFixture` (behaviour unchanged; it passes the real `rules_override` through the resolver since Task 10).
+- Create: `apps/web/src/server/engine-db/refreeze.ts`: `refreezeFixture(tx, fixtureId, cfg)`, extracted from `admin-fixture-config.ts:212-338` (the snapshot write plus the `match_states` upsert). Its snapshot `update` also sets `rules_version = rules_version + 1` and returns the new value (P-1: a correction and a staff re-freeze are the ONLY two bumps, and both go through this one function).
+- Modify: `apps/web/src/server/usecases/admin-fixture-config.ts`: `resnapshotFixtureConfig` (`:155`) calls `refreezeFixture`. Behaviour is unchanged except that it now bumps `rules_version`, so an open pad learns of a staff re-freeze too. It passes the real `rules_override` through the resolver since Task 10.
 - Create: `apps/web/src/server/usecases/fixture-rules.ts`
 - Create: `apps/web/src/app/api/v1/fixtures/[id]/rules/route.ts` (`PUT`). Copy the auth call from `app/api/v1/fixtures/[id]/route.ts`'s PATCH.
 - Modify: `apps/web/src/server/api-v1/schemas.ts` (`PutFixtureRules = z.object({rules: z.record(z.string(), z.unknown()).nullable()})`), `openapi.ts` (route + summary listing the codes), `openapi/*.json`.
@@ -2880,18 +3284,20 @@ Spec items 2, 3; §4.5 item 2; D5, D6; X-SR-2, X-SR-5; P5 (server half); Review 
 - Consumes: Task 4's `checkFixtureOverride`; Task 10's `resolveFixtureCfg`; `loadFoldInputs`, `foldFrom` (`fold.ts`); `hasFrozenCfg`; `LOCKED_FIXTURE_STATUSES`; the fixture advisory lock `pg_advisory_xact_lock(hashtext('fixture:'||id))` (`append-event.ts:189`).
 - Produces:
   ```ts
-  export interface OverrideWriteResult { readonly fixtures: readonly { id: string; started: boolean; rules_version: string | null }[] }
+  export interface OverrideWriteResult { readonly fixtures: readonly { id: string; started: boolean; rules_version: number }[] }
+  // engine-db/refreeze.ts
+  export async function refreezeFixture(tx: Tx, fixtureId: string, cfg: unknown): Promise<{ rules_version: number }>;
   export async function writeFixtureRulesOverride(auth: AuthCtx, fixtureIds: readonly string[], fragment: Record<string, unknown> | null): Promise<OverrideWriteResult>;
   // PUT /api/v1/fixtures/{id}/rules {rules} → 200 OverrideWriteResult
   ```
   The future competition-desk bulk action calls this function unchanged.
 
-**The correction's "fits" test (D6, with OQ-3's recommendation).** For each listed sport, refold the recorded ledger under the corrected cfg. It fits iff:
+**The correction's "fits" test (D6; owner P-4 "A").** For each listed sport, refold the recorded ledger under the corrected cfg. It fits iff:
 - the fold does not throw;
 - `outcome` is unchanged;
 - `module.summary(state).headline` (the score as shown) is unchanged.
 
-That is how "never re-scores a played match" becomes a check (finding 23).
+That is how "never re-scores a played match" becomes a check (finding 23). When only the corrected fold has an outcome, the refusal reads "This format would end the match as it stands" (P-4).
 
 - [ ] **Step 1: Write the failing test** — `fixture-rules.test.ts`:
 
@@ -2904,11 +3310,13 @@ import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
+import { resolveLatestModule } from "@seazn/engine/sports";
+import { resnapshotFixtureConfig } from "../admin-fixture-config";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
-const row = async (id: string) => (await sql<{ rules_override: unknown; config_snapshot: Record<string, unknown> | null; config_snapshot_at: Date | null }[]>`
-  select rules_override, config_snapshot, config_snapshot_at from fixtures where id = ${id}`)[0]!;
+const row = async (id: string) => (await sql<{ rules_override: unknown; config_snapshot: Record<string, unknown> | null; rules_version: number }[]>`
+  select rules_override, config_snapshot, rules_version from fixtures where id = ${id}`)[0]!;
 const events = async (id: string) => Number((await sql<{ n: string }[]>`select count(*)::text n from score_events where fixture_id = ${id}`)[0]!.n);
 const audit = async (id: string) => sql<{ payload: { before: unknown; after: unknown; started: boolean } }[]>`
   select payload from competition_events where type = 'fixture.rules_override' and payload->>'fixture_id' = ${id} order by created_at`;
@@ -2943,18 +3351,53 @@ describe.skipIf(!HAS_DB)("X-SR-2 writeFixtureRulesOverride — unstarted", () =>
   });
 });
 
+// I8 — a real ledger: one badminton set played to its end with the module's own rally event
+// (`badminton.rally {wonBy}`, the shape public-player-matches.test.ts:707 uses). The rally count is the
+// variant's own `setTo` (read from the module, never typed), so a preset change moves the test with it.
+const badminton = resolveLatestModule("badminton");
+const SHORT = badminton.configSchema.parse(badminton.variants["short"]) as { setTo: number; bestOf: number };
+const sides = async (id: string) =>
+  (await sql<{ home: string; away: string }[]>`select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${id}`)[0]!;
+async function playSet(orgId: string, id: string, seq0: number, winner: string): Promise<number> {
+  let seq = seq0;
+  for (let i = 0; i < SHORT.setTo; i++) await appendEvent(orgId, id, seq++, { type: "badminton.rally", payload: { wonBy: winner } });
+  return seq;
+}
+async function oneSetPlayed(b: Awaited<ReturnType<typeof seedBracket>>) {
+  const id = b.fixtureIds[0]!;
+  const { home } = await sides(id);
+  await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+  const next = await playSet(b.auth.orgId, id, 1, home);
+  return { id, home, next };
+}
+
 describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
-  it("fits: badminton best of 3 → 5 after one set; snapshot re-frozen, version advanced, audit says started", async () => {
+  it("precondition: the short preset is best of 3, so one set leaves the match open", () => {
+    expect(SHORT.bestOf).toBe(3);
+  });
+  it("fits: badminton best of 3 → 5 after one completed set; snapshot re-frozen, version bumped once, audit says started", async () => {
     const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    // one completed set: start + a set's worth of rallies via the module's own point event (copy the event shape from settle-seating.test.ts)
-    await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
-    const v0 = (await row(id)).config_snapshot_at!;
-    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
+    const { id } = await oneSetPlayed(b);
+    const before = await row(id);
+    expect(before.rules_version).toBe(0);                       // the first event freezes; it never bumps (P-1)
+    const out = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
     const r = await row(id);
     expect(r.config_snapshot).toMatchObject({ bestOf: 5 });
-    expect(r.config_snapshot_at!.getTime()).toBeGreaterThan(v0.getTime());
+    expect(r.rules_version).toBe(1);
+    expect(out.fixtures[0]).toMatchObject({ id, started: true, rules_version: 1 });
+    expect(await events(id)).toBe(1 + SHORT.setTo);             // nothing appended or removed by a correction
     expect((await audit(id)).at(-1)!.payload).toMatchObject({ started: true, after: { bestOf: 5 } });
+  });
+  it("an UNSTARTED write never bumps the version (only a correction or a re-freeze does)", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    await writeFixtureRulesOverride(b.auth, [b.fixtureIds[0]!], { bestOf: 1 });
+    expect((await row(b.fixtureIds[0]!)).rules_version).toBe(0);
+  });
+  it("a staff re-freeze (resnapshotFixtureConfig) bumps the version through refreezeFixture", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const { id } = await oneSetPlayed(b);
+    await resnapshotFixtureConfig(staffAuth(), id);              // copy the staff auth + call shape from the admin suite (Step 4 grep)
+    expect((await row(id)).rules_version).toBe(1);
   });
   it("does not fit: football extra time switched off while the match is in extra time → FORMAT_DOES_NOT_FIT_PLAY with the engine's reason; nothing changed", async () => {
     const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 2, stageConfig: { rules: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true } } });
@@ -2966,13 +3409,25 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
     const err = await writeFixtureRulesOverride(b.auth, [id], { extraTime: { enabled: false, halfMinutes: 15 } }).catch((e) => e);
     expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY" });
     expect(String(err.message).length).toBeGreaterThan(0);
+    expect(await row(id)).toEqual(before);                      // rules_version included: a refusal bumps nothing
+  });
+  it("P-4: a correction that would END the match is refused (best of 3 → 1 after a completed set); nothing changed", async () => {
+    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+    const { id } = await oneSetPlayed(b);
+    const before = await row(id);
+    const err = await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: "FORMAT_DOES_NOT_FIT_PLAY" });
+    expect(String(err.message)).toBe("This format would end the match as it stands");
     expect(await row(id)).toEqual(before);
   });
-  it("OQ-3: a correction that would END the match is refused (best of 3 → 1 after a completed set)", async () => {
+  it("P-4 positive pair: the same best-of-1 correction BEFORE any set completes fits", async () => {
     const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
     const id = b.fixtureIds[0]!;
-    // play one full set to completion (same event shape as the 'fits' case)
-    await expect(writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 })).rejects.toMatchObject({ code: "FORMAT_DOES_NOT_FIT_PLAY" });
+    const { home } = await sides(id);
+    await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(b.auth.orgId, id, 1, { type: "badminton.rally", payload: { wonBy: home } });
+    await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 });
+    expect((await row(id)).config_snapshot).toMatchObject({ bestOf: 1 });
   });
   it("finalized → FIXTURE_FORMAT_LOCKED; cancelled likewise", async () => {
     for (const status of ["finalized", "cancelled"]) {
@@ -2983,13 +3438,13 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
   });
   it("after a void that empties the play, a correction still refolds (the ledger, not the score, decides)", async () => {
     const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    await appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} });
-    await appendEvent(b.auth.orgId, id, 1, { type: "core.void", payload: {}, voids: "1" } as never);
+    const { id, next } = await oneSetPlayed(b);
+    // void the set's last rally: the set is open again, so best of 1 no longer ends the match
+    await appendEvent(b.auth.orgId, id, next, { type: "core.void", payload: {}, voids: String(next - 1) } as never);
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 });
     expect((await row(id)).config_snapshot).toMatchObject({ bestOf: 1 });
   });
-  it("Review Focus 1: a correction and an append serialise on the fixture lock", async () => {
+  it("Review Focus 1: a correction and an append serialise on the fixture lock (M9)", async () => {
     let runs = 0;
     for (let i = 0; i < 5; i++) {
       const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
@@ -2998,10 +3453,14 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
         writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 }),
         appendEvent(b.auth.orgId, id, 0, { type: "core.start", payload: {} }),
       ]);
+      expect(w.status).toBe("fulfilled");                       // unstarted or fits: neither order refuses
+      expect(a.status).toBe("fulfilled");
       const r = await row(id);
-      if (w.status === "fulfilled" && a.status === "fulfilled") expect(r.config_snapshot).toMatchObject({ bestOf: 1 });
-      if (w.status === "rejected") expect(r.rules_override).toBeNull();
-      expect(r.config_snapshot === null || (r.config_snapshot as { bestOf: number }).bestOf === (r.rules_override ? 1 : (r.config_snapshot as { bestOf: number }).bestOf)).toBe(true);
+      expect(r.rules_override).toEqual({ bestOf: 1 });
+      // Either order must leave the frozen snapshot at best of 1: if the writer ran first, the start froze the
+      // override; if the start ran first, the writer saw a frozen snapshot and refolded (then rules_version is 1).
+      expect((r.config_snapshot as { bestOf: number } | null)?.bestOf).toBe(1);
+      expect(r.rules_version).toBeLessThanOrEqual(1);
       runs++;
     }
     expect(runs).toBe(5);
@@ -3012,7 +3471,8 @@ describe.skipIf(!HAS_DB)("X-SR-5 P5 correction of a started match", () => {
 Notes for the implementer:
 - `seedBracket` takes `variant` as declared (use `declaredVariant`).
 - Its signature has no `stageConfig.rules` until D3. Add the parameter pass-through if it is missing.
-- The "one completed set" ledger: copy the point event shape from `settle-seating.test.ts` (it scores a badminton/generic fixture with `scoreEvent`) and loop the rallies to `setTo`. Write it as a local helper `playSet(id, seq0, winnerSide)` in this file, used by the two set cases.
+- `resolveLatestModule` comes from `@seazn/engine/sports` (as in Task 2); `resnapshotFixtureConfig` from `../admin-fixture-config`; `staffAuth()` is whatever the existing admin suite uses to build a staff caller. Copy it; never invent one.
+- The void case assumes the set kernel reopens a set when its last rally is voided. Before relying on it, read the kernel's void handling; if a void cannot reopen a completed set, void the whole set's rallies instead, and say which in a comment.
 
 Add the rule-10 property:
 
@@ -3023,7 +3483,7 @@ describe.skipIf(!HAS_DB)("rule 10 — override × start × correction × void ×
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("write3", "write1", "clear", "start", "void", "finalize"), { minLength: 1, maxLength: 7 }), async (ops) => {
       const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
       const id = b.fixtureIds[0]!;
-      let seq = 0, finalized = false;
+      let seq = 0, finalized = false, lastVersion = 0;
       for (const op of ops) {
         steps++;
         if (op === "start" && seq === 0) { await appendEvent(b.auth.orgId, id, seq++, { type: "core.start", payload: {} }); continue; }
@@ -3036,6 +3496,8 @@ describe.skipIf(!HAS_DB)("rule 10 — override × start × correction × void ×
         const r = await row(id);
         // a frozen snapshot always agrees with the stored override on every key the override sets
         if (r.config_snapshot && r.rules_override) for (const [k, v] of Object.entries(r.rules_override as object)) expect(r.config_snapshot[k]).toEqual(v);
+        expect(r.rules_version).toBeGreaterThanOrEqual(lastVersion); // the version never goes back
+        lastVersion = r.rules_version;
       }
     }), { seed: 20261013, numRuns: 20 });
     expect(steps).toBeGreaterThan(0);
@@ -3058,8 +3520,8 @@ describe.skipIf(!HAS_DB)("rule 10 — override × start × correction × void ×
     7. if `hasFrozenCfg(row.config_snapshot)`:
        - `inputs = await loadFoldInputs(id)`. This reads outside `tx`, but the advisory lock is held, and appends take the same lock, so the ledger cannot move.
        - Fold twice, once with `inputs.cfg` and once with `corrected`.
-       - Refuse `FORMAT_DOES_NOT_FIT_PLAY` when the fold throws (message = the engine's), when the outcomes differ, or when the headlines differ. The reason is "this format would end the match as it stands" when only the corrected fold has an outcome.
-       - Otherwise `refreezeFixture(tx, id, corrected)` (sets `config_snapshot_at = now()`).
+       - Refuse `FORMAT_DOES_NOT_FIT_PLAY` when the fold throws (message = the engine's), when the outcomes differ, or when the headlines differ. The message is exactly "This format would end the match as it stands" when only the corrected fold has an outcome (P-4); otherwise it is the engine's reason.
+       - Otherwise `refreezeFixture(tx, id, corrected)`: it rewrites the snapshot and bumps `rules_version` by one (P-1).
     8. `update fixtures set rules_override = <fragment or null>`;
     9. audit `competition_events` `fixture.rules_override` `{fixture_id, before, after, started}`.
   - Route plus OpenAPI.
@@ -3076,13 +3538,16 @@ describe.skipIf(!HAS_DB)("rule 10 — override × start × correction × void ×
 [
   { "id": "t14-fits-outcome", "file": "apps/web/src/server/usecases/fixture-rules.ts",
     "find": "outcomesDiffer(", "replace": "false && outcomesDiffer(",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "OQ-3" }] },
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "P-4: a correction that would END the match is refused" }] },
   { "id": "t14-locked", "file": "apps/web/src/server/usecases/fixture-rules.ts",
     "find": "LOCKED_FIXTURE_STATUSES.includes(", "replace": "false && LOCKED_FIXTURE_STATUSES.includes(",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "finalized" }] },
   { "id": "t14-replace", "file": "apps/web/src/server/usecases/fixture-rules.ts",
     "find": "const next = isEmpty(fragment) ? null : fragment;", "replace": "const next = { ...(row.rules_override as object ?? {}), ...(fragment ?? {}) };",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "REPLACES" }] }
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "REPLACES" }] },
+  { "id": "t14-version-bump", "file": "apps/web/src/server/engine-db/refreeze.ts",
+    "find": "rules_version = rules_version + 1", "replace": "rules_version = rules_version",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-rules.test.ts"], "name": "version bumped once" }] }
 ]
 ```
 The implementation names `outcomesDiffer`, `isEmpty` and `next` as written here, so the mutants address it.
@@ -3095,36 +3560,51 @@ The implementation names `outcomesDiffer`, `isEmpty` and `next` as written here,
 - Smoke: the two checks above.
 - Regression: `bracket-overlay-callers.test.ts`; the admin re-snapshot suite (the extracted helper must not change its behaviour).
 
-**Sequence cases:** null on empty first; write, replace, clear; refused key; batch with a locked fixture; started fits, does not fit, would end; after a void; finalize; another sport (football); the race.
+**Sequence cases:** null on empty first; write, replace, clear; refused key; batch with a locked fixture; started fits, does not fit, would end (and its positive pair before a set completes); an unstarted write leaves the version at 0; a staff re-freeze bumps it; after a void; finalize; another sport (football); the race.
 
----
+### Task 15: Open pads follow a correction — the rules version (owner P-1 "A"; Opus)
 
-### Task 15: Open pads follow a correction — the rules version (spec amendment `8a0c4bd52`)
+Spec §2.1 #3 (pad half); §4.5 item 2 at `1b757c6cb`; §7 `FIXTURE_RULES_CHANGED`; §9 P5 e2e; D14; X-SR-7. Review C1 (the first draft compared `config_snapshot_at` to the first event's `recorded_at`, and refused a null version after a re-freeze, which also refused the server's own writers) and C2 (other POST sites and server writers; finding 32). The column was created in Task 10 and is bumped only by `refreezeFixture` (Task 14).
 
-Spec §2.1 #3 (pad half); §4.5 item 2; §7 `FIXTURE_RULES_CHANGED`; §9 P5 e2e; D14; X-SR-7.
+**The rule (D14, P-1).**
+- `fixtures.rules_version` is an integer counter, 0 until a correction or a staff re-freeze bumps it.
+- `appendEventInTx` checks it ONLY when the sender includes `rules_version`. A sent value that differs from the row's is refused `FIXTURE_RULES_CHANGED` (409) before any insert. An absent value is never checked.
+- **Senders that always send it** (the two scoring pads): `components/v2/scorepad/transport.ts:355` (v3) and `components/v2/device-score-pad.tsx:318` (the device pad).
+- **Never send it, never blocked:**
+  - `components/v2/fixture-console.tsx:634` (the console chrome `post()`: start, void, settle, forfeit, abandon, finalize; finding 37);
+  - `components/v2/americano-panel.tsx:154` and `:160`;
+  - the server writers `usecases/withdrawal.ts:121-160` (`withdrawEntrantCascade`), `usecases/scoring.ts:868` (`finalizeFixture`), and `usecases/event-import.ts:354` (`importEvents`). They call the append path directly, without the field.
 
 **Files:**
 - Create: `apps/web/e2e/remote-pad-rules-w2c.spec.ts` (the probe in Step 1 becomes its first test and is KEPT)
-- Modify: `apps/web/src/server/api-v1/schemas.ts`: `AppendEventRequest` (`:1828`) gains `rules_version: z.string().datetime({ offset: true }).nullable().optional()`.
-- Modify: `apps/web/src/server/usecases/scoring.ts:140` (`scoreEvent` threads it) and `apps/web/src/server/engine-db/append-event.ts`: the check after the advisory lock (`:189`) and BEFORE any insert; the accepted response carries `rules_version`.
-- Modify: `apps/web/src/server/usecases/fixtures.ts:98-131`: `loadFixturePadCfg` returns `rulesVersion` (`config_snapshot_at` ISO or null).
+- Modify: `apps/web/src/server/api-v1/schemas.ts`: `AppendEventRequest` (`:1828`) gains `rules_version: z.number().int().nonnegative().optional()` (absent means unchecked; there is no null).
+- Modify: `apps/web/src/server/usecases/scoring.ts:140` (`scoreEvent` threads it) and `apps/web/src/server/engine-db/append-event.ts`: the check after the advisory lock (`:189`) and BEFORE any insert. Every accepted response carries the row's `rules_version`.
+- Modify: `apps/web/src/server/usecases/fixtures.ts:98-131`: `loadFixturePadCfg` returns `rulesVersion: number`.
 - Modify: `apps/web/src/app/api/v1/fixtures/[id]/rules/route.ts`: add `GET` → `{cfg, rules_version, format_line}` (`format_line` from Task 16's describer once it lands; until then `effectiveRulesLine` as today).
-- Modify: `apps/web/src/components/v2/scorepad/{transport.ts:355, pipeline.ts:152,203, use-pad-pipeline.ts, refusal-copy.ts}`: send the loaded or captured version; on `FIXTURE_RULES_CHANGED` or a newer `rules_version` in a response, reload rules and raise the banner; a queued tap refused for this reason is dropped with the banner, never resent under the new version.
+- Modify: `apps/web/src/components/v2/scorepad/{transport.ts:355, pipeline.ts:152,203, use-pad-pipeline.ts, refusal-copy.ts}`:
+  - send the loaded or captured version on every append;
+  - on `FIXTURE_RULES_CHANGED`, or a newer `rules_version` in a response: reload the rules and raise the banner;
+  - a queued tap refused for this reason is dropped with the banner, never resent under the new rules.
+- Modify: `apps/web/src/components/v2/device-score-pad.tsx:318`: the body gains `rules_version`. The value comes from a new `rulesVersion` prop, set by `app/score/[token]/page.tsx` from `loadFixturePadCfg`. On the refusal it shows the same banner and reloads (`router.refresh()`, as the pad already does after a refusal; read `:330-360`).
 - Modify: `apps/web/src/components/v2/scorepad/v3/types.ts` (bootstrap gains `rulesVersion`), `apps/web/src/app/score/[token]/page.tsx:265-270`, `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx:79` (pass it through).
-- Create: `apps/web/src/components/v2/scorepad/v3/rules-changed-banner.tsx` (`data-testid="pad-rules-changed"`).
+- Create: `apps/web/src/components/v2/scorepad/v3/rules-changed-banner.tsx` (`data-testid="pad-rules-changed"`), used by both pads.
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`: `pad.rulesChanged` = "The organiser changed this match's format: {format}" plus es/fr/nl; `ruleLock.FIXTURE_RULES_CHANGED` (same sentence). Then `pnpm i18n:gen-keys`.
 - Modify: `apps/web/src/lib/rule-errors.ts` (`FIXTURE_RULES_CHANGED: 409`).
-- Create: `apps/web/src/server/engine-db/__tests__/rules-version.test.ts`; `apps/web/src/components/v2/scorepad/__tests__/rules-version-transport.test.ts`
+- Create:
+  - `apps/web/src/server/engine-db/__tests__/rules-version.test.ts` (the check);
+  - `apps/web/src/server/usecases/__tests__/rules-version-writers.test.ts` (the non-senders are never blocked);
+  - `apps/web/src/components/v2/__tests__/events-post-sites.test.ts` (the source scan);
+  - `apps/web/src/components/v2/scorepad/__tests__/rules-version-transport.test.ts` (the pipeline).
 - Modify: `scripts/smoke.ts` (one check)
 - Create: `MUT/t15.json`
 
 **Interfaces:**
-- Consumes: Task 14's writer (it advances `config_snapshot_at`).
+- Consumes: Task 10's `rules_version` column; Task 14's writer and `refreezeFixture` (the only bump).
 - Produces:
-  - the wire field `rules_version` on appends and accepted responses;
+  - the wire field `rules_version: number` on pad appends and on every accepted response;
   - `GET /api/v1/fixtures/{id}/rules`;
-  - `loadFixturePadCfg(...).rulesVersion`;
-  - `FIXTURE_RULES_CHANGED` (409, `extra: {rules_version, format}`).
+  - `loadFixturePadCfg(...).rulesVersion: number`;
+  - `FIXTURE_RULES_CHANGED` (409, `extra: {rules_version: number, format: string}`).
 
 - [ ] **Step 1: DRIVE today's behaviour first (read ≠ run).** Write the probe as the spec's first test and run it on the tree BEFORE any Task 15 change:
 
@@ -3147,7 +3627,7 @@ test("probe: an open remote pad after a live correction (records today's behavio
 });
 ```
 
-`seedLiveBadminton` is a local helper in the spec. It POSTs a competition, a badminton `short` division, `addEntrantsViaApi(…, 2)`, `createStageAndGenerate(…, "league")`, and one `core.start` through `/api/v1/fixtures/{id}/events` with `expected_seq: 0`, then returns `{fixtureId}`. If the pad has no `pad-format-line` testid, the probe records the visible match-format text by the selector the pad actually renders. Read `v3` once to find it and use that.
+`seedLiveBadminton` is a local helper in the spec. It POSTs a competition, a badminton `short` division, `addEntrantsViaApi(…, 2)`, `createStageAndGenerate(…, "league")`, and one `core.start` through `/api/v1/fixtures/{id}/events` with `expected_seq: 0`, then returns `{fixtureId}`. If the pad has no `pad-format-line` testid, the probe records the visible header text instead (read the skin for its testids first).
 
 Run the whole file (Global Constraints, Playwright). Record in the task report and in `w2c-state.md`:
 - whether the format text changed without a reload;
@@ -3156,7 +3636,9 @@ Run the whole file (Global Constraints, Playwright). Record in the task report a
 
 The result decides only how much of Step 4's client work already exists. **It never removes the server check.**
 
-- [ ] **Step 2: Write the failing server test** — `rules-version.test.ts`:
+- [ ] **Step 2: Write the failing tests.**
+
+`rules-version.test.ts` (the check; every `core.void` carries `voids`, review M5):
 
 ```ts
 import { afterAll, describe, expect, it } from "vitest";
@@ -3169,75 +3651,130 @@ import { seedBracket } from "./helpers/seed-bracket";
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
 const count = async (id: string) => Number((await sql<{ n: string }[]>`select count(*)::text n from score_events where fixture_id = ${id}`)[0]!.n);
+async function liveBadminton() {
+  const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
+  const id = b.fixtureIds[0]!;
+  await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
+  return { b, id };
+}
 
 describe.skipIf(!HAS_DB)("X-SR-7 a tap sent under old rules is never applied under new ones", () => {
-  it("first freeze sets config_snapshot_at equal to the first event's recorded_at (D14's premise)", async () => {
-    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
-    const [r] = await sql<{ same: boolean }[]>`
-      select f.config_snapshot_at = e.recorded_at as same from fixtures f join score_events e on e.fixture_id = f.id and e.seq = 1 where f.id = ${id}`;
-    expect(r!.same).toBe(true);
+  it("the empty case: version 0 with no correction is accepted, and the response carries 0", async () => {
+    const { b, id } = await liveBadminton();
+    expect((await loadFixturePadCfg(b.auth, id)).rulesVersion).toBe(0);
+    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: 0 } as never)).resolves.toMatchObject({ rules_version: 0 });
   });
-  it("no version on an unfrozen fixture, then a second scorer with no version after a normal first freeze: both accepted", async () => {
-    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
-    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, rules_version: null } as never)).resolves.toBeDefined();
+  it("a second device that loaded before the first event (version 0) is accepted after a normal first freeze", async () => {
+    const { b, id } = await liveBadminton();          // device A started the match; device B loaded at version 0 before it
+    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: 0 } as never)).resolves.toBeDefined();
   });
   it("after a correction: a stale version is refused FIXTURE_RULES_CHANGED and NO event is written; the current version is accepted", async () => {
-    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
+    const { b, id } = await liveBadminton();
     const stale = (await loadFixturePadCfg(b.auth, id)).rulesVersion;
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
     const before = await count(id);
-    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: stale } as never)).rejects.toMatchObject({ status: 409, code: "FIXTURE_RULES_CHANGED" });
+    const err = await scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: stale } as never).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: "FIXTURE_RULES_CHANGED", extra: { rules_version: stale + 1 } });
     expect(await count(id)).toBe(before);
     const fresh = (await loadFixturePadCfg(b.auth, id)).rulesVersion;
-    expect(fresh).not.toBe(stale);
+    expect(fresh).toBe(stale + 1);
     await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: fresh } as never)).resolves.toMatchObject({ rules_version: fresh });
   });
-  it("after a correction: a pad that loaded before the first event (null) is refused too", async () => {
-    const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 2 });
-    const id = b.fixtureIds[0]!;
-    await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
+  it("after a correction: an append WITHOUT the field is never checked (P-1)", async () => {
+    const { b, id } = await liveBadminton();
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: 5 });
-    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: null } as never)).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
+    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1" } as never)).resolves.toBeDefined();
+  });
+  it("a version from the future is refused too (≠, not <)", async () => {
+    const { b, id } = await liveBadminton();
+    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "core.void", payload: {}, voids: "1", rules_version: 7 } as never)).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
   });
   it("another sport (football): the same refusal", async () => {
     const b = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "league", entrants: 2 });
     const id = b.fixtureIds[0]!;
     await scoreEvent(b.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
-    const stale = (await loadFixturePadCfg(b.auth, id)).rulesVersion;
     await writeFixtureRulesOverride(b.auth, [id], { halfMinutes: 40 });
-    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "football.period", payload: { phase: "HT" }, rules_version: stale } as never)).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
+    await expect(scoreEvent(b.auth, id, { expected_seq: 1, type: "football.period", payload: { phase: "HT" }, rules_version: 0 } as never)).rejects.toMatchObject({ code: "FIXTURE_RULES_CHANGED" });
   });
 });
 ```
 
-Client unit test `rules-version-transport.test.ts`: build a wire body through `pipeline.ts`'s exported builder (the function at `:203`) and assert:
+`rules-version-writers.test.ts` (C2: the server's own writers are never blocked by a correction). Each case runs `liveBadminton()`-style seeding (football for withdrawal if that suite's seeding needs a team sport), then `writeFixtureRulesOverride(…, {bestOf: 5})` so `rules_version` is 1, then:
+- **withdrawal:** `withdrawEntrantCascade(...)` on one entrant succeeds, and the fixture's last `score_events` row is the forfeit it wrote. Copy the call from `withdrawal-decider-hold.test.ts`.
+- **finalize:** play the match to `decided` (two sets with the `badminton.rally {wonBy}` loop Task 14 uses), correct before the second set, then `finalizeFixture(auth, id, seq)` resolves and the status is `finalized`.
+- **settle:** `scoreEvent(auth, id, {expected_seq, type: "core.settle", payload: {winner, method: "organiser"}})` with no `rules_version` resolves. Copy the payload from `settle-seating.test.ts:148`.
+- **import:** `importEvents(...)` of one event into the corrected fixture succeeds. Copy the call and its lock from `event-import-freeze.test.ts`.
+- **counted:** the file asserts that exactly these four writers ran (`expect(ran).toEqual(["withdrawal", "finalize", "settle", "import"])`).
+
+`events-post-sites.test.ts` (the source scan, P-1):
+
+```ts
+// P-1: every client POST to /api/v1/fixtures/{id}/events is classified. A pad site must send rules_version;
+// every other site must not (it is never checked, so sending it would make a console action refusable).
+import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { describe, expect, it } from "vitest";
+
+const SITES: Readonly<Record<string, "pad" | "other">> = {
+  "src/components/v2/scorepad/transport.ts": "pad",
+  "src/components/v2/device-score-pad.tsx": "pad",
+  "src/components/v2/fixture-console.tsx": "other",     // console chrome: start/void/settle/forfeit/abandon/finalize
+  "src/components/v2/americano-panel.tsx": "other",     // two sites
+};
+const PATTERN = "/api/v1/fixtures/\\$\\{[^}]+\\}/events`";
+
+function sites(): { file: string; line: number }[] {
+  const out = execSync(`git grep -n -a -E '${PATTERN}' -- 'src/**/*.ts' 'src/**/*.tsx' ':!**/__tests__/**' ':!**/*.test.*'`, { cwd: process.cwd(), encoding: "utf8" });
+  return out.trim().split("\n").filter(Boolean).map((l) => { const [file, line] = l.split(":"); return { file: file!, line: Number(line) }; });
+}
+
+describe("P-1 events POST sites", () => {
+  it("every site is classified, and the scan finds exactly the known five", () => {
+    const found = sites();
+    for (const s of found) expect(SITES[s.file], `${s.file}:${s.line} is not classified`).toBeDefined();
+    expect(found).toHaveLength(5);
+    expect(new Set(found.map((s) => s.file))).toEqual(new Set(Object.keys(SITES)));
+  });
+  it("a pad site sends rules_version within its request body; an other site does not", () => {
+    let checked = 0;
+    for (const s of sites()) {
+      const body = readFileSync(s.file, "utf8").split("\n").slice(s.line - 1, s.line + 14).join("\n");
+      expect(/\brules_version\b/.test(body), `${s.file}:${s.line}`).toBe(SITES[s.file] === "pad");
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+});
+```
+- Run it from `apps/web` (its cwd is the vitest root).
+- The 15-line window covers each site's literal body (`device-score-pad.tsx:318-326`, `transport.ts:355`). If `transport.ts` builds its body elsewhere (`pipeline.ts:203`), the pad classification for `transport.ts` instead asserts the builder's output in `rules-version-transport.test.ts`, and this test checks that `transport.ts` passes the built body. Record which.
+
+`rules-version-transport.test.ts`: build a wire body through `pipeline.ts`'s exported builder (the function at `:203`) and assert:
 - it carries the `rules_version` the pipeline was constructed with;
-- a replayed persisted event keeps its captured version and not the current one;
-- a `FIXTURE_RULES_CHANGED` refusal is classified as non-retryable, using the pipeline's existing refusal classifier (the one `refused-write.test.ts` exercises).
+- a replayed persisted event keeps its captured version, not the current one;
+- a `FIXTURE_RULES_CHANGED` refusal is classified as non-retryable by the pipeline's existing refusal classifier (the one `refused-write.test.ts` exercises).
 
-Plus a source-scan guard: `transport.ts`'s events POST body is built only through that builder (`grep` the `/events\`` POST site and assert it passes the built body).
-
-- [ ] **Step 3: Run to verify red** (both files; judge). Expected: `rules_version` is stripped by the schema, so every append is accepted, and the count assertions fail.
+- [ ] **Step 3: Run to verify red** (the four files; judge). Expected:
+  - `rules_version` is stripped by the schema, so a stale append is accepted and the count assertions fail;
+  - `rulesVersion` is undefined;
+  - the scan fails on both pad sites;
+  - the writers file is green already (a characterisation; it must stay green after Step 4, and Step 6's mutant must red it).
 
 - [ ] **Step 4: Implement.**
-  - **Server.** After the lock in `appendEventInTx`, select `config_snapshot_at` and the first event's `recorded_at`. Then:
+  - **Server.** After the lock in `appendEventInTx`, select `rules_version` with the row. Then:
     ```ts
-    const reFrozen = row.config_snapshot_at !== null && firstRecordedAt !== null && row.config_snapshot_at.getTime() !== firstRecordedAt.getTime();
-    const sent = input.rules_version ?? null;
-    if ((sent !== null && sent !== row.config_snapshot_at?.toISOString()) || (sent === null && reFrozen))
-      throw new HttpError(409, ruleErrorMessage("FIXTURE_RULES_CHANGED", { reason: formatLine }), "FIXTURE_RULES_CHANGED", { rules_version: row.config_snapshot_at?.toISOString() ?? null, format: formatLine });
+    if (input.rules_version !== undefined && input.rules_version !== row.rules_version)
+      throw new HttpError(409, ruleErrorMessage("FIXTURE_RULES_CHANGED", { reason: formatLine }), "FIXTURE_RULES_CHANGED", { rules_version: row.rules_version, format: formatLine });
     ```
-    Every accepted response adds `rules_version` (after the freeze, so the first event returns the version it created).
-  - **Client.** Thread `rulesVersion` from both pages into the pipeline. On a newer `rules_version` in a response, or on the refusal, `GET /rules`, swap the pad cfg, and show `RulesChangedBanner` with `msg("pad.rulesChanged", {format})`. Run `frontend-design`: the banner sits above the board on phones (`order-*` per the phone composition), with `role="status"`.
+    Every accepted response adds `rules_version: row.rules_version`. The server writers keep calling the append path without the field. Do not add it to them.
+  - **Clients.**
+    - v3: thread `rulesVersion` from both pages into the pipeline. On a newer `rules_version` in a response, or on the refusal: `GET /rules`, swap the pad cfg, and show `RulesChangedBanner` with `msg("pad.rulesChanged", {format})`.
+    - Device pad: the prop, the body field, and the banner plus refresh.
+    - Run `frontend-design`: the banner sits above the board on phones (`order-*` per the phone composition), with `role="status"`.
+  - The console chrome and the americano panel are NOT changed.
 
 - [ ] **Step 5: Run.**
-  - Unit: the two unit files, `refused-write.test.ts`, `transport.test.ts`, `pipeline.test.ts`, `use-pad-pipeline.test.tsx`, `append-event.test.ts`.
+  - Unit: the four new files; `refused-write.test.ts`, `transport.test.ts`, `pipeline.test.ts`, `use-pad-pipeline.test.tsx`, `append-event.test.ts`, `app/score/[token]/__tests__/page.test.tsx`.
   - `tsc`, eslint, `pnpm i18n:check`, the OpenAPI diff, and the smoke check `w2c: a stale rules version is refused and writes nothing`.
   - Then the e2e spec, whole file, with the P5 e2e test added:
 
@@ -3268,26 +3805,37 @@ test("X-SR-7 P5: remote pad open on a live match; the organiser corrects the for
 ```json
 [
   { "id": "t15-stale", "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "(sent !== null && sent !== row.config_snapshot_at?.toISOString())", "replace": "false",
+    "find": "input.rules_version !== row.rules_version", "replace": "false",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/rules-version.test.ts"], "name": "a stale version is refused" }] },
-  { "id": "t15-null-refrozen", "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "(sent === null && reFrozen)", "replace": "(sent === null && false)",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/rules-version.test.ts"], "name": "loaded before the first event" }] },
-  { "id": "t15-null-first-freeze", "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "row.config_snapshot_at.getTime() !== firstRecordedAt.getTime()", "replace": "true",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/rules-version.test.ts"], "name": "both accepted" }] }
+  { "id": "t15-only-when-sent", "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "input.rules_version !== undefined && ", "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/rules-version-writers.test.ts"], "name": "withdrawal" }] },
+  { "id": "t15-scan-pad", "file": "apps/web/src/components/v2/device-score-pad.tsx",
+    "find": "rules_version: rulesVersion,", "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/__tests__/events-post-sites.test.ts"], "name": "a pad site sends rules_version" }] }
 ]
 ```
+- The second mutant also reds the "WITHOUT the field" case in `rules-version.test.ts`. The writers file must red on its own, which is why it is the named killer.
+- The device pad writes the field as `rules_version: rulesVersion,` so the third mutant addresses it.
 
-- [ ] **Step 7: Commit** `feat(w2c): open pads follow a correction; a stale tap is refused (X-SR-7)`.
+- [ ] **Step 7: Commit** `feat(w2c): open pads follow a correction; a stale pad tap is refused (X-SR-7, P-1)`.
 
 **Test types:**
-- Unit: the server and client files.
+- Unit: the four files.
 - E2E: `e2e/remote-pad-rules-w2c.spec.ts` (probe plus P5), and the `mobile.spec.ts` width test.
 - Smoke: the check above.
-- Regression: the scorepad pipeline/transport suites; `append-event.test.ts`; `scorepad-offline.spec.ts` (whole file, since the offline replay path changed).
+- Regression: the scorepad pipeline/transport suites; `append-event.test.ts`; the score-page test; `scorepad-offline.spec.ts` (whole file, since the offline replay path changed); the withdrawal, finalize and import suites through the writers file.
 
-**Sequence cases:** an unfrozen fixture with no version first; a normal first freeze with a second scorer; a correction then a stale tap; a correction then a null tap; the current version; an offline replay; another sport.
+**Sequence cases:**
+- version 0 with no correction first;
+- a second device at 0;
+- a correction, then a stale tap;
+- a correction, then an unversioned append;
+- a future version;
+- the current version;
+- each server writer after a correction;
+- an offline replay;
+- another sport.
 
 ---
 ### Task 16: Public labels say the rules for every sport
@@ -3423,10 +3971,10 @@ The English strings above are the proposed copy. They are signed with the Step 3
 
 - [ ] **Step 3: Implement.**
   - **Families**, read from `ruleKeys` (Task 4):
-    - `set.games` → `nested`;
+    - `set` → `nested` (Task 4 declares tennis's top-level key `set`, not `set.games`; review M2);
     - `setTo` → `setbased`;
     - `halfMinutes` or `periods.minutes` → `period`;
-    - `ballsPerInnings` → `innings` (printed as overs: `ballsPerInnings / 6`);
+    - `ballsPerInnings` → `innings` (printed as overs: `ballsPerInnings / cfg.ballsPerOver`);
     - `maxBoards` → `boards`;
     - `clock` → `board` (chess, item 14);
     - otherwise `score`.
@@ -3522,6 +4070,43 @@ Spec items 1, 5, 6, 7, 9, 12, 13 and 14 (UI half); §5.3 S1, S4 (stage); X-SR-1,
 - Create: `apps/web/e2e/stage-rules-w2c.spec.ts`
 - Modify: `apps/web/e2e/mobile.spec.ts` (one test across the width projects)
 - Modify: `apps/web/src/components/v2/__tests__/stages-panel*.test.tsx` (`git grep -l -a StageFormatRow -- apps/web/src '*.test.tsx'`)
+- Create: `apps/web/src/components/v2/stage-rules/stage-row-model.ts`. Review I9: the two decisions the mutants target live in a pure helper with a unit killer, never a Playwright one.
+  ```ts
+  /** The stage row's fields for this sport, stage kind and variant (wraps Task 5's stageFieldsFor). */
+  export function stageFieldsShown(module: SportModule, kind: StageKind, variant: string | null): readonly RuleField[];
+  /** True when the stage is a bracket kind and every decider the module's bracketDeciders sets is switched off in `values`. */
+  export function decidersAllOff(module: SportModule, kind: StageKind, values: Record<string, unknown>): boolean;
+  ```
+  `stages-panel.tsx` renders `{decidersAllOff(…) && <DecidersOffNotice …/>}` and maps `stageFieldsShown(…)`.
+- Create: `apps/web/src/components/v2/stage-rules/__tests__/stage-row-model.test.ts`:
+  ```ts
+  import { describe, expect, it } from "vitest";
+  import { builtinModules } from "@seazn/engine/sports";
+  import { BRACKET_KINDS } from "@seazn/engine/core";
+  import { stageKeysFor } from "@seazn/engine/sport";
+  import { decidersAllOff, stageFieldsShown } from "../stage-row-model";
+
+  const football = builtinModules.find((m) => m.key === "football")!;
+  describe("stage row model (I9 killers for t17)", () => {
+    it("football KO with both deciders off holds; one on does not; a league never shows the notice (empty case)", () => {
+      expect(decidersAllOff(football, "knockout", { extraTime: { enabled: false, halfMinutes: 15 }, shootout: false })).toBe(true);
+      expect(decidersAllOff(football, "knockout", { extraTime: { enabled: true, halfMinutes: 15 }, shootout: false })).toBe(false);
+      expect(decidersAllOff(football, "league", { extraTime: { enabled: false, halfMinutes: 15 }, shootout: false })).toBe(false);
+    });
+    it("every sport shows its stage fields: each declared stage key is edited by a shown field (counted)", () => {
+      let checked = 0;
+      for (const m of builtinModules)
+        for (const kind of ["league", ...BRACKET_KINDS] as const)
+          for (const key of stageKeysFor(m, kind, null)) {
+            const top = key.split(".")[0];
+            expect(stageFieldsShown(m, kind, null).some((f) => f.edits.some((e) => e.split(".")[0] === top)), `${m.key}/${kind}/${key}`).toBe(true);
+            checked++;
+          }
+      expect(checked).toBeGreaterThan(builtinModules.length);
+    });
+  });
+  ```
+  The `decidersAllOff` cases take the decider keys from `football.bracketDeciders(...)`. If football's deciders are named otherwise on the rebased tree, read them from there and keep the three cases.
 - Create: `MUT/t17.json`
 
 **Interfaces:**
@@ -3673,15 +4258,15 @@ Notes:
 
 ```json
 [
-  { "id": "t17-notice", "file": "apps/web/src/components/v2/stages-panel.tsx",
-    "find": "{decidersAllOff && <DecidersOffNotice", "replace": "{false && <DecidersOffNotice",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/stage-rules-w2c.spec.ts"], "name": "hold notice", "runner": "playwright" }] },
-  { "id": "t17-fields", "file": "apps/web/src/components/v2/stages-panel.tsx",
+  { "id": "t17-notice", "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
+    "find": "return isBracket && deciders.length > 0 && deciders.every(", "replace": "return false && deciders.every(",
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"], "name": "football KO with both deciders off holds" }] },
+  { "id": "t17-fields", "file": "apps/web/src/components/v2/stage-rules/stage-row-model.ts",
     "find": "stageFieldsFor({ module, stageKind: kind, variant })", "replace": "stageFieldsFor({ module, stageKind: kind, variant }).slice(0, 1)",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/stage-rules-w2c.spec.ts"], "name": "every sport shows its stage fields", "runner": "playwright" }] }
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/stage-rules/__tests__/stage-row-model.test.ts"], "name": "every sport shows its stage fields" }] }
 ]
 ```
-The mutation runner's Playwright mode needs a prod build per mutant (Global Constraints). The orchestrator runs these two at the loop boundary, not the implementer.
+`decidersAllOff` is written with the literal `return isBracket && deciders.length > 0 && deciders.every(` so the first mutant addresses it. The e2e tests "hold notice" and "every sport shows its stage fields" stay: they prove the panel is wired to the helpers.
 
 - [ ] **Step 6: Commit** `feat(w2c): the stage format row for every sport, with the deciders-off notice (S1, S4)`.
 
@@ -3714,6 +4299,8 @@ Spec items 10 and 11 (UI half); §5.3 S3; X-PT-1; Review Focus 3 (UI).
   - `stagePoints.upgrade`: "Bonus and walkover points are part of Pro";
   - `stagePoints.inexpressible`: "This sport's points can't be set per stage yet". This shows for `POINTS_RULE_INEXPRESSIBLE`, rendered from the error's reason.
 - Modify: `apps/web/e2e/stage-rules-w2c.spec.ts` (two tests); `apps/web/e2e/mobile.spec.ts` (the width test gains the points section)
+- Create: `apps/web/src/components/v2/stage-rules/stage-points-model.ts` (review I9): `export function pointsSectionState(canCustom: boolean, expressible: boolean): "inexpressible" | "gate" | "editor"`. The order is inexpressible, then gate, then editor. `stage-points-section.tsx` switches on it.
+- Create: `apps/web/src/components/v2/stage-rules/__tests__/stage-points-model.test.ts`: all four input pairs (counted, `checked === 4`): `(true, true)` → `"editor"`; `(false, true)` → `"gate"` (test name "Community org sees the gate"); `(true, false)` and `(false, false)` → `"inexpressible"` (an ice-hockey stage says why before it asks for Pro).
 - Create: `MUT/t18.json`
 
 **Interfaces:**
@@ -3788,9 +4375,9 @@ Notes:
 
 ```json
 [
-  { "id": "t18-gate", "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "{!canCustom && <UpgradeGate", "replace": "{false && <UpgradeGate",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/stage-rules-w2c.spec.ts"], "name": "Community org sees the gate", "runner": "playwright" }] }
+  { "id": "t18-gate", "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "if (!canCustom) return \"gate\";", "replace": "",
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"], "name": "Community org sees the gate" }] }
 ]
 ```
 
@@ -3831,6 +4418,8 @@ Spec items 2 and 3 (UI half); §5.3 S2, S4 (match); X-SR-2, X-SR-5 (UI); P5 (con
 - Create: `apps/web/e2e/match-rules-w2c.spec.ts`
 - Modify: `apps/web/e2e/mobile.spec.ts` (one width test)
 - Create: `apps/web/src/server/usecases/__tests__/fixture-match-rules-loader.test.ts`
+- Create: `apps/web/src/components/v2/desk/run-sheet-tags.ts` (review I9): `export function formatChangedTag(row: { format_changed?: boolean | null }): "runSheet.formatChanged" | null`. `run-sheet-row.tsx` renders the chip when it is non-null.
+- Create: `apps/web/src/components/v2/desk/__tests__/run-sheet-tags.test.ts`: `true` → the key; `false`, `null` and absent → `null` (counted, 4 cases; test name "the run sheet tags a changed format").
 - Create: `MUT/t19.json`
 
 **Interfaces:**
@@ -3936,6 +4525,30 @@ test("X-SR-5 correct a live match's format: a fitting change saves; one that doe
   expect(n0).toBe(1);                                                                 // a correction writes no score event
 });
 
+test("X-SR-5 a correction the play does not fit is refused with the engine's reason, and nothing changes (I8)", async ({ page, request }) => {
+  const s = await seedFootballKnockoutWithExtraTime(request); // local: football 11-a-side, 2 entrants, knockout stage with rules {extraTime: on, 15'}, generated
+  let seq = 0;
+  for (const [type, payload] of [["core.start", {}], ["football.period", { phase: "HT" }], ["football.period", { phase: "FT" }], ["football.period", { phase: "ET_HT" }]] as const) {
+    const r = await apiJson(request, `/api/v1/fixtures/${s.fixtureId}/events`, "POST", { expected_seq: seq++, type, payload });
+    expect(r.status, type).toBe(201);
+  }
+  const before = await apiJson<{ cfg: { extraTime: { enabled: boolean } }; rules_version: number }>(request, `/api/v1/fixtures/${s.fixtureId}/rules`, "GET");
+  expect(before.data!.cfg.extraTime.enabled).toBe(true);                               // precondition: the match is in extra time under ET-on
+  await page.goto(`${s.divisionUrl}/f/${s.fixtureNo}`);
+  const block = page.getByTestId("match-rules-block");
+  await block.getByRole("button", { name: /correct format/i }).click();
+  await block.getByTestId("stage-rule-field-extraTime").first().getByRole("checkbox").uncheck();
+  await block.getByRole("button", { name: /save/i }).click();
+  const error = block.getByTestId("match-rules-error");
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(/doesn't fit that format/i);                      // ruleLock.FORMAT_DOES_NOT_FIT_PLAY
+  expect(((await error.textContent()) ?? "").length).toBeGreaterThan("The match so far doesn't fit that format: ".length); // the reason is filled
+  const after = await apiJson<{ cfg: unknown; rules_version: number }>(request, `/api/v1/fixtures/${s.fixtureId}/rules`, "GET");
+  expect(after.data).toEqual(before.data);                                            // cfg and version unchanged
+  await expect(block.getByTestId("match-rules-overridden")).toHaveCount(0);
+  expect(await countEvents(request, s.fixtureId)).toBe(4);
+});
+
 test("X-SR-3 a finished match shows the lock and no form", async ({ page, request }) => {
   const s = await seedBadmintonLeague(request);
   await finishFixtureViaApi(request, s.fixtureId); // helpers.ts — re-read its name with git grep -n -a "export async function finish" -- apps/web/e2e/helpers.ts
@@ -3944,8 +4557,8 @@ test("X-SR-3 a finished match shows the lock and no form", async ({ page, reques
   await expect(page.getByTestId("match-rules-block").getByRole("button", { name: /save/i })).toHaveCount(0);
 });
 ```
-- The "does not fit" UI case uses football in extra time, mirroring Task 14's unit case. It asserts `match-rules-error` contains the engine's reason and that `GET /rules` is unchanged.
-- `countEvents` and `seedBadmintonLeague` are local helpers written in the spec.
+- The "does not fit" case mirrors Task 14's unit case through the product (review I8).
+- `countEvents`, `seedBadmintonLeague` and `seedFootballKnockoutWithExtraTime` are local helpers written in the spec. The football one PUTs the stage rules through Task 11's `PUT /api/v1/stages/{id}/rules` before `/generate`.
 - The fixture page URL shape (`/f/{no}`) is re-read from the route folder.
 
 Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens the block on a phone, asserts `toBeAttached` on the block's fields after opening any phone disclosure the console wraps it in (AGENTS.md class 22: open EVERY instance, gate on the toggle being visible), and `expectNoHorizontalScroll`.
@@ -3978,9 +4591,9 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 
 ```json
 [
-  { "id": "t19-tag", "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
-    "find": "{row.format_changed && (", "replace": "{false && (",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/match-rules-w2c.spec.ts"], "name": "the run sheet tags it", "runner": "playwright" }] },
+  { "id": "t19-tag", "file": "apps/web/src/components/v2/desk/run-sheet-tags.ts",
+    "find": "row.format_changed === true ? \"runSheet.formatChanged\" : null", "replace": "null",
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/desk/__tests__/run-sheet-tags.test.ts"], "name": "the run sheet tags a changed format" }] },
   { "id": "t19-state", "file": "apps/web/src/server/usecases/fixtures.ts",
     "find": "LOCKED_FIXTURE_STATUSES.includes(row.status) ? \"locked\"", "replace": "false ? \"locked\"",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/usecases/__tests__/fixture-match-rules-loader.test.ts"], "name": "after finalize: locked" }] }
@@ -3998,9 +4611,9 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 **Sequence cases:** unstarted with no override first; override; reset; live correction fits and does not fit; locked; another sport (football fields).
 
 ---
-### Task 20: S4 — division settings name what is locked (UI, waits on OQ-1)
+### Task 20: S4 — division settings name what is locked (UI)
 
-Spec item 4 (UI half); §5 S4 (division); X-SR-4 (UI). Written for OQ-1 = A. **If B**, the field-level refusal list is replaced by today's single `FORMAT_LOCKED` banner reworded to name the stage. Steps 1–5 keep their shape; only the assertions about "the rest saved" are dropped.
+Spec item 4 (UI half); §5 S4 (division); X-SR-4 (UI). Owner P-2 "A": the lock is per started inheriting stage, and a save keeps every unlocked field.
 
 **Files:**
 - Modify: `apps/web/src/components/v2/division-settings.tsx`: after a save, render `refused[]` (Task 2's response field) as one line per refused field, naming the stage. Locked fields render read-only with the lock line before the organiser types (pre-computed from the same server read, so the response is a fallback, never the only signal).
@@ -4012,6 +4625,11 @@ Spec item 4 (UI half); §5 S4 (division); X-SR-4 (UI). Written for OQ-1 = A. **I
 - Create: `apps/web/e2e/division-locks-w2c.spec.ts`
 - Modify: `apps/web/e2e/division-settings.spec.ts`: the F2b assertions that expect a whole-form `FORMAT_LOCKED` after generation move to the per-field shape (greenfield; Task 2 changed the server).
 - Modify: `apps/web/e2e/mobile.spec.ts` (one width test)
+- Create: `apps/web/src/components/v2/division-settings-locks.ts` (review I9): `export function lockLineFor(fieldKey: string, lockedFields: readonly RefusedField[]): RefusedField | undefined`. It matches a field by its key, or by any engine key its `edits` name. `division-settings.tsx` renders the lock line from it.
+- Create: `apps/web/src/components/v2/__tests__/division-settings-locks.test.ts`, three cases:
+  - "locks the division format with its name": a `variant_key` refusal naming "Pool A" is returned for the format field;
+  - the empty case: `[]` → `undefined`;
+  - another field's refusal → `undefined`.
 - Create: `MUT/t20.json`
 
 **Interfaces:**
@@ -4041,7 +4659,7 @@ test("X-SR-4 a started pool locks the division format with its name; other setti
   expect(after.data!.name).toBe(`Renamed ${TAG}`);
 });
 
-test("X-SR-4 generated but NOT started: the division format still saves (OQ-1 = A)", async ({ page, request }) => {
+test("X-SR-4 generated but NOT started: the division format still saves (P-2 A)", async ({ page, request }) => {
   const d = await seedDivision(request, "badminton", "short");
   await addEntrantsViaApi(request, d.divisionId, 2);
   await createStageAndGenerate(request, d.divisionId, "league");
@@ -4081,9 +4699,9 @@ The settings tab URL and its field labels are re-read from `division-settings.sp
 
 ```json
 [
-  { "id": "t20-lockline", "file": "apps/web/src/components/v2/division-settings.tsx",
-    "find": "lockedFields.find((r) => r.field === field.key)", "replace": "undefined",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/division-locks-w2c.spec.ts"], "name": "locks the division format with its name", "runner": "playwright" }] }
+  { "id": "t20-lockline", "file": "apps/web/src/components/v2/division-settings-locks.ts",
+    "find": "lockedFields.find((r) => r.field === fieldKey", "replace": "undefined && lockedFields.find((r) => r.field === fieldKey",
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/__tests__/division-settings-locks.test.ts"], "name": "locks the division format with its name" }] }
 ]
 ```
 
@@ -4105,7 +4723,7 @@ Spec item 13 (UI half); §5.3 S5; BG-KO-2 (enforced), BG-KO-3 (pad); finding 24.
 
 **Files:**
 - Modify: `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx`: `tiebreakSheet` (`:550`).
-  - Rung options come from `cfg.tiebreakRungs` (Task 8) instead of the constant `TIEBREAK_RUNGS`.
+  - Rung options come from `effectiveRungs(view.cfg)` (Task 8: the stage's list in the stage's order, or every rung when absent) instead of the constant `TIEBREAK_RUNGS`.
   - The Armageddon branch replaces "who won" with two steps: "Who had Black?" (the two entrants) and "Result?" (White won / Black won / Drawn), then a confirm line "Advances: X — Black, Armageddon drawn" (spec §5.3 S5).
   - The emitted payload is Task 8's `{rung: "armageddon", black, result}`.
   - The W2a hint ("a draw means Black advances") stays.
@@ -4187,9 +4805,9 @@ The existing test's `toHaveCount(3)` on rung options becomes a count derived fro
 [
   { "id": "t21-black", "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
     "find": "black: view.entrantIds[answers.black", "replace": "black: view.entrantIds[\"home\"",
-    "killers": [{ "cwd": "apps/web", "files": ["e2e/bracket-finish.spec.ts"], "name": "advances Black on a draw", "runner": "playwright" }] },
+    "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/scorepad/v3/skins/__tests__/boardgame-sheets.test.ts"], "name": "BG-KO-2 the Armageddon branch asks Black" }] },
   { "id": "t21-rungs", "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "cfg.tiebreakRungs.map(", "replace": "TIEBREAK_RUNGS.map(",
+    "find": "effectiveRungs(view.cfg).map(", "replace": "TIEBREAK_RUNGS.map(",
     "killers": [{ "cwd": "apps/web", "files": ["src/components/v2/scorepad/v3/skins/__tests__/boardgame-sheets.test.ts"], "name": "the Armageddon branch asks Black" }] }
 ]
 ```
@@ -4220,16 +4838,16 @@ Spec §10 MD-1. See "MD-1 mutation ownership" below.
   ```bash
   cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c/packages/engine && pnpm exec stryker run --mutate "src/sport/module.ts,src/sport/rule-keys.ts,src/competition/points.ts,src/sports/boardgame/**/*.ts,src/sports/period/kernel.ts,src/sports/period/shootout.ts,src/sports/setbased/kernel.ts,src/sports/football/football.ts,src/sports/hockey/hockey.ts,src/sports/icehockey/icehockey.ts,src/sports/cricket/cricket.ts,src/sports/carrom/carrom.ts,src/sports/generic/generic.ts,src/sports/tennis/tennis.ts" > "$TMPDIR/w2c-stryker.log" 2>&1; echo EXIT=$?
   ```
-  - Record survivors per file in `w2c-state.md`.
+  - Record survivors AND `NoCoverage` mutants per file in `w2c-state.md` (review M6: a mutant no test reaches is a gap too, not a pass; Stryker reports it separately from Survived).
   - **If the total exceeds 150**, stop and report to the orchestrator. It splits the classification across implementers by file (disjoint), or asks the owner whether the pre-existing survivors in a file W2c only touched with a `ruleKeys` property belong to the P0 mutation-debt programme instead (finding 25).
   - Survivors in lines W2c did not change are still classified (MD-1 says "every file it edits"); the split is by file, not by line.
-- [ ] **Step 2: Classify.** For each survivor, exactly one of:
+- [ ] **Step 2: Classify.** For each survivor and each `NoCoverage` mutant, exactly one of:
   - **killed**: a new test in the file's own suite, named for the rule it pins, with the expected value derived from a rule row or a declaration;
   - **equivalent**: an entry in `stryker-equivalent.json` with a one-sentence proof;
   - **debt**: listed in the PR body with the P0 programme's id, and only for lines W2c did not touch.
 
-  Anti-vacuity: the classification count equals the survivor count from Step 1, and zero survivors measured is an error unless the log shows the run completed with a mutant total > 0.
-- [ ] **Step 3: Re-run** the same command. The survivors not classified "equivalent" or "debt" must be 0. Paste the summary line.
+  Anti-vacuity: the classification count equals Step 1's survivors plus `NoCoverage`. Zero measured is an error unless the log shows the run completed with a mutant total > 0.
+- [ ] **Step 3: Re-run** the same command. The survivors and `NoCoverage` mutants not classified "equivalent" or "debt" must be 0. Paste the summary line.
 - [ ] **Step 4: Commit** `test(w2c): classify every surviving mutant in the engine files W2c edits (MD-1)`.
 
 **Test types:**
@@ -4249,9 +4867,15 @@ Spec §9 P8; §11; Global Constraints. The P8 step is **BLOCKED until `feat/ches
 - [ ] **Step 1: Rule rows.**
   - Every Appendix A row moves from `AWAITING_PROOF` to its proving test names, and every `proved-by` path is checked to exist.
   - Run `rules-reference.test.ts` (judge it).
-  - Append the decision lines to `IDX`: D1–D14, OQ-1..3's answers, the findings needing a ruling.
+  - Append the decision lines to `IDX`: D1–D14, the owner's P-1..P-4, OQ-4's answer, the execution ruling ("A Sonnet with those 4 tasks on Opus"), and the findings needing a ruling.
 - [ ] **Step 2: Scoped gate on the whole branch diff.**
-  - vitest: `git diff --name-only main...HEAD` → `vitest related` for the engine and the web separately, each judged by JSON with `.testResults[].name` confirmed.
+  - vitest, **per-task scoped files only** (review I13; never `vitest related` over the branch diff, which fans out to most of the suite and breaks the standing "SCOPED tests only" rule):
+    - The list is the union of the test files each of Tasks 1–22 names in its **Files** and **Step 4**. These are the same commands the batch-end gates already ran.
+    - Write the list into `$TMPDIR/w2c-scoped-engine.txt` and `$TMPDIR/w2c-scoped-web.txt` by hand from the plan, one path per line, relative to `packages/engine` and `apps/web`.
+    - The per-sport contract tests are included through the exact `vitest related --run src/lib/match-rules/<sport>.ts` commands Tasks 5–8 use. Those are scoped to one source file each, not to the branch.
+    - Run each list as explicit paths: `cd …/packages/engine && npx vitest run $(cat "$TMPDIR/w2c-scoped-engine.txt") --reporter=json --outputFile="$TMPDIR/w2c-t23-engine.json"; echo EXIT=$?`, and the same from `apps/web`.
+    - Judge each JSON: `numFailedTests == 0`, `numPendingTests == 0` for the DB files, and `.testResults | length` equal to the list's line count, with every `.testResults[].name` under the right worktree.
+    - A path in the list that matches no file is an error, not a skip (zsh: an empty list runs the FULL suite; check `wc -l` > 0 first).
   - `tsc` for both packages; eslint via `rtk proxy` reading `✖ N problems`.
   - `pnpm i18n:check`; the OpenAPI drift check (`pnpm openapi:gen && git diff --exit-code openapi/`).
   - The smoke suite on a local prod server (Global Constraints).
@@ -4272,6 +4896,8 @@ Spec §9 P8; §11; Global Constraints. The P8 step is **BLOCKED until `feat/ches
   - On the merged tree, run that branch's external-play suites against W2c's Armageddon colours. `external-play/guard.ts:450-456` reads `colorOfHome` (finding 18).
   - Assert that an Armageddon game played externally records the same `black` that the pad sheet would.
   - If the reader conflicts, it is a finding for both programmes' owners. **Do not edit the other branch.**
+
+- [ ] **Step 8: Close the W2c agent exception.** After the PR merges, delete `.claude/agents/implementer-sonnet.md` and `.claude/agents/reviewer-sonnet.md`, and mark the W2c exception in `docs/superpowers/RULES.md` § Agent topology as closed (RULES.md: "delete the `*-sonnet` agents when W2c closes"). This goes in its own PR, or in the IDX close-out commit, whichever the orchestrator's owner prefers.
 
 **Test types:** this task runs the gates; it adds none except any review fixes, which carry their own.
 
@@ -4303,18 +4929,19 @@ Wording is proposed from spec Appendix A, with ids corrected (finding 6). The ow
 | X-SR-2 | `cross-sport.md` | One match may differ from its stage only on keys the engine declares match-scoped; a decider may only be switched off or shortened for one match. | `fixture-rules.ts` via `checkFixtureOverride` (Task 14) | Tasks 4, 14, 19 |
 | X-SR-3 | `cross-sport.md` | A stage's format locks when any of its matches starts and stays locked after a void. | `stage-rules.ts` | Tasks 11, 13, 17 |
 | X-SR-4 | `cross-sport.md` | A division setting locks only when a started stage inherits it; the refusal names the stage, and other settings still save. | `rule-locks.ts` (Task 2) | Tasks 2, 20 |
-| X-SR-5 | `cross-sport.md` | A started, unfinished match's format may be corrected only if the recorded play fits it, and never so that the correction alone ends the match (OQ-3). A finished match's format is locked. | `fixture-rules.ts` (Task 14) | Tasks 14, 19 |
+| X-SR-5 | `cross-sport.md` | A started, unfinished match's format may be corrected only if the recorded play fits it, and never so that the correction alone ends the match (owner P-4). A finished match's format is locked. | `fixture-rules.ts` (Task 14) | Tasks 14, 19 |
 | X-SR-6 | `cross-sport.md` | A new bracket stage starts with its sport's deciders; with every decider off, a level match is held for the organiser, never refused. | `stage-defaults.ts` (Task 12); engine `stageDefaults` (Task 6) | Tasks 6, 12, 17 |
-| **X-SR-7** | `cross-sport.md` | A tap sent under a match's old rules is never applied under its new ones: after a correction, a stale append is refused `FIXTURE_RULES_CHANGED` and writes nothing. | `append-event.ts` (Task 15) | Task 15 |
-| X-PT-1 | `cross-sport.md` | A stage's points rule applies to that stage's table; a walkover pays the rule's walkover row; bonus and walkover rows need the custom-points entitlement. | `competition/points.ts` (Task 9), `stage-rules.ts` (Task 13) | Tasks 9, 13, 16, 18 |
+| **X-SR-7** | `cross-sport.md` | A tap a scoring pad sent under a match's old rules is never applied under its new ones: after a correction or a staff re-freeze, a pad append carrying a stale rules version is refused `FIXTURE_RULES_CHANGED` and writes nothing. An append that carries no version (the fixture console, the server's own writers) is not checked (owner P-1). | `append-event.ts` (Task 15) | Task 15 |
+| X-PT-1 | `cross-sport.md` | A stage's points rule applies to that stage's table. A forfeit is an award with nothing played (a walkover, or a withdrawal or disqualification before play): it pays the rule's walkover row, and its awarded score replaces the credit. A bye never receives the awarded score. An award after play earns normal points. Bonus and walkover rows need the custom-points entitlement. (Spec `1b757c6cb`; owner P-3.) | `competition/points.ts` (Task 9), `stage-rules.ts` (Task 13) | Tasks 9, 13, 16, 18 |
 | BG-KO-3 | `boardgame.md` | A chess knockout stage's tie-break sequence is the organiser's ordered list; an empty list sends a drawn game to the organiser. | `boardgame` module (Task 8) | Tasks 8, 17, 21 |
 | BG-KO-2 | `boardgame.md` (status → `enforced`) | Armageddon records who had Black; a drawn Armageddon advances Black. | `boardgame` module (Task 8); pad sheet (Task 21) | Tasks 8, 21 |
-| **CK-SO-1** | `cricket.md` | A cricket knockout's super over is a stage default the organiser can switch off. | cricket `stageDefaults` (Task 6) | Task 6 |
-| HK-AB-2 | `hockey.md` | Under `q4_stands`, an abandoned match stands if the 4th quarter started, otherwise it is replayed; the option exists only for four-quarter formats. | period kernel (Task 7) | Task 7 |
+| BG-KO-1 (amended) | `boardgame.md` | A drawn chess knockout game goes to the stage's tie-break rungs in order; with an empty rung list it is held for the organiser (ruling 79), never decided by a default. | boardgame module (Task 8) | Task 8 |
+| **CK-SO-1** | `cricket.md` | A cricket knockout's super over is a stage default the organiser can switch off. Switched on in a league stage, it is played on every tie. | cricket `stageDefaults` (Task 6) | Task 6 |
+| HK-AB-2 | `hockey.md` | Under `q4_stands` (hockey only; ice hockey is never offered it), an abandoned match is replayed if the 4th quarter had not started. From the 4th quarter on, including a shoot-out, the result stands; a level score in a format with no draws is no result (ruling 117). The option exists only for four-quarter formats. | period kernel (Task 7) | Task 7 |
 | **CA-AB-2** | `carrom.md` | An abandoned carrom league match is replayed or the points are shared, as the stage says. | carrom module (Task 7) | Task 7 |
 | **GN-AB-2** | `generic.md` | An abandoned generic league match is replayed or the points are shared, as the stage says. (GN-AB-1 exists on W2b.) | generic module (Task 7) | Task 7 |
 | IH-KO-1 | `icehockey.md` | An ice-hockey knockout stage starts with overtime and a shootout. | icehockey `stageDefaults` (Task 6) | Task 6 |
-| FB-SO-1 | `football.md` | A football shootout is 5 kicks each before sudden death; youth variants 3. The count is the stage's `shootout.attempts`. | football `shootoutAttempts` (Task 6) | Task 6 |
+| FB-SO-1 | `football.md` | A football shootout is 5 kicks each before sudden death; youth variants 3. The count is the match-scoped `shootoutAttempts`. | football `shootoutAttempts` (Task 6) | Task 6 |
 
 ---
 
@@ -4322,7 +4949,7 @@ Wording is proposed from spec Appendix A, with ids corrected (finding 6). The ow
 
 Numbered as Part A cites them. **Owner-decision findings are marked (OQ)**, and Task 0 puts them to the owner one at a time.
 
-1. **(OQ-1)** `patchDivision` already locks the whole config with `FORMAT_LOCKED` once any fixture exists (`divisions.ts:820-856`, F2b pin `division-settings.test.ts:586-640`). The `tiebreakers` column (`:899`) is unlocked. Q3/Q4 as ruled LOOSENS the config lock and tightens the tie-break lock.
+1. **(answered: owner P-2 "A")** `patchDivision` already locks the whole config with `FORMAT_LOCKED` once any fixture exists (`divisions.ts:820-856`, F2b pin `division-settings.test.ts:586-640`). The `tiebreakers` column (`:899`) is unlocked. Q3/Q4 as ruled LOOSENS the config lock and tightens the tie-break lock.
 2. The spec premise "a division save has no started check" is false. It has a stricter one (finding 1).
 3. Several Q5 match keys are leaves inside stage-owned objects (`overtime.minutes`, `shootout.attempts`, `periods.minutes`, `game.noAd`, `tiebreak.winBy`). `ruleKeys` keys are therefore dotted paths, and the most specific declaration wins (D1). This is a design decision, not an owner question.
 4. `matchBound: "off_or_shorter"` is additive to the spec's `ruleKeys` type. X-SR-2 needs it to say "a match may only switch a decider off or shorten it".
@@ -4332,7 +4959,7 @@ Numbered as Part A cites them. **Owner-decision findings are marked (OQ)**, and 
 8. The OpenAPI document has no code enum. The new error codes are listed in route summaries (Tasks 13, 14), not as a schema enum.
 9. `UNKNOWN_RULE_KEY` (a key the sport never declares) is kept apart from `RULE_NOT_SETTABLE` (declared, but not for this scope or kind). `SPORT_NOT_SUPPORTED` is retired with the 4-sport gate (Task 11).
 10. The stage points path needs the `standings.custom_points` gate that `createStages` applies (`stages.ts:404-415`); otherwise `PUT /stages/{id}/rules` would be a paywall bypass (Task 13, Review Focus 3).
-11. **(OQ-2)** What counts as a "forfeit" for stage points: withdrew/DQ before play, and byes. Recommendation in Part A.
+11. **(answered: owner P-3 "A")** What counts as a "forfeit" for stage points: an award with nothing played, whatever its reason; never a bye. **Premise refuted (review I7):** the first draft assumed W2b's award outcome carries a nothing-played marker. It does not: `{kind, winner, loser|null, reason}` has none (`core/types.ts:136-195`). The played fact comes from W2b's `playRecorded(ledger, module)` over the fixture's `score_events` (Task 9).
 12. Only `mobile.spec.ts` runs at the seven widths, and it is serial. Each UI task adds one width test there, and a red is a floor (AGENTS.md 21).
 13. `FixtureConsole` has no cfg/rules props, so Task 19 adds `loadFixtureMatchRules`.
 14. The resolver takes a fixture row (`FixtureCfgSource`, D4), not a bare snapshot, so `rules_override` cannot be forgotten by a caller.
@@ -4340,19 +4967,25 @@ Numbered as Part A cites them. **Owner-decision findings are marked (OQ)**, and 
 16. There are two stage insert sites (`stages.ts:458`, `templates.ts:345`). Both call `withStageDefaults`.
 17. D3 is greenfield: top-level stage `shootout`/`extraTime` are removed from `StageConfig` and live only in `config.rules`. Tests and helpers that pin the old shape are updated.
 18. The chess `colorOfHome` reader is at `external-play/guard.ts:450-456`, but only on the local `feat/chess-lichess-external-play` branch. P8 waits for it (Task 23).
-19. Football shootout attempts were hard-coded to 5 (`football.ts:1621`) with no cfg key. Task 6 adds `shootout.attempts` (FB-SO-1).
-20. Ruling 124 (the owner's W2c approvals) is not yet in `IDX`. Task 0 records it.
+19. Football shootout attempts were hard-coded to 5 (`football.ts:1621`) with no cfg key. Task 6 adds the match-scoped key `shootoutAttempts` (FB-SO-1; review M1).
+20. Ruling 124 is W2b's generic retirement credit (it amends ruling 87), not "the owner's W2c approvals" as the first draft said. Task 3 folds it into `IDX` if W2b's merge did not. The W2c approvals (P-1..P-4, the execution ruling) take the next free ruling numbers in Task 0.
 21. The spec's `competition.ts:315` is `:359` on W2b. The W2b caller is confirmed.
 22. `competition/stage.ts` and `progression.ts` are not edited by W2c, so they go on the mutation session's no-wave list (MD-1 ownership).
-23. **(OQ-3)** A correction the recorded play fits but that ENDS the match (best of 3 → 1 after a set). Recommendation: refuse (Task 14).
-24. Armageddon events change shape (`{rung, black, result}`). This is greenfield: three `tiebreak.test.ts` cases and the W2a e2e are rewritten. The golden corpus has 0 Armageddon events.
+23. **(answered: owner P-4 "A")** A correction the recorded play fits but that ENDS the match (best of 3 → 1 after a set) is refused `FORMAT_DOES_NOT_FIT_PLAY` "This format would end the match as it stands". Task 14 proves it on a real ledger (review I8).
+24. Armageddon events change shape (`{rung, black, result}`). This is greenfield: three `tiebreak.test.ts` cases and the W2a e2e are rewritten. The first draft missed two more old-shape senders (review I10): `withdrawal-decider-hold.test.ts:214` (Task 8) and `scripts/smoke.ts:2406` (Task 11, which owns `smoke.ts` after lane E2 merges). The golden corpus has 0 Armageddon events, and `armageddonBlack` is optional and absent unless set, so every existing golden replays byte-identical (review I11; asserted in Task 8).
 25. MD-1 volume risk: 14 engine files, some large (`football.ts`, the period kernel). Task 22 measures first and escalates above 150 survivors.
 26. Task 1's order mutant may SURVIVE, because nothing pins sport order in `SPORT_RULES`. If it does, the split-equality test is the killer, and it is deleted in the same task. Record it as a survivor of a deleted test, not as a gap.
 27. The engine sweep (Task 4) needs a test-side `UNSETTABLE` table per sport for schema keys that are deliberately not rule keys. Any key that cannot be classified as settable or unsettable goes to the owner, not to a guess.
-28. D14's null-version rule uses `config_snapshot_at ≠ the first event's recorded_at` to tell a re-freeze from a first freeze. This avoids refusing a second scorer who loaded before the first event. Residual: a correction to an UNSTARTED fixture leaves an open pad on the old rules until its first append response carries `rules_version` and triggers the reload; the first tap is applied under the NEW rules, which is the correct direction.
+28. **Rewritten (review C1; owner P-1 "A").** The first draft told a re-freeze from a first freeze by comparing `config_snapshot_at` (Postgres `now()`, µs) with the first event's `recorded_at` (the app's `new Date()`, ms). The two clocks never compare equal, so every pad tap would have been refused, and a null version after a re-freeze also refused the server's own writers. D14 now uses an integer `fixtures.rules_version`, bumped only by `refreezeFixture` and checked only when the sender includes it. Residual: a correction to an UNSTARTED fixture bumps nothing, so an open pad plays the new rules from its first append, which is the correct direction.
 29. Cricket's split tie/no-result points make stage points inexpressible for cricket until W2d (`POINTS_RULE_INEXPRESSIBLE`, Task 13).
-30. Ruling 74 (`IDX:1015`, "Other sports in brackets") sends "RB2B-1's creation refusal" to W2c, but `git grep` finds no code-level refusal of a decider-less knockout stage. Task 12's X-SR-6 test pins acceptance (all-off is allowed and held). The orchestrator confirms with the owner in Task 0 that "held, not refused" is the intended reading.
+30. Ruling 74 (`IDX:1015`, "Other sports in brackets") sends "RB2B-1's creation refusal" to W2c, but `git grep` finds no code-level refusal of a decider-less knockout stage. Task 12's X-SR-6 test pins acceptance (all-off is allowed and held). **Settled by the owner's Q7 "B"; not re-asked (review M10).**
 31. Whether an open pad refreshes its rules today is unverified (a read is not a run). Task 15 Step 1 DRIVES it with a kept probe before building, and the server check ships whatever the probe shows.
+32. **(review C2)** The first draft knew one events POST site. There are five client sites: `transport.ts:355` and `device-score-pad.tsx:318` (pads), `fixture-console.tsx:634`, and `americano-panel.tsx:154`/`:160`. There are also three server writers that append without a client (`withdrawal.ts:121-160`, `scoring.ts:868` `finalizeFixture`, `event-import.ts:354`). P-1 classifies them; Task 15's source scan fails on an unclassified site, and its writers test proves the server writers are never blocked.
+33. `applyPointsRule` has four callers, not two: `engine-db/competition.ts:395` and the bye path `:115`, plus `testkit/scenarios.ts:377` and `tools/bench/lib/validate-pack.ts`. The new required `played` parameter makes `tsc` list all four (Task 9).
+34. **(OQ-4, open)** Generic's `share` abandon option with `allowDraws: false`: the fold would produce a draw the format forbids, and `append-event.ts:405-424` refuses a draw for such a cfg at append time. Recommendation: refuse at config time, `CONFIG_INVALID` "Sharing the points needs draws to be allowed". Carrom has no `allowDraws`, so it is unaffected. Task 7 is written for A and names B's changes.
+35. Generic has no `"sets"` variant; its variants are `win_loss` and `score` (`generic.ts:512-530`). Task 2's variant cases use `win_loss`, which differs from `score` on `resultMode` and `allowDraws`.
+36. Task 2's I1 re-parse case depends on the set kernel refusing `cap` below `setTo` (the restored mix: `setTo` and `finalSetTo` restored, `cap` lowered; `setbased/kernel.ts:129` refines `cap >= max(setTo, finalSetTo)` on main). The test asserts that refinement as a precondition from the module's own schema. If the kernel does not refine it, the precondition reds first, and the implementer picks a pair from the schema's actual refinements instead. Silently passing is not an option.
+37. The fixture console's chrome `post()` (`fixture-console.tsx:634`) carries start, void, settle, forfeit, abandon and finalize. P-1 leaves it unversioned, so a console action after a correction is never refused. That is by the owner's design: the console reads the server's current state before each action.
 
 ---
 
@@ -4372,7 +5005,7 @@ Numbered as Part A cites them. **Owner-decision findings are marked (OQ)**, and 
 | #8 ice hockey KO default; football shootout attempts | 6 |
 | #9 carrom `tieBoard` per table stage | 4, 11, 17 |
 | #10 ST-G8 stage points; inexpressible refused | 9, 13, 18 |
-| #11 only a walkover is a forfeit; `awardScore` | 9 (OQ-2) |
+| #11 a forfeit is an award with nothing played; `awardScore` replaces; byes never get it | 9 (P-3) |
 | #12 "If a match is abandoned" per stage | 7, 16, 17 |
 | #13 chess rungs; Armageddon colours; BG-KO-2 | 8, 17, 21 |
 | #14 chess clock per stage, not per match | 4, 11, 17 |
@@ -4396,7 +5029,10 @@ No gaps found.
 - `FixtureCfgSource`, `resolveFixtureCfg` (Task 10; used in 14, 16);
 - `withStageDefaults`, `validateStageRules` (12);
 - `writeFixtureRulesOverride`, `OverrideWriteResult` (14; used in 15, 19);
-- `rules_version`/`rulesVersion` (15);
+- `fixtures.rules_version int` (10), bumped by `refreezeFixture` (14), checked in `appendEventInTx` and carried as `rules_version`/`rulesVersion: number` (15);
+- `applyPointsRule(outcome, pair, rule, played)`, `isUnplayedForfeit(outcome, played)` (9), and `ruleScoreReaches` (9, `qualification-view.ts`);
+- `SportModule.abandonOptions` (4), `abandonOptions(module)`/`ABANDON_LABELS` (5; used in 7);
+- `effectiveRungs(cfg)` and the optional `armageddonBlack` (8; used in 21);
 - `pointsLine` (16; used in 18; D12 names it);
 - `RefusedField`, `divisionRefusals` (2; used in 20);
 - the Armageddon payload `{rung, black, result}` (8; used in 21).
@@ -4407,6 +5043,37 @@ No gaps found.
 - 3 → Tasks 13 and 18;
 - 4 and 5 → Task 12.
 
+**5. Fix round (review of `f4c209bd6`; spec `1b757c6cb`; owner P-1..P-4 and the execution ruling).**
+
+| Finding | Where fixed |
+|---|---|
+| C1 freeze clocks; null-version rule | D14 rewritten; Task 10 (column); Task 14 (bump); Task 15 rewritten; finding 28 |
+| C2 other POST sites, server writers | D14; Task 15 (`events-post-sites.test.ts`, `rules-version-writers.test.ts`); finding 32 |
+| I1 re-parse; refused variant drops its preset keys | Task 2 (two tests, Step 3 items 4/4a, mutants `t2-reparse`, `t2-variant-preset`) |
+| I2 the two old lock pins | Task 2 (`division-settings.test.ts:726-738`); Task 10 (`smoke.ts:8378-8385`) |
+| I3 MUT JSON must parse | Global Constraints (jq loop); every block re-checked |
+| I4 `q4_stands` in OT/SO | Task 7 (predicate, shoot-out case, mutant `t7-q4-shootout`) |
+| I5 ice hockey never offered `q4_stands` | Task 4 (`abandonOptions` type); Task 7 (per-sport lists, test, mutant `t7-ice-options`) |
+| I6 `share` at append time | Task 7 (`abandon-share.test.ts`); OQ-4 |
+| I7 award has no played marker | Task 9 rewritten (`played` from `playRecorded`); finding 11 |
+| I8 real ledgers | Task 14 (`playSet`, P-4 and its positive pair); Task 19 (X-SR-5 refusal e2e) |
+| I9 Playwright killers | Tasks 17–21: pure helpers with unit killers |
+| I10 old Armageddon senders | Task 8 (`withdrawal-decider-hold.test.ts:214`); Task 11 (`smoke.ts:2406`) |
+| I11 golden byte-identical | Task 8 (optional `armageddonBlack`; `hasOwn` test; Step 4) |
+| I12 rung order | Task 8 (`effectiveRungs`, `[blitz, rapid]` case, mutant `t8-order`); Task 21 reads it |
+| I13 Task 23 scope | Task 23 Step 2 (per-task file lists, no `vitest related` over the branch) |
+| M1 `shootoutAttempts` | Appendix A FB-SO-1; finding 19 |
+| M2 tennis family key | Task 16 (`set`) |
+| M3 BG-KO-1 amendment | Appendix A |
+| M4/M12 shared web files | Task 5 owns `types.ts` "sequence", `shared.ts` `ABANDON_LABELS`/`abandonOptions`, `TABLE_RULE_KEYS`; Tasks 7/8 no longer touch them |
+| M5 `core.void` without `voids` | Task 15 tests |
+| M6 NoCoverage | Task 22 |
+| M8/M10 not re-asked | Owner answers; Task 0; finding 30 |
+| M9 tautological race assertion | Task 14 |
+| M11 rules files on W2b | Task 0 Step 2 |
+| CK-SO-1 league half | Task 6 (`cricket.test.ts` case, mutant `t6-league-superover`) |
+| Execution ruling | **Execution** (batches; Opus Tasks 4, 9, 10, 14, 15); Task 23 Step 8 |
+
 ## Execution handoff
 
-The execution method is already set by the brief: subagent-driven, with the loops and lanes above. The orchestrator asks the owner to review this plan and confirm it captures W2c before Task 0 begins.
+The execution method is set by the owner (2026-10-13, "A Sonnet with those 4 tasks on Opus"): subagent-driven, in the six batches of **Execution**, with the loops and lanes above. Opus `implementer`/`reviewer` for Tasks 4, 9, 10, 14 and 15; `implementer-sonnet`/`reviewer-sonnet` for every other implementation task; one Opus `reviewer` pass plus the orchestrator's scoped gate at every batch end. The orchestrator asks the owner to review this plan and confirm it captures W2c before Task 0 begins.
