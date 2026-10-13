@@ -293,10 +293,15 @@ export function referenceBracketFinish(rec: Recorder, observed: ObservedRun, opt
   return parts.length === 0 ? verdict : { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
 }
 
-/** The format lock's answer: usecases/divisions.ts `formatLocked()` throws
- *  `new HttpError(409, …, "FORMAT_LOCKED")` (pinned against that text by
- *  scenarios.test.ts). */
-export const FORMAT_LOCK = Object.freeze({ status: 409, code: "FORMAT_LOCKED" });
+/** The format lock's answer on the division PATCH. Since W2c (X-SR-4, owner P-2
+ *  "A") the lock is PER STARTED STAGE THAT INHERITS the key, not "once any
+ *  fixture exists": usecases/divisions.ts throws the first refusal's own code
+ *  with its `RULE_ERROR_STATUS`, and rule-locks.ts emits `DIVISION_FORMAT_LOCKED`
+ *  for a match-format key (a table key gets `DIVISION_TABLE_RULES_LOCKED`).
+ *  `FORMAT_LOCKED` is no longer this door's answer: it is the replaceStages PUT's
+ *  (spec §4.3), which the `denied` scenario still expects. Pinned against the
+ *  product's own text by scenarios.test.ts. */
+export const FORMAT_LOCK = Object.freeze({ status: 409, code: "DIVISION_FORMAT_LOCKED" });
 
 /** R28: a locked format is refused BY THE LOCK, never a silent accept or a
  *  500. Final review m-3: any named 4xx is not enough — a new domain refusal
@@ -312,8 +317,8 @@ export function formatEditRefusedNamed(edit: ConfigEditObs): CheckResult {
 }
 
 /** Controller ruling (fix round 1, I-2): the entrants-only save is the one
- *  edit the format lock lets through (divisions.ts:795-870), so it must be
- *  ACCEPTED — a 2xx. A 409 here is a red finding, never an expected refusal.
+ *  edit the format lock lets through (usecases/divisions.ts patchDivision,
+ *  `entrants` is never a refused key), so it must be ACCEPTED — a 2xx. A 409 here is a red finding, never an expected refusal.
  *  configProbe always makes one, so none attempted is the vacuous fail. */
 export function entrantsEditAccepted(edit: ConfigEditObs): CheckResult {
   return assertion("life-entrants-edit-accepted", edit.attempts.filter((a) => a.kind === "entrants_only")

@@ -623,21 +623,31 @@ export class FakeLeagueDriver implements OrganiserDriver {
   kindsInUse(): string[] {
     return [...new Set(this.entrants.filter((e) => !DEPARTED_STATUSES.includes(e.status)).flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];
   }
-  /** divisions.ts:795-870: once fixtures exist, a config that does not parse or
-   *  changes anything but `entrants` is 409 FORMAT_LOCKED; a model that no
-   *  longer accepts an active entrant's kind is 422 ENTRANT_KIND_IN_USE
-   *  (T12-R1, :857-871); otherwise it saves. */
+  /** Has any fixture of the stage started? The product's predicate (rule-locks.ts `lockedStageIdsAmong`): a fixture that
+   *  holds an event (its config freezes at the first one). The table fake's expunge writes `abandoned` with no event,
+   *  where the product writes a score event, so that status counts too. Generated-but-unplayed fixtures start nothing,
+   *  and neither does a bye's award (decided at generation, with no event). */
+  stageStarted(): boolean {
+    return this.fixtures.some((f) => f.events.length > 0 || f.status === "abandoned");
+  }
+  /** usecases/divisions.ts patchDivision (W2c, X-SR-4, owner P-2 "A"): the lock is per STARTED stage that INHERITS a
+   *  key. A config that does not parse is 422 CONFIG_INVALID whether or not anything started; once a stage started, a
+   *  change to anything but `entrants` is 409 DIVISION_FORMAT_LOCKED (a match-format key — the keys this fake's probes
+   *  edit; a table key would be DIVISION_TABLE_RULES_LOCKED, which no probe sends); a model that no longer accepts an
+   *  active entrant's kind is 422 ENTRANT_KIND_IN_USE; otherwise it saves. The fake plays stages that post no
+   *  per-stage `rules`, so a started stage inherits every key — and it refuses to run if one ever does. */
   patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     return settle(() => {
       this.log("patchDivisionConfig");
-      const locked = this.fixtures.length > 0;
+      if (this.stage !== null && this.stage.config.rules !== undefined) throw new Error("fake: a stage with its own match rules — per-stage inheritance is not modelled here");
+      const locked = this.stageStarted();
       let parsed: Record<string, unknown>;
       try {
         parsed = resolveSportCfg(this.sport, this.variant, config) as Record<string, unknown>;
       } catch {
-        return locked ? { status: 409, code: "FORMAT_LOCKED" } : { status: 422, code: "CONFIG_INVALID" };
+        return { status: 422, code: "CONFIG_INVALID" };
       }
-      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
+      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
       const entrants = config.entrants;
       const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
       if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };

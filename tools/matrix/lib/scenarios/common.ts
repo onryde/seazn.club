@@ -847,7 +847,8 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
   const division = await ctx.driver.getDivision(setup.division.id);
   const attempts: ConfigEditObs["attempts"] = [];
   const cfg = ctx.cfg as Record<string, unknown>;
-  // A format field this sport declares; divisions.ts:814-857 locks it once fixtures exist.
+  // A format field this sport declares. The probe runs after stage 1 was played (`beforeComplete`), and the harness posts
+  // no per-stage match rules, so the started stage inherits it: the PATCH refuses it by name (W2c, X-SR-4 — FORMAT_LOCK).
   const formatDelta = typeof cfg.allowDraws === "boolean" ? { allowDraws: !cfg.allowDraws }
     : typeof cfg.setTo === "number" ? { setTo: cfg.setTo === 15 ? 11 : 15, finalSetTo: cfg.setTo === 15 ? 11 : 15 }
     : null;

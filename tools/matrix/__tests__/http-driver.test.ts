@@ -383,8 +383,8 @@ describe("HttpDriver — reads and probes", () => {
     expect(seen).toEqual([0, 0]);
   });
   it("patchDivisionConfig returns a refusal instead of throwing", async () => {
-    const { t } = fake([() => err(409, "FORMAT_LOCKED")]);
-    expect(await drv(t).patchDivisionConfig("d1", { setTo: 15 })).toEqual({ status: 409, code: "FORMAT_LOCKED" });
+    const { t } = fake([() => err(409, "DIVISION_FORMAT_LOCKED")]);
+    expect(await drv(t).patchDivisionConfig("d1", { setTo: 15 })).toEqual({ status: 409, code: "DIVISION_FORMAT_LOCKED" });
   });
   it("patchDivisionConfig PATCHes {config} and reports an accepted save as {200, null}", async () => {
     const { t, calls } = fake([() => ok({ id: "d1", config: { entrants: { kinds: ["individual"] } } })]);
