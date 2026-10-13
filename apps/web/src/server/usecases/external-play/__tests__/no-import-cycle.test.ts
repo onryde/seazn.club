@@ -31,6 +31,11 @@ const RESULT = path.join(SRC, "server/usecases/external-play/result.ts");
 const PREFLIGHT = path.join(SRC, "server/usecases/external-play/preflight.ts");
 const REVALIDATE = path.join(SRC, "server/public-site/revalidate.ts");
 const SCORING = path.join(SRC, "server/usecases/scoring.ts");
+const FEN = path.join(SRC, "server/external-play/fen.ts");
+const READ = path.join(SRC, "server/usecases/external-play-read.ts");
+const PLAY = path.join(SRC, "server/usecases/external-play/play.ts");
+const ORG_POSTS = path.join(SRC, "server/usecases/org-posts.ts");
+const DB = path.join(SRC, "lib/db.ts");
 
 function resolveSpecifier(from: string, spec: string): string | null {
   let base: string;
@@ -116,6 +121,33 @@ describe("no import cycle through usecases/fixtures.ts or external-play/guard.ts
     expect(reached.has(FIXTURES), "premise: guard.ts → fixtures.ts (the edge the mocks sit on)").toBe(true);
     for (const target of [RESULT, PREFLIGHT, GUARD]) {
       expect(reached.has(target), `guard.ts must not reach ${rel(target)}: ${shown(reached.get(target))}`).toBe(false);
+    }
+  });
+});
+
+// T17 fix round 5, I2 — the public read never loads the write graph. cacc41489 made `external-play-read.ts` import
+// `fenAfter` from `external-play/play.ts`, so loading the public read ran play.ts → result.ts → scoring.ts →
+// org-posts.ts, whose `const superuser = sql …` touches the database client AT MODULE LOAD. Any suite that mocks
+// `@/lib/db` without `sql` and reaches the read then fails to collect (registration's fetch-registrant-details). The
+// replay now lives in the leaf `server/external-play/fen.ts`: chess.js and nothing of this app.
+describe("the public read path never loads the play/scoring write graph (I2)", () => {
+  it("premise: the walker sees the old chain — play.ts DOES reach org-posts.ts and lib/db.ts", () => {
+    const fromPlay = walk(PLAY);
+    expect(fromPlay.has(ORG_POSTS), `play.ts → org-posts.ts: ${shown(fromPlay.get(ORG_POSTS))}`).toBe(true);
+    expect(fromPlay.has(DB), "play.ts → lib/db.ts").toBe(true);
+  });
+
+  it("fen.ts is a leaf: it imports no module of this app at all — no database, no usecase", () => {
+    expect(fs.existsSync(FEN), "the leaf exists").toBe(true);
+    expect([...walk(FEN).keys()].map(rel), "fen.ts's own app imports").toEqual([]);
+  });
+
+  it("external-play-read.ts reaches fen.ts, yet never play.ts, scoring.ts or org-posts.ts", () => {
+    const reached = walk(READ);
+    expect(reached.size, "anti-vacuity: modules visited from external-play-read.ts").toBeGreaterThan(5);
+    expect(reached.has(FEN), "premise: the read replays through the leaf").toBe(true);
+    for (const target of [PLAY, SCORING, ORG_POSTS]) {
+      expect(reached.has(target), `external-play-read.ts must not reach ${rel(target)}: ${shown(reached.get(target))}`).toBe(false);
     }
   });
 });

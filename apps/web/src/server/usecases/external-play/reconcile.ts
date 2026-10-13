@@ -45,7 +45,7 @@ import type { BoardGameFull, GameSnapshot, LichessStatus } from "@/server/extern
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import { effectiveBridge, loadOnlinePlayFixture, loadSides, type BridgeRow, type OnlinePlayFixture, type Side } from "./guard";
-import { fenAfter } from "./play";
+import { fenAfter } from "@/server/external-play/fen";
 import { closeBridgeIfUnplayable } from "./bridge-close";
 import { isPlayableFixtureStatus } from "./preflight";
 import { holdForOrganiser, writeResultFrom, type HoldReason, type ResultWrite, type RevokedSeat } from "./result";
