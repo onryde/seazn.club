@@ -322,21 +322,54 @@ async function lockFixture(tx: Tx, id: string): Promise<void> {
 }
 
 /**
- * W2b Loop R I-2 — the lock both bracket writers that judge a seat by ANOTHER line's stored decision take, held to
- * commit: the void of a double walkover (`reviveDeadSeats`: what did that double walkover kill?) and a decision's
- * cascade (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?). Each held only its own
- * fixture's lock, so the decision could read the double walkover still standing while its void, parked between its
- * read and its commit, had planned nothing — and both committed: the semi live again, the final a no-event walkover.
+ * W2b Loop R I-2 — the lock every bracket writer that judges a seat by ANOTHER line's stored decision takes, held to
+ * commit: the void of a double walkover (`reviveDeadSeats`: what did that double walkover kill?), a decision's cascade
+ * (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?). Each held only its own fixture's
+ * lock, so the decision could read the double walkover still standing while its void, parked between its read and its
+ * commit, had planned nothing — and both committed: the semi live again, the final a no-event walkover.
  *
- * Taken after the writer's OWN fixture lock and before any read of a seat it feeds; the void then locks its targets
- * after it (own fixture → stage → targets: one order), and the decision takes no further advisory lock. The two-key
- * form keeps it out of the single-key space every `fixture:` and `division:` lock lives in, so a hash collision can
- * never make it one of those. Not taken by the plain un-fill (`releaseFedSeats`' release path): that path waits on a
- * PLAYABLE target's lock (the match its winner was seated in) while it would hold this one, and that target's own
- * decision holds its lock while it asks for this one.
+ * LOCK ORDER (Loop R2 N-1): this lock comes BEFORE any `fixture:` lock, in every writer that takes both — the stage id
+ * is read first without a lock (a fixture never changes stage), then this, then the writer's own fixture, then (the
+ * void) its targets in bracket order (`releaseFedSeats`' ascending (round_no, id)). The void of a stored double
+ * walkover takes it ahead of the append's own fixture lock (`lockStageSeatsForVoid`, append-event.ts); `onDecided`
+ * ahead of its own. I-2 first took it AFTER the own fixture lock, and the void then locked its targets
+ * after it — so the void of a first-round double walkover held this and asked for a semi's fixture lock while that
+ * semi's decision held its fixture lock and asked for this: 40P01, and a decision chosen as the victim seated nobody.
+ * Nothing takes this lock while holding a `fixture:` lock, so no cycle runs through it; `reviveDeadSeats` refuses to
+ * run without it (`holdsStageSeats`). The two-key form keeps it out of the single-key space every `fixture:` and
+ * `division:` lock lives in, so a hash collision can never make it one of those. Not taken by the plain un-fill
+ * (`releaseFedSeats`' release path), which holds fixture locks only.
  */
 export async function lockStageSeats(tx: Tx, stageId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext('stage-seats'), hashtext(${stageId}))`;
+}
+
+/** Loop R2 N-1 — the void's half of the one lock order: a `core.void` of a line whose STORED outcome is a double
+ *  walkover feeding a next match may revive what it killed (`reviveDeadSeats`), so it takes the stage lock before the
+ *  append's own fixture lock. Read without a lock: a fixture never changes stage, and an outcome that turns into a
+ *  double walkover between this read and the append's locked one was written by another append, which the append's
+ *  seq check refuses (SEQ_CONFLICT) before anything is revived. Only a void can take back a double walkover — the
+ *  engine refuses every other event on a decided match (guarantee 4, `foldMatch`) — so every other append pays no
+ *  query here. Returns whether it locked. */
+export async function lockStageSeatsForVoid(tx: Tx, fixtureId: string): Promise<boolean> {
+  const [f] = await tx<{ stage_id: string; outcome: MatchOutcome | null; feeds: boolean }[]>`
+    select stage_id, outcome, (winner_to_fixture is not null or loser_to_fixture is not null) as feeds
+      from fixtures where id = ${fixtureId}`;
+  if (!f || !f.feeds || !advancesNobody(f.outcome)) return false;
+  await lockStageSeats(tx, f.stage_id);
+  return true;
+}
+
+/** Does THIS transaction hold `lockStageSeats(stageId)`? `pg_locks` shows a two-key advisory lock as classid/objid —
+ *  the two int4 keys as unsigned oids — with objsubid 2. */
+async function holdsStageSeats(tx: Tx, stageId: string): Promise<boolean> {
+  const [{ held }] = await tx<{ held: boolean }[]>`
+    select exists (
+      select 1 from pg_locks
+       where locktype = 'advisory' and pid = pg_backend_pid() and granted and objsubid = 2
+         and classid = (hashtext('stage-seats')::bigint & 4294967295)::oid
+         and objid = (hashtext(${stageId})::bigint & 4294967295)::oid) as held`;
+  return held;
 }
 
 /** Plan the seats `src` must give back when its winner and/or loser `moved`,
@@ -570,8 +603,14 @@ async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
   const src = await readNode(tx, fixtureId);
   if (!src) return [];
   // I-2: before the first read of a seat this double walkover killed — a sibling's decision must not judge it dead
-  // while this void is in flight, nor this void judge it before that decision's cascade has committed.
-  await lockStageSeats(tx, src.stage_id);
+  // while this void is in flight, nor this void judge it before that decision's cascade has committed. N-1: taken by
+  // the caller BEFORE its own fixture lock (`lockStageSeatsForVoid`), never here — taking it now, behind a fixture
+  // lock, is the order that deadlocks against a decision.
+  if (!(await holdsStageSeats(tx, src.stage_id))) {
+    throw new Error(
+      `reviveDeadSeats: fixture ${fixtureId} revives without the stage lock — take lockStageSeats before the fixture lock (Loop R2 N-1)`,
+    );
+  }
   const reach = new Map<string, Node>();
   await reachableRevive(tx, src, reach);
   const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

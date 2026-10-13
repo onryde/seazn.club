@@ -730,6 +730,16 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
+    // Loop R I-2 / R2 N-1: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's
+    // stored decision — so first the stage lock a double walkover's void holds while it revives (`lockStageSeats`), and
+    // it comes BEFORE this fixture's own lock: the one order (stage, then fixtures), so a void holding the stage while
+    // it asks for this fixture's lock never waits on a decision that holds this fixture's lock while it asks for the
+    // stage. Read without a lock: a fixture never changes stage. A line that feeds nothing (a league, a group, a final)
+    // never waits.
+    const [pre] = await tx<{ stage_id: string; feeds: boolean }[]>`
+      select stage_id, (winner_to_fixture is not null or loser_to_fixture is not null) as feeds
+        from fixtures where id = ${fixtureId}`;
+    if (pre?.feeds) await lockStageSeats(tx, pre.stage_id);
     await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
     const [fixture] = await tx<
       {
@@ -756,10 +766,10 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
-    // Loop R I-2: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's stored
-    // decision — so first the stage lock a double walkover's void holds while it revives (`lockStageSeats`). Own
-    // fixture, then stage: the void's order. A line that feeds nothing (a league, a group, a final) never waits.
-    if (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null) await lockStageSeats(tx, fixture.stage_id);
+    // An edge wired between the two reads (`wireCrossFeeds` runs when a later stage is generated, play or no play): the
+    // stage lock late, behind this fixture's — the one window the old order survives in, and still better than a
+    // cascade that reads its feeders unserialised.
+    if (!pre?.feeds && (fixture.winner_to_fixture !== null || fixture.loser_to_fixture !== null)) await lockStageSeats(tx, fixture.stage_id);
     // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
     assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
     // W2b D20: a double walkover advances nobody, so a seat it feeds holding one of its entrants is the bug shape.

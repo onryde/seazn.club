@@ -6,8 +6,8 @@
 // walked the final over to its winner, while the void had already planned nothing — both committed. The semi was live
 // again, and the final a no-event walkover the organiser cannot void, its stage possibly complete with a champion.
 //
-// Now both take one stage-scoped advisory lock (`lockStageSeats`) before reading the other line, in one order: own
-// fixture, stage, targets. Two transactions through the product's own writers (`scoreEvent` for the void, `onDecided`
+// Now both take one stage-scoped advisory lock (`lockStageSeats`) before reading the other line, in one order: stage,
+// own fixture, targets (Loop R2 N-1, stage-lock-order.test.ts). Two transactions through the product's own writers (`scoreEvent` for the void, `onDecided`
 // for the decision), interleaved by a third connection holding a row the void writes after its read.
 // single-sport: badminton; the seat rules read the feed graph, never the sport.
 import { afterAll, describe, expect, it } from "vitest";

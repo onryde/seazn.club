@@ -21,7 +21,7 @@ import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
-import { releaseFedSeats } from "./fed-seats";
+import { lockStageSeatsForVoid, releaseFedSeats } from "./fed-seats";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 import { isCascadeOnlyForfeitReason } from "@/lib/forfeit-phase-refusal";
@@ -269,6 +269,9 @@ export async function appendEventInTx(
   expectedSeq: number,
   input: AppendInput,
 ): Promise<{ appended: AppendResult; firstResult: FirstResult | null }> {
+  // Loop R2 N-1: a void that may revive what a stored double walkover killed takes the stage lock FIRST — the one lock
+  // order is stage, then fixtures (fed-seats.ts `lockStageSeats`). A no-op, and no query, for every other event.
+  if (input.type === "core.void") await lockStageSeatsForVoid(tx, fixtureId);
   // Serialise all appends to this fixture (spec 02 §8 — fixture is the write
   // aggregate). The lock is held to commit, so a concurrent appender blocks,
   // then re-reads the committed max seq and 409s.
