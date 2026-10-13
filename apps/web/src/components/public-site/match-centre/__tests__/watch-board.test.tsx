@@ -64,6 +64,15 @@ describe("WatchBoard", () => {
     // White to move, 582 s at asOf; 12 s later the face reads 9:30.
     expect(render(running, null, asOf + 12_000)).toMatch(/data-testid="watch-clock-white"[^]*?9:30/);
     expect(render({ ...running, clockRunning: false }, null, asOf + 12_000)).toMatch(/data-testid="watch-clock-white"[^]*?9:42/);
+    // Only the side to move counts down: Black, not to move, still reads its 600 s at asOf.
+    const face = (html: string, colour: "white" | "black") =>
+      new RegExp(`data-testid="watch-clock-${colour}"[^]*?(\\d+:\\d\\d)`).exec(html)?.[1];
+    const both = render(running, null, asOf + 12_000);
+    expect(face(both, "white")).toBe("9:30");
+    expect(face(both, "black")).toBe("10:00");
+    const blackToMove = render({ ...running, ply: 3, turn: "black" }, null, asOf + 12_000);
+    expect(face(blackToMove, "white"), "White, not to move, holds its 582 s").toBe("9:42");
+    expect(face(blackToMove, "black")).toBe("9:48");
   });
 
   it("no names yet: each side says its colour", () => {

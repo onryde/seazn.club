@@ -52,7 +52,9 @@ export function nextWatch(m: WatchModel, e: WatchEvent): WatchModel {
       whiteSide: prev?.watch?.whiteSide ?? null,
     };
     const status = prev?.status === "finished" || prev?.status === "needs_organiser" ? prev.status : "live";
-    return { roundOpened: true, play: { status, watch } };
+    // roundOpened is left as it was: once a board is on screen it is never read (watchView draws the board, or
+    // the hold, before it asks), and a poll never takes the board away.
+    return { ...m, play: { status, watch } };
   }
   const roundOpened = m.roundOpened || e.doc.roundOpened;
   const cur = m.play?.watch ?? null;
