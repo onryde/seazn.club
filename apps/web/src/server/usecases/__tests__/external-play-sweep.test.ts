@@ -3247,6 +3247,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         expect(flags[0]!.note).toContain(`1 stamp`);
         expect(flags[0]!.note).toContain(`${iso(m.startedAt + 120_000)} to ${iso(m.startedAt + 120_000 + len)}`);
         expect(flags[0]!.note, "neutral: never the camera-off wording").not.toMatch(/camera off/);
+        // T16 fix round 1, I3 + M10: the flag reaches the run sheet from its REAL producer (this sweep pass), as OUR
+        // side's quiet chip — no camera flag counted against the player.
+        const sheet = (await listRunSheetOnlinePlay(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId))[m.b.fixtureId];
+        expect([sheet?.cameraFlagCount, sheet?.connectionProblemCount], "the run sheet: ours, not the player's").toEqual([0, 1]);
       });
 
       it("past the COUNT (one stamp more than the limit, each short): the neutral flag, never camera_lost", async () => {

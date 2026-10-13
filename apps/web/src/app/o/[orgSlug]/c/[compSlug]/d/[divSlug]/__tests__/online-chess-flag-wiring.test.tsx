@@ -190,7 +190,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
   it("T16 — fixtures tab with a board held AND one flagged (online play off now): the queue gets both lists and the run sheet the chips, whatever the flag says — and the flag is never asked", async () => {
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
     const FLAGGED = { boards: [{ fixtureId: "f2" }], ownBoards: 1 };
-    const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
+    const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
     queue.listFlaggedExternalPlay.mockResolvedValue(FLAGGED);
     queue.listRunSheetOnlinePlay.mockResolvedValue(SHEET);
     let checked = 0;

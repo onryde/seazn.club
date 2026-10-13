@@ -64,6 +64,7 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
 const online = (o: Partial<RunSheetOnlinePlay> = {}): RunSheetOnlinePlay => ({
   cameraPolicy: "required",
   cameraFlagCount: 0,
+  connectionProblemCount: 0,
   offSeaznFlagCount: 0,
   held: null,
   live: true,
@@ -142,6 +143,37 @@ describe("the row's online chips", () => {
       }
     }
     expect(checked).toBe(4);
+  });
+
+  // T16 fix round 1, I3 (carry progress.md:1006, T14 round 5): `camera_connection_problems` is OUR safeguard's
+  // connection, never the player's — a quiet fact, never styled as an accusation, never counted with camera_lost,
+  // and never on its own what takes "Camera ok" away. The arbiter panel already draws it neutral.
+  it("I3: our side's connection problems — their own QUIET chip; 'Camera ok' stays; never the amber camera chip", () => {
+    let checked = 0;
+    for (const n of [1, 3]) {
+      const tree = row({ onlinePlay: online({ connectionProblemCount: n }) });
+      const [quiet, ...more] = chips(tree, "run-sheet-connection-chip");
+      expect(more, "one connection chip").toHaveLength(0);
+      expect(textOf(quiet), "the arbiter panel's own words").toBe(messages["arbiter.flag.connection.chipPlain"]);
+      expect(propsOf(quiet!).href, "it still leads to the panel, where it is reviewed").toBe(ARBITER);
+      const cls = String(propsOf(quiet!).className);
+      expect(cls, "never the amber evidence tone").not.toMatch(/fef3c7|713f12|amber/);
+      expect(cls).toMatch(/\bborder-slate-200\b/);
+      const camera = chips(tree, "run-sheet-camera-chip");
+      expect(camera.map((c) => propsOf(c)["data-state"]), `${n}: "Camera ok" stays — the player's camera was not lost`).toEqual(["ok"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("I3, the other direction: a lost camera beside our connection problems — the amber chip counts ONLY the lost camera", () => {
+    const tree = row({ onlinePlay: online({ cameraFlagCount: 1, connectionProblemCount: 2 }) });
+    const camera = chips(tree, "run-sheet-camera-chip");
+    expect(camera.map((c) => propsOf(c)["data-state"]), "amber, and no 'Camera ok'").toEqual(["flagged"]);
+    expect(textOf(camera[0]), "one camera flag, not three").toBe(plural("runsheet.camera.flag", 1));
+    expect(chips(tree, "run-sheet-connection-chip")).toHaveLength(1);
+    // And the empty case: neither ⇒ no connection chip.
+    expect(chips(row({ onlinePlay: online() }), "run-sheet-connection-chip")).toHaveLength(0);
   });
 
   it("moves made off Seazn: its own chip, to the arbiter panel; a camera flag and an off-Seazn flag each show", () => {

@@ -175,10 +175,20 @@ describe.runIf(HAS_DB)("listRunSheetOnlinePlay — the run sheet's chips", () =>
       await flag(r, b.fixtureId, "out_of_band_play"),
     ];
     const before = (await listRunSheetOnlinePlay(r.owner, r.divisionId))[b.fixtureId];
-    expect([before?.cameraFlagCount, before?.offSeaznFlagCount, before?.live, before?.held]).toEqual([2, 1, true, null]);
+    // I3: the lost camera and OUR connection problems are counted apart — never one "2 camera flags".
+    expect([before?.cameraFlagCount, before?.connectionProblemCount, before?.offSeaznFlagCount, before?.live, before?.held]).toEqual([1, 1, 1, true, null]);
     await closeExternalPlayFlags(r.owner, b.fixtureId, ids.slice(0, 2));
     const after = (await listRunSheetOnlinePlay(r.owner, r.divisionId))[b.fixtureId];
-    expect([after?.cameraFlagCount, after?.offSeaznFlagCount]).toEqual([0, 1]);
+    expect([after?.cameraFlagCount, after?.connectionProblemCount, after?.offSeaznFlagCount]).toEqual([0, 0, 1]);
+  });
+
+  it("I3: exactly one camera_connection_problems row — no camera flag counted, one connection problem", async () => {
+    const r = await round();
+    const b = r.boards[0]!;
+    await gameBridge(r, b);
+    await flag(r, b.fixtureId, "camera_connection_problems", b.home.personId);
+    const e = (await listRunSheetOnlinePlay(r.owner, r.divisionId))[b.fixtureId];
+    expect([e?.cameraFlagCount, e?.connectionProblemCount, e?.offSeaznFlagCount, e?.live]).toEqual([0, 1, 0, true]);
   });
 
   it("a flag on a board with no bridge row still gets an entry (the evidence outlives the bridge)", async () => {
