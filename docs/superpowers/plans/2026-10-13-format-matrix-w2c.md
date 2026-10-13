@@ -4246,6 +4246,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
 
+> **Carried from Task 4 re-review.** The X-SR-6 "every decider off" notice must read the RESOLVED cfg (after `bracketDeciders`), not only `stage.rules`: until Task 8/13b land, chess `bracketDeciders` forces `tiebreak` on, so a notice saying tie-breaks are off would be false. Test the notice against a chess knockout stage with its list empty.
+
 Spec items 1, 5, 6, 7, 9, 12, 13 and 14 (UI half); §5.3 S1, S4 (stage); X-SR-1, X-SR-3, X-SR-6, BG-KO-3 (UI); Review Focus 4 (the notice).
 
 **Files:**
