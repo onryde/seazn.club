@@ -45,6 +45,10 @@ export async function seedBracket(opts: {
   divisionConfig?: Record<string, unknown>;
   /** The stage's own config; a swiss stage must declare `rounds` (assertSwissRoundsDeclared). */
   stageConfig?: Record<string, unknown>;
+  /** W2c — the stage's own match rules (`stages.config.rules`). `createStages` refuses `rules` in a stage body (D2a:
+   *  `PUT /stages/{id}/rules` is its one writer, and it serves the set sports only until Task 11), so a seed writes it
+   *  straight onto the row, before the fixtures are generated. */
+  stageRules?: Record<string, unknown>;
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);
   const sportModule = builtinModules.find((x) => x.key === opts.sport)!;
@@ -92,6 +96,10 @@ export async function seedBracket(opts: {
     ),
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
+  if (opts.stageRules !== undefined) {
+    const n = await sql`update stages set config = config || ${sql.json({ rules: opts.stageRules } as never)} where id = ${stage!.id}`;
+    if (n.count !== 1) throw new Error("seedBracket: the stage rules were not written"); // R13
+  }
   await generateStageFixtures(auth, stage!.id);
   // swiss: the first generate plants empty round shells; the second pairs round 1 (stages.ts swissGen).
   if (opts.stageKind === "swiss") await generateStageFixtures(auth, stage!.id);

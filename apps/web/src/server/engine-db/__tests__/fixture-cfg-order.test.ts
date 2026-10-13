@@ -143,3 +143,64 @@ describe("BG-KO-3 (G1): the stage's tie-break rungs survive the bracket overlay"
     expect(resolved({ config_snapshot: null, rules_override: { tiebreakRungs: [] } }, ["blitz", "rapid"]).tiebreakRungs).toEqual([]);
   });
 });
+
+// W2c Task 14 — the override is a LEAF diff (the one writer stores only what the match changed, carry (c)), so the
+// resolver merges it leaf by leaf; and a null is inherit (Task 10 M2), as in a stage's own `rules`.
+describe("W2c Task 14 resolveFixtureCfg: the override's leaf merge and null = inherit", () => {
+  const ov = (rules_override: unknown) => ({ config_snapshot: null, rules_override });
+
+  it("M2 empty case: an override of only nulls (or undefined) leaves the stage's values — never blanks them", () => {
+    const badminton = mod("badminton");
+    const stage = badminton.configSchema.parse(badminton.variants.short) as { cap: number | null; bestOf: number };
+    expect(stage.cap, "the premise: the short preset has a cap to blank").not.toBeNull();
+    let checked = 0;
+    for (const nothing of [null, undefined]) {
+      const r = resolveFixtureCfg(ov({ cap: nothing, bestOf: nothing }), badminton.variants.short, null, badminton) as Record<string, unknown>;
+      expect(r.cap, String(nothing)).toBe(stage.cap);
+      expect(Object.hasOwn(r, "bestOf") ? r.bestOf : stage.bestOf, String(nothing)).toBe(stage.bestOf);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("carry (c): a nested override of one leaf keeps the stage's other leaves (ice hockey overtime.minutes), and a later stage edit to another leaf reaches the match", () => {
+    const ice = mod("icehockey");
+    const ot = (ice.configSchema.parse(ice.variants.iihf) as { overtime: { kind: string; minutes: number; skaters: number } }).overtime;
+    const stage = (skaters: number) => ({ kind: "knockout" as const, config: { rules: { overtime: { ...ot, skaters } } } });
+    const fixture = ov({ overtime: { minutes: ot.minutes - 1 } });
+    const before = resolveFixtureCfg(fixture, ice.variants.iihf, stage(ot.skaters), ice) as { overtime: unknown };
+    expect(before.overtime).toEqual({ ...ot, minutes: ot.minutes - 1 });
+    expect(ice.configSchema.safeParse(before).success).toBe(true);
+    const after = resolveFixtureCfg(fixture, ice.variants.iihf, stage(ot.skaters + 1), ice) as { overtime: unknown };
+    expect(after.overtime).toEqual({ ...ot, minutes: ot.minutes - 1, skaters: ot.skaters + 1 });
+  });
+
+  it("a nested override naming a key the stage's object lacks is a different shape and REPLACES it (tennis finalSet: games-level tie-break → match tie-break)", () => {
+    const tennis = mod("tennis");
+    // Both shapes are the engine's own presets: the slam's deciding-set tie-break and the doubles match tie-break.
+    const slam = tennis.variants["grand-slam"] as { finalSet: Record<string, unknown> };
+    const mtb = tennis.variants["doubles-noad-mtb10"] as { finalSet: Record<string, unknown> };
+    expect(Object.keys(mtb.finalSet).some((k) => !Object.hasOwn(slam.finalSet, k)), "the premise: two different shapes").toBe(true);
+    const r = resolveFixtureCfg(ov({ finalSet: mtb.finalSet }), slam, null, tennis) as { finalSet: unknown };
+    expect(r.finalSet).toEqual(mtb.finalSet);
+    expect(tennis.configSchema.safeParse(r).success, "a leaf merge of the two would be refused by the strict union").toBe(true);
+  });
+
+  it("the leaf merge writes neither input, at any depth", () => {
+    const ice = mod("icehockey");
+    const overtime = { kind: "sudden_death", minutes: 5, skaters: 3 };
+    const division = { overtime };
+    const override = { overtime: { minutes: 4 } };
+    resolveFixtureCfg(ov(override), division, null, ice);
+    expect(division).toEqual({ overtime: { kind: "sudden_death", minutes: 5, skaters: 3 } });
+    expect(overtime).toEqual({ kind: "sudden_death", minutes: 5, skaters: 3 });
+    expect(override).toEqual({ overtime: { minutes: 4 } });
+  });
+
+  it("a `__proto__` key from JSON is an own property of the result, never its prototype", () => {
+    const r = resolveFixtureCfg(ov(JSON.parse('{"__proto__": {"polluted": 1}, "bestOf": 1}')), { bestOf: 3 }, null, mod("badminton")) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(r)).toBe(Object.prototype);
+    expect((r as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(r.bestOf).toBe(1);
+  });
+});
