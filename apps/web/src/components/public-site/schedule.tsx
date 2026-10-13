@@ -225,6 +225,12 @@ function ScorebugRow({
       <ForfeitTagChip tag={forfeit.tag} sentence={forfeit.sentence} testId="schedule-forfeit-tag" />
     );
   const chipOn = (id: string | null, first: boolean) => chip !== null && (winner === null ? first : id === winner);
+  // Design review M-3: the tag has its OWN track beside the stacked scores. Inside the winner's score cell it pushed
+  // that line's digit a tag's width left of the other line's, breaking the column's right edge. Both lines carry a
+  // cell in the track (the loser's empty), so the track is as wide as the tag and both digits end on one edge; the
+  // cell's `-ml-1.5` keeps the tag the 6px after its score it always sat.
+  const tagTrack = lines !== null && chip !== null;
+  const tagCell = (on: boolean) => (tagTrack ? <span className="-ml-1.5 flex items-center">{on ? chip : null}</span> : null);
   // R116-1: an empty seat a walkover was won over (a withdrawn winner's, ruling 116) names her, never its bye label.
   const sideName = (id: string | null, seat: "home" | "away") => {
     const named = id ?? unseatedForfeitLoser(f, seat);
@@ -254,7 +260,7 @@ function ScorebugRow({
   return (
     <Link
       href={href}
-      className="relative grid grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-2.5 transition hover:bg-accent-soft/60"
+      className={`relative grid ${tagTrack ? "grid-cols-[3.5rem_minmax(0,1fr)_auto_auto]" : "grid-cols-[3.5rem_minmax(0,1fr)_auto]"} items-center gap-x-3 px-3.5 py-2.5 transition hover:bg-accent-soft/60`}
     >
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
 
@@ -290,10 +296,7 @@ function ScorebugRow({
 
       <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
       {lines ? (
-        <span className={scoreCls(f.home_entrant_id)}>
-          {lines[0]}
-          {chipOn(f.home_entrant_id, true) ? <span className="ml-1.5 align-middle">{chip}</span> : null}
-        </span>
+        <span data-testid="schedule-score" className={scoreCls(f.home_entrant_id)}>{lines[0]}</span>
       ) : chip !== null ? (
         // No score lines beside the tag (a double walkover, or a line too long for the column): the tag alone, with a
         // credited headline when there is one — never a double walkover's 0 — 0.
@@ -312,13 +315,10 @@ function ScorebugRow({
           {f.summary?.headline ?? (f.venue_name && railMode === "time" ? f.venue_name : "")}
         </span>
       )}
+      {tagCell(chipOn(f.home_entrant_id, true))}
       <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>
-      {lines ? (
-        <span className={scoreCls(f.away_entrant_id)}>
-          {lines[1]}
-          {chipOn(f.away_entrant_id, false) ? <span className="ml-1.5 align-middle">{chip}</span> : null}
-        </span>
-      ) : null}
+      {lines ? <span data-testid="schedule-score" className={scoreCls(f.away_entrant_id)}>{lines[1]}</span> : null}
+      {tagCell(chipOn(f.away_entrant_id, false))}
     </Link>
   );
 }

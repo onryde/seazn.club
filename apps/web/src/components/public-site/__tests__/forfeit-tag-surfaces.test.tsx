@@ -303,13 +303,43 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
         const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
         // Design audit 3.9: AFTER its score, as on the five other hosts (draw node, bracket footer, results matrix, hub
         // card): the credited 3, then the tag.
-        expect(win, `${tag}: the winner's row carries the tag after its credited 3`).toMatch(/>3<span[^>]*><span[^>]*role="img"/);
+        expect(win, `${tag}: the winner's row carries the tag after its credited 3`).toMatch(/>3<\/span><span[^>]*><span[^>]*role="img"/);
         expect(win, `${tag}: never before it`).not.toMatch(/role="img"[^]*>3</);
         expect(lose, `${tag}: the loser's row does not`).not.toContain('role="img"');
         checked++;
       }
     }
     expect(checked).toBe(FORFEIT_REASONS.length * 2);
+  });
+
+  // Design review M-3 (audit 3.9): the tag rode INSIDE the winner's score cell, so that line's digit sat a tag's width
+  // left of the other line's — the stacked column's right edge broke. The tag has its own track now: both lines carry
+  // a cell in it (the loser's empty), so both digits end on one right edge, and the tag still follows its score.
+  it("the stacked score column: both digits in the score track, the tag in its own track after the winner's (M-3)", async () => {
+    /** The row link's own class list (React prints `class` before `href`). */
+    const rowClass = (h: string, id: string) => {
+      const m = new RegExp(`<a class="([^"]*)" href="/d/fixtures/${id}"`).exec(h);
+      expect(m, `row ${id}'s link`).not.toBeNull();
+      return m![1]!;
+    };
+    let checked = 0;
+    for (const [winner, loser] of [["h", "a"], ["a", "h"]] as const) {
+      const credited = { headline: "3–0", perSide: [{ entrantId: winner, line: "3" }, { entrantId: loser, line: "0" }] };
+      const h = await render([fixture({ outcome: award("walkover", winner, loser) as never, summary: credited as never })]);
+      const row = rowOf(h, "f1");
+      const what = `${NAMES[winner]} won`;
+      expect(rowClass(h, "f1").split(" "), `${what}: four tracks`).toContain("grid-cols-[3.5rem_minmax(0,1fr)_auto_auto]");
+      const scores = [...row.matchAll(/data-testid="schedule-score"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1]);
+      expect(scores, `${what}: each score cell holds its digit alone`).toEqual(winner === "h" ? ["3", "0"] : ["0", "3"]);
+      expect(row, `${what}: the tag's cell follows the winner's score`).toMatch(/>3<\/span><span[^>]*><span[^>]*role="img"/);
+      expect(row, `${what}: the loser's line keeps the tag's track, empty`).toMatch(/>0<\/span><span[^>]*><\/span>/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The empty case: a played result has no tag, and no fourth track.
+    const ph = await render([fixture({ status: "decided", outcome: { kind: "win", winner: "h", loser: "a" } as never, summary: { headline: "2–1", perSide: [{ entrantId: "h", line: "2" }, { entrantId: "a", line: "1" }] } as never })]);
+    expect(rowClass(ph, "f1").split(" "), "a played row: three tracks").toContain("grid-cols-[3.5rem_minmax(0,1fr)_auto]");
+    expect([...rowOf(ph, "f1").matchAll(/data-testid="schedule-score"/g)].length, "a played row: both score cells").toBe(2);
   });
 
   it("R116-2: ruling 116's walkover over her dead seat stacks its credited score like any walkover, either seat", async () => {
@@ -327,7 +357,7 @@ describe("Schedule — a forfeited row reads Ended, its credited score and its t
       const what = `her ${her === "h" ? "home" : "away"} seat`;
       const [homeHalf, awayHalf] = row.split('title="Harbour United"');
       const [win, lose] = winner === "h" ? [homeHalf!, awayHalf!] : [awayHalf!, homeHalf!];
-      expect(win, `${what}: the winner's row carries the tag after its credit (audit 3.9)`).toMatch(/>3<span[^>]*><span[^>]*role="img"/);
+      expect(win, `${what}: the winner's row carries the tag after its credit (audit 3.9)`).toMatch(/>3<\/span><span[^>]*><span[^>]*role="img"/);
       expect(lose, `${what}: her row shows nil`).toMatch(/>0<\/span>/);
       expect(lose, `${what}: and no tag`).not.toContain('role="img"');
       expect(row, `${what}: not the headline chip of a row with no lines`).not.toContain(">3–0<");

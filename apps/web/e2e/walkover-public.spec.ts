@@ -162,6 +162,14 @@ test.describe("W2b — a credited result says which one, on every public surface
       await expect(schedTag).toHaveCount(1);
       await expect(schedTag).toHaveAttribute("data-testid", "schedule-forfeit-tag");
       await expect(schedTag.locator("xpath=ancestor::a[1]"), `${w}: the row shows the credited score`).toContainText(String(CREDIT));
+      // Design review M-3: the stacked score column keeps one right edge — the tag has its own track, so it no longer
+      // pushes the winner's digit left of the loser's.
+      const scoreCells = schedTag.locator("xpath=ancestor::a[1]").getByTestId("schedule-score");
+      await expect(scoreCells, `${w}: two stacked score cells`).toHaveCount(2);
+      const rights = await scoreCells.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().right));
+      expect(Math.abs(rights[0]! - rights[1]!), `${w}: both digits end on one edge (${rights.join(", ")})`).toBeLessThanOrEqual(0.5);
+      const tagLeft = await schedTag.evaluate((el) => el.getBoundingClientRect().left);
+      expect(tagLeft, `${w}: the tag follows the scores`).toBeGreaterThanOrEqual(rights[0]!);
       await expectNoHorizontalScroll(page);
       await crop(schedTag.locator("xpath=ancestor::a[1]"), `schedule-walkover-${w}`);
       screens++;
