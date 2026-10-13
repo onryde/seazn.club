@@ -27,10 +27,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, type APIRequestContext } from "@playwright/test";
 import { Chess } from "chess.js";
-import { SignJWT } from "jose";
-import { MATCH_ROOM_TOKEN_TTL_MS } from "../src/server/external-play/window";
 import type { RoomSnapshot } from "../src/components/public-site/match-room/room-snapshot";
-import { apiJson, createStageAndGenerate, linkPersonToUserBySql, TAG, withDb } from "./helpers";
+import { apiJson, createStageAndGenerate, linkLichessBySql, linkPersonToUserBySql, TAG, withDb } from "./helpers";
+import { mintMatchRoomLink } from "./match-room-link";
 
 /** The room's own copy, read from the dictionary rather than retyped. */
 export const uiEn = JSON.parse(
@@ -117,16 +116,9 @@ export async function seedLichessLink(userId: string, lichessId: string): Promis
   });
 }
 
-/** The invite's personal link, minted as invite.ts → mintMatchRoomToken does. */
-async function mintLink(c: { fixtureId: string; personId: string; roundOpenId: string; openedAt: Date }): Promise<string> {
-  const secret = process.env.AUTH_SECRET ?? "dev-insecure-secret-change-me";
-  const exp = Math.floor((c.openedAt.getTime() + MATCH_ROOM_TOKEN_TTL_MS) / 1000);
-  return new SignJWT({ fid: c.fixtureId, pid: c.personId, rid: c.roundOpenId, oat: c.openedAt.toISOString() })
-    .setProtectedHeader({ alg: "HS256", typ: "seazn-match-room" })
-    .setIssuedAt()
-    .setExpirationTime(exp)
-    .sign(new TextEncoder().encode(secret));
-}
+/** The invite's personal link, minted as invite.ts → mintMatchRoomToken does
+ *  (e2e/match-room-link.ts; e2e-seams.test.ts proves the product verifies it). */
+const mintLink = mintMatchRoomLink;
 
 /**
  * One online chess fixture, its round opened (unless `open: false`), both
@@ -328,7 +320,17 @@ export async function checkedInAt(fixtureId: string, personId: string): Promise<
   });
 }
 
-export type RoundPlayer = { name: string; personId: string; lichessId: string; userId: string; email: string; entrantId: string };
+export type RoundPlayer = {
+  name: string;
+  personId: string;
+  lichessId: string;
+  userId: string;
+  email: string;
+  entrantId: string;
+  /** The Lichess bearer the server will send for this player — set only by
+   *  `playable: true`, whose link the server can open (T17). */
+  lichessToken: string | null;
+};
 export type RoundBoard = { fixtureId: string; home: RoundPlayer; away: RoundPlayer };
 export type SeededRound = {
   orgId: string;
@@ -356,7 +358,17 @@ export type SeededRound = {
 export async function seedOnlineRound(
   request: APIRequestContext,
   names: string[],
-  opts: { open?: boolean; camera?: "required" | "off"; stage?: "league" | "swiss" } = {},
+  opts: {
+    open?: boolean;
+    camera?: "required" | "off";
+    stage?: "league" | "swiss";
+    /** The division's clock (default CLOCK, 10+5) — a curated key of time-controls.ts. */
+    clock?: { base: number; increment: number };
+    /** T17: link each player with a token the server CAN open, so a game can
+     *  really be created at the Lichess fixture server. Default: the
+     *  unopenable one-byte token (nothing may reach Lichess). */
+    playable?: boolean;
+  } = {},
 ): Promise<SeededRound> {
   const people: Omit<RoundPlayer, "entrantId">[] = [];
   for (const name of names) {
@@ -368,8 +380,14 @@ export async function seedOnlineRound(
     expect(person.status, `person ${name}: ${JSON.stringify(person.error)}`).toBeLessThan(300);
     await linkPersonToUserBySql(person.data!.id, userId);
     const lichessId = `e2e-rnd-${randomBytes(5).toString("hex")}`;
-    await seedLichessLink(userId, lichessId);
-    people.push({ name, personId: person.data!.id, lichessId, userId, email });
+    let lichessToken: string | null = null;
+    if (opts.playable) {
+      lichessToken = `lio_e2e_${lichessId}`;
+      await linkLichessBySql(userId, lichessId, lichessToken, playScopes());
+    } else {
+      await seedLichessLink(userId, lichessId);
+    }
+    people.push({ name, personId: person.data!.id, lichessId, userId, email, lichessToken });
   }
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
@@ -381,7 +399,7 @@ export async function seedOnlineRound(
     name: "Open Rapid",
     sport_key: "boardgame",
     variant_key: "classical",
-    config: { variant: "classical", onlinePlay: "lichess", clock: CLOCK },
+    config: { variant: "classical", onlinePlay: "lichess", clock: opts.clock ?? CLOCK },
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const divisionId = div.data!.id;
