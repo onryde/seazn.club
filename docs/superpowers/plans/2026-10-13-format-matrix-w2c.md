@@ -1465,6 +1465,8 @@ If `src/sport/module.test.ts` does not exist, the implementer names the suite th
 
 ### Task 5: Web — fields name their engine key; per-sport contract tests; `rule-scope.ts`
 
+> **Carried from batch-1 Opus review (M-b).** `rule-locks.ts:64-81`'s "inherits" check ignores stage kind: a started knockout locks `points`/`pointsMap`/`tiebreakers` (it has no table) and keys forced by `bracketDeciders` or top-level `STAGE_DECIDER_KEYS`. Once `ruleKeys` carry `appliesTo`, a stage only inherits a key that applies to its kind; add a knockout case (division `pointsMap` edit saves while only a knockout stage has started) + one mutant.
+
 > **Carried from build (orchestrator, Task 1/2 reviews).** (a) Add `tools/matrix/__tests__/boundary.test.ts` (run with the ENGINE's vitest) to Step 4's verify: it guards the `.ts` sibling imports plain Node needs, and web `vitest related` never runs it. (b) Task 2 review M-4: `division-locks.test.ts` covers badminton + generic only; once `TABLE_RULE_KEYS` derives from `pointsKeysFor`, add a builtinModules sweep that every sport's table/format classification matches the engine declaration (counted, zero checked = failure).
 
 Spec §4.1 as amended (web side), D2, D11.
@@ -2815,6 +2817,8 @@ In `bracket-overlay-callers.test.ts`:
 
 ### Task 11: Stage rules for every sport — `putStageRules` (server)
 
+> **Carried from batch-1 Opus review (I-A).** Since Task 2 (P-2 "A") the division config can change after stages have stored `config.rules`, but `patchDivision` never re-checks them: e.g. Pool B `{cap:21}` + a division change to setTo/finalSetTo 25 with cap 30 leaves B's merged config breaking the kernel's cap ≥ setTo refinement, frozen as is; or a division `pointsMap` edit drops a score a stage's `bestOf` override needs (standings throw, and the key then locks). Extract ONE merged-parse helper here (`{division ⊕ stage.rules}` parse + `unansweredSetScores` when rules set `bestOf`), use it in `putStageRules` AND in `patchDivision` for every stage that has `config.rules`: refuse 422 `CONFIG_INVALID` naming the stage. Red-first tests for both examples; mutate the new call in `patchDivision` once. Must land before Task 12 writes `stageDefaults` into every knockout stage's rules.
+
 Spec item 1 (write path 1) and item 5's validation for deciders; D1, D3; X-SR-1, X-SR-3.
 
 **Files:**
@@ -3015,7 +3019,7 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 ---
 ### Task 12: Stage creation writes the presets; the API takes `config.rules`; carry merges (server)
 
-> **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses.
+> **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses. Forward `EngineError.data` for `CONFIG_INVALID` in `api-v1/http.ts` so `issues`/`refused` reach HTTP clients (with a route test). Fix stale comments `pad-cfg-resolution.test.ts:99-102`, `schemas.ts:490-491`.
 
 Spec items 5, 6; §4.2; D3, D13; SC-P8; P7; Review Focus 4 and 5; the §8 seam "stageDefaults output is read back through `resolveFixtureCfg` and folded by the real engine".
 
@@ -3423,6 +3427,8 @@ The mutant re-inserts the deleted overlay. The first assertion of the D3 case ki
 
 ### Task 14: The one override writer and the live correction (Q11) (server; Opus)
 
+> **Carried from batch-1 Opus review (I-A, one layer up).** A division or stage save must not invalidate an unstarted fixture's `rules_override`: reuse Task 11's merged-parse helper to check `{division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override}` for every unstarted fixture with an override when the division or stage rules change, refusing 422 naming the match. Red-first test + one mutant.
+
 Spec items 2, 3; §4.5 item 2 at `1b757c6cb`; D5, D6, D14; owner P-1 (the version bump) and P-4 (a correction that ends the match is refused); X-SR-2, X-SR-5; P5 (server half); review I8 (real ledgers), M9 (the race assertion); Review Focus 1; the §8 seam "the override is folded through every caller from a real `writeFixtureRulesOverride` write".
 
 **Files:**
@@ -3730,7 +3736,7 @@ The implementation names `outcomesDiffer`, `isEmpty` and `next` as written here,
 
 ### Task 15: Open pads follow a correction — the rules version (owner P-1 "A"; Opus)
 
-> **Carried from Task 2 review (I-1, orchestrator ruling).** The first event vs a division save can put one stage on mixed rules: `patchDivision` takes no lock, and `appendEventInTx` locks only `fixture:<id>` while reading LIVE `divisions.config` for an unsnapshotted fixture (`append-event.ts` ~:215/:287) and freezing it. Fix on a NEW advisory key (`division-config:<divisionId>`; not `division:`, whose holders take fixture locks → deadlock risk): `patchDivision` takes it EXCLUSIVE before its refusal read; `appendEventInTx` takes it SHARED (`pg_advisory_xact_lock_shared`) only when the fixture has no snapshot, after the fixture lock and before the division read. Test with two connections: hold the patch open past its refusal read, run the first event, commit; red = mixed snapshots in one stage, green = the patch is refused naming the stage (or the event waits and freezes the new config). Mutate each lock call once. Correct the stale claim at `stage-rules.ts:137-148`. **Lock order after W2b (#945):** W2b takes the stage lock before every fixture lock in `fed-seats.ts`, `scoring.ts` and `stages.ts`; re-read those paths after the rebase and place the shared `division-config:` lock so no path holds it while waiting on a stage or fixture lock another path holds in the opposite order (state the global order in the commit message).
+> **Carried from Task 2 review (I-1, orchestrator ruling).** The first event vs a division save can put one stage on mixed rules: `patchDivision` takes no lock, and `appendEventInTx` locks only `fixture:<id>` while reading LIVE `divisions.config` for an unsnapshotted fixture (`append-event.ts` ~:215/:287) and freezing it. Fix on a NEW advisory key (`division-config:<divisionId>`; not `division:`, whose holders take fixture locks → deadlock risk): `patchDivision` takes it EXCLUSIVE before its refusal read; `appendEventInTx` takes it SHARED (`pg_advisory_xact_lock_shared`) only when the fixture has no snapshot, after the fixture lock and before the division read. Test with two connections: hold the patch open past its refusal read, run the first event, commit; red = mixed snapshots in one stage, green = the patch is refused naming the stage (or the event waits and freezes the new config). Mutate each lock call once. Correct the stale claim at `stage-rules.ts:137-148`, and CLOSE that race too (batch-1 Opus review): `putStageRules` (Task 11's every-sport version) takes `division-config:` EXCLUSIVE as well, with its own two-connection red→green test and one mutant. **Lock order after W2b (#945):** W2b takes the stage lock before every fixture lock in `fed-seats.ts`, `scoring.ts` and `stages.ts`; re-read those paths after the rebase and place the shared `division-config:` lock so no path holds it while waiting on a stage or fixture lock another path holds in the opposite order (state the global order in the commit message).
 
 Spec §2.1 #3 (pad half); §4.5 item 2 at `1b757c6cb`; §7 `FIXTURE_RULES_CHANGED`; §9 P5 e2e; D14; X-SR-7. Review C1 (the first draft compared `config_snapshot_at` to the first event's `recorded_at`, and refused a null version after a re-freeze, which also refused the server's own writers) and C2 (other POST sites and server writers; finding 32). The column was created in Task 10 and is bumped only by `refreezeFixture` (Task 14).
 
@@ -4802,7 +4808,7 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 ---
 ### Task 20: S4 — division settings name what is locked (UI)
 
-> **Carried from Task 2 review.** Add to Files and fix: `e2e/division-settings.spec.ts:92-99` (the PATCH 409 FORMAT_LOCKED after generate now returns 200 — rewrite to the per-started-stage behaviour, and the :92-93 testid/text assertions); `components/v2/format-lock.ts:3,6` + the division `page.tsx:948` (the UI still over-locks on any fixture); `content/help/divisions/settings.md:10` and its "Why can't I change the format?" paragraph (English only); stale comments `division-settings.tsx:5`, `usecases/stages.ts:486`, `usecases/templates.ts:362`. i18n keys use the D10 prefix `ruleLock.<CODE>` (orchestrator ruling; the task text's `divisionLock.` is superseded). `RefusedField` is imported from `lib/rule-errors.ts`.
+> **Carried from Task 2 review.** Add to Files and fix: `e2e/division-settings.spec.ts:92-99` (the PATCH 409 FORMAT_LOCKED after generate now returns 200 — rewrite to the per-started-stage behaviour, and the :92-93 testid/text assertions); `components/v2/format-lock.ts:3,6` + the division `page.tsx:948` (the UI still over-locks on any fixture); `content/help/divisions/settings.md:10` and its "Why can't I change the format?" paragraph (English only), plus help `lifecycle.md:15`, `add-a-division.md:21`, `start-scoring.md:7`; stale comments `division-settings.tsx:5`, `usecases/stages.ts:486`, `usecases/templates.ts:362`. i18n keys use the D10 prefix `ruleLock.<CODE>` (orchestrator ruling; the task text's `divisionLock.` is superseded). `RefusedField` is imported from `lib/rule-errors.ts`.
 
 Spec item 4 (UI half); §5 S4 (division); X-SR-4 (UI). Owner P-2 "A": the lock is per started inheriting stage, and a save keeps every unlocked field.
 
