@@ -108,7 +108,7 @@ test("R115-4: /me and the public card refold an old-version snapshot after the f
   const a = await seedScene(page.request, "Me");
   const playerCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const me = await playerCtx.newPage();
-  await loginUi(me, `pat-stale-${TAG}@example.com`, "/me");
+  await loginUi(me, `delivered+pat-stale-${TAG}@resend.dev`, "/me");
   const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
   await linkPersonToUserBySql(a.pat, whoami.data!.id);
   const staleA = await age(a.divisionId, a.pat, a.right);

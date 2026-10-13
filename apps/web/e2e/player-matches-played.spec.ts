@@ -168,7 +168,7 @@ test("R115-1: /me, the public player card and the console count only matches pla
   // ---- /me, as the player: a fresh login, the person linked to it -----------------------------------------------
   const playerCtx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const me = await playerCtx.newPage();
-  const email = `pat-played-${TAG}@example.com`;
+  const email = `delivered+pat-played-${TAG}@resend.dev`;
   await loginUi(me, email, "/me");
   const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
   expect(whoami.status).toBe(200);
@@ -340,7 +340,7 @@ test("ruling 122: the coach is listed with no team match; a bench row follows th
   ] as const) {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const me = await ctx.newPage();
-    await loginUi(me, `${who.toLowerCase()}-r122-${TAG}@example.com`, "/me");
+    await loginUi(me, `delivered+${who.toLowerCase()}-r122-${TAG}@resend.dev`, "/me");
     const whoami = await apiJson<{ id: string }>(me.request, "/api/users/me");
     expect(whoami.status).toBe(200);
     await linkPersonToUserBySql(id, whoami.data!.id);
