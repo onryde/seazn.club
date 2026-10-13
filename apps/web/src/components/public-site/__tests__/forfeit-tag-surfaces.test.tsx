@@ -15,7 +15,9 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { FORFEIT_REASONS } from "@seazn/engine/core";
+import { FORFEIT_REASONS, foldMatch } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -36,6 +38,7 @@ import { ResultsMatrix } from "../results-matrix";
 import { LiveScoreBody } from "../live-score";
 import { outcomeText } from "@/components/v2/stages-panel";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { periodBreakdown } from "@/lib/public-site";
 
 const DICT = en as unknown as Dict;
 const UI = uiEn as Record<string, string>;
@@ -416,6 +419,64 @@ describe("LiveScoreBody — the fallback line (no document)", () => {
     );
     expect(played).toContain("Riverside FC won");
     expect(played).not.toContain("retired");
+  });
+});
+
+// Design review M-1 (audit 3.1 on the match centre's fallback): a double walkover credits nobody, but its summary
+// carries a headline and a line per side (and, on a set sport, a breakdown) — the fallback painted them, a 0 — 0 that
+// reads as an unplayed match. It draws the tag in the headline's place, muted, keeps both names, and draws no line and
+// no set table. Every sport through the real fold (no events: a double walkover is recorded before a ball is played);
+// the premise — the summary carries a headline to hide — is counted. A one-sided walkover keeps its score.
+describe("LiveScoreBody — a double walkover shows no score on any sport (review M-1)", () => {
+  const templates = { tie: "", plain: "{winner} won", shootoutPlain: "", byMethod: {} };
+  // Two ledgers a double walkover can stand on: nothing at all, and a Start with nothing played (ruling 112 keeps the
+  // walkover admitted until play — and a started set sport carries its open 0–0 set, a table to hide).
+  const summaryOf = (key: string, started: boolean) => {
+    const mod = builtinModules.find((m) => m.key === key)!;
+    const cfg = mod.configSchema.parse(SIM_CONFIGS[key] ?? {});
+    const events = started ? [makeEnvelope(0, { type: "core.start", payload: {} } as never)] : [];
+    const state = foldMatch(mod as never, cfg as never, defaultLineupPair(mod.positions), events);
+    return (mod as unknown as { summary: (st: unknown) => { headline?: string; perSide?: { entrantId: string; line: string }[] } }).summary(state);
+  };
+  it("the tag, muted, in the headline's place; both names; no line, no set table — every sport", () => {
+    let checked = 0;
+    let withPeriods = 0;
+    for (const [key, started] of builtinModules.flatMap(({ key: k }) => [[k, false], [k, true]] as const)) {
+      const summary = summaryOf(key, started);
+      if (!summary.headline || !/\d/.test(summary.headline)) continue; // premise: a headline to hide
+      const names = Object.fromEntries((summary.perSide ?? []).map((p, i) => [p.entrantId, i === 0 ? "Riverside FC" : "Harbour United"]));
+      const render = (status: string, outcome: unknown) =>
+        renderToStaticMarkup(
+          createElement(LiveScoreBody, { data: { status, summary, outcome } as never, entrantNames: names, sportKey: key, decidedTemplates: templates, dict: DICT }),
+        );
+      const html = render("forfeited", { kind: "double_walkover" });
+      expect(html, `${key}: the headline is not drawn`).not.toContain(`>${summary.headline}<`);
+      expect(html, `${key}: the tag sits in the headline's place, muted`).toMatch(new RegExp(`text-court-muted[^"]*">${tr("forfeit.tag.doubleWalkover")}</p>`));
+      for (const p of summary.perSide ?? []) expect(html, `${key}: no side line`).not.toContain(`sm:text-2xl">${p.line}</span>`);
+      expect(html, `${key}: no set or period table`).not.toContain("<table");
+      if (periodBreakdown(summary) !== null) withPeriods++; // premise: a period sport's table to hide
+      expect(html, `${key}: both names`).toContain("Riverside FC");
+      expect(html, `${key}: both names`).toContain("Harbour United");
+      expect(html, `${key}: the sentence says what happened`).toContain(tr("forfeit.sentence.doubleWalkover"));
+      const [h, a] = Object.keys(names);
+      const wo = render("forfeited", { kind: "award", winner: h, loser: a, reason: "walkover" });
+      expect(wo.includes(`>${summary.headline}<`) || wo.includes("<table"), `${key}: the walkover keeps its score`).toBe(true);
+      checked++;
+    }
+    expect(checked, "sports whose summary carries a headline to hide").toBeGreaterThanOrEqual(5);
+    expect(withPeriods, "started period sports whose summary carries a period table to hide").toBeGreaterThanOrEqual(1);
+  });
+
+  // No sport's fold opens a set on a Start alone, so the set table is reached only by a summary that carries sets (a
+  // legacy ledger settled non-strict): pinned here with one, so the guard is not decoration.
+  it("a summary that carries a set table: the double walkover draws none; the walkover keeps it", () => {
+    const summary = { headline: "0 — 0", perSide: [{ entrantId: "h", line: "0" }, { entrantId: "a", line: "0" }], detail: { sets: [{ home: 0, away: 0, closed: false }] } };
+    const render = (outcome: unknown) =>
+      renderToStaticMarkup(
+        createElement(LiveScoreBody, { data: { status: "forfeited", summary, outcome } as never, entrantNames: NAMES, sportKey: "badminton", decidedTemplates: templates, dict: DICT }),
+      );
+    expect(render({ kind: "award", winner: "h", loser: "a", reason: "walkover" }), "premise: the summary draws a set table").toContain("<table");
+    expect(render({ kind: "double_walkover" })).not.toContain("<table");
   });
 });
 

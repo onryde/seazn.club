@@ -26,7 +26,7 @@ import {
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import { cricketDetail } from "@/lib/overlay-cricket";
-import { forfeitCopyLookup, forfeitTag, forfeitWords, NO_LEDGER, type ForfeitCopy } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitCopyLookup, forfeitTag, forfeitWords, NO_LEDGER, type ForfeitCopy } from "@/lib/forfeit-tag";
 import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme";
 
 /**
@@ -620,7 +620,10 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // payload this projection cannot place, so it falls to the em-dash state
   // rather than guessing which line belongs to which row.
   const perSide = data.summary?.perSide;
-  const usable = Array.isArray(perSide) && perSide.length === 2 ? perSide : null;
+  // Design review M-1 (audit 3.1 on air): a double walkover credits nobody, but its summary still carries a line per
+  // side — drawn big, that 0 / 0 reads as an unplayed match. It takes the em-dash state; the result line says what
+  // happened.
+  const usable = Array.isArray(perSide) && perSide.length === 2 && !creditsNobody(data.outcome) ? perSide : null;
 
   const overlaySides = ([0, 1] as const).map((row): OverlaySide => {
     const input_ = sides[row];

@@ -27,7 +27,7 @@ import {
   stripLiveSetPoints,
 } from "@/lib/public-site";
 import { type LiveFixtureData } from "./live-score-data";
-import { NO_LEDGER, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
+import { NO_LEDGER, creditsNobody, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
@@ -122,11 +122,15 @@ export function LiveScoreBody({
   const breakdown = setBreakdown(data.summary, sportKey);
   // Kernel perSide order is [home, away]; row labels come from it.
   const sideIds = data.summary?.perSide?.map((s) => s.entrantId) ?? [];
-  const showBreakdown = breakdown !== null && sideIds.length === 2;
+  // Design review M-1 (audit 3.1): a double walkover credits nobody — its summary's headline, side lines, set and period tables
+  // are a 0 — 0 that reads as an unplayed match. None is drawn; the tag takes the headline's place, muted, and the
+  // sentence below says what happened.
+  const noScore = creditsNobody(data.outcome);
+  const showBreakdown = breakdown !== null && sideIds.length === 2 && !noScore;
   // Period-kernel surfaces (v6/00 §5): power-play strength while live,
   // goals-by-period once periods exist, the discipline list, tennis serve dot.
   const strength = inPlay ? matchStrength(data.summary) : null;
-  const periods = periodBreakdown(data.summary);
+  const periods = noScore ? null : periodBreakdown(data.summary); // M-1: a period table of a double walkover is a 0–0 too
   const discipline = disciplineList(data.summary);
   const serving = inPlay ? servingSide(data.summary) : null;
   // R3.5/Task O — recomputed from `data` on every render, so a live poll or
@@ -253,8 +257,10 @@ export function LiveScoreBody({
               above and this HEADLINE are two different pieces of copy that
               happen to describe the same moment; they keep two different
               keys on purpose now. */}
-          <p className="font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl">
-            {data.summary?.headline
+          <p className={`font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl${noScore ? " text-court-muted" : ""}`}>
+            {noScore
+              ? t(activeDict, "forfeit.tag.doubleWalkover")
+              : data.summary?.headline
               ? showBreakdown
                 ? stripLiveSetPoints(data.summary.headline)
                 : data.summary.headline
@@ -278,9 +284,11 @@ export function LiveScoreBody({
                       ) : null}
                       {entrantNames[side.entrantId] ?? "—"}
                     </span>
-                    <span className="shrink-0 font-display text-xl font-bold sm:text-2xl">
-                      {side.line}
-                    </span>
+                    {noScore ? null : (
+                      <span className="shrink-0 font-display text-xl font-bold sm:text-2xl">
+                        {side.line}
+                      </span>
+                    )}
                   </li>
                 );
               })}

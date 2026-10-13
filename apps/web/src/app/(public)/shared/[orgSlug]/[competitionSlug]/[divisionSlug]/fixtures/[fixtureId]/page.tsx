@@ -37,7 +37,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import { decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { linkOnlyRobots } from "@/lib/competition-listing";
-import { FORFEIT_SENTENCE_KEYS } from "@/lib/forfeit-tag";
+import { FORFEIT_SENTENCE_KEYS, creditsNobody as outcomeCreditsNobody } from "@/lib/forfeit-tag";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -94,9 +94,10 @@ function decidedLineFor(
 const RESULT_STATUSES: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
 /** A double walkover credits nobody: its summary's 0 — 0 is not a score, so
- *  no title or description prints it beside the sentence that says so. */
-function creditsNobody(fixture: { outcome: { kind?: string } | null }): boolean {
-  return fixture.outcome?.kind === "double_walkover";
+ *  no title or description prints it beside the sentence that says so. The
+ *  one predicate every host asks (design review M-1), read off the fixture. */
+function creditsNobody(fixture: { outcome: unknown }): boolean {
+  return outcomeCreditsNobody(fixture.outcome);
 }
 
 /** Appends the decided sentence onto a headline (metadata/share text share

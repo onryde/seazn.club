@@ -970,6 +970,29 @@ describe("overlayModel — a credited result reads its forfeit sentence (W2b T13
     expect(model.header.period).toBe(t(UI, "forfeit.sentence.doubleWalkover"));
   });
 
+  // Design review M-1 (audit 3.1 on air): a double walkover credits nobody, but its summary carries a score line per
+  // side — the band drew those as its big digits, a 0 / 0 that reads as an unplayed match. It draws the overlay's own
+  // no-score state (the em dash) instead; a one-sided walkover keeps its credited lines. Every sport, through the real
+  // fold; the premise (the summary really carries a line to hide) is counted.
+  it("a double walkover's band draws no score on any sport; a walkover keeps its lines", () => {
+    let checked = 0;
+    for (const key of builtinModules.map((m) => m.key)) {
+      const at = (outcome: LiveFixtureData["outcome"]) => {
+        const data = { lastSeq: null, venueTz: "UTC", ...payload(key, [], "forfeited", outcome) } as OverlayLiveData;
+        const lines = (data.summary?.perSide ?? []).map((p) => p.line);
+        const model = overlayModel({ sportKey: key, data, sides: SIDES, startLabel: null, clockLabel: null, msg: keyMsg, decidedTemplates: TEMPLATES, forfeitCopy: COPY });
+        return { lines, big: model.sides.map((x) => x.big) };
+      };
+      const dw = at({ kind: "double_walkover" } as never);
+      if (dw.lines.length !== 2 || !dw.lines.every((l) => /\d/.test(String(l)))) continue; // premise: a line to hide
+      expect(dw.big, `${key}: the double walkover draws no score`).toEqual(["—", "—"]);
+      const wo = at({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never);
+      expect(wo.big.every((b) => b !== "—"), `${key}: the walkover keeps its credited lines`).toBe(true);
+      checked++;
+    }
+    expect(checked, "sports whose summary carries a line to hide").toBeGreaterThanOrEqual(5);
+  });
+
   it("the positive pair: a played win, and a caller with no forfeit copy, keep the result templates", () => {
     expect(onAir({ kind: "win", winner: "H", loser: "A", method: "regulation" } as never).result).toBe("WIN Milton Keynes Rovers REG");
     expect(onAir({ kind: "award", winner: "H", loser: "A", reason: "walkover" } as never, false).result).toBe("WIN Milton Keynes Rovers");

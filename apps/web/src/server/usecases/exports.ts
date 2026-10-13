@@ -52,7 +52,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
-import { unseatedForfeitLoser, unseatedForfeitLoserName } from "@/lib/forfeit-tag";
+import { creditsNobody, unseatedForfeitLoser, unseatedForfeitLoserName } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 type Tx = postgres.TransactionSql;
@@ -666,7 +666,9 @@ export async function buildDivisionDocModel(
             away: awayId
               ? (nameById.get(awayId) ?? null)
               : resolveSlotLabel(f.away_slot_label, slotLookup, "bracket.tbd"),
-            headline: f.headline,
+            // Design review M-1 (audit 3.1): a double walkover credits nobody — its stored "0 — 0" would print as an
+            // unplayed match, so the node prints the tag (the live bracket's word) in the score's place.
+            headline: creditsNobody(f.outcome) ? slotLookup("forfeit.tag.doubleWalkover") : f.headline,
             decided: f.outcome !== null,
           };
         });
