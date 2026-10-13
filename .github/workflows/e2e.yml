@@ -1080,6 +1080,11 @@ jobs:
       # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
       # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
       LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
+      # T17 review M7: no spec in this job starts the Lichess fixture, so the
+      # port is closed — a stray reconcile is refused on the runner instead of
+      # reading lichess.org unauthenticated. Video stays unconfigured here (no
+      # REALTIMEKIT_* credentials ⇒ no call). Pinned by e2e-ci-wiring.test.ts.
+      LICHESS_BASE_URL: "http://127.0.0.1:4321"
       # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
       # rotated out. Pass through every Start server / Playwright step; do
       # not introduce SUPABASE_JWT_PRIVATE_KEY.
@@ -1436,6 +1441,11 @@ jobs:
       # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
       # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
       LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
+      # T17 review M7: no spec in this job starts the Lichess fixture, so the
+      # port is closed — a stray reconcile is refused on the runner instead of
+      # reading lichess.org unauthenticated. Video stays unconfigured here (no
+      # REALTIMEKIT_* credentials ⇒ no call). Pinned by e2e-ci-wiring.test.ts.
+      LICHESS_BASE_URL: "http://127.0.0.1:4321"
       # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
       # rotated out. Pass through every Start server / Playwright step; do
       # not introduce SUPABASE_JWT_PRIVATE_KEY.

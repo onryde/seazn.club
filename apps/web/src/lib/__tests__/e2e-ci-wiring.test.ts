@@ -1461,12 +1461,14 @@ describe("the online-chess fixture servers' wiring", () => {
   };
   const STARTERS = /\bstart(?:Lichess|RealtimeKit)FixtureServer\(/;
 
-  function job(name: string, next: string): string {
+  /** One job's body; `next` is the job after it, or null for the file's last. */
+  function job(name: string, next: string | null): string {
     const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
     const start = yml.indexOf(`\n  ${name}:\n`);
-    const end = yml.indexOf(`\n  ${next}:\n`);
+    const end = next === null ? yml.length : yml.indexOf(`\n  ${next}:\n`);
     expect(start, `no ${name} job`).toBeGreaterThan(-1);
     expect(end, `no ${next} job after ${name}`).toBeGreaterThan(start);
+    if (next === null) expect(yml.slice(start + 1), `${name} is the last job`).not.toMatch(/\n {2}[a-z0-9-]+:\n/);
     return yml.slice(start, end);
   }
   /** A job's JOB-level env: four spaces in, as opposed to a service's or a step's. */
@@ -1502,6 +1504,21 @@ describe("the online-chess fixture servers' wiring", () => {
       checked++;
     }
     expect(checked, "vars checked").toBe(7);
+  });
+
+  // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray
+  // reconcile — a future mobile test that resigns, say — is refused on the runner instead of sending an
+  // unauthenticated export read to lichess.org. Video stays unconfigured there (no credentials ⇒ no call at all), which
+  // is the configuration mobile.spec.ts's match-room block is run under.
+  it("e2e-serial and e2e-mobile point LICHESS_BASE_URL at the fixture's port too, and leave video unconfigured", () => {
+    let checked = 0;
+    for (const [name, next] of [["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      const env = jobEnv(job(name, next));
+      expect(env.get("LICHESS_BASE_URL"), `${name}'s job-level env: LICHESS_BASE_URL`).toBe(LICHESS_FIXTURE_URL);
+      for (const k of Object.keys(REALTIMEKIT_FIXTURE_ENV)) expect(env.has(k), `${name}: ${k} would configure video`).toBe(false);
+      checked++;
+    }
+    expect(checked, "jobs checked").toBe(2);
   });
 
   it("is mirrored by ci-local.sh's e2e_env", () => {
