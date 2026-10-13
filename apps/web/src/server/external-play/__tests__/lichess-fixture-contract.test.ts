@@ -791,6 +791,6 @@ describe("property: the stub follows the measured rules over any action sequence
       expect(actions, "zero actions checked is a FAILURE").toBeGreaterThanOrEqual(RUNS * prefix.length);
       // The prefix's own claim was taken on EVERY run.
       expect(paths[claim], `${claim}: ${JSON.stringify(paths)}`).toBeGreaterThanOrEqual(RUNS);
-    }, 120_000);
+    });
   }
 });

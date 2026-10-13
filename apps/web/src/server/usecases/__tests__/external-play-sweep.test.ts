@@ -1265,7 +1265,7 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
       checked++;
     }
     expect(checked).toBe(6);
-  }, 180_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3550,7 +3550,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       checked++;
     }
     expect(checked).toBe(3);
-  }, 180_000);
+  });
 
   it("under 2 minutes after the room ended nothing is read; AT 2 minutes it is", async () => {
     const m = await playedMatch();
