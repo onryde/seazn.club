@@ -150,12 +150,13 @@ export interface QualificationViewInput {
   /** The division's walkover credits the ledger (`divisionAwardAddsToLedger`,
    *  the engine's `forfeitCredit`) — then a two-sided award counts toward the
    *  what-if's average match. The SPORT's forfeit score never reaches a
-   *  one-sided bye. A stage PointsRule's `forfeit.awardScore` scores a forfeit
-   *  with nothing played — never a bye, never an award after play (W2c X-PT-1,
-   *  `ruleScoreReaches`) — and only into `for`/`against`/`diff`: where the
-   *  what-if reads those, the builder counts such an award whatever this flag
-   *  says (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere
-   *  this flag decides. */
+   *  one-sided bye. A stage PointsRule's `forfeit.awardScore` (0–0 too) scores
+   *  a forfeit with nothing played — never a bye, never an award after play
+   *  (W2c X-PT-1, `ruleScoreReaches`) — into `for`/`against`/`diff` and the
+   *  sport's declared score keys (gap a): where the what-if reads `for`, the
+   *  builder counts such an award whatever this flag says
+   *  (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere this
+   *  flag decides. */
   awardAddsToLedger: boolean;
   cascade: readonly string[];
   entrantNames: Readonly<Record<string, string>>;
@@ -198,20 +199,21 @@ function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: b
   return !awardAddsToLedger && !f.played;
 }
 
-/** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a non-zero `forfeit.awardScore`: the
- *  only rule whose score can reach a fixture (`ruleScoreReaches`), so the only one whose fixtures' played facts are read
- *  (`qualificationFixtures`). Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not
- *  parse scores nothing (and gives no view: `boundsInForce` refuses it). */
+/** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a SET `forfeit.awardScore`: the only
+ *  rule whose score can reach a fixture (`ruleScoreReaches`), so the only one whose fixtures' played facts are read
+ *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `applyPointsRule` writes whatever is set, so a
+ *  0–0 replaces the sport's credit (a football walkover's 3–0 becomes 0–0) and the what-if must read it (fix round 2).
+ *  Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not parse scores nothing (and
+ *  gives no view: `boundsInForce` refuses it). */
 export function pointsRuleScoresForfeits(pointsRule: unknown): boolean {
   if (pointsRule === null || pointsRule === undefined) return false;
   const parsed = PointsRule.safeParse(pointsRule);
-  const score = parsed.success ? parsed.data.forfeit?.awardScore : undefined;
-  return score !== undefined && (score[0] !== 0 || score[1] !== 0);
+  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;
 }
 
 /**
  * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `applyPointsRule` writes it (the
- * one rule, two readers: `qualification-points-parity.test.ts`): a rule with a non-zero `forfeit.awardScore`, over a
+ * one rule, two readers: `qualification-points-parity.test.ts`): a rule with a set `forfeit.awardScore` (0–0 too), over a
  * forfeit with nothing played — the engine's own `isUnplayedForfeit` on the fixture's `played` fact (a walkover
  * whatever its ledger reads; any other reason only when nothing was played) — and never a bye: a one-sided award is
  * the fold's bye path (`awardByeDelta`), which the rule pays no score. Only where the what-if reads `for`/`against`/
@@ -227,12 +229,18 @@ export function ruleScoreReaches(
 
 /** Whether a rule-scored award is in the what-if's average match for `row`
  *  (fix round 2): an award counts only if it changed the ledger the deciding
- *  key reads. The rule writes `for`/`against`/`diff` alone, so (1) the key
- *  must be `diff` or `for` — a ratio key reads its own won/lost counters —
- *  and (2) the row's goals must resolve to the rule's `for`, not a sport's
- *  own `gf` that `metricOf` reads first. For both keys the average match is
- *  for + against (tie-what-if.ts `marginFor`); `diff` only sets the margin,
- *  which `played` never touches — so (2) asks where FOR_KEYS lands. */
+ *  key reads. (1) The key must be `diff` or `for` — a ratio key reads its own
+ *  won/lost counters. For both keys the average match is for + against
+ *  (tie-what-if.ts `marginFor`); `diff` only sets the margin, which `played`
+ *  never touches — so (2) asks where FOR_KEYS lands: on the rule's own `for`.
+ *  Since W2c Task 9 gap (a) the rule ALSO writes the score keys a sport
+ *  declares (`awardScoreKeys`: football's and the period sports' `gf`), so
+ *  for those rows (2) answers no although the award did reach `gf`. That
+ *  costs nothing: every sport declaring keys other than `for` credits its
+ *  ledger on a walkover (its schema refuses a 0-goal award), so `ledgerless`
+ *  falls through to `awardAddsToLedger` and counts the award all the same —
+ *  a guard in qualification-points-parity.test.ts holds every module to it.
+ *  Only `for` is told here, because only generic's walkover credits nothing. */
 function ruleScoreInAverage(row: StandingsRow, key: TiebreakerKey | null): boolean {
   if (key !== "diff" && key !== "for") return false;
   return metricKeyOf(row, FOR_KEYS) === "for";

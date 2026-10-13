@@ -1256,9 +1256,15 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIfAssumption).toBeNull();
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } })).rows.D!;
     expect(unscored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
-    // A 0–0 forfeit score adds nothing, so it is no ledger match either.
+    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `applyPointsRule` writes it over the sport's
+    // credit, so the walkover is a 0–0 ledger match — the rows (which it adds nothing to) are unchanged, and the match
+    // counts in the average exactly as an ordinary result between B and D would.
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
-    expect(nil.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
+    const asPlayed = fixtures.map((f) => (f === fixtures[3] ? won(2, "B", "D") : f));
+    const ordinary = must(view({ ...o, fixtures: asPlayed, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
+    expect(ordinary.whatIf, "premise: the ordinary match counts").toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
+    expect(nil.whatIf).toBe(ordinary.whatIf);
+    expect(nil.whatIf, "its negative pair: the same rule without an awarded score").not.toBe(unscored.whatIf);
   });
   it("X-PT-1: a withdrawal with nothing played is rule-scored like the walkover; after play it is the real match it was (ruling 124)", () => {
     // The walkover scene with B–D a withdrawal instead. Nothing played: the rule's 3–0 replaces the credit, so it is a

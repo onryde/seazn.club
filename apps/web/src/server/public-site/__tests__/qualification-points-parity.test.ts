@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { AWARD_REASONS, type MatchOutcome } from "@seazn/engine/core";
 import { applyPointsRule, PointsRule, type FixtureResult } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
-import { ruleScoreReaches, type StageQualMeta } from "../qualification-view";
+import { builtinModules } from "@seazn/engine/sports";
+import { divisionAwardAddsToLedger, pointsRuleScoresForfeits, ruleScoreReaches, type StageQualMeta } from "../qualification-view";
 
 const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } });
 const meta = (pointsRule: unknown): StageQualMeta => ({
@@ -40,6 +41,7 @@ describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awa
         checked++;
       }
     expect(checked).toBe(AWARD_REASONS.length * 2);
+    expect([pointsRuleScoresForfeits(null), pointsRuleScoresForfeits(noScore)], "no rule, no awarded score: nothing scores").toEqual([false, false]);
   });
 
   it("every award reason × played (counted): ruleScoreReaches ⇔ applyPointsRule changed the score", () => {
@@ -95,12 +97,46 @@ describe("X-PT-1 qualification-view agrees with applyPointsRule on where the awa
     expect(viaByePath, "premise: the bye path pays no awarded score").toBe(false);
   });
 
-  it("a rule with a zero awarded score reaches nothing", () => {
+  it("a rule awarding 0–0 is a scoring award: it replaces the sport's credit, so both readers place it where a scored rule's lands (fix round 2)", () => {
+    // A SET awardScore is a score, 0–0 included: `applyPointsRule` writes it whenever it is set, so the view must read it
+    // as one. Expected side: the engine's write, and the placement of the scored rule's — never a typed table.
     const zero = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } });
-    const walkover = { outcome: { kind: "award", winner: "H", loser: "A", reason: "walkover" } as MatchOutcome, played: false, home_entrant_id: "H", away_entrant_id: "A" };
-    expect(ruleScoreReaches(walkover, meta(zero))).toBe(false);
-    // Its positive pair: the same walkover under the scored rule.
-    expect(ruleScoreReaches(walkover, meta(rule))).toBe(true);
+    const walkover = { kind: "award", winner: "H", loser: "A", reason: "walkover" } as MatchOutcome;
+    expect(scoreChanged(walkover, false, zero), "premise: the engine writes the awarded 0–0 over the 1–0 credit").toBe(true);
+    expect(pointsRuleScoresForfeits(zero), "the gate the played-facts loader and a retired build read").toBe(true);
+    let checked = 0;
+    let reached = 0;
+    for (const reason of AWARD_REASONS)
+      for (const played of [false, true]) {
+        const outcome = { kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason } as MatchOutcome;
+        const f = { outcome, played, home_entrant_id: "H", away_entrant_id: reason === "bye" ? null : "A" };
+        const changed = scoreChanged(outcome, played, zero);
+        expect(ruleScoreReaches(f, meta(zero)), `${reason}/played=${played}`).toBe(changed);
+        expect(changed, `${reason}/played=${played}: lands where the scored rule's lands`).toBe(scoreChanged(outcome, played));
+        checked++;
+        if (changed) reached++;
+      }
+    expect(checked).toBe(AWARD_REASONS.length * 2);
+    expect(reached).toBeGreaterThan(0);
+    expect(reached).toBeLessThan(checked);
+  });
+
+  it("guard for `ruleScoreInAverage` reading only `for`: every sport declaring other score keys credits its ledger on a walkover at its schema's floor, and refuses a 0-goal award", () => {
+    // Since gap (a) the rule also writes a sport's declared keys (`gf`), which `ruleScoreInAverage` does not tell; the
+    // what-if still counts such an award because `ledgerless` falls through to `awardAddsToLedger`. That holds only
+    // while no such sport's walkover can credit nothing — swept over the registry, at the lowest award the schema admits.
+    let checked = 0;
+    for (const m of builtinModules) {
+      const keys = m.awardScoreKeys;
+      if (keys === undefined || keys.for === "for") continue;
+      const floor = { awardScore: { goals: 1 } };
+      expect(m.configSchema.safeParse(floor).success, `${m.key}: premise, the floor parses`).toBe(true);
+      expect(divisionAwardAddsToLedger(m, floor), `${m.key}: a 1-goal walkover credits the ledger`).toBe(true);
+      expect(divisionAwardAddsToLedger(m, {}), `${m.key}: the default walkover credits the ledger`).toBe(true);
+      expect(m.configSchema.safeParse({ awardScore: { goals: 0 } }).success, `${m.key}: a 0-goal award is refused`).toBe(false);
+      checked++;
+    }
+    expect(checked, "sports whose declared score keys are not `for`").toBeGreaterThan(0);
   });
 
   it("an open fixture (no outcome) reaches nothing, played or not", () => {

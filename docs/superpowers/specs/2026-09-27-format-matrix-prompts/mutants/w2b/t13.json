@@ -861,8 +861,8 @@
  {
   "id": "m5-whatif-ignores-credit",
   "file": "apps/web/src/server/public-site/qualification-view.ts",
-  "find": "  return isOneSidedAwardBye(f) || !awardAddsToLedger;",
-  "replace": "  return isOneSidedAwardBye(f) || awardAddsToLedger;",
+  "find": "  return !awardAddsToLedger && !f.played;",
+  "replace": "  return awardAddsToLedger && !f.played;",
   "killers": [
    {
     "cwd": "apps/web",
