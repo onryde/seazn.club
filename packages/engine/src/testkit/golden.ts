@@ -1014,6 +1014,10 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
       periodSeconds: { H1: 2700, H2: 2820 },
     },
     concussed: { teamSize: 11, maxSubs: 1, concussionSubs: 2 },
+    // W2c FB-SO-1 — a youth knockout as a stage preset stores it: extra time, penalties and three kicks each.
+    // `shootoutAttempts` is optional with no default, so no shipped variant sets it and the corpus pinned it nowhere. This
+    // entry pins the KEY (the raw config); the shortened shoot-out's behaviour is pinned by src/sport/stage-defaults.test.ts.
+    youthKnockout: { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: 3 },
   },
   // ICC playing conditions declare a per-innings DRS allowance; no shipped
   // variant does, so `reviews` was pinned by nothing. The generator already
