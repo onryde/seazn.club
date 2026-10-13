@@ -7251,7 +7251,9 @@ async function w2cFixtureRulesChecks(owner: Session, fixtureId: string): Promise
   const lastSeq = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`)).last_seq;
   const finalize = await v1(owner, `/api/v1/fixtures/${fixtureId}/finalize`, "POST", { expected_seq: lastSeq });
   const locked = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`, "PUT", { rules: { bestOf: 3 } });
-  const refused = finalize.status === 201 && locked.status === 409 && locked.json.error?.code === "FIXTURE_FORMAT_LOCKED";
+  // POST /finalize answers 200 (the events API's append is the 201).
+  const refused =
+    forfeit.status === 201 && finalize.status === 200 && locked.status === 409 && locked.json.error?.code === "FIXTURE_FORMAT_LOCKED";
   check(
     "w2c: a finished match's format is locked" +
       (refused
