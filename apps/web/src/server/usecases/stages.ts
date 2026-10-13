@@ -1136,8 +1136,22 @@ async function swissGen(
           outcome: f.outcome,
         }),
     );
-    if (seatedPrev.some((f) => !DECIDED.has(f.status))) {
-      throw new EngineError("STAGE_NOT_READY", "current swiss round has undecided fixtures", { stageId });
+    const undecided = seatedPrev.filter((f) => !DECIDED.has(f.status));
+    if (undecided.length > 0) {
+      // W2c P-7 / X-AB-5: an abandoned board holds the round until the organiser settles it (it is deliberately NOT in
+      // DECIDED), and the refusal names it so the organiser knows which board to settle.
+      const abandoned = undecided
+        .filter((f) => f.status === "abandoned")
+        .sort((x, y) => x.seq_in_round - y.seq_in_round)
+        .map((f) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round }));
+      const named = abandoned.map((b) => `round ${b.round} board ${b.board}`).join(", ");
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        abandoned.length === 0
+          ? "current swiss round has undecided fixtures"
+          : `current swiss round has undecided fixtures - settle the abandoned ${abandoned.length === 1 ? "board" : "boards"} first: ${named}`,
+        { stageId, ...(abandoned.length === 0 ? {} : { abandoned }) },
+      );
     }
   }
 

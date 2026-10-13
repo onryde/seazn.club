@@ -34,9 +34,23 @@ describe("run-contract guards — judgeBuilds", () => {
     expect(() => judgeBuilds(mod(capped, abKeys), [num("b", 1, 20)])).toThrow(/not a cross-field refusal/);
   });
 
-  it("a cross-field refusal of a SELECT field throws: only a number range end can sit under another key", () => {
+  it("a cross-field refusal of a SELECT option is tolerated and returned for pinning (P-5: an option another key makes unavailable)", () => {
     const sel = field("b", { kind: "select", options: [{ value: "1", label: "1" }, { value: "20", label: "20" }] });
-    expect(() => judgeBuilds(mod(ab, abKeys), [sel])).toThrow(/not a cross-field refusal on a number field/);
+    const v = judgeBuilds(mod(ab, abKeys), [sel]);
+    expect(v.tolerated).toEqual({ "v/b/1": "b must be ≥ a" });
+    expect(v.checked, "the other option parsed").toBeGreaterThan(0);
+  });
+
+  it("a SELECT option the schema refuses for a reason that is NOT cross-field (a value outside its enum) throws", () => {
+    const e = z.object({ a: z.number(), b: z.enum(["x", "y"]) });
+    const sel = field("b", { kind: "select", options: [{ value: "x", label: "x" }, { value: "nope", label: "nope" }], build: (v) => ({ b: v }) });
+    expect(() => judgeBuilds(mod(e, abKeys, { v: { a: 5, b: "x" } }), [sel])).toThrow(/not a cross-field refusal on a number or select field/);
+  });
+
+  it("a cross-field refusal of a BOOL field still throws: only a number range end or a select option can sit under another key", () => {
+    const flag = z.object({ a: z.number(), b: z.boolean() }).refine((c) => c.b === false, { message: "b must stay off" });
+    const tog = field("b", { kind: "bool", build: (v) => ({ b: v === "on" }) });
+    expect(() => judgeBuilds(mod(flag, abKeys, { v: { a: 5, b: false } }), [tog])).toThrow(/not a cross-field refusal on a number or select field/);
   });
 
   it("a field none of whose probes parses throws, even though every refusal is cross-field", () => {

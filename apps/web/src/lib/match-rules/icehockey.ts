@@ -1,5 +1,7 @@
 // Ice hockey's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
+import { icehockey } from "@seazn/engine/sports/icehockey";
+import { abandonOptions } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const ICEHOCKEY_RULES: RuleField[] = [
@@ -69,5 +71,13 @@ export const ICEHOCKEY_RULES: RuleField[] = [
     min: 3,
     max: 10,
     build: () => ({}),
+  },
+  {
+    key: "abandon",
+    edits: ["abandonPolicy"],
+    label: "If a match is abandoned",
+    kind: "select",
+    options: abandonOptions(icehockey),
+    build: (v) => ({ abandonPolicy: v }),
   },
 ];

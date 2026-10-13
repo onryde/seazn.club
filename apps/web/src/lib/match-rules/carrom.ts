@@ -1,5 +1,7 @@
 // Carrom's curated match-rule fields. Client-safe: no "use client", no JSX, no
 // `@/components` or `@/server` import.
+import { carrom } from "@seazn/engine/sports/carrom";
+import { abandonOptions } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const CARROM_RULES: RuleField[] = [
@@ -84,5 +86,13 @@ export const CARROM_RULES: RuleField[] = [
       { value: "draw", label: "Drawn game (house rule; enables league draws)" },
     ],
     build: (v) => ({ tieBoard: v }),
+  },
+  {
+    key: "abandon",
+    edits: ["abandonPolicy"],
+    label: "If a match is abandoned",
+    kind: "select",
+    options: abandonOptions(carrom),
+    build: (v) => ({ abandonPolicy: v }),
   },
 ];

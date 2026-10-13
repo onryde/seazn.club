@@ -24,9 +24,11 @@ export interface ContractOptions {
    */
   readonly companionWrites?: Readonly<Record<string, readonly string[]>>;
   /**
-   * The cross-field refusals a probe of a NUMBER field is allowed to meet when it is built over a variant preset, keyed
-   * `<variant>/<field>/<probe>` -> the engine's own refusal message. A range end can sit under a value another key fixes
-   * (volleyball `cap` at 15 under the preset's 25-point set); that is a refinement across keys, not a wrong field. The set
+   * The cross-field refusals a probe of a NUMBER or SELECT field is allowed to meet when it is built over a variant preset,
+   * keyed `<variant>/<field>/<probe>` -> the engine's own refusal message. A range end can sit under a value another key
+   * fixes (volleyball `cap` at 15 under the preset's 25-point set), and an option can be unavailable under a value another
+   * key fixes (generic's "share the points" under `allowDraws: false`, owner P-5: the form shows it unavailable); that is a
+   * refinement across keys, not a wrong field. The set
    * is checked EXACT, both ways: a refusal that is not listed fails (a new one must be read and added), and a row the
    * engine no longer produces fails (so the list cannot rot).
    */
@@ -75,8 +77,8 @@ export interface BuildVerdict {
 /**
  * Every build() output of every field, laid over every variant preset that parses, judged by the engine's own schema.
  * THREE guards, each answering a different question, so each can be witnessed (and mutated) alone:
- *  1. only a NUMBER field's CROSS-FIELD (`code: "custom"`) refusal is tolerated; a wrong key, type or range, or any
- *     refusal of a select/bool field, throws;
+ *  1. only a NUMBER or SELECT field's CROSS-FIELD (`code: "custom"`) refusal is tolerated; a wrong key, type, range or
+ *     option value, or any refusal of a bool field, throws;
  *  2. a field must parse at SOME probe, so one the schema always refuses is not waved through by (1);
  *  3. the set of tolerated refusals is returned, for the caller to pin EXACTLY (`assertPinned`).
  * A field the engine does not offer in a variant (cricket's super over under the test match, whose two innings the schema
@@ -101,8 +103,8 @@ export function judgeBuilds(m: AnySportModule, fields: readonly RuleField[]): Bu
         const r = m.configSchema.safeParse({ ...preset, ...out });
         if (r.success) { parsedAtSome = true; checked++; continue; }
         const at = `${variant ?? "-"}/${f.key}/${probe}`;
-        const crossField = f.kind === "number" && r.error.issues.every((i) => i.code === "custom");
-        if (!crossField) throw new Error(`${at} is refused and is not a cross-field refusal on a number field: ${JSON.stringify(r.error.issues)}`);
+        const crossField = (f.kind === "number" || f.kind === "select") && r.error.issues.every((i) => i.code === "custom");
+        if (!crossField) throw new Error(`${at} is refused and is not a cross-field refusal on a number or select field: ${JSON.stringify(r.error.issues)}`);
         tolerated[at] = r.error.issues.map((i) => i.message).join(" | ");
       }
       if (!parsedAtSome) throw new Error(`${variant ?? "-"}/${f.key}: no probe of this field parses over this preset`);

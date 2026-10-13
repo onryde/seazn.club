@@ -1,5 +1,7 @@
 // Field hockey's curated match-rule fields. Client-safe: no "use client", no
 // JSX, no `@/components` or `@/server` import.
+import { hockey } from "@seazn/engine/sports/hockey";
+import { abandonOptions } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const HOCKEY_RULES: RuleField[] = [
@@ -38,5 +40,13 @@ export const HOCKEY_RULES: RuleField[] = [
     min: 3,
     max: 10,
     build: () => ({}),
+  },
+  {
+    key: "abandon",
+    edits: ["abandonPolicy"],
+    label: "If a match is abandoned",
+    kind: "select",
+    options: abandonOptions(hockey),
+    build: (v) => ({ abandonPolicy: v }),
   },
 ];

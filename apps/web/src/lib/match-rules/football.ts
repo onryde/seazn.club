@@ -1,5 +1,7 @@
 // Football's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
+import { football } from "@seazn/engine/sports/football";
+import { abandonOptions } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 /** R3.5 review F5 — the shoot-out points pair's shared "what should be
@@ -170,5 +172,13 @@ export const FOOTBALL_RULES: RuleField[] = [
     min: 1,
     max: 15,
     build: (v) => ({ sinBinMinutes: Number(v) }),
+  },
+  {
+    key: "abandon",
+    edits: ["abandonPolicy"],
+    label: "If a match is abandoned",
+    kind: "select",
+    options: abandonOptions(football),
+    build: (v) => ({ abandonPolicy: v }),
   },
 ];
