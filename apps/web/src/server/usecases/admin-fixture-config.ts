@@ -126,7 +126,7 @@ async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
 export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConfigPanel | null> {
   const row = await loadRow(sql, fixtureId);
   if (!row) return null;
-  // `resolveFixtureCfg(null, …)` rather than a second call to stageScopedCfg:
+  // `resolveFixtureCfg` with the snapshot nulled rather than a second call to stageScopedCfg:
   // "what live config resolves to" must have ONE definition, or the divergence
   // shown here could differ from the one the fold would actually see.
   // W2a: with the stage's kind, so a bracket fixture's live cfg carries the sport's deciders exactly as its first
