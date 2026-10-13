@@ -58,3 +58,53 @@ export function plyOfFen(fen: string): number {
   }
   return (fullmove - 1) * 2 + (side === "b" ? 1 : 0);
 }
+
+/** The spectators' copy of a room broadcast (lib/realtime's `board_state` on
+ *  `fixture:{id}`): the board alone. The draw offer stays with the players. */
+export type PublicBoardPush = {
+  fen: string;
+  lastMove: string | null;
+  turn: "white" | "black";
+  ply: number;
+  whiteMs: number;
+  blackMs: number;
+  over: boolean;
+};
+
+export function spectatorBoard(b: {
+  fen: string;
+  lastMove: string | null;
+  turn: "white" | "black";
+  whiteMs: number;
+  blackMs: number;
+  status: LichessStatus;
+}): PublicBoardPush {
+  return {
+    fen: b.fen,
+    lastMove: b.lastMove,
+    turn: b.turn,
+    ply: plyOfFen(b.fen),
+    whiteMs: b.whiteMs,
+    blackMs: b.blackMs,
+    over: overFromStatus(b.status),
+  };
+}
+
+const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
+const isClock = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
+
+/** A `board_state` payload as it arrives over the wire, checked: the board
+ *  fields and nothing else, or null for anything that is not one. The
+ *  channel is ours, but a payload is data — an unreadable one is dropped,
+ *  never drawn. */
+export function readBoardPush(x: unknown): PublicBoardPush | null {
+  if (x === null || typeof x !== "object") return null;
+  const p = x as Record<string, unknown>;
+  if (typeof p.fen !== "string" || p.fen.length === 0) return null;
+  if (!(p.lastMove === null || (typeof p.lastMove === "string" && UCI.test(p.lastMove)))) return null;
+  if (p.turn !== "white" && p.turn !== "black") return null;
+  if (typeof p.ply !== "number" || !Number.isInteger(p.ply) || p.ply < 0) return null;
+  if (!isClock(p.whiteMs) || !isClock(p.blackMs)) return null;
+  if (typeof p.over !== "boolean") return null;
+  return { fen: p.fen, lastMove: p.lastMove, turn: p.turn, ply: p.ply, whiteMs: p.whiteMs, blackMs: p.blackMs, over: p.over };
+}

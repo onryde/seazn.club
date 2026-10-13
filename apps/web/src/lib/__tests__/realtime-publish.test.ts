@@ -75,6 +75,94 @@ describe("publishFixtureUpdate", () => {
   );
 });
 
+// T16 (controller ruling, T10 carry; design §3.4 step 3) — an accepted move
+// reaches SPECTATORS by push, not by their poll: the same request that tells
+// both players carries a spectator-safe copy on the public fixture topic (the
+// one the public realtime token is minted for, V403's policy). The copy holds
+// the board alone — never the draw offer, a participant or a token.
+describe("publishRoomBroadcast", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({ ok: true, status: 202 });
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  const BODY = {
+    // After 1.e4 e5 2.Nf3 — Black to move, fullmove 2.
+    fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2",
+    lastMove: "g1f3",
+    turn: "black" as const,
+    whiteMs: 590_000,
+    blackMs: 595_000,
+    status: "started" as const,
+    drawOfferBy: "white" as const,
+  };
+  type Sent = { messages: { topic: string; event: string; payload: Record<string, unknown>; private?: boolean }[] };
+  const sent = (): Sent => JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as Sent;
+
+  it("one request: the players' room state, AND the spectators' board on the public fixture topic, both private", async () => {
+    const { publishRoomBroadcast } = await import("../realtime");
+    await publishRoomBroadcast("fx-1", BODY);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { messages } = sent();
+    expect(messages.map((m) => [m.topic, m.event, m.private])).toEqual([
+      ["external-play:fx-1", "room_state", true],
+      ["fixture:fx-1", "board_state", true],
+    ]);
+    expect(messages[0]!.payload).toEqual(BODY);
+  });
+
+  it("the spectators' copy is the board alone: position, last move, turn, ply, clocks, over — no draw offer", async () => {
+    const { publishRoomBroadcast } = await import("../realtime");
+    await publishRoomBroadcast("fx-1", BODY);
+    const spectator = sent().messages[1]!.payload;
+    // toEqual on the whole object: a key added later (a participant, a token, the offer) fails here.
+    expect(spectator).toEqual({
+      fen: BODY.fen,
+      lastMove: "g1f3",
+      turn: "black",
+      ply: 3,
+      whiteMs: 590_000,
+      blackMs: 595_000,
+      over: false,
+    });
+    expect(JSON.stringify(spectator)).not.toContain("drawOffer");
+  });
+
+  it("a board the spectators' copy cannot read costs the spectators one push — the players still get theirs", async () => {
+    const { publishRoomBroadcast } = await import("../realtime");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await publishRoomBroadcast("fx-1", { ...BODY, fen: "not a fen" });
+    expect(sent().messages.map((m) => m.event)).toEqual(["room_state"]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("over on the spectators' copy exactly when Lichess's status has ended the game — every declared status", async () => {
+    const { publishRoomBroadcast } = await import("../realtime");
+    const { LICHESS_STATUSES } = await import("@/server/external-play/types");
+    // The rulebook (lila Status.scala): created and started are the only statuses of a game still on.
+    const ON = new Set(["created", "started"]);
+    let checked = 0;
+    for (const status of LICHESS_STATUSES) {
+      fetchMock.mockClear();
+      await publishRoomBroadcast("fx-1", { ...BODY, status });
+      expect(sent().messages[1]!.payload.over, status).toBe(!ON.has(status));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every declared status").toBe(LICHESS_STATUSES.length);
+  });
+});
+
 describe("mintPublicFixtureToken", () => {
   afterEach(() => {
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;

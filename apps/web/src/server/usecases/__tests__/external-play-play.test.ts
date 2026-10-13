@@ -1655,7 +1655,8 @@ describe.runIf(HAS_DB)("act — a move that ENDS the game (review I2)", () => {
 
 describe("publishRoomBroadcast", () => {
   const BODY: RoomBroadcast = {
-    fen: "x",
+    // After 1.e4 — a real FEN: the spectators' copy reads its ply from it (T16).
+    fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
     lastMove: "e2e4",
     turn: "black",
     whiteMs: 1,
@@ -1699,9 +1700,11 @@ describe("publishRoomBroadcast", () => {
         expect(calls[0]!.init.headers).toMatchObject({ Authorization: "Bearer svc", apikey: "svc" });
         // V434's policy matches `external-play:{lobby_fixture_id}`, so riding
         // this topic needs NO new realtime policy for players.
-        expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
-          messages: [{ topic: externalPlayLobbyTopic("fix-1"), event: "room_state", payload: BODY, private: true }],
-        });
+        const { messages } = JSON.parse(String(calls[0]!.init.body)) as { messages: { topic: string; event: string; private: boolean }[] };
+        expect(messages[0]).toEqual({ topic: externalPlayLobbyTopic("fix-1"), event: "room_state", payload: BODY, private: true });
+        // T16: the same request carries the spectators' board on the public fixture topic
+        // (its payload is pinned in lib/__tests__/realtime-publish.test.ts).
+        expect(messages.slice(1).map((m) => [m.topic, m.event, m.private])).toEqual([["fixture:fix-1", "board_state", true]]);
         expect(calls[0]!.init.signal, "an endpoint that never answers must not hold the move").toBeInstanceOf(AbortSignal);
       },
     );
