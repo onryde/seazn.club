@@ -16345,6 +16345,9 @@
                                   }
                                 ]
                               },
+                              "player_home": {
+                                "type": "boolean"
+                              },
                               "scheduled_at": {
                                 "anyOf": [
                                   {
@@ -16384,6 +16387,7 @@
                               "org_slug",
                               "entrant_name",
                               "opponent_name",
+                              "player_home",
                               "scheduled_at",
                               "summary",
                               "outcome"
@@ -16489,6 +16493,7 @@
                         "org_slug": "example",
                         "entrant_name": "example",
                         "opponent_name": "example",
+                        "player_home": true,
                         "scheduled_at": "example",
                         "summary": null,
                         "outcome": null
@@ -63718,6 +63723,33 @@
                                   },
                                   {
                                     "type": "boolean"
+                                  }
+                                ]
+                              },
+                              "forfeit": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "tag": {
+                                        "type": "string"
+                                      },
+                                      "sentence": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "tag",
+                                      "sentence"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
                                   }
                                 ]
                               }

@@ -28,6 +28,7 @@ import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { creditsNobody } from "@/lib/forfeit-tag";
+import { headlineFrom } from "@/lib/headline-from";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 
@@ -273,8 +274,8 @@ export default async function MePage({
                 <li key={r.id} className="card flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-800">
-                      {r.entrant_name ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
-                      {r.opponent_name ?? t(ui, "me.tbd")}
+                      {sidesOf(r)[0] ?? t(ui, "me.tbd")} <span className="text-slate-400">{t(ui, "schedule.vs")}</span>{" "}
+                      {sidesOf(r)[1] ?? t(ui, "me.tbd")}
                     </p>
                     <p className="mt-0.5 text-xs text-slate-400">
                       {r.competition_name} · {r.division_name} · {r.org_name}
@@ -464,7 +465,24 @@ function publicHref(f: MyFixture): string | null {
   return routes.sharedFixture(f.org_slug, f.competition_slug, f.division_slug, f.id);
 }
 
-function headline(r: MyResult): string | null {
+/** The stored headline, home first. */
+function storedHeadline(r: MyResult): string | null {
   const s = r.summary as { headline?: string } | null;
   return s?.headline ?? null;
+}
+
+/** Fix round 3 — the line names the player's side first, so its score is read from her side (`headlineFrom`): a
+ *  walkover she won away from home reads "2 — 0", never the stored "0 — 2". A stored headline in no shape it can turn
+ *  keeps the stored order, and the names follow it instead (`sidesOf`), so the line never pairs the two orders. */
+function headline(r: MyResult): string | null {
+  const stored = storedHeadline(r);
+  if (stored === null) return null;
+  return headlineFrom(stored, r.player_home ? "home" : "away") ?? stored;
+}
+
+/** The line's two names in the order its score reads: hers first, unless her away score could not be turned. */
+function sidesOf(r: MyResult): [string | null, string | null] {
+  const stored = storedHeadline(r);
+  const kept = !r.player_home && stored !== null && !creditsNobody(r.outcome) && headlineFrom(stored, "away") === null;
+  return kept ? [r.opponent_name, r.entrant_name] : [r.entrant_name, r.opponent_name];
 }

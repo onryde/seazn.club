@@ -868,6 +868,10 @@ export const MyResult = z.object({
   org_slug: z.string(),
   entrant_name: z.string().nullable(),
   opponent_name: z.string().nullable(),
+  /** The player's entrant holds the home seat. `summary.headline` reads home first; /me names the player's side first
+   *  and reads the score from that side (fix round 3). Selected by `listMyFixtures` and declared here so a consumer
+   *  that parses against this schema keeps it. */
+  player_home: z.boolean(),
   scheduled_at: z.string().nullable(),
   summary: z.unknown().nullable(),
   outcome: z.unknown().nullable(),

@@ -124,7 +124,19 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
   it("the player's /me: a finalized double walkover's row carries the outcome that credits nobody; the walkover's credits its winner", async () => {
     // One player per side: a user holds one person per org (persons_org_user_lane_uq), and both semis are this org's.
     const players: Record<string, string> = {};
-    const sides = await sql<{ id: string; home_entrant_id: string }[]>`select id, home_entrant_id from fixtures where id in (${dwId}, ${woId})`;
+    const sides = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where id in (${dwId}, ${woId})`;
+    // Fix round 3: a third player on the walkover's AWAY side, so the row's `player_home` is read both ways.
+    const woAway = sides.find((f) => f.id === woId)!.away_entrant_id;
+    {
+      const [{ id: player }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified)
+        values (${`wo-away-${woId.slice(0, 8)}@test.local`}, 'Ari', true) returning id`;
+      const person = await createPerson(auth, { full_name: `Ari ${woId.slice(0, 4)}`, consent: {}, dob: null, gender: null, external_ref: null });
+      await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${woAway}, ${person.id}, ${auth.orgId})`;
+      await sql`update persons set user_id = ${player} where id = ${person.id}`;
+      players[`${woId}:away`] = player;
+    }
     for (const f of sides) {
       const [{ id: player }] = await sql<{ id: string }[]>`
         insert into users (email, display_name, email_verified)
@@ -134,7 +146,7 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
       await sql`update persons set user_id = ${player} where id = ${person.id}`;
       players[f.id] = player;
     }
-    expect(Object.keys(players).length, "a player on each semi").toBe(2);
+    expect(Object.keys(players).length, "a player on each semi, and one on the walkover's away side").toBe(3);
     const listed = async (id: string) => (await listMyFixtures(players[id]!)).results.find((r) => r.id === id);
     expect([await listed(dwId), await listed(woId)], "premise: an unfinalized result is not listed").toEqual([undefined, undefined]);
     for (const id of [dwId, woId]) await finalizeFixture(auth, id, await tip(id));
@@ -146,5 +158,10 @@ describe.skipIf(!HAS_DB)("a double walkover's 0 / 0 on the hosts that read the s
     expect((row(dwId)!.summary as { headline?: string } | null)?.headline, "premise: beside the stored headline it must not print").toMatch(/\d/);
     expect(creditsNobody(row(woId)!.outcome), "the pair: the walkover credits its winner").toBe(false);
     expect((row(woId)!.summary as { headline?: string } | null)?.headline, "and keeps its credited score").toBe(woHeadline);
+    // Fix round 3: the row says which side the player holds — the stored headline reads home first.
+    expect([row(dwId)!.player_home, row(woId)!.player_home], "the home players' rows").toEqual([true, true]);
+    const awayRow = (await listMyFixtures(players[`${woId}:away`]!)).results.find((r) => r.id === woId);
+    expect(awayRow?.player_home, "the away player's row").toBe(false);
+    expect([awayRow?.entrant_name, awayRow?.opponent_name], "her side named first").toEqual([names[woAway], names[sides.find((f) => f.id === woId)!.home_entrant_id]]);
   });
 });

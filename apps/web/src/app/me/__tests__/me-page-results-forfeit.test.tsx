@@ -31,7 +31,7 @@ const result = (id: string, entrant: string, opponent: string, headline: string,
   division_name: "Open", division_slug: "open", org_name: "Club", org_slug: "club",
   // `MyResult.summary` is typed `string | null`, but the column is jsonb and arrives as the object the page casts it to
   // (`page.tsx` `headline()`); the DB scene's real row has the same shape.
-  entrant_name: entrant, opponent_name: opponent, scheduled_at: null, summary: { headline } as unknown as MyResult["summary"], outcome,
+  entrant_name: entrant, opponent_name: opponent, player_home: true, scheduled_at: null, summary: { headline } as unknown as MyResult["summary"], outcome,
 });
 const RESULTS: MyResult[] = [
   result("dw", "Falcons", "Hawks", "0 — 0", { kind: "double_walkover" }),

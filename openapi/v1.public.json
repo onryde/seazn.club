@@ -39052,6 +39052,33 @@
                                     "type": "boolean"
                                   }
                                 ]
+                              },
+                              "forfeit": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "tag": {
+                                        "type": "string"
+                                      },
+                                      "sentence": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "tag",
+                                      "sentence"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [

@@ -82,6 +82,9 @@ export interface MyResult {
   org_slug: string;
   entrant_name: string | null;
   opponent_name: string | null;
+  /** The player's entrant holds the HOME seat — the stored headline's first side (fix round 3: /me names her side
+   *  first, so the score is read from that side too). */
+  player_home: boolean;
   scheduled_at: string | null;
   summary: string | null;
   outcome: unknown;
@@ -161,6 +164,7 @@ export async function listMyFixtures(userId: string): Promise<{
            d.name as division_name, d.slug as division_slug,
            o.name as org_name, o.slug as org_slug,
            e.display_name as entrant_name, opp.display_name as opponent_name,
+           (f.home_entrant_id = e.id) as player_home,
            f.scheduled_at, m.summary, f.outcome
     from persons p
     join entrant_members em on em.person_id = p.id

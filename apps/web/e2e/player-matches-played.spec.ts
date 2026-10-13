@@ -475,6 +475,11 @@ test("re-review N-1: /me's results print a finalized double walkover's tag, neve
     // The pair: the same cell on the walkover's line prints its credited score.
     const woCell = woLine.locator("span.app-display");
     await expect(woCell, `${width}: the walkover keeps its credited score`).toHaveText(/\d+\s*[–—-]\s*\d+/);
+    // Fix round 3: the line names Pat first, so it reads the score from her side — she won that walkover, so her
+    // credited score comes first whichever seat she held (the stored headline reads home first).
+    const [mine, theirs] = (await woCell.innerText()).split(/\s*[–—-]\s*/).map(Number);
+    expect(mine! > theirs!, `${width}: Pat won the walkover, so her score leads (${mine} — ${theirs}, she was ${wo.home_entrant_id === patE ? "home" : "away"})`).toBe(true);
+    await expect(woLine.locator("p").first(), `${width}: her side named first`).toHaveText(new RegExp(`^${names[0]}\\b`));
     await expect(woCell.getByRole("img"), `${width}: and no tag`).toHaveCount(0);
     await expectNoHorizontalScroll(me);
     const box = me.locator("section").filter({ has: dwLine });
