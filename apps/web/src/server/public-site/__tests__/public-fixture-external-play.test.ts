@@ -24,6 +24,7 @@ import { sql } from "@/lib/db";
 import { getPublicFixture } from "../data";
 import { seedOnlineChessFixture, seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
+import { applyOnlinePlayToConfig } from "@/server/external-play/online-play";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { publicFixture } from "@/server/usecases/public";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
@@ -292,6 +293,41 @@ describe.skipIf(!HAS_DB)("the match centre over an online game being played (R3)
     const notOpened = await getPublicFixture(sl2.org, sl2.comp, sl2.div, later.boards[0]!.fixtureId);
     expect(notOpened!.matchCentre.header.status, "round not opened").toBe("scheduled");
     expect(Object.hasOwn(notOpened!.matchCentre.header, "onlineStarting"), "round not opened: Scheduled, never Starting").toBe(false);
+  });
+
+  // T17 fix round 4, I1: Starting follows the division's online-play MODE, as the Fixtures list and the fixture page's
+  // board do (`readOnlinePlay(config) === "lichess"`). An organiser who opened a round and then switched online play
+  // off (turning it off is never gated) finishes over the board: no unplayed board of that round may read Starting.
+  it("I1: the same opened round reads Starting with online play on and Scheduled with it off — on the page and the poll", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    seeded.push(r.orgId);
+    const board = r.boards[0]!;
+    await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+              values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
+    const sl = await slugsOf(r.divisionId);
+    type H = { status: string; onlineStarting?: boolean };
+    const read = async (): Promise<[H, H]> => [
+      (await getPublicFixture(sl.org, sl.comp, sl.div, board.fixtureId))!.matchCentre.header,
+      ((await publicFixture(board.fixtureId)) as { match_centre: { header: H } }).match_centre.header,
+    ];
+    const [cfg] = await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${r.divisionId}`;
+    expect(cfg!.config.onlinePlay, "premise: the division plays online").toBe("lichess");
+    let checked = 0;
+    const on = await read();
+    for (const [i, where] of (["page", "poll"] as const).entries()) {
+      expect([on[i]!.status, on[i]!.onlineStarting], `on, ${where}: Starting`).toEqual(["scheduled", true]);
+      checked += 1;
+    }
+    // The organiser switches online play off — the REAL config transform the division update applies.
+    const off = { ...cfg!.config };
+    applyOnlinePlayToConfig(off, "off");
+    await sql`update divisions set config = ${sql.json(off as never)} where id = ${r.divisionId}`;
+    const after = await read();
+    for (const [i, where] of (["page", "poll"] as const).entries()) {
+      expect([after[i]!.status, Object.hasOwn(after[i]!, "onlineStarting")], `off, ${where}: Scheduled, no flag`).toEqual(["scheduled", false]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both modes on both surfaces").toBe(4);
   });
 
   // T17 round B, C: the header's format word over an online game is the time control's speed. The seed declares the

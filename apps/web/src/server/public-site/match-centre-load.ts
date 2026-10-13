@@ -35,7 +35,7 @@ import { rulesLineText } from "@/lib/rules-line";
 import { effectiveRulesLine } from "./describe-rules";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
 import type { PublicFixture } from "./data";
-import { supportsOnlinePlay } from "@/server/external-play/online-play";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -587,7 +587,11 @@ export async function loadMatchCentre(
     doubleWalkoverNext,
     unseatedForfeitLoser: unseated,
     onlineGameInPlay: onlineHeader.onlineGameInPlay,
-    onlineGameStarting: onlineHeader.onlineGameStarting,
+    // T17 fix round 4, I1: Starting only while the division plays online — the reader the Fixtures list and the
+    // fixture page's board gate on, so the three never disagree. An opened round switched to over-the-board keeps its
+    // `stage_round_opens` row, and Starting needs no game at all, so without this every unplayed board of it read
+    // Starting. (R3's Live needs a real game with moves; it is left as it was.)
+    onlineGameStarting: onlineHeader.onlineGameStarting && readOnlinePlay(configRows.division?.config) === "lichess",
   };
   return buildMatchCentre(input);
 }
