@@ -18,7 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { BRACKET_KINDS, DRAW_KINDS, foldMatch, playRecorded } from "@seazn/engine/core";
+import { BRACKET_KINDS, DRAW_KINDS, foldMatch, playRecorded, StageKind } from "@seazn/engine/core";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import EN from "@/dictionaries/en/ui.json";
@@ -33,6 +33,7 @@ import type { PublicFixture } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { NoResultOffer } from "@/lib/arbiter-view";
 import { recomputeStandings } from "@/server/engine-db/competition";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { loadDivisionWatch, loadPublicExternalPlay } from "../external-play-read";
@@ -41,10 +42,15 @@ import { closeExternalPlayFlags } from "../external-play/flags";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { RESOLVE_KINDS, resolveExternalPlay, type ResolveKind } from "../external-play/resolve";
 import { HOLD_REASONS, holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, tiebreakIsPending, type HoldReason } from "../external-play/result";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
+import { startDivision } from "../schedule";
+import { completeStage, createStages, generateStageFixtures } from "../stages";
 import { scoreEvent } from "../scoring";
 import { makeUser } from "./_seed";
-import { seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+import { seedOnlineChessRound, seedOnlineSwiss, seedOwner, seedPlayer, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -409,11 +415,11 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a held board, settled", () => {
     expect(checked).toBe(2);
   });
 
-  it("I-3 after the Start (play recorded): the abandon keeps the Start — the board still reads as played, which is true — and decides nobody; a league and a Swiss board alike", async () => {
+  it("I-3 after the Start (play recorded): the abandon keeps the Start — the board still reads as played, which is true — and decides nobody; a league and a group's round-robin alike (fix round 3: the two kinds a void is offered in)", async () => {
     let checked = 0;
-    for (const kind of ["league", "swiss"] as const) {
+    for (const kind of ["league", "group"] as const) {
       const r = await round();
-      if (kind === "swiss") await sql`update stages set kind = 'swiss' where id = ${r.stageId}`;
+      if (kind === "group") await sql`update stages set kind = 'group' where id = ${r.stageId}`;
       const b = r.boards[0]!;
       await gameBridge(r, b, "live");
       await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
@@ -586,42 +592,162 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "pending", needs_reason: null });
   });
 
-  it("I-3 knockout: in EVERY kind the engine declares a level result forbidden in, No result is refused KNOCKOUT_NEEDS_WINNER before anything is written — a line that feeds a next match as much as a final, both players absent included — and a winner still settles it; the panel and the queue hide No result by the same predicate, and every draw kind offers it", async () => {
-    // The kinds come from the ENGINE's declarations (core/types.ts BRACKET_KINDS, DRAW_KINDS), never a list typed here.
-    const readings = { refused: 0, offered: 0 };
-    for (const kind of [...BRACKET_KINDS, ...DRAW_KINDS]) {
+});
+
+// I-3, fix round 3 (controller ruling): the void is offered only where it cannot hold progression up — a league, or a
+// group stage's round-robin (a table completes over a void). Typed from the ruling, never from no-result.ts.
+const VOID_SAFE: ReadonlySet<string> = new Set(["league", "group"]);
+
+/** What the rulings offer in place of a winner on a board of `kind` held for `hold` — never read from no-result.ts:
+ *  both players absent ⇒ W2b's double walkover outside a bracket; otherwise the void where VOID_SAFE says, and a
+ *  refusal elsewhere — a knockout game needs a winner (every kind the engine forbids a level result in), a Swiss round
+ *  needs every game decided (the rest). */
+function rulingOffer(kind: StageKind, hold: NeedsReason): NoResultOffer {
+  if (BOTH_ABSENT.includes(hold)) return BRACKET_KINDS.has(kind) ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
+  if (VOID_SAFE.has(kind)) return { kind: "void" };
+  return { kind: "refused", why: BRACKET_KINDS.has(kind) ? "knockout" : "swiss" };
+}
+const REFUSAL_CODE = { knockout: "KNOCKOUT_NEEDS_WINNER", swiss: "SWISS_NEEDS_RESULT" } as const;
+
+/** A REAL online stage of `kind` through the public usecases — entrants, the generator, Start — as an organiser
+ *  builds one (a league generates every round at once). */
+async function seedRealTable(kind: "league", players: number) {
+  const owner = await seedOwner();
+  const competition = await createCompetition(owner, { name: "Fix3", visibility: "public", branding: {}, starts_on: "2026-10-01", ends_on: "2026-10-02" });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+  });
+  for (let i = 0; i < players; i++) {
+    const p = await seedPlayer(owner.orgId, `L${i + 1}`, `l-${randomUUID().slice(0, 10)}`, true);
+    await createEntrants(owner, division.id, [
+      { display_name: `L${i + 1}`, kind: "individual", seed: i + 1, members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
+    ]);
+  }
+  const [stage] = await createStages(owner, division.id, { seq: 1, kind, name: "League", config: {}, progression: null });
+  await generateStageFixtures(owner, stage!.id);
+  await sql`update fixtures set scheduled_at = now() - interval '5 minutes' where stage_id = ${stage!.id}`;
+  await startDivision(owner, division.id);
+  return { owner, orgId: owner.orgId, divisionId: division.id, stageId: stage!.id };
+}
+
+/** Every paired board of one round of a stage, in board order. */
+async function pairedBoards(stageId: string, roundNo: number) {
+  return sql<{ id: string }[]>`
+    select id from fixtures
+     where stage_id = ${stageId} and round_no = ${roundNo} and home_entrant_id is not null and away_entrant_id is not null
+     order by seq_in_round`;
+}
+
+/** A bridge row for a board of a REAL stage, as the open's invite leaves it. */
+async function bridgeFor(orgId: string, fixtureId: string) {
+  await sql`
+    insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+    values (${fixtureId}, ${orgId}, 'pending', now() - interval '5 minutes')`;
+}
+
+describe.runIf(HAS_DB)("resolveExternalPlay — what No result means, per stage kind (I-3, fix round 3)", () => {
+  const sweep = { kinds: 0, void: 0, doubleWalkover: 0, knockout: 0, swiss: 0 };
+  for (const kind of StageKind.options) {
+    it(`sweep, ${kind}: the panel and the queue carry the ruling's offer, and the settle does exactly that — a void abandons, a double walkover forfeits both, a refusal writes nothing and a winner still settles the board`, async () => {
       const bracket = BRACKET_KINDS.has(kind);
-      for (const line of bracket ? (["feeds a next match", "a final"] as const) : (["a board"] as const)) {
-        const label = `${kind}, ${line}`;
-        const r = await round();
-        await sql`update stages set kind = ${kind} where id = ${r.stageId}`;
-        const b = r.boards[0]!;
-        if (line === "feeds a next match") await feedsNextMatch(r, b);
-        // Both absent on a feeding line: the hold whose No result was a double walkover before this ruling.
-        await holdAs(r, b, line === "feeds a next match" ? "no_show_both" : "not_started");
-        const reason = (await bridgeOf(b.fixtureId))!.needs_reason;
-        const queue = (await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).filter((q) => q.fixtureId === b.fixtureId);
-        const panel = (await loadArbiterRound(r.owner, r.divisionId))!.boards.filter((x) => x.fixtureId === b.fixtureId);
-        expect([queue.length, panel.length], `${label}: premise, both readers list the board`).toEqual([1, 1]);
-        expect(queue[0]!.knockout, `${label}: the queue's reading`).toBe(bracket);
-        expect(panel[0]!.knockout, `${label}: the panel's reading`).toBe(bracket);
-        if (bracket) {
-          expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, "no_result")), label).toEqual([409, "KNOCKOUT_NEEDS_WINNER"]);
+      // A bracket kind sweeps both lines: one that feeds a next match, and a final.
+      const cells = (bracket ? [true, false] : [false]).flatMap((feeds) =>
+        (["not_started", "no_show_both"] as const).map((hold) => ({ feeds, hold })),
+      );
+      const r = await round({ fixtures: cells.length });
+      await sql`update stages set kind = ${kind} where id = ${r.stageId}`;
+      for (const [i, c] of cells.entries()) {
+        if (c.feeds) await feedsNextMatch(r, r.boards[i]!);
+        await holdAs(r, r.boards[i]!, c.hold);
+      }
+      const queue = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
+      const panel = (await loadArbiterRound(r.owner, r.divisionId))!.boards;
+      for (const [i, c] of cells.entries()) {
+        const b = r.boards[i]!;
+        const label = `${kind}, ${c.feeds ? "a line that feeds a next match" : "a board with no next match"}, ${c.hold}`;
+        const offer = rulingOffer(kind, c.hold);
+        expect(queue.find((q) => q.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the queue`).toEqual(offer);
+        expect(panel.find((x) => x.fixtureId === b.fixtureId)?.noResultOffer, `${label}: the panel`).toEqual(offer);
+        if (offer.kind === "refused") {
+          expect(await codeOf(resolveExternalPlay(r.owner, b.fixtureId, "no_result")), label).toEqual([409, REFUSAL_CODE[offer.why]]);
           expect(await ledgerOf(b.fixtureId), `${label}: nothing written`).toEqual([]);
           expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "scheduled", outcome: null });
-          expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: reason });
-          // The pair: a winner still settles it.
-          expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins"), label).toEqual({ status: "finished" });
-          readings.refused += 1;
+          expect(await bridgeOf(b.fixtureId), `${label}: still the organiser's`).toMatchObject({ status: "needs_organiser", needs_reason: c.hold });
+          expect(await resolveExternalPlay(r.owner, b.fixtureId, "home_wins"), `${label}: a winner still settles it`).toEqual({ status: "finished" });
+          sweep[offer.why] += 1;
         } else {
           expect(await resolveExternalPlay(r.owner, b.fixtureId, "no_result"), label).toEqual({ status: "finished" });
-          expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "abandoned", outcome: null });
-          readings.offered += 1;
+          if (offer.kind === "void") {
+            expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "abandoned", outcome: null });
+            sweep.void += 1;
+          } else {
+            expect(await fixtureOf(b.fixtureId), label).toEqual({ status: "forfeited", outcome: { kind: "double_walkover" } });
+            sweep.doubleWalkover += 1;
+          }
         }
       }
+      sweep.kinds += 1;
+    });
+  }
+
+  it("sweep, anti-vacuity: every kind the engine declares was swept, and each answer reached as often as the engine's sets and the ruling say", () => {
+    const all = StageKind.options.length;
+    const bracket = BRACKET_KINDS.size;
+    expect(bracket + DRAW_KINDS.size, "premise: the engine's two halves cover every kind").toBe(all);
+    expect(sweep).toEqual({
+      kinds: all,
+      void: VOID_SAFE.size,
+      doubleWalkover: all - bracket,
+      // Both lines, both holds.
+      knockout: bracket * 2 * 2,
+      swiss: all - bracket - VOID_SAFE.size,
+    });
+  });
+
+  it("Swiss: No result is refused SWISS_NEEDS_RESULT before anything is written; an adjudication, and both players' absence as W2b's double walkover, decide round 1 — and the REAL generator pairs round 2", async () => {
+    const s = await seedOnlineSwiss({ players: 4, rounds: 2 });
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by, opened_at)
+      values (${s.stageId}, ${s.orgId}, 1, ${s.ownerUserId}, now() - interval '5 minutes')`;
+    const round1 = await pairedBoards(s.stageId, 1);
+    expect(round1.length, "premise: round 1 has two paired boards").toBe(2);
+    const [held, absent] = [round1[0]!, round1[1]!];
+    for (const b of round1) await bridgeFor(s.orgId, b.id);
+    await holdForOrganiser({ fixtureId: held.id, reason: "not_started", detail: "TEST" });
+    await holdRefusedNoShow({ fixtureId: absent.id, absent: "both", detail: "sweep: refused 3 passes running (TEST)" });
+    // Premise: round 2 waits on round 1 (W2b's Swiss pairing), so the pairing below is these decisions' doing.
+    await expect(generateStageFixtures(s.owner, s.stageId), "premise: round 1 undecided").rejects.toMatchObject({ code: "STAGE_NOT_READY" });
+
+    expect(await codeOf(resolveExternalPlay(s.owner, held.id, "no_result"))).toEqual([409, "SWISS_NEEDS_RESULT"]);
+    expect(await ledgerOf(held.id), "nothing written").toEqual([]);
+    expect(await bridgeOf(held.id), "still the organiser's").toMatchObject({ status: "needs_organiser", needs_reason: "not_started" });
+
+    expect(await resolveExternalPlay(s.owner, held.id, "home_wins")).toEqual({ status: "finished" });
+    expect(await resolveExternalPlay(s.owner, absent.id, "no_result"), "both absent: W2b's double walkover").toEqual({ status: "finished" });
+    expect(await fixtureOf(absent.id)).toEqual({ status: "forfeited", outcome: { kind: "double_walkover" } });
+
+    await generateStageFixtures(s.owner, s.stageId);
+    expect((await pairedBoards(s.stageId, 2)).length, "round 2 is paired, every board seated").toBe(2);
+  });
+
+  it("league: No result leaves the board abandoned and the league carries on — the stage completes over the void once every other game is decided", async () => {
+    const l = await seedRealTable("league", 4);
+    const boards = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${l.stageId} order by round_no, seq_in_round`;
+    // 4 players, single round-robin: 3 rounds of 2 boards, every pair once.
+    expect(boards.length, "premise: the generator's six games").toBe(6);
+    const [voided, ...rest] = [...boards] as [{ id: string }, ...{ id: string }[]];
+    for (const b of boards) {
+      await bridgeFor(l.orgId, b.id);
+      await holdForOrganiser({ fixtureId: b.id, reason: "not_started", detail: "TEST" });
     }
-    // Anti-vacuity: both answers reached, every declared kind swept.
-    expect(readings).toEqual({ refused: BRACKET_KINDS.size * 2, offered: DRAW_KINDS.size });
+    expect(await resolveExternalPlay(l.owner, voided.id, "no_result")).toEqual({ status: "finished" });
+    expect(await fixtureOf(voided.id)).toEqual({ status: "abandoned", outcome: null });
+    expect((await completeStage(l.owner, l.stageId)).completed, "premise: five games still to play").toBe(false);
+    for (const b of rest) expect(await resolveExternalPlay(l.owner, b.id, "home_wins")).toEqual({ status: "finished" });
+    expect((await completeStage(l.owner, l.stageId)).completed, "the void holds nothing up").toBe(true);
   });
 });
 

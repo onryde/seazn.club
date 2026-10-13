@@ -1,17 +1,24 @@
 import "server-only";
-// I-3 (controller ruling, fix round 2) — what the organiser's "No result" means on an online board, in ONE place: the
-// settle (resolve.ts) writes it, and the two readers that offer it (the arbiter panel's loader, the needs-result queue)
-// hide it by the same predicate, so neither can offer a No result the server refuses.
+// I-3 (controller rulings, fix rounds 2 and 3) — what the organiser's "No result" means on an online board, in ONE
+// place: the settle (resolve.ts) writes it, and the two readers that offer it (the arbiter panel's loader, the
+// needs-result queue) carry the same `noResultOffer`, so neither can offer a No result the server refuses.
 //
 //   - VOID: No result is an abandon — `core.abandon {reason}` (W2b's abandon reason slot): no points to either player
 //     and no absence. The engine folds it to no outcome, so the table scores nothing for it; the fixture reads
 //     `abandoned`, and W2b's shared surfaces print "Abandoned ({reason})". The reason is the hold's, in plain words, in
 //     the club's own language (stored text: the ledger has no reader to localise it for later).
+//     Offered ONLY where a void cannot hold progression up (fix round 3): a league, or a group stage's round-robin —
+//     a table completes over a void (`engineFixtureStatus` reads abandoned as the engine's settled `void`). A Swiss
+//     round is not paired while a board of the round before is undecided (stages.ts `DECIDED`), and abandoned is not
+//     decided there, so a void would stall the stage: refused, "a Swiss round needs every game decided". So is
+//     americano's (its mexicano mode waits on every game decided), which reads the same sentence.
 //   - Both players absent (no_show_both, double_walkover_blocked): W2b's double walkover, `core.forfeit {by: "both",
-//     reason: "walkover"}` — each charged a game played and lost at 0 points.
+//     reason: "walkover"}` — each charged a game played and lost at 0 points; it folds to `forfeited`, which a Swiss
+//     round counts as decided.
 //   - In any knockout (every kind where a level result is forbidden: `forbidsLevelResult`), No result is refused: a
 //     knockout game needs a winner.
 import { forbidsLevelResult } from "@seazn/engine/core";
+import type { NoResultOffer } from "@/lib/arbiter-view";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
@@ -39,11 +46,25 @@ const ABANDON_REASON_KEY = {
   none: "externalPlay.resolve.abandonReason.none",
 } as const satisfies Record<Exclude<NeedsReason, BothAbsent> | "none", MessageKey>;
 
-/** No result is refused on this board's stage: a knockout game needs a winner. The server's one reading — the settle's
- *  refusal and both readers' `knockout` flag. */
-export function noResultRefused(stageKind: string | null): boolean {
-  return forbidsLevelResult(stageKind);
+/** The stage kinds a void cannot hold up: a table that completes over it, and pairs nothing round by round. */
+const VOID_SAFE_KINDS: ReadonlySet<string> = new Set(["league", "group"]);
+
+/** What the settle offers in place of a winner on a board of a `stageKind` stage held for `reason` (null: not held) —
+ *  the server's one reading: the settle's refusal, and both readers' `noResultOffer`. */
+export function noResultOffer(board: { stageKind: string | null; reason: NeedsReason | null }): NoResultOffer {
+  const knockout = forbidsLevelResult(board.stageKind);
+  if (board.reason !== null && isBothAbsent(board.reason)) {
+    return knockout ? { kind: "refused", why: "knockout" } : { kind: "double_walkover" };
+  }
+  if (board.stageKind !== null && VOID_SAFE_KINDS.has(board.stageKind)) return { kind: "void" };
+  return { kind: "refused", why: knockout ? "knockout" : "swiss" };
 }
+
+/** The settle's 409 for each refusal: its code (the readers' notice) and its message. */
+export const NO_RESULT_REFUSAL = {
+  knockout: { code: "KNOCKOUT_NEEDS_WINNER", message: "A knockout game needs a winner — adjudicate it or award it" },
+  swiss: { code: "SWISS_NEEDS_RESULT", message: "A Swiss round needs every game decided — adjudicate it or award it" },
+} as const satisfies Record<Extract<NoResultOffer, { kind: "refused" }>["why"], { code: string; message: string }>;
 
 export type NoResultEvent =
   | { type: "core.forfeit"; payload: { by: "both"; reason: "walkover" } }

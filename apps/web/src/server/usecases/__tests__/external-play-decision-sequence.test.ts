@@ -54,7 +54,7 @@ type Op =
   | { kind: "hold" };
 
 /** `live`: the game has begun on the ledger (core.start) — a settle then writes the result at once, with no start. */
-type Board = { kind: "league" | "knockout"; live?: boolean };
+type Board = { kind: "league" | "knockout" | "swiss"; live?: boolean };
 /** The actors: 0 and 1 are organisers who play nowhere; 2 is an organiser SEATED on the board (its home player). */
 const SEATED = 2;
 const SEATED_REFUSAL: Answer = { refused: [403, "ARBITER_PLAYS_THIS_BOARD"] };
@@ -65,6 +65,9 @@ const STALE: Answer = { refused: [409, "BOARD_CHANGED"] };
  *  "a knockout game needs a winner" — before anything is written, whether or not play is recorded. The board stays
  *  held. (This suite's knockout board feeds no next match; the ruling does not ask, resolve-test sweeps both lines.) */
 const KNOCKOUT: Answer = { refused: [409, "KNOCKOUT_NEEDS_WINNER"] };
+/** I-3, fix round 3 (controller ruling): in a Swiss, No result is refused too — a Swiss round needs every game decided
+ *  before the next is paired — before anything is written, whether or not play is recorded. A draw is a result there. */
+const SWISS: Answer = { refused: [409, "SWISS_NEEDS_RESULT"] };
 
 /** The model: what the rulings say the board is. */
 type Model = {
@@ -106,6 +109,7 @@ function expectResolve(board: Board, m: Model, as: ResolveKind): Answer {
   }
   // I-3: a knockout game needs a winner — No result is refused, whether or not play is recorded; nothing moves.
   if (board.kind === "knockout" && as === "no_result") return KNOCKOUT;
+  if (board.kind === "swiss" && as === "no_result") return SWISS;
   m.settled = true;
   m.heldFor = null;
   return { ok: { status: "finished" } };
@@ -113,13 +117,13 @@ function expectResolve(board: Board, m: Model, as: ResolveKind): Answer {
 
 type Counters = Record<
   | "lateStaysOpen" | "reclosedNoop" | "emptyCloseRefused" | "secondSettleRefused" | "tiebreakHeld" | "tiebreakNeedsWinner"
-  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "raceToldChangedTiebreak" | "knockoutRefused" | "steps",
+  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "raceToldChangedTiebreak" | "knockoutRefused" | "swissRefused" | "steps",
   number
 >;
 const zero = (): Counters => ({
   lateStaysOpen: 0, reclosedNoop: 0, emptyCloseRefused: 0, secondSettleRefused: 0, tiebreakHeld: 0,
   tiebreakNeedsWinner: 0, holdAfterSettleNoop: 0, seatedRefused: 0, raceOneRecorded: 0, raceSameOnce: 0,
-  raceToldChangedTiebreak: 0, knockoutRefused: 0, steps: 0,
+  raceToldChangedTiebreak: 0, knockoutRefused: 0, swissRefused: 0, steps: 0,
 });
 const total: Counters = zero();
 
@@ -198,7 +202,7 @@ async function parked(fixtureId: string, calls: (() => Promise<unknown>)[], orde
 
 async function run(board: Board, ops: Op[]): Promise<void> {
   const r = await seedOnlineChessRound({ fixtures: 1, scheduledAt: new Date(Date.now() - 5 * 60_000) });
-  if (board.kind === "knockout") await sql`update stages set kind = 'knockout' where id = ${r.stageId}`;
+  if (board.kind !== "league") await sql`update stages set kind = ${board.kind} where id = ${r.stageId}`;
   await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
             values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
   const b = r.boards[0]!;
@@ -278,6 +282,7 @@ async function run(board: Board, ops: Op[]): Promise<void> {
         if (!wasTiebreak && m.tiebreak) c.tiebreakHeld++;
         if ("refused" in expected && expected.refused[1] === "TIEBREAK_NEEDS_WINNER") c.tiebreakNeedsWinner++;
         if (expected === KNOCKOUT) c.knockoutRefused++;
+        if (expected === SWISS) c.swissRefused++;
         break;
       }
       case "race": {
@@ -373,6 +378,9 @@ const PREFIXES: { name: keyof Counters; board: Board; ops: Op[] }[] = [
   // RB1: No result on a final is W2b's refusal — before play and after it — and the board stays the organiser's.
   { name: "knockoutRefused", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "no_result" }] },
   { name: "knockoutRefused", board: { kind: "knockout", live: true }, ops: [{ kind: "resolve", as: "no_result" }] },
+  // Fix round 3: No result in a Swiss is refused — before play and after it — and the board stays the organiser's.
+  { name: "swissRefused", board: { kind: "swiss" }, ops: [{ kind: "resolve", as: "no_result" }] },
+  { name: "swissRefused", board: { kind: "swiss", live: true }, ops: [{ kind: "resolve", as: "no_result" }] },
 ];
 const RUNS_PER_PREFIX = 6;
 
@@ -408,6 +416,7 @@ describe.runIf(HAS_DB)("the organiser's decisions — transitions", () => {
     { from: "game begun on the ledger → no result → settled (I-3: void, the Start stands)", board: { kind: "league", live: true }, ops: [{ kind: "resolve", as: "no_result" }] },
     { from: "held (KO) → tiebreak owed → settled by a winner", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "draw" }, { kind: "resolve", as: "home_wins" }] },
     { from: "held (KO) → no result ⇒ refused KNOCKOUT_NEEDS_WINNER, still held → a winner settles it", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "no_result" }, { kind: "resolve", as: "away_wins" }] },
+    { from: "held (Swiss) → no result ⇒ refused SWISS_NEEDS_RESULT, still held → a draw settles it (fix round 3)", board: { kind: "swiss" }, ops: [{ kind: "resolve", as: "no_result" }, { kind: "resolve", as: "draw" }] },
     { from: "settled → settle again ⇒ refused", board: { kind: "league" }, ops: [{ kind: "resolve", as: "draw" }, { kind: "resolve", as: "away_wins" }] },
     { from: "flag open → seen → closed", board: { kind: "league" }, ops: [{ kind: "raise" }, { kind: "look" }, { kind: "close", by: 1 }] },
     { from: "flag closed → closed again ⇒ no-op", board: { kind: "league" }, ops: [{ kind: "raise" }, { kind: "look" }, { kind: "close", by: 0 }, { kind: "close", by: 1 }] },

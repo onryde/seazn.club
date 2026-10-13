@@ -39,7 +39,7 @@ function held(over: Partial<HeldRow> & Pick<HeldRow, "fixtureId" | "reason">): H
     stageName: "Open Swiss",
     canResync: false,
     seated: false,
-    knockout: false,
+    noResultOffer: { kind: "void" },
     ...over,
   };
 }
@@ -143,29 +143,36 @@ describe("a held card", () => {
     expect(testIds(card(h, "f2"), "external-play-resync"), "a game may be on file").toBe(1);
   });
 
-  // I-3: in any knockout the server refuses No result (a knockout game needs a winner) — the row's `knockout` is the
+  // I-3: where the server refuses No result — any knockout, and a Swiss (fix round 3) — the row's `noResultOffer` is the
   // server's own reading, and the queue offers exactly what the server takes.
-  it("a knockout board: No result is not offered and the guidance says why — every locale, both ways, counted", () => {
+  it("a refused No result (knockout, Swiss): not offered, and the guidance says why — each refusal, every locale, both ways, counted", () => {
+    // The sentence for each refusal, typed from the rulings (never the component's own map).
+    const SENTENCE = { knockout: "arbiter.decide.knockoutNeedsWinner", swiss: "arbiter.decide.swissNeedsResult" } as const;
+    const settles = (h: string) => [...h.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1]);
     let checked = 0;
-    for (const locale of Object.keys(LOCALES) as Locale[]) {
-      const dict = LOCALES[locale] as Record<string, string>;
-      const h = render({ held: [held({ fixtureId: "f1", reason: "not_started", knockout: true }), held({ fixtureId: "f2", reason: "not_started" })] }, locale);
-      const refused = card(h, "f1");
-      expect([...refused.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1]), locale).toEqual(["home_wins", "away_wins", "draw"]);
-      const guide = refused.match(/<p[^>]*data-testid="external-play-settle-knockout"[^>]*>(.*?)<\/p>/);
-      expect(guide, `${locale}: the guidance renders`).not.toBeNull();
-      expect(text(guide![1]!), locale).toBe(dict["arbiter.decide.knockoutNeedsWinner"]);
-      // The pair: a board that is not a knockout keeps all four, and no guidance.
-      const offered = card(h, "f2");
-      expect([...offered.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1]), locale).toEqual(["home_wins", "away_wins", "draw", "no_result"]);
-      expect(offered).not.toContain("external-play-settle-knockout");
-      checked++;
+    for (const why of ["knockout", "swiss"] as const) {
+      const offer = { kind: "refused" as const, why };
+      for (const locale of Object.keys(LOCALES) as Locale[]) {
+        const dict = LOCALES[locale] as Record<string, string>;
+        const h = render({ held: [held({ fixtureId: "f1", reason: "not_started", noResultOffer: offer }), held({ fixtureId: "f2", reason: "not_started" })] }, locale);
+        const refused = card(h, "f1");
+        expect(settles(refused), `${why}, ${locale}`).toEqual(["home_wins", "away_wins", "draw"]);
+        const guide = refused.match(/<p[^>]*data-testid="external-play-settle-guidance"[^>]*data-why="([a-z]+)"[^>]*>(.*?)<\/p>/);
+        expect(guide, `${why}, ${locale}: the guidance renders`).not.toBeNull();
+        expect(guide![1], `${why}, ${locale}`).toBe(why);
+        expect(text(guide![2]!), `${why}, ${locale}`).toBe(dict[SENTENCE[why]]);
+        // The pair: a board where the void is offered keeps all four, and no guidance.
+        const offered = card(h, "f2");
+        expect(settles(offered), `${why}, ${locale}`).toEqual(["home_wins", "away_wins", "draw", "no_result"]);
+        expect(offered).not.toContain("external-play-settle-guidance");
+        checked++;
+      }
+      // A drawn knockout held for its tie-break: a winner only, no guidance.
+      const owed = card(render({ held: [held({ fixtureId: "f1", reason: "tiebreak_owed", noResultOffer: offer })] }), "f1");
+      expect(settles(owed), why).toEqual(["home_wins", "away_wins"]);
+      expect(owed, why).not.toContain("external-play-settle-guidance");
     }
-    expect(checked).toBe(4);
-    // A drawn knockout held for its tie-break: a winner only, no guidance.
-    const owed = card(render({ held: [held({ fixtureId: "f1", reason: "tiebreak_owed", knockout: true })] }), "f1");
-    expect([...owed.matchAll(/data-settle="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["home_wins", "away_wins"]);
-    expect(owed).not.toContain("external-play-settle-knockout");
+    expect(checked).toBe(2 * 4);
   });
 
   it("the settle buttons send a SIDE by colour: White's name sends White's side, both ways", () => {

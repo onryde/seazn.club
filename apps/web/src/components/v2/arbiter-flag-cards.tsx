@@ -4,7 +4,7 @@
 // them. The flag cards are evidence only: nothing in them decides.
 import { useMemo } from "react";
 import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
-import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport } from "@/lib/arbiter-view";
+import { fullMoveOf, timelineSegments, type ArbiterBoard, type ArbiterFlag, type CameraOffReport, type NoResultOffer } from "@/lib/arbiter-view";
 import { formatTimeOfDay } from "@/components/public-site/match-room/room-time";
 import type { ArbiterNotice, SettleChoice } from "./arbiter-decision";
 
@@ -201,10 +201,12 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
               ? f.t("arbiter.notice.needsWinner")
               : n.code === "ARBITER_PLAYS_THIS_BOARD"
                 ? f.t("arbiter.notice.settleOwnBoard")
-                : // I-3's 409: No result on a knockout board (a panel loaded before its stage became one).
+                : // I-3's two 409s: No result where it is refused (a screen loaded before the board's stage or hold changed).
                   n.code === "KNOCKOUT_NEEDS_WINNER"
                   ? f.t("arbiter.notice.knockoutNeedsWinner")
-                  : f.t("arbiter.notice.failed");
+                  : n.code === "SWISS_NEEDS_RESULT"
+                    ? f.t("arbiter.notice.swissNeedsResult")
+                    : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
     case "override_failed":
@@ -220,11 +222,11 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
 
 /** The settle buttons, by colour as the panel and the queue name the
  *  players; the server settles by side. A drawn knockout game takes a winner
- *  only (spec §3.6). In any knockout the server refuses "No result" (I-3: a
- *  knockout game needs a winner), so it is not offered: `knockout` is the
- *  server's own reading, carried on the row. */
+ *  only (spec §3.6). The choice in place of a winner is the server's own
+ *  reading, carried on the row (`noResultOffer`, I-3): "No result" where the
+ *  void is offered, nothing where it is refused. */
 export function settleChoices(
-  board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; knockout: boolean },
+  board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; noResultOffer: NoResultOffer },
   f: Fmt,
 ): { choice: SettleChoice; label: string }[] {
   const white: SettleChoice = board.whiteSide === "home" ? "home_wins" : "away_wins";
@@ -239,12 +241,18 @@ export function settleChoices(
     { choice: white, label: f.t("externalPlay.settle.wins", { name: board.whiteName }) },
     { choice: black, label: f.t("externalPlay.settle.wins", { name: board.blackName }) },
     { choice: "draw", label: f.t("externalPlay.resolve.draw") },
-    ...(board.knockout ? [] : [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]),
+    ...(board.noResultOffer.kind === "refused" ? [] : [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]),
   ];
 }
 
-/** Why "No result" is missing, said where it would have been — only where it
- *  would otherwise be offered (a tie-break never offers it). */
-export function settleKnockoutGuidance(board: { tiebreakOwed: boolean; knockout: boolean }): boolean {
-  return board.knockout && !board.tiebreakOwed;
+/** The sentence said where a refused "No result" would have been, by why it is refused. */
+export const SETTLE_GUIDANCE_KEY = {
+  knockout: "arbiter.decide.knockoutNeedsWinner",
+  swiss: "arbiter.decide.swissNeedsResult",
+} as const;
+
+/** Why "No result" is missing — only where it would otherwise be offered (a
+ *  tie-break never offers it); null when nothing is missing. */
+export function settleGuidance(board: { tiebreakOwed: boolean; noResultOffer: NoResultOffer }): keyof typeof SETTLE_GUIDANCE_KEY | null {
+  return board.noResultOffer.kind === "refused" && !board.tiebreakOwed ? board.noResultOffer.why : null;
 }

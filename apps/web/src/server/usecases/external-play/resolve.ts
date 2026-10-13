@@ -31,9 +31,12 @@ import "server-only";
 //                 `core.forfeit {by: "both", reason: "walkover"}` (W2b spec
 //                 §5.2). Never a Start: before play the board stays unplayed
 //                 (ruling 118 reads chess's play from an active Start), after
-//                 it the Start stands. In ANY knockout it is refused
-//                 (KNOCKOUT_NEEDS_WINNER) and nothing is written: a knockout
-//                 game needs a winner. no-result.ts holds all three rules;
+//                 it the Start stands. The void is offered only in a
+//                 league or a group's round-robin (fix round 3): in ANY
+//                 knockout it is refused (KNOCKOUT_NEEDS_WINNER) — a knockout
+//                 game needs a winner — and in a Swiss (SWISS_NEEDS_RESULT),
+//                 whose next round waits on every game decided; nothing is
+//                 written. no-result.ts holds every one of these rules;
 //   - a board whose tie-break is owed takes a winner only, written as the
 //     organiser's settle (`core.settle {method: organiser}`, W2a).
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -45,7 +48,7 @@ import { getFixtureState } from "../fixtures";
 import { EngineError } from "@seazn/engine/core";
 import { scoreEvent } from "../scoring";
 import { whiteSideOf, type Side } from "./guard";
-import { noResultEvent, noResultRefused } from "./no-result";
+import { NO_RESULT_REFUSAL, noResultEvent, noResultOffer } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
 import { foldPhaseOf, holdOwedTiebreak, tiebreakIsPending } from "./result";
 import { isSeatedOn } from "./seated";
@@ -165,7 +168,9 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
  *    tie-break is owed;
  *  - 409 KNOCKOUT_NEEDS_WINNER (I-3): No result in any knockout — every stage kind where a level result is forbidden,
- *    a line that feeds a next match as much as a final. The board stays held.
+ *    a line that feeds a next match as much as a final. The board stays held;
+ *  - 409 SWISS_NEEDS_RESULT (I-3, fix round 3): No result where a void would hold the next round up — a Swiss (and
+ *    americano). The board stays held.
  */
 export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind: ResolveKind): Promise<ResolveOutcome> {
   if (!(RESOLVE_KINDS as readonly string[]).includes(kind)) {
@@ -214,8 +219,10 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   }
 
   if (kind === "no_result") {
-    if (noResultRefused(b.stageKind)) {
-      throw new HttpError(409, "A knockout game needs a winner — adjudicate it or award it", "KNOCKOUT_NEEDS_WINNER");
+    const offer = noResultOffer({ stageKind: b.stageKind, reason });
+    if (offer.kind === "refused") {
+      const refusal = NO_RESULT_REFUSAL[offer.why];
+      throw new HttpError(409, refusal.message, refusal.code);
     }
     // I-3: VOID (an abandon), or — both players absent — the double walkover; either whether or not play is recorded
     // (W2b admits an abandon and a chess walkover before the game and after the Start, ruling 118). So no Start is

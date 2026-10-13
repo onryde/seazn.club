@@ -43,7 +43,8 @@ import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side } from "./guard";
-import { noResultRefused } from "./no-result";
+import { noResultOffer } from "./no-result";
+import { readNeedsReason } from "./queue";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
 import { fixturesSeating, isSeatedOn } from "./seated";
@@ -78,7 +79,7 @@ type BoardRow = {
   hasMeeting: boolean;
   meetingEndedAt: Date | null;
   evidenceAt: Date | null;
-  /** I-3: whether No result is refused here (a knockout) is read from the stage kind. */
+  /** I-3: what the settle offers in place of a winner is read from the stage kind and the hold (no-result.ts). */
   stageKind: string | null;
 };
 
@@ -347,8 +348,8 @@ async function boardOf(
     canSettle: playable && r.bridgeStatus !== null,
     whiteSide,
     tiebreakOwed: r.bridgeStatus === "needs_organiser" && r.needsReason === "tiebreak_owed",
-    // I-3 — the settle's own refusal (no-result.ts), so the panel never offers a No result the server refuses.
-    knockout: noResultRefused(r.stageKind),
+    // I-3 — the settle's own reading (no-result.ts), so the panel never offers a No result the server refuses.
+    noResultOffer: noResultOffer({ stageKind: r.stageKind, reason: r.needsReason === null ? null : readNeedsReason(r.needsReason) }),
     flags,
   };
 }
