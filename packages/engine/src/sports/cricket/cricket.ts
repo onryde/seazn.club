@@ -3606,11 +3606,11 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     },
   },
   // W2c (spec §4.1 Q5) — the overs and the bowler limit may differ per match; the super over (any stage kind,
-  // CK-SO-1) per stage, and per match only switched off (X-SR-2, signed). DLS and the result floor per stage.
+  // CK-SO-1), DLS and the result floor per stage. The innings shape is the variant's.
   ruleKeys: {
     ballsPerInnings: { scope: "match" },
     maxOversPerBowler: { scope: "match" },
-    superOver: { scope: "match", matchBound: "off" },
+    superOver: { scope: "stage" },
     superOverStillTied: { scope: "stage" },
     dls: { scope: "stage" },
     minOversForResult: { scope: "stage" },

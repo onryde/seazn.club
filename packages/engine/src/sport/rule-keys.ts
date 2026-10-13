@@ -79,7 +79,6 @@ function offOrShorter(o: unknown, s: unknown): string | null {
  *  the stage's values at the decider's key; the X-SR-1 sweep proves each bound's shape. */
 function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown, s: unknown): string | null {
   if (bound === "off_or_shorter") return offOrShorter(o, s);
-  if (bound === "off") return o === false ? null : s === true ? "it can only be switched off for one match" : OFF_AT_STAGE;
   if (typeof s !== "number") return OFF_AT_STAGE;
   // Shorter = the smaller of the two. The bound only sees a CHANGED leaf, so `o` never equals `s` (an `o <= s` would
   // carry an untestable `<` twin), and a non-number never equals the number Math.min returns.

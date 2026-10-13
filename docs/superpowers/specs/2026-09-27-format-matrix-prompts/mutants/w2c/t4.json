@@ -84,13 +84,6 @@
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
   },
   {
-    "id": "t4-decider-off",
-    "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "return o === false ? null",
-    "replace": "return true ? null",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
-  },
-  {
     "id": "t4-decider-bound-dispatch",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "      if (owner.fact.matchBound !== undefined) {",
@@ -105,11 +98,18 @@
     "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a decider's bound reads the stage" }]
   },
   {
-    "id": "t4-decider-cricket-declared",
+    "id": "t4-q5-icehockey-bound-dropped",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "\"overtime.minutes\": { scope: \"match\", matchBound: \"shorter\" },",
+    "replace": "\"overtime.minutes\": { scope: \"match\" },",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "Q5 \\(rulebook\\): each sport's match keys and deciders" }]
+  },
+  {
+    "id": "t4-q5-superover-match",
     "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "superOver: { scope: \"match\", matchBound: \"off\" },",
+    "find": "superOver: { scope: \"stage\" },",
     "replace": "superOver: { scope: \"match\" },",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 a format key may differ where the stage has none" }]
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "Q5 \\(rulebook\\): each sport's match keys and deciders" }]
   },
   {
     "id": "t4-bound",
