@@ -62,6 +62,14 @@ const otherSide = (side: "home" | "away") => (side === "home" ? "away" : "home")
 /** BG-KO-2, from the rulebook (packages/engine/rules/boardgame.md): White won → the OTHER entrant advances; Black won or
  *  the Armageddon was drawn → Black advances. Written out here, never read from the engine's helper. */
 const advancerOf = (black: "home" | "away", result: (typeof ARMAGEDDON_RESULTS)[number]) => (result === "white" ? otherSide(black) : black);
+/** A drawn game followed by `payload`, folded through the REAL engine: the outcome the fixture would carry. */
+const foldTiebreak = (payload: Record<string, unknown>) => {
+  const env = (seq: number, type: string, body: unknown): EventEnvelope =>
+    ({ id: `e${seq}`, fixtureId: "fx", seq, type, payload: body, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null }) as EventEnvelope;
+  return boardgame.outcome(
+    foldMatch(boardgame, boardgame.configSchema.parse(TB_CFG), defaultLineupPair(boardgame.positions), [env(1, "core.start", {}), env(2, RESULT_TYPE, DRAWN.payload), env(3, TIEBREAK_TYPE, payload)]),
+  );
+};
 /** The English dictionary with `{var}` interpolation — the sentence a scorer would read. */
 const tEn = (key: string, vars?: Record<string, string | number>): string => {
   const raw = (uiEn as Record<string, string>)[key];
@@ -192,7 +200,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     // The engine's own padSpec is the second witness of WHICH rungs are playable: the pad offers the same set (the order
     // is the stage's; padSpec splits the timed rungs from the Armageddon, so only the set is comparable).
     const offeredBy = (rungs: readonly TiebreakRung[]) => {
-      const spec = boardgame.padSpec(boardgame.configSchema.parse({ tiebreak: true, tiebreakRungs: rungs }));
+      const spec = boardgame.padSpec!(boardgame.configSchema.parse({ tiebreak: true, tiebreakRungs: rungs }));
       const panel = spec.panels.find((p) => p.labelKey.key === "pad.boardgame.panel.tiebreak");
       return (panel?.actions ?? []).flatMap((a) => a.fields ?? []).flatMap((f) => (f.kind === "enum" && f.path === "rung" ? [...f.values] : [])).sort();
     };
@@ -449,18 +457,13 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(sheet.buildPayload({ rung: "armageddon", black: "black-home", result: "result-draw" })).toEqual({ rung: "armageddon", black: "H", result: "draw" });
   });
 
-  it("the seam: every payload the sheet can build folds through the REAL engine to a win for the tapped side (class 1)", () => {
+  it("the seam: every payload the sheet can build folds through the REAL engine to the win the rulebook gives — the tapped winner, or the entrant BG-KO-2 advances (class 1)", () => {
     let checked = 0;
     const sheet = buildSheets(tiebreakView(), echo)[TIEBREAK_TILE_ID]!;
     const scoreStep = sheet.steps.find((s) => s.id === "score")!;
     const scores = scoreStep.kind === "choice" ? scoreStep.options.map((o) => o.id) : [];
     expect(scores).toContain("none");
-    const cfg = boardgame.configSchema.parse(TB_CFG);
-    const lineups = defaultLineupPair(boardgame.positions);
-    const env = (seq: number, type: string, payload: unknown): EventEnvelope =>
-      ({ id: `e${seq}`, fixtureId: "fx", seq, type, payload, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null }) as EventEnvelope;
-    const fold = (payload: Record<string, unknown>) =>
-      boardgame.outcome(foldMatch(boardgame, cfg, lineups, [env(1, "core.start", {}), env(2, RESULT_TYPE, DRAWN.payload), env(3, TIEBREAK_TYPE, payload)]));
+    const fold = foldTiebreak;
     for (const rung of TIEBREAK_RUNGS) {
       if (rung === "armageddon") continue; // the Armageddon is driven below: it has no winner and no score
       for (const winner of ["home", "away"] as const)
@@ -481,6 +484,25 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
       }
     // rapid and blitz × each score × both sides, plus Armageddon × both Black × each result
     expect(checked).toBe((TIEBREAK_RUNGS.length - 1) * scores.length * 2 + 2 * ARMAGEDDON_RESULTS.length);
+  });
+
+  it("BG-KO-2 the read-back names the entrant the REAL engine advances, for every Black × result — the sentence cannot drift from the fold", () => {
+    const names = { home: "Asha Rao", away: "Priya Menon" };
+    const sheet = buildSheets(stageView(undefined, names), tEn)[TIEBREAK_TILE_ID]!;
+    const confirm = sheet.steps.find((s) => s.id === "confirm");
+    if (confirm === undefined || confirm.kind !== "confirm") throw new Error("the Armageddon sheet has no confirm step");
+    const nameOfEntrant = { H: names.home, A: names.away } as const;
+    let checked = 0;
+    for (const black of ["home", "away"] as const)
+      for (const result of ARMAGEDDON_RESULTS) {
+        const answers = { rung: "armageddon", black: `black-${black}`, result: `result-${result}` };
+        const outcome = foldTiebreak(sheet.buildPayload(answers)) as { kind: string; winner: "H" | "A"; loser: "H" | "A" };
+        const line = confirm.summary(answers);
+        expect(line, `${black}/${result}: names the engine's winner`).toContain(`Advances: ${nameOfEntrant[outcome.winner]} —`);
+        expect(line, `${black}/${result}: never names the loser as the advancer`).not.toContain(`Advances: ${nameOfEntrant[outcome.loser]}`);
+        checked++;
+      }
+    expect(checked).toBe(2 * ARMAGEDDON_RESULTS.length);
   });
 
   it("every key the tie-break can render exists in the English dictionary", () => {

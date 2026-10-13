@@ -1332,22 +1332,23 @@ describe("boardgame", () => {
     const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME },
       // an extra key that sorts AFTER "winner" leaves the first two sorted keys right, so only the key count refuses it
       { rung: "rapid", winner: HOME, zz: 1 },
-      // W2c: the Armageddon's old shape is gone, and a winner is never named for it
-      { rung: ARMAGEDDON, winner: HOME }, { rung: ARMAGEDDON, winner: HOME, result: "draw" }];
+      // rapid and blitz never take a Black or a result: those are the Armageddon's facts
+      { rung: "rapid", black: HOME, result: "draw" }, { rung: "blitz", black: AWAY }];
     for (const payload of bad) {
       expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(`is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
     }
     expect(bad).toHaveLength(10);
     // The Armageddon's own refusals: no Black, a stranger as Black, a result the engine does not declare, a missing result,
-    // an extra key (and rapid/blitz never take a Black or a result).
+    // an extra key — and (W2c) the Armageddon's old `{rung, winner}` shape, which the engine refuses: a winner is never named.
     const badArmageddon: unknown[] = [{ rung: ARMAGEDDON, result: "draw" }, { rung: ARMAGEDDON, black: "stranger", result: "draw" }, { rung: ARMAGEDDON, black: HOME, result: "won" },
-      { rung: ARMAGEDDON, black: HOME }, { rung: ARMAGEDDON, black: null, result: "draw" }, { rung: ARMAGEDDON, black: HOME, result: "draw", zz: 1 }, { rung: "rapid", black: HOME, result: "draw" }];
+      { rung: ARMAGEDDON, black: HOME }, { rung: ARMAGEDDON, black: null, result: "draw" }, { rung: ARMAGEDDON, black: HOME, result: "draw", zz: 1 },
+      { rung: ARMAGEDDON, winner: HOME }, { rung: ARMAGEDDON, winner: HOME, result: "draw" }];
     for (const payload of badArmageddon) {
       expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(
         `is not {rung: ${ARMAGEDDON}, black: an entrant of the fixture, result: one of ${ARMAGEDDON_RESULTS.join(", ")}}`,
       );
     }
-    expect(badArmageddon).toHaveLength(7);
+    expect(badArmageddon).toHaveLength(8);
     // the positive pair: each rung of the engine's, either winner (or Black × each result), is accepted
     let accepted = 0;
     for (const rung of TIEBREAK_RUNGS) {

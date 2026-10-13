@@ -832,7 +832,31 @@ export interface SheetNumberStep {
    */
   resetOn?: readonly string[];
 }
-export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep;
+/**
+ * W2c Task 21 (S5, BG-KO-2): a READ-BACK step — the closing step of a sheet that records FACTS and lets the engine
+ * decide what they make true. The chess Armageddon sheet asks who had Black and how the game ended, then states
+ * "Advances: Priya Menon — Black, Armageddon drawn" and waits for one Confirm; the scorer never applies the rule
+ * themselves, and the sentence they read is the one they are about to write.
+ *
+ * Unlike a choice, a person or a number it collects NO answer of its own: answering it (the Confirm control) is what
+ * completes the sheet, and `buildPayload` never reads its id. It exists so a sheet can show its conclusion BEFORE the
+ * write, which a sheet that completes on its last tap cannot.
+ *
+ * `summary(answers)` is a function of the answers gathered so far, evaluated at render, so Back-and-change rewrites the
+ * sentence. Pre-localised, skin-supplied prose (the same rule as `SheetNumberStep.hintText`): the sentence interpolates
+ * names and a colour word no dictionary holds, so the SKIN resolves its own keys and the chassis prints it verbatim.
+ *
+ * It renders under the shared `pad-sheet-confirm` testid (the number step's Confirm already wears it, and the bench
+ * driver's `confirm` TapStep targets it), plus `pad-sheet-summary` on the sentence.
+ */
+export interface SheetConfirmStep {
+  id: string;
+  kind: "confirm";
+  title: MessageKey;
+  summary(answers: Readonly<Record<string, string>>): string;
+  when?: StepPredicate;
+}
+export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep | SheetConfirmStep;
 export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
 
 /**

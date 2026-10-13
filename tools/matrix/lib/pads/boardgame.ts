@@ -14,13 +14,18 @@
 // with no chip it writes no method, so the chip is part of the route.
 //
 // W2a (BG-KO-1, ruling 82): a drawn game in a bracket opens phase `tiebreak`, and the scorer records the tie-break on
-// the pad: the `tiebreak` tile (TIEBREAK_TILE_ID), a sheet of choices — the rung (`rung`), the winner (`winner`, or
-// `winner-armageddon` on the armageddon rung: two steps, one option id set), and for rapid and blitz the score
-// (`score`: none / 2–0 / 1½–½). The chassis' own attributes, not testids: `[data-tile-id]` and
+// the pad: the `tiebreak` tile (TIEBREAK_TILE_ID), a sheet of choices — the rung (`rung`), the winner (`winner`), and for
+// rapid and blitz the score (`score`: none / 2–0 / 1½–½). The chassis' own attributes, not testids: `[data-tile-id]` and
 // `[data-choice-option-id]` (guided-sheet.tsx:418), the last choice of a sheet completing it. The matrix asks for no
 // score, so it taps `none`, which writes `{rung, winner}` and no `score` key. Lots is NOT here: it is the organiser's
 // core.settle (X-ST-2), and the pad refuses to emit it.
-import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
+//
+// W2c Task 21 (S5, BG-KO-2): the Armageddon is no longer a winner tap. The scorer records FACTS — who had Black
+// (`black-home` / `black-away`), then how it ended (`result-white` / `result-black` / `result-draw`) — and the sheet closes
+// on a read-back step whose one Confirm (`pad-sheet-confirm`, the bench driver's `confirm` TapStep) writes
+// `{rung, black, result}`. The ENGINE decides who advances: White won → the other entrant; Black won or drawn → Black.
+// So the generator's `winner` is Black here, and a drawn Armageddon is one more `result-draw` tap, never a winner tap.
+import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
@@ -32,8 +37,12 @@ export const BOARDGAME_TIEBREAK = "boardgame.tiebreak";
 export const BOARDGAME_TIEBREAK_TILE = "tiebreak";
 /** The score step's "no score" option (boardgame.tsx's SCORES[0]; text-pinned). */
 export const TIEBREAK_SCORE_NONE = "none";
-/** The rung whose sheet has no score step (BG-KO-2: the armageddon winner is tapped, nothing more). */
+/** The rung whose sheet records Black and a result instead of a winner and a score (BG-KO-2). */
 export const ARMAGEDDON = "armageddon";
+/** boardgame.tsx BLACK_OPTION_PREFIX / RESULT_OPTION_PREFIX: the Armageddon sheet's option ids are `black-<side>` and
+ *  `result-<result>` (text-pinned in pad-adapters.test.ts). */
+export const BLACK_OPTION_PREFIX = "black-";
+export const RESULT_OPTION_PREFIX = "result-";
 /** boardgame.tsx:381 DRAW_TILE_ID (text-pinned). */
 export const BOARDGAME_DRAW_TILE = "draw";
 /** boardgame.tsx:509 methodChip's id (text-pinned). */
@@ -55,8 +64,9 @@ function resultSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep
 function tiebreakSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
   const p = (payload ?? {}) as Record<string, unknown>;
   const keys = Object.keys(p).sort();
-  const side = p.winner === ctx.entrants.home ? "home" : p.winner === ctx.entrants.away ? "away" : null;
   const rung = typeof p.rung === "string" && (TIEBREAK_RUNGS as readonly string[]).includes(p.rung) ? p.rung : null;
+  if (rung === ARMAGEDDON) return armageddonSteps(payload, p, keys, ctx);
+  const side = p.winner === ctx.entrants.home ? "home" : p.winner === ctx.entrants.away ? "away" : null;
   if (payload === null || typeof payload !== "object" || keys.length !== 2 || keys[0] !== "rung" || keys[1] !== "winner" || rung === null || side === null) {
     throw new Error(`boardgamePad: ${BOARDGAME_TIEBREAK} payload ${JSON.stringify(payload)} is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
   }
@@ -64,7 +74,24 @@ function tiebreakSteps(payload: unknown, ctx: TapAdapterContext): readonly TapSt
     { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE },
     { kind: "choice", optionId: rung },
     { kind: "choice", optionId: side },
-    ...(rung === ARMAGEDDON ? [] : [{ kind: "choice", optionId: TIEBREAK_SCORE_NONE } as const]),
+    { kind: "choice", optionId: TIEBREAK_SCORE_NONE },
+  ];
+}
+
+/** BG-KO-2: `{rung: "armageddon", black: <an entrant>, result: <one of the engine's>}` and nothing else. The old
+ *  `{rung, winner}` shape is gone (the engine refuses it), so a payload carrying a winner is refused here by name too. */
+function armageddonSteps(payload: unknown, p: Record<string, unknown>, keys: readonly string[], ctx: TapAdapterContext): readonly TapStep[] {
+  const side = p.black === ctx.entrants.home ? "home" : p.black === ctx.entrants.away ? "away" : null;
+  const result = typeof p.result === "string" && (ARMAGEDDON_RESULTS as readonly string[]).includes(p.result) ? p.result : null;
+  if (payload === null || typeof payload !== "object" || keys.length !== 3 || keys[0] !== "black" || keys[1] !== "result" || keys[2] !== "rung" || side === null || result === null) {
+    throw new Error(`boardgamePad: ${BOARDGAME_TIEBREAK} payload ${JSON.stringify(payload)} is not {rung: ${ARMAGEDDON}, black: an entrant of the fixture, result: one of ${ARMAGEDDON_RESULTS.join(", ")}}`);
+  }
+  return [
+    { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE },
+    { kind: "choice", optionId: ARMAGEDDON },
+    { kind: "choice", optionId: `${BLACK_OPTION_PREFIX}${side}` },
+    { kind: "choice", optionId: `${RESULT_OPTION_PREFIX}${result}` },
+    { kind: "confirm" },
   ];
 }
 

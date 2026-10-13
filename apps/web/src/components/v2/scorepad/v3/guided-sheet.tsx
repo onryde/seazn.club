@@ -67,9 +67,12 @@
 // (lime-400), matching every sibling primitive's "one hue per signal" rule
 // (tile-grid.tsx's own header) — nothing on this surface is `primary` or
 // `destructive` in the TileGrid sense, so violet/red have no place here.
+// ONE amendment (W2c Task 21): a `SheetConfirmStep` is a sheet's single commit
+// after a read-back sentence, so its Confirm — and only it — takes the
+// `primary` violet fill; every choice, Back and Cancel stay as described above.
 import { useState, type ReactNode } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetConfirmStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 import { SPORT_TONE_CLASSES } from "./tokens";
 import type { SportTone } from "./sport-theme";
 
@@ -569,6 +572,41 @@ function renderNumberStep(
   );
 }
 
+/** W2c Task 21 — the confirm control of a `SheetConfirmStep`: the sheet's ONE commit, so it takes the chassis' `primary`
+ *  fill (tile-grid.tsx `KIND_CLASS.primary`: violet-600 + white, 5.02:1) rather than the neutral pill every choice wears.
+ *  A confirm step carries exactly one decision, so there is nothing for the accent to compete with. */
+const confirmButtonClass =
+  "min-w-0 break-words rounded-full border-2 border-transparent bg-violet-600 px-6 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-400";
+
+/**
+ * The read-back and its Confirm (`SheetConfirmStep`, types.ts). A PLAIN FUNCTION for the same reason the other row
+ * renderers are (the node-only `_hook-harness` walks `.props.children`, never a nested component). The sentence is the
+ * skin's own, derived from the answers so far; it is printed verbatim and sits in a quiet slate box so the names in it
+ * are the loudest thing on the sheet. Confirm shares the number step's `pad-sheet-confirm` testid and its
+ * `scorepad.action.confirm` label, which is what the bench driver's `confirm` TapStep targets.
+ */
+function renderConfirmStep(step: SheetConfirmStep, answers: Readonly<Record<string, string>>, t: TFn, onConfirm: () => void) {
+  return (
+    <div className="flex flex-col gap-3">
+      <p
+        data-testid="pad-sheet-summary"
+        className="break-words rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-800"
+      >
+        {step.summary(answers)}
+      </p>
+      <button
+        type="button"
+        data-testid="pad-sheet-confirm"
+        onClick={onConfirm}
+        style={{ minHeight: 44 }}
+        className={confirmButtonClass}
+      >
+        {t("scorepad.action.confirm")}
+      </button>
+    </div>
+  );
+}
+
 export interface GuidedSheetProps {
   spec: GuidedSheetSpec;
   /** Both squads a `kind:"person"` step might resolve against — see the
@@ -677,7 +715,9 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
           ? renderChoiceRow(step.options, step.hintKey, t, handleAnswer, step.blocked?.(state.answers))
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
-            : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
+            : step.kind === "confirm"
+              ? renderConfirmStep(step, state.answers, t, () => handleAnswer("confirmed"))
+              : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">
         <button type="button" onClick={handleCancel} style={{ minHeight: 44 }} className={cancelButtonClass}>

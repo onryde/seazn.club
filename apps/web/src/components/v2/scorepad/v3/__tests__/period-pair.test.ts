@@ -712,7 +712,8 @@ describe("a claimed action's sheet + dock reach every padSpec-declared field", (
           // `String(step.initial)` stringified the FUNCTION SOURCE into the
           // payload, and the fold rightly refused it — which is how this
           // sweep caught the widening.
-          else answers[step.id] = String(resolveInitial(step, answers));
+          else if (step.kind === "number") answers[step.id] = String(resolveInitial(step, answers));
+          else answers[step.id] = "ok"; // W2c Task 21: a confirm step collects nothing; no period sheet has one
         }
         const payload = sheet.buildPayload(answers);
         const dock = sport.factory(T).dock(type, view, payload);
@@ -876,7 +877,9 @@ describe("changing the class after going Back re-seeds the minutes step", () => 
               ? cur.options[0]!.id
               : cur.kind === "person"
                 ? ((cur.candidates ?? [])[0] ?? "")
-                : String(resolveInitial(cur, st.answers));
+                : cur.kind === "number"
+                  ? String(resolveInitial(cur, st.answers))
+                  : "ok"; // W2c Task 21: a confirm step collects nothing; no period sheet has one
           const out = answerStep(sheet, st, answer);
           if (out.done) return st;
           st = out.state;
@@ -948,7 +951,9 @@ describe("Back-and-forward without changing the class keeps what the scorer type
               ? cur.options[0]!.id
               : cur.kind === "person"
                 ? ((cur.candidates ?? [])[0] ?? "")
-                : String(resolveInitial(cur, st.answers));
+                : cur.kind === "number"
+                  ? String(resolveInitial(cur, st.answers))
+                  : "ok"; // W2c Task 21: a confirm step collects nothing; no period sheet has one
           const out = answerStep(sheet, st, answer);
           if (out.done) return st;
           st = out.state;
