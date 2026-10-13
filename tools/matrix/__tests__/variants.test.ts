@@ -277,8 +277,9 @@ describe("the pair-wise cover", () => {
     expect(judged).toBeGreaterThan(0);
     expect(tried).toBeGreaterThan(judged);
     // A brute force over the whole cross product: every factor an editor field adds multiplies it (W2c Task 7's abandon
-    // select tripled it, 1.1 s -> 3.5 s under load), so it carries its own budget instead of the default 5 s.
-  }, 30_000);
+    // select tripled it, 1.1 s -> 3.5 s under load). No per-test budget here: CI runs this suite with `--testTimeout=30000`
+    // (.github/workflows/ci.yml, the tools/matrix step), and a literal beside it would be a second copy to drift.
+  });
   it("a pair refused at its defaults AND under every single further level, but valid under two, is COVERED, not listed (badminton bwf × cap 15)", () => {
     // single-sport: the pinned depth-2 witness. bwf's set targets (21) exceed cap 15, and no one field lowers
     // both targets the engine checks: it takes two together (setTo and finalSetTo, or best of 1 and its single
@@ -308,7 +309,7 @@ describe("the pair-wise cover", () => {
     const again = JSON.stringify(SPORT_KEYS.map((s) => buildSportVariants(s)));
     expect(again.length).toBeGreaterThan(2);
     expect(again).toBe(JSON.stringify(ALL));
-  }, 30_000); // builds every sport's variant plan a second time: it grows with each editor field, so it has its own budget
+  }); // builds every sport's variant plan a second time: it grows with each editor field; CI's `--testTimeout=30000` is its budget
   it("the rescue search is bounded: a refuse-everything validate fails loudly past RESCUE_BUDGET instead of hanging", () => {
     // single-sport: the sport with the largest non-row factor product — the one the exhaustive rescue could stall on.
     const product = (s: string) => factorsFor(s).slice(1).reduce((n, f) => n * f.levels.length, 1);

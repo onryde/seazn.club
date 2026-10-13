@@ -12855,13 +12855,13 @@
           "sport": "carrom",
           "a": "tieBoard=option:extra",
           "b": "abandon=option:share",
-          "reason": "sport-cfg: carrom/club-29 config invalid — abandonPolicy: Sharing the points needs draws to be allowed. — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: carrom/club-29 config invalid — abandonPolicy: Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first. — and no combination of the other factors' levels makes the pair valid"
         },
         {
           "sport": "carrom",
           "a": "tieBoard=blank",
           "b": "abandon=option:share",
-          "reason": "sport-cfg: carrom/club-29 config invalid — abandonPolicy: Sharing the points needs draws to be allowed. — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: carrom/club-29 config invalid — abandonPolicy: Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first. — and no combination of the other factors' levels makes the pair valid"
         }
       ]
     },
