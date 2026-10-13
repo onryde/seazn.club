@@ -45,7 +45,18 @@ export interface RefreezeResult {
   readonly released: string[];
 }
 
-export async function refreezeFixture(tx: Tx, fixtureId: string, cfg: unknown): Promise<RefreezeResult> {
+/**
+ * Step 1 alone: the snapshot and the bump, no fold. For a match decided by an award NO EVENT records (`awardSeededByes`,
+ * ruling 116) whose cfg froze before the award took over its ledger (every event voided, Loop R M-17): there is no play
+ * to refold, and refolding that ledger would write its null outcome over the award (step 4). The caller re-writes the
+ * award's own score instead (`awarded-state.ts` `writeAwardedMatchState({rewrite})`, fix round 1 I1). Same lock and
+ * status contract as `refreezeFixture`.
+ */
+export async function freezeCfg(
+  tx: Tx,
+  fixtureId: string,
+  cfg: unknown,
+): Promise<{ rules_version: number; outcome: unknown; stage_kind: string | null }> {
   // `outcome` is not written by this statement, so `returning` hands back the one the OLD cfg decided.
   const [row] = await tx<{ rules_version: number; outcome: unknown; stage_kind: string | null }[]>`
     update fixtures f
@@ -55,6 +66,11 @@ export async function refreezeFixture(tx: Tx, fixtureId: string, cfg: unknown): 
      where f.id = ${fixtureId} and s.id = f.stage_id
     returning f.rules_version, f.outcome, s.kind as stage_kind`;
   if (!row) throw new Error(`refreezeFixture: fixture ${fixtureId} (with its stage) not found`);
+  return row;
+}
+
+export async function refreezeFixture(tx: Tx, fixtureId: string, cfg: unknown): Promise<RefreezeResult> {
+  const row = await freezeCfg(tx, fixtureId, cfg);
   let folded;
   try {
     folded = await foldFixture(tx, fixtureId);

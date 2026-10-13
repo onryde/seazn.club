@@ -7209,7 +7209,7 @@ async function w2cStageRulesSuite(): Promise<void> {
   // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
   // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
   // so any accepted key is a change.
-  const { divisionId, fixtureId } = await w2cSeedStartedPool(owner);
+  const { divisionId, fixtureId, unstartedId } = await w2cSeedStartedPool(owner);
   const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: ["h2h_points"] });
   const tableLocked =
     r.status === 409 && r.json.error?.code === "DIVISION_TABLE_RULES_LOCKED" && JSON.stringify(r.json).includes("Pool A");
@@ -7218,16 +7218,36 @@ async function w2cStageRulesSuite(): Promise<void> {
       (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
     tableLocked,
   );
-  await w2cFixtureRulesChecks(owner, fixtureId);
+  await w2cFixtureRulesChecks(owner, fixtureId, unstartedId);
 }
 
 /**
  * W2c Task 14 (X-SR-2, X-SR-5) — `PUT /fixtures/{id}/rules`, the one override writer, on the seed's STARTED match (only
  * a `core.start` recorded, so any format fits): a live correction to best of 5 answers `started` with a bumped
  * `rules_version`, and the state every reader serves was refolded under it. Then the match is walked over and
- * finalized, and the same PUT is 409 FIXTURE_FORMAT_LOCKED.
+ * finalized, and the same PUT is 409 FIXTURE_FORMAT_LOCKED. First (fix round 1), the same PUT on one of the pool's
+ * UNSTARTED matches: 200 `started: false` with no bump, and once that match starts, the cfg it froze is its own format.
  */
-async function w2cFixtureRulesChecks(owner: Session, fixtureId: string): Promise<void> {
+async function w2cFixtureRulesChecks(owner: Session, fixtureId: string, unstartedId: string): Promise<void> {
+  const own = await v1(owner, `/api/v1/fixtures/${unstartedId}/rules`, "PUT", { rules: { bestOf: 1 } });
+  const ownOut = own.json.data as { fixtures?: { id: string; started: boolean; rules_version: number }[] } | undefined;
+  // An unstarted match has no fold to read until it starts: its first event freezes the cfg it resolves to.
+  const begun = await v1(owner, `/api/v1/fixtures/${unstartedId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  const ownState = v1data<{ state: { cfg?: { bestOf?: unknown } } | null }>(await v1(owner, `/api/v1/fixtures/${unstartedId}/state`));
+  const ownSaved =
+    own.status === 200 &&
+    ownOut?.fixtures?.[0]?.started === false &&
+    ownOut.fixtures[0].rules_version === 0 &&
+    begun.status === 201 &&
+    ownState.state?.cfg?.bestOf === 1;
+  check(
+    "w2c: an unstarted match's own format saves (200), and the match plays it once started" +
+      (ownSaved
+        ? ""
+        : ` — got ${own.status} ${JSON.stringify(own.json.error ?? own.json.data)}, start ${begun.status}, state cfg bestOf ${String(ownState.state?.cfg?.bestOf)}`),
+    ownSaved,
+  );
+
   const put = await v1(owner, `/api/v1/fixtures/${fixtureId}/rules`, "PUT", { rules: { bestOf: 5 } });
   const wrote = put.json.data as { fixtures?: { id: string; started: boolean; rules_version: number }[] } | undefined;
   const state = v1data<{ state: { cfg?: { bestOf?: unknown } } | null; last_seq: number }>(
@@ -7269,7 +7289,7 @@ async function w2cFixtureRulesChecks(owner: Session, fixtureId: string): Promise
  * `stageRulesFormatSmoke`'s (competition, division, entrants, stage, generate, start) and the v1 scoring append's
  * (`expected_seq: 0`, a flat `type`/`payload`). Scoring before the division starts is 422 WRONG_PHASE, hence `start`.
  */
-async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string; fixtureId: string }> {
+async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string; fixtureId: string; unstartedId: string }> {
   const comp = v1data<{ id: string }>(
     await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Smoke ${tag}` }),
   );
@@ -7284,14 +7304,15 @@ async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string;
     owner,
     `/api/v1/divisions/${div.id}/entrants`,
     "POST",
-    ["Ana", "Ben"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 })),
+    // Three, so the pool has matches beside the started one (the unstarted override check's).
+    ["Ana", "Ben", "Cal"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 })),
   );
   const pool = v1data<{ id: string }>(
     await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool A" }),
   );
-  const fixtureId = v1data<{ fixtures: { id: string }[] }>(
-    await v1(owner, `/api/v1/stages/${pool.id}/generate`, "POST"),
-  ).fixtures[0].id;
+  const generated = v1data<{ fixtures: { id: string }[] }>(await v1(owner, `/api/v1/stages/${pool.id}/generate`, "POST")).fixtures;
+  const fixtureId = generated[0].id;
+  const unstartedId = generated[1].id;
   await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
   const started = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
     expected_seq: 0,
@@ -7301,7 +7322,7 @@ async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string;
   // The premise of every lock check after it: a seed that failed to start the match would turn each into a check of
   // an unstarted division.
   check("w2c seed: Pool A's first match started through the v1 events API (201)", started.status === 201);
-  return { divisionId: div.id, fixtureId };
+  return { divisionId: div.id, fixtureId, unstartedId };
 }
 
 interface ActiveSuspensionOut {

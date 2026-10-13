@@ -32418,7 +32418,7 @@
     },
     "/api/v1/fixtures/{id}/rules": {
       "put": {
-        "summary": "One match's own format over its stage's (W2c X-SR-2), and the live correction of a STARTED match's format (X-SR-5, owner Q11). A WHOLE-FRAGMENT replace: `rules` is the match's format over its stage's, and `rules: null` (or `{}`, or only null values) sets it back to the stage's — a null VALUE means inherit and is never stored. Only the leaves that differ from the stage's format are stored, so a later stage edit still reaches every leaf the match did not change. Keys are the sport's declared rule keys (400 UNKNOWN_RULE_KEY otherwise); a key the sport scopes per stage, or a decider switched on or lengthened, is 400 RULE_NOT_SETTABLE; the merged `{division + stage rules + bracket deciders + rules}` is parsed by the sport's configSchema (422 CONFIG_INVALID, the engine's message on `field`). A finished match (finalized or cancelled) is 409 FIXTURE_FORMAT_LOCKED. A started match is corrected only if the recorded play fits the new format: its ledger refolded under it must fold, keep its outcome and keep its score as shown, else 409 FORMAT_DOES_NOT_FIT_PLAY (\"This format would end the match as it stands\" when it would decide an open match). A correction re-freezes the match's config and bumps `rules_version` (an open pad compares it); re-sending the format it already plays bumps nothing. Errors carry `fixture_id` and, where one applies, `field`. Organiser auth (no device link).",
+        "summary": "One match's own format over its stage's (W2c X-SR-2), and the live correction of a STARTED match's format (X-SR-5, owner Q11). A WHOLE-FRAGMENT replace: `rules` is the match's format over its stage's, and `rules: null` (or `{}`, or only null values) sets it back to the stage's — a null VALUE means inherit and is never stored. Only the leaves that differ from the stage's format are stored, so a later stage edit still reaches every leaf the match did not change. Keys are the sport's declared rule keys (400 UNKNOWN_RULE_KEY otherwise); a key the sport scopes per stage, or a decider switched on or lengthened, is 400 RULE_NOT_SETTABLE; the merged `{division + stage rules + bracket deciders + rules}` is parsed by the sport's configSchema (422 CONFIG_INVALID, the engine's message on `field`). A finished match (finalized or cancelled) is 409 FIXTURE_FORMAT_LOCKED. A started match is corrected only if the recorded play fits the new format: its ledger refolded under it must fold, keep its outcome and keep its score as shown, else 409 FORMAT_DOES_NOT_FIT_PLAY (\"This format would end the match as it stands\" when it would decide an open match). A correction re-freezes the match's config and bumps `rules_version` (an open pad compares it); re-sending the format it already plays bumps nothing. A match decided WITHOUT play (a walkover no event records) is started too: the correction must keep the award and its credited score (else 409 FORMAT_DOES_NOT_FIT_PLAY), and a bye, which credits no score, is 409 FIXTURE_FORMAT_LOCKED. Errors carry `fixture_id` and, where one applies, `field`. Organiser auth (no device link): a caller without write access to the fixture (a read-only role, an API key without the scope) is 403.",
         "tags": [
           "fixtures"
         ],
@@ -32631,6 +32631,50 @@
           },
           "402": {
             "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {

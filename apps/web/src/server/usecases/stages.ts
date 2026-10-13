@@ -133,7 +133,7 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
-import { refuseOwnFormatLoss } from "./fixture-override-guards";
+import { firstOwnFormat, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 
 type Tx = postgres.TransactionSql;
 type StageInput = z.infer<typeof CreateStage>;
@@ -1503,10 +1503,12 @@ interface SwissRoundReconcile {
  * GUARDS. The advisory lock is already held — `generateStageFixturesWrite`
  * takes `pg_advisory_xact_lock` before it reads either the entrant list or
  * `existing` — so everything below is read UNDER the lock, which is this
- * file's stated convention. Three arms, none covering for another: the round
+ * file's stated convention. Three arms on the round, none covering for another: the round
  * must be wholly unseated, must show no played status or award, and must carry
  * no recorded match data under the CANONICAL `fixtureEvidenceSql` (not a
- * subset — a subset guard on a destructive path is how C1 happened). The
+ * subset — a subset guard on a destructive path is how C1 happened). A
+ * fourth (W2c Task 14) reads only the rows the delete would drop: none may
+ * carry its own format (`FIXTURE_HAS_OWN_FORMAT`). The
  * evidence test is monotonic on purpose: `fixtures.status` moves BACKWARDS
  * when a `core.start` is voided, so status may only ADD refusals.
  *
@@ -1580,6 +1582,17 @@ async function reconcileSwissRoundShells(
   const survivors = boardRows.slice(0, boards);
   const doomed = [...boardRows.slice(boards), ...(byeRow && !bye ? [byeRow] : [])];
   if (doomed.length > 0) {
+    // W2c Task 14 (fix round 1) — a fourth arm, read before the first write
+    // like the three above: a doomed shell carrying its own format
+    // (`fixtures.rules_override`) would take it with the delete. The round
+    // being paired refuses by name (`FIXTURE_HAS_OWN_FORMAT`, the guard every
+    // other delete of unplayed fixtures takes); a round the eager pass only
+    // sweeps up is left exactly as found, as for any other tripped guard.
+    const own = await firstOwnFormat(tx, tx`id in ${tx(doomed.map((f) => f.id))}`);
+    if (own) {
+      if (onBlocked === "skip") return { shells: round, delta: NO_SWISS_RESHAPE };
+      throw ownFormatLoss(own);
+    }
     await tx`delete from fixtures where id in ${tx(doomed.map((f) => f.id))}`;
   }
 

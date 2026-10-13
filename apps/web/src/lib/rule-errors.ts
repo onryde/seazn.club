@@ -13,6 +13,9 @@ export const RULE_ERROR_STATUS = {
   FORMAT_DOES_NOT_FIT_PLAY: 409,
   RULE_NOT_SETTABLE: 400,
   POINTS_RULE_INEXPRESSIBLE: 422,
+  /** W2c Task 14 — a delete (rebuild, Undo of a generation, pool clear, Swiss reshape) that would take a match's own
+   *  format with it (`fixture-override-guards.ts`). The organiser sets that match back to its stage's format first. */
+  FIXTURE_HAS_OWN_FORMAT: 409,
 } as const;
 
 /** X-SR-5 (owner P-4 "A") — why a correction does not fit the recorded play when the engine's fold did NOT refuse it:
@@ -39,6 +42,8 @@ export interface RuleErrorParams {
   stage?: string;
   field?: string;
   reason?: string;
+  /** The match as the board names it ("Match 3"). */
+  match?: string;
 }
 
 const EN: Record<RuleErrorCode, (p: RuleErrorParams) => string> = {
@@ -50,6 +55,8 @@ const EN: Record<RuleErrorCode, (p: RuleErrorParams) => string> = {
   FORMAT_DOES_NOT_FIT_PLAY: (p) => p.reason ?? "The recorded play does not fit this format.",
   RULE_NOT_SETTABLE: (p) => `${p.field} can't be set here${p.reason ? ` — ${p.reason}` : ""}.`,
   POINTS_RULE_INEXPRESSIBLE: (p) => `These points can't be set per stage yet — ${p.reason}.`,
+  FIXTURE_HAS_OWN_FORMAT: (p) =>
+    `${p.match ?? "This match"} has its own format, and this would delete it — set it back to its stage's format first.`,
 };
 
 export const ruleErrorMessage = (code: RuleErrorCode, p: RuleErrorParams): string => EN[code](p);

@@ -21,13 +21,26 @@ type Tx = postgres.TransactionSql;
 
 /** A fixture's ledger as the award reads it: its tip, and how many recorded events still stand (no void took them
  *  back; voids are not voidable, events.test.ts PROMPT-02) — `fed-seats.ts` `readNode`'s `live_events`. */
-async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; standing: number }> {
+export async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; standing: number }> {
   const [ledger] = await tx<{ tip: number; standing: number }[]>`
     select coalesce(max(e.seq), 0)::int as tip,
            (count(*) filter (where e.type <> 'core.void' and not exists (
               select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)))::int as standing
     from score_events e where e.fixture_id = ${fixtureId}`;
   return ledger!;
+}
+
+/** `awardedMatchState`'s refusal when the walkover, folded under a cfg, decides something other than the stored award
+ *  — named, so a caller asking "does this cfg still score the award?" (the format correction, `fixture-rules.ts`) can
+ *  tell "it would change the result" from a broken assumption. */
+export class AwardFoldMismatch extends Error {
+  constructor(
+    readonly decided: MatchOutcome | null,
+    readonly stored: MatchOutcome,
+  ) {
+    super(`awardedMatchState: the walkover folds to ${JSON.stringify(decided)}, not the stored ${JSON.stringify(stored)}`);
+    this.name = "AwardFoldMismatch";
+  }
 }
 
 /**
@@ -65,11 +78,7 @@ export function awardedMatchState(
   };
   const folded = foldMatchWithStoppage(module, cfg as never, lineups, [forfeit]);
   const decided = outcomeOf(module, folded);
-  if (!isDeepStrictEqual(decided, outcome)) {
-    throw new Error(
-      `awardedMatchState: the walkover folds to ${JSON.stringify(decided)}, not the stored ${JSON.stringify(outcome)}`,
-    );
-  }
+  if (!isDeepStrictEqual(decided, outcome)) throw new AwardFoldMismatch(decided, outcome);
   return { state: folded.state, summary: summaryOf(module, folded) };
 }
 
@@ -93,7 +102,43 @@ export function awardedMatchState(
  * double walkover's dead seat — never needs the clear: its dead seat's feeder has no winner, so its award is a bye and
  * wrote no row.)
  */
-export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise<void> {
+export async function writeAwardedMatchState(
+  tx: Tx,
+  fixtureId: string,
+  opts: {
+    /** W2c Task 14 (fix round 1, I1): the award's OWN row, re-written under the fixture's cfg as it now resolves — a
+     *  format correction (`fixture-rules.ts`) changed it and proved the award still scores the same way. Only an award
+     *  with no standing play reaches here (refused below like any other), so the row replaced is the award's. */
+    rewrite?: boolean;
+  } = {},
+): Promise<void> {
+  const award = await loadAward(tx, fixtureId);
+  if (award.ledger.standing > 0) {
+    throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${award.ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
+  }
+  const { state, summary } = awardedMatchState(award.module, award.cfg, award.lineups, award.outcome, {
+    fixtureId,
+    recordedAt: new Date().toISOString(),
+  });
+  const written = await tx`
+    insert into match_states (fixture_id, last_seq, state, summary)
+    values (${fixtureId}, ${award.ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
+    on conflict (fixture_id) do update set
+      last_seq = excluded.last_seq, state = excluded.state, summary = excluded.summary, updated_at = now()
+      where ${award.ledger.tip > 0 || opts.rewrite === true}
+    returning fixture_id`;
+  if (written.length === 0) {
+    throw new Error(`writeAwardedMatchState: ${fixtureId} already holds a match state, and an award recorded without an event never overwrites one`);
+  }
+}
+
+/** What an award with no play is folded from (`writeAwardedMatchState`'s inputs, one reader): its module, the
+ *  fixture's own resolved cfg (`resolveFixtureCfg`, the fold's), its sides — her dead seat included
+ *  (`unseatedForfeitLoser`) — and its ledger. Throws on a fixture that is no award over two sides. */
+export async function loadAward(
+  tx: Tx,
+  fixtureId: string,
+): Promise<{ module: AnySportModule; cfg: unknown; lineups: LineupPair; outcome: MatchOutcome; ledger: { tip: number; standing: number } }> {
   const [fixture] = await tx<
     {
       division_id: string;
@@ -121,24 +166,8 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
   const sportModule = resolveModule(division.sport_key, division.module_version);
   const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   const ledger = await ledgerOf(tx, fixtureId);
-  if (ledger.standing > 0) {
-    throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
-  }
   const lineups = await loadLineupPair(tx, fixtureId, home, away);
-  const { state, summary } = awardedMatchState(sportModule, cfg, lineups, fixture.outcome, {
-    fixtureId,
-    recordedAt: new Date().toISOString(),
-  });
-  const written = await tx`
-    insert into match_states (fixture_id, last_seq, state, summary)
-    values (${fixtureId}, ${ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
-    on conflict (fixture_id) do update set
-      last_seq = excluded.last_seq, state = excluded.state, summary = excluded.summary, updated_at = now()
-      where ${ledger.tip > 0}
-    returning fixture_id`;
-  if (written.length === 0) {
-    throw new Error(`writeAwardedMatchState: ${fixtureId} already holds a match state, and an award recorded without an event never overwrites one`);
-  }
+  return { module: sportModule, cfg, lineups, outcome: fixture.outcome, ledger };
 }
 
 /**

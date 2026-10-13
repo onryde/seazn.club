@@ -7,9 +7,11 @@ import { HttpError } from "@/lib/errors";
 import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { LOCKED_FIXTURE_STATUSES, hasFrozenCfg, resolveModule } from "@/server/engine-db";
+import { AwardFoldMismatch, awardedMatchState, ledgerOf, loadAward, writeAwardedMatchState } from "@/server/engine-db/awarded-state";
+import { bracketOrder } from "@/server/engine-db/fed-seats";
 import { liveCfg, mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
-import { RefreezeFoldError, refreezeFixture } from "@/server/engine-db/refreeze";
+import { RefreezeFoldError, freezeCfg, refreezeFixture } from "@/server/engine-db/refreeze";
 import { log } from "@/server/logger";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { matchName } from "./fixture-override-guards";
@@ -22,7 +24,8 @@ import { invalidatePublicCache } from "./scoring";
  * `fixture-cfg.ts` `resolveFixtureCfg` is its one reader (every call site pinned in `bracket-overlay-callers.test.ts`).
  *
  * Per fixture, all or nothing across the batch, under `division:<id>` then `fixture:<id>` advisory locks (the house
- * order: stage, division, fixture — nothing takes a division lock after a fixture lock):
+ * order: stage, division, fixture — nothing takes a division lock after a fixture lock; the fixtures in bracket order,
+ * `fed-seats.ts` `bracketOrder`, the order a fed-seat release takes them in):
  *  1. Refused if the match is finished (`LOCKED_FIXTURE_STATUSES`, the set the ledger itself guards appends on).
  *  2. Every top-level key AS SENT must be one the sport declares (`UNKNOWN_RULE_KEY`) — before the null strip, so a
  *     misspelled `{notARule: null}` is not a silent 200.
@@ -41,6 +44,14 @@ import { invalidatePublicCache } from "./scoring";
  *     under the corrected cfg must fold at all, keep the outcome, and keep the score as shown (P-4: it may not end the
  *     match either). Then `refreezeFixture` re-freezes, refolds every cache and bumps `rules_version` (P-1). A
  *     correction that resolves to the snapshot already frozen is a no-op for the ledger: no re-freeze, no bump.
+ *  7a. DECIDED WITHOUT PLAY (an outcome no standing event records — `awardSeededByes`' bye, or ruling 116's walkover
+ *     over a withdrawn winner's dead seat; fix round 1, I1): started, whatever its snapshot says. There is no play to
+ *     refold, so the fit is the award's own fold (`awardedMatchState`): under the corrected cfg the walkover must
+ *     still decide the stored award and keep its credited score, or the correction is refused
+ *     (`FORMAT_DOES_NOT_FIT_PLAY`). A bye credits no score and nothing records it, so fitting does not apply: a change
+ *     is refused (`FIXTURE_FORMAT_LOCKED`). On a fit the award's score is re-written under the corrected cfg; a frozen
+ *     snapshot is re-frozen and bumped (`freezeCfg` — never `refreezeFixture`, whose refold of the empty ledger would
+ *     write over the award), and an award with no snapshot has no frozen cfg to bump.
  *  8. One `competition_events` row per fixture (`fixture.rules_override`: before, after, started).
  */
 export interface OverrideWriteResult {
@@ -51,6 +62,7 @@ interface LockedRow {
   id: string;
   fixture_no: number | null;
   status: string;
+  outcome: MatchOutcome | null;
   config_snapshot: unknown;
   rules_override: Record<string, unknown> | null;
   rules_version: number;
@@ -168,6 +180,34 @@ function overrideFor(
   );
 }
 
+const lockedRefusal = (id: string) =>
+  new HttpError(RULE_ERROR_STATUS.FIXTURE_FORMAT_LOCKED, ruleErrorMessage("FIXTURE_FORMAT_LOCKED", {}), "FIXTURE_FORMAT_LOCKED", {
+    fixture_id: id,
+  });
+const notFit = (id: string, reason: string) =>
+  new HttpError(RULE_ERROR_STATUS.FORMAT_DOES_NOT_FIT_PLAY, ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", { reason }), "FORMAT_DOES_NOT_FIT_PLAY", {
+    fixture_id: id,
+  });
+
+/** (7a) An award no event records: under `corrected` the walkover must still decide the stored award and keep its
+ *  credited score. A bye (no loser) credits none and is no award the engine scores: refused as locked. */
+async function assertAwardFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
+  const outcome = row.outcome!;
+  if (outcome.kind !== "award" || outcome.loser === null) throw lockedRefusal(row.id);
+  const award = await loadAward(tx, row.id);
+  const at = { fixtureId: row.id, recordedAt: new Date().toISOString() };
+  const was = awardedMatchState(award.module, award.cfg, award.lineups, award.outcome, at);
+  let now;
+  try {
+    now = awardedMatchState(award.module, corrected, award.lineups, award.outcome, at);
+  } catch (err) {
+    if (EngineError.is(err)) throw notFit(row.id, err.message);
+    if (err instanceof AwardFoldMismatch) throw notFit(row.id, FORMAT_FIT_REASONS.result);
+    throw err;
+  }
+  if (now.summary.headline !== was.summary.headline) throw notFit(row.id, FORMAT_FIT_REASONS.score);
+}
+
 /** (7) X-SR-5: the recorded play, refolded under `corrected`, must fold, keep its outcome and keep its score. */
 async function assertFits(tx: Tx, row: LockedRow, corrected: unknown): Promise<void> {
   const inputs = await loadFoldInputs(tx, row.id);
@@ -205,14 +245,15 @@ export async function writeFixtureRulesOverride(
 
   const { results, byDivision, corrected } = await withTenant(auth.orgId, async (tx) => {
     // `withTenant` scopes the read to this org: another tenant's fixture is indistinguishable from a missing one.
-    const owners = await tx<{ id: string; division_id: string }[]>`
-      select id, division_id from fixtures where id in ${tx(ids)}`;
+    const owners = await tx<{ id: string; division_id: string; round_no: number }[]>`
+      select id, division_id, round_no from fixtures where id in ${tx(ids)}`;
     const missing = ids.find((id) => !owners.some((o) => o.id === id));
     if (missing !== undefined) throw new HttpError(404, "fixture not found", undefined, { fixture_id: missing });
     // Sorted, so two batches over the same divisions/fixtures can never take them in opposite orders.
     for (const d of [...new Set(owners.map((o) => o.division_id))].sort())
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + d}))`;
-    for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+    // Bracket order, as a fed-seat release takes them: never a later round's lock while asking for an earlier one's.
+    for (const o of [...owners].sort(bracketOrder)) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + o.id}))`;
 
     const results: { id: string; started: boolean; rules_version: number }[] = [];
     // Per division, every fixture whose public documents this write made stale: the written ones and any seat a
@@ -227,7 +268,7 @@ export async function writeFixtureRulesOverride(
     for (const id of ids) {
       // Re-read ON THE TX, under the locks: every guard below reads this row, never one read before them.
       const [row] = await tx<LockedRow[]>`
-        select f.id, f.fixture_no, f.status, f.config_snapshot, f.rules_override, f.rules_version,
+        select f.id, f.fixture_no, f.status, f.outcome, f.config_snapshot, f.rules_override, f.rules_version,
                f.division_id, d.competition_id, d.config as division_config, d.variant_key, d.sport_key,
                d.module_version, s.kind as stage_kind, s.config as stage_config
           from fixtures f join divisions d on d.id = f.division_id left join stages s on s.id = f.stage_id
@@ -235,25 +276,35 @@ export async function writeFixtureRulesOverride(
       if (!row) throw new HttpError(404, "fixture not found", undefined, { fixture_id: id });
       assertNotFrozen(frozen, row.competition_id);
       // (1)
-      if (LOCKED_FIXTURE_STATUSES.has(row.status))
-        throw new HttpError(
-          RULE_ERROR_STATUS.FIXTURE_FORMAT_LOCKED,
-          ruleErrorMessage("FIXTURE_FORMAT_LOCKED", {}),
-          "FIXTURE_FORMAT_LOCKED",
-          { fixture_id: id },
-        );
+      if (LOCKED_FIXTURE_STATUSES.has(row.status)) throw lockedRefusal(id);
       const m = resolveModule(row.sport_key, row.module_version);
       // The stage's format (`division ⊕ stage.rules ⊕ bracketDeciders`), as the resolver builds it for this row.
       const stageResolved = liveCfg(row.division_config, { kind: row.stage_kind, config: row.stage_config }, m);
       const stored = overrideFor(row, m, stageResolved, fragment);
       const next = stored === null || Object.keys(stored).length === 0 ? null : stored;
 
-      const started = hasFrozenCfg(row.config_snapshot);
+      const snapshotted = hasFrozenCfg(row.config_snapshot);
+      // (7a) An outcome no standing event records: decided without play.
+      const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;
+      const started = snapshotted || withoutPlay;
       let version = row.rules_version;
-      if (started) {
-        // The corrected cfg is exactly what `resolveFixtureCfg` returns for this row once `next` is stored and the
-        // snapshot cleared: the stage's format with the override merged last (fixture-cfg.ts).
-        const cfg = isObj(stageResolved) ? mergeRulesOverride(stageResolved, next) : stageResolved;
+      // The corrected cfg is exactly what `resolveFixtureCfg` returns for this row once `next` is stored and the
+      // snapshot cleared: the stage's format with the override merged last (fixture-cfg.ts).
+      const cfg = isObj(stageResolved) ? mergeRulesOverride(stageResolved, next) : stageResolved;
+      let rewriteAward = false;
+      if (withoutPlay) {
+        // What the match resolves to now, built as `cfg` is (`resolveFixtureCfg`'s two branches, over this row).
+        const current = snapshotted
+          ? row.config_snapshot
+          : isObj(stageResolved)
+            ? mergeRulesOverride(stageResolved, row.rules_override)
+            : stageResolved;
+        if (canonicalJson(cfg) !== canonicalJson(current)) {
+          await assertAwardFits(tx, row, cfg);
+          if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;
+          rewriteAward = true;
+        }
+      } else if (snapshotted) {
         if (canonicalJson(cfg) !== canonicalJson(row.config_snapshot)) {
           await assertFits(tx, row, cfg);
           try {
@@ -268,6 +319,8 @@ export async function writeFixtureRulesOverride(
         }
       }
       await tx`update fixtures set rules_override = ${next === null ? null : tx.json(next as never)} where id = ${id}`;
+      // After the override lands: the award's score re-written under the cfg the fixture now resolves to.
+      if (rewriteAward) await writeAwardedMatchState(tx, id, { rewrite: true });
       await tx`
         insert into competition_events (competition_id, org_id, type, payload, actor_id)
         values (${row.competition_id}, ${auth.orgId}, 'fixture.rules_override',

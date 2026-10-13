@@ -508,6 +508,12 @@ async function planRevive(tx: Tx, src: Node, revives: Revive[], plan: Step[], lo
   }
 }
 
+/** THE one fixture-lock order across a bracket (review M1, below): ascending (round_no, id). Every writer that locks
+ *  more than one fixture of a stage takes them in this order — the fed-seat release and revive here, and the batch
+ *  override writer (`fixture-rules.ts`, W2c Task 14) — so no two of them can each hold a lock the other asks for. */
+export const bracketOrder = (a: { round_no: number; id: string }, b: { round_no: number; id: string }): number =>
+  a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
 /**
  * Give back the seats `fixtureId`'s stored decision (`before`) had filled and
  * its new fold (`after`) no longer fills, or refuse.
@@ -557,7 +563,7 @@ export async function releaseFedSeats(
   // started with. That is what rules the cycle out.
   const reach = new Map<string, Node>();
   await reachable(tx, src, moved, reach);
-  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [...reach.values()].sort(bracketOrder);
   for (const t of order) await lockFixture(tx, t.id);
 
   const plan: Step[] = [];
@@ -622,7 +628,7 @@ async function reviveDeadSeats(tx: Tx, fixtureId: string): Promise<string[]> {
   }
   const reach = new Map<string, Node>();
   await reachableRevive(tx, src, reach);
-  const order = [...reach.values()].sort((a, b) => a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const order = [...reach.values()].sort(bracketOrder);
   for (const t of order) await lockFixture(tx, t.id);
   const revives: Revive[] = [];
   const plan: Step[] = [];
