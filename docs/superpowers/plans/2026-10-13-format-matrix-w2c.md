@@ -1957,24 +1957,24 @@ describe("HK-AB-2 hockey: replay before the 4th quarter, the result stands from 
     expect(fih().abandonPolicy).toBe("q4_stands");
   });
   it("abandoned before the start (pre) → replay", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([["core.abandon", { reason: "weather" }]]));
     expect(s).toMatchObject({ phase: "abandoned", replayFlagged: true });
   });
   it("abandoned in Q3 → replay (no outcome, replay flagged)", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([["core.start"], goal(HH), adv("Q2"), adv("Q3"), ["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([["core.start"], goal(HH), adv("Q2"), adv("Q3"), ["core.abandon", { reason: "weather" }]]));
     expect(s.outcome ?? null).toBeNull();
     expect(s).toMatchObject({ phase: "abandoned", replayFlagged: true });
   });
   it("abandoned in Q4 while leading → the score stands as a win", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([["core.start"], goal(HH), adv("Q2"), adv("Q3"), adv("Q4"), ["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([["core.start"], goal(HH), adv("Q2"), adv("Q3"), adv("Q4"), ["core.abandon", { reason: "weather" }]]));
     expect(s.outcome).toMatchObject({ winner: HH });
   });
   it("ruling 117: abandoned level in Q4 in a no-draw cfg → no result", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), ["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), ["core.abandon", { reason: "weather" }]]));
     expect(s.outcome).toEqual({ kind: "no_result" });
   });
   it("I4: abandoned in the SHOOT-OUT → stands (never a replay); level → no result", () => {
-    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), adv(SO), ["core.abandon", {}]]));
+    const s = foldMatch(hockey, fih(), hk, ev([...toQ4(), adv(SO), ["core.abandon", { reason: "weather" }]]));
     expect((s as { replayFlagged?: boolean }).replayFlagged ?? false).toBe(false);
     expect(s.outcome).toEqual({ kind: "no_result" });
   });
@@ -2025,7 +2025,7 @@ describe("CA-AB-2 GN-AB-2 opt-in shared points on an abandon; default unchanged"
       ["core.start"],
       ["generic.score", { by: lu.home.entrantId, points: 2 }],
       ["generic.score", { by: lu.away.entrantId, points: 1 }],
-      ["core.abandon", {}],
+      ["core.abandon", { reason: "weather" }],
     ]));
     expect(s.outcome).toMatchObject({ kind: "draw" });
     expect(generic.summary(s).headline).toContain("2");          // the score as it stood, not rewritten to level
@@ -2033,7 +2033,7 @@ describe("CA-AB-2 GN-AB-2 opt-in shared points on an abandon; default unchanged"
   it("carrom: share folds an abandon to a draw", () => {
     const lu = defaultLineupPair(carrom.positions);
     const cfg = carrom.configSchema.parse({ abandonPolicy: "share" });
-    const s = foldMatch(carrom as never, cfg as never, lu, ev([["core.start"], ["core.abandon", {}]]));
+    const s = foldMatch(carrom as never, cfg as never, lu, ev([["core.start"], ["core.abandon", { reason: "weather" }]]));
     expect((s as { outcome: unknown }).outcome).toMatchObject({ kind: "draw" });
   });
   it("P-5: generic refuses share when draws are not allowed (config time)", () => {
@@ -2052,7 +2052,7 @@ describe("P9 sweep: every offered abandon option folds an abandon without throwi
         const preset = Object.values(m.variants).find((p) => m.configSchema.safeParse({ ...p, abandonPolicy: v }).success);
         expect(preset, `${m.key}: no variant accepts its own option ${v}`).toBeDefined();
         const cfg = m.configSchema.parse({ ...preset, abandonPolicy: v });
-        expect(() => foldMatch(m as never, cfg as never, defaultLineupPair(m.positions), ev([["core.start"], ["core.abandon", {}]]))).not.toThrow();
+        expect(() => foldMatch(m as never, cfg as never, defaultLineupPair(m.positions), ev([["core.start"], ["core.abandon", { reason: "weather" }]]))).not.toThrow();
         checked++;
       }
     }
@@ -2093,7 +2093,7 @@ async function liveGeneric(allowDraws: boolean) {
 describe.skipIf(!HAS_DB)("GN-AB-2 share at append time (review I6)", () => {
   it("allowDraws on: a 2–1 abandon under share is accepted as a draw and decided", async () => {
     const { b, id } = await liveGeneric(true);
-    const r = await appendEvent(b.auth.orgId, id, 3, { type: "core.abandon", payload: {} });
+    const r = await appendEvent(b.auth.orgId, id, 3, { type: "core.abandon", payload: { reason: "weather" } });
     expect(r.outcome).toMatchObject({ kind: "draw" });
     expect(r.status).toBe("decided");
   });
@@ -3386,7 +3386,7 @@ it("D3 deciders live in rules; a top-level decider no longer reaches the resolve
 
 - [ ] **Step 3: Implement** the deletion. Then grep for readers of a top-level stage decider: `git grep -n -a -E "config\??\.(shootout|extraTime)\b" -- apps/web/src scripts`. Any hit outside `config.rules` is a stranded reader: report it, and fix it if it is in `engine-db/`.
 
-- [ ] **Step 4: Run** `stage-cfg.test.ts`, `stage-rules-every-sport.test.ts`, `fixture-cfg-order.test.ts`, `bracket-overlay-callers.test.ts`, `stage-defaults.test.ts` and `draw-guard.test.ts` (the suites that resolve a stage's deciders). Judge `files` = the paths passed and `pending == 0`. Then web `tsc` and eslint.
+- [ ] **Step 4: Run** `stage-cfg.test.ts`, `stage-rules-every-sport.test.ts`, `fixture-cfg-order.test.ts`, `bracket-overlay-callers.test.ts`, `stage-defaults.test.ts`, `draw-guard.test.ts`, `config-snapshot.test.ts` and `fixture-cfg.test.ts` (the suites that resolve a stage's deciders; the last two seed a top-level stage `shootout` and must move it under `config.rules`). Judge `files` = the paths passed and `pending == 0`. Then web `tsc` and eslint.
 
 - [ ] **Step 5: Mutate once** — `MUT/t13b.json`:
 
@@ -3867,7 +3867,7 @@ describe.skipIf(!HAS_DB)("X-SR-7 a tap sent under old rules is never applied und
 ```
 
 `rules-version-writers.test.ts` (C2: the server's own writers are never blocked by a correction). Each case runs `liveBadminton()`-style seeding (football for withdrawal if that suite's seeding needs a team sport), then `writeFixtureRulesOverride(…, {bestOf: 5})` so `rules_version` is 1, then:
-- **withdrawal:** `withdrawEntrantCascade(...)` on one entrant succeeds, and the fixture's last `score_events` row is the forfeit it wrote. Copy the call from `withdrawal-decider-hold.test.ts`.
+- **withdrawal:** `withdrawEntrantCascade(...)` on one entrant succeeds, and the fixture's `score_events` contain a row the cascade wrote after the correction (match it by type: a `core.forfeit` OR a `core.abandon` with `expunge`, whichever the cascade emits for that phase — assert on the set of new rows, not on "the last row"). Copy the call from `withdrawal-decider-hold.test.ts`.
 - **finalize:** play the match to `decided` (two sets with the `badminton.rally {wonBy}` loop Task 14 uses), correct before the second set, then `finalizeFixture(auth, id, seq)` resolves and the status is `finalized`.
 - **settle:** `scoreEvent(auth, id, {expected_seq, type: "core.settle", payload: {winner, method: "organiser"}})` with no `rules_version` resolves. Copy the payload from `settle-seating.test.ts:148`.
 - **import is NOT a case (re-review minor).** `importEvents` refuses any fixture that already has a `score_events` row or a non-`scheduled` status (`event-import.ts:223-230`). A corrected fixture has started (a correction to an unstarted fixture bumps nothing), so "import after a correction" cannot happen. P-1 listed it; this is recorded as finding 38 rather than tested vacuously. The import path stays classified as a non-sender.
@@ -4507,8 +4507,9 @@ test("ST-G8 stage points: preview, save, walkover row in the table (X-PT-1)", as
   await expect(sec.getByTestId("stage-points-preview")).toContainText("walkover 2–0");
   await sec.getByRole("button", { name: /save/i }).click();
   // Drive the walkover through the product's own path, then read the table.
-  const f = await apiJson<{ home_entrant_id: string }>(request, `/api/v1/fixtures/${fixtureIds[0]}`, "GET");
-  await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { winner: f.data!.home_entrant_id, reason: "walkover" } });
+  const f = await apiJson<{ home_entrant_id: string; away_entrant_id: string }>(request, `/api/v1/fixtures/${fixtureIds[0]}`, "GET");
+  // CoreForfeit is {by, reason} (W2b core/events.ts:64): `by` is the side that FORFEITS, so the AWAY side forfeits and home wins.
+  await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: f.data!.away_entrant_id, reason: "walkover" } });
   await page.goto(`${d.divisionUrl}?tab=standings`);
   const winnerRow = page.getByTestId(`standings-row-${f.data!.home_entrant_id}`);
   await expect(winnerRow.getByTestId("standings-points")).toHaveText("2");      // 2, not the base win's 3
@@ -4694,7 +4695,7 @@ test("X-SR-2 reset to the stage's format clears the override and the tag", async
   await expect(page.getByTestId(`run-sheet-row-${s.fixtureId}`).getByTestId("run-sheet-format-changed")).toHaveCount(0);
 });
 
-test("X-SR-5 correct a live match's format: a fitting change saves; one that doesn't is refused with the reason", async ({ page, request }) => {
+test("X-SR-5 correct a live match's format: a fitting change saves and writes no score event", async ({ page, request }) => {
   const s = await seedBadmintonLeague(request);
   await apiJson(request, `/api/v1/fixtures/${s.fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   await page.goto(`${s.divisionUrl}/f/${s.fixtureNo}`);
