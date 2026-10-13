@@ -60,8 +60,10 @@ export async function GET(req: Request) {
     return redirectLocal(lichessLanding(next, "unavailable"));
   }
 
+  // Final review M-3: lands where every other exit does — the account settings page bounces an org-less player
+  // through /orgs/new.
   if (!lichessConfigured()) {
-    return redirectLocal("/settings?tab=account&lichess=not_configured");
+    return redirectLocal(lichessLanding(next, "not_configured"));
   }
 
   const state = crypto.randomUUID();

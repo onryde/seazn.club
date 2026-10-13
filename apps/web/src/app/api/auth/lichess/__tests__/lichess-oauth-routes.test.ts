@@ -279,10 +279,30 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     vi.stubEnv("LICHESS_CLIENT_ID", undefined);
     flagIs(FLAG_STATES[1]!);
     expect(landedOn(await GET(start()))).toMatchObject({ pathname: "/me", query: { lichess: "unavailable" } });
-    // The positive pair: offered, the same unconfigured start redirects to settings as before.
+    // The positive pair: offered, the same unconfigured start is told Lichess is not configured.
     flagIs(FLAG_STATES[0]!);
     const res = await GET(start());
     expect(path(res.headers.get("location")!).searchParams.get("lichess")).toBe("not_configured");
+  });
+
+  // Final review M-3: the not_configured exit was hard-coded to /settings?tab=account, which bounces an org-less player
+  // through /orgs/new. It lands where every other exit does: back on `next`, else /me.
+  it("M-3: an unconfigured start lands like every other exit — on `next` (its own query kept), else /me — never on settings", async () => {
+    vi.stubEnv("LICHESS_CLIENT_ID", undefined);
+    flagIs(FLAG_STATES[0]!);
+    const cases: [string | undefined, { pathname: string; query: Record<string, string> }][] = [
+      ["/shared/o/c/d/fixtures/f1/play", { pathname: "/shared/o/c/d/fixtures/f1/play", query: { lichess: "not_configured" } }],
+      ["/shared/o/c/d/fixtures/f1/play?t=tok", { pathname: "/shared/o/c/d/fixtures/f1/play", query: { t: "tok", lichess: "not_configured" } }],
+      [undefined, { pathname: "/me", query: { lichess: "not_configured" } }],
+    ];
+    let checked = 0;
+    for (const [next, landing] of cases) {
+      const res = await GET(start(next));
+      expect(isRedirect(res.status), String(next)).toBe(true);
+      expect(landedOn(res), String(next)).toMatchObject(landing);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 });
 
