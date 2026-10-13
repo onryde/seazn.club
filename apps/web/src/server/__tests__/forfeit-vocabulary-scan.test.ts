@@ -88,6 +88,8 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/server/api-v1/__tests__/http.test.ts": { writes: 1, why: "`reason` drawn from FORFEIT_REASONS itself (the phase-refusal sweep)" },
   "apps/web/src/server/engine-db/__tests__/awarded-state.test.ts": { writes: 1, why: "R116-2: an empty `{}` envelope handed to `awardedMatchState` for its id and time only — the award's own reason is folded, never posted" },
   "apps/web/src/server/engine-db/awarded-state.ts": { writes: 1, why: "R116-2: `reason: outcome.reason`, the stored award's own reason, folded in memory and never posted (the fold must re-decide that same award)" },
+  "apps/web/src/components/public-site/match-room/room-snapshot.ts": { writes: 1, why: "chess T10: `{ by: a.by, reason: a.reason }`, a STORED core.forfeit's own payload (room.ts/arbiter.ts read it from the ledger), folded in memory for the game-over card and never posted" },
+  "apps/web/src/components/public-site/match-room/__tests__/room-snapshot.test.ts": { writes: 1, why: "the room's per-reason fold sweep: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/engine-db/__tests__/w2b-status.test.ts": { writes: 1, why: "`...both`, a spread `{ reason: \"walkover\" }`" },
   "apps/web/src/server/public-site/__tests__/match-centre-forfeit.test.ts": { writes: 1, why: "Task 13's per-reason sentences: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/public-site/__tests__/timeline.test.ts": { writes: 3, why: "Task 12's forfeit-copy sweeps: `reason` drawn from FORFEIT_REASONS itself (two), and a reason-less legacy fixture — rendered as timeline lines, never posted" },
@@ -126,6 +128,11 @@ const RETIRED_EXCEPTIONS: Record<string, { lines: number; why: string }> = {
   "apps/web/src/server/engine-db/append-event.ts": { lines: 1, why: "D15's refusal list (RETIRED_ON_WRITE_SPORT_EVENTS) names what it refuses" },
   "apps/web/src/server/public-site/match-centre.ts": { lines: 1, why: "RESULT_KINDS' public `forfeit` result kind, not a chess method" },
   "apps/web/src/server/public-site/__tests__/match-centre-dictionary.test.ts": { lines: 1, why: "the same public result kind, in its dictionary sweep" },
+  // Chess T10 (rebase onto W2b, I-1): the match room's game-over card carries the ENGINE's summary method for a fold —
+  // boardgame's `detail.method` after a `core.forfeit` is "forfeit" / "double_forfeit" (boardgame.ts applyForfeit) —
+  // and words it ("Forfeit · 1–0"). Expected values read back from that fold, never a `boardgame.result` written.
+  "apps/web/src/components/public-site/match-room/__tests__/room-snapshot.test.ts": { lines: 3, why: "forfeitResultFor's rulebook rows: the summary method the engine's fold of a core.forfeit reports, read back" },
+  "apps/web/src/components/public-site/match-room/__tests__/room-shell.test.tsx": { lines: 2, why: "a RoomResult snapshot fixture carrying that same read-back summary method, painted on the card" },
 };
 
 describe("X-RS-1: every forfeit this repo writes outside the engine uses the closed vocabulary", () => {
@@ -179,7 +186,7 @@ describe("X-RS-1: every forfeit this repo writes outside the engine uses the clo
     expect(deficit).toEqual(Object.fromEntries(Object.entries(UNREAD_WRITERS).map(([f, e]) => [f, e.writes])));
   });
 
-  it("X-RS-1: the retired chess forfeit methods are written only by legacy-replay rows and three named, counted exceptions", () => {
+  it("X-RS-1: the retired chess forfeit methods are written only by legacy-replay rows and named, counted exceptions", () => {
     const hits = retiredGrep(SCOPES).map(classify);
     const writes: Record<string, number> = {};
     let legacy = 0;

@@ -5,7 +5,7 @@
 // field cannot mean one thing on each side. Nothing here touches the DB, a
 // token or Lichess; `@/server/external-play/window` is a pure module, and so
 // is the engine's boardgame fold.
-import { foldMatch } from "@seazn/engine/core";
+import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import { roomPhase, windowFor } from "@/server/external-play/window";
 
@@ -192,7 +192,9 @@ function foldedResult(
   const white = a.myColour === "white" ? a.myEntrantId : a.opponentEntrantId;
   const black = a.myColour === "white" ? a.opponentEntrantId : a.myEntrantId;
   const at = "1970-01-01T00:00:00.000Z";
-  const state = foldMatch(
+  // W2b PF-1: the fold's outcome and headline through the kernel's own readers (outcomeOf/summaryOf), never the
+  // module's bare outcome/summary of its state — the one rule every fold reader keeps (outcome-readers.test.ts).
+  const folded = foldMatchWithStoppage(
     boardgame,
     GAME_SCORE_CFG,
     { home: { entrantId: white, slots: [] }, away: { entrantId: black, slots: [] } },
@@ -201,9 +203,9 @@ function foldedResult(
       { id: "decisive", fixtureId: "room", seq: 1, type: decisive.type, payload: decisive.payload, recordedAt: at, recordedBy: null },
     ],
   );
-  const o = boardgame.outcome(state);
+  const o = outcomeOf(boardgame, folded);
   if (o === null) return null;
-  const summary = boardgame.summary(state);
+  const summary = summaryOf(boardgame, folded);
   const line = (entrant: string) => summary.perSide.find((p) => p.entrantId === entrant)?.line ?? "";
   // The sweeps in room-snapshot.test.ts walk every method and every forfeit
   // reason through the engine and reach exactly these kinds.
