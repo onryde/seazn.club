@@ -3405,6 +3405,7 @@ export type DictionaryKey =
   | "matchCentre.status.notStarted"
   | "matchCentre.status.other"
   | "matchCentre.status.postponed"
+  | "matchCentre.status.roundOpened"
   | "matchCentre.status.scheduled"
   | "matchCentre.status.startsAt"
   | "matchCentre.status.timeNotRecorded"

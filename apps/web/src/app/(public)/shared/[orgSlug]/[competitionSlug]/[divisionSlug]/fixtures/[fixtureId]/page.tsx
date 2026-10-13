@@ -372,7 +372,12 @@ export default async function FixturePage({ params }: Props) {
             "Starts …" sentence renders — one kick-off, one wording, one
             timezone. `initial` is this request's own document, so first paint
             is byte-identical to a server render. */}
-        <MatchCentreSubheading fixtureId={fixture.id} initial={initial} dict={dict} />
+        <MatchCentreSubheading
+          fixtureId={fixture.id}
+          initial={initial}
+          dict={dict}
+          {...(onlineBoard ? { roundOpen: { at: data.roundOpenedAt, timeZone: data.venueTz, locale } } : {})}
+        />
 
         {/* Stream overlay W1 (design §3.9) — the club's own broadcast, under
             the headline block and above the match centre. PLACEMENT ONLY:

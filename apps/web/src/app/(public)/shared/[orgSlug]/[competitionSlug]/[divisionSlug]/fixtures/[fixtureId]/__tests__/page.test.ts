@@ -833,4 +833,24 @@ describe("FixturePage — the 'Your board' island (T16)", () => {
     expect(html).not.toMatch(/="[^"]*\/fixtures\/f1\/play/);
     expect(html).not.toContain("lichess.org");
   });
+  // T17 fix round 2, V1: the line under the title says when an ONLINE board's round opened — the page hands the
+  // subheading its own instant, the venue's zone and the page's locale; any other board gets none (its old line).
+  it("V1: the subheading carries the round-open facts for an online board only — counted", async () => {
+    const { MatchCentreSubheading } = await import("../subheading");
+    const AT = "2026-10-13T10:42:00.000Z";
+    const online = findAll(
+      await renderDivision({ sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "lichess" } }, { roundOpenedAt: AT, venueTz: "Europe/Paris" }),
+      MatchCentreSubheading,
+    );
+    expect(online).toHaveLength(1);
+    expect(online[0]!.props.roundOpen).toEqual({ at: AT, timeZone: "Europe/Paris", locale: "en" });
+    let checked = 0;
+    for (const division of [{}, { sport_key: "boardgame", variant_key: "chess", config: { onlinePlay: "off" } }]) {
+      const found = findAll(await renderDivision(division, { roundOpenedAt: AT }), MatchCentreSubheading);
+      expect(found).toHaveLength(1);
+      expect(found[0]!.props.roundOpen, JSON.stringify(division)).toBeUndefined();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
 });

@@ -39,6 +39,23 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 const apiMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client", async (importOriginal) => ({ ...(await importOriginal<object>()), api: apiMock }));
 
+// V1: the panel is the PRODUCER of the round's open for the line under the title — observed at the real module.
+const channel = vi.hoisted(() => ({ publish: vi.fn(), clear: vi.fn() }));
+vi.mock("../round-open-channel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../round-open-channel")>();
+  return {
+    ...actual,
+    publishRoundOpenedAt: (id: string, at: string | null) => {
+      channel.publish(id, at);
+      actual.publishRoundOpenedAt(id, at);
+    },
+    clearRoundOpenedAt: (id: string) => {
+      channel.clear(id);
+      actual.clearRoundOpenedAt(id);
+    },
+  };
+});
+
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { POLL_MS } from "../use-live-fixture";
 import { publishBoardPush } from "../live-board-channel";
@@ -378,6 +395,19 @@ describe("WatchPanel — after hydration", () => {
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(fetchBoard).toHaveBeenCalledTimes(2);
     island.unmount();
+  });
+
+  it("V1: tells the line under the title when the round opened — the page's own first, then the poll's; cleared on unmount", async () => {
+    channel.publish.mockClear();
+    channel.clear.mockClear();
+    fetchBoard.mockResolvedValue(docOf(null, true));
+    const island = mount(docOf(null, false)); // a viewer who loaded before the organiser opened the round
+    expect(channel.publish.mock.calls, "the page's own answer: not open").toEqual([["f1", null]]);
+    await flush();
+    expect(channel.publish.mock.calls.at(-1), "the poll learnt the open").toEqual(["f1", OPENED_AT]);
+    expect(channel.clear).not.toHaveBeenCalled();
+    island.unmount();
+    expect(channel.clear.mock.calls).toEqual([["f1"]]);
   });
 
   it("a pushed move lands through the real relay — and a stale poll does not take it back", async () => {
