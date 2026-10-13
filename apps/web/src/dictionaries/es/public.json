@@ -544,6 +544,7 @@
   "division.metaDescription": "Clasificación, calendario y resultados de {division} para {competition}.",
   "division.scheduleEmpty": "Aún no hay partidos programados",
   "division.timesIn": "horas en {zone}",
+  "division.roundOpened": "Abierta",
   "division.present": "Presentar",
   "division.share.text": "Clasificación y partidos de {division} — {competition}:",
   "player.inThisCompetition": "En esta competición",

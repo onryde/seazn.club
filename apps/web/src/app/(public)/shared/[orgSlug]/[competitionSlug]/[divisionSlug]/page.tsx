@@ -20,7 +20,7 @@ import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy, publicWatchCopy } from "@/server/public-site/schedule-copy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
+import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
@@ -216,7 +216,7 @@ export default async function DivisionHomePage({ params }: Props) {
   // none at all for a division that does not play online.
   const watch =
     supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
-      ? { links: await loadDivisionWatchLinks(division.id), copy: publicWatchCopy(lookup) }
+      ? { ...(await loadDivisionWatch(division.id)), copy: publicWatchCopy(lookup) }
       : undefined;
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first, as the embed schedule widget does.

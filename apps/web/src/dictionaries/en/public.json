@@ -544,6 +544,7 @@
   "division.metaDescription": "{division} standings, schedule and results for {competition}.",
   "division.scheduleEmpty": "No matches scheduled yet",
   "division.timesIn": "times in {zone}",
+  "division.roundOpened": "Opened",
   "division.present": "Present",
   "division.share.text": "{division} standings & fixtures — {competition}:",
   "player.inThisCompetition": "In this competition",

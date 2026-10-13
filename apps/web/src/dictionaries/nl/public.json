@@ -544,6 +544,7 @@
   "division.metaDescription": "Stand, programma en uitslagen van {division} voor {competition}.",
   "division.scheduleEmpty": "Nog geen wedstrijden gepland",
   "division.timesIn": "tijden in {zone}",
+  "division.roundOpened": "Geopend",
   "division.present": "Presenteren",
   "division.share.text": "Stand en wedstrijden van {division} — {competition}:",
   "player.inThisCompetition": "In deze competitie",

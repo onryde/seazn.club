@@ -77,7 +77,13 @@ interface Props {
    *  id, a board with nothing to watch absent, with their words in the org's locale. Absent for every other
    *  division (and in the embed). Each is a LABEL inside the row's own link — the row already opens the fixture
    *  page, where the watch panel is — so there is never a link inside a link. */
-  watch?: { links: Record<string, PublicWatchLink>; copy: ScheduleWatchCopy };
+  watch?: {
+    links: Record<string, PublicWatchLink>;
+    copy: ScheduleWatchCopy;
+    /** V4 (T17 fix round 4): each board still to be played whose round is open, by fixture id — the moment it opened.
+     *  A board with no scheduled time shows it in the rail where it said "TBD". */
+    roundOpenedAt?: Record<string, string>;
+  };
 }
 
 /** The watch links' words (I4), in the org's locale. */
@@ -98,6 +104,8 @@ export interface ScheduleCopy {
   live: string;
   /** Row rail: a decided match. */
   ended: string;
+  /** Row rail, under the clock (V4, T17 fix round 4): an online board's round opened at that time. */
+  roundOpened: string;
   /** W2a — a held bracket match (`needs_decision`): neither live nor finished. Read by the bracket card. */
   held: string;
   /** Row rail: a match with no time yet. */
@@ -260,6 +268,7 @@ function ScorebugRow({
   dateTag,
   forfeit,
   watch,
+  roundOpenedAt,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -272,6 +281,8 @@ function ScorebugRow({
   /** W2b Task 13 (review I-2) — this row's forfeit tag and sentence, when it has one. */
   forfeit: ForfeitWords | undefined;
   watch: { link: PublicWatchLink; copy: ScheduleWatchCopy } | null;
+  /** V4: when this online board's round opened, or null (no online play, the round not open, or nothing to play). */
+  roundOpenedAt: string | null;
 }) {
   const live = f.status === "in_play";
   // W2a fix round 1 (M5): a HELD bracket match (`needs_decision`) was played to a level score — only who advances is
@@ -283,6 +294,10 @@ function ScorebugRow({
   // A double walkover credits nobody: its summary's 0 — 0 would read as an unplayed match, so it shows its tag alone.
   const doubleWalkover = forfeit?.kind === "double_walkover";
   const lines = (decided || live) && !doubleWalkover ? sideLines(f) : null;
+  // V4 (T17 fix round 4, as V1): an online board with no scheduled time whose round is open shows when it opened —
+  // the fixture page's "Round opened HH:MM" clock — where the rail said "TBD". A real time, a live or a decided row
+  // keeps its own.
+  const opened = !decided && !live && !f.scheduled_at ? roundOpenedAt : null;
   // The tag rides the winner's score (the first row when nobody won), AFTER it, as on the hub's draw node, the bracket
   // footer, the results matrix and the hub card (design audit 3.9).
   const chip =
@@ -346,17 +361,23 @@ function ScorebugRow({
           </span>
         ) : (
           <span className="w-full break-words font-display text-sm font-semibold text-ink">
-            {decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : copy.tbd}
+            {decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : opened !== null ? timeOf(opened, tz) : copy.tbd}
           </span>
         )}
         {/* A court name is free text, so this line DOES truncate — but at the
             track's own width (the cell is `min-w-0`), not at a second literal
             that can drift away from the grid above. */}
-        <span className="mt-0.5 w-full truncate text-[10px] uppercase tracking-wide text-ink-muted">
-          {!decided && !live && railMode === "date" && f.scheduled_at
-            ? shortDate(f.scheduled_at, tz, dateTag)
-            : (f.court_name ?? "")}
-        </span>
+        {opened !== null && f.court_name === null ? (
+          // V4: the word under the round-open clock. A status word, so it WRAPS inside the track rather than
+          // truncating (`schedule-rail-fits.test.ts` measures it); a board with a court keeps its court here.
+          <span className="mt-0.5 w-full break-words text-[10px] uppercase tracking-wide text-ink-muted">{copy.roundOpened}</span>
+        ) : (
+          <span className="mt-0.5 w-full truncate text-[10px] uppercase tracking-wide text-ink-muted">
+            {!decided && !live && railMode === "date" && f.scheduled_at
+              ? shortDate(f.scheduled_at, tz, dateTag)
+              : (f.court_name ?? "")}
+          </span>
+        )}
       </span>
 
       <span title={homeName} className={nameCls(f.home_entrant_id)}>{homeName}</span>
@@ -571,6 +592,7 @@ export function Schedule({
                     dateTag={dateTag}
                     forfeit={forfeitWords.get(f.id)}
                     watch={watch?.links[f.id] ? { link: watch.links[f.id]!, copy: watch.copy } : null}
+                    roundOpenedAt={watch?.roundOpenedAt?.[f.id] ?? null}
                   />
                 </li>
               ))}
