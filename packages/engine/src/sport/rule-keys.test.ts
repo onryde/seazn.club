@@ -504,7 +504,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(stageKeysFor(carrom, null, null)).toContain("tieBoard"); // division level: not narrowed
   });
 
-  it("chess tiebreak and tiebreakRungs apply to bracket kinds only", () => {
+  it("BG-KO-3: chess tiebreak and tiebreakRungs apply to bracket kinds only", () => {
     // Single-sport: the tie-break games exist only where someone must advance (boardgame's bracketDeciders), and the
     // rung list (W2c BG-KO-3, spec §4.1 Q5) orders exactly those games.
     const chess = sport("boardgame");

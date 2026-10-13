@@ -330,6 +330,34 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(shown(drawn)).toEqual(["pad.boardgame.panel.tiebreak"]);
   });
 
+  it("BG-KO-3 padSpec: the pad offers only the stage's rungs, in the stage's order — an Armageddon action iff it is listed, and no tie-break panel for an empty list", () => {
+    const actionsFor = (rungs: readonly string[]) =>
+      boardgame.padSpec!(koWith(rungs)).panels.filter((p) => p.actions.some((a) => a.type === "boardgame.tiebreak")).flatMap((p) => p.actions);
+    const timed = (rungs: readonly string[]) => actionsFor(rungs).filter((a) => a.fields[0]?.kind === "enum" && !a.fields[0].values.includes("armageddon"));
+    const armageddonOf = (rungs: readonly string[]) => actionsFor(rungs).filter((a) => a.fields[0]?.kind === "enum" && a.fields[0].values.includes("armageddon"));
+    let checked = 0;
+    // [listed rungs, the timed rungs the pad offers (in order), whether the Armageddon action is offered]
+    const cases: [readonly string[], readonly string[], boolean][] = [
+      [["blitz", "rapid"], ["blitz", "rapid"], false], // order kept, not re-sorted
+      [["armageddon", "rapid"], ["rapid"], true],
+      [["rapid"], ["rapid"], false],
+      [["armageddon"], [], true],
+    ];
+    for (const [rungs, offeredTimed, offersArmageddon] of cases) {
+      const t = timed(rungs);
+      expect(t.length, `${rungs}: the rapid/blitz action is present iff a timed rung is listed`).toBe(offeredTimed.length > 0 ? 1 : 0);
+      if (offeredTimed.length > 0) expect(t[0]!.fields[0], rungs.join(",")).toEqual({ kind: "enum", path: "rung", values: offeredTimed });
+      expect(armageddonOf(rungs).length, `${rungs}: the Armageddon action is present iff it is listed`).toBe(offersArmageddon ? 1 : 0);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // An empty list leaves nothing to record: no tie-break panel at all, and the result panels are not gated away from
+    // the drawn game (it stays a draw, ruling 79).
+    const empty = boardgame.padSpec!(koWith([]));
+    expect(actionsFor([])).toEqual([]);
+    expect(empty.panels.map((p) => p.gate)).toEqual(empty.panels.map(() => undefined));
+  });
+
   it("BG-KO-1 generator: in phase tiebreak arbitraryEvent emits a tie-break the fold accepts — every rung, both winners, the score present and absent", () => {
     const pending = fold(ko, drawn);
     const seen = { rung: new Set<string>(), winner: new Set<string>(), score: new Set<string>(), black: new Set<string>(), result: new Set<string>() };

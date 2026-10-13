@@ -71,7 +71,7 @@ describe("buildRuleOverride — boardgame clock, a three-way merge", () => {
 
 // W2c Task 8 (BG-KO-3) — the chess tie-break rungs, the first ORDERED-LIST ("sequence") field: the value is the chosen
 // rungs, comma-joined, in the order they are played.
-describe("buildRuleOverride — boardgame tie-break rungs, an ordered list", () => {
+describe("buildRuleOverride — boardgame tie-break rungs (BG-KO-3), an ordered list", () => {
   it("builds the rungs in the order chosen, never re-sorted, and a blank value writes nothing (the engine's own order)", () => {
     expect(buildRuleOverride("boardgame", { tiebreakRungs: "blitz,armageddon" })).toEqual({ tiebreakRungs: ["blitz", "armageddon"] });
     expect(buildRuleOverride("boardgame", { tiebreakRungs: "armageddon,rapid,blitz" })).toEqual({ tiebreakRungs: ["armageddon", "rapid", "blitz"] });
