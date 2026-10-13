@@ -804,15 +804,15 @@ async function extractScorers(
     // single-fixture cfg resolve — same three inputs `fold.ts`'s
     // `foldFixture` reads (config_snapshot, division.config, stage.config) —
     // rather than the division-batched query the division-wide recompute uses.
-    const [fixtureCfgRow] = await tx<{ config_snapshot: unknown }[]>`
-      select config_snapshot from fixtures where id = ${fx.fixture_id}`;
+    const [fixtureCfgRow] = await tx<{ config_snapshot: unknown; rules_override: unknown }[]>`
+      select config_snapshot, rules_override from fixtures where id = ${fx.fixture_id}`;
     const [divisionCfgRow] = await tx<{ config: unknown }[]>`
       select config from divisions where id = ${fx.division_id}`;
     // W2a: the kind beside the config — a bracket stage adds the sport's deciders (fixture-cfg.ts).
     const [stageCfgRow] = await tx<{ kind: string; config: Record<string, unknown> | null }[]>`
       select kind, config from stages where id = ${fx.stage_id}`;
     const cfg = resolveFixtureCfg(
-      fixtureCfgRow?.config_snapshot,
+      fixtureCfgRow ?? { config_snapshot: undefined, rules_override: undefined },
       divisionCfgRow?.config,
       stageCfgRow,
       resolveModule(fx.sport_key, fx.module_version),

@@ -1,6 +1,7 @@
 import "server-only";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
+import { canonicalJson } from "@/lib/canonical-json";
 import { HttpError } from "@/lib/http";
 import { EngineError } from "@seazn/engine/core";
 import {
@@ -83,6 +84,9 @@ interface Row {
   outcome: unknown;
   config_snapshot: unknown;
   config_snapshot_at: Date | null;
+  /** W2c (V439) — the match's own format override. Live config INCLUDES it: it is frozen with everything else at the
+   *  first event, so a re-freeze that dropped it would silently put the match back on its stage's format. */
+  rules_override: unknown;
   division_config: unknown;
   stage_config: Record<string, unknown> | null;
   /** W2a — the stage's kind: a bracket kind adds the sport's deciders to the live cfg (fixture-cfg.ts) and holds a
@@ -103,7 +107,7 @@ type Queryable = postgres.ISql;
 async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
   const [row] = await db<Row[]>`
     select f.id, f.org_id, f.stage_id, f.pool_id, f.fixture_no, f.status, f.outcome,
-           f.config_snapshot, f.config_snapshot_at,
+           f.config_snapshot, f.config_snapshot_at, f.rules_override,
            d.config as division_config, s.config as stage_config, s.kind as stage_kind,
            d.sport_key, d.module_version,
            d.name as division_name, c.name as competition_name, o.name as org_name,
@@ -127,8 +131,10 @@ export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConf
   // shown here could differ from the one the fold would actually see.
   // W2a: with the stage's kind, so a bracket fixture's live cfg carries the sport's deciders exactly as its first
   // append would freeze them (fixture-cfg.ts).
+  // W2c: and with the fixture's REAL override (the snapshot alone is nulled): the first append froze it too, so a
+  // live cfg without it would read "diverged" for every match with an override the moment it started.
   const live = resolveFixtureCfg(
-    null,
+    { config_snapshot: null, rules_override: row.rules_override },
     row.division_config,
     { kind: row.stage_kind, config: row.stage_config },
     resolveModule(row.sport_key, row.module_version),
@@ -146,12 +152,16 @@ export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConf
     snapshot,
     snapshotAt: row.config_snapshot_at?.toISOString() ?? null,
     live,
-    diverged: hasFrozenCfg(snapshot) && JSON.stringify(snapshot) !== JSON.stringify(live),
+    // Key-sorted, not `JSON.stringify`: the snapshot comes back from jsonb, which stores keys in its own order, while
+    // `live` keeps build order — a key the stage, a decider or the match override (W2c) ADDS lands last in `live` and
+    // wherever jsonb sorts it in the snapshot, and an order-sensitive compare called that same cfg "diverged".
+    diverged: hasFrozenCfg(snapshot) && canonicalJson(snapshot) !== canonicalJson(live),
     canResnapshot: hasFrozenCfg(snapshot) && !LOCKED_FIXTURE_STATUSES.has(row.status),
   };
 }
 
-/** Re-freeze a REOPENED fixture's cfg from live division + stage config. */
+/** Re-freeze a REOPENED fixture's cfg from live division + stage config, and the fixture's own match override (W2c):
+ *  the override is the match's format, not drift, so a re-freeze keeps it. */
 export async function resnapshotFixtureConfig(
   actorId: string,
   fixtureId: string,
@@ -204,7 +214,7 @@ export async function resnapshotFixtureConfig(
     }
 
     const live = resolveFixtureCfg(
-      null,
+      { config_snapshot: null, rules_override: row.rules_override },
       row.division_config,
       { kind: row.stage_kind, config: row.stage_config },
       resolveModule(row.sport_key, row.module_version),

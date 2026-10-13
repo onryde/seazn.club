@@ -251,7 +251,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     spy.mockClear();
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     // W2c: the frozen cfg carries the override, so the panel's live cfg must too — or every overridden match would
-    // read "diverged" to staff the moment it started.
+    // read "diverged" to staff the moment it started. The override's key is NEW to this cfg, so it is also the
+    // key-order witness: `live` holds it last, jsonb returns the snapshot's keys in its own order.
     spy.mockClear();
     expect((await fixtureConfigPanel(s.fixtureIds[0]!))!.diverged, "a just-frozen overridden fixture has not diverged").toBe(false);
     spy.mockClear();
@@ -312,20 +313,26 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(paths).toBe(2);
   });
 
-  it.skipIf(!HAS_DB)("event-import.ts importEvents", async () => {
+  it.skipIf(!HAS_DB)("event-import.ts importEvents: the fixture named by id and by ext_key", async () => {
     // The dry-run fold resolves the fixture's cfg before it judges the stream; a start-only stream is then refused
-    // not_decided, which writes nothing — the cfg it was judged under is what this case reads.
+    // not_decided, which writes nothing — the cfg it was judged under is what this case reads. `resolveFixture` has
+    // one SELECT per way a stream names its fixture, so both are driven.
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     await seedOverride({ fixtureId: s.fixtureIds[0]! });
-    spy.mockClear();
-    const report = await importEvents(s.auth, s.divisionId, {
-      import_id: "imp-w2c-override",
-      streams: [{ fixture: { id: s.fixtureIds[0]! }, events: [{ type: "core.start", payload: {} }] }],
-    });
-    expect(report.results[0]!.error?.code).toBe("import.not_decided"); // the fold ran (a refusal earlier would skip it)
-    expectOverlay("knockout");
-    expectOverrideOut("knockout");
-    expectOverrideArg();
+    await sql`update fixtures set ext_key = 'W2C-T10' where id = ${s.fixtureIds[0]!}`;
+    const refs = [{ id: s.fixtureIds[0]! }, { ext_key: "W2C-T10" }];
+    for (const [i, fixture] of refs.entries()) {
+      spy.mockClear();
+      const report = await importEvents(s.auth, s.divisionId, {
+        import_id: `imp-w2c-override-${i}`,
+        streams: [{ fixture, events: [{ type: "core.start", payload: {} }] }],
+      });
+      expect(report.results[0]!.error?.code, JSON.stringify(fixture)).toBe("import.not_decided"); // the fold ran
+      expectOverlay("knockout");
+      expectOverrideOut("knockout");
+      expectOverrideArg();
+    }
+    expect(refs).toHaveLength(2);
   });
 
   it.skipIf(!HAS_DB)("org-posts.ts draftPostsForDecidedFixture", async () => {

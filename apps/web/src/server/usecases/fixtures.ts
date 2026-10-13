@@ -104,7 +104,9 @@ export async function fixtureFeedsNextMatch(auth: AuthCtx, fixtureId: string): P
  * is the column the whole thing turns on: `hasFrozenCfg` reads `undefined` as
  * absence exactly like `null` (fixture-cfg.ts:53-64), so a caller that joined
  * the stage but dropped the snapshot would serve live config for every scored
- * fixture and raise nothing. One select, one place to get it wrong.
+ * fixture and raise nothing. One select, one place to get it wrong. The same
+ * holds for `f.rules_override` beside it (W2c, V439): dropped, the pad would
+ * show the stage's format for a match the organiser changed.
  *
  * No `rejectDeviceLink` guard: this has no route of its own, and the
  * device-link pad is one of the two surfaces that legitimately needs it.
@@ -117,6 +119,7 @@ export async function loadFixturePadCfg(
     const [row] = await tx<
       {
         config_snapshot: unknown;
+        rules_override: unknown;
         division_config: unknown;
         sport_key: string;
         module_version: string;
@@ -124,7 +127,7 @@ export async function loadFixturePadCfg(
         stage_kind: string | null;
       }[]
     >`
-      select f.config_snapshot, d.config as division_config, d.sport_key, d.module_version,
+      select f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
              s.config as stage_config, s.kind as stage_kind
         from fixtures f
         join divisions d on d.id = f.division_id
@@ -136,7 +139,7 @@ export async function loadFixturePadCfg(
     // W2a: the stage KIND too — a bracket fixture's pad must see the sport's deciders (chess's tie-break) the
     // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
     const cfg = resolveFixtureCfg(
-      row.config_snapshot,
+      row,
       row.division_config,
       { kind: row.stage_kind, config: row.stage_config },
       resolveModule(row.sport_key, row.module_version),

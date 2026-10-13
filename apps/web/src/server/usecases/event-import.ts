@@ -71,6 +71,8 @@ interface FixtureRow {
   away_entrant_id: string | null;
   status: string;
   config_snapshot: unknown;
+  /** W2c (V439) — the match's own format override; the dry run folds under it exactly as the writer will. */
+  rules_override: unknown;
   stage_id: string;
 }
 
@@ -168,10 +170,10 @@ async function resolveFixture(
   const rows =
     "id" in ref
       ? await sql<FixtureRow[]>`
-          select id, home_entrant_id, away_entrant_id, status, config_snapshot, stage_id
+          select id, home_entrant_id, away_entrant_id, status, config_snapshot, rules_override, stage_id
           from fixtures where id = ${ref.id} and division_id = ${divisionId}`
       : await sql<FixtureRow[]>`
-          select id, home_entrant_id, away_entrant_id, status, config_snapshot, stage_id
+          select id, home_entrant_id, away_entrant_id, status, config_snapshot, rules_override, stage_id
           from fixtures where division_id = ${divisionId} and ext_key = ${ref.ext_key}`;
   return { row: rows[0], matches: rows.length };
 }
@@ -278,7 +280,7 @@ async function runStream(
   // Tx). No writes happen here — a throw just rolls back reads.
   const [stage] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`
     select kind, config from stages where id = ${fixture.stage_id}`;
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   // Same field names appendEventInTx assigns, so the fold sees exactly what
   // the writer will later hand it (seq 1..n, gapless). `id` is deliberately
   // just the array index as a string: on an EngineError the engine echoes the

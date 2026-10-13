@@ -1273,6 +1273,10 @@ async function main() {
   // its division's is described by those rules on the public match API, the
   // hub document and the division page. Own fresh org; keyless-safe.
   await stageRulesFormatSmoke();
+
+  // Format matrix W2c (stage-level rules, match overrides, their locks): every W2c task's named smoke check lives in
+  // this one suite (plan Global Constraints). Own fresh org; keyless-safe.
+  await w2cStageRulesSuite();
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -7189,6 +7193,72 @@ async function stageRulesFormatSmoke(): Promise<void> {
   );
 }
 
+/**
+ * Format matrix W2c (spec 2026-10-13, stage-level rules) — the one smoke suite every W2c task appends its named
+ * check to (plan Global Constraints, created by Task 10). Over real HTTP against a live server; own fresh owner, no
+ * plan bump, keyless-safe.
+ *
+ * Task 10's own change (`fixtures.rules_override` through every resolver caller) has no HTTP writer until Task 14,
+ * whose smoke check covers the override; its first check is Task 2's owed one.
+ */
+async function w2cStageRulesSuite(): Promise<void> {
+  const owner = newSession();
+  await signIn(owner, `delivered+w2c_${tag}@resend.dev`);
+  // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
+  // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
+  // so any accepted key is a change.
+  const { divisionId } = await w2cSeedStartedPool(owner);
+  const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: ["h2h_points"] });
+  const tableLocked =
+    r.status === 409 && r.json.error?.code === "DIVISION_TABLE_RULES_LOCKED" && JSON.stringify(r.json).includes("Pool A");
+  check(
+    "w2c: division table rules lock names the started stage" +
+      (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
+    tableLocked,
+  );
+}
+
+/**
+ * A badminton `short` division with ONE league stage, "Pool A", generated, the division started, and one of its
+ * fixtures started through the v1 events API — so exactly one stage has started. The call shapes are
+ * `stageRulesFormatSmoke`'s (competition, division, entrants, stage, generate, start) and the v1 scoring append's
+ * (`expected_seq: 0`, a flat `type`/`payload`). Scoring before the division starts is 422 WRONG_PHASE, hence `start`.
+ */
+async function w2cSeedStartedPool(owner: Session): Promise<{ divisionId: string; fixtureId: string }> {
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Smoke ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "W2c Singles",
+      sport_key: "badminton",
+      variant_key: "short",
+    }),
+  );
+  await v1(
+    owner,
+    `/api/v1/divisions/${div.id}/entrants`,
+    "POST",
+    ["Ana", "Ben"].map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 })),
+  );
+  const pool = v1data<{ id: string }>(
+    await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool A" }),
+  );
+  const fixtureId = v1data<{ fixtures: { id: string }[] }>(
+    await v1(owner, `/api/v1/stages/${pool.id}/generate`, "POST"),
+  ).fixtures[0].id;
+  await v1(owner, `/api/v1/divisions/${div.id}/start`, "POST");
+  const started = await v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.start",
+    payload: {},
+  });
+  // The premise of every lock check after it: a seed that failed to start the match would turn each into a check of
+  // an unstarted division.
+  check("w2c seed: Pool A's first match started through the v1 events API (201)", started.status === 201);
+  return { divisionId: div.id, fixtureId };
+}
+
 interface ActiveSuspensionOut {
   side: string;
   classKey: string;
@@ -8762,8 +8832,10 @@ async function paymentMethodSuite(): Promise<void> {
   }
 }
 
-/** v8 (spec 2026-07-13): the format is editable until fixtures exist, then
- *  PATCH rejects with FORMAT_LOCKED; the logo upload URL mints for editors. */
+/** v8 (spec 2026-07-13): the format is editable until a stage that inherits it
+ *  starts (W2c owner P-2), then PATCH rejects with DIVISION_FORMAT_LOCKED naming
+ *  that stage; the stage structure PUT still locks once fixtures exist
+ *  (FORMAT_LOCKED); the logo upload URL mints for editors. */
 async function divisionSettingsSuite(admin: Session): Promise<void> {
   const comp = v1data<{ id: string; slug: string }>(
     await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -8807,15 +8879,28 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
       config: {},
     }),
   );
-  await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST");
+  const firstFixtureId = v1data<{ fixtures: { id: string }[] }>(
+    await v1(admin, `/api/v1/stages/${stage.id}/generate`, "POST"),
+  ).fixtures[0].id;
 
-  const post = await raw(admin, `/api/v1/divisions/${div.id}`, "PATCH", {
-    variant_key: "score",
+  // W2c owner P-2 (X-SR-4): the variant locks per STARTED stage that inherits it, not once fixtures exist. Each PATCH
+  // sends a DIFFERENT variant from the stored one: re-sending the stored variant is a 200 no-op since W2c Task 2, so it
+  // could not tell a lock from a no-op. Generic declares both `score` and `win_loss`.
+  const early = await raw(admin, `/api/v1/divisions/${div.id}`, "PATCH", { variant_key: "win_loss" });
+  check("v8 format: a variant change is accepted while no stage has started (P-2)", early.status === 200);
+  await v1(admin, `/api/v1/divisions/${div.id}/start`, "POST"); // scoring before the start is 422 WRONG_PHASE
+  const started = await v1(admin, `/api/v1/fixtures/${firstFixtureId}/events`, "POST", {
+    expected_seq: 0,
+    type: "core.start",
+    payload: {},
   });
+  const post = await raw(admin, `/api/v1/divisions/${div.id}`, "PATCH", { variant_key: "score" });
   check(
-    "v8 format 409s once fixtures exist",
-    post.status === 409 &&
-      (post.json.error as { code?: string } | undefined)?.code === "FORMAT_LOCKED",
+    "v8 format 409s once an inheriting stage has started (P-2)",
+    started.status === 201 &&
+      post.status === 409 &&
+      (post.json.error as { code?: string } | undefined)?.code === "DIVISION_FORMAT_LOCKED" &&
+      JSON.stringify(post.json).includes('"L"'), // names the started stage
   );
 
   const structSwap = await raw(admin, `/api/v1/divisions/${div.id}/stages`, "PUT", [

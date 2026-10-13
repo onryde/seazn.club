@@ -17,7 +17,7 @@ import "server-only";
 import type postgres from "postgres";
 import { resolveVoids, type EventEnvelope } from "@seazn/engine/core";
 import { resolveModule, resolveLatestModule } from "@/server/engine-db/registry";
-import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { resolveFixtureCfg, type FixtureCfgSource } from "@/server/engine-db/fixture-cfg";
 import { resolveVenueTz } from "@/lib/tz";
 import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
@@ -330,9 +330,10 @@ function buildSides(
   ];
 }
 
-/** The fixture's config snapshot beside its division and stage rows — what
- *  `resolveFixtureCfg` merges. Where the caller already read the division and
- *  stage rows (`configRows`), only the snapshot is read; otherwise all three
+/** The fixture's config snapshot and match override (W2c, V439) beside its
+ *  division and stage rows — what `resolveFixtureCfg` merges. Where the caller
+ *  already read the division and stage rows (`configRows`), only the fixture's
+ *  two columns are read; otherwise all three
  *  come back from ONE statement (they were three before T4). The left joins
  *  hang off a one-row seed so a missing row is `undefined` on its own, exactly
  *  as three separate lookups left it. */
@@ -340,16 +341,17 @@ async function readConfigRows(
   sql: Sql,
   fixture: Pick<PublicFixture, "id" | "division_id" | "stage_id">,
   preread: MatchCentreConfigRows | undefined,
-): Promise<MatchCentreConfigRows & { fixture: { config_snapshot: unknown } | undefined }> {
+): Promise<MatchCentreConfigRows & { fixture: FixtureCfgSource | undefined }> {
   if (preread) {
-    const [fixtureRow] = await sql<{ config_snapshot: unknown }[]>`
-      select config_snapshot from fixtures where id = ${fixture.id}`;
+    const [fixtureRow] = await sql<{ config_snapshot: unknown; rules_override: unknown }[]>`
+      select config_snapshot, rules_override from fixtures where id = ${fixture.id}`;
     return { fixture: fixtureRow, ...preread };
   }
   const [row] = await sql<
     {
       fixture_row: string | null;
       config_snapshot: unknown;
+      rules_override: unknown;
       division_row: string | null;
       division_config: unknown;
       stage_row: string | null;
@@ -357,7 +359,7 @@ async function readConfigRows(
       stage_kind: string | null;
     }[]
   >`
-    select f.id as fixture_row, f.config_snapshot,
+    select f.id as fixture_row, f.config_snapshot, f.rules_override,
            d.id as division_row, d.config as division_config,
            s.id as stage_row, s.config as stage_config, s.kind as stage_kind
     from (select 1) as seed
@@ -365,7 +367,8 @@ async function readConfigRows(
     left join divisions d on d.id = ${fixture.division_id}
     left join stages s    on s.id = ${fixture.stage_id}`;
   return {
-    fixture: row?.fixture_row == null ? undefined : { config_snapshot: row.config_snapshot },
+    fixture:
+      row?.fixture_row == null ? undefined : { config_snapshot: row.config_snapshot, rules_override: row.rules_override },
     division: row?.division_row == null ? undefined : { config: row.division_config },
     stage: row?.stage_row == null ? undefined : { config: row.stage_config, kind: row.stage_kind! },
   };
@@ -500,8 +503,9 @@ export async function loadMatchCentre(
       ? resolveModule(ctx.division.sportKey, ctx.division.moduleVersion)
       : resolveLatestModule(ctx.division.sportKey);
   // W2a: the stage row carries its kind, so a bracket fixture gets the sport's deciders (fixture-cfg.ts).
+  // No fixture row = no snapshot and no override, as an unselected column reads (fixture-cfg.ts).
   const rawCfg = resolveFixtureCfg(
-    configRows.fixture?.config_snapshot,
+    configRows.fixture ?? { config_snapshot: undefined, rules_override: undefined },
     configRows.division?.config,
     configRows.stage,
     sportModule,

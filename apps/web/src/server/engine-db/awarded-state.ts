@@ -101,10 +101,11 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
       home_entrant_id: string | null;
       away_entrant_id: string | null;
       config_snapshot: unknown;
+      rules_override: unknown;
       outcome: MatchOutcome | null;
     }[]
   >`
-    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot, outcome
+    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot, rules_override, outcome
     from fixtures where id = ${fixtureId}`;
   if (!fixture) throw new Error(`writeAwardedMatchState: no fixture ${fixtureId}`);
   const home = fixture.home_entrant_id ?? unseatedForfeitLoser(fixture, "home");
@@ -118,7 +119,7 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
     select kind, config from stages where id = ${fixture.stage_id}`;
   if (!division) throw new Error(`writeAwardedMatchState: no division for ${fixtureId}`);
   const sportModule = resolveModule(division.sport_key, division.module_version);
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   const ledger = await ledgerOf(tx, fixtureId);
   if (ledger.standing > 0) {
     throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);

@@ -13,6 +13,19 @@ export interface DeciderSource {
   readonly configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } };
   bracketDeciders(cfg: never): Record<string, unknown>;
 }
+/**
+ * W2c D4 (spec §4.4) — the fixture ROW, as every caller reads it: the frozen cfg AND the match's own override. Both
+ * keys are required so the compiler sends every caller back to its SELECT for `rules_override`; tsc cannot read
+ * the SQL text itself, which is why `bracket-overlay-callers.test.ts` drives each one with an override seeded.
+ *
+ * `rules_override` is `fixtures.rules_override` (V439): match-scoped keys only, written by the one validated writer
+ * (Task 14). Null = the fixture plays its stage's rules. `undefined` reads the same way, exactly as an unselected
+ * `config_snapshot` does — a column that was not selected is not an override.
+ */
+export interface FixtureCfgSource {
+  readonly config_snapshot: unknown;
+  readonly rules_override: unknown;
+}
 
 /**
  * WHICH CONFIG DOES THIS FIXTURE FOLD AGAINST — the one decision, in one place.
@@ -61,20 +74,44 @@ export interface DeciderSource {
  * config that scores fine. On a refusal the raw cfg is passed; no shipped
  * `bracketDeciders` reads a cfg field.
  *
- * @param snapshot `fixtures.config_snapshot` as the driver returns it: the
- *   frozen jsonb, or null/undefined when none has been taken. Presence is the
- *   test, not truthiness — `{}` is a legitimate config for several modules.
+ * W2c (spec §4.4, P3): the fixture's own match override (`rules_override`)
+ * lands LAST — after the division, the stage's rules and the bracket deciders —
+ * so one match can switch a decider off or shorten its format (X-SR-2), and a
+ * later stage edit still moves every key the match did not override (Review
+ * Focus 2). Order: `snapshot ?? (division ⊕ stage.rules ⊕ bracketDeciders(kind)
+ * ⊕ rules_override)`. The snapshot still wins outright: at the first event the
+ * override is frozen into it with everything else, and only the Q11 correction
+ * (Task 14) re-freezes a started match. A cfg that is not an object (the JSON
+ * null division carve-out above) takes no override either: rebuilding it from
+ * the override's keys alone would hand the fold, and the freeze, a cfg holding
+ * nothing else.
+ *
+ * @param fixture the fixture row (`FixtureCfgSource`): `config_snapshot` as the
+ *   driver returns it — the frozen jsonb, or null/undefined when none has been
+ *   taken; presence is the test, not truthiness, since `{}` is a legitimate
+ *   config for several modules — and `rules_override`.
  * @param stage the fixture's stage row (`kind` and `config`); every caller
  *   selects `s.kind` beside the `config` it already read.
  * @param module the fixture's sport module (its `bracketDeciders`).
  */
 export function resolveFixtureCfg(
-  snapshot: unknown,
+  fixture: FixtureCfgSource,
   divisionCfg: unknown,
   stage: FixtureStageSource | null | undefined,
   module: DeciderSource,
 ): unknown {
-  if (hasFrozenCfg(snapshot)) return snapshot;
+  if (hasFrozenCfg(fixture.config_snapshot)) return fixture.config_snapshot;
+  const decided = liveCfg(divisionCfg, stage, module);
+  if (!isCfgObject(decided)) return decided;
+  const ov = fixture.rules_override;
+  return typeof ov === "object" && ov !== null && !Array.isArray(ov) ? { ...decided, ...(ov as object) } : decided;
+}
+
+const isCfgObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** `division ⊕ stage.rules ⊕ bracketDeciders(kind)`: the cfg a fixture with no snapshot and no override folds. */
+function liveCfg(divisionCfg: unknown, stage: FixtureStageSource | null | undefined, module: DeciderSource): unknown {
   const scoped = stageScopedCfg(divisionCfg, stage?.config);
   if (!forbidsLevelResult(stage?.kind)) return scoped;
   if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is

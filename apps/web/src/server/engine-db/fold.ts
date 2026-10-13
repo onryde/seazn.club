@@ -66,6 +66,8 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
+  /** W2c (V439) — this match's own format override, resolved last (`fixture-cfg.ts`). */
+  rules_override: unknown;
 }
 interface DivisionRow {
   config: unknown;
@@ -96,7 +98,7 @@ export async function loadFoldInputs(
   sides?: { home: string; away: string },
 ): Promise<FoldInputs | null> {
   const [fixture] = await tx<FixtureRow[]>`
-    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot
+    select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot, rules_override
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) return null;
@@ -163,7 +165,7 @@ export async function loadFoldInputs(
   const [stage] = await tx<{ kind: string; config: Record<string, unknown> | null }[]>`
     select kind, config from stages where id = ${fixture.stage_id}
   `;
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   return { sportKey: division.sport_key, module: sportModule, cfg, lineups, envelopes, stageKind: stage?.kind ?? null };
 }
 

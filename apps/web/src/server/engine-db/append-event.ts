@@ -94,6 +94,8 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null until its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
+  /** W2c (V439) — this match's own format override; resolved last, frozen with the rest at the first event. */
+  rules_override: unknown;
   /** W2b D19 — the feed graph: a double walkover needs a next match to send nobody to. */
   winner_to_fixture: string | null;
   loser_to_fixture: string | null;
@@ -282,7 +284,7 @@ export async function appendEventInTx(
 
   const [fixture] = await tx<FixtureRow[]>`
     select id, division_id, stage_id, home_entrant_id, away_entrant_id, status, outcome,
-           config_snapshot, winner_to_fixture, loser_to_fixture
+           config_snapshot, rules_override, winner_to_fixture, loser_to_fixture
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) {
@@ -376,7 +378,7 @@ export async function appendEventInTx(
   // the division up must have the format they choose apply. See
   // `fixture-cfg.ts` for the full rationale; it is the single reader of the
   // column, shared with `fold.ts` so the two folds cannot drift apart.
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const cfg = resolveFixtureCfg(fixture, division.config, stage, sportModule);
   // Take it on the FIRST event only. The advisory lock above is held to
   // commit, so no concurrent appender can interleave between this decision
   // and the write below — the snapshot is taken exactly once.

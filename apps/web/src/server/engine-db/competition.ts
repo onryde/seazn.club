@@ -276,6 +276,8 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null before its
    *  first event. See `fixture-cfg.ts`. */
   config_snapshot: unknown;
+  /** W2c (V439) — the match's own format override, resolved last (`fixture-cfg.ts`). */
+  rules_override: unknown;
   /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
    *  fixture's lane and thirdPlace status. */
   ext_key: string | null;
@@ -327,7 +329,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, f.ext_key, m.state,
+           f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
            ${hasActiveAbandonSql(tx)} as has_active_abandon
     from fixtures f left join match_states m on m.fixture_id = f.id
@@ -380,7 +382,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       const pair = sportModule.standingsDelta(
         f.outcome as MatchOutcome,
         resolveFixtureCfg(
-          f.config_snapshot,
+          f,
           division.config,
           { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
           sportModule,
@@ -403,7 +405,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         sportModule,
         f.outcome as MatchOutcome,
         resolveFixtureCfg(
-          f.config_snapshot,
+          f,
           division.config,
           { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
           sportModule,
