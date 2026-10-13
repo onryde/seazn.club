@@ -254,7 +254,9 @@ function expectInertRefusal(
 }
 
 afterAll(async () => {
-  await sql.end();
+  // Gated like every describe below: with no DATABASE_URL (CI's unit job) the lazy client throws on end(), which
+  // failed the whole file there instead of running its DB-free half.
+  if (process.env.DATABASE_URL) await sql.end();
 });
 
 beforeEach(() => {
