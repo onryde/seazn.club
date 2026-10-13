@@ -352,10 +352,19 @@ describe("R116-3: ruling 116's walkover reads as a walkover naming her, never a 
       expect(rowAction(html), `${dead}: the ordinary walkover's action`).toBe(rowAction(ordinary));
       // Design audit 4.1: and marks her as gone — the departed-entrant chip right after her name (ladder-panel's
       // pattern), the entrant status's own word; the ordinary walkover (her seated) has none.
-      const chip = new RegExp(`Charlie</span><span data-testid="run-sheet-withdrawn"[^>]*>${msg("entrants.status.withdrawn")}</span>`);
+      const chip = new RegExp(`Charlie</span><span class="shrink-0"><span data-testid="run-sheet-withdrawn" class="([^"]*)">${msg("entrants.status.withdrawn")}</span></span>`);
       expect(html, `${dead}: her name, then the Withdrawn chip`).toMatch(chip);
+      // Whole beside the opponent at 320, and not struck with the names: an inline-block in a shrink-0 item of a flex
+      // names line whose names each truncate (the e2e measures the painted result).
+      expect(chip.exec(html)![1]!.split(" "), `${dead}: the chip is an atomic inline`).toContain("inline-block");
+      const line = /<a [^>]*class="([^"]*)"[^>]*href="\/f\/1"|<a [^>]*href="\/f\/1"[^>]*class="([^"]*)"/.exec(html);
+      const lineCls = (line?.[1] ?? line?.[2] ?? "").split(" ");
+      expect(lineCls, `${dead}: the names line is a flex row`).toEqual(expect.arrayContaining(["flex", "min-w-0"]));
+      expect(lineCls, `${dead}: that no longer truncates as one string`).not.toContain("truncate");
+      expect((html.match(/<span class="min-w-0 truncate[^"]*">(Charlie|Alpha)<\/span>/g) ?? []).length, `${dead}: each name truncates on its own`).toBe(2);
       expect((html.match(/data-testid="run-sheet-withdrawn"/g) ?? []).length, `${dead}: one chip, hers`).toBe(1);
       expect(ordinary, `${dead}: a seated side carries no chip`).not.toContain('data-testid="run-sheet-withdrawn"');
+      expect(ordinary, `${dead}: and keeps the one truncating names line`).toMatch(/class="block min-w-0 truncate text-sm/);
       checked++;
     }
     expect(checked).toBe(2);

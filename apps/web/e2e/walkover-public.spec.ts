@@ -586,6 +586,33 @@ test.describe("W2b R116-3 — the organiser's run sheet and bracket read ruling 
       const chip = s.row.getByTestId("run-sheet-withdrawn");
       await expect(chip, `${width}: one Withdrawn chip`).toHaveCount(1);
       await expect(chip, `${width}: the entrant status's word`).toHaveText(UI["entrants.status.withdrawn"]!);
+      // Geometry, as painted: the chip is whole inside the line (never cut "With…"), is not struck through with the
+      // forfeited names, and the arriving side still shows beside it — at 320 the chip must not push the opponent out.
+      const g = await chip.evaluate((el, arrivingText) => {
+        const line = el.closest("a")!;
+        const lb = line.getBoundingClientRect();
+        const cb = el.getBoundingClientRect();
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        let arrivingLeft: number | null = null;
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (n.textContent?.includes(arrivingText)) {
+            const r = document.createRange();
+            r.selectNodeContents(n);
+            arrivingLeft = r.getBoundingClientRect().left;
+          }
+        }
+        return {
+          chip: [Math.round(cb.left), Math.round(cb.right)],
+          line: [Math.round(lb.left), Math.round(lb.right)],
+          struck: getComputedStyle(el).textDecorationLine.includes("line-through") || el.closest(".line-through") !== null && getComputedStyle(el).display === "inline",
+          arrivingLeft: arrivingLeft === null ? null : Math.round(arrivingLeft),
+        };
+      }, arrivingName);
+      console.log(`audit 4.1 ${width} run sheet chip: ${JSON.stringify(g)}`);
+      expect(g.chip[1], `${width}: the chip ends inside its line`).toBeLessThanOrEqual(g.line[1] + 0.5);
+      expect(g.struck, `${width}: the chip is not struck through with the names`).toBe(false);
+      expect(g.arrivingLeft, `${width}: the arriving side is painted on the line`).not.toBeNull();
+      expect(g.arrivingLeft!, `${width}: and starts inside it`).toBeLessThan(g.line[1] - 8);
       await expectNoHorizontalScroll(page);
       await crop(s.row, `organiser-run-sheet-withdrew-final-${width}`);
       await crop(s.node, `organiser-bracket-withdrew-final-${width}`);

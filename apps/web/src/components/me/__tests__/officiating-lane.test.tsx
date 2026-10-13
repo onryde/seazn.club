@@ -330,12 +330,17 @@ describe("OfficiatingLane — a finished duty marks a side that withdrew (audit 
       const a = makeAssignment({ fixture_status: "forfeited", home_name: "Charlie Gone", away_name: "Bears of Brockley", ...(seat === "home" ? { home_withdrew: true } : { away_withdrew: true }) });
       const html = render(a);
       const name = seat === "home" ? "Charlie Gone" : "Bears of Brockley";
-      expect(html, `${seat}: the chip right after that seat's name`).toMatch(new RegExp(`${name}</span><span data-testid="me-withdrawn"[^>]*>${word}</span>`));
+      expect(html, `${seat}: the chip right after that seat's name`).toMatch(new RegExp(`${name}</span><span class="shrink-0"><span data-testid="me-withdrawn"[^>]*>${word}</span></span>`));
+      // Whole at 320 beside the opponent: a flex names line whose names each truncate, the chip an atomic inline.
+      expect(html, `${seat}: the names line is a flex row`).toContain('<p class="flex min-w-0 items-baseline text-sm text-slate-700">');
+      expect((html.match(/<span class="min-w-0 truncate[^"]*">(Charlie Gone|Bears of Brockley)<\/span>/g) ?? []).length, `${seat}: each name truncates on its own`).toBe(2);
       expect((html.match(/data-testid="me-withdrawn"/g) ?? []).length, `${seat}: one chip`).toBe(1);
       checked++;
     }
     expect(checked).toBe(2);
-    expect(render(makeAssignment({ fixture_status: "forfeited", home_name: "Charlie Gone", away_name: "Bears of Brockley" })), "unflagged: no chip").not.toContain('data-testid="me-withdrawn"');
+    const plain = render(makeAssignment({ fixture_status: "forfeited", home_name: "Charlie Gone", away_name: "Bears of Brockley" }));
+    expect(plain, "unflagged: no chip").not.toContain('data-testid="me-withdrawn"');
+    expect(plain, "unflagged: the one truncating line, as before").toContain('<p class="min-w-0 truncate text-sm text-slate-700">');
   });
   it("fr: the sides join with the French dictionary's word", () => {
     const html = render(makeAssignment({ fixture_status: "decided", home_name: "Falcons", away_name: "Hawks" }), FR);

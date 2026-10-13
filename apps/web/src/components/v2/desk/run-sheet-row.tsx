@@ -286,16 +286,25 @@ export function RunSheetRow({
   // Design audit 4.1: the side named in that empty seat WITHDREW, and the result alone ("X won (w/o)") cannot say so —
   // withdrew shares the walkover tag. Marked as a departed entrant is in the ladder (`ladder-panel.tsx`): her name
   // muted, then the entrant status's own word in a chip (slate-600, not the ladder's slate-500: 4.3:1 on slate-100).
+  // Such a row's names line is the device pad's scan-confirm composition (`device-score-pad.tsx`; loop H F1): each name
+  // a `min-w-0 truncate` span, the chip and "vs" `shrink-0`, so at 320 the names shorten and the chip stays whole
+  // beside the opponent — one truncating string cut the chip to "With…" and pushed the opponent off the line. The chip
+  // is `inline-block` inside its item, so the forfeited row's strike-through does not cross it.
+  const withdrawnSeat = unseatedWithdrew(fixture, "home") || unseatedWithdrew(fixture, "away");
   const seatName = (seat: "home" | "away", name: string) =>
-    unseatedWithdrew(fixture, seat) ? (
+    !withdrawnSeat ? (
+      name
+    ) : unseatedWithdrew(fixture, seat) ? (
       <>
-        <span className="text-slate-500">{name}</span>
-        <span data-testid="run-sheet-withdrawn" className="ml-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
-          {msg("entrants.status.withdrawn")}
+        <span className="min-w-0 truncate text-slate-500">{name}</span>
+        <span className="shrink-0">
+          <span data-testid="run-sheet-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
+            {msg("entrants.status.withdrawn")}
+          </span>
         </span>
       </>
     ) : (
-      name
+      <span className="min-w-0 truncate">{name}</span>
     );
   // Loop H F1: the result cut where the winner's name ends — `decided` is the whole string, as before; the tail is what
   // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
@@ -532,7 +541,7 @@ export function RunSheetRow({
                 route to its own fixture console at all. */}
             <Link
               href={href}
-              className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
+              className={`${withdrawnSeat ? "flex min-w-0 items-baseline" : "block min-w-0 truncate"} text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
               {seatName("home", home)}
               {/* slate-500, not slate-400. `#94a3b8` on white measures ~2.9:1
@@ -546,7 +555,7 @@ export function RunSheetRow({
                   lightest step that clears AA and keeps `vs` quieter than the
                   entrant names it separates — the same remedy `move-panel.tsx`
                   already applied to its own contrast finding. */}
-              <span className="mx-1.5 text-slate-500">{msg("schedule.vs")}</span>
+              <span className={`mx-1.5 text-slate-500${withdrawnSeat ? " shrink-0" : ""}`}>{msg("schedule.vs")}</span>
               {seatName("away", away)}
             </Link>
             {/* Task 9: `hidden md:block`, same reasoning as the meta line
