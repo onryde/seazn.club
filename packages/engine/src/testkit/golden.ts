@@ -1033,6 +1033,12 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
     reviewed: { reviews: { perInnings: 2 } },
     mutable: { lineupChanges: { maxSubs: 1, concussionReplacements: 2, reentry: "once" } },
   },
+  // W2c CA-AB-2 / GN-AB-2 - a stage that shares the points on an abandon. `abandonPolicy` is optional with no default, so
+  // no shipped variant sets it and the corpus pinned it nowhere. Each pins the KEY (the raw config); the abandon's
+  // behaviour is pinned by src/sport/abandon-options.test.ts. Both need draws (owner P-5): carrom's house rule tieBoard
+  // "draw", generic's allowDraws.
+  carrom: { sharedAbandon: { tieBoard: "draw", abandonPolicy: "share" } },
+  generic: { sharedAbandon: { resultMode: "score", allowDraws: true, abandonPolicy: "share" } },
   // A Fischer-with-delay time control ("G/5 +3 d2"). `increment` and `delay`
   // are independent knobs and a control may declare both.
   boardgame: { timed: { clock: { base: 300, increment: 3, delay: 2 } } },
