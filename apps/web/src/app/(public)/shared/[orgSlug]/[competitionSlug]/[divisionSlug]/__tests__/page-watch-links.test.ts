@@ -75,6 +75,7 @@ describe("public division page — the watch links (I4)", () => {
         final: msgFor("fr", "externalPlay.watch.list.final"),
         notOpened: msgFor("fr", "externalPlay.watch.list.notOpened"),
         starting: msgFor("fr", "externalPlay.watch.list.starting"),
+        noResult: msgFor("fr", "externalPlay.watch.list.noResult"),
       },
     });
   });
