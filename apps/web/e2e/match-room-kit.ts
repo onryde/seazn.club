@@ -360,7 +360,10 @@ export async function seedOnlineRound(
   names: string[],
   opts: {
     open?: boolean;
-    camera?: "required" | "off";
+    /** The division's camera policy, written before Start. Unset/"off" leaves
+     *  the competition's floor (`off`, no tile); "optional" shows the tile
+     *  with no duty; "required" gates every seat on the meeting. */
+    camera?: "required" | "optional" | "off";
     stage?: "league" | "swiss";
     /** The division's clock (default CLOCK, 10+5) — a curated key of time-controls.ts. */
     clock?: { base: number; increment: number };
@@ -403,10 +406,10 @@ export async function seedOnlineRound(
   });
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const divisionId = div.data!.id;
-  if (opts.camera === "required") {
+  if (opts.camera === "required" || opts.camera === "optional") {
     // The division settings' own write (division-settings.tsx saveCameraPolicy),
     // before any round opens — after that it may only be relaxed (D9).
-    const cam = await apiJson(request, `/api/v1/divisions/${divisionId}`, "PATCH", { camera_policy: "required" });
+    const cam = await apiJson(request, `/api/v1/divisions/${divisionId}`, "PATCH", { camera_policy: opts.camera });
     expect(cam.status, `camera policy: ${JSON.stringify(cam.error)}`).toBeLessThan(300);
   }
   const ents = await apiJson<{ id: string }[]>(
