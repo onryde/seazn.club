@@ -79,7 +79,7 @@
     "killers": [{ "cwd": "apps/web", "files": ["src/lib/match-rules/__tests__/abandon-field.test.ts"], "name": "each option builds the policy the engine reads" }] },
   { "id": "t7-p7-result-kept", "file": "apps/web/src/server/engine-db/append-event.ts",
     "find": "&& outcomeOf(sportModule, before) === null;", "replace": "&& true;",
-    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/abandon-swiss-settle.test.ts"], "name": "X-AB-5 no regression" }] },
+    "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/abandon-share.test.ts"], "name": "a shared abandon is a RESULT the table credits" }] },
   { "id": "t7-p7-needs-abandon", "file": "apps/web/src/server/engine-db/append-event.ts",
     "find": "const abandonedNoResult = resolveVoids(prior).some((e) => e.type === \"core.abandon\") &&", "replace": "const abandonedNoResult = true &&",
     "killers": [{ "cwd": "apps/web", "files": ["src/server/engine-db/__tests__/abandon-swiss-settle.test.ts"], "name": "X-AB-5 no regression" }] },

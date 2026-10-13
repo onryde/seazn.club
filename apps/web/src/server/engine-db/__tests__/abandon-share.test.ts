@@ -89,6 +89,38 @@ describe.skipIf(!HAS_DB)("GN-AB-2 CA-AB-2 share at append time (review I6)", () 
   });
 });
 
+describe.skipIf(!HAS_DB)("a shared abandon is a RESULT the table credits - the organiser's settle (X-AB-5) must not turn it into a win", () => {
+  /** A settle on `id` naming its home side the winner, as the organiser would send it. */
+  const settleHome = async (orgId: string, id: string, atSeq: number) => {
+    const f = await fx(id);
+    return appendEvent(orgId, id, atSeq, { type: "core.settle", payload: { winner: f.home, method: "organiser" } });
+  };
+
+  it("GN-AB-2: generic, 2-1 abandoned under share (a draw) - a settle is refused not_bracket and the draw and its status stand", async () => {
+    const { b, id } = await liveGeneric({ allowDraws: true, abandonPolicy: "share" });
+    await appendEvent(b.auth.orgId, id, 3, { type: "core.abandon", payload: { reason: "weather" } });
+    expect(await fx(id)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+    await expect(settleHome(b.auth.orgId, id, 4)).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE", data: { reason: "not_bracket" } });
+    expect(await fx(id), "the shared points were not rewritten into a win").toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+  });
+
+  it("CA-AB-2: carrom (house draw rule), abandoned under share - the same refusal", async () => {
+    const { b, id } = await liveCarrom({ tieBoard: "draw", abandonPolicy: "share" });
+    await appendEvent(b.auth.orgId, id, 1, { type: "core.abandon", payload: { reason: "weather" } });
+    expect(await fx(id)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+    await expect(settleHome(b.auth.orgId, id, 2)).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE", data: { reason: "not_bracket" } });
+    expect(await fx(id)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+  });
+
+  it("the negative pair: the same generic stage with NO policy - the abandon decides nobody, and the settle is accepted", async () => {
+    const { b, id } = await liveGeneric({ allowDraws: true });
+    await appendEvent(b.auth.orgId, id, 3, { type: "core.abandon", payload: { reason: "weather" } });
+    expect(await fx(id)).toMatchObject({ status: "abandoned", outcome: null });
+    await settleHome(b.auth.orgId, id, 4);
+    expect(await fx(id)).toMatchObject({ status: "decided", outcome: { kind: "win" } });
+  });
+});
+
 describe.skipIf(!HAS_DB)("P-5 the save refuses share without draws, with the owner's wording, and writes nothing", () => {
   /** `{ code, data.issues }` of the refusal a save of `config` over the division gets, or null when it saved. */
   async function refusalOf(auth: Parameters<typeof patchDivision>[0], divisionId: string, config: Record<string, unknown>) {
