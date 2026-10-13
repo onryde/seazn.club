@@ -36,6 +36,7 @@ import {
 import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { resolveFixtureCfg } from "./fixture-cfg";
+import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
 
 type Tx = postgres.TransactionSql;
 
@@ -111,7 +112,8 @@ function awardByeDelta(
   // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
   // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
   const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
-  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule) : rawPair;
+  // W2c X-PT-1: a bye is told apart by its reason (`isBye`), never by `played` — and it has no ledger: nothing played.
+  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule, false) : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
@@ -364,6 +366,11 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // now describes the format keys rather than the whole column. Let `points`
   // into `rules`, or drop D1's lock, and this line is the same defect again.
   const pointsRule = stage.config?.points ? PointsRule.parse(stage.config.points) : null;
+  // W2c Task 9 (X-PT-1): under a rule, each forfeit-shaped result's "was anything played" fact, from its own ledger —
+  // one read for the stage, and none without a rule (nothing reads it then) or without a forfeit.
+  const playedFacts = pointsRule
+    ? await forfeitPlayedFacts(tx, fixtures.filter((f) => f.outcome && f.state && f.home_entrant_id && f.away_entrant_id), sportModule)
+    : new Map<string, boolean>();
 
   const tableFixtures: TableFixture[] = fixtures.map((f) => {
     const base: TableFixture = {
@@ -399,9 +406,10 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         f.state,
       );
       // Custom points rule (Jul3/05 §2): re-derive competition points from
-      // stage config; the sport ledger is untouched.
+      // stage config; the sport ledger is untouched. W2c X-PT-1: a forfeit
+      // with nothing played pays the rule's forfeit row and its awarded score.
       base.result = pointsRule
-        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule)
+        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule, playedFor(f, playedFacts))
         : pair;
     } else if (isOneSidedAwardBye(f)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one

@@ -15,7 +15,7 @@ import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots"
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
 import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
-import { divisionQualification } from "@/server/public-site/division-qualification";
+import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { STAGE_RULES_SPORTS } from "@/lib/match-rules";
 // From the DB-free module, not through the server-only usecase above: this
@@ -517,7 +517,7 @@ export default async function DivisionPage({
           division,
           dict: publicDict,
           locale,
-          fixtures,
+          fixtures: await qualificationFixtures(fixtures, sportModule, [...qualMeta.values()]),
           entrantStatuses,
           entrantNames,
           cascade,

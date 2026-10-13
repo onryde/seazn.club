@@ -167,6 +167,7 @@
 import {
   EngineError,
   foldMatchWithStoppage,
+  playRecorded,
   summaryOf,
   type EventEnvelope,
   type FoldedOutcomeFacts,
@@ -2204,8 +2205,10 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
+      // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
+      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module.
       result: pointsRule
-        ? applyPointsRule(fold.outcome, pair, pointsRule)
+        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module))
         : pair,
     });
   }

@@ -18,6 +18,7 @@ import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__
 import { fixtureStatusFromFold } from "../append-event";
 import { foldFixture, foldFrom } from "../fold";
 import { declaredVariant, insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
+import { qualificationFixtures } from "@/server/public-site/division-qualification";
 import { fixtureRow, playBadminton, post, rowsOf, tip } from "./helpers/w2b-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -363,5 +364,63 @@ describe.skipIf(!HAS_DB)("W2b append guards and the status rule, through scoreEv
     expect([read.status, (await fixtureRow(id)).status], "a read never rewrites the stored status").toEqual(["abandoned", "abandoned"]);
     const out = await post(s.auth, id, "core.note", { text: "umpires' report" });
     expect([out.status, (await fixtureRow(id)).status], "the next append writes the W2b status").toEqual(["decided", "decided"]);
+  });
+});
+
+// W2c Task 9 (X-PT-1, owner P-3 "A") — the seam through real `score_events`: the standings fold reads each forfeit's
+// played fact from its ledger (`engine-db/forfeit-played.ts` → W2b's `playRecorded`) and hands it to `applyPointsRule`;
+// the public qualification view's loader (`qualificationFixtures`) reads the same fact for the same fixture.
+// single-sport: badminton is the sport whose rally is the first thing "played" (ruling 112) and whose own ledger keeps
+// no generic `for` — so the rule's awarded score is told apart from the sport's credit by key. The expected points and
+// score are the stage rule's own (the test's declaration); the sport's credit after play is the rule-less twin's table.
+describe.skipIf(!HAS_DB)("X-PT-1 stage points read a forfeit's played fact from its ledger (W2c Task 9)", () => {
+  const RULE = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [21, 0] } };
+  /** A two-entrant badminton league (with or without the stage rule): `script` runs before the away side withdraws. */
+  async function withdrawal(rule: boolean, script: (auth: AuthCtx, id: string, home: string) => Promise<void>) {
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "league", entrants: 2, ...(rule ? { stageConfig: { points: RULE } } : {}) });
+    const id = s.fixtureIds[0]!;
+    const f = await fixtureRow(id);
+    await post(s.auth, id, "core.start");
+    await script(s.auth, id, f.home_entrant_id!);
+    // PF-2: `withdrew` is the withdrawal cascade's reason — written as the cascade writes it.
+    const out = await scoreEvent(s.auth, id, { expected_seq: await tip(id), type: "core.forfeit", payload: { by: f.away_entrant_id, reason: "withdrew" } } as never, { writer: "withdrawal_cascade" });
+    expect([out.status, (out.outcome as { reason?: string }).reason], "rig: the withdrawal decided the fixture").toEqual(["forfeited", "withdrew"]);
+    const rows = await standings(s.auth, s.stageId);
+    // The public view's read of the same fixture, under a stage that scores forfeits (the loader reads only there).
+    const [qual] = await qualificationFixtures([{ ...(await fixtureRow(id)), stage_id: s.stageId, pool_id: null }], moduleOf("badminton"), [{ points_rule: RULE }]);
+    return { home: rows.find((r) => r.entrantId === f.home_entrant_id)!, away: rows.find((r) => r.entrantId === f.away_entrant_id)!, qualPlayed: qual!.played };
+  }
+  const rally = async (auth: AuthCtx, id: string, home: string) => {
+    await post(auth, id, "badminton.rally", { wonBy: home });
+  };
+
+  it("a withdrawal with NOTHING played (Start only) pays the rule's forfeit row, and its awarded score replaces for/against/diff", async () => {
+    const t = await withdrawal(true, async () => {});
+    expect(t.qualPlayed, "the public view reads the same fact: nothing played").toBe(false);
+    expect([t.home.points, t.away.points]).toEqual([RULE.forfeit.winnerPoints, RULE.forfeit.loserPoints]);
+    expect(t.home.metrics).toMatchObject({ for: 21, against: 0, diff: 21 });
+    expect(t.away.metrics).toMatchObject({ for: 0, against: 21, diff: -21 });
+  });
+
+  it("a withdrawal AFTER a rally pays base points and keeps the sport's own credit — no awarded score", async () => {
+    const t = await withdrawal(true, rally);
+    expect(t.qualPlayed, "the public view reads the same fact: played").toBe(true);
+    expect([t.home.points, t.away.points]).toEqual([RULE.base.win, RULE.base.loss]);
+    expect(t.home.metrics?.for, "no awarded score: badminton keeps no generic `for`").toBeUndefined();
+    // The sport's credit is the rule-less table's, key for key: the rule changed points alone.
+    const twin = await withdrawal(false, rally);
+    expect(Object.keys(twin.home.metrics ?? {}).length, "premise: the sport credits a ledger").toBeGreaterThan(0);
+    expect([t.home.metrics, t.away.metrics]).toEqual([twin.home.metrics, twin.away.metrics]);
+  });
+
+  it("a rally the scorer voided is no play (ruling 127): the withdrawal after it is nothing played, so the forfeit row and the awarded score", async () => {
+    const t = await withdrawal(true, async (auth, id, home) => {
+      await rally(auth, id, home);
+      const [r] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and type = 'badminton.rally'`;
+      await post(auth, id, "core.void", { event_id: r!.id });
+    });
+    expect(t.qualPlayed, "the public view reads the same fact: the void took the play back").toBe(false);
+    expect([t.home.points, t.away.points]).toEqual([RULE.forfeit.winnerPoints, RULE.forfeit.loserPoints]);
+    expect(t.home.metrics).toMatchObject({ for: 21, against: 0, diff: 21 });
   });
 });

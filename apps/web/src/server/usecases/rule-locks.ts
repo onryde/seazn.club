@@ -22,15 +22,19 @@ export const tableRuleKeys = (module: AnySportModule, variant: string | null): R
 
 /**
  * The table keys a stage PointsRule REPLACES. `applyPointsRule` (engine competition/points.ts) re-derives `delta.points`
- * from the rule and leaves the sport's metrics ledger untouched, so a stage with its own `config.points` no longer reads
- * the division's keys that feed `delta.points`: the per-sport win/draw/loss (`points`), the set sports' `pointsMap`,
- * a board game's `scoring`. The other points-scope keys are NOT replaced and a stage rule does not make them stop
- * mattering: football's and the period sports' `awardScore` sets the goal credit of a forfeit in their own ledger
- * (gf/ga/gd), where the rule's own award score writes for/against/diff beside it, never over it; a board game's
- * `byeScore` is declared and read nowhere. Anything not named here stays locked, which is the safe side for a key a
- * future module declares. Pinned against the engine's declarations in division-locks.test.ts.
+ * from the rule and never touches the sport's own ledger keys (on a forfeit with nothing played it writes only the
+ * generic `for`/`against`/`diff`, W2c X-PT-1), so a stage with its own `config.points` no longer reads the division's
+ * keys whose ONLY reader is `delta.points`: the per-sport win/draw/loss (`points`) and the set sports' `pointsMap`.
+ * The other points-scope keys are NOT replaced and a stage rule does not make them stop mattering:
+ *  - a board game's `scoring` also writes the game's own score: its headline (`summary` reads `cfg.scoring`), its
+ *    declared points sets and its per-match bounds — none of which a stage rule replaces (W2c Task 9 addendum);
+ *  - football's and the period sports' `awardScore` sets the goal credit of a forfeit in their own ledger (gf/ga/gd),
+ *    where the rule's own award score writes for/against/diff beside it, never over it;
+ *  - a board game's `byeScore` is declared and read nowhere.
+ * Anything not named here stays locked, which is the safe side for a key a future module declares. Pinned against the
+ * engine's declarations in division-locks.test.ts.
  */
-export const STAGE_POINTS_REPLACES: ReadonlySet<string> = new Set(["points", "pointsMap", "scoring"]);
+export const STAGE_POINTS_REPLACES: ReadonlySet<string> = new Set(["points", "pointsMap"]);
 
 /**
  * "Which of these stages have already started?" — THE format-lock predicate,

@@ -78,7 +78,7 @@ import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { cachedIfFound } from "./cache-found";
-import { divisionQualification } from "./division-qualification";
+import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
 import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
@@ -923,7 +923,7 @@ export async function loadCompetitionHub(
       division: d,
       dict,
       locale,
-      fixtures,
+      fixtures: await qualificationFixtures(fixtures, module_, stages),
       entrantStatuses: Object.fromEntries(entrants.map((e) => [e.id, e.status])),
       entrantNames: names,
       cascade,

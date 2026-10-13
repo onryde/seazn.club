@@ -35,7 +35,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { divisionQualification } from "@/server/public-site/division-qualification";
+import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { msgFor } from "@/lib/messages-i18n";
 import { rulesLineText } from "@/lib/rules-line";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
@@ -165,7 +165,7 @@ export default async function DivisionHomePage({ params }: Props) {
     division,
     dict,
     locale: orgLocale,
-    fixtures,
+    fixtures: await qualificationFixtures(fixtures, module_, stages),
     entrantStatuses,
     entrantNames,
     cascade,

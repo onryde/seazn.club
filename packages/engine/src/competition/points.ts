@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { EntrantId, MatchOutcome, MetricSpec, StandingsDelta } from "../core/types.ts";
 import { EngineError } from "../core/errors.ts";
+import { awardReasonOf } from "../sport/forfeit-credit.ts";
 import type { MatchPointsBounds } from "../sport/module.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 
@@ -54,9 +55,40 @@ export function validatePointsRule(rule: PointsRule, metrics: readonly MetricSpe
   }
 }
 
-const isForfeit = (outcome: MatchOutcome): boolean =>
-  outcome.kind === "award" ||
-  (outcome.kind === "win" && (outcome.method === "walkover" || outcome.method === "forfeit"));
+// ---------------------------------------------------------------------------
+// W2c Task 9 (X-PT-1; owner Q9, P-3 "A") — which results a stage PointsRule pays as a forfeit.
+// ---------------------------------------------------------------------------
+
+/** A bye: the system's award nobody forfeited (`awardReasonOf` reads a typed or a pre-W2b stored award). */
+const isBye = (outcome: MatchOutcome): boolean => outcome.kind === "award" && awardReasonOf(outcome) === "bye";
+
+/** A walkover by its own reason: the side never arrived. An award whose reason is `walkover`, or a win whose method is. */
+const isWalkover = (outcome: MatchOutcome): boolean =>
+  outcome.kind === "award" ? awardReasonOf(outcome) === "walkover" : outcome.kind === "win" && outcome.method === "walkover";
+
+/** The outcomes whose `played` fact matters: an award (a bye included), or a win by walkover/forfeit — chess's
+ *  pre-W2b `boardgame.result{method: "forfeit"}` still decides a `win`, not an award. Callers load ledgers for exactly
+ *  these (one query per stage), so a win by forfeit after a played game is read as played. */
+export function forfeitShaped(outcome: MatchOutcome): boolean {
+  return outcome.kind === "award" || (outcome.kind === "win" && (outcome.method === "walkover" || outcome.method === "forfeit"));
+}
+
+/**
+ * P-3 "A": a forfeit under a stage PointsRule is an award with NOTHING PLAYED, whatever its reason; never a bye.
+ *  - A walkover is nothing played by its own reason, whatever `played` reads (X-PT-1 lists "a walkover" unqualified;
+ *    Q9 "only walkover reason = forfeit"). The one ledger where the two differ is chess's: its Start is play (ruling
+ *    118, `startIsPlay`) and a no-show after it is still recorded as a walkover (FIDE 6.7.1) — the stats reader reads
+ *    it as unplayed too (`forfeitStatsRole`, X-PS-1).
+ *  - Any other forfeit — a withdrawal, a disqualification, a retirement, a pre-W2b chess win by forfeit — is one only
+ *    while nothing is played (`played` false). After play it is a result (Q9: normal points).
+ *  - A bye is never one: nobody forfeited (it keeps the forfeit row's points, `applyPointsRule`, but no award score).
+ */
+export function isUnplayedForfeit(outcome: MatchOutcome, played: boolean): boolean {
+  if (isWalkover(outcome)) return true;
+  if (played) return false;
+  if (outcome.kind === "win") return outcome.method === "forfeit";
+  return outcome.kind === "award" && !isBye(outcome);
+}
 
 function marginOf(delta: StandingsDelta): number {
   const m = delta.metrics;
@@ -65,23 +97,26 @@ function marginOf(delta: StandingsDelta): number {
   return 0;
 }
 
+/** `forfeitRow`: the result the rule pays as a forfeit (`applyPointsRule`) — an unplayed forfeit or a bye. Margin bonuses
+ *  read a played score, so they skip it; the forfeit bonuses pay only it. An award AFTER play is not one: its margin
+ *  bonuses read the real score the sport credited (owner Q9, "normal win/loss points + bonuses on real score"). */
 function bonusesFor(
   delta: StandingsDelta,
   outcome: MatchOutcome,
   rule: PointsRule,
+  forfeitRow: boolean,
 ): number {
   // D14 (X-DW-4): a double walkover earns no bonus, `forfeit_loss` included — nobody forfeited TO anyone.
   if (outcome.kind === "double_walkover") return 0;
   let extra = 0;
   const margin = marginOf(delta);
-  const forfeit = isForfeit(outcome);
   for (const b of rule.bonuses) {
     switch (b.when) {
       case "loss_margin_lte":
-        if (delta.lost === 1 && !forfeit && -margin <= (b.param ?? 0)) extra += b.points;
+        if (delta.lost === 1 && !forfeitRow && -margin <= (b.param ?? 0)) extra += b.points;
         break;
       case "win_margin_gte":
-        if (delta.won === 1 && !forfeit && margin >= (b.param ?? 0)) extra += b.points;
+        if (delta.won === 1 && !forfeitRow && margin >= (b.param ?? 0)) extra += b.points;
         break;
       case "score_ratio_gte": {
         // netball 26 Jan: losing side that scored ≥ param × the winner's score.
@@ -90,7 +125,7 @@ function bonusesFor(
         const a = delta.metrics.against;
         if (
           delta.lost === 1 &&
-          !forfeit &&
+          !forfeitRow &&
           f !== undefined &&
           a !== undefined &&
           f >= (b.param ?? 0) * a
@@ -103,10 +138,10 @@ function bonusesFor(
         if (delta.drawn === 1) extra += b.points;
         break;
       case "forfeit_win":
-        if (forfeit && delta.won === 1) extra += b.points;
+        if (forfeitRow && delta.won === 1) extra += b.points;
         break;
       case "forfeit_loss":
-        if (forfeit && delta.lost === 1) extra += b.points;
+        if (forfeitRow && delta.lost === 1) extra += b.points;
         break;
       case "no_result":
         if (outcome.kind === "no_result") extra += b.points;
@@ -117,23 +152,37 @@ function bonusesFor(
 }
 
 /**
- * Re-derive both sides' competition points from the rule (Jul3/05 §2). The
- * sport's metrics ledger is untouched; only `points` changes — plus the
- * optional configured award score on a forfeit (never a fake score unless the
- * organiser configured one, 20 Jan / 8 Dec).
+ * Re-derive both sides' competition points from the rule (Jul3/05 §2). Only `points` changes — plus, on a forfeit with
+ * nothing played, the rule's configured award score (never a fake score unless the organiser configured one, 20 Jan /
+ * 8 Dec), which REPLACES `for` / `against` / `diff` (W2c X-PT-1, owner Q9). The sport's own ledger keys (`gf`,
+ * `runs_for`, `sets_won`, …) are never touched: the rule writes only the generic three, so where a sport keeps its
+ * credit under its own keys that credit stands beside the rule's score (P1, 2026-09-24; tiebreak-rule-award-alias.test.ts).
+ *
+ * `played` (W2c Task 9, owner P-3 "A") is the fixture's "was anything played" fact — W2b's `playRecorded` over its
+ * ledger under its sport module (rulings 112–115, 118, 120, 127). REQUIRED, so no caller can leave it out: a stored
+ * award outcome carries no played marker (review I7), so only the caller, which holds the ledger, can say. It is read
+ * only for a forfeit-shaped outcome (`forfeitShaped`). How the rule reads each outcome (X-PT-1):
+ *  - a forfeit with nothing played (`isUnplayedForfeit`) pays the rule's forfeit row, its forfeit bonuses and its award
+ *    score;
+ *  - a bye pays the forfeit row and its forfeit bonuses (as before W2c) but never the award score: nobody forfeited;
+ *  - an award after play is a result: base points, and the margin bonuses on the real score the sport credited (Q9);
+ *  - a double walkover and a no result pay 0 (D14).
  */
 export function applyPointsRule(
   outcome: MatchOutcome,
   pair: FixtureResult,
   rule: PointsRule,
+  played: boolean,
 ): FixtureResult {
-  const forfeit = isForfeit(outcome);
+  const forfeit = isUnplayedForfeit(outcome, played);
+  // The rule's forfeit row pays an unplayed forfeit and a bye alike; only the award score tells them apart.
+  const forfeitRow = forfeit || isBye(outcome);
   const mapped = pair.map((delta) => {
     let points: number;
     // D14 (X-DW-4): a double walkover is a 0-point loss for both, whatever the rule pays a loss or a forfeit loser.
     if (outcome.kind === "no_result" || outcome.kind === "double_walkover") {
       points = 0;
-    } else if (forfeit && rule.forfeit !== undefined) {
+    } else if (forfeitRow && rule.forfeit !== undefined) {
       points = delta.won === 1 ? rule.forfeit.winnerPoints : rule.forfeit.loserPoints;
     } else if (delta.won === 1) {
       points = rule.base.win;
@@ -144,18 +193,52 @@ export function applyPointsRule(
     } else {
       points = 0;
     }
-    points += bonusesFor(delta, outcome, rule);
+    points += bonusesFor(delta, outcome, rule, forfeitRow);
     const metrics = { ...delta.metrics };
     if (forfeit && rule.forfeit?.awardScore !== undefined) {
       const [w, l] = rule.forfeit.awardScore;
       const [mine, theirs] = delta.won === 1 ? [w, l] : [l, w];
-      metrics.for = (metrics.for ?? 0) + mine;
-      metrics.against = (metrics.against ?? 0) + theirs;
-      metrics.diff = (metrics.diff ?? 0) + mine - theirs;
+      metrics.for = mine;
+      metrics.against = theirs;
+      metrics.diff = mine - theirs;
     }
     return { ...delta, points, metrics };
   }) as unknown as FixtureResult;
   return mapped;
+}
+
+// ---------------------------------------------------------------------------
+// Q1 (W2c spec item 10): what a stage PointsRule cannot express.
+// ---------------------------------------------------------------------------
+
+export type Expressible = { readonly ok: true } | { readonly ok: false; readonly keys: readonly string[]; readonly reason: string };
+
+/** The `points` keys a stage PointsRule's `base` stands in for: the three-way result, under either spelling (generic
+ *  writes w/d/l). Every other non-null key of a division's `points` pays a result the rule has no field for. */
+const BASE_KEYS: ReadonlySet<string> = new Set(["win", "draw", "loss", "w", "d", "l"]);
+
+/**
+ * W2c Q1 (owner "A"): can a stage PointsRule (win/draw/loss + bonuses + a forfeit row) stand in for this division's own
+ * points without dropping any of them? Refused — never silently dropped — where the division splits its points in a way
+ * the rule cannot say (W2d widens PointsRule and lifts this):
+ *  - a `points` key beyond the three-way result: ice hockey's `otWin`/`otLoss`, hockey's `shootoutWin`/`shootoutLoss`,
+ *    cricket's `tie`/`noResult` (plan finding 29);
+ *  - a set sport's `pointsMap` that pays more than one pair by set score (volleyball's FIVB 3-2 → 2:1 beside 3:0): the
+ *    rule pays one pair per result. A map of one pair (badminton's `*` 2:0) is the rule's own win/loss.
+ * The empty case first: no cfg, or one with neither key, is expressible.
+ */
+export function pointsRuleExpressible(divisionCfg: unknown): Expressible {
+  const cfg = (typeof divisionCfg === "object" && divisionCfg !== null ? divisionCfg : {}) as {
+    points?: Record<string, unknown> | null;
+    pointsMap?: Record<string, unknown> | null;
+  };
+  const pts = cfg.points ?? {};
+  const keys = Object.keys(pts).filter((k) => !BASE_KEYS.has(k) && pts[k] != null);
+  const pairs = new Set(Object.values(cfg.pointsMap ?? {}).map((pair) => JSON.stringify(pair)));
+  if (pairs.size > 1) keys.push("pointsMap");
+  return keys.length === 0
+    ? { ok: true }
+    : { ok: false, keys, reason: `this division awards ${keys.join(", ")}, which a stage points rule cannot express yet` };
 }
 
 // ---------------------------------------------------------------------------

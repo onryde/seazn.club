@@ -34,6 +34,11 @@ function result(home: string, away: string, hs: number, as_: number): { outcome:
   };
 }
 
+/** W2c Task 9: `applyPointsRule`'s `played` (the ledger's `playRecorded`). These cases hold no ledger: a played
+ *  result is played (the flag is read only for a forfeit-shaped outcome); an outcome-only forfeit had nothing played. */
+const PLAYED = true;
+const NOTHING_PLAYED = false;
+
 const NETBALL = PointsRule.parse({
   base: { win: 5, draw: 3, loss: 0 },
   bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }],
@@ -44,7 +49,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
     // A beats B 20–8 (no bonus for B), B beats C 12–7 (C ≥50% → bonus 1),
     // A draws C 10–10.
     const games = [result("A", "B", 20, 8), result("B", "C", 12, 7), result("A", "C", 10, 10)];
-    const pairs = games.map((g) => applyPointsRule(g.outcome, g.pair, NETBALL));
+    const pairs = games.map((g) => applyPointsRule(g.outcome, g.pair, NETBALL, PLAYED));
     const rows = foldResults(["A", "B", "C"], pairs);
     const points = Object.fromEntries(rows.map((r) => [r.entrantId, r.points]));
     expect(points).toEqual({ A: 8, B: 5, C: 4 }); // A: 5+3 · B: 0+5 · C: 1+3
@@ -57,7 +62,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
     });
     const outcome: MatchOutcome = { kind: "win", winner: "A", loser: "B", method: "walkover" };
     const pair: FixtureResult = [delta("A", 1, 0, 0, 0, 0), delta("B", 0, 0, 1, 0, 0)];
-    const [a, b] = applyPointsRule(outcome, pair, rule);
+    const [a, b] = applyPointsRule(outcome, pair, rule, NOTHING_PLAYED);
     expect(a.points).toBe(3);
     expect(b.points).toBe(-1);
     expect(a.metrics.for).toBe(0); // no fake score
@@ -66,7 +71,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
       base: { win: 3, draw: 1, loss: 0 },
       forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [4, 0] },
     });
-    const [a2, b2] = applyPointsRule(outcome, pair, withScore);
+    const [a2, b2] = applyPointsRule(outcome, pair, withScore, NOTHING_PLAYED);
     expect(a2.metrics).toMatchObject({ for: 4, against: 0, diff: 4 });
     expect(b2.metrics).toMatchObject({ for: 0, against: 4, diff: -4 });
   });
@@ -80,7 +85,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
       { entrantId: "A", played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },
       { entrantId: "B", played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },
     ];
-    const [a, b] = applyPointsRule({ kind: "no_result" }, pair, rule);
+    const [a, b] = applyPointsRule({ kind: "no_result" }, pair, rule, NOTHING_PLAYED);
     expect(a.points).toBe(1);
     expect(b.points).toBe(1);
   });
@@ -117,7 +122,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
           const pairs = games.map((g) => {
             const [h, a] = teams[g.pairIdx]!;
             const r = result(h, a, g.hs, g.as);
-            return applyPointsRule(r.outcome, r.pair, rule);
+            return applyPointsRule(r.outcome, r.pair, rule, PLAYED);
           });
           const rows = foldResults(["A", "B", "C"], pairs);
           const shuffled = foldResults(["A", "B", "C"], [...pairs].reverse());
@@ -205,6 +210,9 @@ function ruleCorpus(): { outcome: MatchOutcome; pair: FixtureResult }[] {
     { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
     { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
     { outcome: { kind: "award", winner: "H", loser: "A", reason: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    // W2c X-PT-1: an award after play is a result (margin bonuses on its real score); a bye pays the forfeit row.
+    { outcome: { kind: "award", winner: "H", loser: "A", reason: "withdrew" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
+    { outcome: { kind: "award", winner: "H", loser: null, reason: "bye" }, pair: [delta("H", 1, 0, 0, 0, 0), blank("__bye__", 0, 0, 1)] },
     { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
     { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
     { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
@@ -242,7 +250,7 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
     const seen = { win: [] as number[], loss: [] as number[], all: [] as number[] };
     for (const [hs, as_] of [[30, 0], [21, 20], [10, 10], [5, 6], [0, 30]] as const) {
       const { outcome, pair } = result("H", "A", hs, as_);
-      const [h, a] = applyPointsRule(outcome, pair, RUGBY);
+      const [h, a] = applyPointsRule(outcome, pair, RUGBY, PLAYED);
       for (const d of [h, a]) {
         seen.all.push(d.points);
         if (d.won === 1) seen.win.push(d.points);
@@ -292,9 +300,9 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
         const b = pointsRuleBounds(r);
         // One expect per rule, not per value: 4 per value timed out at 400 runs.
         const outside: string[] = [];
-        for (const { outcome, pair } of corpus) {
-          for (const d of applyPointsRule(outcome, pair, r)) {
-            const at = `${outcome.kind} ${d.entrantId} ${JSON.stringify(d.metrics)} → ${d.points}`;
+        for (const { outcome, pair } of corpus) for (const played of [NOTHING_PLAYED, PLAYED]) {
+          for (const d of applyPointsRule(outcome, pair, r, played)) {
+            const at = `${outcome.kind} played=${played} ${d.entrantId} ${JSON.stringify(d.metrics)} → ${d.points}`;
             if (d.points < b.min) outside.push(`${at} < min ${b.min}`);
             if (d.points > b.max) outside.push(`${at} > max ${b.max}`);
             if (d.won === 1 && d.points < b.winFloor) outside.push(`${at} < winFloor ${b.winFloor}`);
@@ -351,14 +359,14 @@ describe("pointsRuleBounds — winsOnly: only wins pay, at one amount", () => {
       const r = PointsRule.parse(raw);
       const b = pointsRuleBounds(r);
       expect(b.winsOnly, JSON.stringify(raw)).toBe(true);
-      for (const { outcome, pair } of ruleCorpus()) {
-        for (const d of applyPointsRule(outcome, pair, r)) {
+      for (const { outcome, pair } of ruleCorpus()) for (const played of [NOTHING_PLAYED, PLAYED]) {
+        for (const d of applyPointsRule(outcome, pair, r, played)) {
           checked++;
-          if (d.points !== d.won * b.winFloor) off.push(`${JSON.stringify(raw)} ${outcome.kind} ${d.entrantId} → ${d.points}`);
+          if (d.points !== d.won * b.winFloor) off.push(`${JSON.stringify(raw)} ${outcome.kind} played=${played} ${d.entrantId} → ${d.points}`);
         }
       }
     }
     expect(off).toEqual([]);
-    expect(checked).toBe(rules.length * ruleCorpus().length * 2);
+    expect(checked).toBe(rules.length * ruleCorpus().length * 2 * 2);
   });
 });

@@ -32,6 +32,7 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision } from "../data";
+import { qualificationFixtures } from "../division-qualification";
 import { embedDivisionData } from "@/server/embed-data";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import {
@@ -170,7 +171,8 @@ async function load(
     stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
     poolId,
     rows: snap?.rows ?? [],
-    fixtures: data.fixtures,
+    // W2c X-PT-1: the played facts as the public surfaces read them (one read of the forfeit-shaped ledgers).
+    fixtures: await qualificationFixtures(data.fixtures, module_, data.stages),
     entrantStatuses: statuses,
     bounds: divisionPointsBounds(module_, data.division.config),
     awardAddsToLedger: divisionAwardAddsToLedger(module_, data.division.config),

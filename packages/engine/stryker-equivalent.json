@@ -528,6 +528,18 @@
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
+    },
+    {
+      "mutant": "src/competition/points.ts:67:70 ConditionalExpression → true",
+      "original": "outcome.kind === \"win\"",
+      "line": "outcome.kind === \"award\" ? awardReasonOf(outcome) === \"walkover\" : outcome.kind === \"win\" && outcome.method === \"walkover\";",
+      "reason": "The guard exists for TypeScript narrowing only: past the award branch the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so `outcome.method === \"walkover\"` is already false for every one of them and the mutant answers the same (W2c Task 9)."
+    },
+    {
+      "mutant": "src/competition/points.ts:73:39 ConditionalExpression → true",
+      "original": "outcome.kind === \"win\"",
+      "line": "return outcome.kind === \"award\" || (outcome.kind === \"win\" && (outcome.method === \"walkover\" || outcome.method === \"forfeit\"));",
+      "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
     }
   ]
 }

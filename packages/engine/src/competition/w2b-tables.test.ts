@@ -4,7 +4,7 @@
 // each sport's OWN `standingsDelta` (real producer) and read back through the engine's own readers (`RATIO_LEDGERS`,
 // `derivedMetricText`, `rankStandings`), never through the function under test.
 import { describe, expect, it } from "vitest";
-import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, playRecorded } from "../core/events.ts";
 import type { EntrantId, LineupPair, MatchOutcome } from "../core/types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
@@ -36,15 +36,17 @@ const lineups = (m: AnySportModule, home: EntrantId, away: EntrantId): LineupPai
   away: lineupFromCatalog(m.positions, away),
 });
 
-interface Folded { outcome: MatchOutcome; pair: FixtureResult }
+/** `played`: W2b's `playRecorded` of the ledger the fold read (W2c Task 9: `applyPointsRule` takes it). */
+interface Folded { outcome: MatchOutcome; pair: FixtureResult; played: boolean }
 
 /** Fold `events` (a list of {type, payload}) for home v away and return the real outcome + the module's delta pair. */
 function fold(m: AnySportModule, cfg: unknown, home: EntrantId, away: EntrantId, events: { type: string; payload: unknown }[]): Folded {
   const l = lineups(m, home, away);
-  const f = foldMatchWithStoppage(m as never, cfg as never, l, events.map((e, i) => makeEnvelope(i + 1, e as never)));
+  const envelopes = events.map((e, i) => makeEnvelope(i + 1, e as never));
+  const f = foldMatchWithStoppage(m as never, cfg as never, l, envelopes);
   const outcome = outcomeOf(m as never, f as never);
   if (outcome === null) throw new Error(`${m.key}: the stream decided nothing`);
-  return { outcome, pair: m.standingsDelta(outcome, cfg, { kind: "league" }, f.state) };
+  return { outcome, pair: m.standingsDelta(outcome, cfg, { kind: "league" }, f.state), played: playRecorded(envelopes, m) };
 }
 
 /** A PLAYED, decided match from the module's own generator: no forfeit or abandon recorded, a win/draw/tie result.
@@ -58,7 +60,7 @@ function played(m: AnySportModule, cfg: unknown, home: EntrantId, away: EntrantI
     const outcome = outcomeOf(m as never, f as never);
     if (outcome === null || !(outcome.kind === "win" || outcome.kind === "draw" || outcome.kind === "tie")) continue;
     if (wantWinner !== undefined && !(outcome.kind === "win" && outcome.winner === wantWinner)) continue;
-    return { outcome, pair: m.standingsDelta(outcome, cfg, { kind: "league" }, f.state) };
+    return { outcome, pair: m.standingsDelta(outcome, cfg, { kind: "league" }, f.state), played: playRecorded(events, m) };
   }
   throw new Error(`${m.key}: no played ${wantWinner ? `win for ${wantWinner}` : "result"} in 400 seeds`);
 }
@@ -103,7 +105,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
       const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
       expect(dw.outcome, `${m.key}: the fold of core.forfeit{by:"both"}`).toEqual({ kind: "double_walkover" });
       for (const rule of [undefined, RULE]) {
-        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : applyPointsRule(f.outcome, f.pair, rule));
+        const scored = (f: Folded): FixtureResult => (rule === undefined ? f.pair : applyPointsRule(f.outcome, f.pair, rule, f.played));
         const without = foldResults([X, Y, Z], [scored(xz), scored(yz)]);
         const withDw = foldResults([X, Y, Z], [scored(xz), scored(yz), scored(dw)]);
         const tag = `${m.key} ${rule === undefined ? "sport points" : "stage rule"}`;
@@ -120,7 +122,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         expect(rowOf(withDw, Z), `${tag} Z`).toEqual(rowOf(without, Z));
       }
       // The rule's own reading of the result itself: 0 each, never `base.loss` / `forfeit.loserPoints` (both 1 here).
-      expect(applyPointsRule(dw.outcome, dw.pair, RULE).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
+      expect(applyPointsRule(dw.outcome, dw.pair, RULE, dw.played).map((d) => d.points), `${m.key}: D14`).toEqual([0, 0]);
       sports++;
     });
     expect(sports).toBe(builtinModules.length);
@@ -147,7 +149,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
     forEachSport(({ module: m }) => {
       for (const { name, cfg } of declaredCfgs(m as never)) {
         const dw = fold(m, cfg, X, Y, DOUBLE_WALKOVER);
-        const scored = applyPointsRule(dw.outcome, dw.pair, RULE);
+        const scored = applyPointsRule(dw.outcome, dw.pair, RULE, dw.played);
         expect(scored.map((d) => d.points), `${m.key}/${name}: double walkover`).toEqual([0, 0]);
         expect(scored.map((d) => d.metrics), `${m.key}/${name}: no award score on a double walkover`).toEqual(dw.pair.map((d) => d.metrics));
         dws++;
@@ -155,7 +157,8 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
         const bye: MatchOutcome = { kind: "award", winner: X, loser: null, reason: "bye" };
         const state = m.init(cfg, { home: { entrantId: X, slots: [] }, away: { entrantId: "__bye__", slots: [] } });
         const pair = m.standingsDelta(bye, cfg, { kind: "swiss" }, state) as FixtureResult;
-        const winner = applyPointsRule(bye, pair, RULE).find((d) => d.entrantId === X);
+        // A bye is written with no event (stages.ts), so no ledger: nothing played.
+        const winner = applyPointsRule(bye, pair, RULE, false).find((d) => d.entrantId === X);
         expect(winner?.points, `${m.key}/${name}: a bye is a forfeit win (winnerPoints 5 + forfeit_win 16)`).toBe(21);
         byes++;
       }

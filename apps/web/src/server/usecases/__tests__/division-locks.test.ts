@@ -540,7 +540,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
   // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `applyPointsRule`
   // re-derives `points` and leaves the sport's metrics ledger untouched), so it is checked against the engine, not against
   // the lock's own constant.
-  it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the two other points keys a module declares are the ones left locked (counted)", () => {
+  it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the three other points keys a module declares are the ones left locked (counted)", () => {
     const declared = new Set<string>();
     let cells = 0;
     for (const m of builtinModules)
@@ -551,7 +551,8 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
     expect(cells, "swept the registry's module x variant cells").toBeGreaterThan(builtinModules.length);
     for (const key of STAGE_POINTS_REPLACES) expect(declared.has(key), `${key} is a table key some module declares`).toBe(true);
     // A new points key a module declares must be classified deliberately: it is locked until someone shows the rule replaces it.
-    expect([...declared].filter((k) => !STAGE_POINTS_REPLACES.has(k)).sort()).toEqual(["awardScore", "byeScore"]);
+    // W2c Task 9 addendum: a board game's `scoring` also writes the game's own headline, so a stage rule does not replace it.
+    expect([...declared].filter((k) => !STAGE_POINTS_REPLACES.has(k)).sort()).toEqual(["awardScore", "byeScore", "scoring"]);
   });
 
   it("I-2 awardScore reaches the table through the sport's own forfeit credit, and a stage PointsRule leaves that credit in place (engine differential, every module that declares it)", () => {
@@ -566,7 +567,8 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
       const raised = m.configSchema.parse({ awardScore: { goals: base.awardScore.goals + 2 } });
       const ledger = (cfg: unknown) => m.forfeitCredit(cfg as never, m.init(cfg as never, lineups), "walkover", "away").perSide;
       const delta = (side: 0 | 1, cfg: unknown) => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg)[side] } });
-      const viaRule = (cfg: unknown) => applyPointsRule(outcome, [delta(0, cfg), delta(1, cfg)] as never, rule)[0].metrics;
+      // An outcome-only walkover: no ledger, nothing played (W2c X-PT-1) — the rule's score is written, beside the sport's.
+      const viaRule = (cfg: unknown) => applyPointsRule(outcome, [delta(0, cfg), delta(1, cfg)] as never, rule, false)[0].metrics;
       const own = Object.keys(ledger(base)[0]);
       expect(own.length, `${m.key}: the forfeit credits the winner something`).toBeGreaterThan(0);
       expect(ledger(raised)[0], `${m.key}: awardScore changes what the forfeit credits`).not.toEqual(ledger(base)[0]);
@@ -891,7 +893,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect((out.config as typeof before).points.win, "the key the stage rule replaces was").toBe(before.points.win + 1);
   });
 
-  it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: it adds for/against/diff beside the sport's gf/ga/gd", async () => {
+  it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: it writes for/against/diff beside the sport's gf/ga/gd", async () => {
     const r = await rig("football", "11-a-side", "team");
     await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
@@ -900,7 +902,22 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect(out.refused.map((x) => x.field)).toEqual(["awardScore"]);
   });
 
-  it("I-2 a started chess league with its OWN stage points: `scoring` (it feeds delta.points) saves, `byeScore` (the other points key chess declares) is refused", async () => {
+  // W2c Task 9 addendum: a board game's `scoring` is not only `delta.points` — the game's headline (`summary` reads
+  // `cfg.scoring`), its declared points sets and its per-match bounds read it too, and a stage rule replaces none of them.
+  it("I-2 a started chess league with its OWN stage points still locks `scoring` (it also writes the game's headline): a change is refused", async () => {
+    const r = await rig("boardgame", "classical");
+    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await start(r.auth, r.fixtureId);
+    const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
+    const out = await patchDivision(r.auth, r.divisionId, {
+      name: "Renamed",
+      config: { ...before, scoring: { ...before.scoring, win: before.scoring.win + 1 } } as never,
+    });
+    expect(out.refused).toEqual([{ field: "scoring", code: "DIVISION_TABLE_RULES_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+    expect((out.config as typeof before).scoring.win, "scoring was not written").toBe(before.scoring.win);
+  });
+
+  it("I-2 …and `byeScore` (the other points key chess declares) beside it: both refused, neither written", async () => {
     const r = await rig("boardgame", "classical");
     await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
@@ -909,8 +926,8 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       name: "Renamed",
       config: { ...before, scoring: { ...before.scoring, win: before.scoring.win + 1 }, byeScore: before.byeScore + 1 } as never,
     });
-    expect(out.refused).toEqual([{ field: "byeScore", code: "DIVISION_TABLE_RULES_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
-    expect((out.config as typeof before).scoring.win, "scoring was written").toBe(before.scoring.win + 1);
+    expect(out.refused.map((x) => x.field).sort()).toEqual(["byeScore", "scoring"]);
+    expect((out.config as typeof before).scoring.win, "scoring was not written").toBe(before.scoring.win);
     expect((out.config as typeof before).byeScore, "byeScore was not").toBe(before.byeScore);
   });
 

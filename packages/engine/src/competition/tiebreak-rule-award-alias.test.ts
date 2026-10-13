@@ -15,7 +15,7 @@
 // `foldResults` and `rankStandings` — the same chain as the web's
 // engine-db/competition.ts snapshot fold.
 import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "../core/events.ts";
+import { foldMatch, playRecorded, type EventEnvelope } from "../core/events.ts";
 import type { EntrantId, LineupPair, StageCtx } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
 import { cricket, type CricketCfg } from "../sports/cricket/cricket.ts";
@@ -50,7 +50,8 @@ function fixture(home: EntrantId, away: EntrantId, specs: Array<[string, unknown
   const state = foldMatch(cricket, t20, { home: lineup(home), away: lineup(away) }, events, { strictFromSeq: 0 });
   if (state.outcome === null) throw new Error(`${home} v ${away} did not finish`);
   const pair = cricket.standingsDelta(state.outcome, t20, league, state);
-  return applyPointsRule(state.outcome, pair, RULE);
+  // W2c Task 9: the played fact is the ledger's own (`playRecorded`): the walkover's is nothing, the matches' something.
+  return applyPointsRule(state.outcome, pair, RULE, playRecorded(events, cricket));
 }
 
 // Home bats first and wins; the chasing side is bowled out.

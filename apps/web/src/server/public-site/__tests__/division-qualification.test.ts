@@ -14,7 +14,9 @@
 //  * the walkover's ledger flag comes from the division's PINNED module and
 //    cfg — a sport whose forfeit writes a score moves the what-if's average;
 //  * the bounds come from the module too — none (a retired build) is no
-//    status, stated first.
+//    status, stated first; and (W2c X-PT-1) so do the fixtures' played facts a
+//    stage rule's awarded score is read by, so a retired build gives no view
+//    under a stage PointsRule either, though the rule has bounds of its own.
 //
 // Mutants killed: `poolId: null` in the helper (→ the two-pool test); the
 // award flag forced false (→ the award test); bounds not derived (→ the empty
@@ -61,13 +63,15 @@ const fx = (pool: string | null, round: number, home: string, away: string, stat
   home_entrant_id: home,
   away_entrant_id: away,
   outcome,
+  // W2c X-PT-1: no ledger behind these fixtures — nothing played before a forfeit.
+  played: false,
 });
 const won = (pool: string | null, round: number, winner: string, loser: string) =>
   fx(pool, round, winner, loser, "decided", { kind: "win", winner, loser });
 const toPlay = (pool: string | null, round: number, home: string, away: string) => fx(pool, round, home, away, "scheduled", null);
-/** A two-sided walkover (core.forfeit): an award with both seats. */
+/** A two-sided walkover (core.forfeit): an award with both seats, as W2b stores it (`reason`, `loser`). */
 const walkover = (pool: string | null, round: number, winner: string, loser: string) =>
-  fx(pool, round, winner, loser, "forfeited", { kind: "award", winner });
+  fx(pool, round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "walkover" });
 
 /** A stage row as `public_stages_v` publishes it (V414 meta, snake_case). */
 const stage = (over: Partial<QualStage> = {}): QualStage => ({
@@ -129,6 +133,16 @@ describe("divisionQualification — no status stated first", () => {
     const qual = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
     expect(qual(GROUP, SNAP_A)).not.toBeNull();
     expect(qual(GROUP, SNAP_B)).not.toBeNull();
+  });
+  it("W2c X-PT-1: a retired build gives no view under a stage PointsRule either — its played facts are the module's", () => {
+    // The rule has bounds of its own (`pointsRuleBounds`), so only the missing module can refuse here: where the rule's
+    // awarded score lands depends on what was played, which only the module reads (ruling 118).
+    const ruled = stage({ kind: "group", qualify_count: 1, qualify_per_group: true, points_rule: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
+    const live = assemble({ fixtures: POOL_FIXTURES, ids: POOL_IDS });
+    expect(live(ruled, SNAP_A), "premise: the rule's own bounds give a view").not.toBeNull();
+    const retired = assemble({ module_: null, fixtures: POOL_FIXTURES, ids: POOL_IDS });
+    expect(retired(ruled, SNAP_A)).toBeNull();
+    expect(retired(ruled, SNAP_B)).toBeNull();
   });
 });
 

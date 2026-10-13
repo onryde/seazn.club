@@ -142,6 +142,8 @@ function fx(
     home_entrant_id: home,
     away_entrant_id: away,
     outcome,
+    // W2c X-PT-1: these fixtures hold no ledger — nothing was played before a forfeit unless a case says so.
+    played: false,
     ...over,
   };
 }
@@ -151,9 +153,12 @@ const open = (round: number, home: string | null, away: string | null, over: Par
   fx(round, home, away, "scheduled", null, over);
 /** A Swiss sit-out as `seatSwissRound` writes it: settled at creation. */
 const bye = (round: number, id: string) => fx(round, id, null, "forfeited", { kind: "award", winner: id });
-/** A real two-sided walkover (core.forfeit): an award with both seats. */
+/** A real two-sided walkover (core.forfeit): an award with both seats, as W2b stores it (`reason`, `loser`). */
 const walkover = (round: number, winner: string, loser: string) =>
-  fx(round, winner, loser, "forfeited", { kind: "award", winner });
+  fx(round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "walkover" });
+/** W2c X-PT-1: a withdrawal (core.forfeit `withdrew`) with its ledger's played fact. */
+const withdrew = (round: number, winner: string, loser: string, played: boolean) =>
+  fx(round, winner, loser, "forfeited", { kind: "award", winner, loser, reason: "withdrew" }, { played });
 const voided = (f: QualFixture): QualFixture => ({ ...f, status: "cancelled", outcome: null });
 
 interface Scene {
@@ -1229,10 +1234,11 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // A stage PointsRule's `forfeit.awardScore` (V414 publishes it as
-  // meta.pointsRule): `applyPointsRule` adds it to for/against/diff on EVERY
-  // forfeit, and the adapter applies the rule to a one-sided bye's delta too
-  // (engine-db/competition.ts `awardByeDelta`). So under such a rule a walkover
-  // AND a bye are ledger matches wherever the deciding key reads those three
+  // meta.pointsRule): `applyPointsRule` writes it to for/against/diff on a
+  // forfeit with NOTHING PLAYED — never a bye, never an award after play
+  // (W2c X-PT-1; `ruleScoreReaches`, parity with the fold in
+  // qualification-points-parity.test.ts). So under such a rule an unplayed
+  // forfeit is a ledger match wherever the deciding key reads those three
   // keys — the generic module's `diff` and `for` here — without the caller
   // having to say so (the generic module's awardAddsToLedger stays false).
   // Each pair is the same scene under the same rule minus its awardScore.
@@ -1254,11 +1260,25 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
     expect(nil.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
-  it("…and a one-sided bye too (the adapter applies the rule to the bye's delta)", () => {
-    // swiss5's fixtures, goals as a 3–0 bye rule folds them: r1 A 3–0 B, E 3–0
-    // D, C bye; r2 A 2–0 C, E 1–0 B, D bye. D is 3–3 (level) over one real
-    // match and one bye; its rival E is +4, so a win by 5 draws them level:
-    // it fits one 6-goal match, not an average of 3 over two.
+  it("X-PT-1: a withdrawal with nothing played is rule-scored like the walkover; after play it is not (it reads as the unscored rule)", () => {
+    // The walkover scene with B–D a withdrawal instead. Nothing played: the rule's 3–0 replaces the credit, so it is a
+    // ledger match, as the walkover is. Something played: the rule pays base points and leaves the sport's credit, so
+    // the scene reads exactly as it does under the same rule without an awarded score.
+    const o = open4({ D: [6, 8], B: [7, 2] });
+    const scene = (played: boolean) => [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), withdrew(2, "B", "D", played), open(3, "A", "B"), open(3, "C", "D")];
+    const walkoverScored = must(view({ ...o, fixtures: [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")], meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    const unscored = must(view({ ...o, fixtures: scene(true), meta: { pointsRule: scoredRule() } })).rows.D!;
+    expect(walkoverScored.whatIf, "premise: the rule's score changes this scene").not.toBe(unscored.whatIf);
+    const nothingPlayed = must(view({ ...o, fixtures: scene(false), meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(nothingPlayed.whatIf).toBe(walkoverScored.whatIf);
+    const afterPlay = must(view({ ...o, fixtures: scene(true), meta: { pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(afterPlay.whatIf).toBe(unscored.whatIf);
+  });
+  it("…but never a one-sided bye: the rule pays a bye no score (X-PT-1), so it stays out of the average", () => {
+    // swiss5's fixtures: r1 A–B, E–D, C bye; r2 A–C, E–B, D bye. The snapshot rows are the scene's as given (the
+    // builder reads them, it does not fold them): D is 3–3 (level) over one real match and one bye; its rival E is
+    // +4, so a win by 5 draws them level: it fits one 6-goal match, not an average of 3 over two. Before W2c the
+    // rule's score was taken to reach the bye, which made it a second match ("Now: you 0, Ed +4.").
     const s = swiss5();
     const rows = [
       row("A", 1, 2, 2, [5, 0]),
@@ -1267,11 +1287,11 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       row("D", 4, 1, 2, [3, 3]),
       row("B", 5, 0, 2, [0, 4]),
     ];
-    const scored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule([3, 0]) } })).rows.D!;
-    expect(scored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides. Now: you 0, Ed +4.`);
-    expect(scored.whatIfAssumption).toBeNull();
+    const target = `If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`;
     const unscored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule() } })).rows.D!;
-    expect(unscored.whatIf).toBe(`If you finish level on points with Ed, ${RULE} decides: win your next match by 5 or more to finish ahead.`);
+    expect(unscored.whatIf).toBe(target);
+    const scored = must(view({ ...s, rows, meta: { swissRounds: 3, pointsRule: scoredRule([3, 0]) } })).rows.D!;
+    expect(scored.whatIf).toBe(target);
   });
   it("…and on `for` as on `diff`: the rule's score is in the goals the average reads", () => {
     // The walkover scene, D's real match a 1–2 loss plus the walkover's 0–3:
@@ -1306,7 +1326,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   /** What `applyPointsRule` adds for a scored forfeit. */
   const ruleAward = (mine: number, theirs: number): Metrics => ({ for: mine, against: theirs, diff: mine - theirs });
 
-  it("a football bye under the rule: `gf`/`gd` hide the rule's score, so the bye stays out of the average", () => {
+  // W2c X-PT-1: the rule pays a bye no score, so a bye's row never carries the rule's for/against/diff — the scene's
+  // rows are the same with the rule or without it. (Before W2c the bye was taken to carry it and `gf` hid it.)
+  it("a football bye under the rule stays out of the average (no rule pays a bye a score)", () => {
     // Swiss of five on points → diff → for: r1 A 3–0 B, C 2–0 E, D bye; r2
     // A 2–0 C, D 4–0 E, B bye. Di (6, +4 from ONE real match of 4 goals) wins
     // and is in; a loss leaves it level on points with Cy (0). m = 0 − 4 + 1 =
@@ -1326,18 +1348,18 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       open(3, null, null),
     ];
     const goals = (gf: number, ga: number): Metrics => ({ gf, ga, gd: gf - ga });
-    const rows = (scored: boolean) => [
+    const rows = [
       ledgerRow("A", 1, 2, 2, 2 * W, goals(5, 0)),
-      ledgerRow("D", 2, 2, 2, 2 * W, { ...goals(4, 0), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("D", 2, 2, 2, 2 * W, goals(4, 0)),
       ledgerRow("C", 3, 1, 2, W, goals(2, 2)),
-      ledgerRow("B", 4, 1, 2, W, { ...goals(0, 3), ...(scored ? ruleAward(3, 0) : {}) }),
+      ledgerRow("B", 4, 1, 2, W, goals(0, 3)),
       ledgerRow("E", 5, 0, 2, 0, goals(0, 6)),
     ];
     const over = { cascade: ["points", "diff", "for"], bounds: FB, awardAddsToLedger: divisionAwardAddsToLedger(FOOTBALL, {}) };
     const target = `If you finish level on points with Cy, goal difference decides: lose your next match by no more than 3 to finish ahead.`;
-    const plain = must(view({ kind: "swiss", rows: rows(false), fixtures }, over)).rows.D!;
+    const plain = must(view({ kind: "swiss", rows, fixtures }, over)).rows.D!;
     expect(plain.whatIf).toBe(target);
-    const scored = must(view({ kind: "swiss", rows: rows(true), fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
+    const scored = must(view({ kind: "swiss", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(scored.whatIf).toBe(target);
   });
   it("a cricket ledger names runs: `for` reads `runs_for`, and the what-if says \"runs scored\"", () => {

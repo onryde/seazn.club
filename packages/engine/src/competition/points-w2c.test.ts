@@ -1,0 +1,355 @@
+// W2c Task 9 — X-PT-1 (spec items 10–11; owner Q9, P-3 "A") and Q1.
+//
+// X-PT-1 as signed (rules/cross-sport.md, ruling 129): "A forfeit is an award with nothing played (a walkover, or a
+// withdrawal or disqualification before play): it pays the rule's walkover row, and its awarded score replaces the
+// credit. A bye never receives the awarded score. An award after play earns normal points."
+//
+// Expected values come from the rule row above and the rule's OWN fields (`rule.forfeit.winnerPoints`, `rule.base.win`,
+// `rule.forfeit.awardScore`), never from `applyPointsRule`; the award shapes from W2b's AWARD_REASONS; the played fact
+// from W2b's `playRecorded` over a real ledger (the one authority, rulings 112–115, 118, 120, 127), never typed in.
+// The rule pays a forfeit DIFFERENTLY from a result (2 / −1 against 3 / 0), so every wrong branch names itself.
+import { describe, expect, it } from "vitest";
+import { foldMatchWithStoppage, outcomeOf, playRecorded, type EventEnvelope } from "../core/events.ts";
+import { AWARD_REASONS, FORFEIT_REASONS, type EntrantId, type LineupPair, type MatchOutcome } from "../core/types.ts";
+import type { AnySportModule } from "../sport/module.ts";
+import { builtinModules } from "../sports/index.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
+import { forEachSport } from "../testkit/for-each-sport.ts";
+import { buildStream, lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
+import { applyPointsRule, forfeitShaped, isUnplayedForfeit, pointsRuleExpressible, PointsRule } from "./points.ts";
+import type { FixtureResult } from "./standings.ts";
+
+const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1, awardScore: [5, 0] } });
+const FORFEIT = rule.forfeit!;
+const AWARDED = FORFEIT.awardScore!;
+const delta = (entrantId: string, won: 0 | 1, lost: 0 | 1, gf: number, ga: number) =>
+  ({ entrantId, played: 1, won, drawn: 0, lost, points: 0, metrics: { for: gf, against: ga, diff: gf - ga } });
+type D = ReturnType<typeof delta>;
+/** A generic-sport-shaped pair: the sport's OWN ledger is for/against/diff, so "replaces" and "adds" differ. */
+const pair = (gf: number, ga: number) => [delta("H", 1, 0, gf, ga), delta("A", 0, 1, ga, gf)] as unknown as FixtureResult;
+const award = (reason: string): MatchOutcome => ({ kind: "award", winner: "H", loser: reason === "bye" ? null : "A", reason }) as never;
+const win = (method: string): MatchOutcome => ({ kind: "win", winner: "H", loser: "A", method });
+const apply = (o: MatchOutcome, p: FixtureResult, played: boolean, r = rule) => applyPointsRule(o, p, r, played) as unknown as [D, D];
+
+const mod = (key: string): AnySportModule => {
+  const m = builtinModules.find((x) => x.key === key);
+  if (m === undefined) throw new Error(`no module ${key}`);
+  return m;
+};
+const ev = (id: string, type: string, voids?: string) => ({ id, type, ...(voids === undefined ? {} : { voids }) });
+// The played fact is read from ledgers through the ONE authority, never typed in.
+const football = mod("football");
+const NOTHING = playRecorded([ev("1", "core.start"), ev("2", "core.forfeit")], football);
+const SOMETHING = playRecorded([ev("1", "core.start"), ev("2", "football.goal"), ev("3", "core.forfeit")], football);
+/** Ruling 127: play that a void took back is no play. */
+const VOIDED_AWAY = playRecorded([ev("1", "core.start"), ev("2", "football.goal"), ev("3", "core.void", "2"), ev("4", "core.forfeit")], football);
+
+/** Reasons a side can forfeit for after play: every non-bye reason but the walkover (a walkover is a no-show by its
+ *  own reason — X-PT-1's parenthetical, Q9 "only walkover = forfeit", ruling 118's chess no-show). */
+const AFTER_PLAY_REASONS = FORFEIT_REASONS.filter((r) => r !== "walkover");
+
+describe("X-PT-1 a forfeit is an award with nothing played, whatever its reason", () => {
+  it("preconditions: the ledgers read as intended through playRecorded", () => {
+    expect([NOTHING, SOMETHING, VOIDED_AWAY]).toEqual([false, true, false]);
+  });
+
+  it("covers every award reason W2b declares (counted)", () => {
+    expect([...AWARD_REASONS].sort()).toEqual(["bye", "disqualified", "retired", "walkover", "withdrew"]);
+    expect([...AFTER_PLAY_REASONS].sort()).toEqual(["disqualified", "retired", "withdrew"]);
+  });
+
+  it("empty case first: a rule with no forfeit row pays base points to every award, played or not, and adds no score (counted)", () => {
+    const plain = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 } });
+    let checked = 0;
+    for (const reason of AWARD_REASONS)
+      for (const played of [false, true]) {
+        const [h, a] = apply(award(reason), pair(3, 0), played, plain);
+        expect([h.points, a.points], `${reason}/${played}`).toEqual([plain.base.win, plain.base.loss]);
+        expect(h.metrics, `${reason}/${played}: no awarded score without a forfeit row`).toEqual({ for: 3, against: 0, diff: 3 });
+        checked++;
+      }
+    expect(checked).toBe(AWARD_REASONS.length * 2);
+  });
+
+  it("every non-bye reason with nothing played pays the forfeit row, and its awarded score REPLACES the credit (counted)", () => {
+    let checked = 0;
+    for (const reason of FORFEIT_REASONS) {
+      const [h, a] = apply(award(reason), pair(3, 0), NOTHING);
+      expect([h.points, a.points], reason).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
+      // Replaced: the rule's 5-0, not the credit's 3-0 plus it (8-0).
+      expect(h.metrics, reason).toEqual({ for: AWARDED[0], against: AWARDED[1], diff: AWARDED[0] - AWARDED[1] });
+      expect(a.metrics, reason).toEqual({ for: AWARDED[1], against: AWARDED[0], diff: AWARDED[1] - AWARDED[0] });
+      checked++;
+    }
+    expect(checked).toBe(AWARD_REASONS.length - 1);
+  });
+
+  it("a withdrawal or disqualification after play that a void took back is still nothing played (ruling 127)", () => {
+    let checked = 0;
+    for (const reason of ["withdrew", "disqualified"]) {
+      const [h, a] = apply(award(reason), pair(3, 0), VOIDED_AWAY);
+      expect([h.points, a.points], reason).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
+      expect(h.metrics.for, reason).toBe(AWARDED[0]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("every reason but the walkover AFTER play earns normal points and keeps the sport's credit (Q9, counted)", () => {
+    let checked = 0;
+    for (const reason of AFTER_PLAY_REASONS) {
+      const [h, a] = apply(award(reason), pair(2, 1), SOMETHING);
+      expect([h.points, a.points], reason).toEqual([rule.base.win, rule.base.loss]);
+      expect(h.metrics, reason).toEqual({ for: 2, against: 1, diff: 1 });
+      expect(a.metrics, reason).toEqual({ for: 1, against: 2, diff: -1 });
+      expect(isUnplayedForfeit(award(reason), SOMETHING), reason).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(AFTER_PLAY_REASONS.length);
+  });
+
+  it("a walkover is nothing played whatever the ledger reads: a chess no-show after Start pays the forfeit row (ruling 118)", () => {
+    // single-sport: chess is the one module whose Start is play (startIsPlay) AND that admits a walkover after it.
+    const chess = mod("boardgame");
+    const cfg = chess.configSchema.parse({});
+    const events = [makeEnvelope(1, { type: "core.start", payload: {} }), makeEnvelope(2, { type: "core.forfeit", payload: { by: "A", reason: "walkover" } })];
+    const folded = foldMatchWithStoppage(chess as never, cfg as never, sides(chess, "H", "A"), events);
+    const outcome = outcomeOf(chess as never, folded as never)!;
+    expect(outcome, "the fold of a chess walkover after Start").toEqual({ kind: "award", winner: "H", loser: "A", reason: "walkover" });
+    const played = playRecorded(events, chess);
+    expect(played, "precondition: in chess the Start itself is play").toBe(true);
+    expect(isUnplayedForfeit(outcome, played)).toBe(true);
+    const [h, a] = applyPointsRule(outcome, chess.standingsDelta(outcome, cfg, { kind: "swiss" }, folded.state), rule, played);
+    expect([h.points, a.points]).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
+    expect([h.metrics.for, a.metrics.against]).toEqual([AWARDED[0], AWARDED[0]]);
+  });
+
+  it("a bye keeps the forfeit row's points but NEVER the awarded score, played or not", () => {
+    let checked = 0;
+    for (const played of [false, true]) {
+      const [h] = apply(award("bye"), pair(0, 0), played);
+      expect(h.points, `played=${played}`).toBe(FORFEIT.winnerPoints);
+      expect(h.metrics, `played=${played}`).toEqual({ for: 0, against: 0, diff: 0 });
+      expect(isUnplayedForfeit(award("bye"), played), `played=${played}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a second call is the first: the awarded score replaces, so the rule laid over its own result changes nothing", () => {
+    const once = apply(award("walkover"), pair(3, 0), NOTHING);
+    const twice = apply(award("walkover"), once, NOTHING);
+    expect(twice).toEqual(once);
+  });
+
+  it("forfeitShaped covers a win by forfeit (chess) or walkover as well as every award; a regulation win and the rest are not", () => {
+    let checked = 0;
+    for (const reason of AWARD_REASONS) {
+      expect(forfeitShaped(award(reason)), reason).toBe(true);
+      checked++;
+    }
+    expect(forfeitShaped(win("forfeit"))).toBe(true);
+    expect(forfeitShaped(win("walkover"))).toBe(true);
+    for (const o of [win("regulation"), { kind: "win", winner: "H", loser: "A" }, { kind: "draw" }, { kind: "tie" }, { kind: "no_result" }, { kind: "double_walkover" }] as MatchOutcome[]) {
+      expect(forfeitShaped(o), JSON.stringify(o)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(AWARD_REASONS.length + 6);
+  });
+
+  it("a chess win by forfeit AFTER moves were played earns normal points (the played flag reaches win outcomes)", () => {
+    const won = win("forfeit");
+    expect(isUnplayedForfeit(won, SOMETHING)).toBe(false);
+    expect(apply(won, pair(1, 0), SOMETHING)[0].points).toBe(rule.base.win);
+    expect(apply(won, pair(1, 0), NOTHING)[0].points).toBe(FORFEIT.winnerPoints);
+  });
+
+  it("a walkover win method is a forfeit, played flag or not; a regulation win is not", () => {
+    expect(isUnplayedForfeit(win("walkover"), NOTHING)).toBe(true);
+    expect(isUnplayedForfeit(win("walkover"), SOMETHING)).toBe(true);
+    expect(isUnplayedForfeit(win("regulation"), NOTHING)).toBe(false);
+    expect(isUnplayedForfeit(win("regulation"), SOMETHING)).toBe(false);
+  });
+
+  it("a double walkover stays 0 points for both whatever the flag (X-DW-4 unchanged)", () => {
+    for (const played of [false, true]) {
+      const [h, a] = apply({ kind: "double_walkover" }, pair(0, 0), played);
+      expect([h.points, a.points], `played=${played}`).toEqual([0, 0]);
+    }
+  });
+
+  it("bonuses follow the same split: after play the real score earns its margin bonus and no forfeit bonus; nothing played the reverse; a bye keeps its forfeit bonus", () => {
+    // Every bonus pays a different power of two, so the sum names exactly which fired.
+    const bonused = PointsRule.parse({
+      base: { win: 3, draw: 1, loss: 0 },
+      bonuses: [
+        { when: "win_margin_gte", param: 1, points: 1 },
+        { when: "loss_margin_lte", param: 5, points: 2 },
+        { when: "forfeit_win", points: 4 },
+        { when: "forfeit_loss", points: 8 },
+      ],
+      forfeit: { winnerPoints: 2, loserPoints: -1 },
+    });
+    let checked = 0;
+    for (const reason of AFTER_PLAY_REASONS) {
+      const [h, a] = apply(award(reason), pair(2, 1), SOMETHING, bonused);
+      expect([h.points, a.points], `${reason} after play`).toEqual([bonused.base.win + 1, bonused.base.loss + 2]);
+      const [hn, an] = apply(award(reason), pair(2, 1), NOTHING, bonused);
+      expect([hn.points, an.points], `${reason} nothing played`).toEqual([bonused.forfeit!.winnerPoints + 4, bonused.forfeit!.loserPoints + 8]);
+      checked++;
+    }
+    const [bye] = apply(award("bye"), pair(0, 0), false, bonused);
+    expect(bye.points, "a bye: the forfeit row and the forfeit-win bonus, as before W2c").toBe(bonused.forfeit!.winnerPoints + 4);
+    expect(checked).toBe(AFTER_PLAY_REASONS.length);
+  });
+
+  it("the loss-margin bonus an award after play earns pays at exactly its margin and not one past it (boundary, counted)", () => {
+    const LOSS_BONUS = { when: "loss_margin_lte", param: 5, points: 2 } as const;
+    const r = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, bonuses: [LOSS_BONUS] });
+    let checked = 0;
+    for (const reason of AFTER_PLAY_REASONS) {
+      for (const [beatenBy, paid] of [[LOSS_BONUS.param, true], [LOSS_BONUS.param + 1, false]] as const) {
+        const [, a] = apply(award(reason), pair(1 + beatenBy, 1), SOMETHING, r);
+        expect(a.points, `${reason} beaten by ${beatenBy}`).toBe(r.base.loss + (paid ? LOSS_BONUS.points : 0));
+        checked++;
+      }
+    }
+    expect(checked).toBe(AFTER_PLAY_REASONS.length * 2);
+  });
+});
+
+const sides = (m: AnySportModule, home: EntrantId, away: EntrantId): LineupPair => ({
+  home: lineupFromCatalog(m.positions, home),
+  away: lineupFromCatalog(m.positions, away),
+});
+
+/** A real ledger: `core.start`, then the module's own generated events up to the FIRST point where something is played
+ *  (`playRecorded`) and nothing is decided yet, then `core.forfeit` with `reason` by the away side. Null when this cfg's
+ *  generator never stands in such a state (a sport whose first sport event decides it). */
+function playedThenForfeit(m: AnySportModule, cfg: unknown, reason: string): EventEnvelope[] | null {
+  const l = sides(m, "H", "A");
+  for (let seed = 1; seed <= 60; seed++) {
+    const stream = buildStream(m as never, cfg as never, l, seed, 400);
+    for (let i = 0; i < stream.length; i++) {
+      const prefix = stream.slice(0, i + 1);
+      if (prefix.some((e) => e.type === "core.forfeit" || e.type === "core.abandon")) break;
+      if (!playRecorded(prefix, m)) continue;
+      const folded = foldMatchWithStoppage(m as never, cfg as never, l, prefix);
+      if (outcomeOf(m as never, folded as never) !== null) break;
+      return [...prefix, makeEnvelope(prefix.length, { type: "core.forfeit", payload: { by: "A", reason } })];
+    }
+  }
+  return null;
+}
+
+describe("X-PT-1 through every sport's own producer (fold → standingsDelta → applyPointsRule)", () => {
+  it("a walkover with nothing played pays the forfeit row, and the awarded score replaces for/against/diff — every sport, every declared cfg (counted)", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const events = [makeEnvelope(1, { type: "core.forfeit", payload: { by: "A", reason: "walkover" } })];
+        const folded = foldMatchWithStoppage(m as never, cfg as never, sides(m, "H", "A"), events);
+        const outcome = outcomeOf(m as never, folded as never)!;
+        expect(outcome, `${m.key}/${name}`).toEqual({ kind: "award", winner: "H", loser: "A", reason: "walkover" });
+        const played = playRecorded(events, m);
+        expect(played, `${m.key}/${name}: nothing played`).toBe(false);
+        const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
+        const [h, a] = applyPointsRule(outcome, credit, rule, played);
+        expect([h.points, a.points], `${m.key}/${name}`).toEqual([FORFEIT.winnerPoints, FORFEIT.loserPoints]);
+        // The sport's own keys stand as the sport credited them; the generic keys ARE the awarded score.
+        expect(h.metrics, `${m.key}/${name} home`).toEqual({ ...credit[0].metrics, for: AWARDED[0], against: AWARDED[1], diff: AWARDED[0] - AWARDED[1] });
+        expect(a.metrics, `${m.key}/${name} away`).toEqual({ ...credit[1].metrics, for: AWARDED[1], against: AWARDED[0], diff: AWARDED[1] - AWARDED[0] });
+        checked++;
+      }
+    });
+    expect(checked).toBeGreaterThanOrEqual(builtinModules.length);
+  });
+
+  it("a withdrawal, a disqualification and a retirement after play earn normal points and keep the sport's own credit — every sport (counted)", () => {
+    const covered = new Set<string>();
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        for (const reason of AFTER_PLAY_REASONS) {
+          const events = playedThenForfeit(m, cfg, reason);
+          if (events === null) continue;
+          const folded = foldMatchWithStoppage(m as never, cfg as never, sides(m, "H", "A"), events);
+          const outcome = outcomeOf(m as never, folded as never)!;
+          expect(outcome, `${m.key}/${name}/${reason}`).toEqual({ kind: "award", winner: "H", loser: "A", reason });
+          const played = playRecorded(events, m);
+          expect(played, `${m.key}/${name}/${reason}: something played`).toBe(true);
+          const credit = m.standingsDelta(outcome, cfg, { kind: "league" }, folded.state) as FixtureResult;
+          const [h, a] = applyPointsRule(outcome, credit, rule, played);
+          expect([h.points, a.points], `${m.key}/${name}/${reason}`).toEqual([rule.base.win, rule.base.loss]);
+          expect([h.metrics, a.metrics], `${m.key}/${name}/${reason}: the sport's credit, untouched`).toEqual([credit[0].metrics, credit[1].metrics]);
+          covered.add(m.key);
+          checked++;
+        }
+      }
+    });
+    expect(checked).toBeGreaterThan(0);
+    // Every module reaches "something played, nothing decided" in some declared cfg, so none is skipped.
+    expect([...covered].sort()).toEqual(builtinModules.map((m) => m.key).sort());
+  });
+});
+
+/** Q1 / spec §2 routing (b): the per-sport point systems a stage PointsRule (win/draw/loss + bonuses + forfeit) cannot
+ *  express — routed to W2d — named per module and preset. Ice hockey's OT/SO (default and iihf), hockey's shoot-out
+ *  split (fih-shootout), cricket's tie / no-result (every preset, plan finding 29), and volleyball's set-score map
+ *  (FIVB 3-2 → 2:1, indoor and the default; beach pays one pair). Every other preset is expressible. */
+const INEXPRESSIBLE: Record<string, readonly string[]> = {
+  "icehockey/(schema default)": ["otWin", "otLoss"],
+  "icehockey/iihf": ["otWin", "otLoss"],
+  "hockey/fih-shootout": ["shootoutWin", "shootoutLoss"],
+  "cricket/(schema default)": ["tie", "noResult"],
+  "cricket/t20": ["tie", "noResult"],
+  "cricket/odi": ["tie", "noResult"],
+  "cricket/hundred": ["tie", "noResult"],
+  "cricket/test": ["tie", "noResult"],
+  "volleyball/(schema default)": ["pointsMap"],
+  "volleyball/indoor": ["pointsMap"],
+};
+
+describe("Q1 pointsRuleExpressible — refused, never silently dropped", () => {
+  it("empty / null division cfg is expressible (the empty case)", () => {
+    expect(pointsRuleExpressible({})).toEqual({ ok: true });
+    expect(pointsRuleExpressible(null)).toEqual({ ok: true });
+    expect(pointsRuleExpressible(undefined)).toEqual({ ok: true });
+  });
+
+  it("every builtin division preset: refused exactly where the sport splits its points, naming the split keys (counted)", () => {
+    let checked = 0;
+    const seen = new Set<string>();
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const id = `${m.key}/${name}`;
+        const want = INEXPRESSIBLE[id];
+        const got = pointsRuleExpressible(cfg);
+        if (want === undefined) expect(got, id).toEqual({ ok: true });
+        else {
+          expect(got, id).toMatchObject({ ok: false });
+          expect(got.ok === false ? [...got.keys].sort() : [], id).toEqual([...want].sort());
+          expect(got.ok === false ? got.reason : "", id).toMatch(/cannot express/);
+          seen.add(id);
+        }
+        checked++;
+      }
+    });
+    expect(checked).toBeGreaterThan(builtinModules.length);
+    expect([...seen].sort(), "every refusal the table names was reached").toEqual(Object.keys(INEXPRESSIBLE).sort());
+  });
+
+  it("a null split value is not a split; one set-score pair repeated is not a split", () => {
+    expect(pointsRuleExpressible({ points: { win: 3, draw: 1, loss: 0, otWin: null } })).toEqual({ ok: true });
+    expect(pointsRuleExpressible({ pointsMap: { "2-0": [2, 0], "2-1": [2, 0], "*": [2, 0] } })).toEqual({ ok: true });
+    expect(pointsRuleExpressible({ pointsMap: { "3-2": [2, 1], "*": [3, 0] } })).toMatchObject({ ok: false, keys: ["pointsMap"] });
+  });
+
+  it("the refusal names every split key, comma-separated, in the brief's declared sentence", () => {
+    expect(pointsRuleExpressible({ points: { win: 2, loss: 0, otWin: 2, otLoss: 1 } })).toEqual({
+      ok: false,
+      keys: ["otWin", "otLoss"],
+      reason: "this division awards otWin, otLoss, which a stage points rule cannot express yet",
+    });
+  });
+});

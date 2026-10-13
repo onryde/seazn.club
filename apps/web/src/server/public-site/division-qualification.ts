@@ -11,9 +11,17 @@ import "server-only";
 //    bounds, so no status);
 //  * every word, from the caller's dictionary in the caller's locale — the
 //    public surfaces pass the org's (they are ISR: never the visitor's);
+//  * (W2c X-PT-1) each fixture's played fact, from its ledger under the same
+//    module (`qualificationFixtures`), so a stage rule's awarded score lands in
+//    the what-if exactly where the standings fold wrote it. Without the module
+//    that fact is unknowable, so a retired build gives no view at all — under a
+//    stage PointsRule too, whose bounds would otherwise stand in for the
+//    module's (no status beats a wrong one, R3);
 //
 // and, per table, the stage's V414 meta and the pool the SNAPSHOT is for.
 import type { StandingsRow } from "@seazn/engine/competition";
+import { sql } from "@/lib/db";
+import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
@@ -21,6 +29,7 @@ import {
   buildQualificationView,
   divisionAwardAddsToLedger,
   divisionPointsBounds,
+  pointsRuleScoresForfeits,
   stageQualMeta,
   type QualFixture,
   type QualificationView,
@@ -53,9 +62,31 @@ export interface DivisionQualificationInput {
   cascade: readonly string[];
 }
 
+/**
+ * W2c X-PT-1 — the division's fixtures as the qualification view reads them: each with its `played` fact, the one the
+ * standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`), read exactly where the view reads it
+ * (`ruleScoreReaches`): under a stage rule that scores forfeits (`pointsRuleScoresForfeits`), for a two-seated
+ * forfeit. One read of those fixtures' ledgers, and none otherwise — a division with no such stage rule (nearly all)
+ * costs nothing, and a bye (one seat) has no ledger to read: nothing played. Where it is not read `played` is false:
+ * with no scoring rule `ruleScoreReaches` answers before it, and without the module `divisionQualification` builds no
+ * view at all.
+ */
+export async function qualificationFixtures<F extends Omit<QualFixture, "played">>(
+  fixtures: readonly F[],
+  module_: AnySportModule | null | undefined,
+  stages: readonly { points_rule: unknown }[],
+): Promise<(F & { played: boolean })[]> {
+  if (!module_ || !stages.some((s) => pointsRuleScoresForfeits(s.points_rule))) return fixtures.map((f) => ({ ...f, played: false }));
+  const seated = (f: F) => f.home_entrant_id !== null && f.away_entrant_id !== null;
+  const facts = await forfeitPlayedFacts(sql, fixtures.filter(seated), module_);
+  return fixtures.map((f) => ({ ...f, played: seated(f) ? playedFor(f, facts) : false }));
+}
+
 export function divisionQualification(
   i: DivisionQualificationInput,
 ): (stage: QualStage, snap: QualSnapshot) => QualificationView | null {
+  // A retired build: no bounds, and no played facts for a stage rule's awarded score (see the header).
+  if (!i.module_) return () => null;
   const bounds = divisionPointsBounds(i.module_, i.division.config);
   const awardAddsToLedger = divisionAwardAddsToLedger(i.module_, i.division.config);
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(i.dict, key, vars);
