@@ -1,0 +1,75 @@
+<h2>Screen 4 of 5 — Locked rules: how does the organiser find out?</h2>
+<p class="subtitle">Your Q3/Q4: once a stage that inherits the division's rules has started, the division settings refuse table points, tie-breaks and match format — by name. Other division fields still save. Example: Group A started, Knockout not yet. Same question applies to a started stage (screen 1) and a started match (screen 2).</p>
+
+<style>
+  .card { border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#0f172a; font-size:13px; overflow:hidden }
+  .h { padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-weight:600; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap }
+  .sec { padding:10px 14px; border-bottom:1px solid #f1f5f9 }
+  .sec h5 { margin:0 0 8px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#475569; display:flex; gap:8px; align-items:center }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px }
+  .f { border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px } .f .l { font-size:11px; color:#475569 } .f .v { font-weight:600 }
+  .f.off { background:#f8fafc; color:#94a3b8 } .f.off .v { color:#64748b }
+  .lock { background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px; font-size:12px; color:#334155 }
+  .err { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:8px; padding:8px 10px; font-size:12px }
+  .ok { background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; border-radius:8px; padding:6px 10px; font-size:12px }
+  .btn { border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px; font-size:12px; background:#fff }
+  .btn.p { background:#0f172a; color:#fff; border-color:#0f172a }
+  .phone { width:320px; max-width:100%; margin:0 auto; border:8px solid #1e293b; border-radius:22px; overflow:hidden; background:#f1f5f9 }
+  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#475569; margin:14px 0 6px }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Say it before they try — locked sections shown read-only with the reason</h3>
+      <p>The locked sections show their values greyed with one line: "🔒 Group A has started — match format is locked. Change individual unstarted matches instead." with a link to the fixtures. Everything else stays editable. The server still refuses if anyone gets past (API, stale tab).</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Edit freely, explain on Save</h3>
+      <p>All fields look editable. On Save, the allowed fields save, and a message lists what was refused and why. Simpler to build; the organiser learns about the lock only after making the change.</p>
+    </div>
+  </div>
+</div>
+
+<div class="lbl">A — desktop 1280: division settings</div>
+<div class="card">
+  <div class="h"><span>Division settings · Men's Open</span></div>
+  <div class="sec"><h5>General</h5><div class="grid"><div class="f"><div class="l">Name</div><div class="v">Men's Open</div></div><div class="f"><div class="l">Entry fee</div><div class="v">£12</div></div></div></div>
+  <div class="sec"><h5>Match format</h5>
+    <div class="lock">🔒 Group A has started — its match format is locked. <u>Change individual unstarted matches instead.</u></div>
+    <div class="grid" style="margin-top:8px"><div class="f off"><div class="l">Best of</div><div class="v">3</div></div><div class="f off"><div class="l">Points to win</div><div class="v">21</div></div></div></div>
+  <div class="sec"><h5>Table points & tie-breaks</h5>
+    <div class="lock">🔒 Group A has started — table rules are locked.</div>
+    <div class="grid" style="margin-top:8px"><div class="f off"><div class="l">Points</div><div class="v">3 · 1 · 0</div></div><div class="f off"><div class="l">Tie-breaks</div><div class="v">Head-to-head, diff…</div></div></div></div>
+  <div class="sec"><button class="btn p">Save</button></div>
+</div>
+
+<div class="lbl">A — phone 320</div>
+<div class="phone"><div class="card" style="border:0;border-radius:0">
+  <div class="h"><span>Division settings</span></div>
+  <div class="sec"><h5>Match format</h5><div class="lock">🔒 Group A has started — match format locked. <u>Change unstarted matches</u></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:8px"><div class="f off"><div class="l">Best of</div><div class="v">3</div></div><div class="f off"><div class="l">Points</div><div class="v">21</div></div></div></div>
+  <div class="sec"><button class="btn p" style="width:100%">Save</button></div>
+</div></div>
+
+<div class="lbl">B — desktop 1280: after pressing Save</div>
+<div class="card">
+  <div class="h"><span>Division settings · Men's Open</span></div>
+  <div class="sec"><div class="ok">Saved: entry fee.</div>
+    <div class="err" style="margin-top:6px"><b>Not saved:</b> best of, points to win — Group A has started; its match format is locked. Change individual unstarted matches instead.</div></div>
+  <div class="sec"><h5>Match format</h5><div class="grid"><div class="f"><div class="l">Best of</div><div class="v">1</div></div><div class="f"><div class="l">Points to win</div><div class="v">21</div></div></div></div>
+</div>
+
+<div class="pros-cons" style="margin-top:18px">
+  <div class="pros"><h4>My recommendation: A</h4><ul>
+    <li>Never offers a change the server will refuse — the same principle W2a's "Needs a decision" block follows</li>
+    <li>The organiser sees WHY and WHERE to go instead, before wasting effort</li>
+    <li>Same lock line pattern reused on started stages (screen 1) and started matches (screen 2)</li>
+    <li>Server refusal stays as the backstop, with the same wording</li></ul></div>
+  <div class="cons"><h4>Against A</h4><ul>
+    <li>The page has to load "which stages have started" up front (one extra query — already exists for stage rules)</li></ul></div>
+</div>

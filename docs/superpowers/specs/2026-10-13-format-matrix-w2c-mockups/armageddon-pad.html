@@ -1,0 +1,76 @@
+<h2>Screen 5 of 5 — Recording an Armageddon game on the scorer's pad</h2>
+<p class="subtitle">Today (W2a): the scorer picks the round (Rapid / Blitz / Armageddon), then taps who won; for Armageddon a hint says "In Armageddon a draw means Black advances" — nothing records colours. W2c (your Q6): record who had Black, and the engine enforces "drawn Armageddon → Black advances". The round list now follows the stage's tie-break rounds setting (e.g. straight to Armageddon). Example: knockout final, Asha Rao v Priya Menon, main game drawn.</p>
+
+<style>
+  .phone { width:320px; max-width:100%; border:8px solid #1e293b; border-radius:22px; overflow:hidden; background:#0f172a; color:#f8fafc; font-size:13px }
+  .ph { padding:10px 12px; border-bottom:1px solid #334155; display:flex; justify-content:space-between }
+  .step { padding:12px }
+  .step .t { font-weight:700; margin-bottom:4px } .step .s { color:#94a3b8; font-size:11.5px; margin-bottom:10px }
+  .opt { border:1px solid #475569; border-radius:12px; padding:12px; margin:8px 0; min-height:44px; display:flex; justify-content:space-between; align-items:center }
+  .opt.on { border-color:#5eead4; background:#134e4a }
+  .dot { width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:8px; border:1px solid #94a3b8 }
+  .b { background:#0b0b0b } .w { background:#f8fafc }
+  .res { border:1px solid #5eead4; border-radius:12px; padding:10px; background:#042f2e; color:#ccfbf1; font-size:12.5px; margin-top:10px }
+  .pill { font-size:11px; color:#94a3b8 }
+  .cols { display:flex; gap:22px; flex-wrap:wrap; justify-content:center }
+  .cap { text-align:center; font-size:11px; color:#475569; margin-top:6px; text-transform:uppercase; letter-spacing:.06em }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Facts, then the engine decides — "Who had Black?" → "Result?"</h3>
+      <p>Two taps of facts: who had Black, then White won / Black won / Drawn. The pad shows "Advances: Priya Menon (Black, draw)" before confirming. The scorer never applies the rule themselves.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Today's "who advances" plus colour — "Who had Black?" → "Who advances?"</h3>
+      <p>Keeps the W2a winner tap; adds a colour step first and the hint. The engine REFUSES a combination that breaks the rule (e.g. a draw recorded with White advancing) — but the scorer still has to apply the rule in their head, and "drawn" isn't recorded as a fact.</p>
+    </div>
+  </div>
+</div>
+
+<div class="cols">
+  <div>
+    <div class="phone">
+      <div class="ph"><span>Final · Tie-break</span><span class="pill">A · step 2 of 3</span></div>
+      <div class="step"><div class="t">Who had Black?</div><div class="s">Armageddon</div>
+        <div class="opt"><span><span class="dot w"></span>Asha Rao</span></div>
+        <div class="opt on"><span><span class="dot b"></span>Priya Menon</span><span>✓</span></div></div>
+    </div><div class="cap">A — step 2</div>
+  </div>
+  <div>
+    <div class="phone">
+      <div class="ph"><span>Final · Tie-break</span><span class="pill">A · step 3 of 3</span></div>
+      <div class="step"><div class="t">Result?</div><div class="s">Armageddon · Rao (White) v Menon (Black)</div>
+        <div class="opt">White won</div>
+        <div class="opt">Black won</div>
+        <div class="opt on"><span>Drawn</span><span>✓</span></div>
+        <div class="res">Advances: <b>Priya Menon</b> — Black, Armageddon drawn</div>
+        <div class="opt" style="justify-content:center;background:#f8fafc;color:#0f172a;font-weight:700;margin-top:10px">Confirm</div></div>
+    </div><div class="cap">A — step 3</div>
+  </div>
+  <div>
+    <div class="phone">
+      <div class="ph"><span>Final · Tie-break</span><span class="pill">B · step 3 of 3</span></div>
+      <div class="step"><div class="t">Who advances?</div><div class="s">In Armageddon a draw means Black advances.</div>
+        <div class="opt"><span><span class="dot w"></span>Asha Rao</span></div>
+        <div class="opt on"><span><span class="dot b"></span>Priya Menon</span><span>✓</span></div>
+        <div class="opt" style="justify-content:center;background:#f8fafc;color:#0f172a;font-weight:700;margin-top:10px">Confirm</div></div>
+    </div><div class="cap">B — step 3</div>
+  </div>
+</div>
+
+<div class="pros-cons" style="margin-top:18px">
+  <div class="pros"><h4>My recommendation: A</h4><ul>
+    <li>Scorer records what happened (colour, result); the engine applies BG-KO-2 — no rule in the scorer's head</li>
+    <li>"Drawn" is kept as a fact — the public match centre can say "drawn Armageddon, Black advances"</li>
+    <li>The confirm line shows the outcome before it's committed</li>
+    <li>Colour lives on the tie-break event, never touching the main game's colour (chess session's constraint)</li></ul></div>
+  <div class="cons"><h4>Against A</h4><ul>
+    <li>Changes W2a's familiar "tap the winner" step for Armageddon (rapid/blitz unchanged)</li>
+    <li>One more option per screen (three results vs two names)</li></ul></div>
+</div>

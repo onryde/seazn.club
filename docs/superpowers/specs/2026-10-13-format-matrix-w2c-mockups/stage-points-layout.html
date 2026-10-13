@@ -1,0 +1,93 @@
+<h2>Screen 3 of 4 — Stage points (ST-G8): the "Points" section of the stage rules form</h2>
+<p class="subtitle">Lives inside screen 1's form (your A), table stages only. What it can set today: win / draw / loss, walkover points and an optional walkover score (your Q9: walkover only), and bonus points (losing by ≤ N, winning by ≥ N, scoring ≥ x% of the winner, draw, no result). Per-sport point systems (chess ½, ice hockey OT/SO, cricket tie/NR) are W2d — a rule this screen can't express is refused with a reason (your Q1).</p>
+
+<style>
+  .card { border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#0f172a; font-size:13px; overflow:hidden }
+  .h { padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-weight:600; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap }
+  .sec { padding:10px 14px; border-bottom:1px solid #f1f5f9 }
+  .sec h5 { margin:0 0 8px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#475569 }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0 }
+  .in { display:inline-block; min-width:34px; text-align:center; border:1px solid #94a3b8; border-radius:6px; padding:3px 6px; font-weight:600; background:#fff }
+  .muted { color:#64748b; font-size:12px }
+  .btn { border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px; font-size:12px; background:#fff }
+  .btn.p { background:#0f172a; color:#fff; border-color:#0f172a }
+  .tbl { display:grid; grid-template-columns:auto auto auto; gap:6px 14px; align-items:center }
+  .preview { background:#f0fdfa; border:1px solid #99f6e4; color:#115e59; border-radius:8px; padding:6px 10px; font-size:12px }
+  .refuse { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:8px; padding:8px 10px; font-size:12px }
+  .disc { color:#0f172a; font-size:12px; font-weight:600 }
+  .phone { width:320px; max-width:100%; margin:0 auto; border:8px solid #1e293b; border-radius:22px; overflow:hidden; background:#f1f5f9 }
+  .lbl { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#475569; margin:14px 0 6px }
+  .x { color:#94a3b8 }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Sentences — every rule reads as a line, live preview on top</h3>
+      <p>"A win earns [3]. A draw [1]. A loss [0]." Walkover and bonuses are sentence rows: "Losing by [7] or fewer: +[1]". "+ Add bonus" picks from the bonuses this sport supports. A one-line preview summarises the whole rule. Advanced parts (walkover score, bonuses) sit behind "More".</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Compact table — results × points, bonuses as a list below</h3>
+      <p>A small table: Win / Draw / Loss / Walkover win / Walkover loss, each with a number. Bonuses as a list of condition + points rows. Denser and faster for experienced organisers; less self-explaining.</p>
+    </div>
+  </div>
+</div>
+
+<div class="lbl">A — desktop 1280</div>
+<div class="card">
+  <div class="h"><span>Group stage · Rules · Points</span><span class="muted">Division: 3 · 1 · 0</span></div>
+  <div class="sec"><div class="preview">Win 4 · Draw 2 · Loss 0 · +1 losing by 7 or fewer · Walkover 4–0, scored 20–0</div></div>
+  <div class="sec"><h5>Results</h5>
+    <div class="row">A win earns <span class="in">4</span> · a draw <span class="in">2</span> · a loss <span class="in">0</span> points.</div></div>
+  <div class="sec"><h5>Walkover <span class="muted" style="text-transform:none;letter-spacing:0">(nothing played)</span></h5>
+    <div class="row">The team given the walkover earns <span class="in">4</span>, the absent team <span class="in">0</span>.</div>
+    <div class="row">Record it as a score of <span class="in">20</span>–<span class="in">0</span> <span class="muted">(optional — leave empty to record no score)</span></div>
+    <div class="muted">Retirement, disqualification or withdrawal after play: normal win/loss points on the real score.</div></div>
+  <div class="sec"><h5>Bonus points</h5>
+    <div class="row">Losing by <span class="in">7</span> or fewer: <span class="in">+1</span> <span class="x">✕</span></div>
+    <button class="btn">+ Add bonus</button></div>
+  <div class="sec"><div class="row"><button class="btn p">Save</button><button class="btn">Use division points</button></div></div>
+</div>
+
+<div class="lbl">A — phone 320 (bonuses folded under "More")</div>
+<div class="phone"><div class="card" style="border:0;border-radius:0">
+  <div class="h"><span>Points</span><span class="muted">Div 3·1·0</span></div>
+  <div class="sec"><div class="preview">Win 4 · Draw 2 · Loss 0 · +1 close loss</div></div>
+  <div class="sec"><div class="row">Win <span class="in">4</span> Draw <span class="in">2</span> Loss <span class="in">0</span></div></div>
+  <div class="sec"><span class="disc">▸ More: walkover, bonuses (2)</span></div>
+  <div class="sec"><div class="row"><button class="btn p" style="flex:1">Save</button></div></div>
+</div></div>
+
+<div class="lbl">B — desktop 1280</div>
+<div class="card">
+  <div class="h"><span>Group stage · Rules · Points</span><span class="muted">Division: 3 · 1 · 0</span></div>
+  <div class="sec"><div class="tbl">
+    <b>Result</b><b>Points</b><b></b>
+    <span>Win</span><span class="in">4</span><span></span>
+    <span>Draw</span><span class="in">2</span><span></span>
+    <span>Loss</span><span class="in">0</span><span></span>
+    <span>Walkover win</span><span class="in">4</span><span class="muted">score <span class="in">20</span>–<span class="in">0</span></span>
+    <span>Walkover loss</span><span class="in">0</span><span></span></div></div>
+  <div class="sec"><h5>Bonuses</h5>
+    <div class="row"><span class="btn">Loss margin ≤ ▾</span><span class="in">7</span> → <span class="in">+1</span> <span class="x">✕</span></div>
+    <button class="btn">+ Add</button></div>
+  <div class="sec"><div class="row"><button class="btn p">Save</button><button class="btn">Use division points</button></div></div>
+</div>
+
+<div class="lbl">Both options — the refusal (Q1), e.g. ice hockey stage whose division uses 3-2-1-0</div>
+<div class="card"><div class="sec"><div class="refuse"><b>These points can't be set per stage yet.</b> This division gives overtime and shoot-out results their own points (3 · 2 · 1 · 0). Stage points only support win / draw / loss today, so saving here would lose them. The stage keeps the division's points.</div></div></div>
+
+<div class="pros-cons" style="margin-top:18px">
+  <div class="pros"><h4>My recommendation: A</h4><ul>
+    <li>Reads like the rulebook — organisers check "is this what my league does?" at a glance</li>
+    <li>Live preview catches mistakes before save; preview reuses the public format line</li>
+    <li>Q9 distinction (walkover vs retirement) stated where it matters</li>
+    <li>Folds cleanly on phone (one DOM; "More" disclosure)</li></ul></div>
+  <div class="cons"><h4>Against A</h4><ul>
+    <li>Longer than B; B is quicker once you know the model</li>
+    <li>Sentence copy × 4 locales — more strings to translate</li></ul></div>
+</div>

@@ -4252,6 +4252,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
 
+> **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
+
 > **Carried from Task 4 re-review.** The X-SR-6 "every decider off" notice must read the RESOLVED cfg (after `bracketDeciders`), not only `stage.rules`: until Task 8/13b land, chess `bracketDeciders` forces `tiebreak` on, so a notice saying tie-breaks are off would be false. Test the notice against a chess knockout stage with its list empty.
 
 Spec items 1, 5, 6, 7, 9, 12, 13 and 14 (UI half); §5.3 S1, S4 (stage); X-SR-1, X-SR-3, X-SR-6, BG-KO-3 (UI); Review Focus 4 (the notice).
@@ -4500,6 +4502,8 @@ Notes:
 
 ### Task 18: S3 — stage points UI (same loop as Task 17)
 
+> **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
+
 Spec items 10 and 11 (UI half); §5.3 S3; X-PT-1; Review Focus 3 (UI).
 
 **Files:**
@@ -4613,6 +4617,8 @@ Notes:
 ---
 
 ### Task 19: S2 + S4 (match) — the match rules block on the fixture console, plus the run-sheet tag
+
+> **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
 > **Carried from Task 5.** The football `extraTime` web field builds `{enabled, halfMinutes: 15}` on "On". As a match override against a stage whose extra time is shorter (or off), that is refused by the engine's `off_or_shorter` bound. The match form must seed extra time FROM THE STAGE's resolved value (and offer only off or shorter), never the field's default. Test: stage ET 2×10 → match form opens at 10, "On" with 15 is not offered.
 
@@ -4834,6 +4840,8 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 ---
 ### Task 20: S4 — division settings name what is locked (UI)
 
+> **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
+
 > **Carried from the batch-2 review.** (M-4) This task's text predates Task 5: `divisionRefusals` now takes `{module, variantKey, divisionConfig}` and `TABLE_RULE_KEYS` is `tableRuleKeys(module, variant)` — use the real signatures. (Owner-visible) A v1/settings save that mixes a refused key with anything that lands now answers **200 with `refused[]`** (Task 5); `division-settings.tsx:469-477` shows "rules saved" on any 200 and never reads `refused`, so the locked value silently snaps back on refresh. The form must name each refused field (RefusedField copy) on a 200 as well as a 409; e2e covers the mixed case. The Task 20 smoke check must include the mixed 200 case (Task 5 changed the HTTP contract).
 
 > **Carried from batch-1 fixes.** `e2e/division-settings.spec.ts:95-99` re-sends the current variant `score` — now a 200 no-op. The rewrite must start a stage and send a DIFFERENT variant.
@@ -4945,6 +4953,8 @@ The settings tab URL and its field labels are re-read from `division-settings.sp
 ---
 
 ### Task 21: S5 — the Armageddon pad sheet asks who has Black (same loop as Task 20)
+
+> **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
 
 Spec item 13 (UI half); §5.3 S5; BG-KO-2 (enforced), BG-KO-3 (pad); finding 24.
 
