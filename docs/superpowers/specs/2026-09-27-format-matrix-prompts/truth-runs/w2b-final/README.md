@@ -1,9 +1,9 @@
-# W2b final truth run: the local half (Task 16 Steps 1–3)
+# W2b final truth run (Task 16 Steps 1–7)
 
 Task 16 of W2b (plan `docs/superpowers/plans/2026-10-09-format-matrix-w2b.md`; spec
 `docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md` §8.3–5) drives the W2b cells locally: the five
 boardgame R4 cells W2a re-keyed to CD-T13, and the five W2b scenarios. The CI half (the full matrix and the regression
-judge, Steps 4–7) has not run yet, so there is no `ci/` and no top-level `MATRIX.md` here.
+judge, Steps 4–7) is in "Steps 4–7: the CI truth run" at the end, and its artifact is in `ci/`.
 
 **Verdict: the R4 half passes; the new-scenario half is NEGATIVE.** All 5 R4 cells are `works`. Every W2b-owned
 check passes, with `checked > 0` wherever it applies. But 23 of the 246 scenario cases are red, for three causes
@@ -282,3 +282,133 @@ the bracket's own scroll rail):
 - The champion banner still reads `Champion` / `Matrix Team 4`.
 - Unchanged and out of scope (W4's): the empty seat's own word still reads `Bye`, the final's bye tile still prints
   `TBD`, and SF2's void still reads `TBD` · `Bye` · `Winner of Quarter-finals, match 4`.
+
+## Steps 4–7: the CI truth run (`ci/`)
+
+**Verdict: 0 newly red that W2b owns.** L1 and L2 are clean. L3 has one newly red cell,
+`swiss_knockout|football|11-a-side|R4`. It is an owner ruling 70 lots-flip cell (P6, SW-H1, owned by W3), and the
+controller accepted it as that, named (ruling (a) below). Judged against the W1d baseline, where ruling 70 holds its
+three cells red, L3 has 0 newly red.
+
+### The run
+
+| | |
+|---|---|
+| CI | workflow "Matrix truth run", run **38362040946**, `event` workflow_dispatch, `headSha` `191f2692eb71abd0f119f3f0544f5402507d950a` (the branch tip when dispatched), conclusion success, 15 of 15 jobs success, 2026-10-13 07:20–07:38 UTC |
+| artifact | `gh run download 38362040946 --name merged --dir ci`; L1 8 shards, L2 2, L3 2; `SUMMARY.md` "Run complete: yes", harness faults none; each layer's `judge.json` is the faults verdict, exit 0, 0 faults |
+| not committed | the three `faults.txt` files (`committed-matrix` reads JSON and Markdown only), as W2a did |
+| `MATRIX.md` | `ci/<L>/MATRIX.md`, re-rendered here with `pnpm matrix:render ci/<L>/results.json --out ci/<L>/MATRIX.md`, byte-identical to the artifact's own for all three layers |
+| lock | 3 entries appended to `../plans.lock.json` (`w2b-final/ci/L1`, `L2`, `L3`), built by `committed-matrix`'s own `freeze()` from today's planners; each equals the W2a entry for the same layer; `pnpm matrix:lock-check --against HEAD`: 283 entries compared, 3 added, exit 0 |
+
+| layer | plan | cases | driven | works | red | no_path | not_run |
+|---|---|---|---|---|---|---|---|
+| L1 | `--layer L1 --scope grid` | 231 | 178 | 167 | 11 | 53 | 0 |
+| L2 | `--layer L2 --scope grid` | 1729 | 62 | 43 | 19 | 164 | 1503 |
+| L3 | `--set w1-driving` | 937 | 937 | 834 | 103 | 0 | 0 |
+
+### The baseline (controller ruling (c))
+
+The baseline is **run 37951331449**: W2a's real final truth run, at harness `4162e79` (`headSha`
+`4162e7962d9edfb98db9b7dd5e274d8d330bb40b`, 2026-10-09 15:23 UTC, the run the W2a branch review gated the merge on).
+Its `merged` artifact still downloads. It is not committed. Its `results.json` files, by sha256:
+
+| layer | sha256 |
+|---|---|
+| L1 | `75117ab228cdef98c6229ae2f083128619e33c7ded2f5d9dbb7e25cac022db30` |
+| L2 | `6ca1f08e38a7179b99662079791d65999fe6331cd0dd877187505d3043de1a0b` |
+| L3 | `c46543ef0ba986e21c4226469104e9a84802d426f38061231a9c62a7d96dabda` |
+
+The committed `../w2a-final/ci` is the earlier run **37916609028** (harness `e45d742`), and it is judged here too.
+- **Why it is not the baseline:** it predates W2a's loop R fixes. At L3 the two W2a runs differ by 11 cells, every one
+  red → works in 37951331449: the 10 `page_playoff_only|*|M1` cells W2a false premise 50 reddened (all but boardgame)
+  and `swiss_playoff|generic|score|R4`.
+- W2a's committed folder is not rewritten.
+- Recorded as W2b false premise 19 (`../../_INDEX.md`).
+
+### Judges
+
+Per layer, `pnpm matrix:judge regression --now ci/<L>/results.json --expect <the run's own case ids>`:
+
+| file | baseline | exit | compared | newly red | absent |
+|---|---|---|---|---|---|
+| `judge-L1.json` | 37951331449 L1 | 0 | 231 | 0 | 0 |
+| `judge-L2.json` | 37951331449 L2 | 0 | 1729 | 0 | 0 |
+| `judge-L3.json` | 37951331449 L3 | **1** | 937 | **1** | 0 |
+| `judge-L1-vs-37916609028.json` | committed `../w2a-final/ci/L1` | 0 | 231 | 0 | 0 |
+| `judge-L2-vs-37916609028.json` | committed `../w2a-final/ci/L2` | 0 | 1729 | 0 | 0 |
+| `judge-L3-vs-37916609028.json` | committed `../w2a-final/ci/L3` | **1** | 937 | **1** | 0 |
+| `judge-L3-vs-w1d-r70.json` | `../w1d-baseline/L3` (run 37346206686) | 0 | 937 | 0 | 0 |
+
+    ci-38362040946-1-l3 against the baseline ci-37951331449-1-l3: compared 937 cases; 1 regressions
+    baseline overrides: not applied — the baseline is ci-37951331449-1-l3 and owner ruling 70's list was written for workflow run 37346206686 (tag matrix-truth/w1d-baseline); 3 of its case(s) are in this sample and are judged as that baseline shows them
+      swiss_knockout|football|11-a-side|R4: works → red — I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks); life-loop-bounded: play loop exited empty_pair_round
+
+    ci-38362040946-1-l3 against the baseline ci-37346206686-1-l3: compared 937 cases; 0 regressions
+    baseline overrides: 3 case(s) held red (cause P6, SW-H1, W3) — owner ruling 70
+
+Every L3 cell that moved against 37951331449 (L1 and L2: none moved):
+
+| cell | move | classification |
+|---|---|---|
+| `knockout\|boardgame\|blitz\|R4`, `knockout_third_place\|…`, `ko_plate\|…`, `double_elim\|…`, `qualifying_main\|boardgame\|blitz\|R4` | red → works | W2b's: the five CD-T13 cells, the predicted green |
+| `swiss_knockout\|football\|11-a-side\|R4` | works → red | **owner ruling 70's lots-flip cell (P6, SW-H1, W3)**, accepted as the one newly red by controller ruling (a); no re-dispatch |
+
+On ruling 70's cell:
+- `lotSeed` hashes the per-run entrant UUIDs. So in a sport whose tie-break cascade ends in `lots`, tied Swiss
+  entrants are ordered differently on every run. On some of those paths round 5 has no rematch-free matching, and
+  SW-H1 fires.
+- Its state across runs: W1d red (SW-H1); 37916609028 works; 37951331449 works; this run red (SW-H1).
+- The W2b diff touches no Swiss pairing code. Its `points.ts` and `stage.ts` changes are the double-walkover points
+  and the bracket ranks.
+
+### Ruling D-P2 (`tools/matrix/w2a-expect.ts`)
+
+`--expect ../w2a-repro/expect-77.json --rekeys ../w2a-repro/expect-77-rekeys.json` (the two pins left after Step 2).
+
+**`w2a-expect-ci.json`, CI first, exit 0.** Inputs in this order: this run's L3, L2 and L1; then the five local R4
+runs; then W2a's committed CI L3, L2 and L1. This is the order the tool's header prescribes, "the CI artifact before
+the local run".
+
+    expected 77, found 77: 75 works, 1 red as pinned, 1 greened; 0 unexpected red, 0 wrong reason (5799 case(s) read)
+      red as pinned ko_plate|boardgame|blitz|F1: owned by FX-G14 (W4)
+      greened swiss_playoff|generic|score|R4: re-keyed but works - the pin is stale
+
+- **The greened cell is NOT a W2b green (controller ruling (b)).** `swiss_playoff|generic|score|R4` is the W3 SW-H1
+  pin, and generic is a lots sport, so this is the same flip as ruling 70's cells.
+  - Its state across runs: W1d red (stall); 37916609028 red (SW-H1); 37951331449 works; this run works.
+  - The pin and its expectation stay untouched in `../w2a-repro/expect-77-rekeys.json`, still keyed to SW-H1 (W3).
+- **`page_playoff_only|generic|score|M1` (W2a false premise 50) is `works` on CI here**, as are all 11
+  `page_playoff_only|*|M1` cells. The local run's one unexpected red is read only from W2a's committed CI L3.
+
+**`w2a-expect-ci-literal.json`, the brief's way, exit 1.** Step 2's inputs (the five local runs, then W2a's committed
+CI L3, L2 and L1), with this run's L3 appended last:
+
+    expected 77, found 77: 74 works, 2 red as pinned, 0 greened; 1 unexpected red, 0 wrong reason (3839 case(s) read)
+      red as pinned ko_plate|boardgame|blitz|F1: owned by FX-G14 (W4)
+      red as pinned swiss_playoff|generic|score|R4: owned by SW-H1 (W3)
+      unexpected red page_playoff_only|generic|score|M1: red - life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)
+
+This judges nothing about this run. The first input that holds a case decides it, and W2a's committed L3 holds all 937
+L3 cases, so this run's L3 is never read. The output equals `w2a-expect-after.json` but for the case count.
+Recorded as W2b false premise 17 (`../../_INDEX.md`).
+
+### The brief's top-level `MATRIX.md`
+
+Step 6's `pnpm matrix:render ci/L3/results.json --out w2b-final/MATRIX.md` is not committed.
+- `committed-matrix`'s sweep ("every committed MATRIX.md is the render of its results.json") reads the
+  `results.json` beside each tracked `MATRIX.md`. With that file rendered and staged, the test fails 3 of 28:
+  `ENOENT: … truth-runs/w2b-final/results.json`, plus the two lock tests that owe the three new entries.
+- The render lives per layer in `ci/<L>/MATRIX.md`, as W2a's does.
+- Recorded as W2b false premise 18.
+
+### Rulings, as recorded
+
+Controller rulings (a)–(c), 2026-10-13, Task 16 Steps 5–7:
+- **(a)** `swiss_knockout|football|11-a-side|R4` is accepted as the one newly red, named, citing owner ruling 70.
+  With ruling 70 applied (the W1d baseline), 0 are newly red. No re-dispatch.
+- **(b)** greened `[swiss_playoff|generic|score|R4]` is the same lots flip, not a W2b green. The W3 SW-H1 pin and its
+  expectation are untouched.
+- **(c)** The judge baseline is 37951331449. The committed 37916609028 is cited too, with the reason above.
+
+The rulings are recorded here and in `../../_INDEX.md`, not inside `../plans.lock.json`. A lock entry is a strict
+`{plan, layered, driven, planned}` object (`committed-plans.ts`, `z.strictObject`), so it has no field for a note.

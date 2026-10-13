@@ -2669,6 +2669,21 @@ Kept here, not in "W1d truth-run backlog" below: that section is `pnpm matrix:ba
 
 - **W2a final truth run (CI 37916609028, 2026-10-09): the swiss_playoff R4 cells, classified (11 checked)** — SC-O1 (`swiss_playoff|boardgame|blitz|R4`) went from red (stall) to **works**, on CI and locally: the **predicted fix**. SC-O2 (`swiss_playoff|generic|score|R4`) went from red (stall) to red on **SW-H1** ("round 5 paired nobody (SW-H1)", so the knockout stage is never reached). It works locally at `e45d74203`, so W2a closed the stall and the CI red is the **reason flip to SW-H1, owned by P6 (W3)**, not a W2a regression. Ruling D-P2's judge still counts it as an unexpected red, since the pins do not hold it and Task 16 did not edit them. `swiss_playoff|hockey|fih-outdoor|R4` is unchanged (SW-H1, P6/W3). The other 8 sports stay works. Evidence: `truth-runs/w2a-final/README.md`.
 
+### W2b final truth run: the cells that moved (Task 16, 2026-10-13)
+
+- **W2b final truth run (CI 38362040946, `headSha` `191f2692e`, 2026-10-13): every moved cell, classified (6 moved at
+  L3 against W2a's final run 37951331449; L1 0 of 231 and L2 0 of 1729 moved).**
+  - The five boardgame R4 cells (`knockout`, `knockout_third_place`, `ko_plate`, `double_elim`, `qualifying_main`) went
+    red → works. This is W2b's predicted green (CD-T13).
+  - `swiss_knockout|football|11-a-side|R4` went works → red: "round 5 paired nobody (SW-H1)".
+    - It is owner ruling 70's lots-flip cell (P6, W3), not a W2b regression.
+    - **Controller ruling (a):** it is accepted, named, as the one newly red; no re-dispatch. With ruling 70 applied
+      (judged against `w1d-baseline`), L3 has 0 newly red.
+  - `swiss_playoff|generic|score|R4`, the W3 SW-H1 pin, is works on this run, and D-P2 reports it greened.
+    - **Controller ruling (b):** that is the same lots flip, not a W2b green. The pin stays.
+  - **Controller ruling (c):** the baseline is 37951331449; the committed `w2a-final/ci` (37916609028) is cited too.
+  - Evidence: `truth-runs/w2b-final/README.md`, "Steps 4–7".
+
 ### False premises found (W2b)
 
 1. The W2b brief listed C17 as an owner constraint; it was a W2a controller ruling. Ruling 90 is the owner's answer.
@@ -2704,6 +2719,20 @@ Kept here, not in "W1d truth-run backlog" below: that section is `pnpm matrix:ba
 16. The plan's red judge "`failedSuites == 0`" cannot hold for a red under vitest 4.1.11: `numFailedTestSuites` counts
     the file and each `describe`, both failed when a test inside fails. A red is judged collected by an empty
     `.testResults[].message` and the expected `numTotalTests`.
+17. Task 16 Step 5's "rerun Step 2's judge with the CI L3 results added: EXIT=0, `greened: []`" judges nothing about
+    the CI run. `w2a-expect.ts` lets the first `--now` holding a case decide it. W2a's committed CI L3 already holds
+    all 937 L3 cases, so the CI L3 appended last is never read: exit 1, the same verdict as Step 2's
+    `w2a-expect-after.json`. The tool's own order, CI first, gives exit 0, `greened: [swiss_playoff|generic|score|R4]`
+    (a lots flip, controller ruling (b)) and 0 unexpected red. Evidence: `truth-runs/w2b-final/w2a-expect-ci.json`,
+    `w2a-expect-ci-literal.json`.
+18. Task 16 Step 6's `pnpm matrix:render … --out "$R/w2b-final/MATRIX.md"` reds `committed-matrix.test.ts`. Its sweep
+    reads the `results.json` beside every tracked `MATRIX.md` (`ENOENT: … w2b-final/results.json`, proven with the
+    file staged). The render stays per layer in `w2b-final/ci/<L>/MATRIX.md`, as W2a's does.
+19. Task 16 Step 5's baseline "W2a's last committed CI results (`TR/w2a-final/ci`)" is run 37916609028 (harness
+    `e45d742`), which is not W2a's final run. W2a's final run is 37951331449 (harness `4162e79`, the run the W2a
+    review gated the merge on), and it differs at L3 by 11 cells, all red → works. The step's own fallback ("if
+    `gh run download 37951331449 --name merged` still serves") applies, and the artifact still served on 2026-10-13
+    (controller ruling (c)).
 
 ## Findings routed (W1b)
 

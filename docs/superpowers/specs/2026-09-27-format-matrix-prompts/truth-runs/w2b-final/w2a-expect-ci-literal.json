@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "expected": 77,
+  "read": 3839,
+  "found": 77,
+  "works": 74,
+  "pinnedRed": [
+    {
+      "caseId": "ko_plate|boardgame|blitz|F1",
+      "now": "FX-G14",
+      "wave": "W4"
+    },
+    {
+      "caseId": "swiss_playoff|generic|score|R4",
+      "now": "SW-H1",
+      "wave": "W3"
+    }
+  ],
+  "greened": [],
+  "unexpectedRed": [
+    {
+      "caseId": "page_playoff_only|generic|score|M1",
+      "state": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    }
+  ],
+  "wrongReason": [],
+  "exit": 1
+}
