@@ -75,7 +75,10 @@ describe.skipIf(!HAS_DB)("lobby route — who, and never cached", () => {
       expect(res.headers.get("cache-control"), label).toBe("private, no-store");
       const body = (await res.json()) as { ok: boolean; data?: unknown };
       if (status === 200) {
-        const data = ExternalPlayLobbyOut.parse(body.data);
+        // Strict: the documented arm's keys and no others (fix round 1, M1) — a non-strict parse let a spread of
+        // the room snapshot (its realtime token included) through.
+        const data = ExternalPlayLobbyOut.options[1].strict().parse(body.data);
+        expect(JSON.stringify(body), `${label}: no realtime field rides along`).not.toMatch(/"(token|realtime|participant|game)"/);
         expect(data.roomPath, label).toMatch(new RegExp(`/fixtures/${s.fixtureId}/play$`));
       } else {
         expect(JSON.stringify(body), `${label}: no room path in a refusal`).not.toContain("/play");

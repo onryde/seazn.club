@@ -148,6 +148,31 @@ describe.skipIf(!HAS_DB)("the decision routes — who may call them", () => {
     expect(await written(b.fixtureId)).toEqual({ events: 2, closed: 1 });
   });
 
+  it("M3: auth comes before the body — a stranger with a MALFORMED body is 401, never a 400 that describes the schema", async () => {
+    const { b } = await heldBoards();
+    const stranger = await seedOwner();
+    authState.userId = stranger.userId!;
+    const routes: [string, (req: Request, c: { params: Promise<{ id: string }> }) => Promise<Response>, string][] = [
+      ["resolve", resolveRoute, `/fixtures/${b.fixtureId}/external-play/resolve`],
+      ["flags/close", closeRoute, `/fixtures/${b.fixtureId}/external-play/flags/close`],
+    ];
+    const bodies: unknown[] = [{ kind: "teleport", extra: 1 }, { ids: [] }, "not json"];
+    let checked = 0;
+    for (const [name, route, path] of routes) {
+      for (const body of bodies) {
+        const res = await read(await route(post(path, body), ctx(b.fixtureId)));
+        expect([res.status, res.body.error?.code], `${name} ${JSON.stringify(body)}`).toEqual([401, "UNAUTHENTICATED"]);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: two routes × three bodies").toBe(6);
+    // The positive pair: the club's admin with the same malformed body IS told about the body.
+    const { r: r2, b: b2 } = await heldBoards();
+    authState.userId = await member(r2.orgId, "admin");
+    const bad = await read(await resolveRoute(post(`/fixtures/${b2.fixtureId}/external-play/resolve`, { kind: "teleport" }), ctx(b2.fixtureId)));
+    expect(bad.status, "an organiser's malformed body is a 400").toBe(400);
+  });
+
   it("C: an org ADMIN who plays on the board is refused by both routes for THAT reason — and decides another board", async () => {
     const { r, b, flags } = await heldBoards(2);
     await sql`insert into org_members (org_id, user_id, role) values (${r.orgId}, ${b.home.userId}, 'admin')`;

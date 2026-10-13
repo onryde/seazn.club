@@ -16,6 +16,7 @@ import { windowFor } from "@/server/external-play/window";
 import type { RoomDeps } from "../external-play/room";
 import { readExternalPlayLobby, LOBBY_STATES } from "../external-play/lobby";
 import { stampFixtureCheckIn } from "../me";
+import { ExternalPlayLobbyOut } from "@/server/api-v1/schemas";
 import { makeUser } from "./_seed";
 import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
@@ -162,6 +163,51 @@ describe.skipIf(!HAS_DB)("readExternalPlayLobby — the state the door states", 
     expect(before.availability.length, "premise: one check-in on file").toBe(1);
     expect(d.publish).not.toHaveBeenCalled();
     expect(d.create).not.toHaveBeenCalled();
+  });
+});
+
+/** Every key anywhere in a value, at any depth — a leak nested in an object is still a leak. */
+function deepKeys(v: unknown, out: string[] = []): string[] {
+  if (Array.isArray(v)) for (const x of v) deepKeys(x, out);
+  else if (v !== null && typeof v === "object")
+    for (const [k, x] of Object.entries(v)) {
+      out.push(k);
+      deepKeys(x, out);
+    }
+  return out;
+}
+
+describe.skipIf(!HAS_DB)("readExternalPlayLobby — the answer is an ALLOWLIST (fix round 1, M1)", () => {
+  // The room's snapshot carries what play needs: a realtime token, the participant, the game, the opponent's
+  // presence. The door carries none of it. The expected keys are the DOCUMENTED answer's (the v1 schema's two arms),
+  // never lobby.ts's; a spread of the room snapshot into the answer adds keys and dies here.
+  const FORBIDDEN = /token|realtime|participant|presence|game|opponent|draw|clock|lichess|camera|video/i;
+  it("each state's answer has exactly the documented keys, and nothing the room carries for play — at any depth", async () => {
+    const offKeys = Object.keys(ExternalPlayLobbyOut.options[0].shape).sort();
+    const doorKeys = Object.keys(ExternalPlayLobbyOut.options[1].shape).sort();
+    const opened = await seed();
+    const live = await seed();
+    await gameOnFile(live, { status: "live" });
+    const held = await seed();
+    await gameOnFile(held, { status: "needs_organiser", needsReason: "fair_play" });
+    const off = await seed();
+    const cells: [string, () => Promise<unknown>, string[]][] = [
+      ["check-in (the room mints a realtime token for this seat)", () => readExternalPlayLobby(opened.home.userId, opened.fixtureId, deps()), doorKeys],
+      ["playing (a game on file)", () => readExternalPlayLobby(live.away.userId, live.fixtureId, deps()), doorKeys],
+      ["held", () => readExternalPlayLobby(held.home.userId, held.fixtureId, deps()), doorKeys],
+      ["off", () => readExternalPlayLobby(off.home.userId, off.fixtureId, deps({ offered: vi.fn(async () => false) })), offKeys],
+    ];
+    let checked = 0;
+    for (const [label, ask, keys] of cells) {
+      const answer = await ask();
+      expect(Object.keys(answer as object).sort(), label).toEqual(keys);
+      const leaked = deepKeys(answer).filter((k) => FORBIDDEN.test(k));
+      expect(leaked, `${label}: no play field at any depth`).toEqual([]);
+      expect(JSON.stringify(answer), `${label}: the minted realtime token never rides along`).not.toContain("rt-token");
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: states checked").toBe(cells.length);
+    expect(doorKeys.length, "premise: the documented door has keys to compare").toBeGreaterThan(1);
   });
 });
 
