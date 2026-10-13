@@ -469,11 +469,25 @@ const ROWS: RetirementRow[] = [
       ];
     },
   },
+  // GN-RT-1 (ruling 124, amends 87; FB-RT-1's rule): the walkover credit (GN-WO-1's, EXPECTED_WALKOVER), unless the
+  // recorded score is WORSE for the retiree, which stands. Three margins, so the rule is witnessed both ways.
   {
-    // A recorded 3-1 to the retiree: the winner gets the win points; the recorded score is kept.
-    id: "GN-RT-1", key: "generic", cfg: parsed("generic"),
+    // 3-1 to the retiree: the recorded score is better for it than the walkover, so the walkover credit.
+    id: "GN-RT-1 (3-1 to the retiree: the walkover credit)", key: "generic", cfg: parsed("generic"),
     played: [["generic.score", { by: H, points: 3 }], ["generic.score", { by: A, points: 1 }]],
-    want: () => [{ for: 3, against: 1, diff: 2 }, { for: 1, against: 3, diff: -2 }],
+    want: (c) => { const w = EXPECTED_WALKOVER.generic!(c); return [w.loser, w.winner]; },
+  },
+  {
+    // 1-5 against the retiree: worse for it than the walkover, so the recorded score stands.
+    id: "GN-RT-1 (1-5: the recorded score is worse for the retiree, it stands)", key: "generic", cfg: parsed("generic"),
+    played: [["generic.score", { by: H, points: 1 }], ["generic.score", { by: A, points: 5 }]],
+    want: () => [{ for: 1, against: 5, diff: -4 }, { for: 5, against: 1, diff: 4 }],
+  },
+  {
+    // 2-2: an equal margin is not worse for the retiree than the walkover's, so the walkover credit (FB-RT-1's rule).
+    id: "GN-RT-1 (2-2: an equal margin takes the walkover credit)", key: "generic", cfg: parsed("generic"),
+    played: [["generic.score", { by: H, points: 2 }], ["generic.score", { by: A, points: 2 }]],
+    want: (c) => { const w = EXPECTED_WALKOVER.generic!(c); return [w.loser, w.winner]; },
   },
   {
     // CK-WO-1 "incl. refusal to continue": a retirement is the walkover credit, whatever was played.
@@ -680,11 +694,23 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
   });
   it("TN-RT-1: tennis retirement — the same credit as TN-WO-1", () => expectRetirement(row("TN-RT-1")));
   it("CA-RT-1: carrom retirement — completed games stand, the unfinished one 25-(opponent), the rest 25-0", () => expectRetirement(row("CA-RT-1")));
-  it("GN-RT-1: generic retirement — walkover credit, keeping the recorded score", () => {
-    expectRetirement(row("GN-RT-1"));
-    const cfg = row("GN-RT-1").cfg as { points: { w: number; l: number } };
-    const [home, away] = retirementDeltas(row("GN-RT-1"), "retired");
-    expect([home.points, away.points]).toEqual([cfg.points.l, cfg.points.w]);
+  it("GN-RT-1 (ruling 124): generic retirement — the walkover credit, unless the recorded score is worse for the retiree", () => {
+    const ids = [
+      "GN-RT-1 (3-1 to the retiree: the walkover credit)",
+      "GN-RT-1 (1-5: the recorded score is worse for the retiree, it stands)",
+      "GN-RT-1 (2-2: an equal margin takes the walkover credit)",
+    ];
+    // Premise: the walkover credit generic declares is not the recorded 3-1, so the leading case witnesses the rule.
+    expect(EXPECTED_WALKOVER.generic!(parsed("generic")).winner).not.toEqual({ for: 1, against: 3, diff: -2 });
+    let checked = 0;
+    for (const id of ids) {
+      expectRetirement(row(id));
+      const cfg = row(id).cfg as { points: { w: number; l: number } };
+      const [home, away] = retirementDeltas(row(id), "retired");
+      expect([home.points, away.points], id).toEqual([cfg.points.l, cfg.points.w]);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
   it("CK-WO-1: a cricket retirement (refusal to continue) is the walkover credit — the played runs are not credited", () =>
     expectRetirement(row("CK-WO-1 (refusal to continue)")));
@@ -886,11 +912,12 @@ const PF1: Pf1Row[] = [
     headline: () => "0 — 1",
   },
   {
-    // A 2-2 result card. GN-RT-1: the winner's points, the recorded score kept — so the headline still reads 2 — 2.
+    // A 2-2 result card. GN-RT-1 (ruling 124): an equal margin is not worse for the withdrawer, so the walkover credit
+    // (0-0, GN-WO-1) — and the headline reads that credit, generic's walkover marker, never the card's 2 — 2.
     id: "GN-RT-1", key: "generic", cfg: parsed("generic", { resultMode: "score", allowDraws: true }),
     level: [["core.start"], ["generic.result", { p1Score: 2, p2Score: 2 }]],
-    table: () => [{ for: 2, against: 2, diff: 0 }, { for: 2, against: 2, diff: 0 }],
-    headline: () => "2 — 2",
+    table: (c) => { const w = EXPECTED_WALKOVER.generic!(c); return [w.loser, w.winner]; },
+    headline: () => "L — W/O",
   },
   {
     // A tie: 150/4 off 120 balls, then 150 all out. CK-WO-1 (the cricket retirement row): none of what was played is
@@ -942,8 +969,9 @@ describe("PF-1 / X-WO-1: a withdrawal over a held level result — the headline 
       checked++;
     }
     expect(checked).toBe(5);
-    // the goal sports and chess show a credited score the played level result did not
-    expect(moved).toBe(3);
+    // the goal sports, chess and generic (ruling 124: its 2-2 card is not the walkover credit) show a credit the played
+    // level result did not
+    expect(moved).toBe(4);
   });
 
   it("no withdrawal, no overlay: a plain retirement's summary is the module's own", () => {
@@ -1293,7 +1321,7 @@ describe("X-WO-1 / X-RT-1: a forfeit's summary shows the credited score, never t
       holds: (_lines, want) => expect(want, "a cricket forfeit credits no runs").toEqual([0, 0]),
     },
     generic: {
-      why: "a generic forfeit's summary is the result marker ('W/O' / 'L'), not a score: GN-WO-1 credits 0-0 and GN-RT-1 keeps the recorded score",
+      why: "a generic forfeit's summary is the result marker ('W/O' / 'L'), not a score: GN-WO-1 credits 0-0 and GN-RT-1 keeps the recorded score only where it is worse for the offender (ruling 124)",
       holds: (lines, _want, offenderAt) => {
         expect(lines.map(shown), "a generic forfeit shows no number").toEqual([null, null]);
         expect(lines[offenderAt], "the side at fault is the one marked lost").not.toBe(lines[1 - offenderAt]);

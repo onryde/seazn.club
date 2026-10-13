@@ -283,11 +283,14 @@ function carromCredit(cfg: Record<string, unknown>, p: Played | null): Credit {
 function genericCredit(cfg: Record<string, unknown>, p: Played | null): Credit {
   const mode = cfg.resultMode;
   if (mode !== "score" && mode !== "win_loss") throw new CreditRefused("cfg-invalid", `generic: cfg.resultMode is ${JSON.stringify(mode)}`);
-  // GN-WO-1: "win points, 0-0". GN-RT-1: "walkover credit, keeping any recorded score" — in either result mode: the
-  // generic pad keeps its running tally (generic.score) under win/loss as under score, and the row names no mode
-  // (R112 fix round 2, m3: this family used to refuse a win/loss tally as "records no score", which was false).
-  const w = p === null ? 0 : sum(p.win);
-  const o = p === null ? 0 : sum(p.off);
+  // GN-WO-1: "win points, 0-0". GN-RT-1 (ruling 124, amends 87): "walkover credit, unless the recorded score is worse
+  // for the offender, in which case it stands" — FB-RT-1's rule against GN-WO-1's 0-0, so an equal margin takes the
+  // walkover credit. In either result mode: the generic pad keeps its running tally (generic.score) under win/loss as
+  // under score, and the row names no mode (R112 fix round 2, m3: this family used to refuse a win/loss tally as
+  // "records no score", which was false).
+  let w = 0;
+  let o = 0;
+  if (p !== null && sum(p.win) - sum(p.off) > 0) { w = sum(p.win); o = sum(p.off); }
   return { winner: { for: w, against: o, diff: w - o }, loser: { for: o, against: w, diff: o - w }, excluded: [] };
 }
 

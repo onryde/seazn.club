@@ -21,7 +21,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -214,7 +214,7 @@ function applyScore(state: GenericState, payload: GenericScore): GenericState {
 }
 
 function sideLine(state: GenericState, side: Side): string {
-  if (state.score) return String(state.score[side]);
+  if (state.score && !creditReplacesCard(state)) return String(state.score[side]);
   const outcome = state.outcome;
   // A live tally renders while the fixture is undecided; a decided fixture
   // always renders its result, never the tally.
@@ -245,24 +245,39 @@ function sideMetrics(state: GenericState, side: Side): Record<string, number> {
   return { for: forScore, against, diff: forScore - against };
 }
 
+/** GN-WO-1: generic's walkover score — the win points at 0-0 (a stage-level awarded score is W2c). */
+const GENERIC_WALKOVER_SCORE = 0;
+
 /**
- * W2b (spec §5.2; GN-WO-1, GN-RT-1) — a walkover is the win points at 0-0 (a stage-level awarded score is W2c). A
- * retirement, an in-match disqualification or a withdrawal is the walkover credit KEEPING the recorded score: the
- * result card's, else the running tally. Before play nothing is recorded, so a withdrawal before the start is the
- * walkover credit (PF-7) — except a tally pressed with no `core.start`, which generic's tally permits and which this
- * reads as play (generic has no start gate on its tally).
+ * W2b (spec §5.2; GN-WO-1, GN-RT-1) — a walkover is the win points at 0-0 (`GENERIC_WALKOVER_SCORE`). A retirement,
+ * an in-match disqualification or a withdrawal is the walkover credit, unless the recorded score — the result card's,
+ * else the running tally — is WORSE for the offender, in which case it stands: football's rule (FB-RT-1, `goalCredit`),
+ * owner ruling 124 (2026-10-13, amends ruling 87, which kept any recorded score and so let a retiree who led 10-2 finish
+ * +8 on difference). An equal margin takes the walkover credit. Before play nothing is recorded, so a withdrawal before
+ * the start is the walkover credit (PF-7) — except a tally pressed with no `core.start`, which generic's tally permits
+ * and which this reads as play (generic has no start gate on its tally).
  */
 function genericForfeitCredit(_cfg: GenericCfg, state: GenericState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
   const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
   if (by === "both") return doubleWalkoverCredit(played[0], played[1], ["for", "against", "diff"]);
   if (reason === "bye") return { perSide: played, excluded: [] };
   const recorded = reason === "walkover" ? null : (state.score ?? state.running ?? null);
-  const record = (side: Side) => {
-    const forScore = recorded?.[side] ?? 0;
-    const against = recorded?.[opponent(side)] ?? 0;
-    return { for: forScore, against, diff: forScore - against };
-  };
-  return { perSide: creditFor(by, record(opponent(by)), record(by)), excluded: [] };
+  const winner = opponent(by);
+  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });
+  const record = (forScore: number, against: number) => ({ for: forScore, against, diff: forScore - against });
+  return { perSide: creditFor(by, record(credited.winner, credited.offender), record(credited.offender, credited.winner)), excluded: [] };
+}
+
+/** X-WO-1 (ruling 124) — a forfeit over a recorded result card reads the table's credit: the card's numbers only where
+ *  GN-RT-1 keeps them. True where the walkover credit replaced them, so the line is generic's walkover marker. */
+function creditReplacesCard(state: GenericState): boolean {
+  const outcome = state.outcome;
+  if (outcome?.kind !== "award" || state.score === null) return false;
+  const reason = awardReasonOf(outcome);
+  if (reason === "bye") return false;
+  const winnerSide = sideOf(state, outcome.winner);
+  const credit = genericForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id)));
+  return credit.perSide[0].for !== state.score.home || credit.perSide[0].against !== state.score.away;
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +690,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "award": {
-        // W2b (spec §5.2): the credited score (`genericForfeitCredit`) — GN-WO-1 0-0, GN-RT-1 the recorded score.
+        // W2b (spec §5.2): the credited score (`genericForfeitCredit`) — GN-WO-1 0-0, GN-RT-1 the recorded score only where it is worse for the offender (ruling 124).
         const winnerSide = sideOf(state, outcome.winner);
         const loserSide = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = genericForfeitCredit(cfg, state, awardReasonOf(outcome), loserSide);

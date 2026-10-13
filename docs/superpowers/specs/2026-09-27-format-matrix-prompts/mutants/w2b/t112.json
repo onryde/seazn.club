@@ -766,30 +766,30 @@
  {
   "id": "m3-ref-generic-winloss-tally-dropped",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "const w = p === null ? 0 : sum(p.win);",
-  "replace": "const w = p === null || mode === \"win_loss\" ? 0 : sum(p.win);",
+  "find": "if (p !== null && sum(p.win) - sum(p.off) > 0) {",
+  "replace": "if (p !== null && mode !== \"win_loss\" && sum(p.win) - sum(p.off) > 0) {",
   "killers": [
    {
     "cwd": "packages/reference",
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode"
+    "name": "GN-RT-1"
    }
   ]
  },
  {
   "id": "m3-ref-generic-winloss-refused",
   "file": "packages/reference/src/families/walkover-credit.ts",
-  "find": "  const w = p === null ? 0 : sum(p.win);\n",
-  "replace": "  if (p !== null && mode === \"win_loss\" && p.win.length > 0) throw new CreditRefused(\"played-malformed\", \"generic: a win/loss match records no score\");\n  const w = p === null ? 0 : sum(p.win);\n",
+  "find": "  let w = 0;\n  let o = 0;\n  if (p !== null && sum",
+  "replace": "  if (p !== null && mode === \"win_loss\" && p.win.length > 0) throw new CreditRefused(\"played-malformed\", \"generic: a win/loss match records no score\");\n  let w = 0;\n  let o = 0;\n  if (p !== null && sum",
   "killers": [
    {
     "cwd": "packages/reference",
     "files": [
      "src/families/walkover-credit.test.ts"
     ],
-    "name": "GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode"
+    "name": "GN-RT-1"
    },
    {
     "cwd": "packages/reference",

@@ -159,13 +159,17 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
 
     expect(propsOf(confirm()).disabled).toBe(false);
     expect(textOf(confirm()), "one specific Confirm").toBe(en("forfeitDialog.confirm.retired"));
-    // GN-RT-1: a generic retirement is the walkover credit (GN-WO-1: no score) KEEPING THE RECORDED SCORE — the one
-    // played event's points, read off the ledger this console holds.
+    // GN-RT-1 (ruling 124, amends 87): a generic retirement is the walkover credit (GN-WO-1: no score) unless the
+    // recorded score — the one played event's points, read off the ledger this console holds — is WORSE for the retiree,
+    // which then stands. The rig's one score puts one side ahead: retiring while behind keeps it, while ahead does not.
     const played = PLAY.payload as { by: string; points: number };
     const [homeScore, awayScore] = played.by === LINEUPS.home.entrantId ? [played.points, 0] : [0, played.points];
     expect(homeScore + awayScore, "rig: the played event scored").toBeGreaterThan(0);
-    expect(textOf(byTestid(d.tree(), "forfeit-preview")[0]!), "GN-RT-1: the recorded score stands").toBe(
-      tRuntime(messages, "forfeitDialog.preview", { home: HOME.name, homeScore, away: AWAY.name, awayScore }),
+    const retireeLeads = (played.by === LINEUPS.home.entrantId ? "home" : "away") === sideKey;
+    expect(textOf(byTestid(d.tree(), "forfeit-preview")[0]!), `GN-RT-1: the retiree ${retireeLeads ? "leads: the walkover credit" : "trails: the recorded score stands"}`).toBe(
+      retireeLeads
+        ? tRuntime(messages, "forfeitDialog.preview.none", {})
+        : tRuntime(messages, "forfeitDialog.preview", { home: HOME.name, homeScore, away: AWAY.name, awayScore }),
     );
     click(confirm());
     await vi.waitFor(() => expect(d.onClose).toHaveBeenCalledTimes(1));

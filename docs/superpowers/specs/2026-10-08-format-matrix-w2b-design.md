@@ -596,5 +596,5 @@ at build; a signed or deviation row ships only with a proving test whose title c
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
 | GN-WO-1 | Generic walkover = win points, 0-0 (stage-level awarded score is W2c). | product rule W2b-R4 | signed 86 2026-10-08 | — | — |
-| GN-RT-1 | Generic retirement = walkover credit, keeping any recorded score. | product rule W2b-R5 | signed 87 2026-10-08 | — | — |
+| GN-RT-1 | Generic retirement = walkover credit, unless the recorded score is worse for the offender, in which case it stands (FB-RT-1's rule; ruling 124 amends ruling 87, which kept any recorded score). | product rule W2b-R5; owner ruling 124 (amends 87) | signed 124 2026-10-13 | — | — |
 | GN-AB-1 | Generic abandon = replay by default (no shared points; opt-in sharing is W2c). | product rule RB2B-25 / W2b-R6 | signed 88 2026-10-08 | — | — |

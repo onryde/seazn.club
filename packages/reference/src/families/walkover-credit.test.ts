@@ -339,10 +339,15 @@ describe("walkover-credit: tennis, cricket, chess, carrom, generic", () => {
     w = sets(2, 1, 72, 49);
     expect(ret("carrom", "club-29", [29, 14, 0], [20, 29, 0])).toEqual(single(w, mirrorSets(w), true));
   });
-  it("GN-WO-1: win points, 0-0; GN-RT-1: the walkover credit, keeping any recorded score — the tally, in either result mode", () => {
+  it("GN-WO-1: win points, 0-0; GN-RT-1 (ruling 124): the walkover credit, unless the recorded score is worse for the side at fault — the tally, in either result mode", () => {
     const z = { for: 0, against: 0, diff: 0 };
     for (const name of ["win_loss", "score"]) expect(wo("generic", name), name).toEqual(single(z, z, false));
-    expect(ret("generic", "score", [3], [7])).toEqual(single({ for: 3, against: 7, diff: -4 }, { for: 7, against: 3, diff: 4 }, true));
+    // Ruling 124 (amends 87; FB-RT-1's rule), by hand: the side at fault (away) LEADS 7-3 — the recorded score is better
+    // for it than the walkover's 0-0, so the walkover credit; it TRAILS 3-7 — worse for it, so 7-3 stands; level 2-2 —
+    // an equal margin is not worse, so the walkover credit.
+    expect(ret("generic", "score", [3], [7])).toEqual(single(z, z, true));
+    expect(ret("generic", "score", [7], [3])).toEqual(single({ for: 7, against: 3, diff: 4 }, { for: 3, against: 7, diff: -4 }, true));
+    expect(ret("generic", "score", [2], [2])).toEqual(single(z, z, true));
     // R112 fix round 2 (m3): a win/loss match keeps a tally too. The generic pad's generic.score runs in both result
     // modes, the engine admits start → generic.score → retired under win/loss, and GN-RT-1 names no mode — so the
     // recorded tally is kept, by hand: the side at fault (away) trails 1-2, so the winner is 2-1 up.

@@ -370,7 +370,7 @@ export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events
         return { home: [0], away: [0] };
       }
       case "generic": {
-        // GN-RT-1: "keeping any recorded score" — the points recorded so far.
+        // GN-RT-1 (ruling 124): the points recorded so far — the reference keeps them only where worse for the offender.
         only("generic.score");
         const t = tally((e) => { const n = pay(e).points; return [sideOf(pay(e).by, e), typeof n === "number" ? n : unread(`generic.score carries no numeric points`)]; });
         return { home: [t.home], away: [t.away] };

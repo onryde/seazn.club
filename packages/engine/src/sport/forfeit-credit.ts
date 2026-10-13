@@ -59,9 +59,9 @@ export function doubleWalkoverCredit(home: Ledger, away: Ledger, declared: reado
   return { perSide: [zero, zero], excluded: keys };
 }
 
-/** FB-RT-1 / HK-RT-1 / IH-RT-1 (FDC Art. 28; FIH GTR 13) — the awarded score, unless the real score's margin is WORSE
- *  for the offender, in which case the real score stands. An equal margin takes the awarded score. A walkover has no
- *  real score (nothing was played), so it is always the awarded one. */
+/** FB-RT-1 / HK-RT-1 / IH-RT-1 (FDC Art. 28; FIH GTR 13), and GN-RT-1 at generic's 0-0 (ruling 124) — the awarded
+ *  score, unless the real score's margin is WORSE for the offender, in which case the real score stands. An equal
+ *  margin takes the awarded score. A walkover has no real score (nothing was played), so it is always the awarded one. */
 export function goalCredit(awarded: number, real: { winner: number; offender: number }): { winner: number; offender: number } {
   return real.winner - real.offender > awarded ? real : { winner: awarded, offender: 0 };
 }

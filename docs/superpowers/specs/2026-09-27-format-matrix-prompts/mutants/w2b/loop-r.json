@@ -378,5 +378,69 @@
     "name": "Loop R I-1"
    }
   ]
+ },
+ {
+  "id": "lr-i3-generic-keeps-any-score",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "  const credited = goalCredit(GENERIC_WALKOVER_SCORE, { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 });\n",
+  "replace": "  const credited = { winner: recorded?.[winner] ?? 0, offender: recorded?.[by] ?? 0 };\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "GN-RT-1"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ]
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/fixture-console-forfeit-hooks.test.tsx"
+    ],
+    "name": "after play"
+   }
+  ]
+ },
+ {
+  "id": "lr-i3-reference-keeps-any-score",
+  "file": "packages/reference/src/families/walkover-credit.ts",
+  "find": "  if (p !== null && sum(p.win) - sum(p.off) > 0) { w = sum(p.win); o = sum(p.off); }\n",
+  "replace": "  if (p !== null) { w = sum(p.win); o = sum(p.off); }\n",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "packages/reference/src/families/walkover-credit.test.ts"
+    ],
+    "name": "GN-RT-1"
+   },
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/reference-walkover-credit.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "lr-i3-headline-reads-card",
+  "file": "packages/engine/src/sports/generic/generic.ts",
+  "find": "  if (state.score && !creditReplacesCard(state)) return String(state.score[side]);\n",
+  "replace": "  if (state.score) return String(state.score[side]);\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sport/forfeit-credit.test.ts"
+    ],
+    "name": "each level-capable sport"
+   }
+  ]
  }
 ]

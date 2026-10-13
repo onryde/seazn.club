@@ -24,7 +24,7 @@ const OPEN = "⬜ open";
  *  W2b ledger's rulings amend it (plan PF-13: "53 new ids + CK-WO-2 + X-WD-6, plus the X-BR-1 amendment"):
  *  - Appendix A's 53 new ids, with Appendix A's status (`signed <ruling>` from _INDEX rulings 83–99; BD-WO-2 and BD-RT-1
  *    are recorded deviations);
- *  - CK-WO-2 (plan PF-6): an orchestrator ruling the ledger reports to the owner, so OPEN; X-WD-6 (plan PF-7) was the same
+ *  - CK-WO-2 (plan PF-6): an orchestrator ruling the ledger reported to the owner, OPEN until ruling 125; X-WD-6 (plan PF-7) was the same
  *    until owner ruling 113 (2026-10-11) settled its wording ("Amends X-RS-1, X-RT-1 and X-WD-6"), so it carries 113;
  *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
  *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
@@ -39,7 +39,10 @@ const OPEN = "⬜ open";
  *    its text: football takes a draw in every draw kind (football.ts `supportsDraws`), so no football cfg reaches it;
  *  - X-PS-2 and X-AB-1 carry owner ruling 120 (2026-10-12), which amends them ("X-PS-2 and X-AB-1, the stats clause
  *    only"): an abandon counts as a match in players' stats only if something was played before it. Appendix A carries
- *    the same text, so neither is in AMENDED_TEXT. */
+ *    the same text, so neither is in AMENDED_TEXT;
+ *  - GN-RT-1 carries owner ruling 124 (2026-10-13, amends 87): football's FB-RT-1 rule — the walkover credit unless the
+ *    recorded score is worse for the offender. Appendix A carries the same text, so it is not in AMENDED_TEXT;
+ *  - CK-WO-2 carries owner ruling 125 (2026-10-13), which signed PF-6's row as built (its text unchanged). */
 const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "cross-sport.md": {
     "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
@@ -57,10 +60,10 @@ const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "tabletennis.md": { "TT-WO-1": signed(86), "TT-RT-1": signed(87) },
   "tennis.md": { "TN-WO-1": signed(86), "TN-RT-1": signed(87) },
   "badminton.md": { "BD-WO-1": signed(86), "BD-WO-2": deviation(86), "BD-RT-1": deviation(87) },
-  "cricket.md": { "CK-WO-1": signed(86), "CK-AB-1": signed(88), "CK-AB-2": signed(88), "CK-WO-2": OPEN },
+  "cricket.md": { "CK-WO-1": signed(86), "CK-AB-1": signed(88), "CK-AB-2": signed(88), "CK-WO-2": signed(125, "2026-10-13") },
   "boardgame.md": { "BG-WO-1": signed(86), "BG-DW-1": signed(84), "BG-WO-2": signed(90), "BG-WO-3": signed(99, "2026-10-09") },
   "carrom.md": { "CA-WO-1": signed(86), "CA-RT-1": signed(87), "CA-AB-1": signed(88) },
-  "generic.md": { "GN-WO-1": signed(86), "GN-RT-1": signed(87), "GN-AB-1": signed(88) },
+  "generic.md": { "GN-WO-1": signed(86), "GN-RT-1": signed(124, "2026-10-13"), "GN-AB-1": signed(88) },
 };
 /** Appendix A's own per-file count ("54 rows: cross-sport.md 23, football.md 3, …"), less the X-BR-1 amendment it counts
  *  in cross-sport, plus PF-7's X-WD-6 (cross-sport) and PF-6's CK-WO-2 (cricket). Pins W2B_ROWS against a dropped entry. */
@@ -519,7 +522,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     expect(w2bTextProblems([], readAppendixA(readFileSync(W2B_SPEC, "utf8")))).toEqual({ problems: [], fromAppendix: 0, amended: 0, added: 0 });
   });
 
-  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113, 115 or 118 where that ruling changed the text; PF-6 open), and X-BR-1's text says 'a win or a double walkover'", () => {
+  it("W2b: the 55 new ids (Appendix A's 53, plus CK-WO-2 and X-WD-6) are present, each in its file and signed or deviation with its ruling number from Appendix A (108, 113, 115, 118 or 124 where that ruling changed the text; 125 signed PF-6's CK-WO-2), and X-BR-1's text says 'a win or a double walkover'", () => {
     const ids = w2bIds();
     expect(ids).toHaveLength(55);
     expect(new Set(ids).size).toBe(55); // no id pinned twice
@@ -527,9 +530,10 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     for (const [file, n] of Object.entries(W2B_PER_FILE)) expect(Object.keys(W2B_ROWS[file] ?? {}), file).toHaveLength(n);
     expect(Object.keys(W2B_ROWS).sort()).toEqual(Object.keys(W2B_PER_FILE).sort());
     expect(Object.values(W2B_PER_FILE).reduce((a, b) => a + b, 0)).toBe(55);
-    // Appendix A's 53 are signed or deviation, and so is X-WD-6 since ruling 113; only PF-6's CK-WO-2 is open.
+    // Appendix A's 53 are signed or deviation, X-WD-6 since ruling 113 and PF-6's CK-WO-2 since ruling 125: none is open.
     const open = Object.values(W2B_ROWS).flatMap((ids) => Object.entries(ids)).filter(([, s]) => s === OPEN).map(([id]) => id);
-    expect(open.sort()).toEqual(["CK-WO-2"]);
+    expect(open.sort()).toEqual([]);
+    expect(Object.values(W2B_ROWS).flatMap((ids) => Object.values(ids)).filter((s) => s.startsWith("signed ")).length, "signed rows").toBe(53);
     expect(w2bProblems(allRows())).toEqual([]);
   });
 
@@ -634,7 +638,8 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
       openProved++;
     }
     expect(named).toBe(56);
-    expect(openProved).toBe(1);
+    // Ruling 125 signed the one open row (CK-WO-2): no W2b row is open, so no open row owes a proof here.
+    expect(openProved).toBe(0);
   });
 });
 
