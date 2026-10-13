@@ -906,7 +906,7 @@ describe.runIf(HAS_DB)("the decision actions' usecases — who may press them", 
   });
 });
 
-describe.runIf(HAS_DB)("fixture_video_participants.user_id / removed_at — V436's guards (SQLSTATE + constraint name)", () => {
+describe.runIf(HAS_DB)("fixture_video_participants.user_id / removed_at — V442's guards (SQLSTATE + constraint name)", () => {
   const refused = async (q: () => Promise<unknown>) => {
     try {
       await q();

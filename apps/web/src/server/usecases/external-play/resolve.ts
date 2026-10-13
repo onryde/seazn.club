@@ -98,7 +98,7 @@ async function closeBridge(fixtureId: string): Promise<void> {
 function readReason(raw: string | null): NeedsReason | null {
   if (raw === null) return null;
   const r = NEEDS_REASONS.find((x) => x === raw);
-  // V433's CHECK keeps the column inside the vocabulary; a drift is refused
+  // V439's CHECK keeps the column inside the vocabulary; a drift is refused
   // loudly rather than settled on a guess.
   if (!r) throw new HttpError(500, `needs_organiser row with unknown reason ${JSON.stringify(raw)}`, "NEEDS_REASON_UNKNOWN");
   return r;

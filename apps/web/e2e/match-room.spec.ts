@@ -613,7 +613,7 @@ test("Seam A, the Lichess link revoked: the frozen player's board dimmed and rea
   await expect(p.getByTestId("room-board-surface")).toHaveAttribute("data-movable", "true");
 
   // T12's mid-game diagnosis: White's grant was revoked on Lichess. The
-  // hold freezes White's seat (V436 revoked_seat); the next poll reads it.
+  // hold freezes White's seat (V442 revoked_seat); the next poll reads it.
   const freeze = (seat: "white" | "both") =>
     withDb(
       (sql) => sql`

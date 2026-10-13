@@ -381,7 +381,7 @@ async function flagView(
       };
     }
     default:
-      // V433's CHECK names exactly three kinds. A guard, not a comment: a
+      // V439's CHECK names exactly three kinds. A guard, not a comment: a
       // fourth is refused loudly rather than drawn as one of the three.
       throw new HttpError(500, `fixture_play_flags row with unknown kind ${JSON.stringify(f.kind)}`, "FLAG_KIND_UNKNOWN");
   }

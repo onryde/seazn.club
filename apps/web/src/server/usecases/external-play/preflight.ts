@@ -269,7 +269,7 @@ async function verifyRequiredSeat(
  *  invalidate the earlier one, so a second tab does not knock out the first.
  *  Tokens are never stored: a token at rest is a token to leak.
  *
- *  (fixture_id, person_id) is deliberately NOT unique (V433: a second camera
+ *  (fixture_id, person_id) is deliberately NOT unique (V439: a second camera
  *  angle is config, not a migration), so two first claims racing (two tabs)
  *  are serialised on the meeting row instead: mint OUTSIDE any transaction
  *  (an open transaction across an HTTP call holds the lock for the round

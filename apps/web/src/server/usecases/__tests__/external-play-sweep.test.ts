@@ -2981,7 +2981,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   // closes what the organiser saw. A flag closed DURING the match must not
   // swallow the camera judgment that only comes after it — and a camera flag
   // the organiser has closed is already-judged evidence: a later pass over the
-  // same room raises nothing (V436's one settle per room).
+  // same room raises nothing (V442's one settle per room).
   it("T16: a flag closed mid-match does not stop the camera judgment; the judged camera flag, once closed, is never raised again", async () => {
     const m = await playedMatch();
     const x = session(m, m.startedAt - 120_000, m.endedAt);

@@ -38,7 +38,7 @@ export type PublicFixtureRow = PublicBridgeRow & {
   finished_at: Date | null;
 };
 
-/** The view-only board from the move ledger (T10 writes it, V436), or null
+/** The view-only board from the move ledger (T10 writes it, V442), or null
  *  when no game exists at Lichess yet. The position is the ledger replayed
  *  from the start; a ledger chess.js cannot replay in full shows the plies it
  *  could (the room's reconcile repairs the ledger — a spectator never sees a
@@ -63,7 +63,7 @@ export function watchFromLedger(row: PublicBridgeRow, fixtureClosed = false): Pu
   };
 }
 
-/** A hold's public reading. The column is CHECKed to the vocabulary (V433); a drift is refused loudly rather than
+/** A hold's public reading. The column is CHECKed to the vocabulary (V439); a drift is refused loudly rather than
  *  shown as some other hold. */
 export function publicHoldOf(reason: string | null): PublicExternalPlay["hold"] {
   if (reason === null) return null;

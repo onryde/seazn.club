@@ -1,7 +1,7 @@
 // The public fixture loader against the REAL fixture_external_play schema.
 //
 // `loadPublicExternalPlay` selected play_url / white_play_url /
-// black_play_url, which V433's table never had: Postgres refuses an unknown
+// black_play_url, which V439's table never had: Postgres refuses an unknown
 // column when it PARSES the query, whether or not a row matches, and
 // getPublicFixture runs that read for every fixture — so every public fixture
 // page errored, chess or not. No test ran the real loader against the real
@@ -133,7 +133,7 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     const s = await seedPublicFixture();
     seeded.push(s.orgId);
     const lastMoveAt = new Date("2026-10-13T10:00:00.000Z");
-    // Labelled SQL: T10's move append writes the ledger (V436); here it stands for two accepted moves, 1.Nf3 Nf6.
+    // Labelled SQL: T10's move append writes the ledger (V442); here it stands for two accepted moves, 1.Nf3 Nf6.
     await sql`
       insert into fixture_external_play
         (fixture_id, org_id, scheduled_at_basis, status, challenge_id, white_side,

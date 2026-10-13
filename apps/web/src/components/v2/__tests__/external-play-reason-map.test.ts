@@ -1,7 +1,7 @@
 // T16 — the held queue's copy (external-play-held-copy.ts): one chip title and
 // one sentence for EVERY member of the needs_reason vocabulary, in all four
 // locales. The vocabulary is read from its declaration (`NEEDS_REASONS`, the
-// list V433/V435's CHECK pins), never typed here, so a new reason fails this
+// list V439/V441's CHECK pins), never typed here, so a new reason fails this
 // sweep until it has its copy. Pure: no DB, no render.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -18,7 +18,7 @@ const SEATS = ["white", "black", "both", null] as const;
 const NAMES = { whiteName: "Rafael Quintero", blackName: "Mei Lin Chu" };
 
 /** Every sentence a held card can show: each reason, and token_revoked once
- *  per seat V436 admits (plus unknown). */
+ *  per seat V442 admits (plus unknown). */
 function everyBody(): { label: string; reason: NeedsReason; key: string; vars?: { name: string } }[] {
   const out: { label: string; reason: NeedsReason; key: string; vars?: { name: string } }[] = [];
   for (const reason of NEEDS_REASONS) {
@@ -32,7 +32,7 @@ function everyBody(): { label: string; reason: NeedsReason; key: string; vars?: 
 }
 
 describe("held copy: every reason, every locale", () => {
-  it("the vocabulary itself is not empty (12 reasons at V435) — the sweeps below are not vacuous", () => {
+  it("the vocabulary itself is not empty (12 reasons at V441) — the sweeps below are not vacuous", () => {
     expect(NEEDS_REASONS.length).toBeGreaterThanOrEqual(12);
   });
 
@@ -152,7 +152,7 @@ describe("held copy: every reason, every locale", () => {
 });
 
 describe("FINDING (T16): `mismatch` has no producer", () => {
-  // The vocabulary carries `mismatch` (V433) and the queue has its copy, but
+  // The vocabulary carries `mismatch` (V439) and the queue has its copy, but
   // no writer in the server holds a board for it: every other reason is read
   // back through its real producer in the sweep/result suites (T16
   // `expectQueued`); this one cannot be. Pinned so the day a producer lands,

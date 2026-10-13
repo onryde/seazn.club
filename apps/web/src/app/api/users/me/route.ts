@@ -150,7 +150,7 @@ export async function DELETE(req: Request) {
       }
     }
 
-    // The Lichess link holds a SEALED board:play token (V433) — a credential
+    // The Lichess link holds a SEALED board:play token (V439) — a credential
     // that can move pieces in any of this player's Lichess games. Deleting the
     // account is the strongest withdrawal of consent, so revoke the grant at
     // Lichess and drop the row, exactly as Unlink does. Placed AFTER every

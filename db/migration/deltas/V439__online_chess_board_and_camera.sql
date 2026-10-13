@@ -1,5 +1,5 @@
 -- =============================================================================
--- V433 — Online chess: board in page + camera (design 2026-10-09).
+-- V439 — Online chess: board in page + camera (design 2026-10-09).
 -- Amends the unmerged V405 in place (renamed: V405 sat below main's V431 and
 -- flyway.toml sets no outOfOrder, so it could never be applied again).
 --
@@ -100,7 +100,7 @@ create table fixture_external_play (
   challenge_id        text,
   -- Dead under the 2026-10-09 design (§3.3 removes the urlWhite/urlBlack
   -- hand-off: White's token challenges Black's username). Kept nullable
-  -- because guard.ts/room.ts still select them; T9 drops them in V435 once
+  -- because guard.ts/room.ts still select them; T9 drops them in V441 once
   -- the last reader is gone.
   url_white           text,
   url_black           text,

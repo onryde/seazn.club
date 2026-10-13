@@ -816,7 +816,7 @@ async function releaseClaim(
 }
 
 /** T16 (T10 carry): a NEW game on a pending row starts from the start
- *  position — the move ledger's nine columns (V436) back to empty, so no
+ *  position — the move ledger's nine columns (V442) back to empty, so no
  *  earlier game's moves, clocks or draw offer reach the new board (the room
  *  and the spectators' board both read them). Both writes that record a game
  *  on a pending row carry it. A fresh `sql` fragment per query (a list of

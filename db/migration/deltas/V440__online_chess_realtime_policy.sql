@@ -1,4 +1,4 @@
--- V434 — private match-room channel external-play:{fixtureId} (amends the
+-- V440 — private match-room channel external-play:{fixtureId} (amends the
 -- unmerged V407; renamed because V407 sat below main's V431 and flyway.toml
 -- sets no outOfOrder). Under the 2026-10-09 design this topic carries the
 -- LIVE game, not just lobby readiness: our server is the only mover, so every
@@ -14,7 +14,7 @@
 do $migrate$
 begin
   if not exists (select 1 from pg_namespace where nspname = 'realtime') then
-    raise notice 'V434: no realtime schema — skip (non-Supabase database)';
+    raise notice 'V440: no realtime schema — skip (non-Supabase database)';
     return;
   end if;
 
@@ -22,7 +22,7 @@ begin
     select 1 from pg_tables
     where schemaname = 'realtime' and tablename = 'messages'
   ) then
-    raise notice 'V434: realtime.messages missing — skip';
+    raise notice 'V440: realtime.messages missing — skip';
     return;
   end if;
 
@@ -32,7 +32,7 @@ begin
       and tablename = 'messages'
       and policyname = 'external play lobby read by claim'
   ) then
-    raise notice 'V434: policy already present — skip';
+    raise notice 'V440: policy already present — skip';
     return;
   end if;
 
@@ -49,7 +49,7 @@ begin
     $sql$;
   exception
     when insufficient_privilege then
-      raise notice 'V434: insufficient privilege on realtime.messages — skip (not owner)';
+      raise notice 'V440: insufficient privilege on realtime.messages — skip (not owner)';
   end;
 end
 $migrate$;

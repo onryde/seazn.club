@@ -1,4 +1,4 @@
--- V436 — the move ledger on fixture_external_play (chess design §3.4, Task 10).
+-- V442 — the move ledger on fixture_external_play (chess design §3.4, Task 10).
 --
 -- Our server is the only mover: a player posts an intended move to us, we
 -- submit it with THAT player's Lichess token, and only an accepted move is
@@ -41,7 +41,7 @@
 --   M4: a board read forever with no signal blocks the next round). On a row
 --   ALREADY held, every read counts whatever it brings (controller ruling C3:
 --   a held board is never re-read every tick). Written by the sweep alone;
---   `last_polled_at` (V433) is when it last read.
+--   `last_polled_at` (V439) is when it last read.
 --
 -- game_over_at — when a reconcile read FIRST found this game over (a terminal
 --   Lichess status), whatever was then written: a result that finished the

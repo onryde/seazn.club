@@ -1,6 +1,6 @@
 // T6 — the camera-policy ladder, pure half. Three levels (design §5.1: "set
 // per division/stage, defaulting from the competition"; controller ruling Q1=D,
-// 2026-10-09): stage → division → competition, each a COLUMN (V433), the
+// 2026-10-09): stage → division → competition, each a COLUMN (V439), the
 // competition's NOT NULL so the chain has a floor.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";

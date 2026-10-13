@@ -1,4 +1,4 @@
-// V433 video + flags + audit. Four claims that are not derivable from the DDL:
+// V439 video + flags + audit. Four claims that are not derivable from the DDL:
 //  - D6: N participants per fixture is the MODEL, so (fixture_id, person_id)
 //    is deliberately NOT unique — a second angle is config later, not a
 //    migration. The test proves two rows for one person are accepted.
@@ -25,7 +25,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
+describe.skipIf(!HAS_DB)("video, flags and audit schema (V439)", () => {
   let orgId = "";
   let fixtureId = "";
   /** A second fixture in the same stage, with NO meeting row — the only way to
@@ -72,7 +72,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
     });
   });
 
-  // V436 (T13, controller ruling C1): camera evidence is read after the
+  // V442 (T13, controller ruling C1): camera evidence is read after the
   // meeting ends — never before — and a settled stamp is what stops a re-run
   // writing a second flag. Every write here is rolled back (a sentinel), so
   // the shared meeting row stays as beforeAll made it.
@@ -110,7 +110,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
     )).toEqual({ accepted: true });
   });
 
-  // V436 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
+  // V442 (T14 re-review 3, I-1): a guard fault is OUR safeguard taking the
   // player's camera out of the meeting. Every write is rolled back.
   describe("guard faults (I-1): our safeguard's gap, never the player's", () => {
     const fault = (tx: typeof sql, o: { startedAt?: string; endedAt?: string | null; fixture?: string } = {}) => tx`
@@ -254,7 +254,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
 
   // T6 fix round 1 (review M-3): with policy_downgrade gone, the columns only
   // it used (stage_id, from_policy, to_policy) were dropped from the unmerged
-  // V433. Expected set typed from that ruling, not read from the table.
+  // V439. Expected set typed from that ruling, not read from the table.
   it("the audit table carries only what a video override needs", async () => {
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns

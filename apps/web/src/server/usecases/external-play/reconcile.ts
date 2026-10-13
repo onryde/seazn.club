@@ -115,7 +115,7 @@ const IS_TERMINAL: Record<LichessStatus | "unrecognised", boolean> = {
 export const RECONCILED_WHILE_HELD = ["token_revoked", "provider_error"] as const satisfies readonly HoldReason[];
 
 /** lila registers no draw offer before ply 2 (Game.scala `playerCanOfferDraw`,
- *  lila 3747530a1 — source, as T10 cites it); V436's CHECKs refuse one. */
+ *  lila 3747530a1 — source, as T10 cites it); V442's CHECKs refuse one. */
 const DRAW_MIN_PLY = 2;
 
 /** A T12 answer after which the game is closed on our side: a result written
@@ -430,7 +430,7 @@ async function holdRevoked(g: Game, revoked: readonly Colour[]): Promise<ResultW
  *  append absorbs). One recorded after THIS read was sent to Lichess after
  *  Lichess was read, so the line in hand cannot hold its move: nothing it
  *  could excuse is missed. No lock is owed for that ordering, and the write
- *  spends it anyway once the ledger passes its ply (V436: next ply only). */
+ *  spends it anyway once the ledger passes its ply (V442: next ply only). */
 async function submissionOnFile(fixtureId: string): Promise<SubmittedMove | null> {
   const [row] = await sql<{ ply: number | null; uci: string | null }[]>`
     select pending_move_ply as ply, pending_move_uci as uci
@@ -488,7 +488,7 @@ function offerAfter(b: BridgeRow, g: BoardGameFull, ply: number) {
   return by === "white" ? { ...keep, by, whitePly: ply } : { ...keep, by, blackPly: ply };
 }
 
-/** The row's clocks after this read, in the row's own terms (V436, T10's
+/** The row's clocks after this read, in the row's own terms (V442, T10's
  *  append): `white_ms`/`black_ms` are each side's time AS AT `last_move_at`,
  *  and every renderer counts the side to move down from `last_move_at`
  *  (once both sides have moved — scalachess Clock.step). Lichess reports
@@ -657,7 +657,7 @@ async function applyExport(
              started_at = coalesce(started_at, ${t.at}::timestamptz),
              last_move_at = ${t.at},
              -- I4: this write adopts at least one ply, so it passes the only
-             -- submission the row can hold (V436: the next ply's) — spent.
+             -- submission the row can hold (V442: the next ply's) — spent.
              pending_move_ply = null, pending_move_uci = null, pending_move_at = null,
              updated_at = now()
        where fixture_id = ${fixtureId} and challenge_id = ${g.gameId}
