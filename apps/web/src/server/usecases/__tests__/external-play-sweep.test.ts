@@ -32,7 +32,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
-import { readFileSync, writeSync } from "node:fs";
+import { readFileSync, readdirSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, foldMatch } from "@seazn/engine/core";
@@ -915,6 +915,83 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     const report = await sweep(b, { now: b.at(45) });
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RB3 (controller ruling 2026-10-13): core.start is written only where a
+// result is written, never at a claim — and once one is on the ledger the
+// T+20 sweep never writes a walkover over it. W2b admits a chess walkover
+// after the Start (walkoverPhases, ruling 118: the Start is play), so the
+// engine would take it: the sweep must not ask. Such a board is left open,
+// for the arbiter.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("RB3 — no walkover over a Start", () => {
+  /** The organiser's Start through the real scoring write (the pad's producer, or a settle that wrote its Start and
+   *  then lost its result write). */
+  async function startRecorded(b: Board): Promise<string> {
+    const auth = await mintOrgOwnerAuth(b.orgId);
+    await scoreEvent(auth, b.fixtureId, { expected_seq: (await getFixtureState(auth, b.fixtureId)).last_seq, type: "core.start", payload: {} });
+    const [row] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${b.fixtureId} and type = 'core.start'`;
+    scoring.calls = [];
+    return row!.id;
+  }
+
+  it("a board with an active Start is never forfeited at T+20 — one player absent, and both — and is left open", async () => {
+    let checked = 0;
+    for (const checkedIn of [["home"], []] as Side[][]) {
+      const label = `checked in: ${JSON.stringify(checkedIn)}`;
+      const b = await openedBoard({ checkedIn });
+      await startRecorded(b);
+      const report = await sweep(b, { now: b.at(45) });
+      expect(forfeitsAttempted(b.fixtureId), `${label}: never asked`).toEqual([]);
+      expect(await forfeitsWritten(b.fixtureId), label).toEqual([]);
+      expect([report.noShows, report.failures], label).toEqual([0, []]);
+      expect((await fixtureRow(b.fixtureId)).status, `${label}: open, the arbiter's`).toBe("in_play");
+      // A second pass is no different.
+      await sweep(b, { now: b.at(50) });
+      expect(forfeitsAttempted(b.fixtureId), `${label}: never asked, twice`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: boards").toBe(2);
+  });
+
+  it("the pair: a Start the organiser VOIDED is no Start — the same board is a no-show again", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const startId = await startRecorded(b);
+    const auth = await mintOrgOwnerAuth(b.orgId);
+    await scoreEvent(auth, b.fixtureId, {
+      expected_seq: (await getFixtureState(auth, b.fixtureId)).last_seq,
+      type: "core.void",
+      payload: { event_id: startId },
+    });
+    scoring.calls = [];
+    const report = await sweep(b, { now: b.at(45) });
+    expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload)).toEqual([{ by: b.away.entrantId, reason: WALKOVER }]);
+    expect(report.noShows).toBe(1);
+    expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: b.away.entrantId, reason: WALKOVER }]);
+  });
+
+  it("core.start is written only where a result is written — result.ts and resolve.ts — never at a claim (source scan, counted)", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const roots = [join(here, "..", "external-play"), join(here, "..", "..", "external-play")];
+    const sites: string[] = [];
+    let scanned = 0;
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== "__tests__") walk(path);
+        } else if (/\.tsx?$/.test(e.name)) {
+          scanned++;
+          const n = readFileSync(path, "utf8").split('type: "core.start"').length - 1;
+          for (let i = 0; i < n; i++) sites.push(e.name);
+        }
+      }
+    };
+    roots.forEach(walk);
+    expect(scanned, "anti-vacuity: source files scanned").toBeGreaterThan(10);
+    expect(sites.sort()).toEqual(["resolve.ts", "result.ts"]);
   });
 });
 

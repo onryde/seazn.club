@@ -22,7 +22,8 @@ import "server-only";
 //
 // Every per-fixture action runs in its own try/catch: one fixture's refusal
 // is reported in `failures` and never aborts the pass.
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, playRecorded } from "@seazn/engine/core";
+import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
@@ -43,7 +44,7 @@ import {
 } from "@/server/external-play/video/realtimekit";
 import { EDITOR_ROLES } from "@/lib/types";
 import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
-import { getFixtureState } from "../fixtures";
+import { getFixtureState, listEvents } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "./auth";
 import { createGameIfReady, type CreateOutcome } from "./create-game";
@@ -305,6 +306,12 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   const by = !came.home && !came.away ? "both" : !came.home ? f.homeEntrantId : f.awayEntrantId;
   const auth = await mintOrgOwnerAuth(f.orgId);
   const state = await getFixtureState(auth, f.fixtureId);
+  // RB3 (controller ruling 2026-10-13): never a walkover over a Start. W2b admits a chess walkover after the Start
+  // (ruling 118: the Start is play), so the engine would take it — the sweep must not ask. The board is left open,
+  // the arbiter's. Read AFTER the seq the forfeit is written at: a Start landing in between is seen here, and one
+  // landing after makes the write SEQ_CONFLICT — refused, never a walkover over it.
+  const ledger = await listEvents(auth, f.fixtureId, 0);
+  if (playRecorded(ledger.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), boardgame)) return;
   try {
     await scoreEvent(auth, f.fixtureId, {
       expected_seq: state.last_seq,
