@@ -463,3 +463,34 @@ describe("UI-1 fix round 1: the preview follows the ledger, and an old refusal d
     expect(posts.map(([, init]) => (init as { json: { type: string } }).json.type), "the abandon was the write that cleared it").toEqual(["core.forfeit", "core.abandon"]);
   });
 });
+
+// Design review M-4 — the withdrawn header's composition truncates its names ONLY on the phone strip with its details
+// closed, as the header's one line always did; opening the details (or ≥768, where `max-md:` is inert) wraps the line
+// between whole items so both names are read in full. The static header test sees the closed state only; this drives
+// the details toggle through the island.
+describe("M-4: a withdrawn side's header line wraps once the phone details are open", () => {
+  it("closed: a nowrap phone line of truncating names; opened: a wrapping line, names whole", () => {
+    const base = baseProps("scheduled");
+    const island = renderIsland(FixtureConsole, {
+      ...base,
+      fixture: { ...base.fixture, status: "forfeited", away_unseated_name: "Charlie Gone" },
+      away: null,
+      initialState: { ...base.initialState, status: "forfeited", outcome: { kind: "award", winner: HOME.id, loser: "e-gone", reason: "withdrew" } },
+    } as never);
+    const h1 = () => island.tree().find((e) => e.type === "h1")!;
+    const nameSpan = (name: string) => island.tree().find((e) => e.type === "span" && propsOf(e).children === name);
+    const cls = (e: ReactElement | undefined) => String(propsOf(e!).className).split(/\s+/u);
+    expect(byTestid(island.tree(), "console-withdrawn"), "premise: the withdrawn composition is on").toHaveLength(1);
+    expect(cls(h1()), "closed: the phone line does not wrap").toEqual(expect.arrayContaining(["flex", "flex-wrap", "max-md:flex-nowrap"]));
+    expect(cls(nameSpan("Charlie Gone")), "closed: her name truncates on the phone").toContain("max-md:truncate");
+    expect(cls(nameSpan(HOME.name)), "closed: the opponent truncates on the phone").toContain("max-md:truncate");
+    const toggle = island.tree().find((e) => propsOf(e)["aria-label"] === en("console.phone.showDetails"));
+    expect(toggle, "the phone details toggle").toBeDefined();
+    click(toggle);
+    expect(cls(h1()), "opened: the line wraps").toContain("flex-wrap");
+    expect(cls(h1()), "opened: never nowrap").not.toContain("max-md:flex-nowrap");
+    expect(cls(nameSpan("Charlie Gone")), "opened: her name whole").not.toContain("max-md:truncate");
+    expect(cls(nameSpan(HOME.name)), "opened: the opponent whole").not.toContain("max-md:truncate");
+  });
+});
+

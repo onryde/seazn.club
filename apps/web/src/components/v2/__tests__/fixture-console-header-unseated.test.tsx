@@ -113,9 +113,9 @@ describe("fixture-console header — M-4: a withdrawn side wears the Withdrawn c
       const chips = [...h1.matchAll(CHIP)];
       expect(chips.map((c) => c[2]), `${seat}: the chip, once`).toEqual([WITHDRAWN]);
       expect(chips[0]![1]!.split(" ").sort(), `${seat}: the run sheet's chip`).toEqual(RUN_SHEET_CHIP);
-      expect(h1, `${seat}: her name muted`).toContain('<span class="min-w-0 truncate text-slate-500">Charlie Gone</span>');
-      expect(h1, `${seat}: the opponent truncates on its own`).toContain('<span class="min-w-0 truncate">Bears of Brockley</span>');
-      expect(/^<h1 class="[^"]*\bflex min-w-0 items-baseline\b/.test(h1), `${seat}: a flex line`).toBe(true);
+      expect(h1, `${seat}: her name muted`).toContain('<span class="min-w-0 max-md:truncate text-slate-500">Charlie Gone</span>');
+      expect(h1, `${seat}: the opponent truncates on its own`).toContain('<span class="min-w-0 max-md:truncate">Bears of Brockley</span>');
+      expect(/^<h1 class="[^"]*\bflex min-w-0 flex-wrap items-baseline max-md:flex-nowrap\b/.test(h1), `${seat}: a flex line, one line on the phone`).toBe(true);
       expect(/^<h1 class="[^"]*max-md:truncate/.test(h1), `${seat}: no whole-line truncate (it cut the chip)`).toBe(false);
       checked++;
     }

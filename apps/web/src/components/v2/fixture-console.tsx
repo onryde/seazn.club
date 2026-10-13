@@ -1002,18 +1002,21 @@ export function FixtureConsole({
   // Design review M-4 (audit 4.1): the side the page names in a dead seat (R116-4) may have WITHDRAWN — the run sheet
   // row that links here marks her (`run-sheet-row.tsx` `seatName`), so the header does too, in the same composition:
   // her name muted, the entrant status's own word in a chip, each name a `min-w-0 truncate` span, the chip and "vs"
-  // `shrink-0` — a whole-line truncate cut the chip to "With…" at 320. Read off the live outcome and the seats.
+  // `shrink-0` — a whole-line truncate cut the chip to "With…" at 320. As the header always did, only the phone strip
+  // with its details closed truncates: opened, or at ≥768, the line wraps between whole items and every name is read
+  // in full. Read off the live outcome and the seats.
   const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
   const seatWithdrew = (seat: "home" | "away") =>
     (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
   const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
   const vsWord = <span className="text-slate-600">{msg("schedule.vs")}</span>;
+  const nameFit = detailsOpen ? "min-w-0" : "min-w-0 max-md:truncate";
   const headerName = (seat: "home" | "away", name: string) =>
     !withdrawnSeat ? (
       name
     ) : seatWithdrew(seat) ? (
       <>
-        <span className="min-w-0 truncate text-slate-500">{name}</span>
+        <span className={`${nameFit} text-slate-500`}>{name}</span>
         <span className="shrink-0">
           <span data-testid="console-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
             {msg("entrants.status.withdrawn")}
@@ -1021,7 +1024,7 @@ export function FixtureConsole({
         </span>
       </>
     ) : (
-      <span className="min-w-0 truncate">{name}</span>
+      <span className={nameFit}>{name}</span>
     );
   // Feed name map: entrant ids AND every rostered person, so person-carrying
   // events (core.award MOTM, cards, subs) render names instead of "Unknown".
@@ -1153,7 +1156,7 @@ export function FixtureConsole({
       <header className="card p-5 max-md:p-3">
         <div className="flex flex-wrap items-center justify-between gap-3 max-md:flex-nowrap max-md:gap-2">
           <h1
-            className={`${withdrawnSeat ? "flex min-w-0 items-baseline " : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
+            className={`${withdrawnSeat ? `flex min-w-0 flex-wrap items-baseline ${detailsOpen ? "" : "max-md:flex-nowrap "}` : ""}text-lg font-semibold tracking-tight text-slate-900 max-md:min-w-0 max-md:flex-1 max-md:text-[13px] ${
               detailsOpen || withdrawnSeat ? "" : "max-md:truncate"
             }`}
           >
