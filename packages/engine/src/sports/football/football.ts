@@ -2542,8 +2542,8 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   // stage's points (D11).
   ruleKeys: {
     halfMinutes: { scope: "match" },
-    extraTime: { scope: "match", matchBound: "off_or_shorter" },
-    shootout: { scope: "stage" },
+    extraTime: { scope: "match", matchBound: "off_or_shorter", decider: true },
+    shootout: { scope: "stage", decider: true },
     teamSize: { scope: "stage" },
     maxSubs: { scope: "stage" },
     subWindows: { scope: "stage" },

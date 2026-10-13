@@ -700,10 +700,13 @@ export interface RuleKeyFact {
    *  variant at the call site (the division level, or no variant) is never narrowed. */
   readonly appliesTo?: { readonly stageKinds?: readonly StageKind[]; readonly variants?: readonly string[] };
   /** X-SR-2 (signed): "a decider may only be switched off or shortened for one match". Carried by every match-scoped
-   *  decider key (spec §4.1 Q5) — the declaration IS what makes a key a decider: `shorter` a length or count a match
-   *  may only lower (overtime minutes, shoot-out attempts); `off_or_shorter` an `{enabled, halfMinutes}` decider, off
-   *  or a shorter half (RB2B-3, football ET). Whole deciders (`shootout`, `superOver`, `overtime`) are stage keys. */
+   *  bounded key (spec §4.1 Q5): `shorter` a length or count a match may only lower (overtime minutes, shoot-out
+   *  attempts); `off_or_shorter` an `{enabled, halfMinutes}` decider, off or a shorter half (RB2B-3, football ET). */
   readonly matchBound?: "shorter" | "off_or_shorter";
+  /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
+   *  super over, chess tie-break games, carrom's tie board). The knockout preselection and its "no decider" notice
+   *  read it through `deciderKeysFor` (spec §4.2, X-SR-6). Stage keys, except football ET, a bounded match key. */
+  readonly decider?: true;
 }
 /** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
 export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;

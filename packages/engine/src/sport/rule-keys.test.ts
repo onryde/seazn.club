@@ -11,9 +11,9 @@ import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { schemaHasPath, schemaTopKeys } from "../testkit/schema-paths.ts";
 import {
-  checkFixtureOverride, fixtureKeysFor, pointsKeysFor, ruleKeyApplies, ruleKeyOwning, sportTopKeys,
+  checkFixtureOverride, deciderKeysFor, fixtureKeysFor, pointsKeysFor, ruleKeyApplies, ruleKeyOwning, sportTopKeys,
   stageDefaultsFor, stageKeysFor, stageTopKeysFor,
-  type AnySportModule, type RuleKeyFact, type RuleKeys,
+  type AnySportModule, type RuleKeyFact, type RuleKeys, type RuleScope,
 } from "./index.ts";
 
 const KINDS = StageKind.options;
@@ -39,6 +39,18 @@ function overrideAt(stage: Record<string, unknown>, key: string, value: unknown)
   const [top, ...rest] = key.split(".");
   return { [top!]: set(stage[top!], rest) };
 }
+const isPlainObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** A top-level key switched ON over `preset`, from the engine's own values: a boolean true, an `{enabled}` object
+ *  enabled; an absent or null value takes what the bracket deciders force, else the first value another declared cfg
+ *  gives it; anything else (a length, an enum) is already on as the preset holds it. */
+function switchedOn(m: AnySportModule, top: string, preset: Record<string, unknown>, donors: readonly Record<string, unknown>[]): unknown {
+  const v = preset[top];
+  if (typeof v === "boolean") return true;
+  if (isPlainObj(v) && typeof v.enabled === "boolean") return { ...v, enabled: true };
+  if (v !== undefined && v !== null) return v;
+  const forced = (m.bracketDeciders(preset) as Record<string, unknown>)[top];
+  return forced ?? donors.map((d) => d[top]).find((d) => d !== undefined && d !== null);
+}
 
 /** Top-level cfg keys an organiser never sets, per sport, each with its reason.
  *  Reviewed line by line; a new schema key fails the sweep until it is either
@@ -47,8 +59,10 @@ function overrideAt(stage: Record<string, unknown>, key: string, value: unknown)
 const VARIANT = "a variant fact: set by the variant preset, never edited per stage or match (not in spec §4.1 Q5's settable list)";
 const BOOKKEEPING = "scorer bookkeeping or pad vocabulary, not a format rule";
 const ABANDON_T7 = "D9: settable from W2c Task 7, which declares it (stage) with abandonOptions and its web field; no form sets it before then";
+const PERIOD_SECONDS =
+  "a per-phase length override in seconds, only for periods of UNEQUAL length (period/kernel.ts:781-786); the settable length is the minutes scalar Q5 names";
 const PERIOD_UNSET = {
-  setPieceKinds: BOOKKEEPING, goalkeeper: BOOKKEEPING, periodSeconds: VARIANT, suspensions: VARIANT,
+  setPieceKinds: BOOKKEEPING, goalkeeper: BOOKKEEPING, periodSeconds: PERIOD_SECONDS, suspensions: VARIANT,
   strength: VARIANT, goalKinds: BOOKKEEPING, assists: BOOKKEEPING, abandonPolicy: ABANDON_T7,
 } as const;
 const SET_UNSET = { records: "stat-recording flags, not a format rule" } as const;
@@ -56,14 +70,15 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   volleyball: SET_UNSET, badminton: SET_UNSET, tabletennis: SET_UNSET,
   tennis: { interruptions: BOOKKEEPING },
   football: {
-    periodSeconds: VARIANT,
+    periodSeconds: PERIOD_SECONDS,
     halves: "picks the phase machine (2 halves or 4 quarters); a variant fact",
     fairPlay: "card tracking for the FIFA fair-play tie-break; the tie-break cascade is W2d's",
     abandonPolicy: ABANDON_T7,
   },
   cricket: {
     inningsPerSide: VARIANT, ballsPerOver: VARIANT, followOn: VARIANT,
-    reviews: BOOKKEEPING, lineupChanges: "team-sheet policy, owned by the lineups programme (W4)",
+    reviews: "the DRS review allowance per innings per side (W4 domain audit); not in spec §4.1 Q5's settable list",
+    lineupChanges: "team-sheet policy, owned by the lineups programme (W4)",
   },
   icehockey: PERIOD_UNSET,
   hockey: { ...PERIOD_UNSET, overtime: "hockey has no overtime (FIH); the kernel key exists, hockey narrows it out" },
@@ -72,29 +87,76 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   generic: { progressScore: "a pad display switch, not a result rule" },
 };
 
-/** THE RULEBOOK for which keys a match may set: spec §4.1 Q5, owner-approved
- *  (docs/superpowers/specs/2026-10-13-format-matrix-w2c-design.md:160-166). Q5 names keys in rule vocabulary; the
- *  plan's Task 4 declaration table ("by ENGINE key", plans/2026-10-13-format-matrix-w2c.md) maps each to its engine
- *  path. Stage-only and points keys are everything else, so pinning the match list pins them too. */
-const Q5_MATCH = [
-  "bestOf", "setTo", "finalSetTo", "finalSet", "setType", "gameTo", "cap", "winBy", "tiebreakWinBy", "noAd",
-  "halfMinutes", "quarterMinutes", "periodMinutes", "overtimeMinutes", "shootoutAttempts", "overs",
-  "maxOversPerBowler", "maxBoards", "extraTime",
-] as const;
-/** Q5's deciders a match may only shorten or switch off: extraTime "per match only off or shorter" (RB2B-3); the
- *  overtime and shoot-out LENGTHS shorter only (X-SR-2, signed; coordinator correction 2026-10-13). */
-const Q5_DECIDERS: Readonly<Record<string, RuleKeyFact["matchBound"]>> = {
+/** THE RULEBOOK: spec §4.1 Q5, owner-approved (docs/superpowers/specs/2026-10-13-format-matrix-w2c-design.md:160-166),
+ *  in its three lists — match (:160-162), stage only (:163-165), points (:166). Q5 names keys in rule vocabulary; the
+ *  plan's Task 4 declaration table ("by ENGINE key", plans/2026-10-13-format-matrix-w2c.md) says where each lives in
+ *  an engine cfg (`Q5_WHERE`) and which keys it declares that no Q5 name covers (`PLAN_ONLY`). Each scope is pinned on
+ *  its own, so a key moved between ANY two scopes goes red. */
+const Q5 = {
+  match: [
+    "bestOf", "setTo", "finalSetTo", "finalSet", "setType", "gameTo", "cap", "winBy", "tiebreakWinBy", "noAd",
+    "halfMinutes", "quarterMinutes", "periodMinutes", "overtimeMinutes", "shootoutAttempts", "overs",
+    "maxOversPerBowler", "maxBoards", "extraTime",
+  ],
+  stage: [
+    "allowDraws", "shootout", "superOver", "overtime", "dls", "tieBoard", "variant", "resultMode", "teamSize",
+    "playersPerSide", "maxSubs", "subWindows", "sinBinMinutes", "overtimeSkaters", "queenFollowsBoard", "queenCapAt",
+    "queenPoints", "clockBaseMinutes", "clockIncrementSeconds", "clockDelaySeconds", "tiebreakRungs", "abandon",
+  ],
+  points: ["shootoutWin", "shootoutLoss"],
+} as const satisfies Record<RuleScope, readonly string[]>;
+/** Q5 names no engine cfg holds yet, each with the task that adds it; the sweep fails once one lands, so its row goes. */
+const Q5_PENDING: Readonly<Record<string, string>> = {
+  tiebreakRungs: "W2c Task 8 adds the chess tie-break rungs",
+  abandon: "W2c Task 7 declares abandonPolicy (UNSETTABLE until then)",
+};
+/** Where a Q5 name lives in an engine cfg: the schema path it names, and the declared key owning that path (default:
+ *  the path itself). A sport row wins over the shared one. */
+interface Where { readonly path: string; readonly owner?: string }
+const Q5_WHERE: Readonly<Record<string, Where>> = {
+  setType: { path: "set" }, noAd: { path: "game.noAd" }, tiebreakWinBy: { path: "tiebreak.winBy" },
+  periodMinutes: { path: "periods.minutes" }, quarterMinutes: { path: "periods.minutes" },
+  overtimeMinutes: { path: "overtime.minutes" }, shootoutAttempts: { path: "shootout.attempts" },
+  overs: { path: "ballsPerInnings" }, overtimeSkaters: { path: "overtime.skaters", owner: "overtime" },
+  clockBaseMinutes: { path: "clock.base", owner: "clock" }, clockIncrementSeconds: { path: "clock.increment", owner: "clock" },
+  clockDelaySeconds: { path: "clock.delay", owner: "clock" }, abandon: { path: "abandonPolicy" },
+  shootoutWin: { path: "points.shootoutWin", owner: "points" }, shootoutLoss: { path: "points.shootoutLoss", owner: "points" },
+};
+const Q5_WHERE_BY_SPORT: Readonly<Record<string, Readonly<Record<string, Where>>>> = {
+  football: { shootoutAttempts: { path: "shootoutAttempts" } }, // W2c Task 6 adds it to the schema, top-level
+};
+/** Keys the plan's Task 4 table declares that no Q5 name covers, by sport and scope — each straight from that table. */
+const SET_PLAN = { points: ["pointsMap"] } as const;
+const PLAN_ONLY: Readonly<Record<string, Partial<Record<RuleScope, readonly string[]>>>> = {
+  volleyball: SET_PLAN, badminton: SET_PLAN, tabletennis: SET_PLAN,
+  tennis: { points: ["points"] },
+  football: { stage: ["rollingSubs", "concussionSubs"], points: ["awardScore"] },
+  cricket: { stage: ["superOverStillTied", "minOversForResult"], points: ["points"] },
+  icehockey: { points: ["awardScore"] },
+  hockey: { points: ["awardScore"] },
+  boardgame: { stage: ["tiebreak"], points: ["scoring", "byeScore"] },
+  carrom: { stage: ["pointsPerCoin"], points: ["points"] },
+  generic: { points: ["points"] },
+};
+/** The bounded deciders a match may only shorten or switch off: extraTime "per match only off or shorter" (Q5,
+ *  RB2B-3); the overtime and shoot-out LENGTHS shorter only (X-SR-2, signed; coordinator correction 2026-10-13). */
+const Q5_MATCH_BOUNDS: Readonly<Record<string, RuleKeyFact["matchBound"]>> = {
   extraTime: "off_or_shorter", overtimeMinutes: "shorter", shootoutAttempts: "shorter",
 };
-/** Q5 name → engine path where they differ (plan Task 4 table); a sport row wins over the shared one. */
-const Q5_ENGINE_PATH: Readonly<Record<string, string>> = {
-  setType: "set", noAd: "game.noAd", tiebreakWinBy: "tiebreak.winBy", periodMinutes: "periods.minutes",
-  quarterMinutes: "periods.minutes", overtimeMinutes: "overtime.minutes", shootoutAttempts: "shootout.attempts",
-  overs: "ballsPerInnings",
-};
-const Q5_ENGINE_PATH_BY_SPORT: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  football: { shootoutAttempts: "shootoutAttempts" }, // W2c Task 6 adds it to the schema, top-level
-};
+/** The WHOLE deciders (spec §4.1 "plus the existing decider keys"; X-SR-6): Q5's decider names, plus the chess bracket
+ *  tie-break games the plan's table declares (BG-KO-1), which no Q5 name covers. */
+const Q5_WHOLE_DECIDERS = ["extraTime", "shootout", "overtime", "superOver", "tieBoard"] as const;
+const PLAN_ONLY_DECIDERS: Readonly<Record<string, readonly string[]>> = { boardgame: ["tiebreak"] };
+const whereOf = (m: AnySportModule, name: string): Where => Q5_WHERE_BY_SPORT[m.key]?.[name] ?? Q5_WHERE[name] ?? { path: name };
+/** The declared key a Q5 name maps to in this sport, or null where its schema holds no such path (or holds it only
+ *  under a top-level key the UNSETTABLE table keeps out). */
+function q5Owner(m: AnySportModule, name: string): string | null {
+  const where = whereOf(m, name);
+  const path = where.path.split(".");
+  if (!schemaHasPath(m.configSchema, path) || Object.hasOwn(UNSETTABLE[m.key] ?? {}, path[0]!)) return null;
+  return where.owner ?? where.path;
+}
+const sorted = (xs: Iterable<string>): string[] => [...xs].sort();
 
 describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
   it("the testkit path reader answers no as well as yes (the sweep below leans on it)", () => {
@@ -181,34 +243,142 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(values).toBeGreaterThanOrEqual(checked);
   });
 
-  it("Q5 (rulebook): each sport's match keys and deciders are exactly spec §4.1 Q5's, restricted to its schema", () => {
+  it("Q5 (rulebook): each sport's match, stage and points keys are exactly Q5's lists plus the plan's, restricted to its schema", () => {
     let sports = 0;
-    let matchKeys = 0;
-    let deciderKeys = 0;
+    const counts: Record<RuleScope, number> = { match: 0, stage: 0, points: 0 };
     const hit = new Set<string>();
     for (const m of builtinModules) {
-      const unsettable = UNSETTABLE[m.key] ?? {};
-      const pathOf = (name: string): string => Q5_ENGINE_PATH_BY_SPORT[m.key]?.[name] ?? Q5_ENGINE_PATH[name] ?? name;
-      const inSchema = (name: string): boolean =>
-        schemaHasPath(m.configSchema, pathOf(name).split(".")) && !Object.hasOwn(unsettable, pathOf(name).split(".")[0]!);
-      const expectedMatch = new Set(Q5_MATCH.filter(inSchema).map(pathOf));
-      for (const name of Q5_MATCH.filter(inSchema)) hit.add(name);
-      const declaredMatch = new Set(Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.scope === "match").map(([k]) => k));
-      expect([...declaredMatch].sort(), `${m.key}: match keys vs Q5`).toEqual([...expectedMatch].sort());
-      const expectedDeciders = Object.fromEntries(
-        Object.entries(Q5_DECIDERS).filter(([name]) => inSchema(name)).map(([name, bound]) => [pathOf(name), bound]));
-      const declaredDeciders = Object.fromEntries(deciders(m).map(([k, f]) => [k, f.matchBound]));
-      expect(declaredDeciders, `${m.key}: deciders vs Q5`).toEqual(expectedDeciders);
-      matchKeys += expectedMatch.size;
-      deciderKeys += Object.keys(expectedDeciders).length;
+      for (const scope of ["match", "stage", "points"] as const) {
+        const fromQ5 = new Set<string>();
+        for (const name of Q5[scope]) {
+          const owner = q5Owner(m, name);
+          if (owner === null) continue;
+          fromQ5.add(owner);
+          hit.add(name);
+        }
+        const planOnly = PLAN_ONLY[m.key]?.[scope] ?? [];
+        for (const key of planOnly) {
+          expect(schemaHasPath(m.configSchema, key.split(".")), `${m.key}: PLAN_ONLY ${key} is not a schema path`).toBe(true);
+          expect(fromQ5.has(key), `${m.key}: PLAN_ONLY ${key} is already a Q5 key`).toBe(false);
+        }
+        const expected = sorted([...fromQ5, ...planOnly]);
+        const declared = sorted(Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.scope === scope).map(([k]) => k));
+        expect(declared, `${m.key}: ${scope} keys vs Q5`).toEqual(expected);
+        counts[scope] += expected.length;
+      }
       sports++;
     }
     expect(sports).toBe(builtinModules.length);
-    expect(matchKeys).toBeGreaterThan(0);
-    expect(deciderKeys).toBe(deciderCount());
-    expect(deciderKeys).toBeGreaterThan(0);
-    // Every Q5 match name lands in some sport's schema: a mistyped engine path would otherwise drop out silently.
-    expect(Q5_MATCH.filter((n) => !hit.has(n))).toEqual([]);
+    expect(counts.match + counts.stage + counts.points).toBe(builtinModules.reduce((n, m) => n + Object.keys(m.ruleKeys ?? {}).length, 0));
+    for (const scope of ["match", "stage", "points"] as const) expect(counts[scope], scope).toBeGreaterThan(0);
+    // Every Q5 name lands in some sport's schema (a mistyped engine path would drop out silently), except the ones a
+    // later task adds — and those must still be missing, or their pending row is stale.
+    expect(sorted([...Q5.match, ...Q5.stage, ...Q5.points].filter((n) => !hit.has(n)))).toEqual(sorted(Object.keys(Q5_PENDING)));
+  });
+
+  it("Q5 (rulebook): the match bounds and the whole deciders are exactly Q5's, restricted to each sport's schema", () => {
+    let bounds = 0;
+    let whole = 0;
+    for (const m of builtinModules) {
+      const expectedBounds = Object.fromEntries(Object.entries(Q5_MATCH_BOUNDS).flatMap(([name, bound]) => {
+        const owner = q5Owner(m, name);
+        return owner === null ? [] : [[owner, bound]];
+      }));
+      expect(Object.fromEntries(deciders(m).map(([k, f]) => [k, f.matchBound])), `${m.key}: match bounds vs Q5`).toEqual(expectedBounds);
+      const expectedWhole = sorted([
+        ...Q5_WHOLE_DECIDERS.map((n) => q5Owner(m, n)).filter((k): k is string => k !== null),
+        ...(PLAN_ONLY_DECIDERS[m.key] ?? []),
+      ]);
+      const declaredWhole = Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.decider === true);
+      expect(sorted(declaredWhole.map(([k]) => k)), `${m.key}: whole deciders vs Q5`).toEqual(expectedWhole);
+      for (const [k, f] of declaredWhole) expect(f.scope, `${m.key}.${k}: a decider is never table points`).not.toBe("points");
+      bounds += Object.keys(expectedBounds).length;
+      whole += expectedWhole.length;
+    }
+    expect(bounds).toBe(deciderCount());
+    expect(bounds).toBeGreaterThan(0);
+    expect(whole).toBe(builtinModules.reduce((n, m) => n + Object.values(m.ruleKeys ?? {}).filter((f) => f.decider === true).length, 0));
+    expect(whole).toBeGreaterThan(0);
+  });
+
+  it("appliesTo is carried by exactly carrom tieBoard (DRAW_KINDS), chess tiebreak (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
+    const ck = sport("cricket");
+    const ckVariants = ck.variants as Record<string, object>;
+    const variantsWhere = (on: Record<string, unknown>): string[] =>
+      sorted(Object.keys(ckVariants).filter((v) => ck.configSchema.safeParse({ ...ckVariants[v], ...on }).success));
+    const expected: Record<string, { stageKinds?: string[]; variants?: string[] }> = {
+      "carrom.tieBoard": { stageKinds: sorted(DRAW_KINDS) },
+      "boardgame.tiebreak": { stageKinds: sorted(BRACKET_KINDS) },
+      "cricket.superOver": { variants: variantsWhere({ superOver: true }) },
+      "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
+    };
+    // The variant axis is not degenerate: each cricket list leaves out a variant, and holds one.
+    for (const key of ["cricket.superOver", "cricket.dls"]) {
+      expect(expected[key]!.variants!.length, key).toBeGreaterThan(0);
+      expect(expected[key]!.variants!.length, key).toBeLessThan(Object.keys(ckVariants).length);
+    }
+    const declared: Record<string, { stageKinds?: string[]; variants?: string[] }> = {};
+    for (const m of builtinModules)
+      for (const [k, f] of Object.entries(m.ruleKeys ?? {}))
+        if (f.appliesTo !== undefined)
+          declared[`${m.key}.${k}`] = {
+            ...(f.appliesTo.stageKinds ? { stageKinds: sorted(f.appliesTo.stageKinds) } : {}),
+            ...(f.appliesTo.variants ? { variants: sorted(f.appliesTo.variants) } : {}),
+          };
+    expect(declared).toEqual(expected);
+  });
+
+  it("every key a cell offers parses switched ON over that variant's preset, and a key the schema refuses there is not offered", () => {
+    let cells = 0;
+    let offered = 0;
+    let refused = 0;
+    let narrowed = 0;
+    const noOnValue = new Set<string>();
+    for (const m of builtinModules) {
+      const presets: [string | null, Record<string, unknown>][] = Object.entries(m.variants).map(([v, p]) => [v, m.configSchema.parse(p) as Record<string, unknown>]);
+      const bare = m.configSchema.safeParse({});
+      if (bare.success) presets.push([null, bare.data as Record<string, unknown>]); // the division level: no variant
+      const donors = presets.map(([, c]) => c);
+      const tops = new Set(Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.scope !== "points").map(([k]) => k.split(".")[0]!));
+      for (const [variant, preset] of presets) {
+        const parsesOn = new Map<string, boolean>();
+        for (const top of tops) {
+          const on = switchedOn(m, top, preset, donors);
+          if (on === undefined) noOnValue.add(`${m.key}.${top}`);
+          else parsesOn.set(top, m.configSchema.safeParse({ ...preset, [top]: on }).success);
+        }
+        for (const kind of [...KINDS, null]) {
+          const offeredTops = stageTopKeysFor(m, kind, variant);
+          for (const top of offeredTops) {
+            if (!parsesOn.has(top)) continue; // no engine value switches it on: pinned below
+            expect(parsesOn.get(top), `${m.key} ${kind}/${variant}: ${top} is offered, but refused switched on`).toBe(true);
+            offered++;
+          }
+          for (const [top, ok] of parsesOn)
+            if (!ok) {
+              expect(offeredTops.has(top), `${m.key} ${kind}/${variant}: ${top} is refused switched on, yet offered`).toBe(false);
+              refused++;
+            }
+          cells++;
+        }
+        // Not over-narrowed: a key a variant list leaves out is one the schema refuses there.
+        for (const [k, f] of Object.entries(m.ruleKeys ?? {}))
+          if (variant !== null && f.appliesTo?.variants !== undefined && !f.appliesTo.variants.includes(variant)) {
+            expect(parsesOn.get(k.split(".")[0]!), `${m.key}/${variant}: ${k} left out, yet the schema accepts it`).toBe(false);
+            narrowed++;
+          }
+      }
+    }
+    expect(cells).toBeGreaterThan(0);
+    expect(offered).toBeGreaterThan(0);
+    expect(refused).toBeGreaterThan(0); // the variant axis refuses something (cricket's test match: no super over, no DLS)
+    expect(narrowed).toBeGreaterThan(0);
+    // Optional keys no declared cfg (and no bracket decider) gives a value: the engine names no ON state for them, and
+    // any value here would be the test's own invention. Pinned, so the skip stays visible and a new one goes red.
+    expect(sorted(noOnValue)).toEqual(sorted([
+      "football.maxSubs", "football.subWindows", "football.sinBinMinutes", "football.concussionSubs",
+      "boardgame.clock", "volleyball.cap", "tabletennis.cap",
+    ]));
   });
 
   it("appliesTo names only real stage kinds and real variants", () => {
@@ -505,10 +675,78 @@ describe("X-SR-2 checkFixtureOverride", () => {
     expect([...bounds].sort()).toEqual(["off_or_shorter", "shorter"]); // every bound kind is exercised
   });
 
-  it("a decider's bound reads the stage: a length the stage lacks is off; a non-number is never shorter", () => {
-    // Synthetic module: no builtin's resolved stage lacks its length leaf.
-    const m = fake({ so: { scope: "stage" }, "so.attempts": { scope: "match", matchBound: "shorter" } });
-    expect(checkFixtureOverride(m, "knockout", null, { so: { sd: true } }, { so: { sd: true, attempts: 3 } })).toMatchObject({ ok: false, path: "so.attempts", reason: expect.stringMatching(/off for this stage/) });
-    expect(checkFixtureOverride(m, "knockout", null, { so: { attempts: 5 } }, { so: { attempts: "3" } })).toMatchObject({ ok: false, path: "so.attempts", reason: expect.stringMatching(/shorter/) });
+  it("a decider's bound reads the stage: a length the stage lacks is off; a non-number is never shorter (both bounds)", () => {
+    // Synthetic module: no builtin's resolved stage lacks its length leaf, or holds a non-number length.
+    const m = fake({
+      so: { scope: "stage" }, "so.attempts": { scope: "match", matchBound: "shorter" },
+      et: { scope: "match", matchBound: "off_or_shorter" },
+    });
+    const off = { ok: false, code: "RULE_NOT_SETTABLE", reason: expect.stringMatching(/off for this stage/) };
+    const longer = { ok: false, code: "RULE_NOT_SETTABLE", reason: expect.stringMatching(/shorter/) };
+    let checked = 0;
+    // shorter: the stage's length must be a finite number, and so must the override's.
+    for (const s of [undefined, null, "5", false, Infinity]) {
+      expect(checkFixtureOverride(m, "knockout", null, { so: { sd: true, attempts: s } }, { so: { sd: true, attempts: 3 } }), `stage ${String(s)}`).toMatchObject({ ...off, path: "so.attempts" });
+      checked++;
+    }
+    for (const o of ["3", null, false, -Infinity, NaN, { n: 3 }]) {
+      expect(checkFixtureOverride(m, "knockout", null, { so: { attempts: 5 } }, { so: { attempts: o } }), `override ${JSON.stringify(o)}`).toMatchObject({ ...longer, path: "so.attempts" });
+      checked++;
+    }
+    // off_or_shorter: the same, on the half length of a switched-on decider.
+    for (const s of [undefined, null, "20", false, Infinity]) {
+      expect(checkFixtureOverride(m, "knockout", null, { et: { enabled: true, halfMinutes: s } }, { et: { enabled: true, halfMinutes: 10 } }), `stage ${String(s)}`).toMatchObject({ ...off, path: "et" });
+      checked++;
+    }
+    for (const o of ["10", null, false, "", -Infinity, NaN]) {
+      expect(checkFixtureOverride(m, "knockout", null, { et: { enabled: true, halfMinutes: 15 } }, { et: { enabled: true, halfMinutes: o } }), `override ${String(o)}`).toMatchObject({ ...longer, path: "et" });
+      checked++;
+    }
+    expect(checked).toBe(22);
+    // The positive pair: finite and not longer is accepted on both bounds.
+    expect(checkFixtureOverride(m, "knockout", null, { so: { attempts: 5 } }, { so: { attempts: 3 } })).toEqual({ ok: true, changed: ["so.attempts"] });
+    expect(checkFixtureOverride(m, "knockout", null, { et: { enabled: true, halfMinutes: 15 } }, { et: { enabled: true, halfMinutes: 10 } })).toEqual({ ok: true, changed: ["et.halfMinutes"] });
+  });
+
+  it("a list leaf is compared by value: a copied pointsMap changes nothing; a different one is a points key, refused", () => {
+    // Set-kernel family: its pointsMap is the one cfg value holding lists (PointsPair tuples).
+    const vb = sport("volleyball");
+    const cfg = declaredCfgs(vb)[0]!.cfg as Record<string, unknown>;
+    const pm = cfg.pointsMap as Record<string, unknown>;
+    const first = Object.keys(pm)[0]!;
+    expect(Array.isArray(pm[first])).toBe(true);
+    expect(checkFixtureOverride(vb, "league", null, cfg, { pointsMap: structuredClone(pm) })).toEqual({ ok: true, changed: [] });
+    expect(checkFixtureOverride(vb, "league", null, cfg, { pointsMap: { ...pm, [first]: [9, 9] } })).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: `pointsMap.${first}` });
+  });
+});
+
+describe("G3 deciderKeysFor — the whole deciders a stage carries", () => {
+  it("empty case first: a module declaring none, or a sport without deciders, carries none in any cell", () => {
+    expect(deciderKeysFor(fake({}), "knockout", null)).toEqual([]);
+    expect(deciderKeysFor(fake({ overs: { scope: "match" } }), "knockout", null)).toEqual([]);
+    for (const kind of [...KINDS, null]) expect(deciderKeysFor(sport("generic"), kind, null), String(kind)).toEqual([]);
+  });
+  it("the engine's own deciders: football ET and penalties; chess tie-breaks in a bracket only; a test match has no super over", () => {
+    expect(sorted(deciderKeysFor(sport("football"), "knockout", null))).toEqual(["extraTime", "shootout"]);
+    expect(deciderKeysFor(sport("boardgame"), "knockout", null)).toEqual(["tiebreak"]);
+    expect(deciderKeysFor(sport("boardgame"), "league", null)).toEqual([]);
+    expect(deciderKeysFor(sport("cricket"), "knockout", "t20")).toEqual(["superOver"]);
+    expect(deciderKeysFor(sport("cricket"), "knockout", "test")).toEqual([]);
+  });
+  it("in every sport × kind × variant cell: exactly the decider facts that apply there, each a key the stage may set", () => {
+    let cells = 0;
+    let found = 0;
+    for (const m of builtinModules)
+      for (const kind of [...KINDS, null])
+        for (const variant of [...Object.keys(m.variants), null]) {
+          const got = deciderKeysFor(m, kind, variant);
+          const want = Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.decider === true && ruleKeyApplies(f, kind, variant)).map(([k]) => k);
+          expect(sorted(got), `${m.key} ${kind}/${variant}`).toEqual(sorted(want));
+          for (const k of got) expect(stageKeysFor(m, kind, variant), `${m.key}.${k}`).toContain(k);
+          found += got.length;
+          cells++;
+        }
+    expect(cells).toBeGreaterThan(0);
+    expect(found).toBeGreaterThan(0);
   });
 });

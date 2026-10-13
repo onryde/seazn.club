@@ -4,160 +4,554 @@
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "owner.fact.scope !== \"match\" || ",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "stage leaf in the same object" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "stage leaf in the same object"
+      }
+    ]
   },
   {
     "id": "t4-most-specific",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "for (let n = path.length; n >= 1; n--)",
     "replace": "for (let n = 1; n <= path.length; n++)",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "most specific" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "most specific"
+      }
+    ]
   },
   {
     "id": "t4-own-key",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "if (Object.hasOwn(keys, key)) return",
     "replace": "if (keys[key] !== undefined) return",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "most specific" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "most specific"
+      }
+    ]
   },
   {
     "id": "t4-applies-kind",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "|| kinds.includes(kind))",
     "replace": "|| true)",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "carrom tieBoard applies to table kinds only" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "carrom tieBoard applies to table kinds only"
+      }
+    ]
   },
   {
     "id": "t4-applies-variant",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "|| variants.includes(variant))",
     "replace": "|| true)",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "narrows by variant too" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "narrows by variant too"
+      }
+    ]
   },
   {
     "id": "t4-division-unnarrowed",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "kinds === undefined || kind === null || ",
     "replace": "kinds === undefined || ",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a kind-limited key follows its declared kinds" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a kind-limited key follows its declared kinds"
+      }
+    ]
   },
   {
     "id": "t4-fixture-scope",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "keysWhere(m, kind, variant, [\"match\"])",
     "replace": "keysWhere(m, kind, variant, [\"stage\", \"match\"])",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "lands in exactly its declared scope" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "lands in exactly its declared scope"
+      }
+    ]
   },
   {
     "id": "t4-points-out-of-stage",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "keysWhere(m, kind, variant, [\"stage\", \"match\"])",
     "replace": "keysWhere(m, kind, variant, [\"stage\", \"match\", \"points\"])",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "points keys are in neither" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "points keys are in neither"
+      }
+    ]
   },
   {
     "id": "t4-unknown-first",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "if (!known.has(top)) return",
     "replace": "if (false) return",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a key the sport never declares is UNKNOWN_RULE_KEY" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a key the sport never declares is UNKNOWN_RULE_KEY"
+      }
+    ]
   },
   {
     "id": "t4-applies-check",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": " || !ruleKeyApplies(owner.fact, kind, variant))",
     "replace": ")",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a match key outside its declared kinds is refused" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a match key outside its declared kinds is refused"
+      }
+    ]
   },
   {
     "id": "t4-format-key-not-off",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "      changed.push(path);",
     "replace": "      if (valueAt(stageResolved, path) === undefined) return notSettable(path, OFF_AT_STAGE);\n      changed.push(path);",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 a format key may differ where the stage has none" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 a format key may differ where the stage has none"
+      }
+    ]
   },
   {
     "id": "t4-decider-shorter",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "Math.min(o as number, s) === o ? null",
+    "find": "isLength(o) && Math.min(o, s) === o ? null",
     "replace": "true ? null",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 every declared decider, every sport"
+      }
+    ]
   },
   {
     "id": "t4-decider-bound-dispatch",
     "file": "packages/engine/src/sport/rule-keys.ts",
     "find": "      if (owner.fact.matchBound !== undefined) {",
     "replace": "      if (owner.fact.matchBound === \"off_or_shorter\") {",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 every declared decider, every sport" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 every declared decider, every sport"
+      }
+    ]
   },
   {
     "id": "t4-decider-stage-lacks-length",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "  if (typeof s !== \"number\") return OFF_AT_STAGE;\n",
+    "find": "  if (!isLength(s)) return OFF_AT_STAGE;\n",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a decider's bound reads the stage" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a decider's bound reads the stage"
+      }
+    ]
   },
   {
     "id": "t4-q5-icehockey-bound-dropped",
     "file": "packages/engine/src/sports/period/kernel.ts",
     "find": "\"overtime.minutes\": { scope: \"match\", matchBound: \"shorter\" },",
     "replace": "\"overtime.minutes\": { scope: \"match\" },",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "Q5 \\(rulebook\\): each sport's match keys and deciders" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): the match bounds and the whole deciders"
+      }
+    ]
   },
   {
     "id": "t4-q5-superover-match",
     "file": "packages/engine/src/sports/cricket/cricket.ts",
-    "find": "superOver: { scope: \"stage\" },",
-    "replace": "superOver: { scope: \"match\" },",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "Q5 \\(rulebook\\): each sport's match keys and deciders" }]
+    "find": "superOver: { scope: \"stage\", decider: true,",
+    "replace": "superOver: { scope: \"match\", decider: true,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): each sport's match, stage and points keys"
+      }
+    ]
   },
   {
     "id": "t4-bound",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "<= Number(st.halfMinutes) ? null",
-    "replace": "<= Infinity ? null",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+    "find": "ov.halfMinutes <= st.halfMinutes ? null",
+    "replace": "ov.halfMinutes <= Infinity ? null",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 football extra time per match"
+      }
+    ]
   },
   {
     "id": "t4-bound-switch-on",
     "file": "packages/engine/src/sport/rule-keys.ts",
-    "find": "if (st.enabled !== true) return OFF_AT_STAGE;",
-    "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+    "find": "if (st.enabled !== true || !isLength(st.halfMinutes))",
+    "replace": "if (!isLength(st.halfMinutes))",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 football extra time per match"
+      }
+    ]
   },
   {
     "id": "t4-path-reader-no",
     "file": "packages/engine/src/testkit/schema-paths.ts",
     "find": "  return false;\n}",
     "replace": "  return true;\n}",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "the testkit path reader answers no as well as yes" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "the testkit path reader answers no as well as yes"
+      }
+    ]
   },
   {
     "id": "t4-football-bound-declared",
     "file": "packages/engine/src/sports/football/football.ts",
-    "find": "extraTime: { scope: \"match\", matchBound: \"off_or_shorter\" },",
-    "replace": "extraTime: { scope: \"match\" },",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+    "find": "extraTime: { scope: \"match\", matchBound: \"off_or_shorter\", decider: true },",
+    "replace": "extraTime: { scope: \"match\", decider: true },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "X-SR-2 football extra time per match"
+      }
+    ]
   },
   {
     "id": "t4-carrom-tieboard-kinds",
     "file": "packages/engine/src/sports/carrom/carrom.ts",
-    "find": "tieBoard: { scope: \"stage\", appliesTo: { stageKinds: [...DRAW_KINDS] } },",
-    "replace": "tieBoard: { scope: \"stage\" },",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "carrom tieBoard applies to table kinds only" }]
+    "find": "tieBoard: { scope: \"stage\", decider: true, appliesTo: { stageKinds: [...DRAW_KINDS] } },",
+    "replace": "tieBoard: { scope: \"stage\", decider: true },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "carrom tieBoard applies to table kinds only"
+      }
+    ]
   },
   {
     "id": "t4-hockey-narrows",
     "file": "packages/engine/src/sports/hockey/hockey.ts",
     "find": "\"overtime.minutes\": _noOvertimeMinutes, ",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "each row is a real top-level key that is not declared" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "each row is a real top-level key that is not declared"
+      }
+    ]
   },
   {
     "id": "t4-unclassified-key",
     "file": "packages/engine/src/sports/generic/generic.ts",
     "find": "    allowDraws: { scope: \"stage\" },\n",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "every top-level schema key is declared or listed UNSETTABLE" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every top-level schema key is declared or listed UNSETTABLE"
+      }
+    ]
+  },
+  {
+    "id": "t4-i1-dls-points",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "dls: { scope: \"stage\", appliesTo:",
+    "replace": "dls: { scope: \"points\", appliesTo:",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): each sport's match, stage and points keys"
+      }
+    ]
+  },
+  {
+    "id": "t4-i1-superover-points",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "superOver: { scope: \"stage\", decider: true,",
+    "replace": "superOver: { scope: \"points\", decider: true,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): each sport's match, stage and points keys"
+      }
+    ]
+  },
+  {
+    "id": "t4-i1-football-shootout-points",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "shootout: { scope: \"stage\", decider: true },",
+    "replace": "shootout: { scope: \"points\", decider: true },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): each sport's match, stage and points keys"
+      }
+    ]
+  },
+  {
+    "id": "t4-i1-halfminutes-league-only",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "halfMinutes: { scope: \"match\" },",
+    "replace": "halfMinutes: { scope: \"match\", appliesTo: { stageKinds: [\"league\"] } },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "appliesTo is carried by exactly"
+      }
+    ]
+  },
+  {
+    "id": "t4-i2-superover-every-variant",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "superOver: { scope: \"stage\", decider: true, appliesTo: { variants: [\"t20\", \"odi\", \"hundred\"] } },",
+    "replace": "superOver: { scope: \"stage\", decider: true },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every key a cell offers parses switched ON"
+      }
+    ]
+  },
+  {
+    "id": "t4-i2-dls-over-narrowed",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "dls: { scope: \"stage\", appliesTo: { variants: [\"t20\", \"odi\", \"hundred\"] } },",
+    "replace": "dls: { scope: \"stage\", appliesTo: { variants: [\"t20\", \"odi\"] } },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "every key a cell offers parses switched ON"
+      }
+    ]
+  },
+  {
+    "id": "t4-g3-helper-ignores-decider",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "f.decider === true && ruleKeyApplies(f, kind, variant)",
+    "replace": "ruleKeyApplies(f, kind, variant)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "G3 deciderKeysFor"
+      }
+    ]
+  },
+  {
+    "id": "t4-g3-helper-ignores-cell",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "f.decider === true && ruleKeyApplies(f, kind, variant)",
+    "replace": "f.decider === true",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "chess tie-breaks in a bracket only"
+      }
+    ]
+  },
+  {
+    "id": "t4-g3-football-shootout-undeclared",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "shootout: { scope: \"stage\", decider: true },",
+    "replace": "shootout: { scope: \"stage\" },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "Q5 \\(rulebook\\): the match bounds and the whole deciders"
+      }
+    ]
+  },
+  {
+    "id": "t4-m1-stage-half-coerced",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (st.enabled !== true || !isLength(st.halfMinutes))",
+    "replace": "if (st.enabled !== true)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a decider's bound reads the stage"
+      }
+    ]
+  },
+  {
+    "id": "t4-m1-override-half-coerced",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "isLength(ov.halfMinutes) && ov.halfMinutes <= st.halfMinutes",
+    "replace": "Number(ov.halfMinutes) <= st.halfMinutes",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a decider's bound reads the stage"
+      }
+    ]
+  },
+  {
+    "id": "t4-m1-shorter-override-coerced",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "isLength(o) && Math.min(o, s) === o",
+    "replace": "Math.min(o as number, s) === o",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a decider's bound reads the stage"
+      }
+    ]
+  },
+  {
+    "id": "t4-m1-islength-coerces",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "(v: unknown): v is number => Number.isFinite(v);",
+    "replace": "(v: unknown): v is number => Number.isFinite(Number(v));",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a decider's bound reads the stage"
+      }
+    ]
+  },
+  {
+    "id": "t4-m5-reference-compare",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "JSON.stringify(before) === JSON.stringify(after) ? [] : [path]",
+    "replace": "before === after ? [] : [path]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/rule-keys.test.ts"
+        ],
+        "name": "a list leaf is compared by value"
+      }
+    ]
   }
 ]

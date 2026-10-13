@@ -30,6 +30,10 @@ export const stageTopKeysFor = (m: AnySportModule, kind: StageKind | null, varia
   new Set(stageKeysFor(m, kind, variant).map(topOf));
 /** First segments of every declared key, whatever its scope. */
 export const sportTopKeys = (m: AnySportModule): ReadonlySet<string> => new Set(Object.keys(m.ruleKeys ?? {}).map(topOf));
+/** The WHOLE deciders (`decider: true`) a stage of this kind and variant carries — what the knockout preselection
+ *  switches on and the "no decider" notice checks (spec §4.2, X-SR-6). */
+export const deciderKeysFor = (m: AnySportModule, kind: StageKind | null, variant: string | null): readonly string[] =>
+  Object.entries(m.ruleKeys ?? {}).filter(([, f]) => f.decider === true && ruleKeyApplies(f, kind, variant)).map(([k]) => k);
 
 /** The declaration that owns a cfg path: the most specific declared prefix ("overtime.minutes" over "overtime").
  *  Only the module's OWN keys count — an inherited property name ("toString") is never a rule key. */
@@ -64,6 +68,9 @@ const valueAt = (o: Record<string, unknown>, key: string): unknown =>
 
 const OFF_AT_STAGE = "it is off for this stage";
 const NOT_LONGER = "it can only be shorter than the stage's";
+/** A length the bounds compare: a finite number (`Number.isFinite` never coerces), so null, "", false or "10" is no
+ *  length at all — not the 0 or 10 a `Number()` would read. */
+const isLength = (v: unknown): v is number => Number.isFinite(v);
 
 /** RB2B-3 (X-SR-2): a match may switch the key off or shorten it, never switch it on or lengthen it. Reads the
  *  `{enabled, halfMinutes}` shape — the X-SR-1 sweep proves every `off_or_shorter` key has it. */
@@ -71,18 +78,18 @@ function offOrShorter(o: unknown, s: unknown): string | null {
   const ov = isObj(o) ? o : {};
   const st = isObj(s) ? s : {};
   if (ov.enabled !== true) return null;
-  if (st.enabled !== true) return OFF_AT_STAGE;
-  return Number(ov.halfMinutes) <= Number(st.halfMinutes) ? null : NOT_LONGER;
+  if (st.enabled !== true || !isLength(st.halfMinutes)) return OFF_AT_STAGE;
+  return isLength(ov.halfMinutes) && ov.halfMinutes <= st.halfMinutes ? null : NOT_LONGER;
 }
 
 /** X-SR-2 (signed): a decider may only be switched off or shortened for one match. `o` and `s` are the override's and
  *  the stage's values at the decider's key; the X-SR-1 sweep proves each bound's shape. */
 function deciderBound(bound: NonNullable<RuleKeyFact["matchBound"]>, o: unknown, s: unknown): string | null {
   if (bound === "off_or_shorter") return offOrShorter(o, s);
-  if (typeof s !== "number") return OFF_AT_STAGE;
+  if (!isLength(s)) return OFF_AT_STAGE;
   // Shorter = the smaller of the two. The bound only sees a CHANGED leaf, so `o` never equals `s` (an `o <= s` would
-  // carry an untestable `<` twin), and a non-number never equals the number Math.min returns.
-  return Math.min(o as number, s) === o ? null : NOT_LONGER;
+  // carry an untestable `<` twin).
+  return isLength(o) && Math.min(o, s) === o ? null : NOT_LONGER;
 }
 
 export type OverrideCheck =

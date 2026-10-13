@@ -920,7 +920,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     queenCapAt: { scope: "stage" },
     queenFollowsBoard: { scope: "stage" },
     pointsPerCoin: { scope: "stage" },
-    tieBoard: { scope: "stage", appliesTo: { stageKinds: [...DRAW_KINDS] } },
+    tieBoard: { scope: "stage", decider: true, appliesTo: { stageKinds: [...DRAW_KINDS] } },
     points: { scope: "points" },
   },
 

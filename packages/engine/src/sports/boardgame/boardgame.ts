@@ -777,7 +777,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   ruleKeys: {
     variant: { scope: "stage" },
     clock: { scope: "stage" },
-    tiebreak: { scope: "stage", appliesTo: { stageKinds: [...BRACKET_KINDS] } },
+    tiebreak: { scope: "stage", decider: true, appliesTo: { stageKinds: [...BRACKET_KINDS] } },
     scoring: { scope: "points" },
     byeScore: { scope: "points" },
   },
