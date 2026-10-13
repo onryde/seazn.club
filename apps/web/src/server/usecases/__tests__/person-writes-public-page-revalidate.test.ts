@@ -196,16 +196,13 @@ import {
 import { sql } from "@/lib/db";
 import { maskDisplayName } from "@/lib/name-display";
 import {
-  competitionTag,
-  divisionTag,
   getPublicDivision,
   getPublicFixture,
   getPublicPlayer,
   NEXT_CACHE_TAG_MAX_ITEMS,
-  orgTag,
-  personTag,
   playerCardTags,
 } from "@/server/public-site/data";
+import { competitionTag, divisionTag, orgTag, personTag } from "@/server/public-site/cache-tags";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";

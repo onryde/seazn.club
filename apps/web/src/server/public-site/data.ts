@@ -31,6 +31,7 @@ import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
 import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
+import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
@@ -168,14 +169,6 @@ export async function withCourtVenueName<T extends { id: string }>(
 export const REVALIDATE_FAST = 30; // competition / division / fixture pages
 export const REVALIDATE_SLOW = 300; // entrant / player pages
 
-export const divisionTag = (divisionId: string) => `division:${divisionId}`;
-export const competitionTag = (competitionId: string) => `competition:${competitionId}`;
-export const orgTag = (orgSlug: string) => `org-public:${orgSlug}`;
-/** One person's public card entries — at every competition URL, allowed or
- *  refused. Fired by every write to what a card shows about them
- *  (`firePersonRevalidate`); nothing else carries it. */
-export const personTag = (personId: string) => `pub-person:${personId}`;
-
 /** Next keeps at most this many tags on one cache entry and drops the rest
  *  with nothing but a console line (`validateTags`, next/dist/lib/constants).
  *  Pinned against Next's own value by the person-writes revalidate suite. */
@@ -202,9 +195,6 @@ export function playerCardTags(
   }
   return [...fixed, ...orderedDivisionIds.slice(0, room).map(divisionTag)];
 }
-/** One shared tag for every discovery surface (doc 15, PROMPT-19). */
-export const DISCOVERY_TAG = "discovery";
-
 export type Visibility = "public" | "unlisted";
 
 export interface PublicOrg {

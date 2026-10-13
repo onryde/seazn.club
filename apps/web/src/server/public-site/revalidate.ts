@@ -9,7 +9,8 @@ import { cacheDel, cacheDelPattern } from "@/lib/cache";
 import { broadcastRevalidate } from "@/lib/peer-revalidate";
 import { purgeCdn } from "@/lib/cdn-purge";
 import { log } from "@/server/logger";
-import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./data";
+// The leaf, never ./data: this module is on the scoring write path (T16 fix round 2, N1 — see ./cache-tags).
+import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./cache-tags";
 import { deferred } from "@/lib/deferred";
 import { publicFixtureCacheKey } from "./fixture-doc-cache-key";
 import { publicDivisionCacheKeys } from "./division-doc-cache-keys";

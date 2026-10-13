@@ -7,7 +7,8 @@ import "server-only";
 // writes of discoverable competitions (see revalidate.ts).
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
-import { DISCOVERY_TAG, REVALIDATE_FAST } from "./data";
+import { DISCOVERY_TAG } from "./cache-tags";
+import { REVALIDATE_FAST } from "./data";
 import type { DiscoveryEntry } from "@/server/usecases/public";
 
 export type { DiscoveryEntry };

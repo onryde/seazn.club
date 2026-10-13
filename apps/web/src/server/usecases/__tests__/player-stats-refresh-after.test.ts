@@ -101,7 +101,7 @@ import {
 } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { sql } from "@/lib/db";
 import { deferred } from "@/lib/deferred";
-import { competitionTag, divisionTag } from "@/server/public-site/data";
+import { competitionTag, divisionTag } from "@/server/public-site/cache-tags";
 import {
   fireScoreRevalidate,
   fireStatsRevalidate,
