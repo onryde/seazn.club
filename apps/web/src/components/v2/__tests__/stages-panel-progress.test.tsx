@@ -155,8 +155,8 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
   // this test never touched) is what the tests around it still cover.
   it("D12: an online board whose round nobody has opened is counted 'not opened' — and the clause is absent at zero", () => {
     const unopened = {
-      f3: { cameraPolicy: "off", cameraFlagCount: 0, offSeaznFlagCount: 0, held: null, live: false, unopened: true },
-      f4: { cameraPolicy: "off", cameraFlagCount: 0, offSeaznFlagCount: 0, held: null, live: true, unopened: false },
+      f3: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: null, live: false, unopened: true },
+      f4: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: null, live: true, unopened: false },
     } as const;
     const counts = progressCounts(renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={unopened} />))!;
     expect(counts).toContain(en["schedule.progress.notOpened.one"]!.replace("{count}", "1"));

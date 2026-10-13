@@ -17,9 +17,6 @@ import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/onlin
 import { isPlayableFixtureStatus } from "./preflight";
 import { readNeedsReason } from "./queue";
 
-/** Flag kinds the camera chip counts; the rest (out_of_band_play) is its own
- *  chip. V433's CHECK names exactly three kinds. */
-const CAMERA_FLAG_KINDS = ["camera_lost", "camera_connection_problems"] as const;
 
 export async function listRunSheetOnlinePlay(auth: AuthCtx, divisionId: string): Promise<Record<string, RunSheetOnlinePlay>> {
   const [division] = await sql<{ id: string; sportKey: string; config: unknown }[]>`
@@ -41,13 +38,17 @@ export async function listRunSheetOnlinePlay(auth: AuthCtx, divisionId: string):
       bridgeStatus: string | null;
       needsReason: unknown;
       cameraFlags: number;
+      connectionProblems: number;
       offSeaznFlags: number;
       roundOpened: boolean;
     }[]
   >`
     select f.id as "fixtureId", f.stage_id as "stageId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason",
-           count(fl.id) filter (where fl.kind in ${sql([...CAMERA_FLAG_KINDS])})::int as "cameraFlags",
+           -- V433's CHECK names exactly three kinds, and each is its own chip: the player's lost camera (amber), OUR
+           -- side's connection problems (quiet — T16 fix round 1, I3), moves made off Seazn (amber).
+           count(fl.id) filter (where fl.kind = 'camera_lost')::int as "cameraFlags",
+           count(fl.id) filter (where fl.kind = 'camera_connection_problems')::int as "connectionProblems",
            count(fl.id) filter (where fl.kind = 'out_of_band_play')::int as "offSeaznFlags",
            sro.id is not null as "roundOpened"
       from fixtures f
@@ -72,11 +73,12 @@ export async function listRunSheetOnlinePlay(auth: AuthCtx, divisionId: string):
     const playable = isPlayableFixtureStatus(r.fixtureStatus);
     const unopened = online && !r.roundOpened && playable;
     // A settled board of an unopened round with no other fact: nothing to show.
-    if (r.bridgeStatus === null && r.cameraFlags + r.offSeaznFlags === 0 && !unopened) continue;
+    if (r.bridgeStatus === null && r.cameraFlags + r.connectionProblems + r.offSeaznFlags === 0 && !unopened) continue;
     const held = r.bridgeStatus === "needs_organiser" && playable;
     out[r.fixtureId] = {
       cameraPolicy: policyByStage.get(r.stageId)!,
       cameraFlagCount: r.cameraFlags,
+      connectionProblemCount: r.connectionProblems,
       offSeaznFlagCount: r.offSeaznFlags,
       held: held ? readNeedsReason(r.needsReason) : null,
       live: r.bridgeStatus === "live" && playable,

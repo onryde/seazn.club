@@ -78,8 +78,11 @@ export type RunSheetStage = { id: string; seq: number; kind: string };
  *  row, so `buildRunSheet`'s grouping cannot see it. */
 export type RunSheetOnlinePlay = {
   cameraPolicy: CameraPolicy;
-  /** Open `camera_lost` + `camera_connection_problems` flags. */
+  /** Open `camera_lost` flags: a player's camera evidence (amber; takes "Camera ok" away). */
   cameraFlagCount: number;
+  /** T16 fix round 1, I3 — open `camera_connection_problems` flags: OUR safeguard's connection, never the player's.
+   *  A quiet fact of its own (carry progress.md:1006): never counted with `cameraFlagCount`, never an accusation. */
+  connectionProblemCount: number;
   /** Open `out_of_band_play` flags: moves made off Seazn. */
   offSeaznFlagCount: number;
   /** Held for the organiser (needs_organiser) while still to be played. */

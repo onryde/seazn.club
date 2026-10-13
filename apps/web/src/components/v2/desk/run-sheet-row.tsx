@@ -103,6 +103,9 @@ export function scheduleErrorKey(err: unknown): MessageKey {
 /** T16 — a flag chip: amber (the desk's attention tone for evidence), 44 px on phones. */
 const CHIP_FLAG =
   "inline-flex shrink-0 items-center gap-1 rounded-full bg-[#fef3c7] px-2 py-0.5 text-xs font-semibold text-[#713f12] max-md:min-h-11 md:order-first";
+/** T16 fix round 1, I3 — a quiet chip: a fact that is nobody's fault (OUR side's camera connection), 44 px on phones. */
+const CHIP_QUIET =
+  "inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 max-md:min-h-11 md:order-first";
 
 /** A chip that leads somewhere when the page handed it a destination; without one it is plain text — the evidence
  *  still shows. A plain function, not a component: it is part of the row's own markup. */
@@ -688,6 +691,21 @@ export function RunSheetRow({
               <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-green-600" />
               {msg("runsheet.camera.ok")}
             </span>
+          )}
+          {/* I3: our safeguard's connection — reviewed in the same panel, but never the amber evidence chip, and on its
+              own it leaves "Camera ok" standing (the player's camera was not lost). */}
+          {onlinePlay && onlinePlay.connectionProblemCount > 0 && (
+            chipLink({
+              href: arbiterHref,
+              testId: "run-sheet-connection-chip",
+              state: "ours",
+              label: msg("runsheet.online.flagName", {
+                chip: msg("arbiter.flag.connection.chipPlain"),
+                match: `${home} ${msg("schedule.vs")} ${away}`,
+              }),
+              className: CHIP_QUIET,
+              children: msg("arbiter.flag.connection.chipPlain"),
+            })
           )}
           {onlinePlay && onlinePlay.offSeaznFlagCount > 0 && (
             chipLink({
