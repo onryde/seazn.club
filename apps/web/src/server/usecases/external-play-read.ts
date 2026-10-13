@@ -174,7 +174,28 @@ export function watchLinkOf(row: WatchLinkRow): PublicWatchLink | null {
  *  which fixtures exist). Keyed by fixture id; a board with nothing to offer is absent. The caller asks only for a
  *  division that plays online. Never a challenge id, a Lichess id or a hold reason — only the link's kind and score. */
 export async function loadDivisionWatchLinks(divisionId: string): Promise<Record<string, PublicWatchLink>> {
-  const rows = await sql<(WatchLinkRow & { fixture_id: string })[]>`
+  const rows = await watchLinkRows({ divisionId });
+  const out: Record<string, PublicWatchLink> = {};
+  for (const r of rows) {
+    const l = watchLinkOf(r);
+    if (l !== null) out[r.fixture_id] = l;
+  }
+  return out;
+}
+
+/** R3 (T16 fix round 1): is an online game being played on this board? Exactly when the Fixtures list offers "Watch
+ *  live" for it (`watchLinkOf`), so the list and the match centre's header never disagree. Nothing marks a fixture in
+ *  play for a Lichess game (its result is written when the game ends), so the header asks this instead. A fixture with
+ *  no bridge row is not. */
+export async function loadOnlineGameInPlay(fixtureId: string): Promise<boolean> {
+  const [row] = await watchLinkRows({ fixtureId });
+  return row !== undefined && watchLinkOf(row)?.kind === "live";
+}
+
+/** The rows `watchLinkOf` reads — a public read: `public_fixtures_v` decides which fixtures exist. ONE query for the
+ *  Fixtures list (a division) and the match centre (a fixture), so the two read the same columns the same way. */
+function watchLinkRows(of: { divisionId: string } | { fixtureId: string }) {
+  return sql<(WatchLinkRow & { fixture_id: string })[]>`
     select v.id as fixture_id, f.status as fixture_status, f.home_entrant_id, f.away_entrant_id, f.outcome, v.summary,
            f.finished_at, ep.status, ep.challenge_id, ep.white_side, coalesce(ep.move_count, 0)::int as move_count,
            ep.needs_reason,
@@ -182,13 +203,7 @@ export async function loadDivisionWatchLinks(divisionId: string): Promise<Record
       from public_fixtures_v v
       join fixtures f on f.id = v.id
       left join fixture_external_play ep on ep.fixture_id = v.id
-     where v.division_id = ${divisionId}`;
-  const out: Record<string, PublicWatchLink> = {};
-  for (const r of rows) {
-    const l = watchLinkOf(r);
-    if (l !== null) out[r.fixture_id] = l;
-  }
-  return out;
+     where ${"divisionId" in of ? sql`v.division_id = ${of.divisionId}` : sql`v.id = ${of.fixtureId}`}`;
 }
 
 /** Has this fixture's round been opened (D12)? Opening (T19's openRound)
