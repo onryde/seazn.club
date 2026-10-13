@@ -23,8 +23,10 @@
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { afterAll, describe, expect, it } from "vitest";
+import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ENGINE_HTTP } from "@/server/api-v1/http";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { loadArbiterRound } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
@@ -59,6 +61,10 @@ const SEATED_REFUSAL: Answer = { refused: [403, "ARBITER_PLAYS_THIS_BOARD"] };
 /** A race's loser: the board changed between its read and its write (T16 fix round 2, N2 ruling) — its own code, never
  *  ALREADY_RESOLVED ("already has its result"), which is wrong when the winner's draw left a knockout tie-break owed. */
 const STALE: Answer = { refused: [409, "BOARD_CHANGED"] };
+/** RB1 (controller ruling 2026-10-13): No result is W2b's double walkover, `core.forfeit {by: "both"}`. This suite's
+ *  knockout board is a line that feeds no next match (the seed sets no feed edge — a final), where W2b D19 refuses a
+ *  double walkover: the engine's refusal, as the route answers it (http.ts ENGINE_HTTP). The board stays held. */
+const NO_NEXT: Answer = { refused: [ENGINE_HTTP.DOUBLE_WALKOVER_NO_NEXT_MATCH, "DOUBLE_WALKOVER_NO_NEXT_MATCH"] };
 
 /** The model: what the rulings say the board is. */
 type Model = {
@@ -76,6 +82,8 @@ async function answer(p: Promise<unknown>): Promise<Answer> {
     return { ok: await p };
   } catch (err) {
     if (err instanceof HttpError) return { refused: [err.status, err.code ?? ""] };
+    // An engine refusal reaches the route as itself; v1 answers it with ENGINE_HTTP's status.
+    if (err instanceof EngineError) return { refused: [ENGINE_HTTP[err.code], err.code] };
     throw err;
   }
 }
@@ -96,6 +104,8 @@ function expectResolve(board: Board, m: Model, as: ResolveKind): Answer {
     m.heldFor = "tiebreak_owed";
     return { ok: { status: "tiebreak_owed" } };
   }
+  // RB1: a double walkover on a final is refused (W2b D19), whether or not play is recorded; nothing moves.
+  if (board.kind === "knockout" && as === "no_result") return NO_NEXT;
   m.settled = true;
   m.heldFor = null;
   return { ok: { status: "finished" } };
@@ -103,13 +113,13 @@ function expectResolve(board: Board, m: Model, as: ResolveKind): Answer {
 
 type Counters = Record<
   | "lateStaysOpen" | "reclosedNoop" | "emptyCloseRefused" | "secondSettleRefused" | "tiebreakHeld" | "tiebreakNeedsWinner"
-  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "raceToldChangedTiebreak" | "steps",
+  | "holdAfterSettleNoop" | "seatedRefused" | "raceOneRecorded" | "raceSameOnce" | "raceToldChangedTiebreak" | "noNextRefused" | "steps",
   number
 >;
 const zero = (): Counters => ({
   lateStaysOpen: 0, reclosedNoop: 0, emptyCloseRefused: 0, secondSettleRefused: 0, tiebreakHeld: 0,
   tiebreakNeedsWinner: 0, holdAfterSettleNoop: 0, seatedRefused: 0, raceOneRecorded: 0, raceSameOnce: 0,
-  raceToldChangedTiebreak: 0, steps: 0,
+  raceToldChangedTiebreak: 0, noNextRefused: 0, steps: 0,
 });
 const total: Counters = zero();
 
@@ -267,6 +277,7 @@ async function run(board: Board, ops: Op[]): Promise<void> {
         if (wasSettled) c.secondSettleRefused++;
         if (!wasTiebreak && m.tiebreak) c.tiebreakHeld++;
         if ("refused" in expected && expected.refused[1] === "TIEBREAK_NEEDS_WINNER") c.tiebreakNeedsWinner++;
+        if (expected === NO_NEXT) c.noNextRefused++;
         break;
       }
       case "race": {
@@ -359,6 +370,9 @@ const PREFIXES: { name: keyof Counters; board: Board; ops: Op[] }[] = [
   // being played (no core.start to race on), so the loser meets the tie-break owed.
   { name: "raceToldChangedTiebreak", board: { kind: "knockout" }, ops: [{ kind: "race", a: "draw", b: "home_wins", ordered: true }] },
   { name: "raceToldChangedTiebreak", board: { kind: "knockout", live: true }, ops: [{ kind: "race", a: "draw", b: "away_wins", ordered: true }] },
+  // RB1: No result on a final is W2b's refusal — before play and after it — and the board stays the organiser's.
+  { name: "noNextRefused", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "no_result" }] },
+  { name: "noNextRefused", board: { kind: "knockout", live: true }, ops: [{ kind: "resolve", as: "no_result" }] },
 ];
 const RUNS_PER_PREFIX = 6;
 
@@ -390,9 +404,10 @@ describe.runIf(HAS_DB)("the organiser's decisions — transitions", () => {
   const T: { from: string; board: Board; ops: Op[] }[] = [
     { from: "held → settled", board: { kind: "league" }, ops: [{ kind: "resolve", as: "home_wins" }] },
     { from: "held → drawn (league) → settled", board: { kind: "league" }, ops: [{ kind: "resolve", as: "draw" }] },
-    { from: "held → no result → settled", board: { kind: "league" }, ops: [{ kind: "resolve", as: "no_result" }] },
+    { from: "held → no result → settled (RB1: a double walkover, nothing played)", board: { kind: "league" }, ops: [{ kind: "resolve", as: "no_result" }] },
+    { from: "game begun on the ledger → no result → settled (RB1: the same double walkover, after play)", board: { kind: "league", live: true }, ops: [{ kind: "resolve", as: "no_result" }] },
     { from: "held (KO) → tiebreak owed → settled by a winner", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "draw" }, { kind: "resolve", as: "home_wins" }] },
-    { from: "held (KO) → no result → settled (W2a's needs_decision)", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "no_result" }] },
+    { from: "held (KO final) → no result ⇒ refused DOUBLE_WALKOVER_NO_NEXT_MATCH, still held → a winner settles it", board: { kind: "knockout" }, ops: [{ kind: "resolve", as: "no_result" }, { kind: "resolve", as: "away_wins" }] },
     { from: "settled → settle again ⇒ refused", board: { kind: "league" }, ops: [{ kind: "resolve", as: "draw" }, { kind: "resolve", as: "away_wins" }] },
     { from: "flag open → seen → closed", board: { kind: "league" }, ops: [{ kind: "raise" }, { kind: "look" }, { kind: "close", by: 1 }] },
     { from: "flag closed → closed again ⇒ no-op", board: { kind: "league" }, ops: [{ kind: "raise" }, { kind: "look" }, { kind: "close", by: 0 }, { kind: "close", by: 1 }] },

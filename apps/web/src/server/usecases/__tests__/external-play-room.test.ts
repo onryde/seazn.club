@@ -14,6 +14,8 @@
 // exists only for `boardgame` (guard.ts `d.sport_key = 'boardgame'`).
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { foldMatch } from "@seazn/engine/core";
+import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import { roomPhase, windowFor, DEADLINE_AFTER_MS } from "@/server/external-play/window";
@@ -22,7 +24,8 @@ import { stampFixtureCheckIn } from "../me";
 import { act, type PlayResult } from "../external-play/play";
 import { fenAfter } from "@/server/external-play/fen";
 import { writeResultFrom } from "../external-play/result";
-import { appendEvent } from "@/server/engine-db";
+import { mintOrgOwnerAuth } from "../external-play/auth";
+import { resolveExternalPlay } from "../external-play/resolve";
 import type { GameSnapshot } from "@/server/external-play/types";
 import { CLOCK_ZERO_SPACING_MS } from "@/components/public-site/match-room/use-room";
 import {
@@ -438,17 +441,33 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(black.result).toMatchObject({ outcome: "won", score: "0–1" });
   });
 
-  it("I7: a double forfeit on the ledger reads as NO RESULT, 0–0, for both players — never a draw", async () => {
+  it("I7 + RB1: the organiser's No result on a game being played reads as NO RESULT for both players — the double walkover W2b records, as the engine folds it, never a draw", async () => {
     const s = await seed();
     await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
-    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
-    await appendEvent(s.orgId, s.fixtureId, 1, { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } });
+    // The real producer: the organiser's settle (W2b spec §5.2 — a chess double forfeit is core.forfeit{by: both}).
+    expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
+    const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq`;
+    expect(ledger, "premise: the double walkover is the ledger's one event").toEqual([{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
+    // The expected card, from the engine's own fold of that event (home is White here).
+    const state = foldMatch(
+      boardgame,
+      boardgame.configSchema.parse({}),
+      { home: { entrantId: s.home.entrantId, slots: [] }, away: { entrantId: s.away.entrantId, slots: [] } },
+      [{ id: "e0", fixtureId: s.fixtureId, seq: 0, type: "core.forfeit", payload: { by: "both", reason: "walkover" }, recordedAt: now.toISOString(), recordedBy: null }],
+    );
+    const summary = boardgame.summary(state);
+    const line = (entrant: string) => summary.perSide.find((p) => p.entrantId === entrant)!.line;
     const [fx] = await sql<{ status: string; outcome: { kind: string } | null }[]>`select status, outcome from fixtures where id = ${s.fixtureId}`;
-    expect(fx!.outcome, "premise: the engine folded it to no_result").toEqual({ kind: "no_result" });
+    expect(fx!.outcome, "premise: the engine folded it to a double walkover").toEqual(boardgame.outcome(state));
+    expect(fx!.outcome).toEqual({ kind: "double_walkover" });
     let checked = 0;
     for (const who of [s.home, s.away]) {
       const snap = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
-      expect(snap.result).toEqual({ outcome: "no_result", method: "double_forfeit", score: "0–0" });
+      expect(snap.result).toEqual({
+        outcome: "no_result",
+        method: (summary.detail as { method?: string }).method,
+        score: `${line(s.home.entrantId)}–${line(s.away.entrantId)}`,
+      });
       checked += 1;
     }
     expect(checked).toBe(2);

@@ -48,8 +48,9 @@ export type RoomGame = {
 };
 
 export type RoomResult = {
-  /** The engine's outcome, from the viewer's side: a win is won/lost; a
-   *  draw; or no result (a double forfeit — chess.md §7). */
+  /** The engine's outcome, from the viewer's side: a win (or, W2b, a
+   *  forfeit's award) is won/lost; a draw; or no result (a double forfeit —
+   *  chess.md §7 — which W2b folds to a double walkover). */
   outcome: "won" | "lost" | "draw" | "no_result";
   /** boardgame.result's method, when one was recorded. */
   method: string | null;
@@ -177,25 +178,19 @@ const ENGINE_METHODS: ReadonlySet<string> = new Set(BoardgameMethod.options);
  *  how a chess result is written. */
 const GAME_SCORE_CFG = boardgame.configSchema.parse({});
 
-/** The game-over card's facts from the recorded boardgame.result (winner an
- *  entrant id or null), as the ENGINE folds it (review I7): its outcome kind
- *  — a double forfeit is `no_result`, never a draw — and its points for each
- *  side, White first. A method the engine does not know is carried for the
- *  record and folded as none. A winner who is neither seat is no result this
- *  room can state: null, and the screen says the result is on its way. */
-export function resultFor(a: {
-  winnerEntrantId: string | null;
-  method: string | null;
-  myEntrantId: string;
-  opponentEntrantId: string;
-  myColour: Colour;
-}): RoomResult | null {
-  if (a.winnerEntrantId !== null && a.winnerEntrantId !== a.myEntrantId && a.winnerEntrantId !== a.opponentEntrantId) {
-    return null;
-  }
+type Seats = { myEntrantId: string; opponentEntrantId: string; myColour: Colour };
+
+/** The card's facts from a short ledger, as the ENGINE folds it (review I7): its outcome kind from the viewer's side
+ *  and its points for each side, White first. Only the kinds the card can word are worded — a win or (W2b) a forfeit's
+ *  award is won/lost, a draw a draw, and a double forfeit (W2b BG-DW-1: a double walkover, whatever shape recorded it)
+ *  no result; anything else is null, never worded as one of those. */
+function foldedResult(
+  a: Seats,
+  decisive: { type: string; payload: unknown },
+  methodOf: (summaryMethod: string | null) => string | null,
+): RoomResult | null {
   const white = a.myColour === "white" ? a.myEntrantId : a.opponentEntrantId;
   const black = a.myColour === "white" ? a.opponentEntrantId : a.myEntrantId;
-  const method = a.method !== null && ENGINE_METHODS.has(a.method) ? a.method : undefined;
   const at = "1970-01-01T00:00:00.000Z";
   const state = foldMatch(
     boardgame,
@@ -203,27 +198,72 @@ export function resultFor(a: {
     { home: { entrantId: white, slots: [] }, away: { entrantId: black, slots: [] } },
     [
       { id: "start", fixtureId: "room", seq: 0, type: "core.start", payload: {}, recordedAt: at, recordedBy: null },
-      {
-        id: "result",
-        fixtureId: "room",
-        seq: 1,
-        type: "boardgame.result",
-        payload: { winner: a.winnerEntrantId, ...(method === undefined ? {} : { method }) },
-        recordedAt: at,
-        recordedBy: null,
-      },
+      { id: "decisive", fixtureId: "room", seq: 1, type: decisive.type, payload: decisive.payload, recordedAt: at, recordedBy: null },
     ],
   );
   const o = boardgame.outcome(state);
   if (o === null) return null;
-  const line = (entrant: string) => boardgame.summary(state).perSide.find((p) => p.entrantId === entrant)?.line ?? "";
-  // boardgame.result folds to these three kinds only (the sweep in
-  // room-snapshot.test.ts walks every method); anything else is no result
-  // this card can word, so it is not worded at all.
+  const summary = boardgame.summary(state);
+  const line = (entrant: string) => summary.perSide.find((p) => p.entrantId === entrant)?.line ?? "";
+  // The sweeps in room-snapshot.test.ts walk every method and every forfeit
+  // reason through the engine and reach exactly these kinds.
   const outcome: RoomResult["outcome"] | null =
-    o.kind === "win" ? (o.winner === a.myEntrantId ? "won" : "lost") : o.kind === "draw" || o.kind === "no_result" ? o.kind : null;
+    o.kind === "win" || o.kind === "award"
+      ? o.winner === a.myEntrantId
+        ? "won"
+        : "lost"
+      : o.kind === "draw"
+        ? "draw"
+        : o.kind === "no_result" || o.kind === "double_walkover"
+          ? "no_result"
+          : null;
   if (outcome === null) return null;
-  return { outcome, method: a.method, score: `${line(white)}–${line(black)}` };
+  const summaryMethod = (summary.detail as { method?: unknown } | undefined)?.method;
+  return { outcome, method: methodOf(typeof summaryMethod === "string" ? summaryMethod : null), score: `${line(white)}–${line(black)}` };
+}
+
+const holdsASeat = (entrant: string, a: Seats) => entrant === a.myEntrantId || entrant === a.opponentEntrantId;
+
+/** The game-over card's facts from the recorded boardgame.result (winner an
+ *  entrant id or null), as the ENGINE folds it (review I7). A method the
+ *  engine does not know is carried for the record and folded as none. A
+ *  winner who is neither seat is no result this room can state: null, and the
+ *  screen says the result is on its way. A result the engine's own schema
+ *  refuses (W2b f-w2: a double forfeit with a winner) throws, as the engine
+ *  does — a stored ledger never holds one. */
+export function resultFor(a: Seats & { winnerEntrantId: string | null; method: string | null }): RoomResult | null {
+  if (a.winnerEntrantId !== null && !holdsASeat(a.winnerEntrantId, a)) return null;
+  const method = a.method !== null && ENGINE_METHODS.has(a.method) ? a.method : undefined;
+  return foldedResult(
+    a,
+    { type: "boardgame.result", payload: { winner: a.winnerEntrantId, ...(method === undefined ? {} : { method }) } },
+    () => a.method,
+  );
+}
+
+/** The game-over card's facts from a recorded `core.forfeit` — how W2b records every chess forfeit (spec §5.2): a
+ *  no-show's walkover, the organiser's default win, the organiser's No result (`by: "both"`). Folded by the engine
+ *  after a Start (chess admits every forfeit reason there, ruling 118), its method the engine's own summary method
+ *  ("forfeit", "double_forfeit"). `by` naming neither seat nor "both" is null, like a stranger's win. */
+export function forfeitResultFor(a: Seats & { by: string; reason: string }): RoomResult | null {
+  if (a.by !== "both" && !holdsASeat(a.by, a)) return null;
+  return foldedResult(a, { type: "core.forfeit", payload: { by: a.by, reason: a.reason } }, (m) => m);
+}
+
+/** A ledger event that decides a board, as its readers select it (room.ts, arbiter.ts): the latest unvoided
+ *  `boardgame.result` or `core.forfeit`. */
+export type DecisiveEvent =
+  | { type: "boardgame.result"; payload: { winner?: string | null; method?: string } }
+  | { type: "core.forfeit"; payload: { by?: string; reason?: string } };
+
+/** The card's facts from whichever event decided the board. A stored forfeit always names `by` and `reason`
+ *  (CoreForfeit is strict); one that does not names no seat, and is null. */
+export function decisiveResultFor(e: DecisiveEvent, seats: Seats): RoomResult | null {
+  if (e.type === "core.forfeit") {
+    if (e.payload.by === undefined || e.payload.reason === undefined) return null;
+    return forfeitResultFor({ ...seats, by: e.payload.by, reason: e.payload.reason });
+  }
+  return resultFor({ ...seats, winnerEntrantId: e.payload.winner ?? null, method: e.payload.method ?? null });
 }
 
 /** How long the room's realtime subscriber token lives. It used to be the
