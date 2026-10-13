@@ -85,13 +85,22 @@ export function showsOnePointsField(
 
 /** The fields the editor renders, in table order: the table itself, or — on
  *  best of 1 — the table without `setTo` and with `finalSetTo` relabelled. The
- *  table is never mutated; the relabelled field is a copy. */
+ *  table is never mutated; the relabelled field is a copy.
+ *
+ *  A `sequence` field (an ordered list, chess's tie-break rungs) is NOT shown:
+ *  the control that edits one is W2c Task 17's, and until it exists the grid
+ *  would render it as a single `<select>`, so an organiser could save a list of
+ *  one rung — which dead-ends the scorer on a drawn knockout game (the pad
+ *  offers only that rung). It stays in the table, so `hydrateRuleValues` and
+ *  `buildRuleOverride` still carry a saved list through every save (an editor
+ *  that hides a field must not drop what it holds). TASK 17 OWNS UN-HIDING IT:
+ *  delete the `sequence` filter below when its control lands. */
 export function visibleRuleFields(
   sportKey: string,
   values: Record<string, string>,
   inherited: Record<string, unknown> = {},
 ): RuleField[] {
-  const fields = rulesFor(sportKey);
+  const fields = rulesFor(sportKey).filter((f) => f.kind !== "sequence");
   if (!showsOnePointsField(sportKey, values, inherited)) return fields;
   return fields
     .filter((f) => f.key !== BEST_OF_ONE_PAIR.shadow)

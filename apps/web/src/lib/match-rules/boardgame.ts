@@ -2,6 +2,10 @@
 // client", no JSX, no `@/components` or `@/server` import.
 import type { RuleField } from "./types.ts";
 
+/** The value of the tie-break rungs field that stands for the EMPTY list — a blank is "unset", so "no tie-break games"
+ *  needs a token of its own (round-trips through `build` and `read`). */
+export const NO_TIEBREAK_GAMES = "none";
+
 export const BOARDGAME_RULES: RuleField[] = [
   {
     key: "variant",
@@ -63,10 +67,14 @@ export const BOARDGAME_RULES: RuleField[] = [
       { value: "blitz", label: "Blitz game" },
       { value: "armageddon", label: "Armageddon" },
     ],
-    build: (v) => ({ tiebreakRungs: v === "" ? [] : v.split(",") }),
+    // A BLANK value means "unset" everywhere in the editor (`buildRuleOverride` skips it), so an EMPTY list ("no tie-break
+    // games"; a drawn game is held for the organiser, BG-KO-1) needs a value of its own: NO_TIEBREAK_GAMES. `build("")` is
+    // kept as the empty list for a caller that hands it a blank directly.
+    build: (v) => ({ tiebreakRungs: v === "" || v === NO_TIEBREAK_GAMES ? [] : v.split(",") }),
     // Report only what the config carries, so a stage's saved order reopens as itself: a stage's PUT is a fragment where a
-    // blank means "inherit", and a blank over a saved list would drop it on the next save. An empty list has no value of
-    // its own here (blank is "the engine's own order"); the sequence control that renders this field owns that case.
-    read: (config) => (Array.isArray(config.tiebreakRungs) && config.tiebreakRungs.length > 0 ? config.tiebreakRungs.join(",") : undefined),
+    // blank means "inherit", and a blank over a saved list would drop it on the next save. The empty list reopens as
+    // NO_TIEBREAK_GAMES, never as a blank (which would read as "unset" and lose it); an absent list reads as nothing.
+    read: (config) =>
+      Array.isArray(config.tiebreakRungs) ? (config.tiebreakRungs.length === 0 ? NO_TIEBREAK_GAMES : config.tiebreakRungs.join(",")) : undefined,
   },
 ];
