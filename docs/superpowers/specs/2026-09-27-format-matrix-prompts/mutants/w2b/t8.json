@@ -129,8 +129,8 @@
  {
   "id": "final-dw-written",
   "file": "apps/web/src/server/usecases/withdrawal.ts",
-  "find": "          if (feeds && !(await hasLivePlay(auth, u.fixtureId))) {",
-  "replace": "          if (true && !(await hasLivePlay(auth, u.fixtureId))) {",
+  "find": "          } else if (feeds) {\n",
+  "replace": "          } else if (true) {\n",
   "killers": [
    {
     "cwd": "apps/web",

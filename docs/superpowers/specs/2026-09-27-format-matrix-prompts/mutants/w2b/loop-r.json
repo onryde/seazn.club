@@ -461,8 +461,8 @@
  {
   "id": "lr-m4-table-dw-over-live-play",
   "file": "apps/web/src/server/usecases/withdrawal.ts",
-  "find": "        if (!(await hasLivePlay(auth, u.fixtureId))) {\n",
-  "replace": "        if (true) {\n",
+  "find": "\n        if (line.played) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
+  "replace": "\n        if (false) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
   "killers": [
    {
     "cwd": "apps/web",
@@ -729,6 +729,190 @@
      "src/server/__tests__/w2b-migration.test.ts"
     ],
     "name": "M-6: the remedy"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-bare-start-is-play",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "    played: playRecorded(events.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), sportModule),\n",
+  "replace": "    played: events.some((e) => e.type !== \"core.void\" && !voided.has(e.id)),\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-5: a bare Start is not play"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-module-not-passed",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "voids: e.voids_event_id })), sportModule),",
+  "replace": "voids: e.voids_event_id })), {}),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-voids-ignored",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "({ id: e.id, type: e.type, voids: e.voids_event_id })",
+  "replace": "({ id: e.id, type: e.type, voids: null })",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-live-line-not-recorded",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "            if (line.live) await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "replace": "            if (false) await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: play recorded, then voided"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-empty-line-recorded",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "            else await departSeat(auth, u.fixtureId, entrantId, \"double_walkover\");\n",
+  "replace": "            else await recordDoubleWalkover(auth, u.fixtureId, line.events);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "X-WD-4: both entrants of a line withdraw in turn"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-abandon-not-voided",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "  for (const abandon of activeAbandons(events)) {\n    const state = await getFixtureState(auth, fixtureId);",
+  "replace": "  for (const abandon of [] as EventOut[]) {\n    const state = await getFixtureState(auth, fixtureId);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: a scorer's abandon after a bare Start"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-bracket-left-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (line.played) {\n            void 0;\n          } else if (feeds) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-1: a line with recorded play is never overwritten"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both finalists gone after play on the final"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both sides gone and only a bare Start on the line"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-table-left-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "\n        if (line.played) {\n          out.left_to_organiser.push(u.fixtureId);\n        } else {\n          await recordDoubleWalkover",
+  "replace": "\n        if (line.played) {\n          void 0;\n        } else {\n          await recordDoubleWalkover",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-table-double-walkover.test.ts"
+    ],
+    "name": "M-1 holds in a table too"
+   }
+  ]
+ },
+ {
+  "id": "lr-m5-played-final-not-reported",
+  "file": "apps/web/src/server/usecases/withdrawal.ts",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (line.played && feeds) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "M-5: both finalists gone after play on the final"
    }
   ]
  }

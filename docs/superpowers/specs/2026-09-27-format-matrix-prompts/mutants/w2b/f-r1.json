@@ -137,8 +137,8 @@
  {
   "id": "r1-m1-live-play",
   "file": "apps/web/src/server/usecases/withdrawal.ts",
-  "find": "          if (feeds && !(await hasLivePlay(auth, u.fixtureId))) {",
-  "replace": "          if (feeds) {",
+  "find": "          if (line.played) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
+  "replace": "          if (false) {\n            out.left_to_organiser.push(u.fixtureId);\n          } else if (feeds) {",
   "killers": [
    {
     "cwd": "apps/web",

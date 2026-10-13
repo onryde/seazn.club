@@ -391,7 +391,7 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       if (status === "forfeited") await sql`update fixtures set outcome = ${sql.json({ kind: "double_walkover" })} where id = ${fx}`;
       await sql`
         insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
-        values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'boardgame.result', ${sql.json({ winner: null, method: "double_forfeit" })},
+        values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'boardgame.result', ${sql.json({ winner: null, method: "double_forfeit" /* legacy row: a pre-W2b stream */ })},
                 now() + interval '1 hour')`;
     };
     const CASES: { name: string; ban: number; write: (ctx: Ctx) => Promise<unknown>; served: number }[] = [

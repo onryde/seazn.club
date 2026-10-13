@@ -139,6 +139,7 @@ describe.runIf(HAS_DB)("CD-T13-SW: a chess swiss withdrawal walks the paired boa
       voided: 0,
       skipped_finalized: 0,
       walked_over_held: 0,
+      left_to_organiser: [],
     });
 
     const after = await fixturesOf(rig.stageId);

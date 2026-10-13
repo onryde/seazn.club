@@ -128,7 +128,35 @@ describe.skipIf(!HAS_DB)("Loop R M-4: X-WD-4 in a table stage — both sides gon
     expect(held.status, "rig: in play").toBe("in_play");
     const out = await withdrawEntrantCascade(s.auth, cascaded);
     expect(out, "nothing was written on the played line").toMatchObject({ walkovers: 0, voided: 0 });
+    // Loop R M-5: and the cascade names it, as left to the organiser.
+    expect(out.left_to_organiser, "the played line is reported").toEqual([line.id]);
     const after = await fixtureRow(line.id);
     expect([after.status, after.outcome]).toEqual([held.status, held.outcome]);
+  }, 120_000);
+
+  it("M-5: a bare Start is not play (ruling 112) — the both-gone line is still a double walkover, recorded over the Start, counted as X-DW-4 counts it", async () => {
+    // single-sport: badminton; the per-sport reading (chess's Start is play, ruling 118) is swept in withdrawal-w2b.
+    const { s, line, cascaded, other, poolId } = await scene("league", "home");
+    await sql`update entrants set status = 'withdrawn' where id = ${other}`;
+    await post(s.auth, line.id, "core.start");
+    expect((await fixtureRow(line.id)).status, "rig: in play, nothing played").toBe("in_play");
+    const before = await table(s.auth, s.stageId, poolId, [cascaded, other]);
+    const out = await withdrawEntrantCascade(s.auth, cascaded);
+    expect(out, "the line was walked over, nothing left").toMatchObject({ walkovers: 1, voided: 0, left_to_organiser: [] });
+    const after = await fixtureRow(line.id);
+    expect([after.status, after.outcome]).toEqual(["forfeited", { kind: "double_walkover" }]);
+    const ledger = await sql<{ type: string; payload: unknown }[]>`
+      select type, payload from score_events where fixture_id = ${line.id} order by seq`;
+    expect(ledger).toEqual([
+      { type: "core.start", payload: {} },
+      { type: "core.forfeit", payload: { by: "both", reason: "walkover" } },
+    ]);
+    const tables = await table(s.auth, s.stageId, poolId, [cascaded, other]);
+    let checked = 0;
+    for (const i of [0, 1]) {
+      expect(tables[i]!.tally, "P+1, L+1, 0 points (X-DW-4)").toEqual(xdw4(before[i]!.tally));
+      checked++;
+    }
+    expect(checked).toBe(2);
   }, 120_000);
 });

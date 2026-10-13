@@ -132,6 +132,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       voided: 0,
       skipped_finalized: 0,
       walked_over_held: 0,
+      left_to_organiser: [],
     });
     expect(await stageEventCount(s.stageId), "nothing was written").toBe(before);
     // The second call: already withdrawn, refused, and still nothing written.
@@ -339,8 +340,95 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     );
     const out = await withdrawEntrantCascade(s.auth, sf!.away_entrant_id!);
     expect(out, "nothing was written on the played line").toMatchObject({ walkovers: 0, voided: 0 });
+    // Loop R M-5: and the cascade says so — the line is named as left to the organiser.
+    expect(out.left_to_organiser, "the played line is reported").toEqual([sf!.id]);
     const after = await fixtureRow(sf!.id);
     expect([after.status, after.outcome, await activeTypes(sf!.id)]).toEqual([before.status, before.outcome, ledger]);
+  });
+
+  it("M-5: both sides gone and only a bare Start on the line — every sport: nothing is played (ruling 112), so the line is a double walkover; where the sport's Start IS play (ruling 118) it is left to the organiser and reported", async () => {
+    // Every sport × its first declared variant. The answer is the engine's own declaration (`startIsPlay`), never a list
+    // typed here. Her opponent left by a bare status write (no cascade), and the scorer had pressed Start.
+    let doubleWalkovers = 0;
+    let left = 0;
+    for (const m of builtinModules) {
+      const label = m.key;
+      const s = await seedBracket({ sport: m.key, variant: declaredVariant(m.key, Object.keys(m.variants)[0]!), stageKind: "knockout", entrants: 4 });
+      const [sf] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id && r.winner_to_fixture);
+      expect(sf, `${label}: rig: a seated semi that feeds the final`).toBeDefined();
+      await sql`update entrants set status = 'withdrawn' where id = ${sf!.home_entrant_id}`;
+      await post(s.auth, sf!.id, "core.start");
+      const before = await fixtureRow(sf!.id);
+      expect([before.status, await activeTypes(sf!.id)], `${label}: rig: a bare Start`).toEqual(["in_play", ["core.start"]]);
+      const out = await withdrawEntrantCascade(s.auth, sf!.away_entrant_id!);
+      const after = await fixtureRow(sf!.id);
+      if ((m as { startIsPlay?: boolean }).startIsPlay === true) {
+        expect([out.walkovers, out.left_to_organiser], `${label}: the Start is play — left, and reported`).toEqual([0, [sf!.id]]);
+        expect([after.status, after.outcome, await activeTypes(sf!.id)], `${label}: untouched`).toEqual([before.status, before.outcome, ["core.start"]]);
+        left++;
+      } else {
+        expect([out.walkovers, out.left_to_organiser], `${label}: nothing played — a double walkover, nothing left`).toEqual([1, []]);
+        expect([after.status, after.outcome], `${label}: X-WD-4`).toEqual(["forfeited", { kind: "double_walkover" }]);
+        // Recorded over the Start, as the console's double walkover is (a departure's no-event write refuses any
+        // live event, and the Start stands in the record).
+        expect(active(await ledgerOf(sf!.id)).map((e) => [e.type, e.type === "core.forfeit" ? e.payload : null]), `${label}: the ledger`).toEqual([
+          ["core.start", null],
+          ["core.forfeit", { by: "both", reason: "walkover" }],
+        ]);
+        expect(seatOf(await fixtureRow(sf!.winner_to_fixture!), sf!.winner_to_slot), `${label}: it seats nobody (X-DW-2)`).toBeNull();
+        doubleWalkovers++;
+      }
+    }
+    expect(doubleWalkovers + left, "every sport checked").toBe(builtinModules.length);
+    // anti-vacuity: both answers are reached — chess declares its Start as play, the racket sports do not.
+    expect([doubleWalkovers > 0, left > 0], "both branches reached").toEqual([true, true]);
+  }, 300_000);
+
+  it("M-5: a scorer's abandon after a bare Start is not play either — the abandon is voided first (D-G2 corner 1), then the double walkover", async () => {
+    // single-sport: badminton; the abandon's void is the kernel's, sport-blind.
+    const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4 });
+    const [sf] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    await sql`update entrants set status = 'withdrawn' where id = ${sf!.home_entrant_id}`;
+    await post(s.auth, sf!.id, "core.start");
+    await post(s.auth, sf!.id, "core.abandon", { reason: "rain" });
+    expect((await fixtureRow(sf!.id)).status, "rig: abandoned").toBe("abandoned");
+    const out = await withdrawEntrantCascade(s.auth, sf!.away_entrant_id!);
+    expect([out.walkovers, out.left_to_organiser]).toEqual([1, []]);
+    const after = await fixtureRow(sf!.id);
+    expect([after.status, after.outcome]).toEqual(["forfeited", { kind: "double_walkover" }]);
+    expect(await activeTypes(sf!.id), "the abandon voided, the Start kept").toEqual(["core.start", "core.forfeit"]);
+  });
+
+  it("M-5: play recorded, then voided — nothing is played any more, so the both-gone line is a double walkover over the Start", async () => {
+    // single-sport: badminton; the void is the kernel's, sport-blind. The sequence after a void: the engine's reading
+    // drops the voided game, so the line is back to a bare Start.
+    const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4 });
+    const [sf] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    await sql`update entrants set status = 'withdrawn' where id = ${sf!.home_entrant_id}`;
+    await post(s.auth, sf!.id, "core.start");
+    await post(s.auth, sf!.id, "badminton.game.summary", { home: 21, away: 10 });
+    const [game] = active(await ledgerOf(sf!.id)).filter((e) => e.type === "badminton.game.summary");
+    await post(s.auth, sf!.id, "core.void", { event_id: game!.id });
+    expect(await activeTypes(sf!.id), "rig: only the Start is active").toEqual(["core.start"]);
+    const out = await withdrawEntrantCascade(s.auth, sf!.away_entrant_id!);
+    expect([out.walkovers, out.left_to_organiser]).toEqual([1, []]);
+    const after = await fixtureRow(sf!.id);
+    expect([after.status, after.outcome]).toEqual(["forfeited", { kind: "double_walkover" }]);
+    expect(await activeTypes(sf!.id)).toEqual(["core.start", "core.forfeit"]);
+  });
+
+  it("M-5: both finalists gone after play on the final — nothing is written (D19), and the played final is reported to the organiser", async () => {
+    // single-sport: badminton. The unplayed final (below) is W4's vacant title and reports nothing; a PLAYED one is
+    // the organiser's ledger to void or settle, as any played line is.
+    const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 2 });
+    const final = await fixtureRow(s.fixtureIds[0]!);
+    expect([final.winner_to_fixture, final.loser_to_fixture], "rig: the line feeds nothing").toEqual([null, null]);
+    await sql`update entrants set status = 'withdrawn' where id = ${final.home_entrant_id}`;
+    await post(s.auth, final.id, "core.start");
+    await post(s.auth, final.id, "badminton.game.summary", { home: 21, away: 10 });
+    const out = await withdrawEntrantCascade(s.auth, final.away_entrant_id!);
+    expect([out.walkovers, out.left_to_organiser]).toEqual([0, [final.id]]);
+    expect(await activeTypes(final.id)).toEqual(["core.start", "badminton.game.summary"]);
   });
 
   it("X-WD-4: both finalists withdraw — the final stays open (W4 handover)", async () => {
@@ -352,7 +440,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect([final.winner_to_fixture, final.loser_to_fixture], "rig: the line feeds nothing").toEqual([null, null]);
     await withdrawBeforeStart(s.auth, s.divisionId, final.home_entrant_id!);
     const out = await withdrawEntrantCascade(s.auth, final.away_entrant_id!);
-    expect(out).toMatchObject({ walkovers: 0, voided: 0 });
+    expect(out).toMatchObject({ walkovers: 0, voided: 0, left_to_organiser: [] });
     const after = await fixtureRow(final.id);
     expect([after.status, after.outcome, after.home_entrant_id, after.away_entrant_id]).toEqual([
       "scheduled",

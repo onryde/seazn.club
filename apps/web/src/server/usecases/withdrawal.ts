@@ -25,7 +25,7 @@ import "server-only";
 // (`withdrawal_cascade`): PF-2 refuses `withdrew` and `expunge` from anyone
 // else. Not one transaction (ruling 101): each write commits on its own.
 // Finalized fixtures are locked (spec 03) and are reported, not touched.
-import { deciderPending } from "@seazn/engine/core";
+import { deciderPending, playRecorded } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import {
   withdrawBracketEntrant,
@@ -96,11 +96,41 @@ async function deciderOwed(auth: AuthCtx, sportModule: AnySportModule, fixtureId
   return deciderPending(sportModule as never, { state: state as never, settlement: null });
 }
 
-/** Does the ledger hold any live event — one that is neither a void nor voided (`writeDepartedSeat`'s own guard)? */
-async function hasLivePlay(auth: AuthCtx, fixtureId: string): Promise<boolean> {
+/** Loop R M-5 — a both-gone line's ledger, read twice over:
+ *  - `played`: has anything been PLAYED — the engine's own `playRecorded` (ruling 112: a bare Start is not play; ruling
+ *    118: chess's Start is), the reading the fold's phase guard judges a walkover by;
+ *  - `live`: does it hold any live event at all — one that is neither a void nor voided. That is `writeDepartedSeat`'s
+ *    own guard: the departure's no-event write is refused over any of them, a bare Start included. */
+async function lineLedger(
+  auth: AuthCtx,
+  sportModule: AnySportModule,
+  fixtureId: string,
+): Promise<{ played: boolean; live: boolean; events: EventOut[] }> {
   const events = await listEvents(auth, fixtureId, 0);
   const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
-  return events.some((e) => e.type !== "core.void" && !voided.has(e.id));
+  return {
+    played: playRecorded(events.map((e) => ({ id: e.id, type: e.type, voids: e.voids_event_id })), sportModule),
+    live: events.some((e) => e.type !== "core.void" && !voided.has(e.id)),
+    events,
+  };
+}
+
+/** X-WD-4 over a ledger with nothing played on it, written as the console's double walkover is: `core.forfeit{by:
+ *  "both", reason: "walkover"}` through the ordinary write (a walkover is admitted while nothing is played, ruling
+ *  112). An active scorer's abandon is voided first — a forfeit over it is refused (D4), as `applyUpdate` does for a
+ *  withdrawal's walkover (D-G2 corner 1). */
+async function recordDoubleWalkover(auth: AuthCtx, fixtureId: string, events: readonly EventOut[]): Promise<void> {
+  for (const abandon of activeAbandons(events)) {
+    const state = await getFixtureState(auth, fixtureId);
+    await scoreEvent(auth, fixtureId, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: abandon.id } }, CASCADE);
+  }
+  const state = await getFixtureState(auth, fixtureId);
+  await scoreEvent(
+    auth,
+    fixtureId,
+    { expected_seq: state.last_seq, type: "core.forfeit", payload: { by: "both", reason: "walkover" } },
+    CASCADE,
+  );
 }
 
 /** The ACTIVE abandons in a ledger: a `core.abandon` no `core.void` targets (voids are not voidable). */
@@ -121,6 +151,9 @@ export interface WithdrawCascadeOut {
   /** W2b: of `walkovers`, the lines that were HELD (a level result, a tie-break owed, a scorer's abandon) — each was
    *  waiting for the organiser's settle under W2a, and is walked over now (merge notice N1). */
   walked_over_held: number;
+  /** Loop R M-5: the fixtures both of whose sides have now gone (X-WD-4) but where play was recorded (`playRecorded`) —
+   *  written nothing, never overwritten: each is the organiser's ledger to void or settle. */
+  left_to_organiser: string[];
 }
 
 interface FixtureRowLite {
@@ -242,6 +275,7 @@ export async function withdrawEntrantCascade(
     voided: 0,
     skipped_finalized: 0,
     walked_over_held: 0,
+    left_to_organiser: [],
   };
 
   // Before the tournament starts there is nothing to settle: fixtures (if
@@ -251,6 +285,7 @@ export async function withdrawEntrantCascade(
       listStages(auth, division.id),
       listDivisionFixtures(auth, division.id),
     ]);
+    const sportModule = resolveModule(division.sport_key, division.module_version);
     const byStage = new Map<string, FixtureRowLite[]>();
     for (const f of fixtures as unknown as FixtureRowLite[]) {
       if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) continue;
@@ -289,7 +324,6 @@ export async function withdrawEntrantCascade(
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
         }
       } else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {
-        const sportModule = resolveModule(division.sport_key, division.module_version);
         const bracketFixtures: BracketFixture[] = [];
         const held = new Set<string>();
         for (const f of mine) {
@@ -348,11 +382,20 @@ export async function withdrawEntrantCascade(
           // which seats nobody (X-DW-2) — unless the line feeds nothing: a final has no next match (D19, X-DW-3), so
           // it stays open for W4's vacant title, and nothing is written. A ladder challenge is exempt (D19).
           // Review M-1: and only over a line nobody has recorded play on. The other side left by a bare status write
-          // (no cascade), so play may have gone on; that ledger is the organiser's to void or settle, never overwritten.
+          // (no cascade), so play may have gone on; that ledger is the organiser's to void or settle, never overwritten
+          // — and named in `left_to_organiser` (Loop R M-5), a played final included.
           // A double-elimination grand final with a bracket reset feeds only its own rematch: a final too (I-5).
           const feeds = feedsNextMatch(step.fixture) || step.bracket.kind === "ladder";
-          if (feeds && !(await hasLivePlay(auth, u.fixtureId))) {
-            await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+          const line = await lineLedger(auth, sportModule, u.fixtureId);
+          if (line.played) {
+            out.left_to_organiser.push(u.fixtureId);
+          } else if (feeds) {
+            // Loop R M-5: "played" is the engine's reading (ruling 112), so a bare Start no longer leaves the line in
+            // play forever. Nothing live at all: the departure's no-event write. A Start (or an annotation, an abandon)
+            // with nothing played after it: recorded, as the console's double walkover is — the no-event write refuses
+            // any live event, and the Start stands in the record.
+            if (line.live) await recordDoubleWalkover(auth, u.fixtureId, line.events);
+            else await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
             out.walkovers++;
           }
           continue;
@@ -367,15 +410,13 @@ export async function withdrawEntrantCascade(
         // sides have withdrawn: a double walkover. Unlike a bracket line (which seats nothing, so it is written as a
         // bye is), a table line is RECORDED — X-DW-4 counts it P+1, L+1 for both, and the table folds only a line with
         // a match state — so it goes through the ordinary write, as the console's double walkover does. M-1's guard
-        // holds here too: a line with recorded play is the organiser's to settle.
-        if (!(await hasLivePlay(auth, u.fixtureId))) {
-          const state = await getFixtureState(auth, u.fixtureId);
-          await scoreEvent(
-            auth,
-            u.fixtureId,
-            { expected_seq: state.last_seq, type: "core.forfeit", payload: { by: "both", reason: "walkover" } },
-            CASCADE,
-          );
+        // holds here too: a line with recorded play (the engine's reading — a bare Start is not play, Loop R M-5) is the
+        // organiser's to settle, and is named in `left_to_organiser`.
+        const line = await lineLedger(auth, sportModule, u.fixtureId);
+        if (line.played) {
+          out.left_to_organiser.push(u.fixtureId);
+        } else {
+          await recordDoubleWalkover(auth, u.fixtureId, line.events);
           out.walkovers++;
         }
         continue;
