@@ -3222,6 +3222,8 @@ export function withStageDefaults(module: AnySportModule, kind: StageKind, varia
 
 ### Task 13: Stage points — the server half of ST-G8 (same loop as Task 12)
 
+> **Carried from Task 9.** `pointsRuleExpressible` / `POINTS_RULE_INEXPRESSIBLE` has NO producer after Task 9 (code + copy exist at `lib/rule-errors.ts:15,43`): this task is the producer — `putStageRules`'s points arm (and `createStages`' custom-points path) must call it and refuse; drive it through the real HTTP route, not the helper. Its reason text is English with raw key names: map keys to localised field labels for the 409/422 copy (Task 18 shows it). Also: Task 9 made the rule's award ASSIGN `for`/`against`/`diff` (not add); `STAGE_POINTS_REPLACES` = `points`, `pointsMap` (`scoring`, `awardScore` stay locked).
+
 Spec item 10; Q1; Review Focus 3.
 
 **Files:**
