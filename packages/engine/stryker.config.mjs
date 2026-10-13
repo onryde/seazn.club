@@ -57,9 +57,16 @@ export default {
   concurrency: strykerConcurrency({ cores: availableParallelism(), memBytes: totalmem(), workersPerSandbox: STRYKER_VITEST_WORKERS }),
   tempDirName: ".stryker-tmp",
   // A mutant that turns a counter into a runaway loop is killed by the heap, not by anything quicker: the hosted probe lost about
-  // 14 runner-minutes to three of them (run 37330725739), each retried twice. The cap is on the heap of the runner child's test
-  // worker (it overrides the thread's own resource limit). MEASURED (test/stryker-runner.test.ts): the whole-engine dry run, the
-  // largest there is, passes at 256 MB and fails at 128; a runaway allocating loop in a worker thread died in 13.9 s at 1024 MB
-  // and 42.3 s at 4096. 1024 is 4x the least that passes, and 3 children at it are a fifth of a 16 GB runner.
-  testRunnerNodeArgs: ["--max-old-space-size=1024"],
+  // 14 runner-minutes to three of them (run 37330725739), each retried twice. The cap is on the heap of the runner child. The
+  // dry run is what sets its floor: for a leg that relates to the whole engine (core-2: errors.ts, events.ts and time.ts are
+  // imported by nearly everything) the child's main thread deserialises the cumulative per-test mutant coverage of every test
+  // file (isolate:false, one worker), so the floor grows with mutants x files x tests. MEASURED (test/stryker-runner.test.ts),
+  // core-2's dry run at 04bfa54f9 (803 mutants, 126 files, 4,217 tests): out of memory at 1024 and 1536 MB (SIGABRT, "Child
+  // process ran out of memory", as CI runs 38418427451 and 38420799725), passes at 1792 MB (RSS 2.28 GB) and 2048 MB (RSS 2.64
+  // GB, 94 s); it needs about 1.8 GB. At 89d8d3c53 (541 mutants) it passed at 1024. The old "passes at 256 MB" figure was
+  // taken on a low-mutant case and is stale. 2560 leaves about 40% over the 1792 pass, and 3 children at it are 7.5 GB, under
+  // half of a 16 GB runner. The heap is also what kills a runaway loop, so a larger cap is a slower kill: a runaway allocating
+  // loop in a worker thread died in 13.9 s at 1024 MB and 42.3 s at 4096; 2560 lies between, about 28 s if the rise is linear
+  // (an interpolation, not a measurement).
+  testRunnerNodeArgs: ["--max-old-space-size=2560"],
 };
