@@ -247,9 +247,6 @@ function gameMayBeOnFile(pass: Pass, r: BridgeFacts): boolean {
 // judged per board, and the guard loads it. A sent create past the deadline
 // is held for the organiser (I3), never ruled a no-show: a game may exist.
 
-/** W2b's refusal code (packages/engine core/errors.ts on W2b). Not yet in
- *  this engine's EngineErrorCode union, hence compared as a string. */
-const DOUBLE_WALKOVER_NO_NEXT_MATCH = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
 /** The sweep's no-show forfeit's idempotency key, per fixture. */
 const NO_SHOW_KEY_PREFIX = "extplay-noshow:";
 
@@ -318,11 +315,13 @@ async function noShow(pass: Pass, c: NoShowCandidate): Promise<void> {
   } catch (err) {
     // T12's hold needs a row to hold; a board the open never attached has none.
     await ensureBridgeRow(f);
-    // W2b D19: a double walkover on a bracket line that feeds no next match
-    // (a final, a last rung, a third-place match) has nowhere for "nobody
-    // advances" to go, and is refused. An expected outcome, not an error: the
-    // board stays open and goes to the organiser's queue. Read by CODE.
-    if (by === "both" && err instanceof EngineError && (err.code as string) === DOUBLE_WALKOVER_NO_NEXT_MATCH) {
+    // W2b D19 (append-event.ts assertW2bWriteGuards; packages/engine
+    // core/errors.ts DOUBLE_WALKOVER_NO_NEXT_MATCH): a double walkover on a
+    // bracket line that feeds no next match (a final, a last rung, a
+    // third-place match) has nowhere for "nobody advances" to go, and is
+    // refused. An expected outcome, not an error: the board stays open and
+    // goes to the organiser's queue (RB2). Read by CODE, never the message.
+    if (by === "both" && err instanceof EngineError && err.code === "DOUBLE_WALKOVER_NO_NEXT_MATCH") {
       const held = await holdForOrganiser({ fixtureId: f.fixtureId, reason: "double_walkover_blocked" });
       if (held.wrote === "needs_organiser") pass.report.heldForOrganiser++;
       return;

@@ -20,13 +20,12 @@
 // scoped to the test's own orgs (`orgIds`): the shared test DB holds other
 // suites' opened rounds, and an unscoped sweep would act on them.
 //
-// THE W2b GATE. Today's boardgame engine refuses a forfeit in phase `pre`
-// (boardgame.ts `forfeit not allowed in phase "pre"`), which is exactly where
-// a game that never began sits — so on today's engine the no-show forfeit is
-// ATTEMPTED and refused. `W2B` below asks the ENGINE (a one-event fold), never
-// the sweep: where it answers false the tests pin the attempt and the
-// refusal; where it answers true they pin the ledger and the outcome. This
-// branch must not merge before W2b (brief Step 20).
+// W2b is merged (rebased 2026-10-13): boardgame admits a walkover in phase
+// `pre`, which is exactly where a game that never began sits, so every no-show
+// below is WRITTEN and the tests pin the ledger and the outcome. The pre-W2b
+// halves (the attempt refused WRONG_PHASE) are gone; the guard below asks the
+// ENGINE (a one-event fold), never the sweep, so an engine that stopped
+// admitting it reds by name instead of reading as a sweep defect.
 //
 // Single-sport by construction: online play exists only for `boardgame`
 // (guard.ts `d.sport_key = 'boardgame'`); the sweep adds no sport branch.
@@ -321,10 +320,10 @@ const rtk = vi.hoisted(() => {
 const RTK = { fetch: ((i: string | URL | Request, init?: RequestInit) => rtk.fetch(i, init)) as typeof fetch, baseUrl: "https://rtk.test/client/v4" };
 
 // The forfeit WRITE is observed at scoreEvent's door: a spy around the REAL
-// function (it still writes). On today's engine the write is refused, so the
-// attempt — who, why, under whose authority — is the only thing to read.
-// `refuse` stands in for a refusal today's engine cannot produce (W2b's
-// DOUBLE_WALKOVER_NO_NEXT_MATCH); every use is labelled.
+// function (it still writes), so the attempt — who, why, under whose
+// authority — is read beside the ledger it lands in. `refuse` stands in for a
+// refusal the engine cannot produce on that board (a persistent refusal, W2b's
+// DOUBLE_WALKOVER_NO_NEXT_MATCH on a single forfeit); every use is labelled.
 type ScoreCall = {
   fixtureId: string;
   input: { type: string; payload: unknown; expected_seq: number; idempotency_key?: string };
@@ -387,7 +386,7 @@ afterAll(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// The W2b probe: ask the ENGINE whether a walkover is admitted before a game
+// The W2b guard: ask the ENGINE whether a walkover is admitted before a game
 // begins (phase `pre`). One event, folded on a fresh boardgame state.
 // ---------------------------------------------------------------------------
 function engineAdmitsPreWalkover(): boolean {
@@ -404,7 +403,11 @@ function engineAdmitsPreWalkover(): boolean {
     throw err;
   }
 }
-const W2B = engineAdmitsPreWalkover();
+describe("the W2b premise every no-show test below stands on", () => {
+  it("the engine admits a chess walkover before the game (W2b D3: boardgame walkoverPhases)", () => {
+    expect(engineAdmitsPreWalkover()).toBe(true);
+  });
+});
 
 /** Spec §3.6's table: a no-show is `core.forfeit {by, reason: "walkover"}`;
  *  both absent is `by: "both"`. The rulebook, not the sweep. */
@@ -543,15 +546,8 @@ describe.runIf(HAS_DB)("the sweep never touches a round the organiser has not op
     expect(report.scanned, "the board was a candidate").toBeGreaterThanOrEqual(1);
     const tried = forfeitsAttempted(b.fixtureId);
     expect(tried.map((c) => c.input.payload)).toEqual([{ by: "both", reason: WALKOVER }]);
-    if (W2B) {
-      expect(report.noShows).toBe(1);
-      expect((await forfeitsWritten(b.fixtureId)).length).toBe(1);
-    } else {
-      // Today's engine: refused in phase pre, and said so, never thrown.
-      expect(report.noShows).toBe(0);
-      expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
-      expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
-    }
+    expect(report.noShows).toBe(1);
+    expect((await forfeitsWritten(b.fixtureId)).length).toBe(1);
   });
 });
 
@@ -588,8 +584,7 @@ async function liveGame(b: Board, min = 6): Promise<string> {
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other test covers)", () => {
   // swiss-withdrawal-walkover.test.ts forfeits an unstarted board too, but it
-  // is badminton, whose engine tolerates `pre`. boardgame does not until W2b,
-  // and no test anywhere drives a chess pre-game forfeit: this one does.
+  // is badminton. This drives a chess pre-game forfeit, which W2b admits.
   it("ONE player absent forfeits by THAT entrant, reason 'walkover', under the organiser's authority — each side", async () => {
     let checked = 0;
     for (const present of ["home", "away"] as const) {
@@ -603,18 +598,11 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
       expect(tried[0]!.input.idempotency_key).toBe(`extplay-noshow:${b.fixtureId}`);
       // W2a: core.forfeit is organiser-only — the org OWNER's session, never a player's.
       expect(tried[0]!.auth).toMatchObject({ via: "session", role: "owner", userId: b.ownerUserId });
-      if (W2B) {
-        expect(report.noShows).toBe(1);
-        expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: b[absent].entrantId, reason: WALKOVER }]);
-        const fx = await fixtureRow(b.fixtureId);
-        expect(fx.status).toBe("forfeited");
-        expect(fx.outcome).toMatchObject({ kind: "award", winner: b[present].entrantId, loser: b[absent].entrantId });
-      } else {
-        expect(report.noShows).toBe(0);
-        expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
-        expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
-        expect((await fixtureRow(b.fixtureId)).status, "refused: nothing moved").toBe("scheduled");
-      }
+      expect(report.noShows).toBe(1);
+      expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: b[absent].entrantId, reason: WALKOVER }]);
+      const fx = await fixtureRow(b.fixtureId);
+      expect(fx.status).toBe("forfeited");
+      expect(fx.outcome).toMatchObject({ kind: "award", winner: b[present].entrantId, loser: b[absent].entrantId });
       // C2's pair: one side present is the no-show path, never not_started.
       expect(report.heldForOrganiser, `${absent} absent: no hold`).toBe(0);
       expect((await bridgeOf(b.fixtureId))?.needs_reason ?? null, `${absent} absent`).not.toBe("not_started");
@@ -623,18 +611,16 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     expect(checked, "both sides checked").toBe(2);
   });
 
-  it("BOTH absent is a DOUBLE walkover: by 'both', and nobody advances", async () => {
+  it("RB2: BOTH absent on a LEAGUE board is a DOUBLE walkover, written at once: by 'both', and nobody advances", async () => {
     const b = await openedBoard({ checkedIn: [] });
     const report = await sweep(b, { now: b.at(45) });
     expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload)).toEqual([{ by: "both", reason: WALKOVER }]);
-    if (W2B) {
-      expect(report.noShows).toBe(1);
-      const fx = await fixtureRow(b.fixtureId);
-      expect(fx.status).toBe("forfeited");
-      expect(fx.outcome, "no winner for anyone").toEqual({ kind: "double_walkover" });
-    } else {
-      expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
-    }
+    expect(report.noShows).toBe(1);
+    expect(report.heldForOrganiser, "written, not held for the organiser").toBe(0);
+    expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: "both", reason: WALKOVER }]);
+    const fx = await fixtureRow(b.fixtureId);
+    expect(fx.status).toBe("forfeited");
+    expect(fx.outcome, "no winner for anyone").toEqual({ kind: "double_walkover" });
   });
 
   it("BOTH present at the deadline with no game is NOT a no-show: it is HELD `not_started` for the organiser, once (C2)", async () => {
@@ -692,17 +678,9 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     await sweep(b, { now: b.at(45) });
     const second = await sweep(b, { now: b.at(50) });
     expect(second.noShows).toBe(0);
-    if (W2B) {
-      // Forfeited ⇒ no longer playable ⇒ not a candidate at all.
-      expect(forfeitsAttempted(b.fixtureId).length).toBe(1);
-      expect((await forfeitsWritten(b.fixtureId)).length).toBe(1);
-    } else {
-      // Refused ⇒ still open ⇒ asked again, under the SAME key, and refused again.
-      const tried = forfeitsAttempted(b.fixtureId);
-      expect(tried.length).toBe(2);
-      expect(new Set(tried.map((c) => c.input.idempotency_key)).size).toBe(1);
-      expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
-    }
+    // Forfeited ⇒ no longer playable ⇒ not a candidate at all.
+    expect(forfeitsAttempted(b.fixtureId).length).toBe(1);
+    expect((await forfeitsWritten(b.fixtureId)).length).toBe(1);
   });
 
   it("a LATE arrival before the deadline is seated, not swallowed by an idempotency guard", async () => {
@@ -820,21 +798,15 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
 // Job 1 — a double walkover with nowhere for "nobody advances" to go.
 // ---------------------------------------------------------------------------
 describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, not thrown", () => {
-  // W2b D19 refuses `by: "both"` in a bracket kind on a fixture that feeds no
-  // next match (no winner/loser edge — the feed graph, never a round name):
-  // EngineError DOUBLE_WALKOVER_NO_NEXT_MATCH. The board stays OPEN for the
-  // organiser — a handled outcome. Today's engine refuses the pre-phase
-  // forfeit first (WRONG_PHASE) and cannot produce this refusal, so the
-  // today-half injects it at scoreEvent's door: the code W2b throws
-  // (packages/engine errors.ts on feat/format-matrix-w2b), with a message
-  // that is NOT W2b's — the routing must read the code, never the text.
+  // W2b D19 (append-event.ts assertW2bWriteGuards) refuses `by: "both"` in a
+  // bracket kind on a fixture that feeds no next match (no winner/loser edge —
+  // the feed graph, never a round name): EngineError
+  // DOUBLE_WALKOVER_NO_NEXT_MATCH (packages/engine core/errors.ts). The board
+  // stays OPEN for the organiser — a handled outcome. The shapes below meet
+  // W2b's REAL refusal; the cases that need a refusal W2b cannot produce (that
+  // code on a single forfeit, a cancel racing it) inject it at scoreEvent's
+  // door with a message that is not W2b's — the routing reads the code.
   const NO_NEXT = "DOUBLE_WALKOVER_NO_NEXT_MATCH";
-  const injectNoNextFor = (fixtureId: string) => {
-    scoring.refuse = (id, input) =>
-      id === fixtureId && input.type === "core.forfeit" && (input.payload as { by?: string }).by === "both"
-        ? new EngineError(NO_NEXT as never, "injected: a message the sweep must not read")
-        : null;
-  };
   /** A bracket line that feeds no next match, in W2b's own terms. */
   const SHAPES = [
     { label: "a knockout final", kind: "knockout", thirdPlace: false },
@@ -842,12 +814,11 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     { label: "a stepladder's last rung", kind: "stepladder", thirdPlace: false },
   ] as const;
 
-  it("each no-next-match shape leaves the board OPEN, held double_walkover_blocked, and is counted — never a failure", async () => {
+  it("RB2: each no-next-match shape (a knockout final among them) leaves the board OPEN, held double_walkover_blocked, and is counted — never a failure", async () => {
     let checked = 0;
-    for (const shape of W2B ? SHAPES : SHAPES.slice(0, 1)) {
+    for (const shape of SHAPES) {
       const b = await openedBoard({ checkedIn: [], kind: shape.kind });
       if (shape.thirdPlace) await sql`update fixtures set third_place = true where id = ${b.fixtureId}`;
-      if (!W2B) injectNoNextFor(b.fixtureId);
       const report = await sweep(b, { now: b.at(45) });
       expect(forfeitsAttempted(b.fixtureId).map((c) => c.input.payload), shape.label).toEqual([{ by: "both", reason: WALKOVER }]);
       expect(report.heldForOrganiser, shape.label).toBe(1);
@@ -860,10 +831,10 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
       await expectQueued(b, "double_walkover_blocked");
       checked++;
     }
-    expect(checked, "no-next-match shapes checked").toBe(W2B ? SHAPES.length : 1);
+    expect(checked, "no-next-match shapes checked").toBe(SHAPES.length);
   });
 
-  it("the pair: a double walkover that FEEDS a next match is not held (W2b writes it; today it is the pre-phase refusal)", async () => {
+  it("RB2, the pair: a KNOCKOUT double walkover that FEEDS a next match is written, not held", async () => {
     const b = await openedBoard({ checkedIn: [], kind: "knockout" });
     // A next match for the winner to go to — the feed edge W2b reads.
     const [next] = await sql<{ id: string }[]>`
@@ -874,12 +845,10 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     const report = await sweep(b, { now: b.at(45) });
     expect(report.heldForOrganiser).toBe(0);
     expect((await bridgeOf(b.fixtureId))?.status, "not held").toBe("pending");
-    if (W2B) {
-      expect(report.noShows).toBe(1);
-      expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: "both", reason: WALKOVER }]);
-    } else {
-      expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: "WRONG_PHASE" }]);
-    }
+    expect(report.noShows).toBe(1);
+    expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: "both", reason: WALKOVER }]);
+    const fx = await fixtureRow(b.fixtureId);
+    expect([fx.status, fx.outcome], "nobody advances").toEqual(["forfeited", { kind: "double_walkover" }]);
   });
 
   it("only THAT code holds: any other refusal of a double walkover is a failure, and the board is not held", async () => {
@@ -895,7 +864,7 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     // W2b raises it for `by: "both"` only; a single forfeit refused with it
     // would be a W2b defect, and must not be filed as double_walkover_blocked.
     const b = await openedBoard({ checkedIn: ["home"] });
-    scoring.refuse = (id) => (id === b.fixtureId ? new EngineError(NO_NEXT as never, "injected") : null);
+    scoring.refuse = (id) => (id === b.fixtureId ? new EngineError(NO_NEXT, "injected") : null);
     const report = await sweep(b, { now: b.at(45) });
     expect(report.heldForOrganiser).toBe(0);
     expect(report.failures).toEqual([{ job: "no_show", fixtureId: b.fixtureId, code: NO_NEXT }]);
@@ -911,7 +880,7 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
       if (id !== b.fixtureId || input.type !== "core.forfeit") return null;
       // Stands for the organiser's cancel of this board.
       await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
-      return new EngineError(NO_NEXT as never, "injected");
+      return new EngineError(NO_NEXT, "injected");
     };
     const report = await sweep(b, { now: b.at(45) });
     expect(forfeitsAttempted(b.fixtureId).length, "premise: the refusal landed").toBe(1);
@@ -923,7 +892,6 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
   it("the refusal does not abort the rest of the pass", async () => {
     const blocked = await openedBoard({ checkedIn: [], kind: "knockout" });
     const ordinary = await openedBoard({ checkedIn: ["home"] });
-    if (!W2B) injectNoNextFor(blocked.fixtureId);
     const report = await sweepExternalPlay({ now: blocked.at(45), orgIds: [blocked.orgId, ordinary.orgId] });
     expect(report.heldForOrganiser).toBe(1);
     expect(forfeitsAttempted(ordinary.fixtureId).map((c) => c.input.payload), "the other board still got its ruling")
@@ -932,7 +900,6 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
 
   it("a HELD board is the organiser's: the next pass neither re-tries nor re-holds it", async () => {
     const b = await openedBoard({ checkedIn: [], kind: "knockout" });
-    if (!W2B) injectNoNextFor(b.fixtureId);
     await sweep(b, { now: b.at(45) });
     const second = await sweep(b, { now: b.at(50) });
     expect(forfeitsAttempted(b.fixtureId).length, "one attempt, ever").toBe(1);
@@ -945,7 +912,6 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
     // Stands for a board the open never attached (no row yet): T13 mints it
     // through T9's ensureBridgeRow, because T12's hold needs a row to hold.
     await sql`delete from fixture_external_play where fixture_id = ${b.fixtureId}`;
-    if (!W2B) injectNoNextFor(b.fixtureId);
     const report = await sweep(b, { now: b.at(45) });
     expect(report.failures).toEqual([]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "double_walkover_blocked" });
@@ -1027,10 +993,9 @@ describe.runIf(HAS_DB)("M3 — a refused no-show reaches the organiser; a writte
     const b = await openedBoard({ checkedIn: ["home"] });
     const auth = await mintOrgOwnerAuth(b.orgId);
     // Stands for the sweep's own forfeit (its key), then the organiser's undo.
-    // Today's engine refuses a forfeit before a start (WRONG_PHASE), so the
-    // board is started first; W2b admits the sweep's at once.
+    // No Start (W2b admits the walkover before the game): with one, RB3's own
+    // guard would also skip this board and cover for the key guard this tests.
     let seq = (await getFixtureState(auth, b.fixtureId)).last_seq;
-    await scoreEvent(auth, b.fixtureId, { expected_seq: seq++, type: "core.start", payload: {} });
     await scoreEvent(auth, b.fixtureId, {
       expected_seq: seq++, type: "core.forfeit", payload: { by: b.away.entrantId, reason: "walkover" },
       idempotency_key: `extplay-noshow:${b.fixtureId}`,
@@ -2186,7 +2151,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     | { kind: "withdraw" }
     // Review M3: from here on the engine refuses this board's forfeit, the
     // same way every pass (injected at scoreEvent's door — a refusal the
-    // sweep cannot know in advance; today's engine gives WRONG_PHASE anyway).
+    // sweep cannot know in advance).
     | { kind: "refuseForfeits" }
     | { kind: "sweep"; dt: number };
   type Model = {
@@ -2390,7 +2355,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
         p.forfeitBy = !m.came.home && !m.came.away ? "both" : !m.came.home ? b.home.entrantId : b.away.entrantId;
         if (p.forfeitBy === "both") counters.forfeit_both++;
         else counters.forfeit_one++;
-        if (W2B && !m.refusing) {
+        if (!m.refusing) {
           p.noShows = 1;
           m.playable = false; // forfeited
         } else {
@@ -2399,7 +2364,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
           // as the no-show it is (the seed pairs home as White).
           m.refusals++;
           if (m.refusals < NO_SHOW_REFUSALS_BEFORE_HOLD) {
-            p.refusedWith = m.refusing ? "INVALID_EVENT" : "WRONG_PHASE";
+            p.refusedWith = "INVALID_EVENT";
           } else {
             m.bridge = "held";
             m.reason = p.forfeitBy === "both" ? "no_show_both" : p.forfeitBy === b.home.entrantId ? "no_show_white" : "no_show_black";
