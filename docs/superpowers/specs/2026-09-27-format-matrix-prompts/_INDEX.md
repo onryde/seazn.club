@@ -1420,6 +1420,11 @@ Elsewhere the text is the controller's record.
      **X-AB-5** "An abandoned match in a Swiss stage holds the next round until the organiser settles it." Found by the
      chess session on main (`stages.ts` DECIDED omits `abandoned` → STAGE_NOT_READY; settle refused SETTLE_NOT_APPLICABLE).
      Built in W2c Task 7; the row is written at the batch-3 proof commit, citing `signed 130 2026-10-13`.
+131. **Engine repo split: cut over after W2e** (2026-10-13, owner "cutover be after W2e"). `packages/engine` moves to
+     its own repo (GitHub Packages; Stryker moves with it) once W2 is complete — W2c, W2d and W2e stay in the monorepo.
+     Still open: repo visibility (private, which costs Actions minutes, vs public) and when the split's spec/plan start.
+     Prep: `.superpowers/handoff/2026-10-08-w1d-close/` (split prompt, per-wave engine/web map, runner research).
+     Rule rows: none (sequencing).
 
 ## Recommendations (mine — not rulings)
 
