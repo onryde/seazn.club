@@ -11,4 +11,7 @@ runContract(football, FOOTBALL_RULES, {
     rollingSubs: "declared stage key outside Q5; the football form has never offered it (variants set it)",
     concussionSubs: "declared stage key outside Q5; the football form has never offered it",
   },
+  // The engine's schema gives these no maximum (`.positive().int()` only), so the web's range is its own choice and cannot be
+  // checked against the engine; the contract lists them so a bound the engine adds later is noticed.
+  noEngineMax: ["halfMinutes", "shootoutWin", "shootoutLoss", "maxSubs", "subWindows", "sinBinMinutes"],
 });

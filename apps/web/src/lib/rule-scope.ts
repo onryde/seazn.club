@@ -7,7 +7,8 @@
 // every key it edits. The stage form, the match form and the points screen are built on these three lists.
 //
 // Client-safe like `lib/match-rules/**`: no "use client", no JSX, no `@/server` import. It imports the engine's
-// `/sport` and `/sports` package subpaths and the field table, nothing else.
+// `/sport` and `/sports` package subpaths and the field table, and the `StageKind` TYPE from `/core` (an `import type`,
+// erased at build, so no runtime import of the core subpath), nothing else.
 import type { StageKind } from "@seazn/engine/core";
 import { fixtureKeysFor, pointsKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";

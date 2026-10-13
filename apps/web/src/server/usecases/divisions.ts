@@ -1090,14 +1090,21 @@ export async function patchDivision(
       }
 
       // Nothing the save can apply is left, and something was refused: that is a refusal, not a success that did
-      // nothing. A save that also renames, or keeps part of its config, still lands with `refused` beside the row.
+      // nothing. A save that also renames, keeps part of its config, or carries a tiebreakers (or variant) change the
+      // lock let through still lands with `refused` beside the row: the patch is applied PER FIELD (owner P-2 "A"),
+      // so only a patch from which NOTHING lands is a 409, and a 409 never hides a field it did not refuse.
       //
-      // Only `otherColumn` and `configApplied` can be what survives. Every refusal needs a started stage, and a started
-      // stage refuses a CHANGED variant and CHANGED tiebreakers outright (`divisionRefusals` answers both with the first
-      // started stage) — so once anything is refused, neither of those two was applied, and there is nothing to ask.
+      // What lands is read off what will be WRITTEN, not off "was anything refused". The lock now judges each change
+      // by the stages that inherit it, so a refusal of one field says nothing about another: a started knockout has
+      // no table, hence refuses a changed `setTo` and accepts a changed `tiebreakers` in the same patch (review I1).
+      // A tiebreakers change that is in the patch, differs from what is stored, and is not in `refused` is written
+      // (`effective.tiebreakers`, deleted only when refused), so it counts exactly as `otherColumn` and `configApplied` do.
+      // A VARIANT change needs no such term: the lock refuses it on the first started stage, and every other refusal also
+      // needs a started stage, so once anything is refused a changed variant was refused with it.
       const lockable = new Set(["variant_key", "config", "tiebreakers"]);
       const otherColumn = Object.entries(patch).some(([k, v]) => v !== undefined && !lockable.has(k));
-      if (refused.length > 0 && !otherColumn && !configApplied) {
+      const tiebreakersApplied = tiebreakersChanged && !refusedFields.has("tiebreakers");
+      if (refused.length > 0 && !otherColumn && !configApplied && !tiebreakersApplied) {
         const first = refused[0]!;
         throw new HttpError(
           RULE_ERROR_STATUS[first.code],

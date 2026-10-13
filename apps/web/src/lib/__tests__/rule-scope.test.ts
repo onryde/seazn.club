@@ -104,6 +104,17 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
   it("X-SR-1 icehockey: the stage form is the match fields plus the stage-only editors (overtime on/off and skaters, the shoot-out on/off), points are not in it", () => {
     inOrder(keysOf(stageFieldsFor(ice())), ["periodMinutes", "overtime", "overtimeMinutes", "overtimeSkaters", "shootout", "shootoutAttempts"]);
     expect(keysOf(matchFieldsFor(ice()))).toEqual(["periodMinutes", "overtimeMinutes", "shootoutAttempts"]);
+    // "Points are not in it": no stage field edits a points key the engine declares for this sport and stage. Ice hockey has no
+    // points FIELD today (asserted last), so the loop is a guard for the day it gets one; the football test below carries the
+    // positive case (a real points field kept out of the stage form).
+    const ctx = ice();
+    const pointsKeys = pointsKeysFor(ctx.module, ctx.stageKind, ctx.variant);
+    const stageFields = stageFieldsFor(ctx);
+    expect(pointsKeys.length, "icehockey declares points keys, so the absence below is a real claim").toBeGreaterThan(0);
+    expect(stageFields.length, "the stage form is not empty").toBeGreaterThan(0);
+    for (const f of stageFields) for (const k of f.edits) expect(pointsKeys, `${f.key} edits ${k}, a points key`).not.toContain(k);
+    // No field edits an icehockey points key, so its points form is EMPTY and nothing can have leaked from it.
+    expect(pointsFieldsFor(ctx)).toEqual([]);
   });
 
   it("X-SR-1 football: the shoot-out points pair is a POINTS form field, in neither the stage nor the match form (ST-G8 screen)", () => {
@@ -255,10 +266,67 @@ describe("rule-scope — buildMatchFragment (X-SR-2: a match overrides only matc
           boundedRefusals++;
         }
     }
-    expect(sports, "sports with a match form: every one but chess and generic").toBe(builtinModules.length - 2);
+    expect(sports, "sports with a match form: every one but generic and boardgame, which declare no match key").toBe(builtinModules.length - 2);
     expect(judged).toBeGreaterThan(0);
     expect(accepted, "the check accepted fragments from the web").toBeGreaterThan(0);
     expect(accepted + boundedRefusals).toBe(judged);
+  });
+  // Fix round 1, I3. The engine's override check judges a fragment against the stage's rules; it does not parse the
+  // CONFIG that results. A fragment can pass the check and still lay a config the sport's schema refuses (a carrom game
+  // shortened below the stage's queen cap, a cricket innings shorter than its bowler limit, a set-sport cap under the set
+  // target). The producer here is buildMatchFragment, the consumer the schema the fold parses with.
+  // These are KNOWN cross-field refusals, pinned exactly: a new one must be read and added, a fixed one removed. Whether the
+  // match form should write the companion key (carrom's queenCapAt) is a Task 14 decision; this test does not change the
+  // fragment, it states what the fragment does today.
+  const KNOWN_SEAM_REFUSALS: Record<string, string> = {
+    "cricket/t20/overs/1": "maxOversPerBowler exceeds the innings length | minOversForResult exceeds the innings length",
+    "cricket/t20/maxOversPerBowler/50": "maxOversPerBowler exceeds the innings length",
+    "cricket/odi/overs/1": "maxOversPerBowler exceeds the innings length | minOversForResult exceeds the innings length",
+    "cricket/hundred/overs/1": "maxOversPerBowler exceeds the innings length | minOversForResult exceeds the innings length",
+    "cricket/hundred/maxOversPerBowler/50": "maxOversPerBowler exceeds the innings length",
+    "carrom/icf/gameTo/5": "queenCapAt must not exceed gameTo",
+    "carrom/club-29/gameTo/5": "queenCapAt must not exceed gameTo",
+    "volleyball/indoor/cap/15": "cap must be ≥ the set target",
+    "volleyball/beach/cap/15": "cap must be ≥ the set target",
+    "badminton/bwf/cap/15": "cap must be ≥ the set target",
+    "badminton/short/setTo/30": "cap must be ≥ the set target",
+    "badminton/short/finalSetTo/30": "cap must be ≥ the set target",
+  };
+  it("X-SR-2 the SEAM, schema half: the stage config with a built fragment laid on it parses, bar the pinned cross-field refusals", () => {
+    const probes = (f: RuleField): string[] =>
+      f.kind === "select" ? (f.options ?? []).map((o) => o.value)
+      : f.kind === "bool" ? ["on", "off"]
+      : [String(f.min ?? 1), ...(f.max === undefined ? [] : [String(f.max)])];
+    const refused: Record<string, string> = {};
+    let judged = 0;
+    let parsed = 0;
+    let sports = 0;
+    for (const m of builtinModules) {
+      const ctxFor = (variant: string): RuleContext => ({ module: m, stageKind: "knockout", variant });
+      if (matchFieldsFor(ctxFor(Object.keys(m.variants)[0]!)).length === 0) continue;
+      sports++;
+      for (const variant of Object.keys(m.variants)) {
+        const stageParse = m.configSchema.safeParse({ ...m.variants[variant], ...stageDefaultsFor(m, "knockout", variant) });
+        expect(stageParse.success, `${m.key}/${variant}: the stage parses`).toBe(true);
+        const resolved = stageParse.data as Record<string, unknown>;
+        const ctx = ctxFor(variant);
+        for (const f of matchFieldsFor(ctx))
+          for (const v of probes(f)) {
+            const fragment = buildMatchFragment(ctx, { [f.key]: v }, resolved);
+            // Only a fragment the engine's own override check lets through ever reaches the fold.
+            if (!checkFixtureOverride(m, "knockout", variant, resolved, fragment).ok) continue;
+            judged++;
+            const r = m.configSchema.safeParse({ ...resolved, ...fragment });
+            if (r.success) { parsed++; continue; }
+            expect(r.error.issues.every((i) => i.code === "custom"), `${m.key}/${variant}/${f.key}=${v}: ${JSON.stringify(r.error.issues)}`).toBe(true);
+            refused[`${m.key}/${variant}/${f.key}/${v}`] = r.error.issues.map((i) => i.message).join(" | ");
+          }
+      }
+    }
+    expect(sports, "sports with a match form: every one but generic and boardgame, which declare no match key").toBe(builtinModules.length - 2);
+    expect(judged).toBeGreaterThan(0);
+    expect(parsed, "fragments that parse").toBeGreaterThan(0);
+    expect(refused).toEqual(KNOWN_SEAM_REFUSALS);
   });
 });
 

@@ -57,6 +57,13 @@ export async function lockedStageIdsAmong(tx: Tx, stageIds: readonly string[]): 
   return new Set(rows.map((r) => r.stage_id));
 }
 
+/** The top-level keys a bracket stage forces on itself (`bracketDeciders`), read off the division's cfg as the fixture
+ *  resolver reads it (`safeParse`, never `parse`: a stored config the schema now refuses must not make the lock throw). */
+function forcedKeys(module: AnySportModule, divisionConfig: Record<string, unknown>): ReadonlySet<string> {
+  const parsed = module.configSchema.safeParse(divisionConfig);
+  return new Set(Object.keys(module.bracketDeciders((parsed.success ? parsed.data : divisionConfig) as never)));
+}
+
 /**
  * The fields of a division save that a STARTED stage still depends on, each named with the first such stage.
  *
@@ -82,8 +89,9 @@ export async function divisionRefusals(
   const { module, variantKey } = scope;
   const tableKeys = tableRuleKeys(module, variantKey);
   // The keys a bracket stage forces on itself for the tie it must break (carrom's tie board, a board game's tiebreak):
-  // that stage never reads the division's value for them.
-  const forced = live.some((s) => forbidsLevelResult(s.kind)) ? new Set(Object.keys(module.bracketDeciders(scope.divisionConfig as never))) : new Set<string>();
+  // that stage never reads the division's value for them. Asked the way the fixture resolver asks it (`liveCfg`,
+  // fixture-cfg.ts): with the cfg the sport's schema parsed, defaults applied, or the stored one if the schema refuses it.
+  const forced = live.some((s) => forbidsLevelResult(s.kind)) ? forcedKeys(module, scope.divisionConfig) : new Set<string>();
   if (change.variant) {
     const s = first(() => true);
     if (s) out.push({ field: "variant_key", code: "DIVISION_FORMAT_LOCKED", stageId: s.id, stageName: s.name });

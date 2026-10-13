@@ -7,8 +7,8 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/rule-errors";
-import { EngineError } from "@seazn/engine/core";
-import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, type AnySportModule } from "@seazn/engine/sport";
+import { BRACKET_KINDS, DRAW_KINDS, EngineError, StageKind } from "@seazn/engine/core";
+import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ENGINE_HTTP } from "@/server/api-v1/http";
@@ -521,6 +521,19 @@ async function rigBracket(sport: string, variant: string, opts: { league?: boole
   return { auth, divisionId: d.id, ko: ko!, league, fixtureId: f!.id, leagueFixtureId: lf?.id };
 }
 
+/** A division with ONE stage of `kind` that has started: a fixture row carrying a frozen config, the lock's own started
+ *  predicate (`lockedStageIdsAmong`: a `config_snapshot` or a score event). Only the lock is under test, so the fixture is
+ *  the thinnest row that predicate reads, not a generated draw (some kinds need a format the lock does not care about). */
+async function startedStageOfKind(sport: string, variant: string, kind: StageKind) {
+  const auth = await seedOrg();
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Dl " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+  const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: sport, variant_key: variant, config: {} });
+  const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: `K-${kind}`, config: kind === "swiss" ? { rounds: 3 } : {}, progression: null });
+  await sql`insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, fixture_no, config_snapshot)
+            values (${stage!.id}, ${d.id}, ${auth.orgId}, 1, 1, 1, ${sql.json({} as never)})`;
+  return { divisionId: d.id, stage: stage! };
+}
+
 describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration (no database)", () => {
   it("X-SR-4 tableRuleKeys is the engine's points keys plus pointsMap, narrowed by variant; another sport's non-points keys are never in it", () => {
     const fake = {
@@ -616,6 +629,70 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect(out.name).toBe("Renamed");
   });
 
+  // Fix round 1, I1. A patch is applied PER FIELD (owner P-2 "A"): every field the lock lets through lands, every field it
+  // refuses is named in `refused`, and only a patch from which NOTHING lands is a 409. The 409 test therefore asks what
+  // WILL BE WRITTEN, never "was something refused": a tiebreakers change a knockout-only division does not refuse is a
+  // write like any other, and dropping it behind a 409 that names only setTo would lose it silently.
+  it("I1 a mixed patch on a knockout-only division lands what is allowed: tiebreakers is saved, setTo is refused by name (200, not a 409 that drops the tiebreakers)", async () => {
+    const ko = await rigBracket("badminton", "short");
+    await start(ko.auth, ko.fixtureId);
+    const before = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown> & { setTo: number };
+    const out = await patchDivision(ko.auth, ko.divisionId, { config: { ...before, setTo: 15 }, tiebreakers: ["head_to_head"] as never });
+    expect(out.refused).toEqual([{ field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: ko.ko.id, stageName: "Final" }]);
+    expect(out.tiebreakers, "the allowed change landed").toEqual(["head_to_head"]);
+    expect((out.config as { setTo: number }).setTo, "the refused change did not").toBe(before.setTo);
+    expect((await getDivision(ko.auth, ko.divisionId)).tiebreakers, "and it is stored").toEqual(["head_to_head"]);
+
+    // The negative's pair: the same patch where the tiebreakers change IS refused too (a started league has a table) lands
+    // nothing, so it is a 409 naming the first refused field, with every refused field in `refused`.
+    const lg = await rig("badminton", "short");
+    await start(lg.auth, lg.fixtureId);
+    const b2 = (await getDivision(lg.auth, lg.divisionId)).config as Record<string, unknown>;
+    const tiebreakersBefore = (await getDivision(lg.auth, lg.divisionId)).tiebreakers;
+    const err = await rejection(patchDivision(lg.auth, lg.divisionId, { config: { ...b2, setTo: 15 }, tiebreakers: ["head_to_head"] as never }));
+    expect(err, "the first refusal in the list leads: the cascade, then the config keys").toMatchObject({ status: RULE_ERROR_STATUS.DIVISION_TABLE_RULES_LOCKED, code: "DIVISION_TABLE_RULES_LOCKED" });
+    expect((err as { extra?: { refused: { field: string }[] } }).extra?.refused.map((x) => x.field).sort()).toEqual(["setTo", "tiebreakers"]);
+    expect((await getDivision(lg.auth, lg.divisionId)).tiebreakers, "nothing landed").toEqual(tiebreakersBefore);
+  });
+
+  it("M4 every stage kind: a table key and the cascade lock only a kind with a table, a format key every kind, carrom tieBoard only where the engine applies it (counted)", async () => {
+    const generic = resolveLatestModule("generic");
+    const carrom = resolveLatestModule("carrom");
+    expect(pointsKeysFor(generic, null, "score"), "precondition: generic's table key").toContain("points");
+    expect(stageKeysFor(generic, null, "score"), "precondition: generic's format key").toContain("allowDraws");
+    let swept = 0;
+    let withTable = 0;
+    let withoutTable = 0;
+    let tieBoardLocked = 0;
+    for (const kind of StageKind.options) {
+      const hasTable = DRAW_KINDS.has(kind);
+      expect(hasTable !== BRACKET_KINDS.has(kind), `${kind}: the engine puts every kind in exactly one of the two sets`).toBe(true);
+      const g = await startedStageOfKind("generic", "score", kind);
+      const got = await sql.begin((tx) =>
+        divisionRefusals(tx, g.divisionId, { configKeys: ["points", "allowDraws"], variant: false, tiebreakers: true }, { module: generic, variantKey: "score", divisionConfig: {} }));
+      const byField = Object.fromEntries(got.map((x) => [x.field, x.code]));
+      expect(byField.allowDraws, `${kind}: a format key locks on every kind`).toBe("DIVISION_FORMAT_LOCKED");
+      expect(byField.points, `${kind} points`).toBe(hasTable ? "DIVISION_TABLE_RULES_LOCKED" : undefined);
+      expect(byField.tiebreakers, `${kind} tiebreakers`).toBe(hasTable ? "DIVISION_TABLE_RULES_LOCKED" : undefined);
+      expect(got.every((x) => x.stageId === g.stage.id && x.stageName === g.stage.name), `${kind}: every refusal names the started stage`).toBe(true);
+      if (hasTable) withTable++; else withoutTable++;
+
+      const c = await startedStageOfKind("carrom", "icf", kind);
+      const tie = await sql.begin((tx) =>
+        divisionRefusals(tx, c.divisionId, { configKeys: ["tieBoard"], variant: false, tiebreakers: false }, { module: carrom, variantKey: "icf", divisionConfig: {} }));
+      // The oracle is the engine's own declaration of where the tie board applies.
+      expect(tie.length, `${kind}: carrom tieBoard`).toBe(ruleKeyApplies(carrom.ruleKeys!.tieBoard!, kind, "icf") ? 1 : 0);
+      tieBoardLocked += tie.length;
+      swept++;
+    }
+    expect(swept, "every kind of the engine's StageKind").toBe(StageKind.options.length);
+    expect(withTable).toBe(DRAW_KINDS.size);
+    expect(withoutTable).toBe(BRACKET_KINDS.size);
+    expect(withTable, "at least one kind with a table was swept").toBeGreaterThan(0);
+    expect(withoutTable, "at least one kind without a table was swept").toBeGreaterThan(0);
+    expect(tieBoardLocked, "tieBoard locked exactly the kinds it applies to").toBe(DRAW_KINDS.size);
+  });
+
   it("M-b a knockout and a league both started: the table refusal names the league (the stage with a table), the format refusal the knockout (first by seq)", async () => {
     const r = await rigBracket("badminton", "short", { league: true });
     await start(r.auth, r.fixtureId);
@@ -681,10 +758,11 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // The predicate with a module the test builds, over REAL started stages: each guard witnessed alone (carrom's
   // tieBoard cannot do it: its appliesTo and its forced value cover the same kinds, so either guard hides the other).
   describe("the inherits predicate, one guard at a time (fake module, real stages)", () => {
-    const fakeModule = (ruleKeys: Record<string, unknown>, forced: Record<string, unknown> = {}) =>
-      ({ key: "fake", ruleKeys, bracketDeciders: () => forced }) as unknown as AnySportModule;
-    const refusalsFor = async (r: { divisionId: string }, mod: AnySportModule, keys: string[], variantKey = "x") =>
-      sql.begin((tx) => divisionRefusals(tx, r.divisionId, { configKeys: keys, variant: false, tiebreakers: false }, { module: mod, variantKey, divisionConfig: {} }));
+    type Parse = (cfg: unknown) => { success: boolean; data?: unknown };
+    const fakeModule = (ruleKeys: Record<string, unknown>, forced: Record<string, unknown> | ((cfg: unknown) => Record<string, unknown>) = {}, parse: Parse = (c) => ({ success: true, data: c })) =>
+      ({ key: "fake", ruleKeys, configSchema: { safeParse: parse }, bracketDeciders: typeof forced === "function" ? forced : () => forced }) as unknown as AnySportModule;
+    const refusalsFor = async (r: { divisionId: string }, mod: AnySportModule, keys: string[], variantKey = "x", divisionConfig: Record<string, unknown> = {}) =>
+      sql.begin((tx) => divisionRefusals(tx, r.divisionId, { configKeys: keys, variant: false, tiebreakers: false }, { module: mod, variantKey, divisionConfig }));
 
     it("X-SR-4 a key that applies to table kinds only is not inherited by a started knockout, and is by a started league", async () => {
       const r = await rigBracket("generic", "score", { league: true });
@@ -726,6 +804,19 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       const mod = fakeModule({ forcedKey: { scope: "stage" }, plainKey: { scope: "stage" } }, { forcedKey: true });
       const got = await refusalsFor(r, mod, ["forcedKey", "plainKey"]);
       expect(got.map((x) => `${x.field}@${x.stageName}`).sort()).toEqual(["forcedKey@Pool", "plainKey@Final"]);
+    });
+
+    it("M3 bracketDeciders is asked with the division config the SCHEMA parsed (defaults applied), as the fixture resolver does; a config the schema refuses is passed as stored", async () => {
+      const r = await rigBracket("generic", "score");
+      await start(r.auth, r.fixtureId);
+      // The decider reads a field the stored config does not carry and the schema defaults in.
+      const reads = (cfg: unknown) => ((cfg as { defaulted?: string }).defaulted === "yes" ? { forcedKey: true } : {});
+      const withDefault: Parse = (c) => ({ success: true, data: { ...(c as object), defaulted: "yes" } });
+      const refuses: Parse = () => ({ success: false });
+      const keys = { forcedKey: { scope: "stage" } };
+      expect(await refusalsFor(r, fakeModule(keys, reads, withDefault), ["forcedKey"], "x", {}), "parsed cfg: forced, so not inherited").toEqual([]);
+      expect((await refusalsFor(r, fakeModule(keys, reads, refuses), ["forcedKey"], "x", {})).map((x) => x.field), "unparsed: the decider sees no default, so the key is inherited").toEqual(["forcedKey"]);
+      expect(await refusalsFor(r, fakeModule(keys, reads, refuses), ["forcedKey"], "x", { defaulted: "yes" }), "a refused parse passes the stored config through").toEqual([]);
     });
 
     it("X-SR-4 a stage that sets a declared decider at its top level does not inherit it; one that sets a non-decider there still does", async () => {

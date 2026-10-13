@@ -10,4 +10,7 @@ runContract(tabletennis, TABLETENNIS_RULES, {
     // delete this row if an organiser should be able to set one.
     cap: "a table-tennis game has no hard cap (always win by two), and the form has never offered one",
   },
+  // The engine's schema gives these no maximum (`.positive().int()` only), so the web's range is its own choice and cannot be
+  // checked against the engine; the contract lists them so a bound the engine adds later is noticed.
+  noEngineMax: ["setTo", "finalSetTo", "winBy"],
 });
