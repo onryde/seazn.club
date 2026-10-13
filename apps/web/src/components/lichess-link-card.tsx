@@ -59,10 +59,17 @@ export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/
               <p className="basis-full text-sm text-amber-800" data-testid="lichess-reconsent">
                 {t("settings.account.lichess.reconsentRequired")}
               </p>
+              {/* M5 (T16 fix round 1, canvas MePhone): what the re-link asks Lichess for, before the press — the same
+                  three lines the account tab's consent copy and the room's re-link card say. */}
+              <div data-testid="lichess-scope" className="basis-full space-y-1">
+                <h3 className="text-sm font-semibold text-slate-800">{t("settings.account.lichess.consent.title")}</h3>
+                <p className="text-xs leading-relaxed text-slate-600">{t("settings.account.lichess.consent.body")}</p>
+                <p className="text-xs text-slate-500">{t("settings.account.lichess.consent.scopes")}</p>
+              </div>
               {orgSlug !== null && (
                 <a
                   href={lichessLinkStartHref(orgSlug, next)}
-                  className="btn btn-primary text-xs inline-flex"
+                  className="btn btn-primary min-h-11"
                   data-testid="lichess-relink"
                 >
                   {t("settings.account.lichess.consent.cta")}
@@ -72,7 +79,7 @@ export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/
           )}
           <button
             type="button"
-            className="btn btn-ghost text-xs"
+            className="btn btn-ghost min-h-11"
             data-testid="lichess-unlink"
             disabled={busy}
             onClick={() => void unlink()}
@@ -83,7 +90,7 @@ export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/
       ) : orgSlug !== null ? (
         <a
           href={lichessLinkStartHref(orgSlug, next)}
-          className="btn btn-primary text-xs inline-flex"
+          className="btn btn-primary min-h-11"
           data-testid="lichess-link"
         >
           {t("settings.account.lichess.link")}

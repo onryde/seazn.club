@@ -202,7 +202,15 @@ export function DivisionCard({
           whoever is looking (information about the division, like the organiser note above). The required duty
           carries the owner-approved notice verbatim; nothing here claims the player is monitored (D8). */}
       {division.online_play === true && (
-        <div data-testid="division-online-play" className="mt-3 space-y-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+        // M6 (T16 fix round 1): the canvas's tones — amber for a required camera (a duty), lavender otherwise.
+        <div
+          data-testid="division-online-play"
+          className={`mt-3 space-y-1 rounded-lg border px-3 py-2 text-xs ${
+            division.camera_policy === "required"
+              ? "border-[#f5d27a] bg-[#fef3c7] text-[#713f12]"
+              : "border-transparent bg-[#f3effc] text-[#4a3a6b]"
+          }`}
+        >
           <p>{t("register.online.lichess")}</p>
           {division.camera_policy !== undefined && division.camera_policy !== "off" && (
             <div data-testid="division-camera-requirement" data-policy={division.camera_policy}>

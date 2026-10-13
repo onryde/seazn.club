@@ -590,9 +590,40 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("the join link: flag ON demands the link; flag OFF or PostHog throwing moves on to the next check (privacy consent)", async () => {
+  // M7 (T16 fix round 1): the entries step states online play from a PUBLIC read that cannot know who is looking — it
+  // asks the flag as the club (registrations.ts publicRegistrationInfo). The submit's link demand must ask the SAME
+  // way, or under a person-targeted rollout the notice and the LICHESS_LINK_REQUIRED gate disagree. Signed in here.
+  it("M7: a SIGNED-IN registrant's submit asks the flag as the club, exactly as the entries step did — never as the person", async () => {
     let checked = 0;
     for (const s of FLAG_STATES) {
+      overrideOn();
+      const g = await onlineRegistration("individual", "auto");
+      const me = await seedPlayer(g.owner.orgId, "Signed In", `si${randomUUID().slice(0, 6)}`, false);
+      flagIs(s);
+      const submitted = submitRegistrationGroup(
+        { orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: me.userId },
+        {
+          contact: contact(),
+          privacy_consent: true,
+          entries: [{ division_id: g.divisionId, entrant_kind: "individual", players: [{ full_name: "Solo Player" }], answers: {} }],
+        },
+      );
+      if (s.offered) expect(await refusal(submitted), s.label).toEqual({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+      else expect((await submitted).entries.map((e) => e.status), s.label).toEqual(["confirmed"]);
+      expectAsked(g.owner.orgId, g.owner.orgId);
+      expect(
+        flags.isServerFeatureEnabled.mock.calls.filter((c) => c[1] === me.userId),
+        `${s.label}: never asked as the person`,
+      ).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+  });
+
+  it("the join link: flag ON demands the link; flag OFF or PostHog throwing moves on to the next check (privacy consent)", async () => {
+    let checked = 0;
+    // M7: signed out, and signed in — the club is asked either way, never the person.
+    for (const [s, signedIn] of FLAG_STATES.flatMap((st) => [[st, false], [st, true]] as const)) {
       overrideOn();
       const g = await onlineRegistration("team", "manual");
       // The team entry is made with the flag OFF, so its own submit is not what is under test here.
@@ -610,19 +641,25 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
       );
       const joinCode = res.entries[0]!.join_code;
       expect(joinCode, "premise: a team entry carries a join code").toEqual(expect.any(String));
+      const joiner = signedIn ? (await seedPlayer(g.owner.orgId, "Joiner", `jn${randomUUID().slice(0, 6)}`, false)).userId : null;
       flagIs(s);
       // privacy_consent false: the check that comes AFTER the link demand, so the two answers tell the gates apart.
-      const err = await joinTeamEntry({}, { join_code: joinCode!, player: { full_name: "Joiner" }, privacy_consent: false }).then(
+      const err = await joinTeamEntry(
+        { sessionUserId: joiner },
+        { join_code: joinCode!, player: { full_name: "Joiner" }, privacy_consent: false },
+      ).then(
         () => null,
         (e: unknown) => e,
       );
-      expect(err, s.label).toBeInstanceOf(HttpError);
-      if (s.offered) expect(err, s.label).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
-      else expect(err, s.label).toMatchObject({ status: 422, code: undefined, message: "Please agree to the privacy policy to join" });
+      const at = `${s.label}${signedIn ? ", signed in" : ""}`;
+      expect(err, at).toBeInstanceOf(HttpError);
+      if (s.offered) expect(err, at).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+      else expect(err, at).toMatchObject({ status: 422, code: undefined, message: "Please agree to the privacy policy to join" });
       expectAsked(g.owner.orgId, g.owner.orgId);
+      if (joiner !== null) expect(flags.isServerFeatureEnabled.mock.calls.filter((c) => c[1] === joiner), at).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(FLAG_STATES.length);
+    expect(checked).toBe(FLAG_STATES.length * 2);
   });
 
   it("the organiser's roster: flag ON refuses an unlinked player; flag OFF or PostHog throwing enters them", async () => {
