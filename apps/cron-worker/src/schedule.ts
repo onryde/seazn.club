@@ -107,8 +107,9 @@ export const JOBS: readonly Job[] = [
   // T+20 no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
   // and ending arbiter watches. Every one of them happens when no page is open, so without this row none of them runs.
   // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
-  // re-send with `skipped`. No failureCounts: SweepReport carries its failures as a list, not a number (R3 needs a
-  // numeric field, drift.test.ts).
+  // re-send with `skipped`. Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when
+  // another pass held the lock — a pass that overlaps the next firing ran for five minutes) are both failures.
+  // `deferred` is not: the pass budget ran out and the next firing reaches the rest.
   {
     id: "external-play",
     path: "/api/cron/external-play",
@@ -116,6 +117,7 @@ export const JOBS: readonly Job[] = [
     due: { kind: "every" },
     retry: false,
     manual: true,
+    failureCounts: ["data.failed", "data.skipped"],
   },
 ];
 

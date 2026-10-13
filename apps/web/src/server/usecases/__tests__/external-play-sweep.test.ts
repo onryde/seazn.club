@@ -78,6 +78,7 @@ import {
   SWEEP_CADENCE_MS,
   SWEEP_MOVE_BUDGET,
   SWEEP_NO_TRUTH_HOLD_AFTER,
+  SWEEP_PASS_BUDGET_MS,
   NO_SHOW_REFUSALS_BEFORE_HOLD,
   expectedEndAt,
   playableWindow,
@@ -2102,14 +2103,14 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     await inside;
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
-      skipped: true, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, failures: [],
+      skipped: 1, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
     });
     release();
     const done = await first;
-    expect([done.skipped, done.reconciled, reads]).toEqual([false, 1, 1]);
+    expect([done.skipped, done.reconciled, reads]).toEqual([0, 1, 1]);
     const third = await sweep(b, { now: b.at(14), reconcile: async () => { reads++; return null; } });
-    expect([third.skipped, third.reconciled, reads], "the lock went with the first pass").toEqual([false, 1, 2]);
+    expect([third.skipped, third.reconciled, reads], "the lock went with the first pass").toEqual([0, 1, 2]);
   });
 
   it("a pass that THROWS lets go of the lock: the next pass runs", async () => {
@@ -2118,7 +2119,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     // job's own catch: the pass itself throws.
     await expect(sweepExternalPlay({ now: b.at(5), orgIds: ["not-a-uuid"] })).rejects.toThrow();
     const next = await sweep(b, { now: b.at(5) });
-    expect(next.skipped).toBe(false);
+    expect(next.skipped).toBe(0);
     expect(next.scanned, "premise: the next pass looked at the board").toBeGreaterThan(0);
   });
 });
@@ -2154,6 +2155,92 @@ describe.runIf(HAS_DB)("M7 — a job's failure is logged with its message; the r
     } finally {
       warns.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final review I-1: the cron Worker reads NUMBERS (R3, apps/cron-worker/src/call.ts failureCountsOver0) — `failed`
+// and `skipped` — and the pass stops starting network work once its wall-clock budget is spent, so one pass cannot
+// outlive the Worker's 60 s. The rest is counted `deferred` (never a failure) and the next firing reaches it.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("I-1 — the report's numeric failure counters and the pass budget", () => {
+  /** A scripted wall clock: the pass looks once at its start, then once before each budgeted row it would start. */
+  const scripted = (reads: number[]) => {
+    let looks = 0;
+    return { wallClock: () => reads[Math.min(looks++, reads.length - 1)]!, looks: () => looks };
+  };
+
+  it("`failed` counts the fixtures whose action threw — 1 of 2 boards provoked; a clean pass reads 0", async () => {
+    const bad = await openedBoard({ checkedIn: ["home", "away"] });
+    const good = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(bad);
+    await liveGame(good);
+    const r = await sweep([bad, good], {
+      now: bad.at(8),
+      reconcile: async ({ fixtureId }) => {
+        if (fixtureId === bad.fixtureId) throw new HttpError(503, "down", "LICHESS_UNAVAILABLE");
+        return null;
+      },
+    });
+    expect([r.reconciled, r.failed, r.skipped, r.deferred], "reconciled 2, one threw").toEqual([2, 1, 0, 0]);
+    expect(r.failures.map((f) => f.fixtureId)).toEqual([bad.fixtureId]);
+    const clean = await sweep([bad, good], { now: new Date(bad.at(8).getTime() + SWEEP_CADENCE_MS), reconcile: async () => null });
+    expect([clean.reconciled, clean.failed], "the next pass read both and nothing threw").toEqual([2, 0]);
+  });
+
+  it("the budget: once SPENT the pass starts no further reconcile, counts it deferred (never failed), and the next pass reads it", async () => {
+    const one = await openedBoard({ checkedIn: ["home", "away"] });
+    const two = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(one);
+    await liveGame(two);
+    const B = SWEEP_PASS_BUDGET_MS;
+    const reads: string[] = [];
+    const reconcile: SweepDeps["reconcile"] = async ({ fixtureId }) => {
+      reads.push(fixtureId);
+      return null;
+    };
+    // Start 0; before the first board: B/2 (read); before the second: exactly B (spent).
+    const spent = scripted([0, B / 2, B]);
+    const first = await sweep([one, two], { now: one.at(8), reconcile, wallClock: spent.wallClock });
+    expect([first.reconciled, first.deferred, first.failed, first.skipped], "one read, one deferred").toEqual([1, 1, 0, 0]);
+    expect(spent.looks(), "PREMISE: start, before each of the two boards — and no look after it stopped").toBe(3);
+    expect(reads, "only one board was read").toHaveLength(1);
+    const deferred = reads[0] === one.fixtureId ? two.fixtureId : one.fixtureId;
+    // The remainder is the next firing's: the deferred board was never claimed, so it is due at once.
+    const next = await sweep([one, two], { now: one.at(8), reconcile });
+    expect([next.reconciled, next.deferred], "the next pass read the deferred board").toEqual([1, 0]);
+    expect(reads[1]).toBe(deferred);
+  });
+
+  it("positive pair: 1 ms short of the budget before the second board, both are read and nothing is deferred", async () => {
+    const one = await openedBoard({ checkedIn: ["home", "away"] });
+    const two = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(one);
+    await liveGame(two);
+    const B = SWEEP_PASS_BUDGET_MS;
+    let reads = 0;
+    const short = scripted([0, 0, B - 1, B]);
+    const r = await sweep([one, two], { now: one.at(8), reconcile: async () => (reads++, null), wallClock: short.wallClock });
+    expect([r.reconciled, r.deferred, reads]).toEqual([2, 0, 2]);
+  });
+
+  it("the DB-only no-show is never deferred: with the budget spent from the start it still forfeits the absent player", async () => {
+    // The budget bounds NETWORK work. The T+20 no-show writes to our own database and is time-critical: deferring it
+    // behind a slow Lichess would push a forfeit past its tick.
+    const live = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(live);
+    const absent = await openedBoard({ checkedIn: ["home"] });
+    let reads = 0;
+    const B = SWEEP_PASS_BUDGET_MS;
+    const r = await sweep([live, absent], {
+      now: absent.at(45),
+      reconcile: async () => (reads++, null),
+      wallClock: scripted([0, B]).wallClock,
+    });
+    expect(reads, "the reconcile was deferred").toBe(0);
+    expect(r.deferred, "the live board's read").toBeGreaterThanOrEqual(1);
+    expect(r.noShows, "the forfeit was written in this pass").toBe(1);
+    expect(forfeitsAttempted(absent.fixtureId)).toHaveLength(1);
   });
 });
 

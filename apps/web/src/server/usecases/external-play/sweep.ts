@@ -65,11 +65,16 @@ export type SweepJob =
   | "camera_evidence"
   | "arbiter_revoke";
 
+/** Final review I-1: written out LITERALLY. The cron Worker reads `data.failed` and `data.skipped` as its failure
+ *  counters (R3, apps/cron-worker/src/schedule.ts), and apps/cron-worker/test/drift.test.ts finds each field's numeric
+ *  declaration in this module's CODE. A counter that is not a finite number reads "unreadable" there, i.e. degraded. */
 export type SweepReport = {
   /** Review M8: another pass held the lock, so this one did nothing — every
    *  count below is zero because nothing was looked at, not because nothing
-   *  was due. */
-  skipped: boolean;
+   *  was due. 1 or 0, never a boolean (I-1): the monitor counts a skipped
+   *  pass as a failure, since a pass that overlaps the next firing is one
+   *  that ran for five minutes. */
+  skipped: number;
   /** Bridges closed because their fixture is no longer playable (job 0, T16
    *  fix round 1, I1): held, pending, ready or live rows under a fixture
    *  decided on the pad, settled, withdrawn, voided or cancelled. */
@@ -93,6 +98,13 @@ export type SweepReport = {
   /** Candidates examined across every job — a pass that looked at nothing
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
+  /** I-1: rows of network jobs NOT started because the pass's wall-clock
+   *  budget (SWEEP_PASS_BUDGET_MS) was spent. NOT a failure: they keep
+   *  their place and the next firing reaches them. */
+  deferred: number;
+  /** I-1: fixtures whose action threw — `failures.length`, as a number the
+   *  cron Worker can read. */
+  failed: number;
   /** One per fixture whose action threw. A code, never a message: a
    *  message can carry a Lichess body, and the report is returned to the
    *  cron caller. */
@@ -117,7 +129,24 @@ export type SweepDeps = {
    *  (M8), so a test can overlap two passes and prove a job's own row claim
    *  on its own. Production never passes it. */
   serialise?: false;
+  /** TEST SEAM — the clock the pass budget (I-1) is measured on. Production
+   *  passes none and reads Date.now. */
+  wallClock?: () => number;
 };
+
+/** Final review I-1: the pass stops STARTING network work (NETWORK_JOBS) once this much wall-clock time has gone. The
+ *  cron Worker abandons a job at 60 s (JOB_TIMEOUT_MS, apps/cron-worker/src/call.ts) and records a timeout; stopping
+ *  here leaves 15 s for the row in flight, the figure stream-tick's STREAM_TICK_BUDGET_MS chose for the same Worker.
+ *  external-play/route.test.ts pins it below the Worker's figure. RESIDUAL, as stream-tick's: one row's worst case is
+ *  not under 15 s — every Lichess and RealtimeKit request is bounded at 10 s, and a reconcile can make three in a row
+ *  plus a 3 s broadcast — so a row started just inside the budget against a stalled vendor can still outlive the
+ *  Worker. That reads as a Worker timeout (an error, one Sentry event an hour under R2), never as silence. */
+export const SWEEP_PASS_BUDGET_MS = 45_000;
+
+/** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the
+ *  T+20 no-show) touch only our own database, and the no-show is time-critical: a slow Lichess must never push a
+ *  forfeit past its tick. */
+const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>(["reconcile", "mint_retry", "teardown", "camera_evidence", "arbiter_revoke"]);
 
 /** The window a board is playable in, anchored on the ROUND being opened
  *  (D12). Gate B (2026-10-11): every merged reader — T9's create, T8's seat
@@ -141,7 +170,21 @@ function codeOf(err: unknown): string {
   return err instanceof Error ? err.name : "UNKNOWN";
 }
 
-type Pass = { now: Date; orgIds: readonly string[] | undefined; report: SweepReport };
+type Pass = {
+  now: Date;
+  orgIds: readonly string[] | undefined;
+  report: SweepReport;
+  /** I-1: the budget's clock, read at the pass's start and before each network row. */
+  clock: () => number;
+  startedAt: number;
+  spent: boolean;
+};
+
+/** I-1: has the pass spent its budget? Once spent it stays spent. */
+function budgetSpent(pass: Pass): boolean {
+  if (!pass.spent && pass.clock() - pass.startedAt >= SWEEP_PASS_BUDGET_MS) pass.spent = true;
+  return pass.spent;
+}
 
 async function each<T extends { fixtureId: string }>(
   pass: Pass,
@@ -150,12 +193,18 @@ async function each<T extends { fixtureId: string }>(
   act: (row: T) => Promise<void>,
 ): Promise<void> {
   pass.report.scanned += rows.length;
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (NETWORK_JOBS.has(job) && budgetSpent(pass)) {
+      pass.report.deferred += rows.length - i;
+      break;
+    }
     try {
       await act(row);
     } catch (err) {
       const code = codeOf(err);
       pass.report.failures.push({ job, fixtureId: row.fixtureId, code });
+      pass.report.failed++;
       // Review M7: the report stays code-only (it is returned to the cron
       // caller); the server log carries what diagnoses it — the message, and
       // the stack of anything that is not a named refusal (a TypeError is a
@@ -1065,7 +1114,7 @@ async function arbiterRevoke(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDe
   pass.report.arbitersRemoved += stamped.count;
 }
 
-function emptyReport(skipped: boolean): SweepReport {
+function emptyReport(skipped: 0 | 1): SweepReport {
   return {
     skipped,
     bridgesClosed: 0,
@@ -1079,6 +1128,8 @@ function emptyReport(skipped: boolean): SweepReport {
     connectionFlags: 0,
     arbitersRemoved: 0,
     scanned: 0,
+    deferred: 0,
+    failed: 0,
     failures: [],
   };
 }
@@ -1099,12 +1150,13 @@ export async function sweepExternalPlay(deps: SweepDeps = {}): Promise<SweepRepo
     if (report === null) throw err;
     log.warn({ message: err instanceof Error ? err.message : String(err) }, "external-play sweep: the pass lock's transaction ended badly");
   }
-  return report ?? emptyReport(true);
+  return report ?? emptyReport(1);
 }
 
 async function runPass(deps: SweepDeps): Promise<SweepReport> {
-  const report = emptyReport(false);
-  const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report };
+  const report = emptyReport(0);
+  const clock = deps.wallClock ?? Date.now;
+  const pass: Pass = { now: deps.now ?? new Date(), orgIds: deps.orgIds, report, clock, startedAt: clock(), spent: false };
 
   // Job 0 before everything: a board whose fixture is decided is over for us.
   await each(pass, "close_unplayable", await unplayableCandidates(pass), (c) => closeUnplayable(pass, c));
