@@ -130,11 +130,14 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
   // slate-500 measures 4.3:1 on slate-100). Such a card's names line is the run sheet's withdrawn composition
   // (`desk/run-sheet-row.tsx`): each name a `min-w-0 truncate` span, the chips and "vs" `shrink-0`, so at 320 the names
   // shorten and the chip stays whole — one truncating string would cut it and the opponent off.
-  const withdrawn = (a.home_withdrew === true && a.home_name !== null) || (a.away_withdrew === true && a.away_name !== null);
-  const seatName = (name: string | null, withdrew: boolean, slot: MyOfficiatingAssignment["home_slot_label"]) =>
-    name !== null && withdrew ? (
+  const home = a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd");
+  const away = a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd");
+  const homeGone = a.home_withdrew === true && a.home_name !== null;
+  const awayGone = a.away_withdrew === true && a.away_name !== null;
+  const seatName = (label: string, withdrew: boolean) =>
+    withdrew ? (
       <>
-        <span className="min-w-0 truncate text-slate-500">{name}</span>
+        <span className="min-w-0 truncate text-slate-500">{label}</span>
         <span className="shrink-0">
           <span data-testid="me-withdrawn" className="ml-1.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs font-normal text-slate-600">
             {msg("entrants.status.withdrawn")}
@@ -142,7 +145,7 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
         </span>
       </>
     ) : (
-      <span className="min-w-0 truncate">{name ?? resolveSlotLabel(slot, msg, "me.tbd")}</span>
+      <span className="min-w-0 truncate">{label}</span>
     );
   const [open, setOpen] = useState(false);
   const canReport = a.response === "accepted" && REPORTABLE.has(a.fixture_status);
@@ -155,11 +158,11 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
   return (
     <li className="card space-y-1 border-l-4 border-l-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {withdrawn ? (
+        {homeGone || awayGone ? (
           <p className="flex min-w-0 items-baseline text-sm text-slate-700">
-            {seatName(a.home_name, a.home_withdrew === true, a.home_slot_label)}
+            {seatName(home, homeGone)}
             <span className="mx-1 shrink-0 text-slate-400">{msg("schedule.vs")}</span>
-            {seatName(a.away_name, a.away_withdrew === true, a.away_slot_label)}
+            {seatName(away, awayGone)}
             <span className="ml-1 shrink-0">
               <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
                 {msg("me.off.role", { role: a.role_key })}
@@ -168,9 +171,9 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
           </p>
         ) : (
           <p className="min-w-0 truncate text-sm text-slate-700">
-            {a.home_name ?? resolveSlotLabel(a.home_slot_label, msg, "me.tbd")}{" "}
+            {home}{" "}
             <span className="text-slate-400">{msg("schedule.vs")}</span>{" "}
-            {a.away_name ?? resolveSlotLabel(a.away_slot_label, msg, "me.tbd")}{" "}
+            {away}{" "}
             <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-500">
               {msg("me.off.role", { role: a.role_key })}
             </span>
