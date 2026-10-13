@@ -38,6 +38,13 @@ import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
 import { divisionChampion } from "../champion";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { boardgame } from "@seazn/engine/sports/boardgame";
+import enPublic from "@/dictionaries/en/public.json";
+import { scoreEvent } from "@/server/usecases/scoring";
+import { getFixtureState } from "@/server/usecases/fixtures";
+import { KnockoutTab } from "@/components/public-site/matches-hub/knockout-tab";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -413,9 +420,12 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       const doc = (await loadCompetitionHub(scene.orgSlug, scene.compSlug))!;
       expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
       const card = (id: string) => doc.matches.find((m) => m.fixtureId === id)!;
+      // Loop R M-10: a walkover stored with no ledger at all was not played (the engine's reader on an empty ledger).
       expect(card(wo!).forfeit).toEqual({
-        kind: "walkover", tag: "w/o", sentence: `${await name(row(wo!).away_entrant_id)} didn't turn up — walkover`,
+        kind: "walkover", tag: "w/o", sentence: `${await name(row(wo!).away_entrant_id)} didn't turn up — walkover`, played: false,
       });
+      // An abandon's tag carries no `played`: the banner's walkover line is a forfeit's question.
+      expect(card(ab!).forfeit && "played" in card(ab!).forfeit!).toBe(false);
       expect(card(ab!).forfeit?.kind).toBe("abandoned");
       expect(card(ab!).forfeit?.tag).toBe("Aband.");
       expect(card(ab!).forfeit?.sentence).toMatch(/^Abandoned \(floodlights\)/);
@@ -430,6 +440,86 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       }
     }
   });
+
+  // Loop R M-10 — the champion banner's walkover line reads whether the final was PLAYED, the producer's
+  // `forfeit.played` (the engine's one "played" reader over the final's real ledger, `fixturesStatsReading`), never the
+  // forfeit's kind. Written through the real scoring path (`scoreEvent`: the kernel's phase guard admits each forfeit
+  // and stores its award), read back through the real hub and rendered by the real tab. Two sports, chosen for the one
+  // declaration that changes the answer (ruling 118: chess's Start is play): generic and boardgame.
+  it("M-10: a final forfeited after a bare Start reads as a walkover, after real play as 'Beat X' — and in chess the Start is play (ruling 118)", async () => {
+    const auth: AuthCtx = { orgId: scene.orgId, via: "session", userId: null, role: "owner", keyId: null };
+    await sql`
+      insert into sports (key, name, module_version, position_catalog)
+      values ('boardgame', 'Board game', ${boardgame.version}, ${sql.json(boardgame.positions as never)})
+      on conflict (key) do nothing`;
+    await sql`
+      insert into sport_variants (sport_key, key, name, config, is_system)
+      values ('boardgame', 'classical', 'Classical', ${sql.json(boardgame.variants.classical as never)}, true)
+      on conflict do nothing`;
+    const finalOf = async (sport: "generic" | "boardgame") => {
+      const comp = await createCompetition(auth, {
+        ends_on: "2030-12-31", name: `Final ${sport} ${randomUUID().slice(0, 6)}`, visibility: "public", branding: {},
+      });
+      const division = await createDivision(auth, comp.id, {
+        name: "Final", slug: "final",
+        ...(sport === "generic"
+          ? { sport_key: "generic", variant_key: "score", config: DIVISION_CONFIG }
+          : { sport_key: "boardgame", variant_key: "classical", config: {} }),
+      });
+      await createEntrants(auth, division.id, ["Ada", "Bea"].map((display_name, i) => ({
+        kind: sport === "generic" ? ("team" as const) : ("individual" as const), display_name, seed: i + 1, members: [],
+      })));
+      const [stage] = await createStages(auth, division.id, { seq: 1, kind: "knockout", name: "Cup", config: {} });
+      await generateStageFixtures(auth, stage!.id);
+      // Scoring opens at the division's start (doc 12 §1); the start action's own side effects are not under test.
+      await sql`update divisions set status = 'active' where id = ${division.id}`;
+      const [final] = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+        select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id} and is_final`;
+      expect(final?.home_entrant_id && final.away_entrant_id, `${sport}: a two-entrant final is seated`).toBeTruthy();
+      return { compSlug: comp.slug, ...final! };
+    };
+    const record = async (fixtureId: string, type: string, payload: Record<string, unknown>) => {
+      const { last_seq } = await getFixtureState(auth, fixtureId);
+      await scoreEvent(auth, fixtureId, { expected_seq: last_seq, type, payload });
+    };
+    const read = async (compSlug: string, finalId: string) => {
+      const doc = (await loadCompetitionHub(scene.orgSlug, compSlug))!;
+      expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+      expect(doc.knockouts[0]?.championFixtureId, "the final crowns").toBe(finalId);
+      const card = doc.matches.find((m) => m.fixtureId === finalId)!;
+      const h = renderToStaticMarkup(createElement(KnockoutTab, { doc, dict: enPublic, locale: "en", now: Date.parse(doc.generatedAt) }));
+      return { card, banner: h, round: card.roundLabel ?? "" };
+    };
+    const line = (key: "knockout.championLine" | "knockout.championLineWalkover", name: string, round: string) =>
+      `>${enPublic[key].replace("{name}", name).replace("{round}", round)}`;
+
+    // generic, a bare Start then a disqualification: nothing played (ruling 115) — the walkover line, no tag.
+    const bare = await finalOf("generic");
+    await record(bare.id, "core.start", {});
+    await record(bare.id, "core.forfeit", { by: bare.away_entrant_id, reason: "disqualified" });
+    const a = await read(bare.compSlug, bare.id);
+    expect(a.card.forfeit).toMatchObject({ kind: "disqualified", tag: enPublic["forfeit.tag.disqualified"], played: false });
+    expect(a.banner).toContain(line("knockout.championLineWalkover", "Bea", a.round));
+    expect(a.banner).not.toContain("mh-knockout-champion-forfeit");
+
+    // generic, a point played first: the same disqualification, played — "Beat Bea", with its tag beside.
+    const played = await finalOf("generic");
+    await record(played.id, "core.start", {});
+    await record(played.id, "generic.score", { by: played.home_entrant_id, points: 1 });
+    await record(played.id, "core.forfeit", { by: played.away_entrant_id, reason: "disqualified" });
+    const b = await read(played.compSlug, played.id);
+    expect(b.card.forfeit).toMatchObject({ kind: "disqualified", played: true });
+    expect(b.banner).toContain(line("knockout.championLine", "Bea", b.round));
+    expect(b.banner).toContain("mh-knockout-champion-forfeit");
+
+    // boardgame, a bare Start then a disqualification: chess's Start IS play (ruling 118) — "Beat Bea".
+    const chess = await finalOf("boardgame");
+    await record(chess.id, "core.start", {});
+    await record(chess.id, "core.forfeit", { by: chess.away_entrant_id, reason: "disqualified" });
+    const c = await read(chess.compSlug, chess.id);
+    expect(c.card.forfeit).toMatchObject({ kind: "disqualified", played: true });
+    expect(c.banner).toContain(line("knockout.championLine", "Bea", c.round));
+  }, 60_000);
 
   it("a PRIVATE competition → null (the page 404s it)", async () => {
     expect(await loadCompetitionHub(scene.orgSlug, scene.privateSlug)).toBeNull();

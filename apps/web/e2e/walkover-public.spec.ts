@@ -230,10 +230,12 @@ test.describe("W2b — a credited result says which one, on every public surface
     expect(banners).toBe(WIDTHS.length);
   });
 
-  // Design audit 3.6(b): a final won on a disqualification was played, so the banner reads "Beat {name} in the Final" and
-  // the final's DQ tag rides beside it — on the dark court, in the court card's on-court chip idiom (translucent amber),
-  // read off the painted colours, never the light pill. R4: a disqualification is recordable from the Start.
-  test("audit 3.6: a final won on a disqualification — 'Beat X in the Final' with its DQ tag on-court, at 1280/768/320", async ({ page, request }) => {
+  // Design audit 3.6(b): a final won on a disqualification AFTER PLAY was played, so the banner reads "Beat {name} in the
+  // Final" and the final's DQ tag rides beside it — on the dark court, in the court card's on-court chip idiom
+  // (translucent amber), read off the painted colours, never the light pill. Loop R M-10: the play is real — half-time
+  // is a football event after the Start (ruling 112); a disqualification after a bare Start was never played (ruling
+  // 115), and the next test pins that it reads as the walkover it is.
+  test("audit 3.6: a final won on a disqualification after play — 'Beat X in the Final' with its DQ tag on-court, at 1280/768/320", async ({ page, request }) => {
     test.setTimeout(3 * 60_000);
     const org = await activeOrg(page);
     const ko = await publicKnockout(request);
@@ -243,6 +245,7 @@ test.describe("W2b — a credited result says which one, on every public surface
       .toBe(true);
     const seated = await read(request, ko.final.id);
     await post(request, ko.final.id, "core.start", {});
+    await post(request, ko.final.id, "football.period", { phase: "HT" });
     await post(request, ko.final.id, "core.forfeit", { by: seated.away_entrant_id, reason: "disqualified" });
     expect((await read(request, ko.final.id)).outcome).toMatchObject({ kind: "award", winner: seated.home_entrant_id, reason: "disqualified" });
     const loser = ko.nameOf.get(seated.away_entrant_id!)!;
@@ -272,6 +275,45 @@ test.describe("W2b — a credited result says which one, on every public surface
       expect(paint.bg, `${w}: translucent, not the light pill`).toMatch(/\/ 0\.2\)|, 0\.2\)/);
       await expectNoHorizontalScroll(page);
       await crop(banner, `champion-banner-dq-${w}`);
+      banners++;
+    }
+    expect(banners).toBe(WIDTHS.length);
+  });
+
+  // Loop R M-10 (ruling 115): a disqualification after a bare Start — nothing played — is a walkover, so the champion
+  // banner reads the walkover line and no tag repeats it, exactly as a walkover's final does. The banner reads whether
+  // the final was played (the engine's reader over its ledger), never the reason.
+  test("M-10: a final disqualified after a bare Start reads 'by walkover', no tag beside it, at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(3 * 60_000);
+    const org = await activeOrg(page);
+    const ko = await publicKnockout(request);
+    for (const semi of ko.semis) await post(request, semi.id, "core.forfeit", { by: semi.away_entrant_id, reason: "walkover" });
+    await expect
+      .poll(async () => { const f = await read(request, ko.final.id); return f.home_entrant_id !== null && f.away_entrant_id !== null; }, { timeout: STEP_MS })
+      .toBe(true);
+    const seated = await read(request, ko.final.id);
+    await post(request, ko.final.id, "core.start", {});
+    await post(request, ko.final.id, "core.forfeit", { by: seated.away_entrant_id, reason: "disqualified" });
+    expect((await read(request, ko.final.id)).outcome).toMatchObject({ kind: "award", winner: seated.home_entrant_id, reason: "disqualified" });
+    const loser = ko.nameOf.get(seated.away_entrant_id!)!;
+    const walkoverLine = say("knockout.championLineWalkover", { name: loser, round: "Final" });
+    const beatLine = say("knockout.championLine", { name: loser, round: "Final" });
+    let banners = 0;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.goto(`/shared/${org.slug}/${ko.compSlug}?tab=knockout`);
+      await dismissCookieBanner(page);
+      const banner = page.locator('[data-testid^="mh-knockout-champion-"]').first();
+      await expect(banner, `${w}: the unplayed final's line`).toContainText(walkoverLine, { timeout: STEP_MS });
+      await expect(banner, `${w}: never "Beat"`).not.toContainText(beatLine);
+      await expect(page.getByTestId("mh-knockout-champion-forfeit"), `${w}: no tag repeats it`).toHaveCount(0);
+      // The final's own card keeps its DQ tag and sentence.
+      await expect(
+        page.getByTestId(`mh-match-${ko.final.id}`).getByRole("img", { name: say("forfeit.sentence.disqualified", { loser }) }),
+        `${w}: the final's card tag`,
+      ).toHaveText(say("forfeit.tag.disqualified"));
+      await expectNoHorizontalScroll(page);
+      await crop(banner, `champion-banner-dq-bare-start-${w}`);
       banners++;
     }
     expect(banners).toBe(WIDTHS.length);

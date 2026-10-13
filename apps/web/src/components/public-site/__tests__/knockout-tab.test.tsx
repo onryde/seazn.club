@@ -831,16 +831,24 @@ describe("KnockoutTab — the champion banner", () => {
     }
   });
 
-  // W2b Task 13: the banner reads the final's FORFEIT KIND (`HubMatch.forfeit`, `forfeitTag`'s), not the status line —
-  // the status cannot tell a walkover (never played) from a retirement (played, then abandoned by one side).
-  const forfeitFinal = (kind: string) =>
+  // W2b Task 13, Loop R M-10: the banner reads whether the final was PLAYED (`HubMatch.forfeit.played`, the producer's
+  // `fixturesStatsReading` over the final's ledger: the engine's one "played" reader, rulings 112/115/118/127), never
+  // the forfeit's kind. The status cannot tell a walkover from a retirement, and the kind cannot tell a disqualification
+  // after a bare Start (ruling 115: a walkover) from one after real play. Absent (`played` unknown: a document cached
+  // before the field, or a sport the hub cannot resolve) makes no walkover claim: the plain line, the tag beside it.
+  const forfeitFinal = (kind: string, played?: boolean) =>
     hubDoc({
       matches: DONE_MATCHES.map((x) =>
         x.fixtureId === "f1"
           ? {
               ...x,
               header: { ...x.header, status: "other" as const, statusLine: { key: "matchCentre.status.forfeited" } },
-              forfeit: { kind, tag: kind === "retired" ? "ret." : "w/o", sentence: "Dev — the sentence" },
+              forfeit: {
+                kind,
+                tag: kind === "retired" ? "ret." : kind === "disqualified" ? "DQ" : "w/o",
+                sentence: "Dev — the sentence",
+                ...(played === undefined ? {} : { played }),
+              },
             }
           : x,
       ),
@@ -851,26 +859,44 @@ describe("KnockoutTab — the champion banner", () => {
     expect(at).toBeGreaterThan(-1);
     return h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
   };
-  it("a final won by WALKOVER (or a withdrawal) says so — 'Won the Final by walkover against Dev', never 'Beat Dev'", () => {
+  /** Every forfeit the engine can leave on a final with nothing played before it (ruling 112: a walkover; 115: a
+   *  disqualification; 127: a withdrawal), and with play before it (113: a retirement needs play; 115, 127). */
+  const UNPLAYED = ["walkover", "disqualified", "withdrew"] as const;
+  const PLAYED = ["retired", "disqualified", "withdrew"] as const;
+  it("a final nothing was played in says so — 'Won the Final by walkover against Dev', never 'Beat Dev' (a DQ after a bare Start too, ruling 115)", () => {
     let checked = 0;
-    for (const kind of ["walkover", "withdrew"]) {
-      const banner = bannerOf(render(forfeitFinal(kind)));
+    for (const kind of UNPLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, false)));
       expect(banner).toContain(">Eli<");
       expect(banner, kind).toContain(">Won the Final by walkover against Dev<");
       expect(banner, kind).not.toContain("Beat Dev");
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(UNPLAYED.length);
   });
-  it("…a final won on a RETIREMENT or a disqualification was played: 'Beat Dev', not the walkover line", () => {
+  it("…a final PLAYED before its forfeit (a retirement, a disqualification or a withdrawal after play): 'Beat Dev', not the walkover line", () => {
     let checked = 0;
-    for (const kind of ["retired", "disqualified"]) {
-      const banner = bannerOf(render(forfeitFinal(kind)));
+    for (const kind of PLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, true)));
       expect(banner, kind).toContain(">Beat Dev in the Final<");
       expect(banner, kind).not.toContain("walkover");
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(PLAYED.length);
+  });
+  it("the same disqualification reads both ways — the played fact decides, never the reason (M-10's pair)", () => {
+    expect(bannerOf(render(forfeitFinal("disqualified", false)))).toContain(">Won the Final by walkover against Dev<");
+    expect(bannerOf(render(forfeitFinal("disqualified", true)))).toContain(">Beat Dev in the Final<");
+  });
+  it("`played` unknown makes no walkover claim: the plain line and the final's tag, whatever the kind", () => {
+    let checked = 0;
+    for (const kind of ["walkover", "withdrew", "retired", "disqualified"]) {
+      const banner = bannerOf(render(forfeitFinal(kind)));
+      expect(banner, kind).toContain(">Beat Dev in the Final<");
+      expect(banner, `${kind}: the tag says what the line does not`).toContain("mh-knockout-champion-forfeit");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   // W2b T13 fix round 1 (review (b)) — the line keeps no reason ("Beat Dev" is right for a retirement, and the walkover
@@ -880,33 +906,34 @@ describe("KnockoutTab — the champion banner", () => {
     expect(bannerOf(render(doneDoc("f1")))).not.toContain("mh-knockout-champion-forfeit");
   });
   // Design audit 3.6: (a) the tag rides only beside a line that names no reason — "Beat Dev" (a retirement, a
-  // disqualification). The walkover line already says "by walkover", so its "w/o" said it twice; a withdrawal shares the
-  // w/o tag and the walkover line (X-RS-2). (b) The banner is the dark court: the chip wears the on-court idiom (the
-  // court card's translucent amber), never the light pill. Both sides of (a) are counted.
-  it("a final won on a retirement or a disqualification: the final's tag beside 'Beat Dev', named by its sentence, once, on-court", () => {
+  // disqualification, a withdrawal after play). The walkover line already says "by walkover", so its "w/o" said it
+  // twice. (b) The banner is the dark court: the chip wears the on-court idiom (the court card's translucent amber),
+  // never the light pill. Both sides of (a) are counted.
+  it("a final played before its forfeit: the final's tag beside 'Beat Dev', named by its sentence, once, on-court", () => {
     let checked = 0;
-    for (const kind of ["retired", "disqualified"]) {
-      const banner = bannerOf(render(forfeitFinal(kind)));
+    for (const kind of PLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, true)));
       const chip = BANNER_CHIP.exec(banner);
       expect(chip, `${kind}: the banner's chip`).not.toBeNull();
-      expect([chip![1], chip![2], chip![3]], kind).toEqual([esc("Dev — the sentence"), esc("Dev — the sentence"), kind === "retired" ? "ret." : "w/o"]);
+      const tag = kind === "retired" ? "ret." : kind === "disqualified" ? "DQ" : "w/o";
+      expect([chip![1], chip![2], chip![3]], kind).toEqual([esc("Dev — the sentence"), esc("Dev — the sentence"), tag]);
       expect(banner.split("mh-knockout-champion-forfeit").length - 1, `${kind}: once`).toBe(1);
       const cls = new Set((/data-testid="mh-knockout-champion-forfeit" class="([^"]*)"/.exec(banner)?.[1] ?? "").split(/\s+/u));
       for (const token of ["rounded-full", "bg-amber-400/20", "text-amber-300"]) expect(cls.has(token), `${kind}: the on-court ${token}`).toBe(true);
       for (const token of ["bg-zinc-100", "text-ink-muted"]) expect(cls.has(token), `${kind}: not the light pill's ${token}`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(PLAYED.length);
   });
-  it("a final won by walkover or withdrawal: the line says 'by walkover', and no w/o tag repeats it", () => {
+  it("a final nothing was played in: the line says 'by walkover', and no tag repeats it", () => {
     let checked = 0;
-    for (const kind of ["walkover", "withdrew"]) {
-      const banner = bannerOf(render(forfeitFinal(kind)));
+    for (const kind of UNPLAYED) {
+      const banner = bannerOf(render(forfeitFinal(kind, false)));
       expect(banner, `${kind}: the walkover line`).toContain("by walkover");
       expect(banner, `${kind}: no tag beside it`).not.toContain("mh-knockout-champion-forfeit");
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(UNPLAYED.length);
   });
 
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {

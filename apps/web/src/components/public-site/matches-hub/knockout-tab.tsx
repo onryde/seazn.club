@@ -71,11 +71,11 @@ export interface KnockoutTabProps {
  *  `import type`, so a value cannot cross that boundary. */
 const THIRD_PLACE_KEY = "third-place";
 
-/** W2b Task 13: the forfeits whose match was never played — the walkover's and the withdrawal's
- *  (`HubMatch.forfeit.kind`, `forfeitTag`'s own kinds). A final won by one of these was not "beaten" in. A retirement
- *  or a disqualification happened DURING the final, so the plain line stands. Before W2b every forfeited final read
- *  the walkover line (the status was the only fact), a retirement included. */
-const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set(["walkover", "withdrew"]);
+/** W2b Task 13, Loop R M-10: a final won by a forfeit with NOTHING played before it was not "beaten" in — the
+ *  producer's `HubMatch.forfeit.played`, the engine's one "played" reader over the final's ledger, never the kind (a
+ *  disqualification after a bare Start is a walkover, ruling 115; one after play is not). Only an explicit `false`
+ *  claims the walkover line: unknown makes no claim, and the final's tag beside the plain line says what it was. */
+const finalUnplayed = (forfeit: HubMatchT["forfeit"]): boolean => forfeit?.played === false;
 
 /** A round-0 cell in the Draw, in px; round k is this times 2^k, so every node
  *  sits centred between the two that feed it. */
@@ -454,9 +454,9 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
           <p className="text-[13px] text-court-muted">
             {t(
               dict,
-              // A final won by forfeit was never played, so "Beat X" would
-              // report a match that did not happen.
-              UNPLAYED_FORFEIT_KINDS.has(final.forfeit?.kind ?? "")
+              // A final won by a forfeit with nothing played before it was
+              // never played, so "Beat X" would report a match that did not happen.
+              finalUnplayed(final.forfeit)
                 ? "knockout.championLineWalkover"
                 : "knockout.championLine",
               { name: loser.name, round: roundLabel },
@@ -466,7 +466,7 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
                 Design audit 3.6: (a) only there — the walkover line already says "by walkover", and its "w/o" tag
                 beside it said it twice (a withdrawal shares that tag, X-RS-2; the final's card keeps its sentence);
                 (b) in the on-court tone, the banner being the dark court. */}
-            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (
+            {final.forfeit && !finalUnplayed(final.forfeit) ? (
               <span className="ml-1.5 inline-block align-middle">
                 <ForfeitTagChip
                   tag={final.forfeit.tag}

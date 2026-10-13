@@ -73,6 +73,18 @@ vi.mock("@/server/usecases/discipline", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/discipline")>()),
   activePublicSuspensionEntries: suspensionEntriesMock,
 }));
+// Loop R M-10: whether a forfeited fixture was PLAYED is the engine's reader over its stored ledger, a SQL read — a
+// real database's job (`competition-hub-db.test.ts` "M-10"). Here it is a seam: what the builder asks it, and where
+// its answer lands. By default it answers nothing (the card then carries no `played`).
+const statsReadingMock = vi.hoisted(() =>
+  vi.fn<
+    (db: unknown, fixtures: readonly { id: string; sport_key: string; module_version: string }[]) => Promise<Map<string, { played: boolean; result: boolean }>>
+  >(async () => new Map()),
+);
+vi.mock("@/server/usecases/player-stats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/player-stats")>()),
+  fixturesStatsReading: statsReadingMock,
+}));
 // Observed, not silenced for its own sake: a read the hub swallows must still
 // leave a warning behind, or a broken discipline query reads as "no bans".
 const logMock = vi.hoisted(() => ({
@@ -2726,6 +2738,29 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
       expect(final.bucket).toBe("completed");
       expect(final.winnerIndex).toBe(1);
       expect(final.header.statusLine?.key).toBe("matchCentre.status.forfeited");
+    });
+
+    it("Loop R M-10: the banner's `played` is the engine reader's answer for the forfeited final, asked under the division's own module", async () => {
+      // Empty case first: answered nothing, the card makes no claim.
+      const before = await load({ stages: [cup], fixtures: eight({ status: "forfeited", outcome: forfeit("e2", "e1") }), standings: [] });
+      expect(before.matches.find((m) => m.fixtureId === "ko-f")!.forfeit).not.toHaveProperty("played");
+      for (const played of [false, true]) {
+        statsReadingMock.mockClear();
+        statsReadingMock.mockImplementationOnce(async () => new Map([["ko-f", { played, result: played }]]));
+        const doc = await load({ stages: [cup], fixtures: eight({ status: "forfeited", outcome: forfeit("e2", "e1") }), standings: [] });
+        expect(doc.matches.find((m) => m.fixtureId === "ko-f")!.forfeit?.played, `answered ${played}`).toBe(played);
+        // Asked once, of the forfeit-tagged fixtures only (the played results beside it are not read), under the
+        // division's pinned sport and version.
+        expect(statsReadingMock).toHaveBeenCalledTimes(1);
+        const asked = statsReadingMock.mock.calls[0]![1];
+        expect(asked).toEqual([{ id: "ko-f", sport_key: DIV.sport_key, module_version: DIV.module_version }]);
+      }
+    });
+
+    it("Loop R M-10: a division with no forfeit asks nothing", async () => {
+      statsReadingMock.mockClear();
+      await load({ stages: [cup], fixtures: eight({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } }), standings: [] });
+      expect(statsReadingMock).not.toHaveBeenCalled();
     });
 
     it("a grand-final RESET won by forfeit crowns the reset's winner, not the first grand final's", async () => {

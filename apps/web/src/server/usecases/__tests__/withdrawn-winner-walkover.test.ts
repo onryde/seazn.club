@@ -342,7 +342,8 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       expect(want.sentence, `${sport}: premise, the sentence names her`).toContain(await nameOf(w1));
       const pub = await publicOf(s);
       expect(pub.words.get(parentId), `${sport}: schedule and bracket`).toEqual(want);
-      expect(pub.hub.matches.find((m) => m.fixtureId === parentId)?.forfeit, `${sport}: the hub card`).toEqual(want);
+      // Loop R M-10: the hub card also says nothing was played (no event at all), so a final's banner reads the walkover line.
+      expect(pub.hub.matches.find((m) => m.fixtureId === parentId)?.forfeit, `${sport}: the hub card`).toEqual({ ...want, played: false });
       const doc = await loadMatchCentre(sql, await publicRow(parentId), await matchCentreCtx(s.divisionId));
       expect(doc.header.statusLine, `${sport}: the match page`).toEqual({ key: "forfeit.sentence.withdrew", params: { loser: await nameOf(w1) } });
       expect(t(EN, doc.header.statusLine!.key, doc.header.statusLine!.params), sport).toBe(want.sentence);
