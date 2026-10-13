@@ -1007,6 +1007,7 @@ export function FixtureConsole({
   const seatWithdrew = (seat: "home" | "away") =>
     (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
   const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
+  const vsWord = <span className="text-slate-600">{msg("schedule.vs")}</span>;
   const headerName = (seat: "home" | "away", name: string) =>
     !withdrawnSeat ? (
       name
@@ -1164,7 +1165,9 @@ export function FixtureConsole({
                 the badge/label convention throughout components/v2). Ratio
                 computed and pinned in
                 components/v2/__tests__/history-panel-contrast.test.tsx. */}
-            <span className={withdrawnSeat ? "mx-1.5 shrink-0 text-slate-600" : "text-slate-600"}>{msg("schedule.vs")}</span>{" "}
+            {/* M-4: in the withdrawn composition the word keeps its own span (pinned by the contrast test) and an outer
+                `shrink-0` item gives it the run sheet's margin. */}
+            {withdrawnSeat ? <span className="mx-1.5 shrink-0">{vsWord}</span> : vsWord}{" "}
             {headerName("away", awayName ?? fixture.away_unseated_name ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd"))}
           </h1>
           {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
