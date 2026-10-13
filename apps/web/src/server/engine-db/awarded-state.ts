@@ -15,8 +15,20 @@ import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { resolveFixtureCfg } from "./fixture-cfg";
+import { foldFrom, loadFoldInputs } from "./fold";
 
 type Tx = postgres.TransactionSql;
+
+/** A fixture's ledger as the award reads it: its tip, and how many recorded events still stand (no void took them
+ *  back; voids are not voidable, events.test.ts PROMPT-02) — `fed-seats.ts` `readNode`'s `live_events`. */
+async function ledgerOf(tx: Tx, fixtureId: string): Promise<{ tip: number; standing: number }> {
+  const [ledger] = await tx<{ tip: number; standing: number }[]>`
+    select coalesce(max(e.seq), 0)::int as tip,
+           (count(*) filter (where e.type <> 'core.void' and not exists (
+              select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)))::int as standing
+    from score_events e where e.fixture_id = ${fixtureId}`;
+  return ledger!;
+}
 
 /**
  * R116-2 (W2b Task 16; owner ruling 116, T13's one credited score, X-WO-1) — the state and score of a match decided by
@@ -63,15 +75,22 @@ export function awardedMatchState(
 
 /**
  * Writes `awardedMatchState` for one fixture into `match_states` — the cache every public read joins for `summary`
- * (`public_fixtures_v`) — at `last_seq` 0: no event was recorded, and none is (X-PS-1: the stats reader reads the
- * ledger, so the tie stays no match played; the forfeit is folded, never appended). Under the fixture's own resolved cfg (`resolveFixtureCfg`, the fold's) and
+ * (`public_fixtures_v`) — at the ledger's tip: no event is recorded for it (X-PS-1: the stats reader reads the
+ * ledger, so the tie stays no match played; the forfeit is folded, never appended). The tip is 0 for a tie nobody
+ * touched; for one whose every event a void took back (Start, then Undo) it is that ledger's last seq, the token
+ * every append is checked against (`getFixtureState`'s `last_seq`), which every `last_seq` writer takes from the
+ * ledger. Under the fixture's own resolved cfg (`resolveFixtureCfg`, the fold's) and
  * with her in her dead seat for the fold's sides — she is the award's loser, never seated (X-WD-3); `unseatedForfeitLoser`
  * is the one reader of whose seat it is.
  *
  * Called from the write that awards the tie. A reset of that award (`fed-seats.ts` `writePlan`) drops the row with it
- * (`clearAwardedMatchState`), so a row already here is a broken assumption, refused by name rather than overwriting a
- * cache some other write made. (A revived walkover — a voided double walkover's dead seat — never needs the clear: its
- * dead seat's feeder has no winner, so its award is a bye and wrote no row.)
+ * (`clearAwardedMatchState`), so over an EMPTY ledger a row already here is a broken assumption, refused by name
+ * rather than overwriting a cache some other write made. Over a ledger every void took back, the row is that ledger's
+ * own fold (the take-back's append wrote it), which holds no play: the award takes it over, and its reset puts it back
+ * (Loop R M-17, class 13 — refusing it refused the arriving side's decider). A recorded event that still stands is
+ * play, and an award recorded without an event never overwrites play: refused by name. (A revived walkover — a voided
+ * double walkover's dead seat — never needs the clear: its dead seat's feeder has no winner, so its award is a bye and
+ * wrote no row.)
  */
 export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise<void> {
   const [fixture] = await tx<
@@ -99,6 +118,10 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
   if (!division) throw new Error(`writeAwardedMatchState: no division for ${fixtureId}`);
   const sportModule = resolveModule(division.sport_key, division.module_version);
   const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  const ledger = await ledgerOf(tx, fixtureId);
+  if (ledger.standing > 0) {
+    throw new Error(`writeAwardedMatchState: ${fixtureId} holds ${ledger.standing} recorded event(s) no void took back, and an award recorded without an event never overwrites play`);
+  }
   const lineups = await loadLineupPair(tx, fixtureId, home, away);
   const { state, summary } = awardedMatchState(sportModule, cfg, lineups, fixture.outcome, {
     fixtureId,
@@ -106,8 +129,10 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
   });
   const written = await tx`
     insert into match_states (fixture_id, last_seq, state, summary)
-    values (${fixtureId}, 0, ${tx.json(state as never)}, ${tx.json(summary as never)})
-    on conflict (fixture_id) do nothing
+    values (${fixtureId}, ${ledger.tip}, ${tx.json(state as never)}, ${tx.json(summary as never)})
+    on conflict (fixture_id) do update set
+      last_seq = excluded.last_seq, state = excluded.state, summary = excluded.summary, updated_at = now()
+      where ${ledger.tip > 0}
     returning fixture_id`;
   if (written.length === 0) {
     throw new Error(`writeAwardedMatchState: ${fixtureId} already holds a match state, and an award recorded without an event never overwrites one`);
@@ -117,12 +142,34 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
 /**
  * R116-2 — the other half of `writeAwardedMatchState`: a write that puts an awarded tie back to `scheduled` (her feeder
  * voided, a dead seat revived) takes its score with it, or the re-opened tie would show the old walkover's credit as if
- * still decided — and the re-award would collide with it. Only a row with NO ledger behind it goes: that is the one the
+ * still decided — and the re-award would collide with it. A row with NO ledger behind it goes: that is the one the
  * award wrote, since every other `match_states` row is a fold of recorded events (append, rebuild) and stays theirs.
+ *
+ * Loop R M-17: over a ledger every void took back, the award took over that ledger's own row (`writeAwardedMatchState`),
+ * so the reset puts the ledger's fold back rather than dropping the row — a ledger with no row reads `last_seq` 0
+ * (`getFixtureState`), and every append to it would then be refused SEQ_CONFLICT. The fold is over the sides the row
+ * was folded with (its summary's `perSide`, home then away): her seat and the arriving side's may both be released by
+ * now. A row over play that still stands is that play's fold, and stays.
  */
 export async function clearAwardedMatchState(tx: Tx, fixtureId: string): Promise<void> {
   await tx`
     delete from match_states m
     where m.fixture_id = ${fixtureId}
       and not exists (select 1 from score_events e where e.fixture_id = m.fixture_id)`;
+  const ledger = await ledgerOf(tx, fixtureId);
+  if (ledger.standing > 0) return;
+  const [row] = await tx<{ summary: ScoreSummary }[]>`select summary from match_states where fixture_id = ${fixtureId}`;
+  if (!row) return;
+  const sides = row.summary.perSide;
+  if (sides.length !== 2 || !sides[0]!.entrantId || !sides[1]!.entrantId) {
+    throw new Error(`clearAwardedMatchState: ${fixtureId}'s row names ${sides.length} side(s), not the two it was folded over`);
+  }
+  const inputs = await loadFoldInputs(tx, fixtureId, { home: sides[0]!.entrantId, away: sides[1]!.entrantId });
+  if (inputs === null) throw new Error(`clearAwardedMatchState: ${fixtureId}'s ledger of ${ledger.tip} event(s) did not load`);
+  const folded = foldFrom(fixtureId, inputs);
+  await tx`
+    update match_states
+    set last_seq = ${folded.lastSeq}, state = ${tx.json(folded.state as never)}, summary = ${tx.json(folded.summary as never)},
+        updated_at = now()
+    where fixture_id = ${fixtureId}`;
 }

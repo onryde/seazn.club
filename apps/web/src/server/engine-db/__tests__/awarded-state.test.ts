@@ -94,6 +94,16 @@ describe("R116-2: an award no event recorded shows what any withdrawal walkover 
 
 describe.skipIf(!HAS_DB)("R116-2: a reset award takes its score with it, and only its own", () => {
   const rowOf = async (id: string) => (await sql<{ n: number }[]>`select count(*)::int as n from match_states where fixture_id = ${id}`)[0]!.n;
+  const fullRow = async (id: string) =>
+    (await sql<{ last_seq: number; state: unknown; summary: unknown; updated_at: Date }[]>`
+      select last_seq, state, summary, updated_at from match_states where fixture_id = ${id}`)[0] ?? null;
+  /** A seated tie of `s` stored as an award to its home side, its away side the loser, as the award's writer finds it. */
+  const awardTo = async (id: string) => {
+    const [f] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${id}`;
+    const award = { kind: "award", winner: f!.home_entrant_id, loser: f!.away_entrant_id, reason: "withdrew" };
+    await sql`update fixtures set status = 'forfeited', outcome = ${sql.json(award)} where id = ${id}`;
+  };
 
   it("the award's ledger-less row goes; a fold of recorded events stays", async () => {
     // single-sport: boardgame — the clear reads the ledger, not the sport.
@@ -112,14 +122,63 @@ describe.skipIf(!HAS_DB)("R116-2: a reset award takes its score with it, and onl
     // `played`: a recorded event, so its row is the fold of a ledger.
     await appendEvent(s.auth.orgId, played, 0, { type: "core.start", payload: {} });
     expect([await rowOf(awarded), await rowOf(played)], "premise: both carry a row").toEqual([1, 1]);
+    const playedRow = await fullRow(played);
     await withTenant(s.auth.orgId, async (tx) => {
       await clearAwardedMatchState(tx, played);
       await clearAwardedMatchState(tx, awarded);
     });
     expect(await rowOf(played), "a fold of recorded events is the ledger's, and stays").toBe(1);
+    expect(await fullRow(played), "untouched: a fold of play is never rewritten by a reset (Loop R M-17)").toEqual(playedRow);
     expect(await rowOf(awarded), "the award's own row goes").toBe(0);
     // A second clear finds nothing and refuses nothing (an idempotent reset).
     await withTenant(s.auth.orgId, (tx) => clearAwardedMatchState(tx, awarded));
     expect(await rowOf(awarded)).toBe(0);
+  });
+
+  // Loop R M-17 — single-sport: boardgame; the guard reads the fixture row, not the sport.
+  it("Loop R M-17: a tie holding no award is refused by name — there is no score to write beside nothing", async () => {
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 4 });
+    const id = s.fixtureIds[0]!;
+    await expect(withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id))).rejects.toThrow(/is no award over a side that holds no seat/);
+    expect(await rowOf(id), "nothing written").toBe(0);
+    // The positive pair: the same tie, awarded, is written.
+    await awardTo(id);
+    await withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id));
+    expect(await rowOf(id)).toBe(1);
+  });
+
+  // Loop R M-17 — single-sport: boardgame; the writer and the clear read the ledger, not the sport (the every-sport
+  // sweep of the sequence is withdrawn-winner-walkover.test.ts "Loop R M-17").
+  it("Loop R M-17: over a recorded event no void took back, the award is refused by name; once the void takes it back, the award writes at the ledger's tip", async () => {
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 4 });
+    const id = s.fixtureIds[0]!;
+    const start = await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await awardTo(id);
+    const before = await fullRow(id);
+    await expect(withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id))).rejects.toThrow(/1 recorded event\(s\) no void took back/);
+    expect(await fullRow(id), "play is never overwritten").toEqual(before);
+    // The positive pair: Undo takes the Start back (the status follows the fold, so the award is re-stored after it).
+    await sql`update fixtures set status = 'in_play', outcome = null where id = ${id}`;
+    await appendEvent(s.auth.orgId, id, start.seq, { type: "core.void", payload: {}, voids: start.event.id });
+    await awardTo(id);
+    await withTenant(s.auth.orgId, (tx) => writeAwardedMatchState(tx, id));
+    expect((await fullRow(id))?.last_seq, "at the ledger's tip").toBe(2);
+  });
+
+  it("Loop R M-17: a reset over a ledger every void took back refuses a row that does not name the two sides it was folded over", async () => {
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 4 });
+    const id = s.fixtureIds[0]!;
+    const start = await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.auth.orgId, id, start.seq, { type: "core.void", payload: {}, voids: start.event.id });
+    const takenBack = await fullRow(id);
+    expect(takenBack?.last_seq, "premise: the take-back's row").toBe(2);
+    await sql`update match_states set summary = jsonb_set(summary, '{perSide}', '[]'::jsonb) where fixture_id = ${id}`;
+    await expect(withTenant(s.auth.orgId, (tx) => clearAwardedMatchState(tx, id))).rejects.toThrow(/names 0 side\(s\), not the two/);
+    // The positive pair: the row as the take-back wrote it is put back as it was.
+    await sql`update match_states set summary = ${sql.json(takenBack!.summary as never)} where fixture_id = ${id}`;
+    await withTenant(s.auth.orgId, (tx) => clearAwardedMatchState(tx, id));
+    const { updated_at: _a, ...after } = (await fullRow(id))!;
+    const { updated_at: _b, ...want } = takenBack!;
+    expect(after, "the ledger's own fold over its own sides").toEqual(want);
   });
 });

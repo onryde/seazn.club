@@ -244,15 +244,15 @@
  {
   "id": "knockout-retired-unplayed",
   "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-  "find": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\"]);",
-  "replace": "const UNPLAYED_FORFEIT_KINDS: ReadonlySet<string> = new Set([\"walkover\", \"withdrew\", \"retired\"]);",
+  "find": "const finalUnplayed = (match: Pick<HubMatchT, \"forfeit\">): boolean => match.forfeit?.played === false;",
+  "replace": "const finalUnplayed = (match: Pick<HubMatchT, \"forfeit\">): boolean => match.forfeit !== undefined;",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/components/public-site/__tests__/knockout-tab.test.tsx"
     ],
-    "name": "a RETIREMENT or a disqualification was played"
+    "name": "a final PLAYED before its forfeit (a retirement, a disqualification or a withdrawal after play)"
    }
   ]
  },
@@ -876,7 +876,7 @@
  {
   "id": "b-banner-chip-dropped",
   "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
-  "find": "            {final.forfeit && !UNPLAYED_FORFEIT_KINDS.has(final.forfeit.kind) ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
+  "find": "            {final.forfeit && !finalUnplayed(final) ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
   "replace": "            {false ? (\n              <span className=\"ml-1.5 inline-block align-middle\">",
   "killers": [
    {
@@ -884,7 +884,7 @@
     "files": [
      "src/components/public-site/__tests__/knockout-tab.test.tsx"
     ],
-    "name": "a final won on a retirement or a disqualification"
+    "name": "a final played before its forfeit: the final's tag beside 'Beat Dev'"
    }
   ]
  },

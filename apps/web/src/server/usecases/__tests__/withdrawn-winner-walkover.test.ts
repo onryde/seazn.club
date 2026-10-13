@@ -690,3 +690,74 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     expect(card.includes(enUi("schedule.withdrawnSide", { name: dqThem })), "the arriving side is never marked").toBe(false);
   }, 240_000);
 });
+
+// Loop R M-17 (recurring class 13: a guard that refuses a legitimate new arrival). A tie whose Start was recorded and
+// then taken back holds two ledger events, neither standing, and the cache row the take-back wrote (`appendEvent`'s
+// fold of it, at seq 2). The award's writer refused ANY row there as a reset that kept its score, so the arriving
+// side's decider threw and that line could not be decided at all. A ledger that every void took back holds no play,
+// and its row is that ledger's fold, never an award's: the award takes it over, at the ledger's tip (the token every
+// append is checked against: `getFixtureState`'s `last_seq`). A reset puts the ledger's own row back. Through the
+// buttons: Start, Undo, the arriving line's Undo and re-score, Withdraw.
+const stateRow = async (id: string) =>
+  (await sql<{ last_seq: number; state: unknown; summary: unknown }[]>`
+    select last_seq, state, summary from match_states where fixture_id = ${id}`)[0] ?? null;
+const lastEvent = async (id: string) =>
+  (await sql<{ id: string; type: string; payload: unknown }[]>`
+    select id, type, payload from score_events where fixture_id = ${id} order by seq desc limit 1`)[0]!;
+/** Events no void took back, voids aside (voids are not voidable: events.test.ts PROMPT-02). */
+const standingEvents = async (id: string) =>
+  (await sql<{ n: number }[]>`
+    select count(*)::int as n from score_events e
+    where e.fixture_id = ${id} and e.type <> 'core.void'
+      and not exists (select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)`)[0]!.n;
+
+describe.skipIf(!HAS_DB)("Loop R M-17: a tie whose ledger every void took back still takes ruling 116's walkover", () => {
+  it("every sport: the award takes over the take-back's row at the ledger's tip, a reset puts that row back, and a second award takes it again", async () => {
+    let checked = 0;
+    for (const { sport, variant, play } of SPORTS) {
+      const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+      // Published, so the public's own view (`storedLines`) reads the tie.
+      await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+      const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
+      const w1 = (await play(s.auth, a.id)).home_entrant_id!;
+      const arriving = (await play(s.auth, b.id)).home_entrant_id!;
+      // Start pressed by mistake, then Undo: two ledger events, neither standing, and the take-back's own row.
+      await post(s.auth, parentId, "core.start");
+      await post(s.auth, parentId, "core.void", { event_id: (await lastEvent(parentId)).id });
+      const takenBack = await stateRow(parentId);
+      expect([takenBack?.last_seq, await standingEvents(parentId), (await fixtureRow(parentId)).status], `${sport}: premise`).toEqual([2, 0, "scheduled"]);
+      // The arriving line's decider is taken back (its winner leaves the tie), and she withdraws while that seat is TBD.
+      const decider = await lastEvent(b.id);
+      await post(s.auth, b.id, "core.void", { event_id: decider.id });
+      await withdrawEntrantCascade(s.auth, w1);
+      const waiting = await fixtureRow(parentId);
+      expect([seatOf(waiting, a.winner_to_slot), seatOf(waiting, b.winner_to_slot), waiting.outcome], `${sport}: premise, both seats empty`).toEqual([null, null, null]);
+
+      // The decider again: its winner walks over her dead seat — the walkover any ruling 116 tie shows.
+      const credit = WALKOVER_CREDIT[sport]!((await divisionOf(s.divisionId)).cfg);
+      expect(credit, `${sport}: premise, the walkover credits something`).toBeGreaterThan(0);
+      const wantLines = { [arriving]: String(credit), [w1]: "0" };
+      const awardIt = async (round: string) => {
+        await post(s.auth, b.id, decider.type, decider.payload);
+        const tie = await fixtureRow(parentId);
+        expect([tie.status, tie.outcome], `${sport} ${round}: the walkover`).toEqual(["forfeited", { kind: "award", winner: arriving, loser: w1, reason: "withdrew" }]);
+        expect(await storedLines(parentId), `${sport} ${round}: its credit`).toEqual(wantLines);
+        expect((await stateRow(parentId))?.last_seq, `${sport} ${round}: at the ledger's tip`).toBe(2);
+        expect([await activeEvents(parentId), await standingEvents(parentId)], `${sport} ${round}: no event appended`).toEqual([2, 0]);
+      };
+      await awardIt("first award");
+
+      // Reset: the decider taken back once more. The tie re-opens with the take-back's own row — not the old credit.
+      await post(s.auth, b.id, "core.void", { event_id: (await lastEvent(b.id)).id });
+      const reopened = await fixtureRow(parentId);
+      expect([reopened.status, reopened.outcome], `${sport}: re-opened`).toEqual(["scheduled", null]);
+      expect(await stateRow(parentId), `${sport}: the take-back's own row, as Undo left it`).toEqual(takenBack);
+
+      // A second award over the same ledger (the sequence, not just the feature).
+      await awardIt("second award");
+      checked++;
+    }
+    expect(checked).toBe(SPORTS.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+  }, 240_000);
+});

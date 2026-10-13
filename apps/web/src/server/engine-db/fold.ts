@@ -86,7 +86,15 @@ interface EventRow {
 // rebuild of match_state from score_events (spec 02 §6: MatchState is a
 // disposable cache = fold(events)). Returns null for a fixture with no events
 // (nothing to derive). Shared by rebuildState + verifyStateConsistency.
-export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInputs | null> {
+//
+// `sides` (Loop R M-17) folds the ledger over the two entrants a caller names instead of the fixture's seats: an
+// award's reset (awarded-state.ts `clearAwardedMatchState`) puts back the fold of a ledger every void took back after
+// its seats have been released, over the sides that ledger's own row was folded with.
+export async function loadFoldInputs(
+  tx: Tx,
+  fixtureId: string,
+  sides?: { home: string; away: string },
+): Promise<FoldInputs | null> {
   const [fixture] = await tx<FixtureRow[]>`
     select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot
     from fixtures where id = ${fixtureId}
@@ -121,7 +129,9 @@ export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInp
   // This reason lets that caller (or any other) distinguish "this guard,
   // before the fold ran" from "the fold itself judged the config" without
   // widening the exemption to every WRONG_PHASE.
-  if (!fixture.home_entrant_id || !fixture.away_entrant_id) {
+  const home = sides?.home ?? fixture.home_entrant_id;
+  const away = sides?.away ?? fixture.away_entrant_id;
+  if (!home || !away) {
     throw new EngineError("WRONG_PHASE", "fixture has an unassigned entrant (bye/TBD)", {
       fixtureId,
       reason: "unassigned_entrant",
@@ -129,12 +139,7 @@ export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInp
   }
 
   const sportModule = resolveModule(division.sport_key, division.module_version);
-  const lineups = await loadLineupPair(
-    tx,
-    fixtureId,
-    fixture.home_entrant_id,
-    fixture.away_entrant_id,
-  );
+  const lineups = await loadLineupPair(tx, fixtureId, home, away);
 
   const envelopes: EventEnvelope[] = events.map((r) => ({
     id: r.id,

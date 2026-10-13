@@ -188,8 +188,8 @@
  {
   "id": "lr-i1-seats-hub-card",
   "file": "apps/web/src/server/public-site/competition-hub.ts",
-  "find": "  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);",
-  "replace": "  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));",
+  "find": "): (ForfeitWords & { played?: boolean }) | null {\n  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);",
+  "replace": "): (ForfeitWords & { played?: boolean }) | null {\n  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason));",
   "killers": [
    {
     "cwd": "apps/web",
@@ -1212,6 +1212,349 @@
      "tools/matrix/__tests__/reference-walkover-credit.test.ts"
     ],
     "name": "all 212 enumerated cases agree"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-not-award",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (outcome.kind !== \"award\") {",
+  "replace": "  if (outcome.kind !== \"award\" && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses anything but an award"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-bye-no-loser",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (outcome.loser === null) {",
+  "replace": "  if (outcome.loser === null && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a bye"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-fold-not-the-award",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (!isDeepStrictEqual(decided, outcome)) {",
+  "replace": "  if (!isDeepStrictEqual(decided, outcome) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses an award the engine would not decide"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-no-award-no-seat",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (home === null || away === null || fixture.outcome === null) {",
+  "replace": "  if ((home === null || away === null || fixture.outcome === null) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "a tie holding no award is refused by name"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-already-holds",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (written.length === 0) {",
+  "replace": "  if (written.length === 0 && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-standing-play-refused",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) {",
+  "replace": "  if (ledger.standing > 0 && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-tip-not-zero",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "values (${fixtureId}, ${ledger.tip},",
+  "replace": "values (${fixtureId}, 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-overwrite-empty-ledger",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "      where ${ledger.tip > 0}",
+  "replace": "      where ${ledger.tip > 0 || true}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-overwrite-voided-ledger",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "      where ${ledger.tip > 0}",
+  "replace": "      where ${ledger.tip > 0 && false}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-standing-counts-voided",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "e.type <> 'core.void' and not exists (",
+  "replace": "e.type <> 'core.void' and exists (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "over a recorded event no void took back"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-no-restore",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) return;",
+  "replace": "  if (ledger.standing > 0 || true) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-rewrites-play",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (ledger.standing > 0) return;",
+  "replace": "  if (ledger.standing > 0 && false) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "the award's ledger-less row goes"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-two-sides",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "  if (sides.length !== 2 || !sides[0]!.entrantId || !sides[1]!.entrantId) {",
+  "replace": "  if ((sides.length !== 2 || !sides[0]!.entrantId || !sides[1]!.entrantId) && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-clear-sides-swapped",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "{ home: sides[0]!.entrantId, away: sides[1]!.entrantId }",
+  "replace": "{ home: sides[1]!.entrantId, away: sides[0]!.entrantId }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/awarded-state.test.ts"
+    ],
+    "name": "refuses a row that does not name the two sides"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-fold-sides-ignored",
+  "file": "apps/web/src/server/engine-db/fold.ts",
+  "find": "  const home = sides?.home ?? fixture.home_entrant_id;",
+  "replace": "  const home = fixture.home_entrant_id;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawn-winner-walkover.test.ts"
+    ],
+    "name": "the award takes over the take-back's row at the ledger's tip"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-not-forfeit",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "  if (event.type !== \"core.forfeit\") return null;",
+  "replace": "  if (event.type !== \"core.forfeit\" && false) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "every other core event type admits nothing"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-neither-side",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "  if (by !== home && by !== away) {",
+  "replace": "  if (by !== home && by !== away && false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "a forfeit by neither side is refused"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-lw-winner",
+  "file": "apps/web/src/lib/level-withdrawal.ts",
+  "find": "winner: by === home ? away : home",
+  "replace": "winner: by === home ? home : away",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/level-withdrawal.test.ts"
+    ],
+    "name": "the helper admits exactly what the kernel's fold admits"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-slides-dw",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "    creditsNobody(f.outcome)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: lineOf.get(f.id)",
+  "replace": "    (creditsNobody(f.outcome) && false)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: lineOf.get(f.id)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/double-walkover-hosts-db.test.ts"
+    ],
+    "name": "the organiser's slideshow"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-public-slides-dw",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "    creditsNobody(f.outcome)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: f.summary?.headline",
+  "replace": "    (creditsNobody(f.outcome) && false)\n      ? { line: null, tag: lookup(\"forfeit.tag.doubleWalkover\") }\n      : { line: f.summary?.headline",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/public-slides.test.ts"
+    ],
+    "name": "every sport that admits one: the results and bracket slides carry no line and the tag"
+   }
+  ]
+ },
+ {
+  "id": "lr-m17-exports-dw",
+  "file": "apps/web/src/server/usecases/exports.ts",
+  "find": "headline: creditsNobody(f.outcome) ? slotLookup(",
+  "replace": "headline: creditsNobody(f.outcome) && false ? slotLookup(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/double-walkover-hosts-db.test.ts"
+    ],
+    "name": "the bracket poster"
    }
   ]
  }
