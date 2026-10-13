@@ -313,8 +313,6 @@ jobs:
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
           key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ hashFiles('packages/engine/scripts/stryker-vitest-runner.mjs') }}@${{ github.sha }}
-          restore-keys: |
-            stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ hashFiles('packages/engine/scripts/stryker-vitest-runner.mjs') }}@
       - name: Run Stryker
         working-directory: packages/engine
         run: |
