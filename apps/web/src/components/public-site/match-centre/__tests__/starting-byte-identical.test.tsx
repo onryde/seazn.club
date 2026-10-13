@@ -170,7 +170,9 @@ describe("STARTING moves nothing else — byte-identical to BASE 5ce459f89", () 
 // T17 fix round 4, V4: the rail shows an online board's round-open time where it said "TBD". The Fixtures list is
 // every sport's, so this second golden pins the list for every fixture status × with a time and without × a court
 // name or none × a short and a long score line — with no watch prop (every other division, the embed) and with an
-// online division's links — captured AT b42a805ab, before V4 (`CAPTURE_V4_GOLDEN=1`).
+// online division's links — captured AT b42a805ab, before V4 (`CAPTURE_V4_GOLDEN=1`). Re-captured at cacf6b6e0, the same
+// commit rebased onto W2b (2026-10-13): W2b's own schedule-row markup (the `schedule-score` test id, the forfeit tag
+// track) changed every hash, so the BASE is the rebased pre-V4 tree, never the code under test.
 const GOLDEN_V4 = join(__dirname, "__fixtures__", "rail-round-opened-byte-identical.json");
 const CAPTURE_V4 = process.env.CAPTURE_V4_GOLDEN === "1";
 
