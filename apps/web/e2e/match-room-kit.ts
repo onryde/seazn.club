@@ -327,3 +327,152 @@ export async function checkedInAt(fixtureId: string, personId: string): Promise<
     return row?.checked_in_at ?? null;
   });
 }
+
+export type RoundPlayer = { name: string; personId: string; lichessId: string; userId: string; email: string; entrantId: string };
+export type RoundBoard = { fixtureId: string; home: RoundPlayer; away: RoundPlayer };
+export type SeededRound = {
+  orgId: string;
+  competitionId: string;
+  divisionId: string;
+  stageId: string;
+  /** The division's run sheet, where the queue and the Open round control live. */
+  fixturesTab: string;
+  arbiterPath: string;
+  /** `/shared/{org}/{comp}/{div}` — prefix of every public fixture page. */
+  publicBase: string;
+  /** Round 1's boards, in fixture order (seq_in_round). */
+  boards: RoundBoard[];
+};
+
+/**
+ * One online chess round of `names.length` linked players, through the
+ * product: a public competition, a boardgame division played online on a
+ * ship-1 clock, the entrants, a stage, Start, and (unless `open: false`)
+ * round 1 opened through the open-round route (D12). A league pairs every
+ * round at Generate; a Swiss stage mints its shells at Start and pairs round 1
+ * on the next Generate — the organiser's two presses. `camera: "required"` is
+ * set before anything opens, as D9 allows.
+ */
+export async function seedOnlineRound(
+  request: APIRequestContext,
+  names: string[],
+  opts: { open?: boolean; camera?: "required" | "off"; stage?: "league" | "swiss" } = {},
+): Promise<SeededRound> {
+  const people: Omit<RoundPlayer, "entrantId">[] = [];
+  for (const name of names) {
+    const { userId, email } = await seedUser(name);
+    const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", {
+      full_name: name,
+      consent: { public_name: true },
+    });
+    expect(person.status, `person ${name}: ${JSON.stringify(person.error)}`).toBeLessThan(300);
+    await linkPersonToUserBySql(person.data!.id, userId);
+    const lichessId = `e2e-rnd-${randomBytes(5).toString("hex")}`;
+    await seedLichessLink(userId, lichessId);
+    people.push({ name, personId: person.data!.id, lichessId, userId, email });
+  }
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Round ${TAG} ${randomUUID().slice(0, 4)}`,
+    visibility: "public",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Open Rapid",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: CLOCK },
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const divisionId = div.data!.id;
+  if (opts.camera === "required") {
+    // The division settings' own write (division-settings.tsx saveCameraPolicy),
+    // before any round opens — after that it may only be relaxed (D9).
+    const cam = await apiJson(request, `/api/v1/divisions/${divisionId}`, "PATCH", { camera_policy: "required" });
+    expect(cam.status, `camera policy: ${JSON.stringify(cam.error)}`).toBeLessThan(300);
+  }
+  const ents = await apiJson<{ id: string }[]>(
+    request,
+    `/api/v1/divisions/${divisionId}/entrants`,
+    "POST",
+    people.map((p, i) => ({ kind: "individual", display_name: p.name, seed: i + 1, members: [{ person_id: p.personId }] })),
+  );
+  expect(ents.status, `entrants: ${JSON.stringify(ents.error)}`).toBeLessThan(300);
+  const byEntrant = new Map(ents.data!.map((e, i) => [e.id, { ...people[i]!, entrantId: e.id }]));
+
+  let stageId: string;
+  if (opts.stage === "swiss") {
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 3 },
+    });
+    expect(stage.status, `swiss stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+    stageId = stage.data!.id;
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST", {});
+    expect(paired.status, `pair round 1: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
+  } else {
+    ({ stageId } = await createStageAndGenerate(request, divisionId));
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  }
+  if (opts.open !== false) {
+    const opened = await apiJson(request, `/api/v1/stages/${stageId}/open-round`, "POST", { roundNo: 1 });
+    expect(opened.status, `open-round: ${JSON.stringify(opened.error)}`).toBeLessThan(300);
+  }
+
+  return withDb(async (sql) => {
+    const rows = await sql<{ id: string; home: string; away: string }[]>`
+      select id, home_entrant_id as home, away_entrant_id as away from fixtures
+       where stage_id = ${stageId} and round_no = 1 and home_entrant_id is not null and away_entrant_id is not null
+       order by seq_in_round`;
+    expect(rows.length, `${names.length} entrants pair into ${names.length / 2} boards in round 1`).toBe(names.length / 2);
+    const [slug] = await sql<{ org: string; comp: string; div: string; org_id: string }[]>`
+      select o.slug as org, c.slug as comp, d.slug as div, o.id as org_id
+        from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id
+       where d.id = ${divisionId}`;
+    const base = `/o/${slug!.org}/c/${slug!.comp}/d/${slug!.div}`;
+    return {
+      orgId: slug!.org_id,
+      competitionId: comp.data!.id,
+      divisionId,
+      stageId,
+      fixturesTab: `${base}?tab=fixtures`,
+      arbiterPath: `${base}/arbiter`,
+      publicBase: `/shared/${slug!.org}/${slug!.comp}/${slug!.div}`,
+      boards: rows.map((r) => ({ fixtureId: r.id, home: byEntrant.get(r.home)!, away: byEntrant.get(r.away)! })),
+    };
+  });
+}
+
+/** A game on a board's ledger, as T9 (create) and T10 (moves) leave it, White
+ *  the home side (recorded on the row, the way T9 records it). `hold` puts it
+ *  on the organiser's desk (needs_organiser). The rules judge `moves`. */
+export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; hold?: "mismatch" }): Promise<{ fen: string }> {
+  const rules = new Chess();
+  for (const uci of opts.moves) rules.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), ...(uci.length > 4 ? { promotion: uci[4] } : {}) });
+  await withDb(async (sql) => {
+    const res = await sql`
+      update fixture_external_play
+         set status = ${opts.hold ? "needs_organiser" : "live"},
+             needs_reason = ${opts.hold ?? null},
+             challenge_id = ${`e2e${randomBytes(5).toString("hex")}`},
+             white_side = 'home',
+             white_lichess_id = ${board.home.lichessId},
+             black_lichess_id = ${board.away.lichessId},
+             moves_uci = ${sql.json(opts.moves)},
+             move_count = ${opts.moves.length},
+             started_at = now() - interval '30 minutes',
+             last_move_at = now(),
+             white_ms = ${CLOCK.base * 1000},
+             black_ms = ${CLOCK.base * 1000},
+             clock_increment_s = ${CLOCK.increment},
+             updated_at = now()
+       where fixture_id = ${board.fixtureId}`;
+    expect(res.count, `bridge row for ${board.fixtureId} (was the round opened?)`).toBe(1);
+  });
+  return { fen: rules.fen() };
+}

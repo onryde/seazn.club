@@ -222,7 +222,8 @@ test.describe("arbiter panel", () => {
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.fixturesTab);
-    await page.getByRole("link", { name: uiEn["arbiter.entry.link"] }).click();
+    // Exact: the run sheet's flag chips and the queue's "Review in arbiter panel" (T16) also lead there.
+    await page.getByRole("link", { name: uiEn["arbiter.entry.link"], exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${r.arbiterPath}$`));
     await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
 
@@ -244,12 +245,18 @@ test.describe("arbiter panel", () => {
     await expect(tiles(page).getByText(uiEn["arbiter.tile.unavailable"], { exact: true })).toHaveCount(2);
     await expect(page.locator("audio")).toHaveCount(0);
 
-    // Resync reaches the route; Lichess cannot be read here (the kit's tokens
-    // never open, LICHESS_BASE_URL is unreachable), so it says it failed.
-    const resync = page.waitForRequest((q) => q.method() === "POST" && q.url().endsWith(`/fixtures/${b1.fixtureId}/external-play/resync`));
+    // Resync reaches the route; the kit's tokens never open, so the route refuses
+    // LICHESS_TOKEN_UNAVAILABLE before any request to Lichess — and the panel
+    // says THAT, in the reader's words (T16: a retry does not fix it), not a
+    // generic "try again".
+    const resync = page.waitForResponse(
+      (q) => q.request().method() === "POST" && q.url().endsWith(`/fixtures/${b1.fixtureId}/external-play/resync`),
+    );
     await decision(page).getByRole("button", { name: uiEn["arbiter.decide.resync"] }).click();
-    await resync;
-    await expect(status(page)).toHaveText(uiEn["arbiter.notice.resyncFailed"]);
+    const refused = await resync;
+    expect(refused.status()).toBe(503);
+    expect(((await refused.json()) as { error?: { code?: string } }).error?.code).toBe("LICHESS_TOKEN_UNAVAILABLE");
+    await expect(status(page)).toHaveText(uiEn["arbiter.notice.resyncTokenUnavailable"]!);
     // Board 1 has no flag: nothing to "go on" from.
     await expect(decision(page).getByRole("button", { name: uiEn["arbiter.decide.goOn"] })).toHaveCount(0);
 
@@ -269,25 +276,47 @@ test.describe("arbiter panel", () => {
     await expect(page.getByText(uiEn["arbiter.status.onHold"], { exact: true })).toBeVisible();
     expect(off.from < off.to).toBe(true);
 
-    // "Let the game go on" answers a flag and writes nothing.
+    // "Let the game go on" (T16, D10): exactly the flags on screen are closed —
+    // kept on file under the organiser's name — and the game is untouched.
     await decision(page).getByRole("button", { name: uiEn["arbiter.decide.goOn"] }).click();
     await expect(status(page)).toHaveText(uiEn["arbiter.notice.wentOn"]);
-    const openFlags = await withDb((sql) => sql`select 1 from fixture_play_flags where fixture_id = ${b2.fixtureId} and closed_at is null`);
-    expect(openFlags.length, "the flags stay on record").toBe(2);
+    const kept = await withDb(
+      (sql) => sql<{ closed: boolean; role: string | null }[]>`
+        select f.closed_at is not null as closed, m.role from fixture_play_flags f
+          left join org_members m on m.user_id = f.resolved_by and m.org_id = f.org_id
+         where f.fixture_id = ${b2.fixtureId}`,
+    );
+    const organiser = expect.stringMatching(/^(owner|admin)$/);
+    expect(kept, "both flags closed and kept on record, resolved by an organiser").toEqual([
+      { closed: true, role: organiser },
+      { closed: true, role: organiser },
+    ]);
+    // Nothing is left to go on from.
+    await expect(decision(page).getByRole("button", { name: uiEn["arbiter.decide.goOn"] })).toHaveCount(0);
 
-    // "Settle the result now…" opens to the board's match page.
+    // "Settle the result now…" (T16): a board with a game on file is settled
+    // HERE — four outcomes, by colour from the row (White is the home side).
     const settle = decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] });
     await settle.click();
     await expect(settle).toHaveAttribute("aria-expanded", "true");
-    const fixtureNo = await withDb(async (sql) => {
-      const [row] = await sql<{ n: number }[]>`select fixture_no as n from fixtures where id = ${b2.fixtureId}`;
-      return row!.n;
-    });
-    await expect(decision(page).getByRole("link", { name: fill("arbiter.decide.settleLink", { n: 2 }) })).toHaveAttribute(
-      "href",
-      new RegExp(`/f/${fixtureNo}$`),
-    );
+    const choices = page.getByTestId("arbiter-settle").getByRole("button");
+    await expect(choices).toHaveText([
+      fill("externalPlay.settle.wins", { name: b2.home.name }),
+      fill("externalPlay.settle.wins", { name: b2.away.name }),
+      uiEn["externalPlay.resolve.draw"]!,
+      uiEn["externalPlay.resolve.noResult"]!,
+    ]);
     await shoot(page, "arbiter-board2");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await choices.filter({ hasText: uiEn["externalPlay.resolve.draw"]! }).click();
+    await expect(status(page)).toHaveText(uiEn["arbiter.notice.settled"]);
+    const settled = await withDb(async (sql) => {
+      const [row] = await sql<{ status: string; outcome: { kind?: string } | null }[]>`
+        select status, outcome from fixtures where id = ${b2.fixtureId}`;
+      return row!;
+    });
+    expect(settled.status).toBe("decided");
+    expect(settled.outcome).toMatchObject({ kind: "draw" });
 
     // Back to board 1: let it play without video. One audit record, the
     // organiser's, with the panel's note; the tiles follow the refresh.

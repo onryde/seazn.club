@@ -1,8 +1,10 @@
 /**
  * Task 9 — chess external-play UI regression:
- * - OTB (onlinePlay absent): public fixture page has no Play CTA; pad still loads.
- * - Online ready bridge: the public page loads and links to NO Lichess game
- *   (D3 deleted the lichess.org mode; T9 2026-10-09 rewrite).
+ * - OTB (onlinePlay absent): the public fixture page has no watch panel and no
+ *   Your board door; the pad still loads.
+ * - A live online board (T16): the public page WATCHES the game here — the
+ *   position from the ledger, view-only — and links to NO Lichess game
+ *   (D3 deleted the lichess.org mode).
  * - needs_organiser: division queue visible and resolve settles the fixture.
  */
 import { test, expect } from "@playwright/test";
@@ -15,6 +17,7 @@ import {
   TAG,
 } from "../helpers";
 import { publicFixturePath } from "../spectator-public-helpers";
+import { seedGameSql, seedMatchRoom } from "../match-room-kit";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -53,37 +56,28 @@ test("OTB boardgame: no Play CTA on public page; console pad still mounts", asyn
 
   const pub = await sharedPath(page.request, fx.competitionId, fx.divisionId, fx.fixtureId);
   await page.goto(pub);
-  await expect(page.getByTestId("external-play-cta")).toHaveCount(0);
-  await expect(page.getByTestId("external-play-waiting")).toHaveCount(0);
+  await expect(page.locator("main"), "the match centre rendered").toContainText(`EP OTB ${TAG}`, { timeout: 20_000 });
+  // Over the board: nothing online to watch, no door to a room (the positive
+  // pair is the next test, on an online division).
+  await expect(page.getByTestId("watch-panel")).toHaveCount(0);
+  await expect(page.getByTestId("your-board")).toHaveCount(0);
 
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(page.locator('[data-testid="score-pad"]')).toBeVisible({ timeout: 20_000 });
 });
 
-test("ready bridge: public fixture page loads and shows no Lichess play link", async ({ page }) => {
+test("a live online board: the public page watches the game here and links to no Lichess game", async ({ page }) => {
   test.setTimeout(120_000);
-  const fx = await seedRosteredFixture(page.request, {
-    label: `EP Ready ${TAG}`,
-    sportKey: "boardgame",
-    variantKey: "classical",
-    entrantKind: "individual",
-    home: [{ fullName: `EP Ready Home ${TAG}` }],
-    away: [{ fullName: `EP Ready Away ${TAG}` }],
-    emitCoreStart: false,
-  });
+  const room = await seedMatchRoom(page.request, { names: [`EP Live Home ${TAG}`, `EP Live Away ${TAG}`] });
+  // Four legal plies, judged by chess.js in the kit; the FEN is the rules', not the page's.
+  const { fen } = await seedGameSql(room, { moves: ["e2e4", "e7e5", "g1f3", "b8c6"] });
 
-  await seedFixtureExternalPlaySql(fx.fixtureId, {
-    status: "ready",
-    challengeId: `e2eReady-${TAG}`,
-  });
-
-  const pub = await sharedPath(page.request, fx.competitionId, fx.divisionId, fx.fixtureId);
-  const res = await page.goto(pub);
-  expect(res?.status(), "the public fixture page renders with a bridge row").toBe(200);
-  await expect(page.locator("main"), "the match centre rendered").toContainText(`EP Ready Home ${TAG}`, {
-    timeout: 20_000,
-  });
-  await expect(page.getByTestId("external-play-cta")).toHaveCount(0);
+  const res = await page.goto(room.fixturePath);
+  expect(res?.status(), "the public fixture page renders with a game on file").toBe(200);
+  await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "board", { timeout: 20_000 });
+  await expect(page.getByTestId("watch-board")).toBeAttached();
+  await expect(page.getByTestId("room-board-surface")).toHaveAttribute("data-fen", fen);
+  await expect(page.getByTestId("room-board-surface")).toHaveAttribute("data-view-only", "true");
   await expect(page.locator('a[href*="lichess.org"]')).toHaveCount(0);
 });
 
