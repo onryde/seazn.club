@@ -15,7 +15,7 @@
     "host": "padSpec",
     "text": "export function padSpec(cfg: CricketCfg): PadSpec {",
     "nth": 1,
-    "line": 3015
+    "line": 3031
   },
   {
     "file": "src/sports/cricket/cricket.ts",
@@ -24,7 +24,7 @@
     "host": "cricket",
     "text": "export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {",
     "nth": 1,
-    "line": 3524
+    "line": 3563
   },
   {
     "file": "src/sports/cricket/cricket.ts",
@@ -33,7 +33,7 @@
     "host": "cricket",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<CricketEv> | null {",
     "nth": 1,
-    "line": 3989
+    "line": 4052
   },
   {
     "file": "src/sports/football/football.ts",
@@ -42,7 +42,7 @@
     "host": "football",
     "text": "export const football: SportModule<FootballCfg, FootballEv, FootballState> = {",
     "nth": 1,
-    "line": 2437
+    "line": 2509
   },
   {
     "file": "src/sports/football/football.ts",
@@ -51,7 +51,7 @@
     "host": "football",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<FootballEv> | null {",
     "nth": 1,
-    "line": 2823
+    "line": 2924
   },
   {
     "file": "src/sports/nested/kernel.ts",
@@ -60,7 +60,7 @@
     "host": "makeNestedModule",
     "text": "): SportModule<NestedCfg, NestedEv, NestedState> {",
     "nth": 1,
-    "line": 1982
+    "line": 2005
   },
   {
     "file": "src/sports/nested/kernel.ts",
@@ -68,8 +68,8 @@
     "replacement": "{}",
     "host": "makeNestedModule",
     "text": "return {",
-    "nth": 2,
-    "line": 2052
+    "nth": 3,
+    "line": 2103
   },
   {
     "file": "src/sports/nested/kernel.ts",
@@ -78,7 +78,7 @@
     "host": "makeNestedModule",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {",
     "nth": 1,
-    "line": 2252
+    "line": 2330
   },
   {
     "file": "src/sports/period/kernel.ts",
@@ -87,7 +87,7 @@
     "host": "makePeriodModule",
     "text": "): SportModule<PeriodCfg, PeriodEv, PeriodState> {",
     "nth": 1,
-    "line": 1855
+    "line": 1899
   },
   {
     "file": "src/sports/period/kernel.ts",
@@ -96,7 +96,7 @@
     "host": "makePeriodModule",
     "text": "return {",
     "nth": 1,
-    "line": 2434
+    "line": 2513
   },
   {
     "file": "src/sports/period/kernel.ts",
@@ -105,16 +105,16 @@
     "host": "makePeriodModule",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<PeriodEv> | null {",
     "nth": 1,
-    "line": 2681
+    "line": 2787
   },
   {
     "file": "src/sports/setbased/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
     "host": "makeSetBasedModule",
-    "text": "export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {",
+    "text": "): SetBasedModule {",
     "nth": 1,
-    "line": 2149
+    "line": 2179
   },
   {
     "file": "src/sports/setbased/kernel.ts",
@@ -123,6 +123,6 @@
     "host": "makeSetBasedModule",
     "text": "return {",
     "nth": 1,
-    "line": 2267
+    "line": 2358
   }
 ]

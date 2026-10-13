@@ -428,19 +428,19 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2567:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2574:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2310:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2317:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2310:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2317:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
@@ -530,7 +530,7 @@
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2324:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2331:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."

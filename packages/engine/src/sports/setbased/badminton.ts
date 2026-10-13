@@ -91,4 +91,4 @@ export const badminton = makeSetBasedModule({
       },
     ],
   },
-});
+}, () => badminton);

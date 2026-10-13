@@ -154,7 +154,7 @@ export const volleyball = makeSetBasedModule({
       },
     ],
   },
-});
+}, () => volleyball);
 
 // Jul3/06 §3 — the 12-Jun scoresheet: point-by-point columns per set,
 // signature lines, final result, two matches per A4 (columnsHint: 2).

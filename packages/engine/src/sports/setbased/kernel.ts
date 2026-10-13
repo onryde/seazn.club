@@ -2169,7 +2169,14 @@ function mergePlayerStats(
 export type SetBasedModule = SportModule<SetBasedCfg, SetBasedEv, SetBasedState> &
   SetBasedServeSource;
 
-export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
+export function makeSetBasedModule(
+  preset: SetBasedPreset,
+  /** The module this call returns, as the caller's own binding (`makeSetBasedModule({...}, () => volleyball)`, as tennis
+   *  hands `() => tennis` to `makeNestedModule` and hockey hands `() => hockey` to its keeper fold): the matches fold reads
+   *  its declarations when it runs (ruling 120), never a copy. A thunk the caller owns lets the module stay the returned
+   *  object literal the Stryker split names (`makeSetBasedModule.onLineup`). */
+  self: () => StatsPlayDeclaration,
+): SetBasedModule {
   const configSchema = makeConfigSchema(preset.defaults);
   const rallyType = `${preset.key}.rally`;
   const summaryType = `${preset.key}.${preset.coarseEventType}`;
@@ -2348,7 +2355,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     return { home: credit.perSide[0].sets_won ?? state.setsWon.home, away: credit.perSide[1].sets_won ?? state.setsWon.away };
   };
 
-  const sportModule: SetBasedModule = {
+  return {
     key: preset.key,
     version: preset.version,
     // R5-1 — read by `setBasedServeContext`, which builds this module's own
@@ -2371,7 +2378,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     playerStats: mergePlayerStats(
       {
         metrics: [setBasedPointsWonMetric(rallyType)],
-        folded: setBasedMatchOutcomesFold(preset, configSchema, () => sportModule),
+        folded: setBasedMatchOutcomesFold(preset, configSchema, self),
       },
       preset.playerStats,
     ),
@@ -2826,5 +2833,4 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       return out;
     },
   };
-  return sportModule;
 }
