@@ -313,8 +313,6 @@ describe("rule-scope — buildMatchFragment (X-SR-2: a match overrides only matc
         for (const f of matchFieldsFor(ctx))
           for (const v of probes(f)) {
             const fragment = buildMatchFragment(ctx, { [f.key]: v }, resolved);
-            // Only a fragment the engine's own override check lets through ever reaches the fold.
-            if (!checkFixtureOverride(m, "knockout", variant, resolved, fragment).ok) continue;
             judged++;
             const r = m.configSchema.safeParse({ ...resolved, ...fragment });
             if (r.success) { parsed++; continue; }
