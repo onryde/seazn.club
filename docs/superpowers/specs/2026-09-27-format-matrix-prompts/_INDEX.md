@@ -1422,7 +1422,8 @@ Elsewhere the text is the controller's record.
      Built in W2c Task 7; the row is written at the batch-3 proof commit, citing `signed 130 2026-10-13`.
 131. **Engine repo split: cut over after W2e** (2026-10-13, owner "cutover be after W2e"). `packages/engine` moves to
      its own repo (GitHub Packages; Stryker moves with it) once W2 is complete — W2c, W2d and W2e stay in the monorepo.
-     Still open: repo visibility (private, which costs Actions minutes, vs public) and when the split's spec/plan start.
+     Engine repo is **public for now** (owner "public for now", same day), so GitHub-hosted Actions stay free; the split's
+     spec and plan start now (owner "start"), docs only, in their own session.
      Prep: `.superpowers/handoff/2026-10-08-w1d-close/` (split prompt, per-wave engine/web map, runner research).
      Rule rows: none (sequencing).
 
