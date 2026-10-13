@@ -86,9 +86,11 @@ const RESULT: PublicGameResult = { kind: "win", winner: "home", method: "resign"
 const finished = (o: Partial<PublicExternalPlay> = {}) =>
   docOf(ep("finished", board(9, { over: true }), { decided: true, result: RESULT, ...o }));
 type Details = { scheduledAt: string | null; clock: { limitSeconds: number; incrementSeconds: number } | null; timeZone: string };
-const paint = (doc: PublicWatchDoc, loc: Loc = "en", details: Details = DETAILS) => {
+/** The pairing's White, as the page reads it before a game exists — the AWAY entrant here, as `board()`'s game says. */
+type Side = "home" | "away" | null;
+const paint = (doc: PublicWatchDoc, loc: Loc = "en", details: Details = DETAILS, pairedWhiteSide: Side = "away") => {
   current.locale = loc;
-  return renderToStaticMarkup(<WatchPanel fixtureId="f1" initial={doc} names={NAMES} details={details} />);
+  return renderToStaticMarkup(<WatchPanel fixtureId="f1" initial={doc} names={NAMES} details={details} pairedWhiteSide={pairedWhiteSide} />);
 };
 const testids = (html: string) => [...html.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]!);
 
@@ -96,9 +98,10 @@ describe("WatchPanel — first paint, every state", () => {
   // [label, doc, data-state, data-hold, the board shown?, the keys of the copy that names the state]
   const STATES: [string, PublicWatchDoc, string, string | null, boolean, string[]][] = [
     ["not opened", docOf(null, false), "not_opened", null, false, ["externalPlay.watch.notOpenedTitle", "externalPlay.watch.notOpened"]],
-    ["not started", docOf(null), "not_started", null, false, ["externalPlay.watch.notStartedTitle", "externalPlay.watch.notStarted"]],
-    ["ready, no move yet", docOf(ep("ready", board(0))), "not_started", null, false, ["externalPlay.watch.notStartedTitle"]],
-    ["live", live(board(5)), "live", null, true, ["externalPlay.watch.title", "externalPlay.watch.viewOnly", "externalPlay.watch.intro", "externalPlay.watch.moves"]],
+    // Owner ruling 2026-10-13 (option B): from the round's open, the real board at the start position.
+    ["not started", docOf(null), "not_started", null, true, ["externalPlay.watch.status.waiting", "externalPlay.watch.title", "externalPlay.watch.viewOnly", "externalPlay.watch.intro"]],
+    ["ready, no move yet", docOf(ep("ready", board(0))), "not_started", null, true, ["externalPlay.watch.status.waiting", "externalPlay.watch.viewOnly"]],
+    ["live", live(board(5)), "live", null, true, ["externalPlay.watch.status.blackToMove", "externalPlay.watch.title", "externalPlay.watch.viewOnly", "externalPlay.watch.intro", "externalPlay.watch.moves"]],
     [
       "held: a knockout draw keeps its final position",
       docOf(ep("needs_organiser", board(9, { over: true }), { hold: "tiebreak" })),
@@ -157,6 +160,75 @@ describe("WatchPanel — first paint, every state", () => {
     expect(open).toContain('data-state="held"');
     expect(open).toContain('data-polling="true"');
     expect(open).toContain(esc(s("en", "externalPlay.needsOrganiser")));
+  });
+
+  it("NOT STARTED (option B): the start position, each name on the pairing's side, both clocks at the initial time, the waiting line above — in all four locales", () => {
+    // 900 s = 15:00 on the clock face: DETAILS' time control, read as a chess clock reads it.
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const html = paint(docOf(null), loc);
+      expect(html, loc).toContain('data-testid="watch-board" data-view-only="true" data-ply="0"');
+      expect(html, `${loc}: the pairing's White (away) on White's clock`).toMatch(/data-testid="watch-clock-white"[^]*?Bo Away[^]*?15:00/);
+      expect(html, `${loc}: home on Black's`).toMatch(/data-testid="watch-clock-black"[^]*?Ada Home[^]*?15:00/);
+      const status = html.match(/<p[^>]*data-testid="watch-status"[^>]*data-kind="([^"]+)"[^>]*>[^]*?<\/p>/);
+      expect(status?.[1], loc).toBe("waiting");
+      expect(status?.[0], loc).toContain(esc(s(loc, "externalPlay.watch.status.waiting")));
+      expect(html.indexOf('data-testid="watch-status"'), `${loc}: the line sits ABOVE the board`).toBeLessThan(html.indexOf('data-testid="watch-board"'));
+      expect(html, `${loc}: no card in place of the board`).not.toContain('data-testid="watch-not-started"');
+      expect(html, `${loc}: no move list before a move`).not.toContain('data-testid="watch-moves"');
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    // The positive pair on colours: a pairing with HOME as White puts the names the other way round.
+    const homeWhite = paint(docOf(null), "en", DETAILS, "home");
+    expect(homeWhite).toMatch(/data-testid="watch-clock-white"[^]*?Ada Home/);
+    expect(homeWhite).toMatch(/data-testid="watch-clock-black"[^]*?Bo Away/);
+    // A game on file at ply 0 knows its own White (home here), whatever the pairing read said.
+    const ready = paint(docOf(ep("ready", board(0, { whiteSide: "home", whiteMs: null, blackMs: null }))), "en", DETAILS, "away");
+    expect(ready).toMatch(/data-testid="watch-clock-white"[^]*?Ada Home[^]*?15:00/);
+    // No colours read and no time control: each side says its colour, and an unread clock is a dash, never 0:00.
+    const bare = paint(docOf(null), "en", { ...DETAILS, clock: null }, null);
+    expect(bare).toMatch(new RegExp(`data-testid="watch-clock-white"[^]*?${esc(s("en", "externalPlay.room.colour.white"))}[^]*?—`));
+    expect(bare).not.toContain("0:00");
+    // Before the round opens there is still no board (D12).
+    expect(paint(docOf(null, false))).not.toContain('data-testid="watch-board"');
+  });
+
+  it("the status line names whose move it is while the game is on, in the SAME slot the waiting line used — and none once it is over", () => {
+    const kind = (html: string) => html.match(/data-testid="watch-status"[^>]*data-kind="([^"]+)"/)?.[1] ?? null;
+    const cells: [string, PublicWatchDoc, string | null, string | null][] = [
+      ["not started", docOf(null), "waiting", "externalPlay.watch.status.waiting"],
+      ["ply 1: Black to move", live(board(1)), "black", "externalPlay.watch.status.blackToMove"],
+      ["ply 2: White to move", live(board(2)), "white", "externalPlay.watch.status.whiteToMove"],
+      ["held", docOf(ep("needs_organiser", board(9, { over: true }), { hold: "tiebreak" })), null, null],
+      ["finished", finished(), null, null],
+    ];
+    let checked = 0;
+    for (const [label, doc, want, key] of cells) {
+      for (const loc of LOCALES) {
+        const html = paint(doc, loc);
+        expect(kind(html), `${loc} ${label}`).toBe(want);
+        if (key !== null) expect(html, `${loc} ${label}`).toContain(esc(s(loc, key)));
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(cells.length * LOCALES.length);
+  });
+
+  it("the first move moves nothing: before and after it, the board column holds the same pieces in the same order, in the same grid", () => {
+    // A node render cannot measure; this pins the composition the browser check (online-chess-desk.spec.ts) measures.
+    const column = (html: string) => {
+      const grid = html.match(/<div class="(grid [^"]*)"/)?.[1];
+      const start = html.indexOf('data-testid="watch-status"');
+      const end = html.indexOf("<aside");
+      return { grid, ids: testids(html.slice(start, end)) };
+    };
+    const before = column(paint(docOf(null)));
+    const after = column(paint(live(board(1))));
+    expect(before.grid, "the two-column grid from the start").toContain("lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)]");
+    expect(after.grid).toBe(before.grid);
+    expect(before.ids).toEqual(["watch-status", "watch-board", "watch-clock-black", "watch-clock-white"]);
+    expect(after.ids).toEqual(before.ids);
   });
 
   it("the board names each side from White's side on file — the AWAY entrant plays White here", () => {
@@ -290,7 +362,7 @@ describe("WatchPanel — after hydration", () => {
     vi.useRealTimers();
   });
   const mount = (initial: PublicWatchDoc, fixtureId = "f1") =>
-    renderIsland(WatchPanelInner, { fixtureId, initial, names: NAMES, details: DETAILS, fetchBoard });
+    renderIsland(WatchPanelInner, { fixtureId, initial, names: NAMES, details: DETAILS, pairedWhiteSide: "away", fetchBoard });
   const pushOf = (ply: number, o: Partial<PublicBoardPush> = {}): PublicBoardPush => ({
     fen: board(ply).fen, lastMove: "e2e4", turn: ply % 2 === 0 ? "white" : "black", ply, whiteMs: 600_000, blackMs: 600_000, over: false, ...o,
   });
@@ -405,7 +477,7 @@ describe("WatchPanel — after hydration", () => {
   });
 
   it("a navigation to another fixture starts from THAT fixture's doc — the panel is keyed by its fixture", () => {
-    const el = WatchPanel({ fixtureId: "f2", initial: live(board(1)), names: NAMES, details: DETAILS }) as ReactElement;
+    const el = WatchPanel({ fixtureId: "f2", initial: live(board(1)), names: NAMES, details: DETAILS, pairedWhiteSide: "away" }) as ReactElement;
     expect(el.type).toBe(WatchPanelInner);
     expect(el.key).toBe("f2");
   });

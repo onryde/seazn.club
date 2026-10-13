@@ -9,7 +9,9 @@
  *  - Unpair refused while a game is on file, with the way to the arbiter panel;
  *  - "Your board": a signed-in player's door into their room, nobody else's;
  *  - the public watch panel: the game's position, view-only, kept current by
- *    the poll, and the not-opened line before the round opens;
+ *    the poll, and the not-opened line before the round opens; from the
+ *    round's open, the start position with the waiting line (T17 round B,
+ *    option B), and a first move that moves nothing on the page;
  *  - /me's Lichess card for an entered player who is not linked, its 44px
  *    controls hit-tested, and the re-link's grant disclosure;
  *  - T16 fix round 1: the Open round confirmation's earlier-round note (R1),
@@ -603,6 +605,97 @@ test.describe("online chess — the public fixture page", () => {
     await row.click();
     await page.waitForURL((u) => u.pathname === room.fixturePath);
     await expect(page.getByTestId("watch-panel")).toBeVisible();
+    await ctx.close();
+  });
+
+  test("option B: from the round's open, the board at the start position — names on their side, clocks at the initial time, the waiting line; the first move moves nothing", async ({
+    browser,
+    request,
+  }) => {
+    test.setTimeout(240_000 + 4 * POLL_MS);
+    const room = await seedMatchRoom(request, { names: [longName(), "Bo Lindqvist"] });
+    const start = new Chess();
+    // The division's clock as the kit set it (10+5): both faces read the base time, as a chess clock shows it.
+    const initial = `${Math.floor(CLOCK.base / 60)}:${String(CLOCK.base % 60).padStart(2, "0")}`;
+
+    const ctx = await cold(browser);
+    const page = await ctx.newPage();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(room.fixturePath);
+    const panel = page.getByTestId("watch-panel");
+    await expect(panel).toHaveAttribute("data-state", "not_started", { timeout: 30_000 });
+    const status = page.getByTestId("watch-status");
+    await expect(status).toHaveAttribute("data-kind", "waiting");
+    await expect(status).toHaveText(uiEn["externalPlay.watch.status.waiting"]!);
+    const surface = page.getByTestId("room-board-surface");
+    await expect(surface).toHaveAttribute("data-fen", start.fen());
+    await expect(surface).toHaveAttribute("data-view-only", "true");
+    await expect(page.locator("cg-board piece")).toHaveCount(32);
+    await expect(page.getByTestId("watch-clock-white")).toContainText(room.white.name);
+    await expect(page.getByTestId("watch-clock-black")).toContainText(room.black.name);
+    await expect(page.getByTestId("watch-clock-white")).toContainText(initial);
+    await expect(page.getByTestId("watch-clock-black")).toContainText(initial);
+    await expect(panel).toContainText(uiEn["externalPlay.watch.viewOnly"]);
+    await expect(page.locator('a[href*="lichess.org"]')).toHaveCount(0);
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "b-not-started");
+
+    /** Where the status line, the board and both clocks sit inside the panel, at a width — measured from the panel's
+     *  own corner, because the page above it is not the panel's: a fixture with no time loses its "Time TBD" line
+     *  when the header goes Live (fixture-subheading.ts, R11 C3), which moves the whole panel, not its contents. */
+    const layout = async (width: number) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(150);
+      return page.evaluate(() => {
+        const panel = document.querySelector('[data-testid="watch-panel"]')!.getBoundingClientRect();
+        const box = (id: string) => {
+          const r = document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect();
+          return r ? [Math.round(r.left - panel.left), Math.round(r.top - panel.top), Math.round(r.width), Math.round(r.height)] : null;
+        };
+        return {
+          status: box("watch-status"),
+          board: box("room-board-surface"),
+          white: box("watch-clock-white"),
+          black: box("watch-clock-black"),
+        };
+      });
+    };
+    const WIDTHS = [320, 768, 1280];
+    const before: Record<number, Awaited<ReturnType<typeof layout>>> = {};
+    for (const w of WIDTHS) {
+      before[w] = await layout(w);
+      // The line belongs to the board: it starts where the board's column starts (at 768 that column is centred).
+      expect(before[w]!.status?.[0], `the status line lines up with the board at ${w}px`).toBe(before[w]!.black?.[0]);
+    }
+
+    // The first move (labelled SQL, the kit's: T10's append of 1.e4) reaches the open page through the poll.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const { fen: afterE4 } = await seedGameSql(room, { moves: ["e2e4"] });
+    await expect(surface).toHaveAttribute("data-fen", afterE4, { timeout: POLL_MS + 15_000 });
+    await expect(panel).toHaveAttribute("data-state", "live");
+    await expect(status).toHaveAttribute("data-kind", "black");
+    await expect(status).toHaveText(uiEn["externalPlay.watch.status.blackToMove"]!);
+    let compared = 0;
+    for (const w of WIDTHS) {
+      const after = await layout(w);
+      for (const part of ["status", "board", "white", "black"] as const) {
+        expect(before[w]![part], `${part} at ${w}px has a box`).not.toBeNull();
+        expect(after[part], `${part} at ${w}px: the first move moved nothing`).toEqual(before[w]![part]);
+        compared += 1;
+      }
+    }
+    expect(compared, "anti-vacuity: 4 parts × 3 widths").toBe(12);
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "b-first-move");
+
+    // Further on (eight plies): White to move, the same line above the board.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const { fen } = await seedGameSql(room, { moves: LINE });
+    await expect(surface).toHaveAttribute("data-fen", fen, { timeout: POLL_MS + 15_000 });
+    await expect(status).toHaveAttribute("data-kind", "white");
+    await expect(status).toHaveText(uiEn["externalPlay.watch.status.whiteToMove"]!);
+    expect(await noSidewaysScroll(page)).toBe(3);
+    await shoot(page, "b-live");
     await ctx.close();
   });
 

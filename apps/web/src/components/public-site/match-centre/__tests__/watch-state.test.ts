@@ -17,10 +17,11 @@
 // The sequence property below drives a server timeline through every order
 // a push/poll interleaving can take (pushes lost, polls stale), and checks
 // the board never regresses and always ends on the server's last word.
+import { Chess } from "chess.js";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { PublicBoardPush, PublicExternalPlay, PublicWatch, PublicWatchDoc } from "@/server/external-play/public-view";
-import { holdOf, initialWatch, movesBehind, nextWatch, pollsAgain, watchView, type WatchModel } from "../watch-state";
+import { START_FEN, holdOf, initialWatch, movesBehind, nextWatch, pollsAgain, startBoard, watchView, type WatchModel } from "../watch-state";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const AT = "2026-10-13T10:00:00.000Z";
@@ -311,4 +312,33 @@ describe("nextWatch — any interleaving of pushes and stale polls", () => {
       });
     }
   }
+});
+
+// Owner ruling 2026-10-13 (option B): from the round's open the spectators see the real board — the start position,
+// both clocks at the initial time, each player on their side — instead of a "not started" card.
+describe("startBoard — the board before the first move", () => {
+  it("the start position is the rules' own (chess.js), not a string typed twice", () => {
+    expect(START_FEN).toBe(new Chess().fen());
+  });
+
+  it("the empty case first: no game on file, no colours read, no time control — the start position, clocks unknown", () => {
+    expect(startBoard(null, null, null)).toEqual({
+      fen: new Chess().fen(), lastMove: null, turn: "white", ply: 0, whiteMs: null, blackMs: null, asOf: null,
+      clockRunning: false, over: false, whiteSide: null, moves: [],
+    });
+  });
+
+  it("before a game exists: the pairing's colours and BOTH clocks at the division's initial time, stopped", () => {
+    // 15 minutes, as the time control states it — the rulebook's number, not one the panel computed.
+    const b = startBoard(null, "away", 15 * 60 * 1000);
+    expect(b).toMatchObject({ whiteSide: "away", whiteMs: 900_000, blackMs: 900_000, clockRunning: false, over: false, turn: "white", ply: 0 });
+  });
+
+  it("a game on file at ply 0 lends its own colours and any clock it has read — the game's word over the pairing's", () => {
+    const g = board(0, { whiteSide: "home", whiteMs: 599_000, blackMs: 598_000 });
+    expect(startBoard(g, "away", 900_000)).toMatchObject({ whiteSide: "home", whiteMs: 599_000, blackMs: 598_000, ply: 0 });
+    // A game created but not yet clocked (create-game resets the ledger's clocks to null) keeps the initial time.
+    const unclocked = board(0, { whiteSide: "home", whiteMs: null, blackMs: null });
+    expect(startBoard(unclocked, "away", 900_000)).toMatchObject({ whiteSide: "home", whiteMs: 900_000, blackMs: 900_000 });
+  });
 });

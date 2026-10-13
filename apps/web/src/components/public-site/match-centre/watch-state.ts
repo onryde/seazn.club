@@ -44,6 +44,33 @@ function stopped(play: PublicExternalPlay | null): PublicExternalPlay | null {
   return { ...play, watch: { ...w, over: true, clockRunning: false } };
 }
 
+/** The position before any move (FIDE Laws Art. 2), as FEN. */
+export const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+/** The board the spectators see from the round's open until the first move (owner ruling 2026-10-13, option B):
+ *  the start position, White to move, both clocks stopped at the initial time, each player on their side. A game
+ *  on file at ply 0 lends its own colours and any clock it has read; before it exists, the pairing's colours and
+ *  the division's time control. A clock nobody can state is null (a dash), never 0. */
+export function startBoard(
+  watch: PublicWatch | null,
+  pairedWhiteSide: "home" | "away" | null,
+  initialMs: number | null,
+): PublicWatch {
+  return {
+    fen: START_FEN,
+    lastMove: null,
+    turn: "white",
+    ply: 0,
+    whiteMs: watch?.whiteMs ?? initialMs,
+    blackMs: watch?.blackMs ?? initialMs,
+    asOf: null,
+    clockRunning: false,
+    over: false,
+    whiteSide: watch?.whiteSide ?? pairedWhiteSide,
+    moves: [],
+  };
+}
+
 /** Is `next` older than the board on screen — would showing it take the board back? */
 function goesBack(cur: PublicWatch, next: PublicWatch | null): boolean {
   if (next === null) return true;

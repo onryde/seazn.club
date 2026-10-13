@@ -2,8 +2,8 @@
 // is chessground, reached only through the room's Board (client-only, via
 // board-loader — licence-isolation.test.ts holds the one-importer rule), so a
 // node render paints the frame around it: names, clocks, whose move. Every
-// line AROUND the board (view-only chip, the result, a hold, "not started")
-// belongs to the panel (fix round 1, M9: one owner per testid).
+// line AROUND the board (view-only chip, the result, a hold, the status line
+// above it) belongs to the panel (fix round 1, M9: one owner per testid).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -49,11 +49,14 @@ describe("WatchBoard", () => {
     let checked = 0;
     for (const w of [watch, { ...watch, over: true }]) {
       const html = render(w);
-      for (const key of ["externalPlay.watch.notStarted", "externalPlay.watch.viewOnly", "externalPlay.room.over.title"]) {
+      for (const key of [
+        "externalPlay.watch.status.waiting", "externalPlay.watch.status.whiteToMove", "externalPlay.watch.status.blackToMove",
+        "externalPlay.watch.viewOnly", "externalPlay.room.over.title",
+      ]) {
         expect(html, `${key} over=${w.over}`).not.toContain(key);
       }
       expect(html).not.toContain('data-testid="watch-over"');
-      expect(html).not.toContain('data-testid="watch-not-started"');
+      expect(html, "the status line above the board is the panel's (M9)").not.toContain('data-testid="watch-status"');
       checked += 1;
     }
     expect(checked).toBe(2);
