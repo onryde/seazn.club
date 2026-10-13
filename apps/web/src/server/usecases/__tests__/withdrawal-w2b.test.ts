@@ -1076,6 +1076,33 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect([walked.status, walked.outcome], "the final walks the other semi's winner over").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
   }, 120_000);
 
+  // Loop R M-12: the no-choice sentence now names the dialog's options after play as "one side and the reason that
+  // fits, Retirement or Disqualification" — so the retirement route owes the same proof as R-4's disqualification: the
+  // line closes, nobody advances, the next match walks the other semi's winner over.
+  it("M-12: the same way out with a RETIREMENT — nobody advances, and the next match walks the other semi's winner over", async () => {
+    // single-sport: football, the held-line rig (R-4's).
+    const s = await seedBracket({ ...football, stageKind: "knockout", entrants: 4 });
+    const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!a || !b || a.winner_to_fixture === null || a.winner_to_fixture !== b.winner_to_fixture) throw new Error("rig: two semis into one final");
+    await heldFootball(s.auth, a.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${a.home_entrant_id}`;
+    await patchEntrant(s.auth, a.away_entrant_id!, { status: "disqualified" } as never);
+    await voidLatest(s.auth, a.id);
+    expect((await fixtureRow(a.id)).status, "back into play").toBe("in_play");
+    await post(s.auth, a.id, "core.forfeit", { by: a.home_entrant_id, reason: "retired" });
+    const closed = await fixtureRow(a.id);
+    expect([closed.status, closed.outcome?.kind, (closed.outcome as { reason?: string } | null)?.reason], "the line is closed by the retirement").toEqual(["forfeited", "award", "retired"]);
+    const final = await fixtureRow(a.winner_to_fixture);
+    expect([seatOf(final, a.winner_to_slot), labelOf(final, a.winner_to_slot)], "nobody advances from it: the seat is dead").toEqual([null, BYE_KEY]);
+    await post(s.auth, b.id, "core.start");
+    await post(s.auth, b.id, "football.goal", { by: b.home_entrant_id });
+    await post(s.auth, b.id, "football.period", { phase: "HT" });
+    await post(s.auth, b.id, "football.period", { phase: "FT" });
+    expect((await fixtureRow(b.id)).status, "rig: the other semi decided").toBe("decided");
+    const walked = await fixtureRow(a.winner_to_fixture);
+    expect([walked.status, walked.outcome], "the final walks the other semi's winner over").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
+  }, 120_000);
+
   it("tidy-2 (R-4 on a FINAL): the void-then-forfeit route names a DEPARTED winner of a line that feeds nothing — why the dialog offers that route only where the line feeds a next match", async () => {
     // single-sport: football, the held-line rig. A two-entrant knockout: its one line is the final.
     const s = await seedBracket({ ...football, stageKind: "knockout", entrants: 2 });
