@@ -1518,6 +1518,23 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     expect(board.exportGameMeta, "verified once, by its export").toHaveBeenCalledTimes(1);
   });
 
+  // T17 re-review N1: PAST the window, a challenge still `created` in the out-list that the ongoing list already shows
+  // as a game is that GAME — never a stray. Cancelling it would abort the accepted game (cancel aborts an accepted,
+  // unplayed game — measured), and the same call would then adopt the game it had just aborted.
+  it("N1: PAST the window, an id in BOTH lookups is the game — adopted, and never cancelled as a stray", async () => {
+    const s = await seed();
+    const sent = await crashedAfterSend(s, WINDOW_MS + 1);
+    const theirs = freshGameId();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [ourChallenge(theirs, s)] });
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+    exportsAnswer({ [theirs]: ourMeta(theirs, sent) });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(board.cancelChallenge, "the accepted game was cancelled as a stray").not.toHaveBeenCalled();
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+    expect(board.acceptChallenge, "a game needs no accept").not.toHaveBeenCalled();
+    expect(await marker(s.fixtureId)).toMatchObject({ status: "ready", challenge_id: theirs });
+  });
+
   it("a RE-ARMED row (pending, no claim, the marker still set) is looked up too", async () => {
     // e.g. an organiser's resolve putting a held unknown-outcome row back to
     // pending (T16): the marker is what remembers a create went out.
