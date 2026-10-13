@@ -14,7 +14,7 @@
 // Pure: no DB. Single-sport by construction — online play is boardgame only.
 import { describe, expect, it } from "vitest";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { publicPlayOf, watchLinkOf, type PublicFixtureRow, type WatchLinkRow } from "../external-play-read";
+import { publicPlayOf, publicResultOf, watchLinkOf, type PublicFixtureRow, type WatchLinkRow } from "../external-play-read";
 import { NEEDS_REASONS } from "@/server/external-play/types";
 
 const OPEN = new Set(["scheduled", "in_play"]);
@@ -153,7 +153,7 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
   it("every fixture status × bridge state × round opened or not", () => {
     // [label, bridge, round opened?, expected for an OPEN fixture, expected for one OUT of play]
     type Want = ReturnType<typeof watchLinkOf>;
-    const FINAL: Want = { kind: "final", score: "" };
+    const FINAL: Want = { kind: "final", score: "", noResult: false };
     const cells: [string, Partial<WatchLinkRow>, boolean, Want, Want][] = [
       ["round not opened, no bridge", { status: null, challenge_id: null, move_count: 0 }, false, { kind: "not_opened" }, null],
       ["round not opened, a bridge pending", { status: "pending", challenge_id: null, move_count: 0 }, false, { kind: "not_opened" }, null],
@@ -164,14 +164,19 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       ["the bridge closed", { status: "finished" }, true, FINAL, FINAL],
     ];
     let checked = 0;
+    let voided = 0;
     for (const fixtureStatus of FIXTURE_STATUSES) {
       for (const [label, bridge, opened, wantOpen, wantOut] of cells) {
         const got = watchLinkOf(link({ ...bridge, round_opened: opened, fixture_status: fixtureStatus }));
-        expect(got, `${fixtureStatus} / ${label}`).toEqual(OPEN.has(fixtureStatus) ? wantOpen : wantOut);
+        // I-3: an abandoned board is VOID — its final position says No result, never a score.
+        const want = OPEN.has(fixtureStatus) ? wantOpen : fixtureStatus === "abandoned" && wantOut !== null ? { ...wantOut, noResult: true } : wantOut;
+        expect(got, `${fixtureStatus} / ${label}`).toEqual(want);
+        if (fixtureStatus === "abandoned" && wantOut !== null) voided += 1;
         checked += 1;
       }
     }
     expect(checked, "anti-vacuity").toBe(FIXTURE_STATUSES.length * cells.length);
+    expect(voided, "anti-vacuity: the abandoned cells").toBeGreaterThan(0);
   });
 
   it("the final position carries the result's score, White first — the away entrant plays White here", () => {
@@ -182,8 +187,27 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       outcome: { kind: "win", winner: HOME },
       summary: { perSide: [{ entrantId: HOME, line: "1" }, { entrantId: AWAY, line: "0" }] },
     });
-    expect(watchLinkOf(decided)).toEqual({ kind: "final", score: "0–1" });
-    expect(watchLinkOf({ ...decided, white_side: "home" })).toEqual({ kind: "final", score: "1–0" });
+    expect(watchLinkOf(decided)).toEqual({ kind: "final", score: "0–1", noResult: false });
+    expect(watchLinkOf({ ...decided, white_side: "home" })).toEqual({ kind: "final", score: "1–0", noResult: false });
+  });
+
+  it("I-3: an ABANDONED board (VOID) reads No result — the header with no method or score, the link with no score — whatever outcome or summary the row carries; a decided board beside it keeps its result", () => {
+    const rows: [string, Partial<WatchLinkRow>][] = [
+      ["no outcome (an abandon decides nobody)", { outcome: null, summary: null }],
+      ["a level outcome left by a bracket draw before the abandon", { outcome: { kind: "draw" }, summary: { perSide: [{ entrantId: HOME, line: "½" }, { entrantId: AWAY, line: "½" }] } }],
+    ];
+    let checked = 0;
+    for (const [label, over] of rows) {
+      const r = link({ status: "finished", fixture_status: "abandoned", finished_at: new Date("2026-10-13T10:00:00.000Z"), ...over });
+      expect(publicResultOf(r), label).toEqual({ kind: "no_result", winner: null, method: null, score: "", recordedAt: "2026-10-13T10:00:00.000Z" });
+      expect(watchLinkOf(r), label).toEqual({ kind: "final", score: "", noResult: true });
+      // The pair: the same row decided reads its result.
+      const decided = { ...r, fixture_status: "decided", outcome: { kind: "win", winner: HOME }, summary: { perSide: [{ entrantId: HOME, line: "1" }, { entrantId: AWAY, line: "0" }] } };
+      expect(publicResultOf(decided)?.kind, label).toBe("win");
+      expect(watchLinkOf(decided), label).toEqual({ kind: "final", score: "1–0", noResult: false });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 });
 

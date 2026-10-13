@@ -50,7 +50,8 @@ export type RoomGame = {
 export type RoomResult = {
   /** The engine's outcome, from the viewer's side: a win (or, W2b, a
    *  forfeit's award) is won/lost; a draw; or no result (a double forfeit —
-   *  chess.md §7 — which W2b folds to a double walkover). */
+   *  chess.md §7 — which W2b folds to a double walkover; or, I-3, a VOID
+   *  board, abandoned, which has no method and no score). */
   outcome: "won" | "lost" | "draw" | "no_result";
   /** boardgame.result's method, when one was recorded. */
   method: string | null;
@@ -267,6 +268,11 @@ export function decisiveResultFor(e: DecisiveEvent, seats: Seats): RoomResult | 
   }
   return resultFor({ ...seats, winnerEntrantId: e.payload.winner ?? null, method: e.payload.method ?? null });
 }
+
+/** I-3: the card for an ABANDONED board — VOID, nobody's result. The engine folds an abandon to no outcome (the
+ *  fixture reads `abandoned`, append-event.ts's derivation of that fold), so there is no method and no score to show:
+ *  the card says No result and nothing more. */
+export const ABANDONED_RESULT: RoomResult = { outcome: "no_result", method: null, score: "" };
 
 /** How long the room's realtime subscriber token lives. It used to be the
  *  window's deadline (T+20), which cut a running game's broadcasts off

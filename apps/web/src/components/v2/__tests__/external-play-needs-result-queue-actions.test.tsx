@@ -56,7 +56,7 @@ const HELD = (fixtureId: string, over: Partial<HeldRow> = {}): HeldRow => ({
   stageName: "League",
   canResync: true,
   seated: false,
-  noNextMatch: false,
+  knockout: false,
   reason: "aborted",
   ...over,
 });
@@ -77,7 +77,7 @@ const FLAGGED = (fixtureId: string, over: Partial<FlaggedBoard> = {}): FlaggedBo
     canSettle: true,
     whiteSide: "home",
     tiebreakOwed: false,
-    noNextMatch: false,
+    knockout: false,
     flags: [
       { id: `${fixtureId}-a`, kind: "out_of_band_play", at: "2026-10-12T19:00:00.000Z", plies: null },
       { id: `${fixtureId}-b`, kind: "out_of_band_play", at: "2026-10-12T19:01:00.000Z", plies: null },
@@ -208,7 +208,7 @@ describe("where the answer shows", () => {
     let checked = 0;
     for (const c of cases) {
       net.calls.length = 0;
-      const board = FLAGGED("g1", c.over ? { state: { kind: "result", score: "1–0" } } : {});
+      const board = FLAGGED("g1", c.over ? { state: { kind: "result", score: "1–0", noResult: false } } : {});
       const ui = mount({ flagged: [board] });
       expect(textOf(byTestId(ui.tree(), "external-play-go-on")[0])).toBe(c.over ? "Mark as reviewed" : "Let the game go on");
       click(byTestId(ui.tree(), "external-play-go-on")[0]);

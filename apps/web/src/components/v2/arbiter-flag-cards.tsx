@@ -164,7 +164,7 @@ export function boardStateWord(state: ArbiterBoard["state"], f: Fmt): string {
     case "on_hold":
       return f.t("arbiter.state.onHold");
     case "result":
-      return state.score ?? f.t("arbiter.state.over");
+      return state.noResult ? f.t("arbiter.state.noResult") : (state.score ?? f.t("arbiter.state.over"));
     case "cancelled":
       return f.t("arbiter.state.cancelled");
   }
@@ -201,9 +201,9 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
               ? f.t("arbiter.notice.needsWinner")
               : n.code === "ARBITER_PLAYS_THIS_BOARD"
                 ? f.t("arbiter.notice.settleOwnBoard")
-                : // W2b D19's 409: a board loaded before its bracket line stopped feeding a next match.
-                  n.code === "DOUBLE_WALKOVER_NO_NEXT_MATCH"
-                  ? f.t("arbiter.notice.noNextMatch")
+                : // I-3's 409: No result on a knockout board (a panel loaded before its stage became one).
+                  n.code === "KNOCKOUT_NEEDS_WINNER"
+                  ? f.t("arbiter.notice.knockoutNeedsWinner")
                   : f.t("arbiter.notice.failed");
     case "overridden":
       return f.t("arbiter.notice.overridden");
@@ -220,11 +220,11 @@ export function noticeSentence(n: ArbiterNotice, f: Fmt, over = false): string {
 
 /** The settle buttons, by colour as the panel and the queue name the
  *  players; the server settles by side. A drawn knockout game takes a winner
- *  only (spec §3.6). On a bracket line that feeds no next match the server
- *  refuses "No result" (a double walkover, W2b D19), so it is not offered:
- *  `noNextMatch` is the server's own reading, carried on the row. */
+ *  only (spec §3.6). In any knockout the server refuses "No result" (I-3: a
+ *  knockout game needs a winner), so it is not offered: `knockout` is the
+ *  server's own reading, carried on the row. */
 export function settleChoices(
-  board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; noNextMatch: boolean },
+  board: { whiteSide: "home" | "away"; whiteName: string; blackName: string; tiebreakOwed: boolean; knockout: boolean },
   f: Fmt,
 ): { choice: SettleChoice; label: string }[] {
   const white: SettleChoice = board.whiteSide === "home" ? "home_wins" : "away_wins";
@@ -239,12 +239,12 @@ export function settleChoices(
     { choice: white, label: f.t("externalPlay.settle.wins", { name: board.whiteName }) },
     { choice: black, label: f.t("externalPlay.settle.wins", { name: board.blackName }) },
     { choice: "draw", label: f.t("externalPlay.resolve.draw") },
-    ...(board.noNextMatch ? [] : [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]),
+    ...(board.knockout ? [] : [{ choice: "no_result" as const, label: f.t("externalPlay.resolve.noResult") }]),
   ];
 }
 
 /** Why "No result" is missing, said where it would have been — only where it
  *  would otherwise be offered (a tie-break never offers it). */
-export function settleNoNextMatchGuidance(board: { tiebreakOwed: boolean; noNextMatch: boolean }): boolean {
-  return board.noNextMatch && !board.tiebreakOwed;
+export function settleKnockoutGuidance(board: { tiebreakOwed: boolean; knockout: boolean }): boolean {
+  return board.knockout && !board.tiebreakOwed;
 }

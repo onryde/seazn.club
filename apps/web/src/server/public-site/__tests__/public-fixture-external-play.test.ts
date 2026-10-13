@@ -393,7 +393,7 @@ describe.skipIf(!HAS_DB)("loadDivisionWatch — the division Fixtures list's wat
     // T17 owner change (2026-10-13): the idle board, its round open and no move yet, reads Starting.
     expect(links).toEqual({
       [live!.fixtureId]: { kind: "live" },
-      [done!.fixtureId]: { kind: "final", score: "0–1" },
+      [done!.fixtureId]: { kind: "final", score: "0–1", noResult: false },
       [idle!.fixtureId]: { kind: "starting" },
     });
     expect(JSON.stringify(links), "no challenge id, no Lichess id, no hold reason").not.toMatch(/gm-|lichess|needs_|token/i);

@@ -23,8 +23,9 @@ export type ArbiterBoardState =
   | { kind: "live"; moveNo: number }
   /** Held for the organiser (fixture_external_play.status = needs_organiser). */
   | { kind: "on_hold" }
-  /** Over: a result written (score White first, "1–0"), or settled without one. */
-  | { kind: "result"; score: string | null }
+  /** Over: a result written (score White first, "1–0"), or settled without one. `noResult` (I-3): the board was
+   *  abandoned — VOID, nobody's result — and has no score. */
+  | { kind: "result"; score: string | null; noResult: boolean }
   /** T16 fix round 1, R4 — the fixture was cancelled: no result will come, but its OPEN flags are still the organiser's
    *  to review. Only the Flagged list carries one; the round panel lists no cancelled board. */
   | { kind: "cancelled" };
@@ -125,10 +126,10 @@ export type ArbiterBoard = {
   /** T16: a drawn knockout game waits for the organiser to pick who goes
    *  through (held `tiebreak_owed`): the settle offers a winner only. */
   tiebreakOwed: boolean;
-  /** W2b D19: the server refuses a double walkover here — a bracket line that feeds no next match (a final, a last
-   *  rung, a third-place match, a reset grand final) — so the settle does not offer "No result". The server's own
-   *  reading (`doubleWalkoverRefused`, lib/double-walkover-next-match.ts), never re-derived on the client. */
-  noNextMatch: boolean;
+  /** I-3: a knockout — every stage kind where a level result is forbidden — so the server refuses No result (a
+   *  knockout game needs a winner) and the settle does not offer it. The server's own reading (`noResultRefused`,
+   *  server/usecases/external-play/no-result.ts), never re-derived on the client. */
+  knockout: boolean;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
 };

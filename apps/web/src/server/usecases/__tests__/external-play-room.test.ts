@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { foldMatch } from "@seazn/engine/core";
+import EN from "@/dictionaries/en/ui.json";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
@@ -23,7 +24,7 @@ import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
 import { act, type PlayResult } from "../external-play/play";
 import { fenAfter } from "@/server/external-play/fen";
-import { writeResultFrom } from "../external-play/result";
+import { holdRefusedNoShow, writeResultFrom } from "../external-play/result";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { resolveExternalPlay } from "../external-play/resolve";
 import type { GameSnapshot } from "@/server/external-play/types";
@@ -441,10 +442,30 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the game as the room 
     expect(black.result).toMatchObject({ outcome: "won", score: "0–1" });
   });
 
-  it("I7 + RB1: the organiser's No result on a game being played reads as NO RESULT for both players — the double walkover W2b records, as the engine folds it, never a draw", async () => {
+  it("I7 + I-3: the organiser's No result on a game being played reads as NO RESULT for both players — VOID (an abandon), no method, no score; never a draw", async () => {
     const s = await seed();
     await gameOnFile(s, { status: "live", moves: ["e2e4", "e7e5"] });
-    // The real producer: the organiser's settle (W2b spec §5.2 — a chess double forfeit is core.forfeit{by: both}).
+    // The real producer: the organiser's settle. No hold on the board: the reason is the organiser's own decision.
+    expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
+    const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq`;
+    expect(ledger, "premise: the abandon is the ledger's one event").toEqual([
+      { type: "core.abandon", payload: { reason: (EN as Record<string, string>)["externalPlay.resolve.abandonReason.none"] } },
+    ]);
+    const [fx] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${s.fixtureId}`;
+    expect(fx, "premise: the engine decided nobody").toEqual({ status: "abandoned", outcome: null });
+    let checked = 0;
+    for (const who of [s.home, s.away]) {
+      const snap = await readRoom({ kind: "session", userId: who.userId }, s.fixtureId, deps());
+      expect(snap.result).toEqual({ outcome: "no_result", method: null, score: "" });
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("I7 + I-3: both players absent — No result is W2b's double walkover, read as NO RESULT for both, as the engine folds it, never a draw", async () => {
+    const s = await seed();
+    await gameOnFile(s, { status: "live", moves: [] });
+    await holdRefusedNoShow({ fixtureId: s.fixtureId, absent: "both", detail: "sweep: refused 3 passes running (TEST)" });
     expect(await resolveExternalPlay(await mintOrgOwnerAuth(s.orgId), s.fixtureId, "no_result")).toEqual({ status: "finished" });
     const ledger = await sql<{ type: string; payload: unknown }[]>`select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq`;
     expect(ledger, "premise: the double walkover is the ledger's one event").toEqual([{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);

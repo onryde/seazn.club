@@ -79,7 +79,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     canSettle: true,
     whiteSide: "home",
     tiebreakOwed: false,
-    noNextMatch: false,
+    knockout: false,
     flags: [],
     ...over,
   };
@@ -100,7 +100,7 @@ const ROUND: ArbiterRound = {
       boardNo: 2,
       white: { name: "Maximiliana Wolfeschlegel-Featherstonehaugh", personId: "c" },
       black: { name: "Priya Raghunathan", personId: "d" },
-      state: { kind: "result", score: "1–0" },
+      state: { kind: "result", score: "1–0", noResult: false },
       canResync: false,
       playable: false,
       canSettle: false,
@@ -360,8 +360,10 @@ describe("the header and the boards (canvas)", () => {
       [{ kind: "checking_in" }, "Checking in"],
       [{ kind: "starting" }, "Starting"],
       [{ kind: "on_hold" }, "On hold"],
-      [{ kind: "result", score: "½–½" }, "Finished · ½–½"],
-      [{ kind: "result", score: null }, "Finished"],
+      [{ kind: "result", score: "½–½", noResult: false }, "Finished · ½–½"],
+      [{ kind: "result", score: null, noResult: false }, "Finished"],
+      // I-3: an abandoned board — VOID — reads No result, never a score.
+      [{ kind: "result", score: null, noResult: true }, "Finished · No result"],
     ];
     let checked = 0;
     for (const [state, label] of states) {
@@ -369,7 +371,7 @@ describe("the header and the boards (canvas)", () => {
       expect(text(html(props({ round: { ...ROUND, boards: [b] } }))), label).toContain(label);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 });
 
@@ -636,26 +638,30 @@ describe("your decision", () => {
     ]);
   });
 
-  // W2b D19: a double walkover is refused on a bracket line that feeds no next match (a final, a last rung, a
-  // third-place match, a reset grand final) — the server's own reading arrives as `noNextMatch`, so the settle never
-  // offers the "No result" W2b would refuse with a 409, and says why in its place, in every locale.
-  it("a line that feeds no next match: No result is not offered and the guidance says why — every locale, counted", () => {
-    const b = { ...ROUND.boards[2]!, noNextMatch: true, whiteSide: "away" as const };
+  // I-3: in any knockout the server refuses No result (a knockout game needs a winner) — its own reading arrives as
+  // `knockout`, so the settle never offers the "No result" it would refuse with a 409, and says why in its place, in
+  // every locale.
+  it("a knockout board: No result is not offered and the guidance says why — every locale, counted", () => {
+    const b = { ...ROUND.boards[2]!, knockout: true, whiteSide: "away" as const };
     let locales = 0;
     for (const loc of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
       const dict = LOCALES[loc] as Record<string, string>;
       const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }), loc);
       expect(settleButtons(h).map(([c]) => c), loc).toEqual(["away_wins", "home_wins", "draw"]);
-      const guide = h.match(/<p[^>]*data-testid="arbiter-settle-no-next-match"[^>]*>(.*?)<\/p>/);
+      const guide = h.match(/<p[^>]*data-testid="arbiter-settle-knockout"[^>]*>(.*?)<\/p>/);
       expect(guide, `${loc}: the guidance renders`).not.toBeNull();
-      expect(text(guide![1]!), loc).toBe(dict["arbiter.decide.noNextMatch"]);
+      expect(text(guide![1]!), loc).toBe(dict["arbiter.decide.knockoutNeedsWinner"]);
       locales++;
     }
     expect(locales).toBe(4);
-    // A drawn knockout on such a line: a winner only, as before — No result is never offered there, so no guidance.
+    // A drawn knockout: a winner only, as before — No result is never offered there, so no guidance.
     const owed = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed: true }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
     expect(settleButtons(owed).map(([c]) => c)).toEqual(["away_wins", "home_wins"]);
-    expect(owed).not.toContain('data-testid="arbiter-settle-no-next-match"');
+    expect(owed).not.toContain('data-testid="arbiter-settle-knockout"');
+    // The pair: a board that is not a knockout offers No result, and no guidance.
+    const league = html(props({ round: { ...ROUND, boards: [{ ...b, knockout: false }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+    expect(settleButtons(league).map(([c]) => c)).toEqual(["away_wins", "home_wins", "draw", "no_result"]);
+    expect(league).not.toContain('data-testid="arbiter-settle-knockout"');
   });
 
   it("a board nobody reached (no online game on file) keeps T15's way to its match page — no settle buttons; closed, the disclosure paints none", () => {
@@ -707,8 +713,8 @@ describe("your decision", () => {
       [{ boardId: "f3", kind: "settle_failed", code: "ONLINE_GAME_OVER" }, EN["arbiter.notice.onlineGameOver"]!],
       [{ boardId: "f3", kind: "settle_failed", code: "TIEBREAK_NEEDS_WINNER" }, EN["arbiter.notice.needsWinner"]!],
       [{ boardId: "f3", kind: "settle_failed", code: "ARBITER_PLAYS_THIS_BOARD" }, EN["arbiter.notice.settleOwnBoard"]!],
-      // W2b D19's 409 — a panel loaded before the bracket was wired past this line still offered No result.
-      [{ boardId: "f3", kind: "settle_failed", code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" }, EN["arbiter.notice.noNextMatch"]!],
+      // I-3's 409 — No result on a knockout board (a panel loaded before its stage became one still offered it).
+      [{ boardId: "f3", kind: "settle_failed", code: "KNOCKOUT_NEEDS_WINNER" }, EN["arbiter.notice.knockoutNeedsWinner"]!],
       [{ boardId: "f3", kind: "overridden" }, EN["arbiter.notice.overridden"]!],
       [{ boardId: "f3", kind: "override_failed", code: "FIXTURE_NOT_PLAYABLE" }, EN["arbiter.notice.notPlayable"]!],
       [{ boardId: "f3", kind: "override_failed", code: "VIDEO_NOT_REQUIRED" }, EN["arbiter.notice.notRequired"]!],
@@ -784,7 +790,7 @@ describe("the camera join, as pure decisions", () => {
       [{ cameraPolicy: "optional" }, true],
       [{ cameraPolicy: "off" }, false],
       [{ videoOverridden: true }, false],
-      [{ state: { kind: "result", score: "1–0" } }, false],
+      [{ state: { kind: "result", score: "1–0", noResult: false } }, false],
       [{ state: { kind: "checking_in" } }, true],
       [{ state: { kind: "on_hold" } }, true],
     ];

@@ -144,7 +144,7 @@ describe("match centre header — an online board starting: the round open, no m
       [{ kind: "starting" }, { onlineGameInPlay: false, onlineGameStarting: true }],
       [{ kind: "live" }, { onlineGameInPlay: true, onlineGameStarting: false }],
       [{ kind: "not_opened" }, { onlineGameInPlay: false, onlineGameStarting: false }],
-      [{ kind: "final", score: "1–0" }, { onlineGameInPlay: false, onlineGameStarting: false }],
+      [{ kind: "final", score: "1–0", noResult: false }, { onlineGameInPlay: false, onlineGameStarting: false }],
       [null, { onlineGameInPlay: false, onlineGameStarting: false }],
     ];
     let checked = 0;

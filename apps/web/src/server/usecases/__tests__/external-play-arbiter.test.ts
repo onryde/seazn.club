@@ -233,7 +233,7 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
     expect(byId.get(c!.fixtureId)!.state).toEqual({ kind: "live", moveNo: 31 });
     expect(byId.get(d!.fixtureId)!.state).toEqual({ kind: "on_hold" });
     // White (home) won: 1–0, White first (FIDE game score).
-    expect(byId.get(e!.fixtureId)!.state).toEqual({ kind: "result", score: "1–0" });
+    expect(byId.get(e!.fixtureId)!.state).toEqual({ kind: "result", score: "1–0", noResult: false });
     // The live board's clocks as T10 stored them, running (ply >= 2); an even
     // ledger leaves White to move.
     expect(byId.get(c!.fixtureId)!.clock).toEqual({

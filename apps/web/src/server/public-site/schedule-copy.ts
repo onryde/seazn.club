@@ -44,12 +44,18 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
  *  "Round not opened yet"), from the org-locale lookup the division page already holds. */
 export function publicWatchCopy(
   ui: (
-    key: "externalPlay.watch.list.live" | "externalPlay.watch.list.final" | "externalPlay.watch.list.notOpened" | "externalPlay.watch.list.starting",
+    key:
+      | "externalPlay.watch.list.live"
+      | "externalPlay.watch.list.final"
+      | "externalPlay.watch.list.noResult"
+      | "externalPlay.watch.list.notOpened"
+      | "externalPlay.watch.list.starting",
   ) => string,
 ): ScheduleWatchCopy {
   return {
     live: ui("externalPlay.watch.list.live"),
     final: ui("externalPlay.watch.list.final"),
+    noResult: ui("externalPlay.watch.list.noResult"),
     notOpened: ui("externalPlay.watch.list.notOpened"),
     starting: ui("externalPlay.watch.list.starting"),
   };

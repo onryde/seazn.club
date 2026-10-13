@@ -23,25 +23,29 @@ import "server-only";
 //                 a bracket the engine opens the tie-break, and the board is
 //                 held `tiebreak_owed` by the same rule as a game's draw (R2):
 //                 a knockout draw is never decided;
-//   - "No result" — a double walkover, `core.forfeit {by: "both", reason:
-//                 "walkover"}` (RB1, controller ruling 2026-10-13; W2b spec
-//                 §5.2: a chess forfeit is a core.forfeit, and W2b D15 refuses
-//                 the old `boardgame.result{double_forfeit}` from every
-//                 writer). Never a Start: before play the board stays unplayed
+//   - "No result" — VOID (I-3, controller ruling, fix round 2): an abandon,
+//                 `core.abandon {reason}` with the hold's reason in plain words
+//                 in the club's language — no points to either player, no
+//                 absence. Only where BOTH players stayed away (no_show_both,
+//                 double_walkover_blocked) is it W2b's double walkover,
+//                 `core.forfeit {by: "both", reason: "walkover"}` (W2b spec
+//                 §5.2). Never a Start: before play the board stays unplayed
 //                 (ruling 118 reads chess's play from an active Start), after
-//                 it the Start stands. Never a tie-break; on a line that feeds
-//                 no next match W2b D19 refuses it
-//                 (DOUBLE_WALKOVER_NO_NEXT_MATCH) and nothing is written;
+//                 it the Start stands. In ANY knockout it is refused
+//                 (KNOCKOUT_NEEDS_WINNER) and nothing is written: a knockout
+//                 game needs a winner. no-result.ts holds all three rules;
 //   - a board whose tie-break is owed takes a winner only, written as the
 //     organiser's settle (`core.settle {method: organiser}`, W2a).
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { toLocale } from "@/lib/i18n-constants";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "../fixtures";
 import { EngineError } from "@seazn/engine/core";
 import { scoreEvent } from "../scoring";
 import { whiteSideOf, type Side } from "./guard";
+import { noResultEvent, noResultRefused } from "./no-result";
 import { isPlayableFixtureStatus } from "./preflight";
 import { foldPhaseOf, holdOwedTiebreak, tiebreakIsPending } from "./result";
 import { isSeatedOn } from "./seated";
@@ -70,6 +74,9 @@ type Board = {
   bridgeStatus: string;
   needsReason: string | null;
   whiteSide: Side | null;
+  stageKind: string | null;
+  /** The club's default locale: the abandon reason's language (I-3). */
+  orgLocale: string | null;
 };
 
 function requireOrganiserSession(auth: AuthCtx): string {
@@ -86,10 +93,13 @@ async function loadBoard(auth: AuthCtx, fixtureId: string): Promise<Board> {
   const [row] = await sql<Board[]>`
     select f.org_id as "orgId", f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
-           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.white_side as "whiteSide"
+           ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.white_side as "whiteSide",
+           s.kind as "stageKind", o.default_locale as "orgLocale"
       from fixtures f
       join divisions d on d.id = f.division_id
+      join organizations o on o.id = f.org_id
       join fixture_external_play ep on ep.fixture_id = f.id
+      left join stages s on s.id = f.stage_id
      where f.id = ${fixtureId} and d.sport_key = 'boardgame'`;
   if (!row || row.orgId !== auth.orgId) throw new HttpError(404, "no online board here", "NOT_FOUND");
   return row;
@@ -154,8 +164,8 @@ async function settleWrite(auth: AuthCtx, fixtureId: string, input: Parameters<t
  *    decision is recorded, the other is told the board changed — its tie-break may now be owed, not settled);
  *  - 409 TIEBREAK_NEEDS_WINNER: a draw or no result for a board whose
  *    tie-break is owed;
- *  - 409 DOUBLE_WALKOVER_NO_NEXT_MATCH (W2b D19, the engine's own refusal, mapped by v1's ENGINE_HTTP): No result on
- *    a bracket line that feeds no next match — a final, a last rung, a third-place match. The board stays held.
+ *  - 409 KNOCKOUT_NEEDS_WINNER (I-3): No result in any knockout — every stage kind where a level result is forbidden,
+ *    a line that feeds a next match as much as a final. The board stays held.
  */
 export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind: ResolveKind): Promise<ResolveOutcome> {
   if (!(RESOLVE_KINDS as readonly string[]).includes(kind)) {
@@ -204,13 +214,17 @@ export async function resolveExternalPlay(auth: AuthCtx, fixtureId: string, kind
   }
 
   if (kind === "no_result") {
-    // RB1: the same double walkover whether or not play is recorded — W2b admits a chess walkover before the game
-    // and after the Start (walkoverPhases, ruling 118), and `by: "both"` is a walkover only (CoreForfeit). So no
-    // Start is written for it: a board nobody played stays unplayed, and one with a Start keeps it.
+    if (noResultRefused(b.stageKind)) {
+      throw new HttpError(409, "A knockout game needs a winner — adjudicate it or award it", "KNOCKOUT_NEEDS_WINNER");
+    }
+    // I-3: VOID (an abandon), or — both players absent — the double walkover; either whether or not play is recorded
+    // (W2b admits an abandon and a chess walkover before the game and after the Start, ruling 118). So no Start is
+    // written for it: a board nobody played stays unplayed, and one with a Start keeps it.
+    const event = noResultEvent(reason, toLocale(b.orgLocale));
     await settleWrite(auth, fixtureId, {
       expected_seq: fs.last_seq,
-      type: "core.forfeit",
-      payload: { by: "both", reason: "walkover" },
+      type: event.type,
+      payload: event.payload,
       idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
     });
     await closeBridge(fixtureId);
