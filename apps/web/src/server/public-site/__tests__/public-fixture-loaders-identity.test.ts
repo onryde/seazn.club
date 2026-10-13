@@ -584,8 +584,9 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
       const division = divisionOf(f.slug);
       const body = await getPublicFixtureBodyBefore(shell, division, f.id);
       expect(body, f.id).not.toBeNull();
-      // `roundOpened` / `roundOpenedAt` (chess T16) joined it the same way: read only for a division that plays
-      // online, which no division of this scene does — asserted, so false/null are the scene's facts.
+      // `roundOpened` / `roundOpenedAt` (chess T16) and `pairedWhiteSide` (chess T17 round B, option B) joined it the
+      // same way: read only for a division that plays online, which no division of this scene does — asserted, so
+      // false/null are the scene's facts.
       expect(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess", f.slug).toBe(false);
       const before = {
         org: shell.org,
@@ -595,6 +596,7 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
         externalPlay: null,
         roundOpened: false,
         roundOpenedAt: null,
+        pairedWhiteSide: null,
       };
       expectIdentical(await getPublicFixture(scene.orgSlug, scene.compSlug, f.slug, f.id), before, `${f.slug} ${f.id}`);
     }
