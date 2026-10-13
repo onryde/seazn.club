@@ -24,9 +24,9 @@ import { isRoundPaired } from "@/lib/division-phase";
 import type { OpenRoundPairing, OpenRoundPress, OpenRoundView } from "@/lib/open-round";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
-import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
+import type { RoundOpenRow } from "@/server/external-play/round-open";
 import { DEADLINE_AFTER_MS, roomPhase, windowFor } from "@/server/external-play/window";
-import { loadSides, whiteSideOf, type Side } from "./guard";
+import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { bridgeTakesInvites } from "./invite";
 import { isPlayableFixtureStatus } from "./preflight";
 
@@ -116,6 +116,25 @@ export async function listOpenRounds(
     else groups.set(key, [r]);
   }
 
+  // M8: the division's round opens, and which of them bound anyone, in two reads — not two per (stage, round).
+  const openRows = await sql<(RoundOpenRow & { stageId: string; roundNo: number })[]>`
+    select o.id, o.opened_at as "roundOpenedAt", o.opened_by as "openedBy", o.stage_id as "stageId", o.round_no as "roundNo"
+      from stage_round_opens o
+      join stages s on s.id = o.stage_id
+     where s.division_id = ${divisionId}`;
+  const opens = new Map(openRows.map(({ stageId, roundNo, ...o }) => [`${stageId}:${roundNo}`, o as RoundOpenRow]));
+  // "Was anyone in this round invited?" — over EVERY bridge row bound to the open, whatever became of its board.
+  const boundOpenIds =
+    openRows.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await sql<{ id: string }[]>`
+              select distinct round_open_id as id from fixture_external_play
+               where round_open_id = any(${openRows.map((o) => o.id)}::uuid[])`
+          ).map((r) => r.id),
+        );
+
   const facts: RoundFacts[] = [];
   for (const group of groups.values()) {
     const first = group[0]!;
@@ -124,20 +143,13 @@ export async function listOpenRounds(
     if (live.length === 0) continue; // openRound: no_fixtures
     if (live.some((r) => r.homeEntrantId === null || r.awayEntrantId === null)) continue; // openRound: not_paired
     const boards = live as Paired[];
-    const open = await roundOpenAt(sql, first.stageId, first.roundNo);
+    const open = opens.get(`${first.stageId}:${first.roundNo}`) ?? null;
     const owed = boards.reduce((n, b) => n + owedSeats(b, open), 0);
     const closed = open !== null && roomPhase(now, open.roundOpenedAt) === "closed";
     let press: OpenRoundPress;
     if (open === null) press = "open";
     else if (owed === 0) press = "none";
-    else {
-      // "Was anyone in this round invited?" — over EVERY bridge row bound to the open, whatever became of its board.
-      const any = (
-        await sql<{ any: boolean }[]>`
-          select exists (select 1 from fixture_external_play where round_open_id = ${open.id}) as any`
-      )[0]!.any;
-      press = !any ? "reopen" : closed ? "none" : "reinvite";
-    }
+    else press = !boundOpenIds.has(open.id) ? "reopen" : closed ? "none" : "reinvite";
     facts.push({ stageId: first.stageId, stageName: first.stageName, roundNo: first.roundNo, boards, open, press, closed });
   }
 
@@ -151,23 +163,30 @@ export async function listOpenRounds(
     f.open === null ? nextPaired.get(f.stageId) === f.roundNo : f.press !== "none" || !f.closed,
   );
 
+  // M8: every shown board's names in one read. The colour stays per board — `whiteSideOf` is the fold's own reading
+  // (getFixtureState), asked only where no game has fixed it yet — but concurrently, not one board after another.
+  const shownBoards = shown.flatMap((f) => f.boards);
+  const [names, colours] = await Promise.all([
+    loadSideNames(shownBoards.flatMap((b) => [b.homeEntrantId, b.awayEntrantId])),
+    Promise.all(shownBoards.map((b) => b.whiteSide ?? whiteSideOf({ fixtureId: b.fixtureId, orgId: auth.orgId }))),
+  ]);
+  const whiteSideByFixture = new Map(shownBoards.map((b, i) => [b.fixtureId, colours[i]!]));
+  const nameOf = (entrantId: string) => names.get(entrantId) ?? "—";
+
   const out: OpenRoundView[] = [];
   for (const f of shown) {
     const pairings: OpenRoundPairing[] = [];
     for (const [i, b] of f.boards.entries()) {
-      const [sides, whiteSide] = await Promise.all([
-        loadSides(b),
-        b.whiteSide ?? whiteSideOf({ fixtureId: b.fixtureId, orgId: auth.orgId }),
-      ] as const);
-      const white = whiteSide === "home" ? sides.home : sides.away;
-      const black = whiteSide === "home" ? sides.away : sides.home;
+      const whiteSide = whiteSideByFixture.get(b.fixtureId)!;
+      const white = nameOf(whiteSide === "home" ? b.homeEntrantId : b.awayEntrantId);
+      const black = nameOf(whiteSide === "home" ? b.awayEntrantId : b.homeEntrantId);
       const stamped = boundStamps(b, f.open);
       const invitedAt = stamped.length === 0 ? null : new Date(Math.max(...stamped.map((d) => d.getTime()))).toISOString();
       pairings.push({
         fixtureId: b.fixtureId,
         boardNo: b.seq ?? i + 1,
-        whiteName: white.displayName,
-        blackName: black.displayName,
+        whiteName: white,
+        blackName: black,
         invitedAt,
         owedSeats: owedSeats(b, f.open),
         // No `closed` term: a closed round is shown only as 'reopen' (nobody bound to its open), where nothing is

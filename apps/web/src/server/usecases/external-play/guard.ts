@@ -372,12 +372,7 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
   // F5: the snapshot is a fallback for the resolver, never the entrant id.
   const snapshotName = rows[0]?.displayName ?? "";
   const kind = rows[0]?.kind ?? null;
-  const members = rows
-    .filter((r): r is SideRow & { personId: string; fullName: string } => r.personId !== null && r.fullName !== null)
-    .map((r) => ({ person_id: r.personId, full_name: r.fullName }))
-    // One row per member today; deduped so a second join row can never turn
-    // one person into "a pair" for the resolver.
-    .filter((m, i, all) => all.findIndex((x) => x.person_id === m.person_id) === i);
+  const members = membersOf(rows);
   const withUser = rows.filter(
     (r): r is SideRow & { personId: string; userId: string } => r.personId !== null && r.userId !== null,
   );
@@ -401,6 +396,45 @@ async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
       .filter((r): r is SideRow & { email: string } => r.email !== null)
       .map((r) => ({ email: r.email, locale: r.locale })),
   };
+}
+
+type NameRow = Pick<SideRow, "displayName" | "kind" | "personId" | "fullName">;
+
+/** An entrant's live members, as the name resolver takes them. One row per member today; deduped so a second join
+ *  row can never turn one person into "a pair" for the resolver. */
+function membersOf(rows: readonly NameRow[]): { person_id: string; full_name: string }[] {
+  return rows
+    .filter((r): r is NameRow & { personId: string; fullName: string } => r.personId !== null && r.fullName !== null)
+    .map((r) => ({ person_id: r.personId, full_name: r.fullName }))
+    .filter((m, i, all) => all.findIndex((x) => x.person_id === m.person_id) === i);
+}
+
+/** T16 fix round 1, I2 + M8 — the name to RENDER for each of many seats, in ONE read: what `loadSides` resolves as
+ *  `displayName`, through the same members and the same `sideDisplayName`, for a list (the organiser queue, the
+ *  Open-round confirmation) that used to ask per board. An id that is not an entrant is absent from the answer. */
+export async function loadSideNames(entrantIds: readonly string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(entrantIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await sql<(NameRow & { entrantId: string })[]>`
+    select e.id as "entrantId", e.display_name as "displayName", e.kind as "kind",
+           p.id as "personId", p.full_name as "fullName"
+      from entrants e
+      left join entrant_members em on em.entrant_id = e.id
+      left join persons p on p.id = em.person_id and p.merged_into is null
+     where e.id = any(${ids}::uuid[])
+     order by e.id, em.person_id`;
+  const byEntrant = new Map<string, NameRow[]>();
+  for (const r of rows) {
+    const list = byEntrant.get(r.entrantId);
+    if (list) list.push(r);
+    else byEntrant.set(r.entrantId, [r]);
+  }
+  return new Map(
+    [...byEntrant].map(([id, list]) => [
+      id,
+      sideDisplayName({ snapshotName: list[0]!.displayName, kind: list[0]!.kind, members: membersOf(list) }),
+    ]),
+  );
 }
 
 export async function loadSides(

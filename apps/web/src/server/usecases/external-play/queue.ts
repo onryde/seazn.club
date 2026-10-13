@@ -8,7 +8,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
-import { whiteSideOf, type Side } from "./guard";
+import { loadSideNames, whiteSideOf, type Side } from "./guard";
 import { isPlayableFixtureStatus } from "./preflight";
 import { fixturesSeating } from "./seated";
 
@@ -75,10 +75,10 @@ export async function listNeedsOrganiserExternalPlay(
       {
         fixture_id: string;
         fixture_no: number | null;
-        home_name: string | null;
-        away_name: string | null;
         scheduled_at: Date | null;
         fixture_status: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
         needs_reason: unknown;
         last_error: string | null;
         white_side: Side | null;
@@ -90,15 +90,13 @@ export async function listNeedsOrganiserExternalPlay(
       }[]
     >`
       select f.id as fixture_id, f.fixture_no, f.status as fixture_status,
-             eh.display_name as home_name, ea.display_name as away_name,
+             f.home_entrant_id, f.away_entrant_id,
              f.scheduled_at, ep.needs_reason, ep.last_error,
              ep.white_side, ep.revoked_seat, ep.challenge_id,
              f.round_no, f.seq_in_round, s.name as stage_name
         from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id
         join stages s on s.id = f.stage_id
-        left join entrants eh on eh.id = f.home_entrant_id
-        left join entrants ea on ea.id = f.away_entrant_id
        where f.division_id = ${divisionId}
          and ep.status = 'needs_organiser'
        order by f.scheduled_at nulls last, f.fixture_no nulls last`;
@@ -106,12 +104,18 @@ export async function listNeedsOrganiserExternalPlay(
   });
   // Outside the tenant transaction: both read with the privileged client.
   const seated = auth.userId === null || rows.length === 0 ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixture_id));
+  // I2 (F5): the PERSON's name, as the Flagged list and the Open-round confirmation name the same board — one read
+  // for the whole queue (M8), never the entrant's registration snapshot.
+  const names = await loadSideNames(
+    rows.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]).filter((id): id is string => id !== null),
+  );
+  const nameOf = (id: string | null) => (id === null ? "" : (names.get(id) ?? ""));
   return Promise.all(
     rows.map(async (r): Promise<NeedsOrganiserExternalPlayRow> => ({
       fixtureId: r.fixture_id,
       fixtureNo: r.fixture_no,
-      homeName: r.home_name ?? "",
-      awayName: r.away_name ?? "",
+      homeName: nameOf(r.home_entrant_id),
+      awayName: nameOf(r.away_entrant_id),
       scheduledAt: r.scheduled_at ? r.scheduled_at.toISOString() : null,
       reason: readNeedsReason(r.needs_reason),
       lastError: r.last_error,
