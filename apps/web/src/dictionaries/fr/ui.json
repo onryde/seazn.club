@@ -6205,6 +6205,7 @@
   "arbiter.notice.settled": "Réglé. Le résultat est enregistré à votre nom.",
   "arbiter.notice.settledTiebreak": "Enregistré comme nulle. Cette élimination directe exige un vainqueur : choisissez qui se qualifie.",
   "arbiter.notice.alreadyResolved": "Cet échiquier a déjà son résultat.",
+  "arbiter.notice.boardChanged": "Cet échiquier a changé pendant que vous décidiez — rechargez pour le voir.",
   "arbiter.notice.needsWinner": "Une partie à élimination directe nulle exige un vainqueur. Choisissez qui se qualifie.",
   "arbiter.notice.settleOwnBoard": "Vous jouez sur cet échiquier : un autre organisateur doit en régler le résultat.",
   "arbiter.notice.overridden": "Cet échiquier se joue désormais sans vidéo. C'est inscrit au journal d'audit.",

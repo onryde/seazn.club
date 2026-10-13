@@ -6205,6 +6205,7 @@
   "arbiter.notice.settled": "Decidido. El resultado queda registrado a tu nombre.",
   "arbiter.notice.settledTiebreak": "Registrado como tablas. Esta eliminatoria necesita un ganador: elige quién pasa.",
   "arbiter.notice.alreadyResolved": "Este tablero ya tiene su resultado.",
+  "arbiter.notice.boardChanged": "Este tablero cambió mientras decidías — recarga para verlo.",
   "arbiter.notice.needsWinner": "Una partida eliminatoria en tablas necesita un ganador. Elige quién pasa.",
   "arbiter.notice.settleOwnBoard": "Juegas en este tablero, así que otro organizador debe decidir su resultado.",
   "arbiter.notice.overridden": "Este tablero ahora se juega sin vídeo. Consta en el registro de auditoría.",

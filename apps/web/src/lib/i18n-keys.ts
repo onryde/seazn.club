@@ -184,6 +184,7 @@ export type DictionaryKey =
   | "arbiter.flags.lede"
   | "arbiter.flags.none"
   | "arbiter.notice.alreadyResolved"
+  | "arbiter.notice.boardChanged"
   | "arbiter.notice.failed"
   | "arbiter.notice.goOnOwnBoard"
   | "arbiter.notice.needsWinner"

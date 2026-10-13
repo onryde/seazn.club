@@ -27,6 +27,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
 import { createBoardApi } from "@/server/external-play/lichess/board-api";
 import type { BoardCall, GameSnapshot } from "@/server/external-play/types";
@@ -34,6 +36,7 @@ import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
 import { reconcile, type ReconcileDeps, type ReconcileOutcome } from "../external-play/reconcile";
+import { resolveExternalPlay } from "../external-play/resolve";
 import { writeResultFrom, type ResultWrite } from "../external-play/result";
 import { scoreEvent } from "../scoring";
 import { seedOnlineChessFixture } from "./_external-play-seed";
@@ -380,3 +383,32 @@ describe.runIf(HAS_DB)("the staggered concurrent sweep — counted", () => {
   });
 });
 
+// T16 fix round 2, N2: the organiser's settle (resolve.ts) has the same window — its board read, then its fold read.
+// Another writer settling the board in between leaves a fold past play beside a status read as playable: the board
+// changed under the organiser. Told BOARD_CHANGED ("reload to see it"), nothing of the late settle written — while a
+// settle that READS the board settled is told ALREADY_RESOLVED ("already has its result"), the sequence's next call.
+describe.runIf(HAS_DB)("resolveExternalPlay — another organiser settles between the board read and the fold read (staged)", () => {
+  const refusalOf = (p: Promise<unknown>) =>
+    p.then(
+      (ok) => ({ ok }),
+      (err: unknown) => (err instanceof HttpError ? { refused: [err.status, err.code] } : Promise.reject(err)),
+    );
+
+  it("the late settle is told BOARD_CHANGED and writes nothing; a settle after it is told ALREADY_RESOLVED", async () => {
+    const g = await liveGame();
+    const organiser = { orgId: g.orgId, via: "session", userId: g.ownerUserId, role: "owner", keyId: null } as AuthCtx;
+    let first: unknown;
+    const probe = stage("state", "late", 1, async () => {
+      first = await inLane("first", () => resolveExternalPlay(organiser, g.fixtureId, "home_wins"));
+    });
+    const late = await inLane("late", () => refusalOf(resolveExternalPlay(organiser, g.fixtureId, "away_wins")));
+    expect(probe.fired, "premise: the late settle paused at its fold read, holding a playable board").toBe(true);
+    expect(first).toEqual({ status: "finished" });
+    expect(late, "the board changed under the organiser").toEqual({ refused: [409, "BOARD_CHANGED"] });
+    expect((await results(g.fixtureId)).map((r) => r.payload.winner), "the first decision stands alone").toEqual([g.home.entrantId]);
+    expect(await fixtureStatus(g.fixtureId)).toBe("decided");
+    // The next press reads the board settled: that is "already has its result", not a change mid-settle.
+    expect(await refusalOf(resolveExternalPlay(organiser, g.fixtureId, "draw"))).toEqual({ refused: [409, "ALREADY_RESOLVED"] });
+    expect(await results(g.fixtureId)).toHaveLength(1);
+  });
+});
