@@ -696,7 +696,8 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
 // fold of it, at seq 2). The award's writer refused ANY row there as a reset that kept its score, so the arriving
 // side's decider threw and that line could not be decided at all. A ledger that every void took back holds no play,
 // and its row is that ledger's fold, never an award's: the award takes it over, at the ledger's tip (the token every
-// append is checked against: `getFixtureState`'s `last_seq`). A reset puts the ledger's own row back. Through the
+// append is checked against: `getFixtureState`'s `last_seq`). A reset re-folds that ledger into the row — the
+// take-back's own row when the same side arrives again, the award's sides otherwise (Loop R2 N-3, below). Through the
 // buttons: Start, Undo, the arriving line's Undo and re-score, Withdraw.
 const stateRow = async (id: string) =>
   (await sql<{ last_seq: number; state: unknown; summary: unknown }[]>`
@@ -755,6 +756,87 @@ describe.skipIf(!HAS_DB)("Loop R M-17: a tie whose ledger every void took back s
 
       // A second award over the same ledger (the sequence, not just the feature).
       await awardIt("second award");
+      checked++;
+    }
+    expect(checked).toBe(SPORTS.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+  }, 240_000);
+
+  // Loop R2 N-3: the row a reset refolds is a CACHE over the sides it names when the reset runs. After the award took
+  // it over, those are the award's — her and the side that walked over — not necessarily the sides the take-back was
+  // recorded with: here the arriving line is re-decided the OTHER way, so a different side (Y) walks over her. What
+  // keeps the row honest is the ledger, never its names: it sits at the ledger's tip (the token every append is
+  // checked against), it credits no play, and the next award over the same ledger credits exactly its own walkover.
+  /** The arriving line, its decider just taken back, decided for its OTHER side — per sport, from the rig's own play. */
+  const OTHER_WINS: Record<string, (auth: AuthCtx, id: string) => Promise<void>> = {
+    // One game each way after the take-back: home took game one, so two games to the away side decide it.
+    badminton: async (auth, id) => {
+      for (let g = 0; g < 2; g++) await post(auth, id, "badminton.game.summary", { home: 10, away: 21 });
+    },
+    // Home's goal stands at half time: half time taken back too, two away goals, then half and full time.
+    football: async (auth, id) => {
+      const r = await fixtureRow(id);
+      const [ht] = await sql<{ id: string; type: string; payload: { phase?: string } }[]>`
+        select id, type, payload from score_events e where e.fixture_id = ${id} and e.type <> 'core.void'
+          and not exists (select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)
+        order by seq desc limit 1`;
+      expect([ht?.type, ht?.payload.phase], "rig: half time is the newest standing event").toEqual(["football.period", "HT"]);
+      await post(auth, id, "core.void", { event_id: ht!.id });
+      for (let g = 0; g < 2; g++) await post(auth, id, "football.goal", { by: r.away_entrant_id });
+      await post(auth, id, "football.period", { phase: "HT" });
+      await post(auth, id, "football.period", { phase: "FT" });
+    },
+  };
+  it("every sport: the arriving line re-decided with a DIFFERENT winner — the reset leaves the ledger's fold at its tip, crediting nothing, over the award's sides; a second award credits its own walkover", async () => {
+    let checked = 0;
+    for (const { sport, variant, play } of SPORTS) {
+      const otherWins = OTHER_WINS[sport];
+      if (otherWins === undefined) throw new Error(`rig: no other-side decider for ${sport}`);
+      const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+      await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+      const { a, b, parentId } = siblingsInto(await rowsOf(s.stageId));
+      const w1 = (await play(s.auth, a.id)).home_entrant_id!;
+      const arriving = (await play(s.auth, b.id)).home_entrant_id!;
+      const y = b.away_entrant_id!;
+      expect(y, `${sport}: premise, Y is not the side the take-back was recorded with`).not.toBe(arriving);
+      await post(s.auth, parentId, "core.start");
+      await post(s.auth, parentId, "core.void", { event_id: (await lastEvent(parentId)).id });
+      const takenBack = (await stateRow(parentId)) as { last_seq: number; state: unknown; summary: { perSide: { entrantId: string }[] } };
+      expect(JSON.stringify(takenBack).includes(y), `${sport}: premise, the take-back's row never names Y`).toBe(false);
+      expect(
+        [takenBack.last_seq, takenBack.summary.perSide.map((p) => p.entrantId).sort()],
+        `${sport}: premise, the take-back's row is the ledger's tip, over the sides it was recorded with`,
+      ).toEqual([2, [w1, arriving].sort()]);
+      await post(s.auth, b.id, "core.void", { event_id: (await lastEvent(b.id)).id });
+      await withdrawEntrantCascade(s.auth, w1);
+
+      // The arriving line decided the other way: Y walks over her dead seat.
+      await otherWins(s.auth, b.id);
+      expect((await fixtureRow(b.id)).outcome?.winner, `${sport}: premise, Y won the arriving line`).toBe(y);
+      const yDecider = await lastEvent(b.id);
+      const credit = WALKOVER_CREDIT[sport]!((await divisionOf(s.divisionId)).cfg);
+      const awardY = async (round: string) => {
+        const tie = await fixtureRow(parentId);
+        expect([tie.status, tie.outcome], `${sport} ${round}: Y's walkover`).toEqual(["forfeited", { kind: "award", winner: y, loser: w1, reason: "withdrew" }]);
+        expect(await storedLines(parentId), `${sport} ${round}: its credit, Y's alone`).toEqual({ [y]: String(credit), [w1]: "0" });
+        expect([(await stateRow(parentId))?.last_seq, await activeEvents(parentId), await standingEvents(parentId)], `${sport} ${round}: at the tip, nothing appended`).toEqual([2, 2, 0]);
+      };
+      await awardY("first award");
+
+      // Reset: Y's decider taken back. The tie re-opens, and the row is the same ledger's fold at its tip, crediting
+      // nothing — over the sides the award held: wherever the take-back's row named the arriving side, this one names Y
+      // (the engine state carries its sides). A cache, re-folded over whoever is seated by the next append.
+      await post(s.auth, b.id, "core.void", { event_id: yDecider.id });
+      const reopened = await fixtureRow(parentId);
+      expect([reopened.status, reopened.outcome], `${sport}: re-opened`).toEqual(["scheduled", null]);
+      const reset = await stateRow(parentId);
+      const named = JSON.stringify(reset);
+      expect([named.includes(y), named.includes(arriving)], `${sport}: the reset row names Y, not the side the take-back named`).toEqual([true, false]);
+      expect(JSON.parse(named.replaceAll(y, arriving)), `${sport}: and is the take-back's row in every other detail`).toEqual(takenBack);
+
+      // A second award over the same ledger (the sequence, not just the feature).
+      await post(s.auth, b.id, yDecider.type, yDecider.payload);
+      await awardY("second award");
       checked++;
     }
     expect(checked).toBe(SPORTS.length);

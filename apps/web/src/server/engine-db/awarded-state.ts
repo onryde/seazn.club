@@ -86,8 +86,9 @@ export function awardedMatchState(
  * Called from the write that awards the tie. A reset of that award (`fed-seats.ts` `writePlan`) drops the row with it
  * (`clearAwardedMatchState`), so over an EMPTY ledger a row already here is a broken assumption, refused by name
  * rather than overwriting a cache some other write made. Over a ledger every void took back, the row is that ledger's
- * own fold (the take-back's append wrote it), which holds no play: the award takes it over, and its reset puts it back
- * (Loop R M-17, class 13 — refusing it refused the arriving side's decider). A recorded event that still stands is
+ * fold (the take-back's append wrote it), which holds no play: the award takes it over, and its reset re-folds that
+ * ledger into it (Loop R M-17, class 13 — refusing it refused the arriving side's decider) — over the award's sides,
+ * not the take-back's (Loop R2 N-3, `clearAwardedMatchState`). A recorded event that still stands is
  * play, and an award recorded without an event never overwrites play: refused by name. (A revived walkover — a voided
  * double walkover's dead seat — never needs the clear: its dead seat's feeder has no winner, so its award is a bye and
  * wrote no row.)
@@ -145,11 +146,18 @@ export async function writeAwardedMatchState(tx: Tx, fixtureId: string): Promise
  * still decided — and the re-award would collide with it. A row with NO ledger behind it goes: that is the one the
  * award wrote, since every other `match_states` row is a fold of recorded events (append, rebuild) and stays theirs.
  *
- * Loop R M-17: over a ledger every void took back, the award took over that ledger's own row (`writeAwardedMatchState`),
- * so the reset puts the ledger's fold back rather than dropping the row — a ledger with no row reads `last_seq` 0
- * (`getFixtureState`), and every append to it would then be refused SEQ_CONFLICT. The fold is over the sides the row
- * was folded with (its summary's `perSide`, home then away): her seat and the arriving side's may both be released by
- * now. A row over play that still stands is that play's fold, and stays.
+ * Loop R M-17: over a ledger every void took back, the award took over that ledger's row (`writeAwardedMatchState`),
+ * so the reset re-folds the ledger into it rather than dropping it — a ledger with no row reads `last_seq` 0
+ * (`getFixtureState`), and every append to it would then be refused SEQ_CONFLICT.
+ *
+ * Loop R2 N-3: the row is a CACHE, and this re-folds it over the sides it names NOW (its summary's `perSide`, home then
+ * away — her seat and the arriving side's may both be released by now, so the seats cannot say). After a takeover
+ * those are the AWARD's sides: her and whoever walked over her, who need not be the side the take-back was recorded
+ * with (the arriving line re-decided the other way). So the reset row is that ledger's fold — at its tip, crediting no
+ * play — but not necessarily the row the take-back wrote: it can name a different arriving side. No column holds the
+ * take-back's sides once the award has written over them, and none is owed: the names are never fold input — every
+ * append re-folds the whole ledger over whoever is seated then (append-event.ts), and is checked against `last_seq`,
+ * which this writes from the ledger. A row over play that still stands is that play's fold, and stays.
  */
 export async function clearAwardedMatchState(tx: Tx, fixtureId: string): Promise<void> {
   await tx`
