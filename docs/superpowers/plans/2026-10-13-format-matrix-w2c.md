@@ -2646,6 +2646,8 @@ export function pointsRuleExpressible(divisionCfg: unknown): Expressible {
 
 ### Task 10: Migration + one resolver through every caller (lane F, **BLOCKED until rebase on W2b merge**; Opus)
 
+> **Carried from batch-1 fixes.** `scripts/smoke.ts:8378-8385` re-sends the CURRENT variant: after Task 2 that is a 200 no-op. Rewrite the pin to start a stage, then PATCH a DIFFERENT variant and expect 409 `DIVISION_FORMAT_LOCKED` naming the stage (plus the unstarted-stage save that succeeds).
+
 Spec item 2 (resolution half); §4.4; §5.2 at `1b757c6cb` (both columns); D4, D14; P2, P3; Review Focus 2; owner P-1 (the column) and P-2 (the smoke pin, review I2). Creates `w2cStageRulesSuite`.
 
 **Files:**
@@ -4807,6 +4809,8 @@ Width test in `mobile.spec.ts`: "W2c match rules block at every width". It opens
 
 ---
 ### Task 20: S4 — division settings name what is locked (UI)
+
+> **Carried from batch-1 fixes.** `e2e/division-settings.spec.ts:95-99` re-sends the current variant `score` — now a 200 no-op. The rewrite must start a stage and send a DIFFERENT variant.
 
 > **Carried from Task 2 review.** Add to Files and fix: `e2e/division-settings.spec.ts:92-99` (the PATCH 409 FORMAT_LOCKED after generate now returns 200 — rewrite to the per-started-stage behaviour, and the :92-93 testid/text assertions); `components/v2/format-lock.ts:3,6` + the division `page.tsx:948` (the UI still over-locks on any fixture); `content/help/divisions/settings.md:10` and its "Why can't I change the format?" paragraph (English only), plus help `lifecycle.md:15`, `add-a-division.md:21`, `start-scoring.md:7`; stale comments `division-settings.tsx:5`, `usecases/stages.ts:486`, `usecases/templates.ts:362`. i18n keys use the D10 prefix `ruleLock.<CODE>` (orchestrator ruling; the task text's `divisionLock.` is superseded). `RefusedField` is imported from `lib/rule-errors.ts`.
 
