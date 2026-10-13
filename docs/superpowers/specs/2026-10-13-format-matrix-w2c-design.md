@@ -4,8 +4,8 @@
   screen, fixture override, O8", ruling 71)
 - **Status:** design approved section by section in chat (session f-w2c, 2026-10-12/13). Scope questions Q1–Q11 and
   UI screens S1–S5 were answered by the owner, either relayed verbatim by the coordinator session f-w2b (routing a–f, Q1–Q6)
-  or given directly in f-w2c (Q7–Q11, §1 amendment, S1–S5). **Written spec awaiting owner review.** No product code until the
-  owner approves this spec, then the plan and its execution method.
+  or given directly in f-w2c (Q7–Q11, §1 amendment, S1–S5). **Written spec approved by the owner 2026-10-13**
+  ("approve the spec, write the plan"). No product code until the owner approves the plan and its execution method.
 - **Worktree / branch:** `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2c`, `feat/format-matrix-w2c`
   (from `origin/main` `a6cc1f038`). **Rebase after W2b (PR #945) merges**: W2b changes `stage.ts`, award reasons
   (`awardReasonOf`), generic retirement credit (ruling 124), adds a `resolveFixtureCfg` caller
