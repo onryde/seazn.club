@@ -74,7 +74,7 @@ test("a live online board: the public page watches the game here and links to no
 
   const res = await page.goto(room.fixturePath);
   expect(res?.status(), "the public fixture page renders with a game on file").toBe(200);
-  await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "board", { timeout: 20_000 });
+  await expect(page.getByTestId("watch-panel")).toHaveAttribute("data-state", "live", { timeout: 20_000 });
   await expect(page.getByTestId("watch-board")).toBeAttached();
   await expect(page.getByTestId("room-board-surface")).toHaveAttribute("data-fen", fen);
   await expect(page.getByTestId("room-board-surface")).toHaveAttribute("data-view-only", "true");

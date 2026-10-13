@@ -6,8 +6,13 @@
 // the route keeps a short public edge window, and a request sent before a
 // move can answer after its push — so a poll never takes the board BACK: an
 // older ply, a game no longer over at the same ply, or no board at all is
-// refused. Status (finished, held) comes only from polls: a push knows the
-// board, not the bridge.
+// refused. Status (finished, held), the fixture's facts (decided, its result)
+// and the move list come only from polls: a push knows the board, not the
+// bridge nor the fixture.
+//
+// Fix round 1, I1: the FIXTURE decides first — a decided fixture is finished
+// for the spectators whatever its bridge reads (never "held"), and is never
+// polled again.
 //
 // The sequence property below drives a server timeline through every order
 // a push/poll interleaving can take (pushes lost, polls stale), and checks
@@ -15,7 +20,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { PublicBoardPush, PublicExternalPlay, PublicWatch, PublicWatchDoc } from "@/server/external-play/public-view";
-import { initialWatch, nextWatch, pollsAgain, watchView, type WatchModel } from "../watch-state";
+import { holdOf, initialWatch, movesBehind, nextWatch, pollsAgain, watchView, type WatchModel } from "../watch-state";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const AT = "2026-10-13T10:00:00.000Z";
@@ -30,10 +35,24 @@ const board = (ply: number, o: Partial<PublicWatch> = {}): PublicWatch => ({
   clockRunning: ply >= 2,
   over: false,
   whiteSide: "home",
+  moves: Array.from({ length: ply }, (_, i) => (i % 2 === 0 ? "e4" : "e5")),
   ...o,
 });
-const doc = (play: PublicExternalPlay | null, roundOpened = true): PublicWatchDoc => ({ roundOpened, externalPlay: play });
-const live = (w: PublicWatch): PublicExternalPlay => ({ status: "live", watch: w });
+const OPENED_AT = "2026-10-13T09:58:00.000Z";
+const doc = (play: PublicExternalPlay | null, roundOpened = true): PublicWatchDoc => ({
+  roundOpened,
+  roundOpenedAt: roundOpened ? OPENED_AT : null,
+  externalPlay: play,
+});
+const ep = (status: PublicExternalPlay["status"], watch: PublicWatch | null, o: Partial<PublicExternalPlay> = {}): PublicExternalPlay => ({
+  status,
+  watch,
+  decided: false,
+  hold: null,
+  result: null,
+  ...o,
+});
+const live = (w: PublicWatch): PublicExternalPlay => ep("live", w);
 const push = (ply: number, o: Partial<PublicBoardPush> = {}): PublicBoardPush => ({
   fen: `${START}#${ply}`,
   lastMove: ply === 0 ? null : "e2e4",
@@ -53,19 +72,31 @@ describe("watchView — what the panel says", () => {
     expect(watchView(initialWatch(doc(null, true)))).toBe("not_started");
   });
 
-  it("every bridge status, with and without a board", () => {
-    const cells: [PublicExternalPlay, string][] = [
-      [{ status: "pending", watch: null }, "not_started"],
-      [{ status: "ready", watch: board(0) }, "not_started"],
-      [{ status: "live", watch: null }, "not_started"],
-      [{ status: "live", watch: board(3) }, "board"],
-      [{ status: "finished", watch: board(9, { over: true }) }, "board"],
-      [{ status: "needs_organiser", watch: null }, "held"],
-      [{ status: "needs_organiser", watch: board(4) }, "held"],
+  it("every bridge status, with and without a board, held or not, under an open or a DECIDED fixture", () => {
+    const cells: [string, PublicExternalPlay, string, string | null][] = [
+      ["pending, no game", ep("pending", null), "not_started", null],
+      ["ready, no move yet", ep("ready", board(0)), "not_started", null],
+      ["live, no board", ep("live", null), "not_started", null],
+      ["live", ep("live", board(3)), "live", null],
+      ["finished", ep("finished", board(9, { over: true })), "finished", null],
+      ["held to confirm, no game", ep("needs_organiser", null, { hold: "confirm" }), "held", "confirm"],
+      ["held: a knockout draw", ep("needs_organiser", board(4, { over: true }), { hold: "tiebreak" }), "held", "tiebreak"],
+      // A revoked token is one seat's problem: the public reading is "no hold", and the board is still played.
+      ["held, the game goes on (token revoked)", ep("needs_organiser", board(4), { hold: null }), "live", null],
+      // I1: the fixture decides first.
+      ["decided, bridge still held", ep("needs_organiser", board(4), { decided: true, hold: null }), "finished", null],
+      ["decided, bridge still live", ep("live", board(4), { decided: true }), "finished", null],
+      ["decided, no game", ep("pending", null, { decided: true }), "finished", null],
+      // The guard, not a doc the server sends (it never sends decided WITH a hold): decided outranks any hold.
+      ["decided, a hold still on file", ep("needs_organiser", board(4), { decided: true, hold: "confirm" }), "finished", null],
+      // A knockout draw awaiting its winner (needs_decision): the fixture's hold outlives the bridge's close.
+      ["bridge closed, the fixture awaiting its winner", ep("finished", board(9, { over: true }), { hold: "tiebreak" }), "held", "tiebreak"],
     ];
     let checked = 0;
-    for (const [play, view] of cells) {
-      expect(watchView(initialWatch(doc(play))), JSON.stringify(play.status)).toBe(view);
+    for (const [label, play, view, hold] of cells) {
+      const m = initialWatch(doc(play));
+      expect(watchView(m), label).toBe(view);
+      expect(holdOf(m), `${label}: the hold named`).toBe(hold);
       checked += 1;
     }
     expect(checked).toBe(cells.length);
@@ -85,7 +116,7 @@ describe("nextWatch — transitions", () => {
     const m = initialWatch(doc(live(board(5))));
     expect(poll(m, doc(live(board(4)))).play?.watch?.ply, "older ply").toBe(5);
     expect(poll(m, doc(null)).play?.watch?.ply, "no board").toBe(5);
-    const over = initialWatch(doc({ status: "finished", watch: board(5, { over: true }) }));
+    const over = initialWatch(doc(ep("finished", board(5, { over: true }))));
     expect(poll(over, doc(live(board(5)))).play?.watch?.over, "un-over").toBe(true);
     // The positive pair: the same ply, not regressing, lands (a fresher clock).
     expect(poll(m, doc(live(board(5, { whiteMs: 1 })))).play?.watch?.whiteMs).toBe(1);
@@ -103,7 +134,7 @@ describe("nextWatch — transitions", () => {
     expect(poll(m, doc(null, false)).roundOpened).toBe(true);
   });
 
-  it("a push always lands (the server's order), takes its clocks as of its arrival, and keeps White's side", () => {
+  it("a push always lands (the server's order), takes its clocks as of its arrival, and keeps White's side and the list", () => {
     const m = initialWatch(doc(live(board(6, { whiteSide: "away" }))));
     const p = pushed(m, push(7), "2026-10-13T10:00:05.000Z");
     expect(p.play).toEqual({
@@ -111,8 +142,16 @@ describe("nextWatch — transitions", () => {
       watch: {
         fen: `${START}#7`, lastMove: "e2e4", turn: "black", ply: 7, whiteMs: 1_000, blackMs: 2_000,
         asOf: "2026-10-13T10:00:05.000Z", clockRunning: true, over: false, whiteSide: "away",
+        moves: ["e4", "e5", "e4", "e5", "e4", "e5"],
       },
+      decided: false,
+      hold: null,
+      result: null,
     });
+    // The list is behind the pushed board: the panel asks for a poll; the poll brings it level.
+    expect(movesBehind(p)).toBe(true);
+    expect(movesBehind(poll(p, doc(live(board(7, { whiteSide: "away" })))))).toBe(false);
+    expect(movesBehind(m), "a polled board is level with its list").toBe(false);
     // Reconcile's correction is a push too: an older ply lands.
     expect(pushed(p, push(6)).play?.watch?.ply).toBe(6);
     expect(p.roundOpened, "a game on the board means the round is open").toBe(true);
@@ -135,17 +174,59 @@ describe("nextWatch — transitions", () => {
 
   it("status comes from polls: a push never closes or holds the board, nor reopens one a poll closed", () => {
     expect(pushed(initialWatch(doc(null)), push(9, { over: true })).play?.status, "over by push: still live until a poll").toBe("live");
-    const held = initialWatch(doc({ status: "needs_organiser", watch: board(4) }));
-    expect(pushed(held, push(5)).play?.status).toBe("needs_organiser");
-    const done = initialWatch(doc({ status: "finished", watch: board(9, { over: true }) }));
+    const held = initialWatch(doc(ep("needs_organiser", board(4), { hold: "tiebreak" })));
+    expect(pushed(held, push(5)).play).toMatchObject({ status: "needs_organiser", hold: "tiebreak" });
+    const done = initialWatch(doc(ep("finished", board(9, { over: true }))));
     expect(pushed(done, push(9, { over: true })).play?.status).toBe("finished");
+    // A push onto a decided fixture's board never restarts its clocks.
+    const decided = initialWatch(doc(ep("live", board(4), { decided: true })));
+    expect(pushed(decided, push(5)).play?.watch).toMatchObject({ over: true, clockRunning: false });
+    expect(pushed(decided, push(5)).play?.decided).toBe(true);
   });
 
-  it("polling stops once a poll says the game is finished — not on a push's 'over'", () => {
-    expect(pollsAgain(initialWatch(doc(null)))).toBe(true);
-    expect(pollsAgain(pushed(initialWatch(doc(null)), push(9, { over: true })))).toBe(true);
-    expect(pollsAgain(initialWatch(doc({ status: "finished", watch: board(9, { over: true }) })))).toBe(false);
-    expect(pollsAgain(initialWatch(doc({ status: "needs_organiser", watch: board(9, { over: true }) })))).toBe(true);
+  it("I1: a decided fixture's board is over with its clocks stopped — first paint, a fresh poll, a push — whatever the board on hand says", () => {
+    const runningBoard = board(6, { over: false, clockRunning: true });
+    const d = doc(ep("needs_organiser", runningBoard, { decided: true }));
+    let checked = 0;
+    for (const [label, m] of [
+      ["first paint", initialWatch(d)],
+      ["a fresh poll", poll(initialWatch(doc(live(board(4)))), d)],
+      ["a push after it", pushed(initialWatch(d), push(7))],
+    ] as const) {
+      expect(m.play?.watch, label).toMatchObject({ over: true, clockRunning: false });
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    // The positive pair: the same board under an open fixture keeps its running clock.
+    expect(initialWatch(doc(live(runningBoard))).play?.watch).toMatchObject({ over: false, clockRunning: true });
+  });
+
+  it("I1: a STALE poll still brings the fixture's decision and result — the board kept, its clocks stopped", () => {
+    const m = initialWatch(doc(live(board(6))));
+    const result = { kind: "win" as const, winner: "home" as const, method: "resign", score: "1–0", recordedAt: AT };
+    const after = poll(m, doc(ep("needs_organiser", board(5), { decided: true, result })));
+    expect(after.play?.watch?.ply, "the board is not taken back").toBe(6);
+    expect(after.play).toMatchObject({ decided: true, result, hold: null });
+    expect(after.play?.watch).toMatchObject({ over: true, clockRunning: false });
+    expect([watchView(after), pollsAgain(after)]).toEqual(["finished", false]);
+  });
+
+  it("polling stops once a poll says the game is over for us — the bridge finished, or the fixture DECIDED (I1) — never on a push's 'over'", () => {
+    const cells: [string, WatchModel, boolean][] = [
+      ["nothing yet", initialWatch(doc(null)), true],
+      ["a push says over", pushed(initialWatch(doc(null)), push(9, { over: true })), true],
+      ["bridge finished", initialWatch(doc(ep("finished", board(9, { over: true })))), false],
+      ["held under an OPEN fixture (its result is still to come)", initialWatch(doc(ep("needs_organiser", board(9, { over: true }), { hold: "tiebreak" }))), true],
+      ["held under a DECIDED fixture", initialWatch(doc(ep("needs_organiser", board(9), { decided: true }))), false],
+      ["decided, no game", initialWatch(doc(ep("pending", null, { decided: true }))), false],
+      ["bridge closed, the fixture awaiting its winner", initialWatch(doc(ep("finished", board(9, { over: true }), { hold: "tiebreak" }))), true],
+    ];
+    let checked = 0;
+    for (const [label, m, polls] of cells) {
+      expect(pollsAgain(m), label).toBe(polls);
+      checked += 1;
+    }
+    expect(checked).toBe(cells.length);
   });
 });
 
@@ -158,7 +239,7 @@ type Step = { pushLost: boolean; polls: number[] };
 const LAG = 3;
 const serverDoc = (ply: number, n: number, endsOver: boolean): PublicWatchDoc => {
   const over = endsOver && ply === n;
-  return doc({ status: over ? "finished" : "live", watch: board(ply, { over, clockRunning: ply >= 2 && !over }) });
+  return doc(ep(over ? "finished" : "live", board(ply, { over, clockRunning: ply >= 2 && !over }), { decided: over }));
 };
 
 function run(steps: Step[], endsOver: boolean) {

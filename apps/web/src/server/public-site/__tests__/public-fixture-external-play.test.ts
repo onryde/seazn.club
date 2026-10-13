@@ -114,7 +114,12 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
         clockRunning: false,
         over: false,
         whiteSide: null,
+        moves: [],
       },
+      // T16 fix round 1: the fixture's own public facts — still to be played, nothing held, no result.
+      decided: false,
+      hold: null,
+      result: null,
     });
   });
 
@@ -145,7 +150,12 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
         clockRunning: true,
         over: false,
         whiteSide: "away",
+        // The rules' notation for 1.Nf3 Nf6.
+        moves: ["Nf3", "Nf6"],
       },
+      decided: false,
+      hold: null,
+      result: null,
     });
   });
 
@@ -165,7 +175,8 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
       insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, needs_reason)
       values (${held.fixtureId}, ${held.orgId}, now(), 'needs_organiser', 'not_started')`;
     const data = await getPublicFixture(held.orgSlug, held.compSlug, held.divSlug, held.fixtureId);
-    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null });
+    // A game that never started waits on the organiser: "to be confirmed" is its public reading (PUBLIC_HOLD).
+    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null, decided: false, hold: "confirm", result: null });
   });
 
   it("an organiser's hold never shows its operator text publicly", async () => {
@@ -179,8 +190,9 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
       values (${s.fixtureId}, ${s.orgId}, now(), 'needs_organiser', 'provider_error',
               'create:outcome_unknown: operator-only detail')`;
     const data = await getPublicFixture(s.orgSlug, s.compSlug, s.divSlug, s.fixtureId);
-    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null });
+    expect(data!.externalPlay).toEqual({ status: "needs_organiser", watch: null, decided: false, hold: "confirm", result: null });
     expect(JSON.stringify(data)).not.toContain("operator-only detail");
+    expect(JSON.stringify(data), "the hold's reason itself is never published").not.toContain("provider_error");
   });
 
   it("T16: an online board's page says whether its round is open (D12) — before and after the organiser opens it", async () => {

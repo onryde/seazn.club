@@ -6,26 +6,42 @@
 // public edge window, and a request sent before a move can answer after its
 // push. So a poll never takes the board BACK — an older ply, "not over" at the
 // ply that ended, or no board at all — though it may still say which entrant
-// plays White, which a push does not carry. Status (finished, held) is the
-// bridge's, and only polls read the bridge.
+// plays White, which a push does not carry. Status (finished, held), the
+// fixture's facts (decided, its result) and the move list are read by polls
+// only.
+//
+// T16 fix round 1, I1: the FIXTURE decides first. A fixture decided another
+// way (the pad, a settle, a withdrawal, a cancel) is finished for the
+// spectators whatever its bridge row reads, never "needs the organiser", and
+// nothing is polled for it any more.
 //
 // Known limit: a correction that SHORTENS the ledger reaches a poll-only
 // spectator at the next move or a reload, not at once (a poll cannot tell it
 // from a stale answer). A pushed spectator gets it at once.
-import {
-  isWatchable,
-  type PublicBoardPush,
-  type PublicExternalPlay,
-  type PublicWatch,
-  type PublicWatchDoc,
+import type {
+  PublicBoardPush,
+  PublicExternalPlay,
+  PublicHold,
+  PublicWatch,
+  PublicWatchDoc,
 } from "@/server/external-play/public-view";
 
-export type WatchModel = { roundOpened: boolean; play: PublicExternalPlay | null };
+export type WatchModel = { roundOpened: boolean; roundOpenedAt: string | null; play: PublicExternalPlay | null };
 export type WatchEvent = { kind: "poll"; doc: PublicWatchDoc } | { kind: "push"; push: PublicBoardPush; at: string };
-export type WatchView = "board" | "held" | "not_opened" | "not_started";
+/** live: the game is being played. held: the organiser has the board (a knockout draw's winner, or a result to
+ *  confirm). finished: the game is over — its board and its result, or the line that it has none yet. */
+export type WatchView = "live" | "held" | "finished" | "not_opened" | "not_started";
 
 export function initialWatch(doc: PublicWatchDoc): WatchModel {
-  return { roundOpened: doc.roundOpened, play: doc.externalPlay };
+  return { roundOpened: doc.roundOpened, roundOpenedAt: doc.roundOpenedAt, play: stopped(doc.externalPlay) };
+}
+
+/** A decided fixture's board is over and its clocks stopped, whatever the board on hand says (I1). One rule for
+ *  the first paint, every poll and every push. */
+function stopped(play: PublicExternalPlay | null): PublicExternalPlay | null {
+  const w = play?.watch ?? null;
+  if (play === null || !play.decided || w === null || (w.over && !w.clockRunning)) return play;
+  return { ...play, watch: { ...w, over: true, clockRunning: false } };
 }
 
 /** Is `next` older than the board on screen — would showing it take the board back? */
@@ -39,6 +55,7 @@ export function nextWatch(m: WatchModel, e: WatchEvent): WatchModel {
   if (e.kind === "push") {
     const prev = m.play;
     const p = e.push;
+    const decided = prev?.decided === true;
     const watch: PublicWatch = {
       fen: p.fen,
       lastMove: p.lastMove,
@@ -47,38 +64,71 @@ export function nextWatch(m: WatchModel, e: WatchEvent): WatchModel {
       whiteMs: p.whiteMs,
       blackMs: p.blackMs,
       asOf: e.at,
-      clockRunning: p.ply >= 2 && !p.over,
-      over: p.over,
+      clockRunning: p.ply >= 2 && !p.over && !decided,
+      over: p.over || decided,
       whiteSide: prev?.watch?.whiteSide ?? null,
+      // A push carries the board, not the list: the list on screen stays until the next poll brings it level
+      // (the panel asks for that poll at once — movesBehind).
+      moves: prev?.watch?.moves ?? [],
     };
     const status = prev?.status === "finished" || prev?.status === "needs_organiser" ? prev.status : "live";
     // roundOpened is left as it was: once a board is on screen it is never read (watchView draws the board, or
     // the hold, before it asks), and a poll never takes the board away.
-    return { ...m, play: { status, watch } };
+    return {
+      ...m,
+      play: { status, watch, decided, hold: prev?.hold ?? null, result: prev?.result ?? null },
+    };
   }
   const roundOpened = m.roundOpened || e.doc.roundOpened;
+  const roundOpenedAt = m.roundOpenedAt ?? e.doc.roundOpenedAt;
   const cur = m.play?.watch ?? null;
-  const next = e.doc.externalPlay?.watch ?? null;
+  const nextPlay = e.doc.externalPlay;
+  const next = nextPlay?.watch ?? null;
   if (cur !== null && goesBack(cur, next)) {
-    // Stale: keep the board, but learn White's side if this board lacks it.
+    // Stale board: keep the one on screen (learning White's side if it lacks it). The fixture's own facts are
+    // still the poll's — a result, a decision or a hold is never older than the board it is shown with.
     const side = cur.whiteSide ?? next?.whiteSide ?? null;
-    const play = side === cur.whiteSide ? m.play : { ...m.play!, watch: { ...cur, whiteSide: side } };
-    return { roundOpened, play };
+    const watch = side === cur.whiteSide ? cur : { ...cur, whiteSide: side };
+    const play: PublicExternalPlay = nextPlay === null ? { ...m.play!, watch } : { ...nextPlay, watch };
+    return { roundOpened, roundOpenedAt, play: stopped(play) };
   }
-  return { roundOpened, play: e.doc.externalPlay };
+  return { roundOpened, roundOpenedAt, play: stopped(nextPlay) };
 }
 
-/** What the panel shows. A board only when there is one to draw (isWatchable). */
+/** What the panel shows. The fixture decides first: decided ⇒ finished. Then a hold the public is told about —
+ *  the bridge's, or the fixture's own while it awaits the organiser's decision (a knockout draw), which outlives
+ *  the bridge's close. Then the bridge closed ⇒ finished. Then a board with a move on it. Otherwise the round's
+ *  own line. */
 export function watchView(m: WatchModel): WatchView {
-  if (m.play !== null && isWatchable(m.play)) return "board";
-  if (m.play?.status === "needs_organiser") return "held";
+  const p = m.play;
+  if (p !== null) {
+    if (p.decided) return "finished";
+    if (p.hold !== null) return "held";
+    if (p.status === "finished") return "finished";
+    if (p.watch !== null && p.watch.ply > 0) return "live";
+  }
   return m.roundOpened ? "not_started" : "not_opened";
 }
 
-/** Keep polling until a poll says the game is finished. A push's "over" is not
- *  the end: the bridge may still hold the board for the organiser. */
+/** The hold the panel names, or null. */
+export function holdOf(m: WatchModel): PublicHold | null {
+  return watchView(m) === "held" ? (m.play?.hold ?? null) : null;
+}
+
+/** Keep polling until the game is over for us: the fixture decided, or the bridge closed with nothing held. A
+ *  push's "over" is not the end (the bridge may still hold the board for the organiser), and a held board — a
+ *  bridge's hold, or a knockout draw awaiting its winner — is polled so its result arrives; a decided fixture is
+ *  never polled again (I1). */
 export function pollsAgain(m: WatchModel): boolean {
-  return m.play?.status !== "finished";
+  const p = m.play;
+  if (p === null) return true;
+  return !(p.decided || (p.status === "finished" && p.hold === null));
+}
+
+/** The board on screen is ahead of its move list (a push moved it): the panel asks for a poll at once. */
+export function movesBehind(m: WatchModel): boolean {
+  const w = m.play?.watch ?? null;
+  return w !== null && w.moves.length < w.ply;
 }
 
 const OPEN_FIXTURE: ReadonlySet<string> = new Set(["scheduled", "in_play", "needs_decision"]);

@@ -34,7 +34,7 @@ import { loadMatchCentre } from "./match-centre-load";
 import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine, PlayerUpcomingRow } from "./public-player-matches";
-import { loadPublicExternalPlay, loadPublicRoundOpened } from "@/server/usecases/external-play-read";
+import { loadPublicExternalPlay, loadPublicRoundOpenedAt } from "@/server/usecases/external-play-read";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
@@ -1161,6 +1161,8 @@ export async function getPublicFixture(
   /** T16 — an online board's round has been opened (D12). Always false for a
    *  division that does not play online (no read is made for it). */
   roundOpened: boolean;
+  /** When it was opened (Match details), or null — the same read. */
+  roundOpenedAt: string | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1304,10 +1306,13 @@ export async function getPublicFixture(
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
         externalPlay: await loadPublicExternalPlay(fixtureId),
-        roundOpened:
-          supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
-            ? await loadPublicRoundOpened(fixtureId)
-            : false,
+        ...(await (async () => {
+          const at =
+            supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess"
+              ? await loadPublicRoundOpenedAt(fixtureId)
+              : null;
+          return { roundOpened: at !== null, roundOpenedAt: at };
+        })()),
       };
     },
     // v2 (owner decision 2026-09-16): `matchCentre.header.statusLine` for a
@@ -1337,7 +1342,11 @@ export async function getPublicFixture(
     // v6 (chess T16, 2026-10-13): `externalPlay` gained `watch`, the view-only
     // board. A `-v5` entry has none, so for a REVALIDATE_FAST window the page
     // would say "not started" over a game being played.
-    ["pub-fixture-v6", fixtureId],
+    //
+    // v7 (chess T16 fix round 1, 2026-10-13): `externalPlay` gained `decided`,
+    // `hold`, `result` and `watch.moves`. A `-v6` entry has none, so a fixture
+    // decided on the pad would read its stale hold under the printed result.
+    ["pub-fixture-v7", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

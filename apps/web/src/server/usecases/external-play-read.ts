@@ -1,8 +1,16 @@
 import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import type { PublicExternalPlay, PublicWatch, PublicWatchDoc } from "@/server/external-play/public-view";
+import {
+  PUBLIC_HOLD,
+  type PublicExternalPlay,
+  type PublicGameResult,
+  type PublicWatch,
+  type PublicWatchDoc,
+} from "@/server/external-play/public-view";
 import { roundOpenFor } from "@/server/external-play/round-open";
+import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import { isPlayableFixtureStatus } from "./external-play/preflight";
 import { fenAfter } from "./external-play/play";
 
 type PublicBridgeRow = {
@@ -16,15 +24,28 @@ type PublicBridgeRow = {
   last_move_at: Date | null;
 };
 
+/** The fixture's own facts the board reads (T16 fix round 1, I1/I4): whether it is still playable, its recorded
+ *  result, and the hold's reason (read here, never published — only its public reading is). */
+export type PublicFixtureRow = PublicBridgeRow & {
+  needs_reason: string | null;
+  fixture_status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  outcome: { kind?: string; winner?: string; method?: string } | null;
+  summary: { perSide?: { entrantId?: string; line?: string }[]; detail?: { method?: string } } | null;
+  finished_at: Date | null;
+};
+
 /** The view-only board from the move ledger (T10 writes it, V436), or null
  *  when no game exists at Lichess yet. The position is the ledger replayed
  *  from the start; a ledger chess.js cannot replay in full shows the plies it
  *  could (the room's reconcile repairs the ledger — a spectator never sees a
  *  last move the board does not show). */
-export function watchFromLedger(row: PublicBridgeRow): PublicWatch | null {
+export function watchFromLedger(row: PublicBridgeRow, fixtureClosed = false): PublicWatch | null {
   if (row.challenge_id === null) return null;
-  const { fen, replayed } = fenAfter(row.moves_uci);
-  const over = row.status === "finished";
+  const { fen, replayed, san } = fenAfter(row.moves_uci);
+  // Over when the bridge closed, or when the fixture left play another way (I1) — its clocks stop either way.
+  const over = row.status === "finished" || fixtureClosed;
   return {
     fen,
     lastMove: replayed > 0 ? row.moves_uci[replayed - 1]! : null,
@@ -36,6 +57,44 @@ export function watchFromLedger(row: PublicBridgeRow): PublicWatch | null {
     clockRunning: replayed >= 2 && !over && row.white_ms !== null && row.black_ms !== null,
     over,
     whiteSide: row.white_side,
+    moves: san,
+  };
+}
+
+/** A hold's public reading. The column is CHECKed to the vocabulary (V433); a drift is refused loudly rather than
+ *  shown as some other hold. */
+export function publicHoldOf(reason: string | null): PublicExternalPlay["hold"] {
+  if (reason === null) return null;
+  if (!(NEEDS_REASONS as readonly string[]).includes(reason)) throw new Error(`publicHoldOf: unknown hold reason ${JSON.stringify(reason)}`);
+  return PUBLIC_HOLD[reason as NeedsReason];
+}
+
+/** The fixture's result as the finished board's header states it — from the fixture's engine outcome and its
+ *  public summary, White's score first. Null while the fixture has none (or one this header cannot word). */
+export function publicResultOf(row: Pick<PublicFixtureRow, "outcome" | "summary" | "home_entrant_id" | "away_entrant_id" | "white_side" | "finished_at">): PublicGameResult | null {
+  const o = row.outcome;
+  if (o === null || typeof o.kind !== "string") return null;
+  const sideOf = (entrant: string | undefined): "home" | "away" | null =>
+    entrant === undefined ? null : entrant === row.home_entrant_id ? "home" : entrant === row.away_entrant_id ? "away" : null;
+  let kind: PublicGameResult["kind"];
+  let winner: PublicGameResult["winner"] = null;
+  if (o.kind === "win" || o.kind === "award") {
+    winner = sideOf(o.winner);
+    // A winner who is neither entrant is no result this header can state.
+    if (winner === null) return null;
+    kind = "win";
+  } else if (o.kind === "draw" || o.kind === "tie") kind = "draw";
+  else if (o.kind === "no_result") kind = "no_result";
+  else return null;
+  const lineOf = (entrant: string | null) => row.summary?.perSide?.find((p) => p.entrantId === entrant)?.line ?? null;
+  const whiteFirst = row.white_side === "away" ? [row.away_entrant_id, row.home_entrant_id] : [row.home_entrant_id, row.away_entrant_id];
+  const [a, b] = whiteFirst.map(lineOf);
+  return {
+    kind,
+    winner,
+    method: row.summary?.detail?.method ?? o.method ?? null,
+    score: a !== null && b !== null && a !== undefined && b !== undefined ? `${a}–${b}` : "",
+    recordedAt: row.finished_at?.toISOString() ?? null,
   };
 }
 
@@ -45,18 +104,56 @@ export function watchFromLedger(row: PublicBridgeRow): PublicWatch | null {
  *  every public fixture page, so a column named here that the table lacks
  *  errors every one of them. */
 export async function loadPublicExternalPlay(fixtureId: string): Promise<PublicExternalPlay | null> {
-  const [row] = await sql<PublicBridgeRow[]>`
-    select status, challenge_id, white_side, moves_uci, move_count, white_ms, black_ms, last_move_at
-      from fixture_external_play
-     where fixture_id = ${fixtureId}`;
-  if (!row) return null;
-  return { status: row.status, watch: watchFromLedger(row) };
+  const [row] = await sql<PublicFixtureRow[]>`
+    select ep.status, ep.challenge_id, ep.white_side, ep.moves_uci, ep.move_count, ep.white_ms, ep.black_ms,
+           ep.last_move_at, ep.needs_reason, f.status as fixture_status, f.home_entrant_id, f.away_entrant_id,
+           f.outcome, v.summary, f.finished_at
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+      left join public_fixtures_v v on v.id = ep.fixture_id
+     where ep.fixture_id = ${fixtureId}`;
+  return row ? publicPlayOf(row) : null;
+}
+
+/** The public reading of a bridge row under its fixture. The FIXTURE decides first (I1):
+ *  - settled (decided, finalized, abandoned, forfeited, cancelled — the pad, a settle, a withdrawal, a cancel):
+ *    over for the spectators even before the sweep closes its bridge, with no hold shown under it;
+ *  - awaiting the organiser's decision (`needs_decision`, W2a: a level result in a bracket — played, not
+ *    finished): the game is over and the board kept, and the hold is the fixture's — a draw's winner to be
+ *    decided, any other level result to be confirmed — whatever the bridge reads;
+ *  - open (scheduled, in_play): the bridge's own hold, if any. */
+export function publicPlayOf(row: PublicFixtureRow): PublicExternalPlay {
+  const open = isPlayableFixtureStatus(row.fixture_status);
+  const awaitingDecision = row.fixture_status === "needs_decision";
+  const decided = !open && !awaitingDecision;
+  const level = row.outcome?.kind === "draw" || row.outcome?.kind === "tie";
+  const hold: PublicExternalPlay["hold"] = decided
+    ? null
+    : awaitingDecision
+      ? level
+        ? "tiebreak"
+        : "confirm"
+      : row.status === "needs_organiser"
+        ? publicHoldOf(row.needs_reason)
+        : null;
+  return {
+    status: row.status,
+    watch: watchFromLedger(row, !open),
+    decided,
+    hold,
+    result: publicResultOf(row),
+  };
 }
 
 /** Has this fixture's round been opened (D12)? Opening (T19's openRound)
  *  stamps `stage_round_opens` with the moment it happened. */
 export async function loadPublicRoundOpened(fixtureId: string): Promise<boolean> {
-  return (await roundOpenFor(sql, fixtureId)) !== null;
+  return (await loadPublicRoundOpenedAt(fixtureId)) !== null;
+}
+
+/** When this fixture's round was opened (D12), as the stamp says, or null. */
+export async function loadPublicRoundOpenedAt(fixtureId: string): Promise<string | null> {
+  return (await roundOpenFor(sql, fixtureId))?.roundOpenedAt.toISOString() ?? null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -69,6 +166,6 @@ export async function publicFixtureBoard(fixtureId: string): Promise<PublicWatch
   if (!UUID.test(fixtureId)) throw new HttpError(404, "fixture not found");
   const [visible] = await sql<{ id: string }[]>`select id from public_fixtures_v where id = ${fixtureId}`;
   if (!visible) throw new HttpError(404, "fixture not found");
-  const [externalPlay, roundOpened] = await Promise.all([loadPublicExternalPlay(fixtureId), loadPublicRoundOpened(fixtureId)]);
-  return { roundOpened, externalPlay };
+  const [externalPlay, roundOpenedAt] = await Promise.all([loadPublicExternalPlay(fixtureId), loadPublicRoundOpenedAt(fixtureId)]);
+  return { roundOpened: roundOpenedAt !== null, roundOpenedAt, externalPlay };
 }

@@ -1,46 +1,24 @@
 // T16 (design §3.4 step 3, controller ruling T10 carry) — the public page
 // watches the game HERE: `PublicExternalPlay` carries a view-only board
-// (`watch`) and `isWatchable` says when there is one to draw. Statuses are
-// the bridge's own vocabulary (ExternalPlayStatus); the table below is the
-// rule — a board is drawn only while a game is on or over, and only when the
-// board itself is there (a status alone must never draw an empty board).
+// (`watch`). Which view draws it is the panel's (watch-state.ts, tested
+// there); this file pins the public reading of a hold, a broadcast's status
+// and a FEN's ply.
 import { describe, expect, it } from "vitest";
-import { isWatchable, overFromStatus, plyOfFen, type PublicExternalPlay, type PublicWatch } from "../public-view";
-import { LICHESS_STATUSES } from "../types";
+import { PUBLIC_HOLD, overFromStatus, plyOfFen, type PublicHold } from "../public-view";
+import { LICHESS_STATUSES, NEEDS_REASONS, type NeedsReason } from "../types";
 
-const WATCH: PublicWatch = {
-  fen: "rnbqkb1r/pppppppp/5n2/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 2 2",
-  lastMove: "g8f6",
-  turn: "white",
-  ply: 2,
-  whiteMs: 598_000,
-  blackMs: 597_000,
-  asOf: "2026-10-13T10:00:00.000Z",
-  clockRunning: true,
-  over: false,
-  whiteSide: "home",
-};
-
-describe("isWatchable", () => {
-  it("live and finished with a board are watchable; pending, ready and a hold are not", () => {
-    const cases: [PublicExternalPlay["status"], boolean][] = [
-      ["pending", false],
-      ["ready", false],
-      ["live", true],
-      ["finished", true],
-      ["needs_organiser", false],
-    ];
+describe("PUBLIC_HOLD — what a spectator is told about a board held for the organiser", () => {
+  it("every hold reason is read: a knockout draw is 'winner to be decided', a revoked token is no hold (the game goes on), the rest 'to be confirmed'", () => {
+    // The rulebook: tiebreak_owed is the one hold whose game is already decided as a draw (T13); token_revoked
+    // holds one seat's link, not the game (RECONCILED_WHILE_HELD). Every other reason waits on the organiser.
+    const SPECIAL: Partial<Record<NeedsReason, PublicHold | null>> = { tiebreak_owed: "tiebreak", token_revoked: null };
     let checked = 0;
-    for (const [status, want] of cases) {
-      expect(isWatchable({ status, watch: WATCH }), status).toBe(want);
+    for (const reason of NEEDS_REASONS) {
+      expect(PUBLIC_HOLD[reason], reason).toBe(reason in SPECIAL ? SPECIAL[reason] : "confirm");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: every bridge status").toBe(5);
-  });
-
-  it("the empty case: a live status with no board yet is NOT watchable — never a blank board", () => {
-    expect(isWatchable({ status: "live", watch: null })).toBe(false);
-    expect(isWatchable({ status: "finished", watch: null })).toBe(false);
+    expect(checked, "anti-vacuity: every declared reason").toBe(NEEDS_REASONS.length);
+    expect(Object.keys(PUBLIC_HOLD).sort(), "no reason the engine does not declare").toEqual([...NEEDS_REASONS].sort());
   });
 });
 

@@ -1316,12 +1316,17 @@ describe.runIf(HAS_DB)("reconcile — a fixture no longer playable closes its br
     expect([r.status, r.draw_offer_by, r.black_draw_offer_ply]).toEqual(["finished", null, 3]);
   });
 
-  it("a HELD row on a withdrawn fixture stays in the organiser's queue", async () => {
+  it("a HELD row on a withdrawn fixture closes too (T16 fix round 1, I1) — the queue lists playable fixtures only, so it would be orphaned", async () => {
+    // Before I1 this row was left `needs_organiser`: out of the queue (queue.ts filters unplayable fixtures),
+    // "needs the organiser" on the public page, and polled there for ever. Now it closes, with no Lichess read,
+    // no hold reason and no seat — and NO finished_at: the close is not the game's end (the camera judgment
+    // reads finished_at as that end; a held game's is game_over_at or the clock's bound).
     const g = await liveGame();
-    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked", seat: "black" });
+    expect(await rowOf(g.fixtureId), "premise: held").toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked" });
     await withdrawEntrantCascade(await mintOrgOwnerAuth(g.orgId), g.black.entrantId);
     expect(await reconcile(g.fixtureId, "sweep", observed().deps)).toBeNull();
-    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "token_revoked", finished_at: null });
+    expect(await rowOf(g.fixtureId)).toMatchObject({ status: "finished", needs_reason: null, revoked_seat: null, finished_at: null });
     expect(lichess.calls).toEqual([]);
   });
 });
