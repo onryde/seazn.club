@@ -67,6 +67,10 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+// page.tsx reads the Lichess card (chess T16) beside the lanes; nothing to link here, and no DB in CI's test job.
+vi.mock("@/server/usecases/me-lichess", () => ({
+  myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),
+}));
 
 const { default: MePage } = await import("../page");
 
