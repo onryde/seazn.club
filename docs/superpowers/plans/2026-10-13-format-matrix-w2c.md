@@ -1904,6 +1904,8 @@ Before Step 2, confirm the cricket `t20` and football `youth` keys in each modul
 
 ### Task 7: Engine — "If a match is abandoned" options (E1, same loop as Task 6)
 
+> **Owner P-7 "A" (2026-10-13).** An abandoned fixture (fold `abandoned`, `core.abandon`) inside a Swiss stage must not strand the stage. Today (main) `stages.ts:~1014` `DECIDED` omits `abandoned` → `generateStageFixtures` throws STAGE_NOT_READY, and settle on that board is refused SETTLE_NOT_APPLICABLE, so nothing unblocks it. Ruling A: the organiser can SETTLE an abandoned board (enter a result or a no-result) — make settle applicable to `abandoned`; the next round keeps waiting until it is settled (do NOT add `abandoned` to DECIDED). The STAGE_NOT_READY refusal must name the abandoned board(s) so the organiser knows what to settle. Red-first DB tests: chess Swiss round 1 with one board abandoned → next round refused naming it → settle it → next round generates; repeat for one other sport whose console offers Abandon inside a Swiss stage (grep it), and a league stage (settle on abandoned also allowed, no regression). Rule row: add to the abandon rows (owner-signed wording needed at batch-3 start — draft: "An abandoned match in a Swiss stage holds the next round until the organiser settles it.").
+
 > **Carried from Task 4.** `abandonPolicy` is held in `UNSETTABLE` in `packages/engine/src/sport/rule-keys.test.ts` until this task declares it; delete those 3 rows (add the file to this task's Files) when the per-sport abandon options land.
 
 Spec item 12; Q10; D9; HK-AB-2, CA-AB-2, GN-AB-2; ruling 117. Review fixes I4 (the Q4 predicate), I5 (ice hockey is never offered `q4_stands`), I6 (`share` under `allowDraws: false`; owner P-5).
