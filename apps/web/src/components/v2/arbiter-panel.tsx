@@ -648,7 +648,9 @@ function Decision({
                     onClick={() => on.settle(c.choice)}
                     disabled={busy}
                     aria-busy={decision.busy?.kind === "settle" || undefined}
-                    className={`${BUTTON_QUIET} min-w-0 ${c.wide ? "min-[360px]:col-span-2 break-words py-2" : "truncate"}`}
+                    // M-5: the side column is narrow, so no label is ever cut — each wraps; a winner takes a row
+                    // of its own (the name in full, then its verb), as the wide double walkover does.
+                    className={`${BUTTON_QUIET} min-w-0 break-words py-2${c.wide || c.choice === "home_wins" || c.choice === "away_wins" ? " min-[360px]:col-span-2" : ""}`}
                   >
                     {c.label}
                   </button>

@@ -627,6 +627,35 @@ describe("your decision", () => {
     expect(checked).toBe(2);
   });
 
+  // M-5 (fix round 4): the panel's side column is narrow (about 290px at 1280), and a truncated winner button read as
+  // a bare name — "Maximiliana Fe…" — with the verb cut away, in a knockout the organiser's one decisive control. Every
+  // settle button wraps instead; each winner takes a row of its own from 360px, so the name has the column's full width;
+  // Draw and No result keep their shared row.
+  it("every settle button shows its whole label: no truncation anywhere; each winner a row of its own, wrapping — settle and tie-break alike, counted", () => {
+    const b = { ...ROUND.boards[2]!, whiteSide: "home" as const };
+    const buttonsOf = (h: string) => [...h.matchAll(/<button([^>]*)data-settle="([a-z_]+)"([^>]*)>/g)].map((m) => ({ choice: m[2]!, cls: `${m[1]} ${m[3]}` }));
+    let winners = 0;
+    let others = 0;
+    for (const tiebreakOwed of [false, true]) {
+      const h = html(props({ round: { ...ROUND, boards: [{ ...b, tiebreakOwed }] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));
+      const buttons = buttonsOf(h);
+      expect(buttons.length, `tie-break ${tiebreakOwed}: premise, the buttons render`).toBe(tiebreakOwed ? 2 : 4);
+      for (const { choice, cls } of buttons) {
+        const label = `tie-break ${tiebreakOwed}, ${choice}`;
+        expect(cls, `${label}: never cut short`).not.toMatch(/\btruncate\b/);
+        expect(cls, `${label}: wraps`).toMatch(/\bbreak-words\b/);
+        if (choice === "home_wins" || choice === "away_wins") {
+          expect(cls, `${label}: a row of its own`).toMatch(/\bmin-\[360px\]:col-span-2\b/);
+          winners++;
+        } else {
+          expect(cls, `${label}: the shared row`).not.toMatch(/col-span-2/);
+          others++;
+        }
+      }
+    }
+    expect([winners, others]).toEqual([4, 2]);
+  });
+
   it("a drawn knockout (tie-break owed) offers a winner only — never Draw or No result", () => {
     const b = { ...ROUND.boards[2]!, tiebreakOwed: true, whiteSide: "away" as const };
     const h = html(props({ round: { ...ROUND, boards: [b] }, decision: { ...initialArbiterDecision("f3"), settleOpen: true } }));

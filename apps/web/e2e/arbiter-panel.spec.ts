@@ -29,7 +29,7 @@
  * Expected copy comes from the dictionary, expected boards and moves from the
  * rules (chess.js, FIDE move numbering) — never from the panel's code.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { Chess } from "chess.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -188,6 +188,23 @@ async function noSidewaysScroll(page: Page, widths: number[]): Promise<number> {
     }));
     expect(scroll, `no horizontal page scroll at ${width}px`).toBeLessThanOrEqual(client);
     checked += 1;
+  }
+  return checked;
+}
+
+/** M-5: every button's WHOLE label is painted at each width — nothing cut short (a truncated label scrolls inside its
+ *  own box). Counted: buttons × widths. */
+async function labelsFit(page: Page, buttons: Locator, widths: number[]): Promise<number> {
+  let checked = 0;
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(150);
+    const boxes = await buttons.evaluateAll((els) => els.map((el) => ({ label: el.textContent ?? "", fits: el.scrollWidth <= el.clientWidth })));
+    expect(boxes.length, `${width}px: premise, the buttons render`).toBeGreaterThan(0);
+    for (const b of boxes) {
+      expect(b.fits, `${width}px: "${b.label}" shows all of its label`).toBe(true);
+      checked += 1;
+    }
   }
   return checked;
 }
@@ -512,6 +529,9 @@ test.describe("arbiter panel", () => {
     await expect(page.getByTestId("arbiter-settle-guidance")).toHaveCount(0);
     await shoot(page, "arbiter-knockout-double-walkover");
     expect(await noSidewaysScroll(page, [320, 768, 1280]), "the panel offering the double walkover").toBe(3);
+    // Every label is shown whole (M-5, fix round 4): the winners — one a 43-character name — each on a row of their
+    // own, wrapping, and the double walkover on its own row too; at every width, counted.
+    expect(await labelsFit(page, choices3, [320, 768, 1280]), "every settle button, at every width").toBe(4 * 3);
     // Its label is never cut short (a row of its own): the button shows all of it.
     await page.setViewportSize({ width: 1280, height: 900 });
     const dw = choices3.filter({ hasText: uiEn["externalPlay.resolve.doubleWalkover"]! });
