@@ -4262,6 +4262,8 @@ The English strings above are the proposed copy. They are signed with the Step 3
 
 ### Task 17: S1 + S4 — the stage format row for every sport (UI)
 
+> **Carried from Tasks 6+7 review.** Carrom `share` is refused unless the tie board is "Drawn game" (overnight ruling, mirrors P-5): every shipped carrom variant defaults to "extra", so `share(carrom, {}).disabled === true` with the reason naming the tie-board setting — the plan's test expecting `false` (~this task's abandon-options case) is WRONG; flip it. `share` is offered only on DRAW_KINDS stages (ignored in brackets).
+
 > **Carried from Task 8 review.** (I1) Until this task, `kind: "sequence"` fields are hidden from `visibleRuleFields` (Task 8 fix round); this task builds the real ordered-subset control and UN-HIDES them — remove that filter and its pin. (I2) The control must represent `[]` ("No tie-break games — a drawn game goes to you"), and open/edit-another-field/save/read-back must keep `[]`. For chess, `tiebreakRungs` is the decider (empty = held); `tiebreak` is no longer organiser-settable.
 
 > **Mockups (design of record, owner picked A):** `docs/superpowers/specs/2026-10-13-format-matrix-w2c-mockups/` — open the screen's HTML beside the build before sign-off (README there maps screen → file).
