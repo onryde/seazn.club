@@ -689,6 +689,22 @@ export function boundsFrom(
   };
 }
 
+/**
+ * W2c (spec §4.1 as amended; plan D1) — who may set a cfg key. Q5's three groups: `match` keys may be set per stage
+ * AND per match, `stage` keys per stage only, `points` keys are the stage's table points (D11), never a match rule.
+ */
+export type RuleScope = "match" | "stage" | "points";
+export interface RuleKeyFact {
+  readonly scope: RuleScope;
+  /** Which stage kinds ("format") and which engine variants the key applies to. Absent = every one. A null kind or
+   *  variant at the call site (the division level, or no variant) is never narrowed. */
+  readonly appliesTo?: { readonly stageKinds?: readonly StageKind[]; readonly variants?: readonly string[] };
+  /** X-SR-2: a match may only switch this key off or shorten it (RB2B-3, football extra time). */
+  readonly matchBound?: "off_or_shorter";
+}
+/** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
+export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;
+
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
 export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> {
@@ -759,6 +775,19 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
+  /**
+   * W2c (spec §4.1 as amended) — the game rule of who may set which cfg key, at which scope, for which stage kinds and
+   * variants. Every settable key of `configSchema` is declared here; every server allowlist, form and label reads it
+   * through the helpers in `sport/rule-keys.ts`, never a hand-kept list. Shared kernels declare their keys once and
+   * the sport re-exports or narrows them. Optional only so hand-built fakes compile; every builtin declares it (the
+   * X-SR-1 sweep in `rule-keys.test.ts`).
+   */
+  ruleKeys?: RuleKeys;
+  /**
+   * W2c (plan D9) — the abandon policies THIS sport offers an organiser, in `abandonPolicy`'s own vocabulary. The
+   * TYPE only here; W2c Task 7 fills it per sport.
+   */
+  abandonOptions?: readonly string[];
 
   // Jul3/06 §3 — optional print-template fragments. Sport-neutral kinds
   // (timetable, standings, roster, participants) live in engine/exports; a
@@ -861,6 +890,13 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.
   bracketDeciders(cfg: Cfg): Partial<Cfg>;
+  /**
+   * W2c (spec §4.2) — the rules a NEW stage of this kind starts with, layered after the variant preset and before the
+   * stage's stored rules (the knockout preselection: football ET 2×15 + penalties, …). Written into the stage when it
+   * is created, never inferred at resolve time. Every key is a stage key of its kind (X-SR-1 sweep). Absent = `{}`;
+   * W2c Task 6 fills it.
+   */
+  stageDefaults?(kind: StageKind, variant: string | null): Partial<Cfg>;
 
   // §9.3 — allowed per-fixture point totals under cfg (football {3, 2}, …);
   // the conformance kit checks Σ points of both deltas is in this set.

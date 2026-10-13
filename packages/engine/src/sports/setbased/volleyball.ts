@@ -4,7 +4,7 @@
 // role (validation only — positions never touch scoring). The kernel owns all
 // set logic; this file is configuration.
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, type SetBasedParams } from "./kernel.ts";
+import { makeSetBasedModule, SET_RULE_KEYS, type SetBasedParams } from "./kernel.ts";
 
 // spec 04 §3.4 — FIVB league convention. "*" (clean 3-0/3-1) → 3:0; the 3-2
 // split is the only exception → 2:1. Total is 3 either way (declaredPointsSets).
@@ -62,6 +62,7 @@ export const volleyball = makeSetBasedModule({
       records: { timeouts: true, sanctions: true, substitutions: false, expedite: false },
     },
   },
+  ruleKeys: { ...SET_RULE_KEYS }, // W2c (spec §4.1 Q5) — the set kernel's keys as they are
   positions,
   // S3/W4b (#426) ruling 2 — FIVB 15.6, the two conditions on a re-entry, and
   // 19.3, the libero replacement that is not a substitution.

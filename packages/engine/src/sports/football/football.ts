@@ -2537,6 +2537,22 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     // every other grassroots/youth preset this module declares.
     "mini-soccer": { halfMinutes: 10, halves: 4, rollingSubs: true, teamSize: 7 },
   },
+  // W2c (spec §4.1 Q5) — the half length may differ per match, and extra time per match only off or shorter (RB2B-3,
+  // X-SR-2). Penalties, the squad and the substitution rules per stage; table points and the walkover score are the
+  // stage's points (D11).
+  ruleKeys: {
+    halfMinutes: { scope: "match" },
+    extraTime: { scope: "match", matchBound: "off_or_shorter" },
+    shootout: { scope: "stage" },
+    teamSize: { scope: "stage" },
+    maxSubs: { scope: "stage" },
+    subWindows: { scope: "stage" },
+    sinBinMinutes: { scope: "stage" },
+    rollingSubs: { scope: "stage" },
+    concussionSubs: { scope: "stage" },
+    points: { scope: "points" },
+    awardScore: { scope: "points" },
+  },
 
   init(cfg, lineups: LineupPair): FootballState {
     // S3/W4b (#426) — ONE construction of the squad, the kernel's. The private

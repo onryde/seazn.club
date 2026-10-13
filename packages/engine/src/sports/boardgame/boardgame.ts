@@ -13,6 +13,7 @@ import { EngineError } from "../../core/errors.ts";
 import { CoreForfeit, forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  BRACKET_KINDS,
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
@@ -770,6 +771,15 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     classical: { variant: "classical" },
     rapid: { variant: "rapid" },
     blitz: { variant: "blitz" },
+  },
+  // W2c (spec §4.1 Q5) — a chess match has no per-match format: the time control is set per stage (item 14), and the
+  // tie-break games exist only where someone must advance (`bracketDeciders`). Scoring and the bye are table points.
+  ruleKeys: {
+    variant: { scope: "stage" },
+    clock: { scope: "stage" },
+    tiebreak: { scope: "stage", appliesTo: { stageKinds: [...BRACKET_KINDS] } },
+    scoring: { scope: "points" },
+    byeScore: { scope: "points" },
   },
 
   init(cfg, lineups: LineupPair): BoardgameState {

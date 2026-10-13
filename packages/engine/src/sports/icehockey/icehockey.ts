@@ -5,7 +5,7 @@
 // Event Code §219 points (3 · 2 · 1 · 0) and the §220 H2H-first tie-break.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, PERIOD_RULE_KEYS, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { ICEHOCKEY_RECREATIONAL_SUSPENSIONS, ICEHOCKEY_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — IIHF's own subset of the shared `PeriodSuspensionReason` union:
@@ -200,6 +200,9 @@ export const icehockey = makePeriodModule({
       suspensions: { classes: ICEHOCKEY_RECREATIONAL_SUSPENSIONS },
     },
   },
+  // W2c (spec §4.1 Q5) — the period kernel's keys as they are: overtime and the shoot-out per stage, their lengths
+  // per match.
+  ruleKeys: { ...PERIOD_RULE_KEYS },
   positions,
   keeperGroup: "G",
   // S3/W4b (#426) ruling 2 — IIHF Rule 68: substitution is unlimited and "on

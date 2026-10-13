@@ -50,6 +50,7 @@ import type {
   PadGate,
   PadPanel,
   PadSpec,
+  RuleKeys,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -1787,10 +1788,29 @@ export function periodKeeperStatsFold(
 // Preset wiring
 // ---------------------------------------------------------------------------
 
+/**
+ * W2c (spec §4.1 Q5; plan finding 3) — the period kernel's rule keys, declared once. The deciders are stage objects
+ * (`overtime`, `shootout`) whose LENGTH leaves a match may change; the most specific declaration wins, so
+ * `overtime.minutes` is a match key inside the stage-only `overtime`. A sport whose rules lack a decider narrows it
+ * out (hockey has no overtime). Table points and the walkover score are the stage's points (D11).
+ */
+export const PERIOD_RULE_KEYS: RuleKeys = {
+  "periods.minutes": { scope: "match" },
+  "overtime.minutes": { scope: "match" },
+  "shootout.attempts": { scope: "match" },
+  overtime: { scope: "stage" },
+  shootout: { scope: "stage" },
+  points: { scope: "points" },
+  awardScore: { scope: "points" },
+};
+
 export interface PeriodPreset {
   key: string; // 'icehockey' | 'hockey' (football migrates later)
   version: string;
   defaults: PeriodParams;
+  /** W2c (spec §4.1 as amended) — who may set which cfg key, from `PERIOD_RULE_KEYS` spread or narrowed. Optional only
+   *  so hand-built test presets compile: the X-SR-1 sweep (`sport/rule-keys.test.ts`) fails a builtin without it. */
+  ruleKeys?: RuleKeys;
   variants: Record<string, Partial<PeriodParams>>;
   positions: PositionCatalog;
   // W4 (#407) — which `positions.groups` key is the goalkeeper, so the kernel
@@ -2541,6 +2561,7 @@ export function makePeriodModule(
       };
     },
     variants: preset.variants,
+    ruleKeys: preset.ruleKeys,
 
     // S3/W4b (#426) — the two halves of adopting `core/lineup.ts`. `lineupPolicy` is
     // declared only when the preset states one, and since the 2026-10-15 ruling a

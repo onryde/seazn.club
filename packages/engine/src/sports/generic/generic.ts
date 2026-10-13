@@ -582,6 +582,12 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       progressScore: false,
     },
   },
+  // W2c (spec §4.1 Q5) — no per-match format: how a result is recorded and whether a draw stands are set per stage.
+  ruleKeys: {
+    resultMode: { scope: "stage" },
+    allowDraws: { scope: "stage" },
+    points: { scope: "points" },
+  },
 
   init(cfg, lineups: LineupPair): GenericState {
     return {

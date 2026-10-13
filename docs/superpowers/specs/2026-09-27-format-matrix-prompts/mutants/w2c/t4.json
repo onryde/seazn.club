@@ -1,0 +1,128 @@
+[
+  {
+    "id": "t4-scope-match",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "owner.fact.scope !== \"match\" || ",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "stage leaf in the same object" }]
+  },
+  {
+    "id": "t4-most-specific",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "for (let n = path.length; n >= 1; n--)",
+    "replace": "for (let n = 1; n <= path.length; n++)",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "most specific" }]
+  },
+  {
+    "id": "t4-own-key",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (Object.hasOwn(keys, key)) return",
+    "replace": "if (keys[key] !== undefined) return",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "most specific" }]
+  },
+  {
+    "id": "t4-applies-kind",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "|| kinds.includes(kind))",
+    "replace": "|| true)",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "carrom tieBoard applies to table kinds only" }]
+  },
+  {
+    "id": "t4-applies-variant",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "|| variants.includes(variant))",
+    "replace": "|| true)",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "narrows by variant too" }]
+  },
+  {
+    "id": "t4-division-unnarrowed",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "kinds === undefined || kind === null || ",
+    "replace": "kinds === undefined || ",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a kind-limited key follows its declared kinds" }]
+  },
+  {
+    "id": "t4-fixture-scope",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "keysWhere(m, kind, variant, [\"match\"])",
+    "replace": "keysWhere(m, kind, variant, [\"stage\", \"match\"])",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "lands in exactly its declared scope" }]
+  },
+  {
+    "id": "t4-points-out-of-stage",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "keysWhere(m, kind, variant, [\"stage\", \"match\"])",
+    "replace": "keysWhere(m, kind, variant, [\"stage\", \"match\", \"points\"])",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "points keys are in neither" }]
+  },
+  {
+    "id": "t4-unknown-first",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (!known.has(top)) return",
+    "replace": "if (false) return",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a key the sport never declares is UNKNOWN_RULE_KEY" }]
+  },
+  {
+    "id": "t4-applies-check",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": " || !ruleKeyApplies(owner.fact, kind, variant))",
+    "replace": ")",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "a match key outside its declared kinds is refused" }]
+  },
+  {
+    "id": "t4-stage-off",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "} else if (leaf.before === undefined) {",
+    "replace": "} else if (false) {",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "one the stage does not carry is off" }]
+  },
+  {
+    "id": "t4-bound",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "<= Number(st.halfMinutes) ? null",
+    "replace": "<= Infinity ? null",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+  },
+  {
+    "id": "t4-bound-switch-on",
+    "file": "packages/engine/src/sport/rule-keys.ts",
+    "find": "if (st.enabled !== true) return \"it is off for this stage\";",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+  },
+  {
+    "id": "t4-path-reader-no",
+    "file": "packages/engine/src/testkit/schema-paths.ts",
+    "find": "  return false;\n}",
+    "replace": "  return true;\n}",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "the testkit path reader answers no as well as yes" }]
+  },
+  {
+    "id": "t4-football-bound-declared",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "extraTime: { scope: \"match\", matchBound: \"off_or_shorter\" },",
+    "replace": "extraTime: { scope: \"match\" },",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "X-SR-2 football extra time per match" }]
+  },
+  {
+    "id": "t4-carrom-tieboard-kinds",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "tieBoard: { scope: \"stage\", appliesTo: { stageKinds: [...DRAW_KINDS] } },",
+    "replace": "tieBoard: { scope: \"stage\" },",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "carrom tieBoard applies to table kinds only" }]
+  },
+  {
+    "id": "t4-hockey-narrows",
+    "file": "packages/engine/src/sports/hockey/hockey.ts",
+    "find": "\"overtime.minutes\": _noOvertimeMinutes, ",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "each row is a real top-level key that is not declared" }]
+  },
+  {
+    "id": "t4-unclassified-key",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "    allowDraws: { scope: \"stage\" },\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["src/sport/rule-keys.test.ts"], "name": "every top-level schema key is declared or listed UNSETTABLE" }]
+  }
+]

@@ -58,6 +58,7 @@ import type {
   PadGate,
   PadPanel,
   PadSpec,
+  RuleKeys,
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
@@ -1500,6 +1501,17 @@ function generateSetScore(
 // Preset wiring — the parts that differ between the three sports
 // ---------------------------------------------------------------------------
 
+/** W2c (spec §4.1 Q5) — the set kernel's rule keys, declared once: the match format may differ per match; the
+ *  table's `pointsMap` is the stage's points (D11). `records` is stat bookkeeping, not a rule. */
+export const SET_RULE_KEYS: RuleKeys = {
+  bestOf: { scope: "match" },
+  setTo: { scope: "match" },
+  finalSetTo: { scope: "match" },
+  cap: { scope: "match" },
+  winBy: { scope: "match" },
+  pointsMap: { scope: "points" },
+};
+
 export interface SetBasedPreset {
   key: string; // 'volleyball' | 'badminton' | 'tabletennis'
   version: string;
@@ -1575,6 +1587,9 @@ export interface SetBasedPreset {
    * `() => DEFAULT_LINEUP_POLICY` to get it, as table tennis does.
    */
   lineupPolicy?: (cfg: SetBasedCfg) => LineupPolicy;
+  /** W2c (spec §4.1 as amended) — who may set which cfg key; the three shipped sports spread `SET_RULE_KEYS`. Optional
+   *  only so hand-built test presets compile: the X-SR-1 sweep (`sport/rule-keys.test.ts`) fails a builtin without it. */
+  ruleKeys?: RuleKeys;
 }
 
 function makeMetrics(unit: { one: string; many: string }): MetricSpec[] {
@@ -2373,6 +2388,7 @@ export function makeSetBasedModule(
     padSpec: (padCfg) => stampAttributionRequired(setBasedPadSpec(preset, padCfg), eventSchemas),
     positions: preset.positions,
     variants: preset.variants,
+    ruleKeys: preset.ruleKeys,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
     // S8/#417 — always populated: the kernel default (`points_won` +
     // matches/sets_won/sets_lost) merges with whatever this preset declares,

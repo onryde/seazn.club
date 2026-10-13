@@ -7,7 +7,7 @@
 // competition demands a winner.
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { PlayerStatsModel } from "../../stats/stats.ts";
-import { makePeriodModule, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
+import { makePeriodModule, PERIOD_RULE_KEYS, periodKeeperStatsFold, type PeriodSuspensionReason } from "../period/kernel.ts";
 import { HOCKEY_SUSPENSIONS, HOCKEY_YOUTH_SUSPENSIONS } from "../period/suspensions.ts";
 
 // S4 (#428) — FIH's own subset of the shared `PeriodSuspensionReason` union:
@@ -166,6 +166,9 @@ export const hockey = makePeriodModule({
       suspensions: { classes: HOCKEY_YOUTH_SUSPENSIONS },
     },
   },
+  // W2c (spec §4.1 Q5) — the period kernel's keys, narrowed: FIH hockey has no overtime, so neither the stage key nor
+  // its match-length leaf is offered (the X-SR-1 sweep holds `overtime` UNSETTABLE for hockey).
+  ruleKeys: (({ overtime: _noOvertime, "overtime.minutes": _noOvertimeMinutes, ...keys }) => keys)(PERIOD_RULE_KEYS),
   positions,
   keeperGroup: "GK",
   // S3/W4b (#426) ruling 2 — FIH Rule 5.2: substitution is UNLIMITED and

@@ -8,7 +8,7 @@
 // reserves the column). That is NOT this module's concern — this module scores a
 // single singles/doubles fixture only (table-tennis.md §4).
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule } from "./kernel.ts";
+import { makeSetBasedModule, SET_RULE_KEYS } from "./kernel.ts";
 
 // table-tennis.md §6 — no positions; singles/doubles/mixed = entrant kind (same
 // as badminton). One nominated unit per side.
@@ -41,6 +41,7 @@ export const tabletennis = makeSetBasedModule({
     bo7: { bestOf: 7 }, // KO / finals
     "hardbat-21": { setTo: 21, finalSetTo: 21 }, // legacy/social — kernel unchanged
   },
+  ruleKeys: { ...SET_RULE_KEYS }, // W2c (spec §4.1 Q5) — the set kernel's keys as they are
   positions,
   // S3/W4b (#426) ruling 2 — ITTF has no substitute: the pair named on the
   // sheet plays the match. Every knob at its most restrictive, which is also

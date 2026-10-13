@@ -3605,6 +3605,18 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       lineupChanges: { concussionReplacements: 1 },
     },
   },
+  // W2c (spec §4.1 Q5) — the overs and the bowler limit may differ per match; the super over (any stage kind,
+  // CK-SO-1), DLS and the result floor per stage. The innings shape is the variant's.
+  ruleKeys: {
+    ballsPerInnings: { scope: "match" },
+    maxOversPerBowler: { scope: "match" },
+    superOver: { scope: "stage" },
+    superOverStillTied: { scope: "stage" },
+    dls: { scope: "stage" },
+    minOversForResult: { scope: "stage" },
+    playersPerSide: { scope: "stage" },
+    points: { scope: "points" },
+  },
 
   // spec 03 §2 guarantee 4 — post-match scorecards append after the decision.
   postDecisionTypes: ["cricket.player.line"],

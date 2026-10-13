@@ -909,6 +909,20 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     // game to 29, queen worth 5, no queen benefit at 24+ — carrom.md §1.
     "club-29": { gameTo: 29, queenPoints: 5, queenCapAt: 24 },
   },
+  // W2c (spec §4.1 Q5) — the game target and board count may differ per match; the coin and queen values per stage.
+  // The tie board is offered only where a table can hold a draw (item 9): a bracket forces `extra`
+  // (`bracketDeciders`).
+  ruleKeys: {
+    gameTo: { scope: "match" },
+    maxBoards: { scope: "match" },
+    bestOf: { scope: "match" },
+    queenPoints: { scope: "stage" },
+    queenCapAt: { scope: "stage" },
+    queenFollowsBoard: { scope: "stage" },
+    pointsPerCoin: { scope: "stage" },
+    tieBoard: { scope: "stage", appliesTo: { stageKinds: [...DRAW_KINDS] } },
+    points: { scope: "points" },
+  },
 
   init(cfg, lineups: LineupPair): CarromState {
     return {
