@@ -4,6 +4,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { backendPid, pollWaitersBehind } from "./_lock-waiters";
 import { HttpError } from "@/lib/errors";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
@@ -358,19 +359,14 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     await open(r);
     mail.sent.length = 0;
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
       let done = false;
       const p = resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN).finally(() => (done = true));
-      let waited = false;
-      for (let i = 0; i < 100 && !waited && !done; i++) {
-        const [w] = await sql<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-           where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
-        waited = w!.n > 0;
-        if (!waited) await new Promise((res) => setTimeout(res, 50));
-      }
+      // I-3: only a session blocked by OUR holder counts — another suite's lock waiter never does.
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%pg_advisory_xact_lock%", finished: () => done })) > 0;
       expect(done, "the resend ran through a held division lock").toBe(false);
       expect(waited).toBe(true);
       await holder`commit`;
@@ -393,21 +389,15 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     await open(r);
     mail.sent.length = 0;
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`update fixture_external_play set create_sent_at = now(), updated_at = now() where fixture_id = ${f}`;
       let done = false;
       const p = resendExternalPlayNotice(r.owner, f, ORIGIN).finally(() => (done = true));
       p.catch(() => undefined);
-      let waited = false;
-      for (let i = 0; i < 100 && !waited && !done; i++) {
-        const [w] = await sql<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-           where datname = current_database() and wait_event_type = 'Lock'
-             and query ilike '%fixture_external_play%'`;
-        waited = w!.n > 0;
-        if (!waited) await new Promise((res) => setTimeout(res, 50));
-      }
+      // I-3: only a session blocked by OUR holder counts — another suite's lock waiter never does.
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%fixture_external_play%", finished: () => done })) > 0;
       expect(done, "the resend ran through a held bridge row").toBe(false);
       expect(waited).toBe(true);
       await holder`commit`;
@@ -430,6 +420,7 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     await open(r);
     mail.sent.length = 0;
     const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
     try {
       await holder`begin`;
       await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
@@ -437,14 +428,8 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
       let done = false;
       const p = resendExternalPlayNotice(r.owner, f, ORIGIN).finally(() => (done = true));
       p.catch(() => undefined);
-      let waited = false;
-      for (let i = 0; i < 100 && !waited && !done; i++) {
-        const [w] = await sql<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-           where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
-        waited = w!.n > 0;
-        if (!waited) await new Promise((res) => setTimeout(res, 50));
-      }
+      // I-3: only a session blocked by OUR holder counts — another suite's lock waiter never does.
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%pg_advisory_xact_lock%", finished: () => done })) > 0;
       expect(done, "the resend ran through a held division lock").toBe(false);
       expect(waited).toBe(true);
       await holder`commit`;
