@@ -1504,7 +1504,7 @@ Spec §4.1 as amended (web side), D2, D11.
 
 ```ts
 // The web half of P1 (spec §9 as amended). One call per sport file, so
-// `vitest related src/lib/match-rules/<sport>.ts` runs only that sport's
+// `vitest related --dir src/lib/match-rules/__tests__ src/lib/match-rules/<sport>.ts` runs only that sport's
 // contract. Expected populations come from the engine's ruleKeys and schema.
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@seazn/engine/core";
@@ -3027,6 +3027,8 @@ describe.skipIf(!HAS_DB)("rule 10 — stage rules × start × void", () => {
 ---
 ### Task 12: Stage creation writes the presets; the API takes `config.rules`; carry merges (server)
 
+> **Carried from Task 5 review (M2).** `rule-locks.ts:~104` reads a decider at the stage's TOP level (pre-D3 storage). When this task moves deciders into `stages.config.rules`, convert that branch, its test and its mutant to read the new storage (or delete them if `stage.rules` already covers it). Grep `-a` for every other top-level decider read.
+
 > **Carried from Task 2 review.** Name `openapi.ts:99` (the division PATCH summary still says "locked once fixtures exist"), declare the 409 body's `refused` array and the 200 body's `refused`, and list the new `ruleLock` codes in the division PATCH responses. Forward `EngineError.data` for `CONFIG_INVALID` in `api-v1/http.ts` so `issues`/`refused` reach HTTP clients (with a route test). Fix stale comments `pad-cfg-resolution.test.ts:99-102`, `schemas.ts:490-491`.
 
 Spec items 5, 6; §4.2; D3, D13; SC-P8; P7; Review Focus 4 and 5; the §8 seam "stageDefaults output is read back through `resolveFixtureCfg` and folded by the real engine".
@@ -3436,6 +3438,8 @@ The mutant re-inserts the deleted overlay. The first assertion of the D3 case ki
 ---
 
 ### Task 14: The one override writer and the live correction (Q11) (server; Opus)
+
+> **Carried from Task 5 review (I3).** `buildMatchFragment` emits carrom `{gameTo}` only; the engine's cross-field refinement "queenCapAt must not exceed gameTo" then refuses the merged cfg, and `queenCapAt` is a stage-only key the match form cannot send. Decide and test (recommend: the override write path refuses with a named CONFIG_INVALID — "Game to 5 is below this stage's queen cap 7" — rather than silently clamping a stage-only key). Same class for cricket `overs` < `maxOversPerBowler` and set-sport `cap` < target, which ARE on the match form: surface the engine's message on the field.
 
 > **Carried from Task 4 review (M2, M3).** `checkFixtureOverride` must receive the SCHEMA-PARSED stage cfg (`resolveFixtureCfg` returns unparsed; an unparsed `{}` stage wrongly refuses an ice-hockey OT shortening). Parse the stage-resolved cfg first, then check. Store the PARSED override (unknown nested leaves like `set.bogus` are accepted by the check and stripped by the schema — never store them). Tests for both.
 
