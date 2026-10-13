@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
+import type { PublicWatchLink } from "@/server/external-play/public-view";
 import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
@@ -72,6 +73,18 @@ interface Props {
   /** N1e e5 — the org's locale ("en", "es", …): the day headings and the
    *  round view's short rail date are written in it. */
   locale: string;
+  /** T16 fix round 1, I4 — an online chess division's watch links (canvas WatchStatesDesktop A): keyed by fixture
+   *  id, a board with nothing to watch absent, with their words in the org's locale. Absent for every other
+   *  division (and in the embed). Each is a LABEL inside the row's own link — the row already opens the fixture
+   *  page, where the watch panel is — so there is never a link inside a link. */
+  watch?: { links: Record<string, PublicWatchLink>; copy: ScheduleWatchCopy };
+}
+
+/** The watch links' words (I4), in the org's locale. */
+export interface ScheduleWatchCopy {
+  live: string;
+  final: string;
+  notOpened: string;
 }
 
 export interface ScheduleCopy {
@@ -186,6 +199,41 @@ function sideLines(f: PublicFixture): [string, string] | null {
   return home != null && away != null ? [home, away] : null;
 }
 
+/** I4 — one online board's watch link, as a label in its row: a live pill, the final position with its score,
+ *  or the quiet "round not opened" line. */
+function WatchChip({ link, copy }: { link: PublicWatchLink; copy: ScheduleWatchCopy }) {
+  const base = "col-span-2 col-start-2 mt-1 justify-self-start";
+  if (link.kind === "live") {
+    return (
+      <span
+        data-testid="schedule-watch"
+        data-kind="live"
+        className={`${base} inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-accent-ink`}
+      >
+        <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+        {copy.live}
+      </span>
+    );
+  }
+  if (link.kind === "final") {
+    return (
+      <span
+        data-testid="schedule-watch"
+        data-kind="final"
+        className={`${base} inline-flex items-center gap-2 rounded-md border border-accent-line bg-surface px-2 py-0.5 text-xs font-semibold text-ink`}
+      >
+        {link.score !== "" ? <span className="font-display text-base font-bold leading-none tabular-nums">{link.score}</span> : null}
+        {copy.final}
+      </span>
+    );
+  }
+  return (
+    <span data-testid="schedule-watch" data-kind="not_opened" className={`${base} text-xs text-ink-muted`}>
+      {copy.notOpened}
+    </span>
+  );
+}
+
 function ScorebugRow({
   fixture: f,
   entrantNames,
@@ -196,6 +244,7 @@ function ScorebugRow({
   copy,
   dateTag,
   forfeit,
+  watch,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -207,6 +256,7 @@ function ScorebugRow({
   dateTag: string;
   /** W2b Task 13 (review I-2) — this row's forfeit tag and sentence, when it has one. */
   forfeit: ForfeitWords | undefined;
+  watch: { link: PublicWatchLink; copy: ScheduleWatchCopy } | null;
 }) {
   const live = f.status === "in_play";
   // W2a fix round 1 (M5): a HELD bracket match (`needs_decision`) was played to a level score — only who advances is
@@ -319,6 +369,7 @@ function ScorebugRow({
       <span title={awayName} className={nameCls(f.away_entrant_id)}>{awayName}</span>
       {lines ? <span data-testid="schedule-score" className={scoreCls(f.away_entrant_id)}>{lines[1]}</span> : null}
       {tagCell(chipOn(f.away_entrant_id, false))}
+      {watch !== null ? <WatchChip link={watch.link} copy={watch.copy} /> : null}
     </Link>
   );
 }
@@ -334,6 +385,7 @@ export function Schedule({
   stageNames,
   copy,
   locale,
+  watch,
 }: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
@@ -503,6 +555,7 @@ export function Schedule({
                     copy={copy}
                     dateTag={dateTag}
                     forfeit={forfeitWords.get(f.id)}
+                    watch={watch?.links[f.id] ? { link: watch.links[f.id]!, copy: watch.copy } : null}
                   />
                 </li>
               ))}

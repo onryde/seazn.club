@@ -22,7 +22,9 @@ vi.mock("next/cache", () => ({
 
 import { sql } from "@/lib/db";
 import { getPublicFixture } from "../data";
-import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedOnlineChessFixture, seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { loadDivisionWatchLinks } from "@/server/usecases/external-play-read";
+import { scoreEvent } from "@/server/usecases/scoring";
 import { makeUser } from "@/server/usecases/__tests__/_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -211,3 +213,42 @@ describe.skipIf(!HAS_DB)("getPublicFixture reads the online-play bridge from the
     expect((await read())!.roundOpened, "opened").toBe(true);
   });
 });
+
+describe.skipIf(!HAS_DB)("loadDivisionWatchLinks — the division Fixtures list's watch links, from the real schema (I4)", () => {
+  it("one read for the division: live, final with its score, not opened — and nothing private", async () => {
+    // Round 1 opened with three boards: one being played, one finished and decided on the pad, one with no game yet.
+    const r = await seedOnlineChessRound({ fixtures: 3 });
+    seeded.push(r.orgId);
+    const [live, done, idle] = r.boards;
+    await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+              values (${r.stageId}, ${r.orgId}, 1, now(), ${r.ownerUserId})`;
+    // Labelled SQL: T10's move append (live) and T12's result + close (done) — the columns the list reads.
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, moves_uci, move_count)
+      values (${live!.fixtureId}, ${r.orgId}, 'live', now(), ${`gm-${uniq()}`}, 'home', ${sql.json(["e2e4", "e7e5"])}, 2),
+             (${done!.fixtureId}, ${r.orgId}, 'finished', now(), ${`gm-${uniq()}`}, 'away', ${sql.json(["e2e4"])}, 1)`;
+    // The result through the REAL scoring write (the pad's producer): home wins by resignation.
+    await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.owner, done!.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: done!.home.entrantId, method: "resign" } });
+    expect((await sql<{ status: string }[]>`select status from fixtures where id = ${done!.fixtureId}`)[0]!.status, "premise: decided").toBe("decided");
+    const links = await loadDivisionWatchLinks(r.divisionId);
+    // The away entrant plays White on the finished board: White first reads 0–1.
+    expect(links).toEqual({ [live!.fixtureId]: { kind: "live" }, [done!.fixtureId]: { kind: "final", score: "0–1" } });
+    expect(Object.keys(links), "the idle board offers nothing once its round is open").not.toContain(idle!.fixtureId);
+    expect(JSON.stringify(links), "no challenge id, no Lichess id, no hold reason").not.toMatch(/gm-|lichess|needs_|token/i);
+
+    // A later round, not opened: every board of it reads "Round not opened yet".
+    const r2 = await seedOnlineChessRound({ fixtures: 1, roundNo: 2 });
+    seeded.push(r2.orgId);
+    expect(await loadDivisionWatchLinks(r2.divisionId)).toEqual({ [r2.boards[0]!.fixtureId]: { kind: "not_opened" } });
+  });
+
+  it("the empty case: a division with no fixtures has no links", async () => {
+    const s = await seedPublicFixture();
+    seeded.push(s.orgId);
+    const [{ division_id }] = await sql<{ division_id: string }[]>`select division_id from fixtures where id = ${s.fixtureId}`;
+    await sql`delete from fixtures where id = ${s.fixtureId}`;
+    expect(await loadDivisionWatchLinks(division_id)).toEqual({});
+  });
+});
+

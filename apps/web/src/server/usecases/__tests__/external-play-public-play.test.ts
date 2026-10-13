@@ -14,7 +14,7 @@
 // Pure: no DB. Single-sport by construction — online play is boardgame only.
 import { describe, expect, it } from "vitest";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { publicPlayOf, type PublicFixtureRow } from "../external-play-read";
+import { publicPlayOf, watchLinkOf, type PublicFixtureRow, type WatchLinkRow } from "../external-play-read";
 
 const OPEN = new Set(["scheduled", "in_play"]);
 const AWAITING_DECISION = "needs_decision";
@@ -94,3 +94,57 @@ describe("publicPlayOf — every fixture status × every bridge state", () => {
     expect(() => publicPlayOf(row({ status: "needs_organiser", needs_reason: "made_up" }))).toThrow(/unknown hold reason/);
   });
 });
+
+// I4 — the division Fixtures list's link (canvas WatchStatesDesktop A): "Watch live" while a game is being played,
+// "Final position" (with the score, White first) once it is over, "Round not opened yet" before the organiser opens
+// the round. Nothing for a board with no game to show (a bye, a no-show, a game not begun) — the row says the rest.
+describe("watchLinkOf — what the Fixtures list offers for an online board", () => {
+  const link = (o: Partial<WatchLinkRow>): WatchLinkRow => ({ ...row({}), round_opened: true, ...o });
+
+  it("the empty case first: no bridge row, or a game with no move, offers nothing once the round is open", () => {
+    let checked = 0;
+    for (const fixtureStatus of FIXTURE_STATUSES) {
+      expect(watchLinkOf(link({ status: null, challenge_id: null, move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toBeNull();
+      expect(watchLinkOf(link({ status: "ready", move_count: 0, fixture_status: fixtureStatus })), fixtureStatus).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(FIXTURE_STATUSES.length);
+  });
+
+  it("every fixture status × bridge state × round opened or not", () => {
+    // [label, bridge, round opened?, expected for an OPEN fixture, expected for one OUT of play]
+    type Want = ReturnType<typeof watchLinkOf>;
+    const FINAL: Want = { kind: "final", score: "" };
+    const cells: [string, Partial<WatchLinkRow>, boolean, Want, Want][] = [
+      ["round not opened, no bridge", { status: null, challenge_id: null, move_count: 0 }, false, { kind: "not_opened" }, null],
+      ["round not opened, a bridge pending", { status: "pending", challenge_id: null, move_count: 0 }, false, { kind: "not_opened" }, null],
+      ["a game being played", { status: "live" }, true, { kind: "live" }, FINAL],
+      ["a seat's token revoked (the game goes on)", { status: "needs_organiser", needs_reason: "token_revoked" }, true, { kind: "live" }, FINAL],
+      ["held for fair play", { status: "needs_organiser", needs_reason: "fair_play" }, true, null, FINAL],
+      ["held: a knockout draw (the game is over)", { status: "needs_organiser", needs_reason: "tiebreak_owed" }, true, FINAL, FINAL],
+      ["the bridge closed", { status: "finished" }, true, FINAL, FINAL],
+    ];
+    let checked = 0;
+    for (const fixtureStatus of FIXTURE_STATUSES) {
+      for (const [label, bridge, opened, wantOpen, wantOut] of cells) {
+        const got = watchLinkOf(link({ ...bridge, round_opened: opened, fixture_status: fixtureStatus }));
+        expect(got, `${fixtureStatus} / ${label}`).toEqual(OPEN.has(fixtureStatus) ? wantOpen : wantOut);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(FIXTURE_STATUSES.length * cells.length);
+  });
+
+  it("the final position carries the result's score, White first — the away entrant plays White here", () => {
+    const decided = link({
+      status: "finished",
+      fixture_status: "decided",
+      white_side: "away",
+      outcome: { kind: "win", winner: HOME },
+      summary: { perSide: [{ entrantId: HOME, line: "1" }, { entrantId: AWAY, line: "0" }] },
+    });
+    expect(watchLinkOf(decided)).toEqual({ kind: "final", score: "0–1" });
+    expect(watchLinkOf({ ...decided, white_side: "home" })).toEqual({ kind: "final", score: "1–0" });
+  });
+});
+

@@ -66,6 +66,10 @@ export type PublicGameResult = {
   recordedAt: string | null;
 };
 
+/** The division Fixtures list's watch link for an online board (T16 fix round 1, I4; canvas WatchStatesDesktop A):
+ *  a game being played, a game over (its score White first, "" when none is recorded), or a round not opened. */
+export type PublicWatchLink = { kind: "live" } | { kind: "final"; score: string } | { kind: "not_opened" };
+
 export type PublicExternalPlay = {
   status: PublicExternalPlayStatus;
   /** Null until a game exists at Lichess. */
