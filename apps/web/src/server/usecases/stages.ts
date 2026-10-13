@@ -58,7 +58,7 @@ import { resolveModule } from "@/server/engine-db";
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
-import { killsLoserEdge } from "@/server/engine-db/fed-seats";
+import { killsLoserEdge, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
@@ -3936,6 +3936,11 @@ async function advanceSettledByes(tx: Tx, settled: string[]): Promise<string[]> 
  * Each update is guarded on the row the cascade judged — under the fixture's own append lock — so a write that finds
  * nothing means that row moved under it.
  *
+ * Loop R2 N-2: the cascade below judges seats by their FEEDERS' stored decisions, so it runs under the stage lock a
+ * decision's cascade and a double walkover's void hold (`lockStageSeats`) — taken first, before the fixture lock (the
+ * one order, Loop R2 N-1). Without it a departure double walkover on one semi and the other semi's decision could each
+ * read the other's line before it committed, and leave the final holding the winner beside a dead semi, unwalked.
+ *
  * @throws Error when the guarded write matches nothing: an assumption broken, never a silent no-op.
  */
 export async function writeDepartedSeat(
@@ -3944,6 +3949,9 @@ export async function writeDepartedSeat(
   entrantId: string,
   mode: "tbd" | "double_walkover",
 ): Promise<string[]> {
+  // Read without a lock: a fixture never changes stage.
+  const [at] = await tx<{ stage_id: string }[]>`select stage_id from fixtures where id = ${fixtureId}`;
+  if (at) await lockStageSeats(tx, at.stage_id);
   await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
   const bye = tx.json(BYE_SLOT_LABEL as never);
   const [row] =

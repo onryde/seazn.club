@@ -324,7 +324,8 @@ async function lockFixture(tx: Tx, id: string): Promise<void> {
 /**
  * W2b Loop R I-2 — the lock every bracket writer that judges a seat by ANOTHER line's stored decision takes, held to
  * commit: the void of a double walkover (`reviveDeadSeats`: what did that double walkover kill?), a decision's cascade
- * (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?). Each held only its own fixture's
+ * (`onDecided` → `fillSlot`, `resolveBracketSeats`: is this seat's feeder dead?) and, since Loop R2 N-2, a
+ * withdrawal's no-event seat write (`writeDepartedSeat` → `resolveBracketSeats`). Each held only its own fixture's
  * lock, so the decision could read the double walkover still standing while its void, parked between its read and its
  * commit, had planned nothing — and both committed: the semi live again, the final a no-event walkover.
  *
@@ -332,7 +333,7 @@ async function lockFixture(tx: Tx, id: string): Promise<void> {
  * is read first without a lock (a fixture never changes stage), then this, then the writer's own fixture, then (the
  * void) its targets in bracket order (`releaseFedSeats`' ascending (round_no, id)). The void of a stored double
  * walkover takes it ahead of the append's own fixture lock (`lockStageSeatsForVoid`, append-event.ts); `onDecided`
- * ahead of its own. I-2 first took it AFTER the own fixture lock, and the void then locked its targets
+ * and `writeDepartedSeat` ahead of their own. I-2 first took it AFTER the own fixture lock, and the void then locked its targets
  * after it — so the void of a first-round double walkover held this and asked for a semi's fixture lock while that
  * semi's decision held its fixture lock and asked for this: 40P01, and a decision chosen as the victim seated nobody.
  * Nothing takes this lock while holding a `fixture:` lock, so no cycle runs through it; `reviveDeadSeats` refuses to
