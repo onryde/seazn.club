@@ -336,8 +336,16 @@ test.describe("W2b — a credited result says which one, on every public surface
       const tileTag = page.getByRole("img", { name: withNext });
       await expect(tileTag, `${w}: the tile's tag is named by the sentence`).toHaveText(dwTag);
       await expect(tileTag).toHaveCount(1);
+      // Design round (audit 3.1's sixth host): the tile's footer is the tag alone — no "0 — 0" headline beside it. The
+      // pair: another forfeited tile on the same bracket (a credited walkover) keeps its score in the same footer.
+      const tile = tileTag.locator("xpath=ancestor::a[1]");
+      await expect(tile.getByTestId("bracket-forfeit"), `${w}: the double walkover's footer is its tag alone`).toHaveText(dwTag);
+      await expect(
+        page.getByTestId("bracket-forfeit").filter({ hasNot: page.getByRole("img", { name: withNext }) }).first(),
+        `${w}: the footer probe's positive pair — a credited walkover keeps its score`,
+      ).toHaveText(/\d+\s*[–—-]\s*\d+/);
       await expectNoHorizontalScroll(page);
-      await crop(tileTag.locator("xpath=ancestor::a[1]"), `bracket-tile-double-walkover-${w}`);
+      await crop(tile, `bracket-tile-double-walkover-${w}`);
       screens++;
 
       // Review I-2 — the Schedule row: the tag alone, named by the sentence, and never the unplayed 0 — 0. Its pair is

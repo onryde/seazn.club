@@ -7,7 +7,12 @@
 // Every outcome here is a REAL fold, swept over the sport registry: each sport that admits a double walkover before
 // play is a case, and the premise (its summary DOES carry side lines) is asserted per case, so a sport whose summary
 // had none could not pass vacuously. The pair: a one-sided walkover in the same sport keeps its credited lines.
+//
+// A sixth host the audit did not list, seen in the design round's 320 crop: the division bracket tile's forfeit footer
+// (`public-site/bracket.tsx`) painted the summary's "0–0" headline beside "2× w/o". It now reads the same reader.
 import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
@@ -25,6 +30,12 @@ import type { SideT } from "../match-centre-schema";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import en from "@/dictionaries/en/public.json";
+import { Bracket } from "@/components/public-site/bracket";
+import { publicScheduleCopy } from "../schedule-copy";
+import { forfeitCopyOf } from "@/lib/forfeit-tag";
+import { getDictionary } from "@/lib/i18n";
+import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
 
 const EN = en as unknown as Dict;
 type Module = (typeof builtinModules)[number];
@@ -54,6 +65,7 @@ function scene(m: Module, ledger: (l: ReturnType<typeof defaultLineupPair>) => {
   const summaryLines = sides.map((s) => fixture.summary?.perSide?.find((p) => p.entrantId === s.entrantId)?.line ?? null);
   return {
     outcome,
+    fixture,
     summaryLines,
     hub: hubHeader(fixture, sides, m.key, "2026-10-09T12:00:00.000Z").scoreLines,
     centre: buildMatchCentre(input).header.scoreLines,
@@ -63,8 +75,24 @@ function scene(m: Module, ledger: (l: ReturnType<typeof defaultLineupPair>) => {
 
 const doubleWalkover = () => [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }];
 
+/** The division bracket tile's forfeit footer row, as the public bracket renders it for this one fixture. */
+async function bracketFooter(fixture: PublicFixture): Promise<string> {
+  const dict = await getDictionary("en", "public");
+  const h = renderToStaticMarkup(
+    createElement(Bracket, {
+      kind: "knockout", fixtures: [fixture], fixtureHref: (id: string) => `/f/${id}`, lookup: msg,
+      entrantNames: Object.fromEntries([fixture.home_entrant_id!, fixture.away_entrant_id!].map((id, i) => [id, i === 0 ? "Riverside FC" : "Harbour United"])),
+      slotText: (_stageId: string, label: never) => resolveSlotLabel(label, msg, "schedule.tbd"),
+      copy: { ...publicScheduleCopy(dict, msg), forfeit: forfeitCopyOf((k) => t(dict, k)) }, tz: "UTC", locale: "en",
+    }),
+  );
+  const at = h.indexOf('data-testid="bracket-forfeit"');
+  if (at < 0) throw new Error("premise: the tile has no forfeit footer");
+  return h.slice(at, h.indexOf("</span></span>", at) + 14);
+}
+
 describe("a double walkover paints no score lines on the hub card, the draw node or the court card (audit 3.1)", () => {
-  it("every sport that admits one: its summary carries side lines (the premise), and neither builder shows them", () => {
+  it("every sport that admits one: its summary carries side lines (the premise), and no host shows them", async () => {
     const checked: string[] = [];
     const refused: string[] = [];
     for (const m of builtinModules) {
@@ -82,13 +110,18 @@ describe("a double walkover paints no score lines on the hub card, the draw node
       expect(s.summaryLines.every((x) => typeof x === "string" && x !== ""), `${m.key}: premise — the summary carries a 0 / 0 to hide`).toBe(true);
       expect(s.hub, `${m.key}: hubHeader (match card, knockout node)`).toEqual([null, null]);
       expect(s.centre, `${m.key}: buildMatchCentre (court card)`).toEqual([null, null]);
+      const headline = s.fixture.summary?.headline;
+      expect(typeof headline === "string" && headline !== "", `${m.key}: premise — the summary carries a headline to hide`).toBe(true);
+      const footer = await bracketFooter(s.fixture);
+      expect(footer, `${m.key}: the bracket tile still carries its tag`).toContain('data-testid="bracket-forfeit-tag"');
+      expect(footer, `${m.key}: the bracket tile (division bracket)`).not.toContain(`>${headline}<`);
       checked.push(m.key);
     }
     console.log(`audit 3.1 sweep: ${checked.length} sports checked (${checked.join(", ")}); not admitted: ${refused.join(", ") || "none"}`);
     expect(checked.length, `sports checked: ${checked.join(", ")}`).toBeGreaterThanOrEqual(5);
   });
 
-  it("the pair: a one-sided walkover in the same sports keeps its credited lines on both builders", () => {
+  it("the pair: a one-sided walkover in the same sports keeps its credited lines on every host", async () => {
     let checked = 0;
     for (const m of builtinModules) {
       let s: ReturnType<typeof scene>;
@@ -101,6 +134,7 @@ describe("a double walkover paints no score lines on the hub card, the draw node
       if (!s.summaryLines.every((x) => typeof x === "string" && x !== "")) continue;
       expect(s.hub, `${m.key}: hub keeps the credited score`).toEqual(s.summaryLines);
       expect(s.centre, `${m.key}: court card keeps the credited score`).toEqual(s.summaryLines);
+      expect(await bracketFooter(s.fixture), `${m.key}: the bracket tile keeps the credited headline`).toContain(`>${s.fixture.summary!.headline}<`);
       checked++;
     }
     expect(checked, `sports checked: ${checked}`).toBeGreaterThanOrEqual(5);

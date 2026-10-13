@@ -183,9 +183,11 @@ function FixtureCard({
           </span>
         ) : forfeit ? (
           // W2b Task 13 (UI-2 option A): the credited score and its tag on ONE row that never wraps — a 188px tile at
-          // 320 has no room for a second line. The sentence is the tag's tooltip and accessible name.
+          // 320 has no room for a second line. The sentence is the tag's tooltip and accessible name. A double walkover
+          // credits nobody: its "0–0" headline would read as an unplayed match, so the tag stands alone (design audit 3.1,
+          // the schedule's and the results matrix's rule).
           <span data-testid="bracket-forfeit" className="flex min-w-0 items-center gap-1.5">
-            {fixture.summary?.headline ? (
+            {forfeit.kind !== "double_walkover" && fixture.summary?.headline ? (
               <span className="min-w-0 truncate font-display text-sm font-semibold tabular-nums text-accent-strong">
                 {fixture.summary.headline}
               </span>
