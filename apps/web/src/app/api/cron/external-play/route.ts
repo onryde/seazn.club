@@ -10,8 +10,9 @@ import { sweepExternalPlay } from "@/server/usecases/external-play";
  *  a match and the removal of arbiter watches that must end (T15 fix round
  *  1, I2). Answers the sweep's report
  *  (counts, and failures by code — never a message; `skipped` when another
- *  pass was still running, T13 M8). Wired in the separate
- *  cron repo (onryde/seazn.club.workflow).
+ *  pass was still running, T13 M8). Schedule:
+ *  apps/cron-worker/src/schedule.ts, the every-5-minutes trigger, never
+ *  retried (the next firing is the retry).
  *  Cron-shaped like /api/cron/registrations: x-cron-secret header (CRON_SECRET).
  *  Lichess pushes nothing to us (spec §3.5; the old webhook route is deleted):
  *  game state is READ by reconcile, and this is the one trigger for it that
