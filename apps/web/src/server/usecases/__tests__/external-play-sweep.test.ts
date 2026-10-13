@@ -986,6 +986,38 @@ describe.runIf(HAS_DB)("RB3 — no walkover over a Start", () => {
     expect(await forfeitsWritten(b.fixtureId)).toEqual([{ by: b.away.entrantId, reason: WALKOVER }]);
   });
 
+  /** Rebase review M-3: the `core.start` token in ANY quote form ("…", '…', `…`), as a key's value or positionally —
+   *  never one spelling of it. Comments name the type in prose, so comment lines and trailing `//` comments are
+   *  dropped first; a string that merely mentions it would count, which errs on the side of a red. */
+  const START_TOKEN = /["'`]core\.start["'`]/g;
+  const codeOf = (text: string) =>
+    text
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+      .map((line) => line.replace(/\s\/\/\s.*$/, ""))
+      .join("\n");
+  const startTokens = (text: string) => [...codeOf(text).matchAll(START_TOKEN)].length;
+
+  it("the Start scan reads every spelling of the token, and never a comment (the matcher, counted)", () => {
+    const spellings = [
+      `scoreEvent(a, id, { expected_seq: 0, type: "core.start", payload: {} })`,
+      `scoreEvent(a, id, { expected_seq: 0, type: 'core.start', payload: {} })`,
+      "settleWrite(a, id, { expected_seq: 0, type: `core.start`, payload: {} })",
+      `post(id, "core.start", {})`,
+      `const START = 'core.start';`,
+    ];
+    let read = 0;
+    for (const s of spellings) {
+      expect(startTokens(s), s).toBe(1);
+      read++;
+    }
+    expect(read).toBe(spellings.length);
+    // The negative pair: prose about the type is not a write.
+    expect(startTokens(`// writes "core.start" first\n * the "core.start" event\n/* type: 'core.start' */`)).toBe(0);
+    expect(startTokens(`await go(); // then "core.start"`)).toBe(0);
+  });
+
   it("core.start is written only where a result is written — result.ts and resolve.ts — never at a claim (source scan, counted)", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const roots = [join(here, "..", "external-play"), join(here, "..", "..", "external-play")];
@@ -998,7 +1030,7 @@ describe.runIf(HAS_DB)("RB3 — no walkover over a Start", () => {
           if (e.name !== "__tests__") walk(path);
         } else if (/\.tsx?$/.test(e.name)) {
           scanned++;
-          const n = readFileSync(path, "utf8").split('type: "core.start"').length - 1;
+          const n = startTokens(readFileSync(path, "utf8"));
           for (let i = 0; i < n; i++) sites.push(e.name);
         }
       }
