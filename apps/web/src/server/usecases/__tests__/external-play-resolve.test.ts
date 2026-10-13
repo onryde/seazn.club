@@ -42,6 +42,7 @@ import { loadArbiterRound } from "../external-play/arbiter";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { RESOLVE_KINDS, resolveExternalPlay, type ResolveKind } from "../external-play/resolve";
+import { readRoom } from "../external-play/room";
 import { HOLD_REASONS, holdForOrganiser, holdOwedTiebreak, holdRefusedNoShow, tiebreakIsPending, type HoldReason } from "../external-play/result";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -602,6 +603,40 @@ describe.runIf(HAS_DB)("resolveExternalPlay — a knockout draw is never decided
     expect(tiebreakIsPending(await getFixtureState(r.owner, b.fixtureId)), "premise: the module still reads tiebreak").toBe(true);
     expect(await holdOwedTiebreak(b.fixtureId, r.owner, "TEST")).toBe(false);
     expect(await bridgeOf(b.fixtureId)).toMatchObject({ status: "pending", needs_reason: null });
+  });
+
+  // Final review M-1: the room read only boardgame.result/core.forfeit, so after the organiser settled a level
+  // knockout game the player who went through was never told. Through the REAL resolve: a draw, then the settle.
+  it("M-1: once the tie-break is settled each player's room reads Draw ½–½ and who goes through; voided and settled the other way, the other player", async () => {
+    const r = await round({ knockout: true });
+    const b = r.boards[0]!;
+    await pendingBridge(r, b);
+    await holdForOrganiser({ fixtureId: b.fixtureId, reason: "not_started" });
+    const roomOf = (userId: string) => readRoom({ kind: "session", userId }, b.fixtureId, { now: new Date() });
+    expect(await resolveExternalPlay(r.owner, b.fixtureId, "draw")).toEqual({ status: "tiebreak_owed" });
+    expect((await roomOf(b.home.userId)).result, "premise: the tie-break is owed, nothing is decided yet").toBeNull();
+    expect(await resolveExternalPlay(r.owner, b.fixtureId, "away_wins")).toEqual({ status: "finished" });
+    // A draw is ½–½ (FIDE); away was told to go through.
+    let checked = 0;
+    for (const [userId, through] of [[b.home.userId, "opponent"], [b.away.userId, "me"]] as const) {
+      expect((await roomOf(userId)).result, through).toMatchObject({ outcome: "draw", score: "½–½", through });
+      checked += 1;
+    }
+    // arbiter.ts reads the same decisive event: the organiser's card shows the GAME's score, ½–½, never a forfeit's or none.
+    expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.state).toEqual({ kind: "result", score: "½–½", noResult: false });
+    // The sequence: the settle voided on the pad puts the tie-break back (nothing decided), and a settle the other way
+    // sends the other player through — the room follows the LATEST settle, never the first.
+    const [settle] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${b.fixtureId} and type = 'core.settle'`;
+    let fs = await getFixtureState(r.owner, b.fixtureId);
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq, type: "core.void", payload: { event_id: settle!.id } });
+    expect((await roomOf(b.away.userId)).result, "voided: the tie-break is owed again").toBeNull();
+    fs = await getFixtureState(r.owner, b.fixtureId);
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: fs.last_seq, type: "core.settle", payload: { winner: b.home.entrantId, method: "lot" } });
+    for (const [userId, through] of [[b.home.userId, "me"], [b.away.userId, "opponent"]] as const) {
+      expect((await roomOf(userId)).result, `re-settled: ${through}`).toMatchObject({ outcome: "draw", score: "½–½", through });
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 
 });

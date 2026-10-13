@@ -58,6 +58,9 @@ export type RoomResult = {
   /** White's score first, the way a chess result is written ("1–0",
    *  "½–½", "0–0") — the engine's own points for each side. */
   score: string;
+  /** Final review M-1: a level knockout game the organiser settled (`core.settle`, resolve.ts) — who goes through,
+   *  from the viewer's side. Absent on every other result, and when the settle names neither seat. */
+  through?: "me" | "opponent";
 };
 
 export type RoomSnapshot = {
@@ -267,6 +270,13 @@ export function decisiveResultFor(e: DecisiveEvent, seats: Seats): RoomResult | 
     return forfeitResultFor({ ...seats, by: e.payload.by, reason: e.payload.reason });
   }
   return resultFor({ ...seats, winnerEntrantId: e.payload.winner ?? null, method: e.payload.method ?? null });
+}
+
+/** M-1: a drawn game's card, with who the organiser's settle sent through. Only a DRAW takes it (a settle follows a
+ *  level game, W2a), and only a winner holding a seat: anything else is the result as it was. */
+export function withSettle(result: RoomResult | null, settleWinner: string | null, seats: Seats): RoomResult | null {
+  if (result === null || result.outcome !== "draw" || settleWinner === null || !holdsASeat(settleWinner, seats)) return result;
+  return { ...result, through: settleWinner === seats.myEntrantId ? "me" : "opponent" };
 }
 
 /** I-3: the card for an ABANDONED board — VOID, nobody's result. The engine folds an abandon to no outcome (the

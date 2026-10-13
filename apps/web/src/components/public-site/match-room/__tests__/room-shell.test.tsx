@@ -167,6 +167,45 @@ describe("the room's first paint", () => {
     expect(html).not.toContain("½");
   });
 
+  it("M-1: a drawn knockout game the organiser settled names who goes through — the player, or the opponent by first name — and says the game was drawn; a plain draw stays Draw", () => {
+    const over = (through?: "me" | "opponent") =>
+      paint(snap({ game: { ...GAME, over: true }, result: { outcome: "draw", method: "adjudication", score: "½–½", ...(through ? { through } : {}) } }));
+    const me = over("me");
+    const them = over("opponent");
+    const plain = over();
+    expect([screenOf(me), screenOf(them), screenOf(plain)]).toEqual(["over", "over", "over"]);
+    expect(me).toContain(">You go through<");
+    expect(them).toContain(">Ada goes through<");
+    let said = 0;
+    for (const html of [me, them]) {
+      expect(html).toContain("The game was drawn, and the organiser chose who goes through.");
+      expect(html, "the score stays the game's").toContain("Adjudication · ½–½");
+      expect(html).not.toContain(">Draw<");
+      said += 1;
+    }
+    expect(said).toBe(2);
+    // The pair: no settle on file, the card is the draw it always was.
+    expect(plain).toContain(">Draw<");
+    expect(plain).not.toContain("goes through");
+    expect(plain).not.toContain("go through");
+  });
+
+  it("M-1: every locale words both settled headlines and the drawn-game line, each its own text", () => {
+    let locales = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const d = LOCALES[locale] as Record<string, string>;
+      const keys = ["externalPlay.room.over.throughMe", "externalPlay.room.over.throughOpponent", "externalPlay.room.over.settled"];
+      for (const k of keys) expect(d[k], `${locale} ${k}`).toBeTruthy();
+      expect(d["externalPlay.room.over.throughOpponent"], locale).toContain("{name}");
+      const html = paint(snap({ game: { ...GAME, over: true }, result: { outcome: "draw", method: "adjudication", score: "½–½", through: "opponent" } }), locale);
+      expect(html).toContain(d["externalPlay.room.over.throughOpponent"]!.replace("{name}", "Ada"));
+      expect(html).toContain(d["externalPlay.room.over.settled"]!.replace(/'/g, "&#x27;"));
+      expect(new Set(keys.map((k) => d[k])).size, locale).toBe(3);
+      locales += 1;
+    }
+    expect(locales).toBe(4);
+  });
+
   it("every state card paints for its snapshot (cards 1, 5, 6; states A and B, drawn 2026-10-12)", () => {
     const cases: [Partial<RoomSnapshot>, string, string][] = [
       [{ phase: "not_opened" }, "notOpened", "room-state-not-opened"],
