@@ -241,6 +241,11 @@ describe("isPathRequired", () => {
     const message = messageFrom(() => isPathRequired(outer, "inner.a"));
     expect(message).toMatch(/wrapper/i);
     expect(message).not.toMatch(/no field "a" found/);
+    // Each part of the diagnosis is read by whoever hits it: where the walk stopped, that it is a depth bound and not a
+    // missing key, and what to do about it.
+    expect(message).toMatch(/"inner" still wraps something after \d+ modifier hops, so the walk gave up before it could look for "a"/);
+    expect(message).toMatch(/\(this is a WRAPPER-DEPTH bound, not a missing field — "a" may well exist; /);
+    expect(message).toMatch(/unwrap the schema or raise MAX_WRAPPER_HOPS in sport\/module\.ts\)$/);
   });
 
   it("a segment that is not an object at all says so, rather than blaming the next segment", () => {
@@ -249,6 +254,8 @@ describe("isPathRequired", () => {
     const message = messageFrom(() => isPathRequired(Ball, "striker.foo"));
     expect(message).toMatch(/striker/);
     expect(message).not.toMatch(/no field "foo" found/);
+    expect(message).toMatch(/"striker" is not an object schema and does not wrap one, so nothing can be resolved beneath it/);
+    expect(message).toMatch(/\(a PadAttributionItem\/PadField path must not walk past a leaf value\)$/);
   });
 
   it("a nullable-but-not-optional field is still required (nullable != optional)", () => {
@@ -306,6 +313,7 @@ describe("isPathRequired through a union", () => {
   it("an enum is still a leaf — its `.options` are strings, not branches, and nothing resolves beneath it", () => {
     const withEnum = z.strictObject({ kind: z.enum(["a", "b"]) });
     expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/not an object schema/);
+    expect(() => isPathRequired(withEnum, "kind.a")).toThrow(/must not walk past a leaf value\)$/);
   });
 });
 
