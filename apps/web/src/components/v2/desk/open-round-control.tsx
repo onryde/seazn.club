@@ -100,6 +100,17 @@ export function OpenRoundConfirmBody({ round, tz }: { round: OpenRoundView; tz: 
           ? plural("runsheet.round.confirmBodyReinvite", owed)
           : plural("runsheet.round.confirmBody", owed)}
       </p>
+      {/* R1 (T16 fix round 1): an earlier round still being played does not stop this open — the organiser drives — but
+          it is said before the press, one line per round. */}
+      {round.earlierInPlay.length > 0 && (
+        <div role="note" data-testid="open-round-earlier" className="flex flex-col gap-0.5 rounded-lg bg-[#fef3c7] px-3 py-2 text-[#713f12]">
+          {round.earlierInPlay.map((e) => (
+            <span key={e.roundNo} data-earlier-round={e.roundNo}>
+              {plural("runsheet.round.confirmEarlierInPlay", e.games, { round: e.roundNo })}
+            </span>
+          ))}
+        </div>
+      )}
       {/* A scrolling region a keyboard can reach (AGENTS.md #23): focusable, named. */}
       <ul
         tabIndex={0}

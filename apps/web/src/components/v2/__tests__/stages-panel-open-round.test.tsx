@@ -28,6 +28,7 @@ const ROUND = (stageId: string, fixtureId: string): OpenRoundView => ({
   windowMinutes: 20,
   scheduledAt: null,
   press: "open",
+  earlierInPlay: [],
   pairings: [{ fixtureId, boardNo: 1, whiteName: "Ada", blackName: "Bo", invitedAt: null, owedSeats: 2, canResend: false }],
 });
 const PROPS = {

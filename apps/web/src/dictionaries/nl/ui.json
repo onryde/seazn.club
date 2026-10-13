@@ -5567,6 +5567,8 @@
   "runsheet.round.confirmWindow": "Ze kunnen meteen inchecken. Als een speler {minutes} minuten nadat je opent nog niet heeft plaatsgenomen, komt dat bord bij jou om te beslissen.",
   "runsheet.round.confirmWindowReinvite": "Als een speler om {time} nog niet heeft plaatsgenomen, komt dat bord bij jou om te beslissen.",
   "runsheet.round.confirmScheduled": "De geplande tijd ({time}) is alleen wat spelers te zien kregen.",
+  "runsheet.round.confirmEarlierInPlay.one": "Ronde {round} heeft nog {count} partij bezig.",
+  "runsheet.round.confirmEarlierInPlay.other": "Ronde {round} heeft nog {count} partijen bezig.",
   "runsheet.round.confirmCta.one": "Ronde openen en {count} speler uitnodigen",
   "runsheet.round.confirmCta.other": "Ronde openen en {count} spelers uitnodigen",
   "runsheet.round.skipLine": "{board}: {reason}",

@@ -65,6 +65,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   windowMinutes: 20,
   scheduledAt: null,
   press: "open",
+  earlierInPlay: [],
   pairings: [P(1), P(2)],
   ...o,
 });

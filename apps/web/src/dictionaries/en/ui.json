@@ -5567,6 +5567,8 @@
   "runsheet.round.confirmWindow": "They can check in straight away. If a player has not taken their seat {minutes} minutes after you open, that board comes to you to decide.",
   "runsheet.round.confirmWindowReinvite": "If a player has not taken their seat by {time}, that board comes to you to decide.",
   "runsheet.round.confirmScheduled": "The scheduled time ({time}) is only what players were shown.",
+  "runsheet.round.confirmEarlierInPlay.one": "Round {round} still has {count} game in play.",
+  "runsheet.round.confirmEarlierInPlay.other": "Round {round} still has {count} games in play.",
   "runsheet.round.confirmCta.one": "Open round and invite {count} player",
   "runsheet.round.confirmCta.other": "Open round and invite {count} players",
   "runsheet.round.skipLine": "{board}: {reason}",

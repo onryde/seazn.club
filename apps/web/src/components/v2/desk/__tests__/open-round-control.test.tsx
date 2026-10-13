@@ -52,6 +52,7 @@ const ROUND = (o: Partial<OpenRoundView> = {}): OpenRoundView => ({
   windowMinutes: DEADLINE_AFTER_MS / 60_000,
   scheduledAt: "2026-10-16T19:00:00.000Z",
   press: "open",
+  earlierInPlay: [],
   pairings: [P(1), P(2), P(3)],
   ...o,
 });
@@ -197,5 +198,18 @@ describe("OpenRoundConfirmBody — what will happen, stated before it happens", 
 
   it("an untimed round states no scheduled time", () => {
     expect(body(ROUND({ scheduledAt: null }))).not.toContain(esc(en["runsheet.round.confirmScheduled"]!.split("(")[0]!));
+  });
+
+  // T16 fix round 1, R1: opening a round while an earlier one is still being played is allowed; the confirmation
+  // names each earlier round's games still in play, one line per round, counted in the locale's plural.
+  it("R1: names each earlier round's games still in play — and nothing when none is (the empty case first)", () => {
+    expect(body(ROUND())).not.toContain('data-testid="open-round-earlier"');
+    const h = body(ROUND({ earlierInPlay: [{ roundNo: 2, games: 1 }, { roundNo: 3, games: 4 }] }));
+    const lines = [...h.matchAll(/data-earlier-round="(\d+)"[^>]*>([^<]*)</g)].map((m) => [Number(m[1]), m[2]]);
+    expect(lines).toEqual([
+      [2, esc(en["runsheet.round.confirmEarlierInPlay.one"]!.replace("{round}", "2").replace("{count}", "1"))],
+      [3, esc(en["runsheet.round.confirmEarlierInPlay.other"]!.replace("{round}", "3").replace("{count}", "4"))],
+    ]);
+    expect(h, "a note, not a refusal: the press stays").toMatch(/data-testid="open-round-earlier"[^>]*role="note"|role="note"[^>]*data-testid="open-round-earlier"/);
   });
 });
