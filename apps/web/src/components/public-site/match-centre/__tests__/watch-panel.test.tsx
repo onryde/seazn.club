@@ -26,11 +26,14 @@ vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(DICTS[current.locale as Loc], key, vars),
 }));
 
+const apiMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client", async (importOriginal) => ({ ...(await importOriginal<object>()), api: apiMock }));
+
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { POLL_MS } from "../use-live-fixture";
 import { publishBoardPush } from "../live-board-channel";
 import { WatchBoard } from "../watch-board";
-import { WatchPanel, WatchPanelInner } from "../watch-panel";
+import { WatchPanel, WatchPanelInner, fetchPublicBoard } from "../watch-panel";
 import { showWatchPanel } from "../watch-state";
 
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
@@ -214,6 +217,16 @@ describe("WatchPanel — after hydration", () => {
     const el = WatchPanel({ fixtureId: "f2", initial: live(board(1)), names: NAMES }) as ReactElement;
     expect(el.type).toBe(WatchPanelInner);
     expect(el.key).toBe("f2");
+  });
+});
+
+describe("fetchPublicBoard — what reaches the network", () => {
+  it("asks the public board route for THIS fixture (encoded), never from the browser's cache", async () => {
+    // The route's Cache-Control is for the edge; a browser-cached answer would freeze a poll-only spectator.
+    apiMock.mockReset();
+    apiMock.mockResolvedValue(live(board(3)));
+    expect(await fetchPublicBoard("f 1")).toEqual(live(board(3)));
+    expect(apiMock.mock.calls).toEqual([["/api/v1/public/fixtures/f%201/board", { cache: "no-store" }]]);
   });
 });
 
