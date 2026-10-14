@@ -120,6 +120,304 @@
   ]
  },
  {
+  "id": "t14-not-frozen",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "assertNotFrozen(frozen, row.competition_id);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a competition frozen by a downgrade refuses 402"
+   }
+  ]
+ },
+ {
+  "id": "t14-cache-unstarted",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "touch(row.division_id, [id]);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules-cache.test.ts"
+    ],
+    "name": "one write: the fixture's own document"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules-cache.test.ts"
+    ],
+    "name": "a batch of two in one division"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-path",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
+  "replace": "const withoutPlay = false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "credits no score and records nothing"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a withdrawal's walkover over her dead seat"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-needs-outcome",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
+  "replace": "const withoutPlay = (await ledgerOf(tx, id)).standing === 0;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "only the CHANGED leaves are stored"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-needs-no-play",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "const withoutPlay = row.outcome !== null && (await ledgerOf(tx, id)).standing === 0;",
+  "replace": "const withoutPlay = row.outcome !== null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "after a withdrawal: the walkover's credited score is recorded play"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-bye",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (outcome.kind !== \"award\" || outcome.loser === null) throw lockedRefusal(row.id);",
+  "replace": "if (outcome.kind !== \"award\") throw lockedRefusal(row.id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "credits no score and records nothing"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-headline",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (now.summary.headline !== was.summary.headline) throw notFit(row.id, FORMAT_FIT_REASONS.score);",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a withdrawal's walkover over her dead seat"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-rewrite",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (rewriteAward) await writeAwardedMatchState(tx, id, { rewrite: true });",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a withdrawal's walkover over her dead seat"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the same award over a frozen snapshot"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-freeze",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the same award over a frozen snapshot"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-not-refold",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "if (snapshotted) version = (await freezeCfg(tx, id, cfg)).rules_version;",
+  "replace": "if (snapshotted) version = (await refreezeFixture(tx, id, cfg)).rules_version;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "the same award over a frozen snapshot"
+   }
+  ]
+ },
+ {
+  "id": "t14-award-rewrite-guard",
+  "file": "apps/web/src/server/engine-db/awarded-state.ts",
+  "find": "where ${award.ledger.tip > 0 || opts.rewrite === true}",
+  "replace": "where ${award.ledger.tip > 0}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "a withdrawal's walkover over her dead seat"
+   }
+  ]
+ },
+ {
+  "id": "t14-lock-order",
+  "file": "apps/web/src/server/usecases/fixture-rules.ts",
+  "find": "for (const o of [...owners].sort(bracketOrder))",
+  "replace": "for (const o of [...owners].sort((a, b) => (a.id < b.id ? -1 : 1)))",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "never deadlocks with a batch over both"
+   }
+  ]
+ },
+ {
+  "id": "t14-bracket-order",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "a.round_no - b.round_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);",
+  "replace": "(a.id < b.id ? -1 : a.id > b.id ? 1 : 0);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-rules.test.ts"
+    ],
+    "name": "never deadlocks with a batch over both"
+   }
+  ]
+ },
+ {
+  "id": "t14-guard-outcome",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": "and f.outcome is null and f.status",
+  "replace": "and f.status",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "a decided or finished match carrying its own format is not asked"
+   }
+  ]
+ },
+ {
+  "id": "t14-guard-status",
+  "file": "apps/web/src/server/usecases/fixture-override-guards.ts",
+  "find": " and f.status <> all(${[...LOCKED_FIXTURE_STATUSES]}::text[])",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "a decided or finished match carrying its own format is not asked"
+   }
+  ]
+ },
+ {
+  "id": "t14-swiss-own-format",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    if (own) {",
+  "replace": "    if (false && own) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "the paired round: refused naming the shell"
+   }
+  ]
+ },
+ {
+  "id": "t14-swiss-skip",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "      if (onBlocked === \"skip\") return { shells: round, delta: NO_SWISS_RESHAPE };\n      throw ownFormatLoss(own);",
+  "replace": "      throw ownFormatLoss(own);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "a later round the eager pass sweeps"
+   }
+  ]
+ },
+ {
+  "id": "t14-own-format-status",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "  FIXTURE_HAS_OWN_FORMAT: 409,",
+  "replace": "  FIXTURE_HAS_OWN_FORMAT: 400,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "declares exactly the eight codes"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/fixture-override-guards.test.ts"
+    ],
+    "name": "rebuild: refused naming the match"
+   }
+  ]
+ },
+ {
   "id": "t14-check-refusal",
   "file": "apps/web/src/server/usecases/fixture-rules.ts",
   "find": "if (!check.ok) {",

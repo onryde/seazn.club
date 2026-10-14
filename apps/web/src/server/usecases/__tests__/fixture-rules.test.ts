@@ -937,6 +937,10 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
         expect([after.status, after.outcome], "the award stands").toEqual([before.status, before.outcome]);
         const want = await awardFold(w, { ...current, ...frag });
         expect(after.summary, "its score is the award's own fold under the corrected format").toEqual(want.summary);
+        // The fold's state carries the cfg it was folded under (the set kernel's `cfg`): the cached row is re-written,
+        // not just left showing the same headline.
+        expect((before.state as { cfg?: unknown }).cfg, "the premise: the cached state was folded under the old format").not.toMatchObject(frag);
+        expect((after.state as { cfg?: unknown }).cfg).toMatchObject(frag);
         expect((await row(w.id)).rules_override).toEqual(frag);
         expect((await audit(w.id)).at(-1)!.payload).toMatchObject({ started: true, after: frag });
       } else {
@@ -973,6 +977,9 @@ describe.skipIf(!HAS_DB)("I1 a match decided without play is started (fix round 
     expect([after.status, after.outcome], "the award stands").toEqual([before.status, before.outcome]);
     expect((await row(w.id)).config_snapshot).toMatchObject(frag);
     expect(after.summary).toEqual((await awardFold(w, { ...current, ...frag })).summary);
+    expect((after.state as { cfg?: unknown }).cfg, "the cached state is re-folded under the re-frozen format").toMatchObject(frag);
+    // …at the ledger's tip: the token every append is checked against (`writeAwardedMatchState`, Loop R M-17).
+    expect((await sql<{ s: number }[]>`select last_seq s from match_states where fixture_id = ${w.id}`)[0]!.s).toBe(2);
     expect(await fixtureRow(next), "the arriving side keeps her next seat").toEqual(seatedNext);
     // …and one that changes the credited score is refused here too.
     await expect(writeFixtureRulesOverride(w.b.auth, [w.id], { bestOf: BWF.bestOf + 2 })).rejects.toMatchObject({ code: "FORMAT_DOES_NOT_FIT_PLAY" });
