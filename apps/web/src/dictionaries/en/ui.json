@@ -6016,7 +6016,7 @@
   "externalPlay.reason.providerError": "Seazn couldn't read this game from Lichess, so its result isn't known here.",
   "externalPlay.reason.tokenRevokedWhite": "{name} (White) revoked Seazn's access to their Lichess account. This is not a no-show. The game may still be running on Lichess.",
   "externalPlay.reason.tokenRevokedBlack": "{name} (Black) revoked Seazn's access to their Lichess account. This is not a no-show. The game may still be running on Lichess.",
-  "externalPlay.reason.tokenRevokedBoth": "Both players revoked Seazn's access to their Lichess accounts. This is not a no-show. The game may still be running on Lichess.",
+  "externalPlay.reason.tokenRevokedBoth": "Neither player's moves can now be made from Seazn. This is not a no-show. The game may still be running on Lichess.",
   "externalPlay.reason.tokenRevoked": "A player revoked Seazn's access to their Lichess account. This is not a no-show. The game may still be running on Lichess.",
   "externalPlay.reason.doubleWalkoverBlocked": "Neither player checked in, and this match feeds no later match, so a double walkover can't be recorded.",
   "externalPlay.reason.tiebreakOwed": "Drawn in a knockout. A knockout needs a winner, and this draw is not recorded as a result.",

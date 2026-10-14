@@ -6016,7 +6016,7 @@
   "externalPlay.reason.providerError": "Seazn no pudo leer esta partida de Lichess, así que aquí no se conoce su resultado.",
   "externalPlay.reason.tokenRevokedWhite": "{name} (blancas) revocó el acceso de Seazn a su cuenta de Lichess. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
   "externalPlay.reason.tokenRevokedBlack": "{name} (negras) revocó el acceso de Seazn a su cuenta de Lichess. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
-  "externalPlay.reason.tokenRevokedBoth": "Los dos jugadores revocaron el acceso de Seazn a sus cuentas de Lichess. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
+  "externalPlay.reason.tokenRevokedBoth": "Ya ninguno de los dos jugadores puede hacer jugadas desde Seazn. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
   "externalPlay.reason.tokenRevoked": "Un jugador revocó el acceso de Seazn a su cuenta de Lichess. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
   "externalPlay.reason.doubleWalkoverBlocked": "Ninguno de los dos jugadores se registró y este encuentro no lleva a ningún otro, así que no se puede registrar una doble incomparecencia.",
   "externalPlay.reason.tiebreakOwed": "Tablas en una eliminatoria. Una eliminatoria necesita un ganador y estas tablas no cuentan como resultado.",

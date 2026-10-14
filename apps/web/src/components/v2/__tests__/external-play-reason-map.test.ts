@@ -132,6 +132,31 @@ describe("held copy: every reason, every locale", () => {
     expect(checked).toBe(3);
   });
 
+  it("fix round 2b: a revoked token on BOTH seats blames no one — true of every path that widens a hold to both — counted", () => {
+    // Typed from the ruling. "both" is reached by two revokes, but also by a provider error or an account change on the
+    // OTHER seat widening a one-seat revoke, so "Both players revoked…" can be false. The sentence says only what is
+    // true of every path: neither seat plays from Seazn, it is not a no-show, the game may still run on Lichess.
+    const RULED = {
+      en: "Neither player's moves can now be made from Seazn. This is not a no-show. The game may still be running on Lichess.",
+      es: "Ya ninguno de los dos jugadores puede hacer jugadas desde Seazn. No es una incomparecencia. Puede que la partida siga en curso en Lichess.",
+      fr: "Aucun des deux joueurs ne peut plus jouer de coups depuis Seazn. Ce n'est pas un forfait. La partie se poursuit peut-être sur Lichess.",
+      nl: "Geen van beide spelers kan nog zetten doen vanuit Seazn. Dit is geen no-show. De partij loopt misschien nog op Lichess.",
+    } as const;
+    // The revoke verb each locale's one-seat sentence uses — proven present there, so refusing it below can fail.
+    const BLAME = { en: "revoked", es: "revoc", fr: "retiré", nl: "ingetrokken" } as const;
+    const both = heldBody({ reason: "token_revoked", revokedSeat: "both", ...NAMES });
+    const oneSeat = heldBody({ reason: "token_revoked", revokedSeat: null, ...NAMES });
+    expect(both.vars, "it names nobody").toBeUndefined();
+    let checked = 0;
+    for (const l of LOCALES) {
+      expect(DICTS[l][both.key], l).toBe(RULED[l]);
+      expect(DICTS[l][oneSeat.key], `${l}: the one-seat sentence carries the verb`).toContain(BLAME[l]);
+      expect(DICTS[l][both.key]!.toLowerCase(), `${l}: no one is said to have revoked`).not.toContain(BLAME[l]);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
   it("a revoked token is NEVER a no-show (design §3.6): each seat's sentence says so, and none is a no-show's sentence", () => {
     const noShow = new Set(
       (["no_show_white", "no_show_black", "no_show_both", "double_walkover_blocked"] as const).map((r) => heldBody({ reason: r, revokedSeat: null, ...NAMES }).key),
