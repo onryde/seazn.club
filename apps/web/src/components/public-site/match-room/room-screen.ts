@@ -13,6 +13,7 @@ import type { SeatRefusal } from "./room-snapshot";
 
 export type RoomScreen =
   | { kind: "unavailable" } // card 7
+  | { kind: "repairing" } // fix round 4b: the organiser is re-pairing the round
   | { kind: "offForClub" } // seam B
   | { kind: "revoked" } // seam A
   | { kind: "seatHeld" } // seam A's layout, a hold the viewer did not cause (R2-1)
@@ -56,6 +57,9 @@ export type ScreenContext = {
 export function roomScreen(s: RoomState, ctx: ScreenContext = {}): RoomScreen {
   const snap = s.snap;
   if (s.notFound) return { kind: "unavailable" };
+  // Fix round 4b: the board is being re-paired — the snapshot in hand is the OLD pairing (its opponent, its
+  // window), so nothing of it is shown until a read of the re-paired board lands.
+  if (s.repairing) return { kind: "repairing" };
   // T20: no game on file and the club is not offered online chess. A game on
   // file is played out whatever the flag says (the usecase only sets this
   // with no game), so this cannot hide a live board.

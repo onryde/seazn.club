@@ -53006,7 +53006,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/room": {
       "get": {
-        "summary": "Match-room snapshot for one of the fixture's two players (session, or the personal link token in `?t=`, which wins when present). Never writes. Never key-reachable. Every identity failure is the same 404 NOT_FOUND",
+        "summary": "Match-room snapshot for one of the fixture's two players (session, or the personal link token in `?t=`, which wins when present). Never writes. Never key-reachable. Every identity failure is the same 404 NOT_FOUND; 409 ROOM_BEING_REPAIRED while the organiser re-pairs the board's round (it seats nobody), to the board's own link or a player of its division",
         "tags": [
           "fixtures"
         ],
@@ -53143,6 +53143,50 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -53196,7 +53240,7 @@
         ]
       },
       "post": {
-        "summary": "Take the seat for this fixture: the camera gate is server-verified (RealtimeKit presence) under policy `required`, never a client claim. Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }",
+        "summary": "Take the seat for this fixture: the camera gate is server-verified (RealtimeKit presence) under policy `required`, never a client claim. Stamps the check-in inside the round's window; once both players are in, the Lichess game is created. Answers { snapshot, seat }. 409 ROOM_BEING_REPAIRED as the GET",
         "tags": [
           "fixtures"
         ],
@@ -53333,6 +53377,50 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

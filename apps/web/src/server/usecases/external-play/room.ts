@@ -3,7 +3,8 @@ import "server-only";
 // points front every player interaction with the room, each resolving the
 // caller to ONE of the fixture's two players first (a session user, or a
 // personal link token bound to the round's open) and collapsing every
-// failure to one 404:
+// failure to one 404 — save a board being re-paired, to a caller tied to it
+// (fix round 4b: GET and POST answer 409 ROOM_BEING_REPAIRED, boardBeingRepaired):
 //   - readRoom       — GET. NEVER writes (spec §12.1).
 //   - claimRoomSeat  — POST. Takes the seat through preflight's seatPlayer
 //     (the server-verified camera gate), stamps the check-in inside the
@@ -48,6 +49,7 @@ import {
   roomPhaseWire,
   turnAfter,
   windowWire,
+  ROOM_BEING_REPAIRED,
   type Colour,
   type RoomGame,
   type RoomSnapshot,
@@ -118,6 +120,7 @@ export const CLOCK_ZERO_COOLDOWN_MS = 2_500;
 const clockZeroReadAt = new Map<string, number>();
 
 const ROOM_NOT_FOUND = () => new HttpError(404, "This match room could not be found", "NOT_FOUND");
+const ROOM_REPAIRING = () => new HttpError(409, "This board is being re-paired", ROOM_BEING_REPAIRED);
 
 type Resolved = {
   f: OnlinePlayFixture;
@@ -135,11 +138,12 @@ type Resolved = {
  * schedule — a NULL-time board resolves; a token for another round never
  * does). Every failure — no such fixture, not an online fixture, a bad or
  * expired token, another fixture or round, a person on neither side —
- * collapses to the same 404 so a probe learns nothing.
+ * collapses to the same 404 so a probe learns nothing — save one (fix round 4b, `tellRepairing`: GET and POST room):
+ * a board being re-paired, to a caller tied to it (boardBeingRepaired), is the 409 the open room reads on through.
  */
-async function resolveRoom(identity: RoomIdentity, fixtureId: string): Promise<Resolved> {
+async function resolveRoom(identity: RoomIdentity, fixtureId: string, opts: { tellRepairing?: boolean } = {}): Promise<Resolved> {
   const f = await loadOnlinePlayFixture(fixtureId);
-  if (!f) throw ROOM_NOT_FOUND();
+  if (!f) throw opts.tellRepairing === true && (await boardBeingRepaired(identity, fixtureId)) ? ROOM_REPAIRING() : ROOM_NOT_FOUND();
   const [{ home, away }, open] = await Promise.all([loadSides(f), roundOpenFor(sql, fixtureId)]);
   let player: SidePlayer | undefined;
   if (identity.kind === "session") {
@@ -153,6 +157,53 @@ async function resolveRoom(identity: RoomIdentity, fixtureId: string): Promise<R
   // An empty side has personId null; it can never be the caller.
   if (!player || player.personId === null) throw ROOM_NOT_FOUND();
   return { f, player: player as SidePlayer & { personId: string }, home, away, open };
+}
+
+/**
+ * Fix round 4b: whether `fixtureId` is a board the organiser is re-pairing, for THIS caller. An unpair → re-pair gap
+ * lasts minutes, and the open room polls through it: the room's 404 would stop it for good, stranding the player who
+ * stays on the board until a reload.
+ *
+ * The board: an online-chess board (loadOnlinePlayFixture's division and fixture tests, its seats aside) in a round
+ * with an open, of which NO board is seated — its own two seats included — Unpair clears the whole round at once
+ * (stages.ts clearSwissFixtureSeats) and Generate seats it at once, so a board left empty once its round is seated
+ * again was not re-paired for this caller (their board is elsewhere, or they sit the round out): the 404.
+ *
+ * The safe reading: the answer is only ever given for a board that seats NOBODY, so it cannot say who is seated; and
+ * only to a caller tied to the board without a seat on it — a link token verified for this fixture AND its round's
+ * open (we mint those for the board's own players only), or a session whose person is on an entrant of the board's
+ * division. Anyone else gets the room's one 404, exactly as before.
+ */
+async function boardBeingRepaired(identity: RoomIdentity, fixtureId: string): Promise<boolean> {
+  const [board] = await sql<{ divisionId: string }[]>`
+    select f.division_id as "divisionId"
+      from fixtures f
+      join divisions d on d.id = f.division_id
+     where f.id = ${fixtureId}
+       and d.sport_key = 'boardgame'
+       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
+       and d.status not in ('setup', 'scheduled')
+       and f.status not in ('finalized', 'cancelled')
+       -- The board's own seats are in its round: none seated, this one included.
+       and not exists (
+         select 1 from fixtures g
+          where g.stage_id = f.stage_id and g.round_no = f.round_no
+            and (g.home_entrant_id is not null or g.away_entrant_id is not null))`;
+  if (!board) return false;
+  const open = await roundOpenFor(sql, fixtureId);
+  if (open === null) return false;
+  if (identity.kind === "token") {
+    const claims = await verifyMatchRoomToken(identity.token).catch(() => null);
+    return claims !== null && claims.fixtureId === fixtureId && claims.roundOpenId === open.id;
+  }
+  const [row] = await sql<{ entrant: boolean }[]>`
+    select exists(
+      select 1 from entrants e
+        join entrant_members em on em.entrant_id = e.id
+        join persons p on p.id = em.person_id and p.merged_into is null
+       where e.division_id = ${board.divisionId} and p.user_id = ${identity.userId}
+    ) as entrant`;
+  return row?.entrant === true;
 }
 
 /** Check-in state for both sides, scoped by fixture_id AND the two resolved
@@ -435,7 +486,7 @@ export async function roomGrantDowngraded(identity: RoomIdentity, fixtureId: str
  *  stale bridge is simply hidden (`effectiveBridge`) until a write path
  *  resets it. */
 export async function readRoom(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomSnapshot> {
-  const r = await resolveRoom(identity, fixtureId);
+  const r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   return compose(r, deps.now ?? new Date(), deps);
 }
 
@@ -459,7 +510,7 @@ function seatWire(seat: SeatResult): SeatWire {
  */
 export async function claimRoomSeat(identity: RoomIdentity, fixtureId: string, deps: RoomDeps = {}): Promise<RoomClaim> {
   const now = deps.now ?? new Date();
-  let r = await resolveRoom(identity, fixtureId);
+  let r = await resolveRoom(identity, fixtureId, { tellRepairing: true });
   await resetStaleBridge(r.f);
   r = await resolveRoom(identity, fixtureId);
   const bridge = effectiveBridge(r.f);

@@ -9,6 +9,10 @@ import { foldMatchWithStoppage, outcomeOf, summaryOf } from "@seazn/engine/core"
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import { roomPhase, windowFor } from "@/server/external-play/window";
 
+/** Fix round 4b: GET and POST room's answer (409) while the organiser re-pairs the board's round — the board names
+ *  nobody for now. The open room reads on through it (room-state), where the room's one 404 stops it for good. */
+export const ROOM_BEING_REPAIRED = "ROOM_BEING_REPAIRED";
+
 export type Colour = "white" | "black";
 export type RoomPhaseWire = "not_opened" | "before" | "open" | "closed";
 export type CameraPolicyWire = "off" | "optional" | "required";

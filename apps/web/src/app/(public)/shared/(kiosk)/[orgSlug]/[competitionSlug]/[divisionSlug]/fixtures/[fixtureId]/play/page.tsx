@@ -26,7 +26,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
 import { readRoom, roomGrantDowngraded, type RoomIdentity } from "@/server/usecases/external-play/room";
-import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
+import { ROOM_BEING_REPAIRED, type RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -85,8 +85,9 @@ export default async function MatchRoomPage({
       grantRefused = await roomGrantDowngraded(identity, fixtureId);
     } catch (err) {
       // Only the room's own refusal reads as "not available"; anything else
-      // is a real fault and goes to the error boundary.
-      if (!(err instanceof HttpError && err.status === 404)) throw err;
+      // is a real fault and goes to the error boundary. A board being
+      // re-paired (fix round 4b) leaves no snapshot to poll on: the same card.
+      if (!(err instanceof HttpError && (err.status === 404 || err.code === ROOM_BEING_REPAIRED))) throw err;
     }
   }
 

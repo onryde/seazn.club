@@ -217,6 +217,16 @@ export function UnavailableCard({ fixtureHref, t }: { fixtureHref: string | null
   );
 }
 
+/** Fix round 4b · the organiser is re-pairing the round: the board names nobody for now. A wait on the organiser,
+ *  like card 1 (its clock), with nothing for the player to do — the room reads on and moves by itself. */
+export function RepairingCard({ t }: { t: RoomT }) {
+  return (
+    <StateCard testId="room-state-repairing" icon="clock" title={t("externalPlay.room.state.repairing.title")}>
+      <Body>{t("externalPlay.room.state.repairing.body")}</Body>
+    </StateCard>
+  );
+}
+
 /** 8 · Lichess needs re-linking: the account page's own consent copy. */
 export function RelinkCard({ relinkHref, t }: { relinkHref: string; t: RoomT }) {
   return (

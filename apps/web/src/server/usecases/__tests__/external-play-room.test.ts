@@ -39,6 +39,7 @@ import {
   reportClockZero,
   roomGrantDowngraded,
   type RoomDeps,
+  type RoomIdentity,
 } from "../external-play/room";
 import { startLichessFixtureServer } from "../../../../e2e/lichess-fixture-server";
 import { hasLiveVideoPublisher } from "@/server/external-play/video/realtimekit";
@@ -1346,5 +1347,113 @@ describe.skipIf(!process.env.DATABASE_URL)("room — Lichess's word on the viewe
       vi.unstubAllEnvs();
       await fx.close();
     }
+  });
+});
+
+// Fix round 4b: the organiser unpairs a round and re-pairs it — minutes, in real use — and a player's room polls on
+// through the gap. Every read inside it finds a board that names nobody; it must be told so (409 ROOM_BEING_REPAIRED,
+// and the room reads on), never the room's one 404 (which stops it for good). The answer is given only where it can
+// name nobody — a board whose WHOLE round is unpaired — and only to a caller tied to the board without a seat on it.
+describe.skipIf(!process.env.DATABASE_URL)("match room — a board being re-paired (fix round 4b)", () => {
+  /** What Unpair leaves (stages.ts clearSwissFixtureSeats, the whole round at once); the e2e drives the real one. */
+  async function unpair(s: SeedOnlineChessFixtureResult) {
+    await sql`delete from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    await sql`
+      update fixtures set home_entrant_id = null, away_entrant_id = null, status = 'scheduled', outcome = null,
+             home_slot_label = null, away_slot_label = null
+       where id = ${s.fixtureId}`;
+  }
+  async function repair(s: SeedOnlineChessFixtureResult) {
+    await sql`update fixtures set home_entrant_id = ${s.home.entrantId}, away_entrant_id = ${s.away.entrantId} where id = ${s.fixtureId}`;
+  }
+  const REPAIRING = { status: 409, code: "ROOM_BEING_REPAIRED" };
+  const GONE = { status: 404, code: "NOT_FOUND" };
+
+  it("the round names nobody: its players — by link and by session, a second time too — are told the board is being re-paired, on the read and on the seat, and nothing is written; re-paired, the read is the room again", async () => {
+    const s = await seed();
+    const token = await tokenFor(s, s.home.personId);
+    expect((await readRoom({ kind: "token", token }, s.fixtureId, deps())).you.name, "premise — the link reads the room").toBe("Ada Okonkwo");
+    await unpair(s);
+    const before = await rows(s.fixtureId);
+    await expect(readRoom({ kind: "token", token }, s.fixtureId, deps())).rejects.toMatchObject(REPAIRING);
+    await expect(readRoom({ kind: "token", token }, s.fixtureId, deps()), "a second read, the same").rejects.toMatchObject(REPAIRING);
+    await expect(readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps())).rejects.toMatchObject(REPAIRING);
+    const d = deps();
+    await expect(claimRoomSeat({ kind: "session", userId: s.away.userId }, s.fixtureId, d), "the seat too").rejects.toMatchObject(REPAIRING);
+    await expect(claimRoomSeat({ kind: "token", token }, s.fixtureId, d)).rejects.toMatchObject(REPAIRING);
+    expect(await rows(s.fixtureId), "nothing written in the gap").toEqual(before);
+    expect([d.create.mock.calls.length, d.publish.mock.calls.length], "nothing asked").toEqual([0, 0]);
+
+    await repair(s);
+    expect((await readRoom({ kind: "token", token }, s.fixtureId, deps())).you.name, "re-paired: the room").toBe("Ada Okonkwo");
+    expect((await readRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, deps())).you.name).toBe("Bo Lind");
+  });
+
+  it("never told to anyone the board is not tied to — a stranger, a player of another division, a link for another board, another round's open, or expired: the room's one 404, as before", async () => {
+    const s = await seed();
+    const other = await seed();
+    const otherOpen = await openOf(other);
+    const tokens = {
+      fixture: await tokenFor(s, s.home.personId, { fixtureId: other.fixtureId }),
+      open: await tokenFor(s, s.home.personId, { roundOpenId: otherOpen.id }),
+      expired: await tokenFor(s, s.home.personId, { roundOpenedAt: new Date("2000-01-01T00:00:00Z") }),
+    };
+    const stranger = await makeUser("r4b-stranger");
+    await unpair(s);
+    // The positive the refusals pair with: the board's own player, by each identity, is told.
+    await expect(readRoom({ kind: "token", token: await tokenFor(s, s.home.personId) }, s.fixtureId, deps())).rejects.toMatchObject(REPAIRING);
+    await expect(readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).rejects.toMatchObject(REPAIRING);
+    const cases: [string, RoomIdentity][] = [
+      ["a stranger's session", { kind: "session", userId: stranger.id }],
+      ["a player of ANOTHER division", { kind: "session", userId: other.home.userId }],
+      ["a link for another board", { kind: "token", token: tokens.fixture }],
+      ["a link for another round's open", { kind: "token", token: tokens.open }],
+      ["an expired link", { kind: "token", token: tokens.expired }],
+    ];
+    let checked = 0;
+    for (const [why, identity] of cases) {
+      await expect(readRoom(identity, s.fixtureId, deps()), why).rejects.toMatchObject(GONE);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: callers refused").toBe(5);
+  });
+
+  it("only while the WHOLE round names nobody: re-paired with this board left empty (its players seated elsewhere), the board's own link is the 404 — the room stops, as it should", async () => {
+    const s = await seed();
+    const token = await tokenFor(s, s.home.personId);
+    await unpair(s);
+    await expect(readRoom({ kind: "token", token }, s.fixtureId, deps()), "premise — mid re-pair").rejects.toMatchObject(REPAIRING);
+    // Generate seats the round again — both players on board 2, board 1 left empty.
+    const [{ divisionId, orgId, scheduledAt }] = await sql<{ divisionId: string; orgId: string; scheduledAt: Date }[]>`
+      select division_id as "divisionId", org_id as "orgId", scheduled_at as "scheduledAt" from fixtures where id = ${s.fixtureId}`;
+    const [board2] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id, scheduled_at)
+      values (${s.stageId}, ${divisionId}, ${orgId}, 1, 2, ${`r4b-${randomUUID().slice(0, 6)}`}, 'scheduled', ${s.home.entrantId}, ${s.away.entrantId}, ${scheduledAt})
+      returning id`;
+    await expect(readRoom({ kind: "token", token }, s.fixtureId, deps())).rejects.toMatchObject(GONE);
+    await expect(readRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, deps())).rejects.toMatchObject(GONE);
+    expect((await readRoom({ kind: "session", userId: s.home.userId }, board2!.id, deps())).you.name, "their board now").toBe("Ada Okonkwo");
+  });
+
+  it("a board gone or no longer online play is the 404 even mid re-pair: deleted, cancelled, online play off, not a board game, its division back in setup, or a round never opened", async () => {
+    const changes: [string, (s: SeedOnlineChessFixtureResult) => Promise<unknown>][] = [
+      ["deleted", (s) => sql`delete from fixtures where id = ${s.fixtureId}`],
+      ["cancelled", (s) => sql`update fixtures set status = 'cancelled' where id = ${s.fixtureId}`],
+      ["online play off", (s) => sql`update divisions set config = config || '{"onlinePlay":"off"}'::jsonb where id = ${s.divisionId}`],
+      ["not a board game", (s) => sql`update divisions set sport_key = 'badminton' where id = ${s.divisionId}`],
+      ["division back in setup", (s) => sql`update divisions set status = 'setup' where id = ${s.divisionId}`],
+      ["no open", (s) => sql`delete from stage_round_opens where stage_id = ${s.stageId}`],
+    ];
+    let checked = 0;
+    for (const [why, change] of changes) {
+      const s = await seed();
+      await unpair(s);
+      const who: RoomIdentity = { kind: "session", userId: s.home.userId };
+      await expect(readRoom(who, s.fixtureId, deps()), `${why}: premise — mid re-pair`).rejects.toMatchObject(REPAIRING);
+      await change(s);
+      await expect(readRoom(who, s.fixtureId, deps()), why).rejects.toMatchObject(GONE);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: endings").toBe(6);
   });
 });

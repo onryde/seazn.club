@@ -6121,6 +6121,8 @@
   "externalPlay.room.over.pending": "Le résultat figurera sur le match une fois enregistré.",
   "externalPlay.room.state.notOpened.title": "Cette ronde n'a pas encore été ouverte.",
   "externalPlay.room.state.notOpened.body": "Votre organisateur l'ouvrira ; vous recevrez un e-mail quand elle commence.",
+  "externalPlay.room.state.repairing.title": "Votre échiquier est en cours de réappariement",
+  "externalPlay.room.state.repairing.body": "Votre organisateur modifie les appariements de cette ronde. Cette page se met à jour d'elle-même quand c'est terminé : inutile de la recharger.",
   "externalPlay.room.state.cameraRequired.title": "Allumez votre caméra pour vous enregistrer",
   "externalPlay.room.state.cameraRequired.body": "Cette division se joue caméra allumée. Autorisez l'accès à la caméra dans votre navigateur, puis réessayez.",
   "externalPlay.room.state.tryAgain": "Réessayer",
