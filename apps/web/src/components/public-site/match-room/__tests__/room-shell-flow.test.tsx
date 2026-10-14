@@ -25,7 +25,7 @@ import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomSnapshot }
 import type { MeetingLink, OwnCamera } from "../camera-loader";
 import { PRESENCE_SETTLE_MS, PRESENCE_TICK_MS } from "../opponent-presence";
 import { useOpponentPresence } from "../use-own-camera";
-import { IDLE_POLL_MS } from "../use-room";
+import { IDLE_POLL_MS, SETTLED_POLL_MS } from "../use-room";
 
 const T0 = Date.parse("2026-10-12T10:00:00.000Z");
 let tick = 0;
@@ -1121,5 +1121,51 @@ describe("the game ends: the camera leaves at once (T17B fix 2, D8a)", () => {
     const screen = walk(island.tree()).find((e) => propsOf(e).room !== undefined && propsOf(e).screen !== undefined);
     expect(propsOf(screen!).presence, "the pill reads the fresh meeting").toBe(true);
     island.unmount();
+  });
+});
+
+// T17B fix 2, D10b (controller ruling): a room that has shown a result kept it for good — it stopped reading — so the
+// organiser's void (or a re-arm) never reached an open tab until a reload. A settled room reads on, slowly, and at once
+// when its tab comes back into view.
+describe("D10b: a settled room keeps a slow read — a void reaches an open tab without a reload", () => {
+  const NO_RESULT = { outcome: "no_result" as const, method: null, score: "" };
+  const settledRoom = () =>
+    renderIsland(RoomShell, {
+      initial: snap({ cameraPolicy: "off", you: { colour: "white", name: "Bo Lind", checkedIn: true }, result: NO_RESULT }),
+      token: "tok",
+      selfPath: "/x",
+    });
+  const gets = () => calls.filter((c) => c.method === "GET").length;
+
+  it("the slow poll: nothing before SETTLED_POLL_MS, then a read — and the void it reads shows the closed board", async () => {
+    getAnswer = () => snap({ cameraPolicy: "off", you: { colour: "white", name: "Bo Lind", checkedIn: true }, boardClosed: true });
+    const island = settledRoom();
+    await settle();
+    expect(screenOf(island), "premise: the result card").toBe("over");
+    await settle(SETTLED_POLL_MS - 1);
+    expect(gets(), "slow: not at the idle cadence").toBe(0);
+    await settle(1);
+    expect(gets()).toBe(1);
+    expect(screenOf(island), "the void reached the open tab").toBe("boardClosed");
+    expect(SETTLED_POLL_MS, "slower than the idle poll").toBeGreaterThan(IDLE_POLL_MS);
+    island.unmount();
+  });
+
+  it("the tab coming back into view reads at once; a hidden tab does not", async () => {
+    const doc = Object.assign(new EventTarget(), { visibilityState: "hidden", cookie: "" });
+    vi.stubGlobal("document", doc);
+    const island = settledRoom();
+    await settle();
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(gets(), "hidden: nothing").toBe(0);
+    doc.visibilityState = "visible";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(gets(), "visible: one read").toBe(1);
+    island.unmount();
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(gets(), "unmounted: the listener is gone").toBe(1);
   });
 });

@@ -857,7 +857,6 @@ test("T17B fix 2, D10: the organiser's No result before any game, then its void 
   const settled = await apiJson(page.request, `/api/v1/fixtures/${room.fixtureId}/external-play/resolve`, "POST", { kind: "no_result" });
   expect(settled.status, JSON.stringify(settled.error)).toBeLessThan(300);
   await expect.poll(() => screenOf(before), { timeout: 25_000, message: "premise: the room reads the No result" }).toBe("over");
-  await before.close();
   const abandon = await withDb(async (sql) => {
     const [e] = await sql<{ id: string; seq: number; type: string }[]>`
       select id, seq, type from score_events where fixture_id = ${room.fixtureId} order by seq desc limit 1`;
@@ -871,6 +870,11 @@ test("T17B fix 2, D10: the organiser's No result before any game, then its void 
   });
   expect(voided.status, JSON.stringify(voided.error)).toBeLessThan(300);
   expect((await bridgeRow(room.fixtureId))?.status, "premise: the bridge stays closed, with no game").toBe("finished");
+  // D10b: the tab that showed the No result reads on — slowly (SETTLED_POLL_MS), and at once when it comes back into
+  // view — so the void reaches it without a reload.
+  await before.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => screenOf(before), { timeout: 10_000, message: "the open tab reads the void" }).toBe("boardClosed");
+  await before.close();
   // The players open their rooms after the void — where stg hung on "Setting up" for good.
   // Every page of this context, from before its first paint (a mount claim fires at hydration).
   const posts: string[] = [];

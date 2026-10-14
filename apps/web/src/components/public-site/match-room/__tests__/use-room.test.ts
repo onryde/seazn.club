@@ -2,7 +2,7 @@
 // when a clock that reached zero is reported. The hook's wiring (the poll
 // effect, the realtime channel, the calls) is the room e2e's.
 import { describe, expect, it } from "vitest";
-import { CLOCK_ZERO_ATTEMPTS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
+import { CLOCK_ZERO_ATTEMPTS, CLOCK_ZERO_SPACING_MS, IDLE_POLL_MS, LIVE_POLL_MS, SETTLED_POLL_MS, nextClockZeroReport, pollIntervalMs, reReadDelayMs } from "../use-room";
 
 describe("pollIntervalMs", () => {
   it("a live game with no realtime channel polls fast; everything else slow", () => {
@@ -12,6 +12,19 @@ describe("pollIntervalMs", () => {
     expect(pollIntervalMs({ gameLive: false, subscribed: true })).toBe(IDLE_POLL_MS);
     // Our own numbers (the brief sets none): the live cadence must be the faster one.
     expect(LIVE_POLL_MS).toBeLessThan(IDLE_POLL_MS);
+  });
+
+  it("D10b: a settled room still reads, slowest of all — whatever else holds (counted)", () => {
+    let checked = 0;
+    for (const gameLive of [true, false]) {
+      for (const subscribed of [true, false]) {
+        expect(pollIntervalMs({ gameLive, subscribed, settled: true }), `${gameLive} ${subscribed}`).toBe(SETTLED_POLL_MS);
+        expect(pollIntervalMs({ gameLive, subscribed, settled: false })).toBeLessThan(SETTLED_POLL_MS);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+    expect(SETTLED_POLL_MS).toBeGreaterThan(IDLE_POLL_MS);
   });
 });
 
