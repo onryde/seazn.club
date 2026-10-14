@@ -41,6 +41,7 @@ vi.mock("@/server/public-site/revalidate", () => ({
   firePersonRevalidate: vi.fn(async () => {}),
   fireScoreRevalidate: vi.fn(async () => {}),
   dropNamedPublicDocuments: vi.fn(),
+  expireCompetitionShell: vi.fn(async () => {}),
 }));
 const logMock = vi.hoisted(() => ({
   error: vi.fn(),

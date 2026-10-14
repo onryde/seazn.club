@@ -162,11 +162,13 @@ describe.skipIf(!HAS_DB)("patchDivision — a name-policy change expires the org
     );
   });
 
-  it("an unrelated rename fires neither", async () => {
+  it("an unrelated rename fires only the competition shell's org expiry, never the name policy's division and competition tags", async () => {
+    // The rename moves the division in the competition shell, which is cached
+    // under the org tag alone (division-shell-revalidate.test.ts owns that).
     const u12 = await division("U12", 12);
     const { result, calls } = await inRequest(() => patchDivision(auth, u12.id, { name: "Under 12s" }));
     expect(result.name).toBe("Under 12s");
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ tags: [orgTag(orgSlug)], durations: { expire: 0 } }]);
   });
 
   it("the hub re-sending an unchanged age_max (and name display) fires neither", async () => {
