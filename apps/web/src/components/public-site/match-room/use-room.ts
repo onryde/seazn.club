@@ -1,8 +1,10 @@
 "use client";
 // The room's transport: the reducer (room-state.ts) fed by
 //   - a poll of GET room — every LIVE_POLL_MS while a game is live and no
-//     realtime channel is up, else every IDLE_POLL_MS; never once polling
-//     stopped (online chess off, the room gone) or the result is written;
+//     realtime channel is up, else every IDLE_POLL_MS; every SETTLED_POLL_MS
+//     once the result is written (D10b: a void reaches an open tab), and at
+//     once when the tab comes back into view; never once polling stopped
+//     (online chess off, the room gone);
 //   - the private realtime channel `external-play:{fixtureId}` when the
 //     snapshot carries a token: `room_state` is a move (applied at once),
 //     `lobby_changed` is a check-in or a created game (a debounced re-read);
@@ -15,6 +17,9 @@ import type { RoomSnapshot } from "./room-snapshot";
 
 export const LIVE_POLL_MS = 3_000;
 export const IDLE_POLL_MS = 15_000;
+/** T17B fix 2, D10b (controller ruling): a room that shows a result still reads, this slowly — the organiser's void
+ *  or re-arm reaches an open tab without a reload (and at once when the tab comes back into view). */
+export const SETTLED_POLL_MS = 30_000;
 const LOBBY_DEBOUNCE_MS = 250;
 /** The two events the room's channel carries — lib/realtime.ts's
  *  publishRoomBroadcast and publishExternalPlayLobby send exactly these
@@ -43,7 +48,8 @@ export function reReadDelayMs(streak: number): number {
   return Math.min(IDLE_POLL_MS, 1_000 * 2 ** Math.min(streak - 2, 30));
 }
 
-export function pollIntervalMs(a: { gameLive: boolean; subscribed: boolean }): number {
+export function pollIntervalMs(a: { gameLive: boolean; subscribed: boolean; settled?: boolean }): number {
+  if (a.settled) return SETTLED_POLL_MS;
   return a.gameLive && !a.subscribed ? LIVE_POLL_MS : IDLE_POLL_MS;
 }
 
@@ -74,12 +80,21 @@ export function useRoom(initial: RoomSnapshot, token: string | null, grantRefuse
   const game = state.snap.game;
   const gameLive = game !== null && !game.over;
   const settled = state.snap.result !== null;
-  const every = pollIntervalMs({ gameLive, subscribed });
+  const every = pollIntervalMs({ gameLive, subscribed, settled });
   useEffect(() => {
-    if (!state.polling || settled) return;
+    if (!state.polling) return;
     const id = setInterval(() => void refresh(), every);
     return () => clearInterval(id);
-  }, [state.polling, settled, every, refresh]);
+  }, [state.polling, every, refresh]);
+  // D10b: a tab coming back into view reads at once (a phone woken after the organiser's void or re-arm).
+  useEffect(() => {
+    if (!state.polling || typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [state.polling, refresh]);
 
   // ── realtime ───────────────────────────────────────────────────────────
   const topic = state.snap.realtime?.topic ?? null;
