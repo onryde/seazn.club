@@ -19,6 +19,7 @@ import {
   GUARD_FAULT_FLAG_SECONDS,
   GUARD_FAULT_FLAG_STAMPS,
   MATCH_OFF_MIN_MS,
+  concurrentConnections,
   matchCameraOff,
   stampedInMatch,
 } from "../match-camera-off";
@@ -275,5 +276,90 @@ describe("stampedInMatch: our safeguard's stamps in ONE match, and when the orga
 
   it("an inverted stamp is refused, as matchCameraOff refuses it", () => {
     expect(() => stampedInMatch(W, [span(400, 300)])).toThrow(/fault/);
+  });
+});
+
+// T17B fix 2, D9 (measured live, JTcfKXow): the owner played White from a tab whose camera was DENIED while a second
+// White tab had its camera on all match — and the union above, rightly, saw no camera off. The ruling: flag it, do not
+// block it. When one player had MORE THAN ONE connection at the same time (overlapping joined→left spans) inside the
+// match, the organiser is told when and how many. A reload is sequential (measured: the old peer's PEER_LEAVING comes
+// before the new peer's PEER_JOINING, t17b-report "Reload, measured at the vendor"), so it is never "at once".
+describe("concurrentConnections (D9): a player connected from more than one place at the same time", () => {
+  const shape = (r: ReturnType<typeof concurrentConnections>) => ({
+    devices: r.devices,
+    intervals: r.intervals.map((i) => [i.from, i.to]),
+    seconds: r.seconds,
+  });
+
+  it("the empty case: no connection is nobody at once — 0 devices, no interval", () => {
+    expect(shape(concurrentConnections(win(0, 900), []))).toEqual({ devices: 0, intervals: [], seconds: 0 });
+  });
+
+  it("one connection is one device: no interval", () => {
+    expect(shape(concurrentConnections(win(0, 900), [onThroughout(0, 900)]))).toEqual({ devices: 1, intervals: [], seconds: 0 });
+  });
+
+  it("a RELOAD (the second peer joins 5 s after the first left) is one device at a time: no interval", () => {
+    expect(shape(concurrentConnections(win(0, 900), [onThroughout(0, 300), onThroughout(305, 900)]))).toEqual({
+      devices: 1,
+      intervals: [],
+      seconds: 0,
+    });
+  });
+
+  it("the edge: a reload whose new peer joins at the very instant the old one left is still sequential", () => {
+    expect(shape(concurrentConnections(win(0, 900), [onThroughout(0, 300), onThroughout(300, 900)]))).toEqual({
+      devices: 1,
+      intervals: [],
+      seconds: 0,
+    });
+  });
+
+  it("the defect's shape: a camera-off tab beside a camera-on one is 2 at once, over exactly their overlap — whatever either camera did", () => {
+    const denied = connection({ joined: 100, left: 850, samples: [] });
+    expect(shape(concurrentConnections(win(0, 900), [onThroughout(0, 900), denied]))).toEqual({
+      devices: 2,
+      intervals: [[at(100), at(850)]],
+      seconds: 750,
+    });
+  });
+
+  it("the edge the other way: an overlap of one second is at once", () => {
+    expect(shape(concurrentConnections(win(0, 900), [onThroughout(0, 301), onThroughout(300, 900)]))).toEqual({
+      devices: 2,
+      intervals: [[at(300), at(301)]],
+      seconds: 1,
+    });
+  });
+
+  it("only the MATCH counts: an overlap before the first move is nothing, and one straddling it is clipped to it", () => {
+    // Both tabs open in the room before the game, the extra one closed before the first move (at 60).
+    expect(shape(concurrentConnections(win(60, 900), [onThroughout(0, 900), onThroughout(10, 50)]))).toEqual({
+      devices: 1,
+      intervals: [],
+      seconds: 0,
+    });
+    // … and one still open at the first move, closed at 200: from the first move to 200.
+    expect(shape(concurrentConnections(win(60, 900), [onThroughout(0, 900), onThroughout(10, 200)]))).toEqual({
+      devices: 2,
+      intervals: [[at(60), at(200)]],
+      seconds: 140,
+    });
+    // The room outlives the game: a tab opened after the game's end is nothing.
+    expect(shape(concurrentConnections(win(60, 900), [onThroughout(0, 1200), onThroughout(950, 1100)])).intervals).toEqual([]);
+  });
+
+  it("three at once is 3 devices; the interval is wherever two or more were connected, as one stretch", () => {
+    const r = concurrentConnections(win(0, 900), [onThroughout(0, 900), onThroughout(100, 500), onThroughout(300, 700)]);
+    expect(shape(r)).toEqual({ devices: 3, intervals: [[at(100), at(700)]], seconds: 600 });
+  });
+
+  it("two separate episodes are two intervals, in order, and their seconds add up", () => {
+    const r = concurrentConnections(win(0, 900), [onThroughout(0, 900), onThroughout(600, 700), onThroughout(100, 200)]);
+    expect(shape(r)).toEqual({ devices: 2, intervals: [[at(100), at(200)], [at(600), at(700)]], seconds: 200 });
+  });
+
+  it("an inverted window is refused, as matchCameraOff refuses it", () => {
+    expect(() => concurrentConnections(win(200, 100), [])).toThrow(/window/);
   });
 });

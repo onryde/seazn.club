@@ -45,8 +45,10 @@ export async function listRunSheetOnlinePlay(auth: AuthCtx, divisionId: string):
   >`
     select f.id as "fixtureId", f.stage_id as "stageId", f.status as "fixtureStatus",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason",
-           -- V439's CHECK names exactly three kinds, and each is its own chip: the player's lost camera (amber), OUR
-           -- side's connection problems (quiet — T16 fix round 1, I3), moves made off Seazn (amber).
+           -- V439's CHECK names three kinds that are each their own chip: the player's lost camera (amber), OUR
+           -- side's connection problems (quiet — T16 fix round 1, I3), moves made off Seazn (amber). V444's fourth,
+           -- multiple_devices (T17B fix 2, D9), has no chip here: it reaches the organiser through the needs-result
+           -- queue's Flagged list and the arbiter panel, like every open flag.
            count(fl.id) filter (where fl.kind = 'camera_lost')::int as "cameraFlags",
            count(fl.id) filter (where fl.kind = 'camera_connection_problems')::int as "connectionProblems",
            count(fl.id) filter (where fl.kind = 'out_of_band_play')::int as "offSeaznFlags",

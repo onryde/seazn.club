@@ -98,7 +98,41 @@ export function FlagCard({ flag, f }: { flag: ArbiterFlag; f: Fmt }) {
           </p>
         </article>
       );
+    case "multiple_devices":
+      return <DevicesCard flag={flag} f={f} />;
   }
+}
+
+/** T17B fix 2, D9: the player was connected from more than one place at the same time in the match — evidence about
+ *  the player (amber, as camera_lost is), never a block: the camera on one device says nothing about the others. */
+function DevicesCard({ flag, f }: { flag: Extract<ArbiterFlag, { kind: "multiple_devices" }>; f: Fmt }) {
+  const name = flag.personName ?? f.t("arbiter.flag.aPlayer");
+  const r = flag.report;
+  if (r === null) {
+    return (
+      <article className={`${CARD} border-[#f5d27a]`}>
+        <span className={CHIP_AMBER}>{f.t("arbiter.flag.devices.chipPlain")}</span>
+        <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.devices.unread", { name })}</p>
+      </article>
+    );
+  }
+  const spans = r.intervals.map((iv) => {
+    const from = f.hms(iv.from);
+    const to = f.hms(iv.to);
+    return from && to ? f.t("arbiter.flag.cameraOff.span", { from, to }) : null;
+  });
+  const allTimed = spans.length > 0 && spans.every((x): x is string => x !== null);
+  return (
+    <article className={`${CARD} border-[#f5d27a]`}>
+      <span className={CHIP_AMBER}>{f.t("arbiter.flag.devices.chip", { count: r.devices })}</span>
+      <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">
+        {allTimed
+          ? f.t("arbiter.flag.devices.spans", { name, count: r.devices, spans: f.list(spans as string[]) })
+          : f.t("arbiter.flag.devices.count", { name, count: r.devices })}{" "}
+        {f.t("arbiter.flag.devices.why")}
+      </p>
+    </article>
+  );
 }
 
 export function CameraReportCard({ flag, f }: { flag: Extract<ArbiterFlag, { kind: "camera_lost" }>; f: Fmt }) {

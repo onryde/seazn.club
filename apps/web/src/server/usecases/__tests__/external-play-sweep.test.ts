@@ -2165,7 +2165,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
       skipped: 1, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
     });
     release();
     const done = await first;
@@ -3298,6 +3298,120 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(cameraFailures(r)).toEqual([]);
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
     expect(rtkReads().filter((c) => c.path.startsWith("/sessions/peer-report/")).length, "4 peers over 2 sessions").toBe(4);
+  });
+
+  // T17B fix 2, D9 (measured live, JTcfKXow): the owner played White to mate from a tab whose camera was DENIED while a
+  // second White tab had its camera on all match — and the union, rightly, saw no camera off, so job 5 said nothing.
+  // The ruling: flag it, never block it. One player connected from more than one place AT THE SAME TIME inside the
+  // match is a `multiple_devices` flag naming when and how many. Expected windows come from the scenario's own join
+  // and leave times; the arbiter panel's loader reads THIS producer's note back.
+  describe("a player connected from more than one place at once (T17B fix 2, D9)", () => {
+    const devicesFlags = async (fixtureId: string) => (await flagsOf(fixtureId)).filter((f) => f.kind === "multiple_devices");
+    const devicesShown = async (m: Match) => {
+      const panel = await loadArbiterRound(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId);
+      return panel!.boards.find((x) => x.fixtureId === m.b.fixtureId)!.flags.filter((f) => f.kind === "multiple_devices");
+    };
+
+    it("the empty case: one connection each is nobody at once — settled, no flag, and the count says 0", async () => {
+      const m = await playedMatch();
+      bothOnThroughout(m);
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags, r.deviceFlags]).toEqual([1, 0, 0]);
+      expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+    });
+
+    it("a RELOAD — two peers one after the other, 5 s apart — is one place at a time: no flag", async () => {
+      const m = await playedMatch();
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      const mid = m.startedAt + 300_000;
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: mid });
+      connect(m, x, "home", { joined: mid + 5_000, left: m.endedAt });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+      expect(x.rows.find((r) => r.user_id === m.part.home)!.peer_events.length, "premise: two peers").toBe(4);
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.deviceFlags]).toEqual([1, 0]);
+      expect(await devicesFlags(m.b.fixtureId)).toEqual([]);
+    });
+
+    it("the defect: a camera-DENIED tab beside a camera-on one — no camera_lost (the union covers it), but a multiple_devices flag for THAT player over exactly the overlap, 2 at once; the panel reads the same; a re-run writes no second", async () => {
+      const m = await playedMatch();
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
+      const denied = { joined: m.startedAt + 60_000, left: m.startedAt + 400_000 };
+      connect(m, x, "home", { ...denied, gaps: [[denied.joined, denied.left]] });
+      connect(m, x, "away", { joined: m.startedAt - 90_000, left: m.endedAt });
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.cameraFlags, r.connectionFlags, r.deviceFlags]).toEqual([1, 0, 0, 1]);
+      const flags = await flagsOf(m.b.fixtureId);
+      expect(flags.map((f) => [f.kind, f.person_id, f.closed_at]), "home's alone, and nothing else").toEqual([
+        ["multiple_devices", m.b.home.personId, null],
+      ]);
+      const seconds = (denied.left - denied.joined) / 1000;
+      expect(flags[0]!.note).toBe(
+        `2 camera connections at once for ${seconds} s in the match: ${iso(denied.joined)} to ${iso(denied.left)}; camera required`,
+      );
+      expect(await devicesShown(m)).toMatchObject([
+        { kind: "multiple_devices", report: { devices: 2, seconds, intervals: [{ from: iso(denied.joined), to: iso(denied.left) }] } },
+      ]);
+      // … and the organiser's queue lists the board under Flagged, with the same card's data (its home after the game).
+      const queued = (await listFlaggedExternalPlay(await mintOrgOwnerAuth(m.b.orgId), m.b.divisionId)).boards.filter((x) => x.fixtureId === m.b.fixtureId);
+      expect(queued.map((x) => x.flags.map((f) => f.kind))).toEqual([["multiple_devices"]]);
+      // SEQUENCE: the room is settled once — a later pass reads nothing and writes nothing.
+      const again = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS + 60_000));
+      expect([again.cameraSettled, again.deviceFlags]).toEqual([0, 0]);
+      expect(await devicesFlags(m.b.fixtureId)).toHaveLength(1);
+    });
+
+    it("only the MATCH counts: two tabs in the room before the first move, one closed before it, is no flag; one open across it is clipped to it", async () => {
+      const lobby = await playedMatch();
+      const x = session(lobby, lobby.startedAt - 120_000, lobby.endedAt);
+      connect(lobby, x, "home", { joined: lobby.startedAt - 90_000, left: lobby.endedAt });
+      connect(lobby, x, "home", { joined: lobby.startedAt - 80_000, left: lobby.startedAt - 10_000 });
+      connect(lobby, x, "away", { joined: lobby.startedAt - 90_000, left: lobby.endedAt });
+      const r = await pass(lobby, after(lobby, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect([r.cameraSettled, r.deviceFlags]).toEqual([1, 0]);
+      expect(await flagsOf(lobby.b.fixtureId)).toEqual([]);
+
+      const across = await playedMatch();
+      const y = session(across, across.startedAt - 120_000, across.endedAt);
+      connect(across, y, "home", { joined: across.startedAt - 90_000, left: across.endedAt });
+      connect(across, y, "home", { joined: across.startedAt - 80_000, left: across.startedAt + 30_000 });
+      connect(across, y, "away", { joined: across.startedAt - 90_000, left: across.endedAt });
+      const r2 = await pass(across, after(across, CAMERA_EVIDENCE_AFTER_MS));
+      expect(r2.deviceFlags).toBe(1);
+      expect((await devicesFlags(across.b.fixtureId)).map((f) => f.note)).toEqual([
+        `2 camera connections at once for 30 s in the match: ${iso(across.startedAt)} to ${iso(across.startedAt + 30_000)}; camera required`,
+      ]);
+    });
+
+    it("each player is judged alone: both with a second tab at once is two flags, one each — counted", async () => {
+      const m = await playedMatch();
+      const x = session(m, m.startedAt - 120_000, m.endedAt);
+      const extra = { home: [m.startedAt + 100_000, m.startedAt + 200_000], away: [m.startedAt + 300_000, m.startedAt + 360_000] } as const;
+      for (const side of ["home", "away"] as const) {
+        connect(m, x, side, { joined: m.startedAt - 90_000, left: m.endedAt });
+        connect(m, x, side, { joined: extra[side][0], left: extra[side][1] });
+      }
+      const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+      expect(cameraFailures(r)).toEqual([]);
+      expect(r.deviceFlags).toBe(2);
+      const flags = await devicesFlags(m.b.fixtureId);
+      const byPerson = new Map(flags.map((f) => [f.person_id, f.note]));
+      let checked = 0;
+      for (const side of ["home", "away"] as const) {
+        const [a, b] = extra[side];
+        expect(byPerson.get(m.b[side].personId), side).toBe(
+          `2 camera connections at once for ${(b - a) / 1000} s in the match: ${iso(a)} to ${iso(b)}; camera required`,
+        );
+        checked++;
+      }
+      expect(checked, "anti-vacuity: both players").toBe(2);
+      expect(flags).toHaveLength(2);
+    });
   });
 
   it("a rejoin that left the match UNCOVERED is a loss, from the leave to the return", async () => {

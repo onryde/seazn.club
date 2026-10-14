@@ -526,6 +526,43 @@ describe("flags on this board (canvas cards)", () => {
     expect(t).not.toMatch(/\d+ s\b/);
   });
 
+  // T17B fix 2, D9: a player connected from more than one place at once (job 5's multiple_devices). Expected copy from
+  // the dictionary, the times from the flag's own instants in the viewer's clock (h23, as every flag card says them).
+  const DEVICES: ArbiterFlag = {
+    id: "fl-dev",
+    kind: "multiple_devices",
+    at: at(19, 41),
+    personName: "Elif Demirtaş",
+    report: { devices: 2, seconds: 340, intervals: [{ from: at(19, 31, 5), to: at(19, 36, 45) }] },
+  };
+  const fillEn = (key: string, slots: Record<string, string | number>) =>
+    Object.entries(slots).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), EN[key]!);
+
+  it("multiple devices (D9): the amber evidence card — the count on its chip, when, and why it matters; on a finished board 'Mark as reviewed' closes it", () => {
+    const b = { ...ROUND.boards[1]!, flags: [DEVICES] };
+    const h = html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f2") }));
+    const t = text(h);
+    expect(t).toContain(fillEn("arbiter.flag.devices.chip", { count: 2 }));
+    const span = fillEn("arbiter.flag.cameraOff.span", { from: "19:31:05", to: "19:36:45" });
+    expect(t).toContain(fillEn("arbiter.flag.devices.spans", { name: "Elif Demirtaş", count: 2, spans: span }));
+    expect(t).toContain(EN["arbiter.flag.devices.why"]);
+    expect(t).toContain(EN["externalPlay.queue.markReviewed"]);
+    // Evidence about the player: the amber card, as camera_lost and out-of-band are — never our side's neutral one.
+    expect(h).toMatch(/<article class="[^"]*border-\[#f5d27a\][^"]*"><span class="[^"]*bg-\[#fef3c7\][^"]*">2 devices at once</);
+  });
+
+  it("multiple devices (D9): before the clock is known no time is painted — the count sentence alone; an unreadable note says so plainly, never a guessed count", () => {
+    const b = { ...ROUND.boards[1]!, flags: [DEVICES] };
+    const early = text(html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f2"), nowMs: null })));
+    expect(early).toContain(fillEn("arbiter.flag.devices.count", { name: "Elif Demirtaş", count: 2 }));
+    expect(early).not.toContain("19:31:05");
+    const unread = { ...ROUND.boards[1]!, flags: [{ ...DEVICES, report: null, personName: null } as ArbiterFlag] };
+    const t = text(html(props({ round: { ...ROUND, boards: [unread] }, decision: initialArbiterDecision("f2") })));
+    expect(t).toContain(EN["arbiter.flag.devices.chipPlain"]);
+    expect(t).toContain(fillEn("arbiter.flag.devices.unread", { name: EN["arbiter.flag.aPlayer"]! }));
+    expect(t).not.toContain(fillEn("arbiter.flag.devices.chip", { count: 2 }));
+  });
+
   it("the pending card while the report is still to come, and not once it is settled", () => {
     const t = text(html(props()));
     expect(t).toContain("Camera report · pending");
@@ -1015,6 +1052,22 @@ describe("every locale", () => {
           boards: [{ ...ROUND.boards[2]!, flags: [outOfBand(null), { id: "c", kind: "camera_connection_problems", at: at(19, 40), personName: null, seconds: 61, stamps: 1 }, { id: "c2", kind: "camera_connection_problems", at: at(19, 41), personName: null, seconds: null, stamps: null }, { ...PRIYA_REPORT, report: null, personName: null } as ArbiterFlag] }],
         },
       }),
+      // T17B fix 2, D9: a multiple_devices card read and unread, on a finished board.
+      props({
+        round: {
+          ...ROUND,
+          boards: [
+            {
+              ...ROUND.boards[1]!,
+              flags: [
+                { id: "d1", kind: "multiple_devices", at: at(19, 41), personName: "Elif Demirtaş", report: { devices: 3, seconds: 400, intervals: [{ from: at(19, 31, 5), to: at(19, 36, 45) }, { from: at(19, 40), to: at(19, 41) }] } },
+                { id: "d2", kind: "multiple_devices", at: at(19, 42), personName: null, report: null },
+              ],
+            },
+          ],
+        },
+        decision: initialArbiterDecision("f2"),
+      }),
     ];
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
@@ -1025,7 +1078,7 @@ describe("every locale", () => {
         checked++;
       }
     }
-    expect(checked).toBe(56);
+    expect(checked).toBe(60);
   });
 
   it("the source never asks for the arbiter's own camera or microphone", () => {
