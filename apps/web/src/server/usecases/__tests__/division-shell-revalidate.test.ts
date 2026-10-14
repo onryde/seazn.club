@@ -132,7 +132,8 @@ import FileSystemCache from "next/dist/server/lib/incremental-cache/file-system-
 import { areTagsExpired, tagsManifest } from "next/dist/server/lib/incremental-cache/tags-manifest.external";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { getPublicCompetition, getPublicFixture, orgTag } from "@/server/public-site/data";
+import { orgTag } from "@/server/public-site/cache-tags";
+import { getPublicCompetition, getPublicFixture } from "@/server/public-site/data";
 import { getPublicCompetitionHub } from "@/server/public-site/competition-hub";
 import { sharedRenameTarget } from "@/server/slug-resolve";
 import { routes } from "@/lib/routes";
