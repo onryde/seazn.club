@@ -43,6 +43,7 @@ import "server-only";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { sql } from "@/lib/db";
 import { deferred } from "@/lib/deferred";
+import { endRoomAtResult, type RoomEndDeps } from "./room-end";
 import { HttpError } from "@/lib/errors";
 import { toLocale } from "@/lib/i18n-constants";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
@@ -71,6 +72,8 @@ export type ResolveDeps = {
   /** Where the Lichess game's ending runs: `deferred` (after the response) by default. */
   defer?: (fn: () => Promise<unknown>) => void;
   lichess?: EndGameDeps;
+  /** T17B fix 2 (D8b): the camera room's end at the settle (room-end.ts) — after the answer by default. */
+  room?: RoomEndDeps;
 };
 
 /** The holds whose colour stayed away (sweep.ts, result.ts NO_SHOW_REASONS):
@@ -209,8 +212,13 @@ export async function resolveExternalPlay(
   if (await isSeatedOn(actorUserId, fixtureId)) {
     throw new HttpError(403, "You play on this board, so another organiser must settle it", "ARBITER_PLAYS_THIS_BOARD");
   }
-  if (!isPlayableFixtureStatus(b.fixtureStatus)) {
+  // T17B fix 2 (D8b): every close here is the board's result — its camera room ends after the answer (room-end.ts).
+  const close = async () => {
     await closeBridge(fixtureId);
+    endRoomAtResult(fixtureId, deps.room);
+  };
+  if (!isPlayableFixtureStatus(b.fixtureStatus)) {
+    await close();
     throw new HttpError(409, "This board already has its result", "ALREADY_RESOLVED");
   }
   // The online game is over while the fixture is open again: its result was voided on the pad (or a level result
@@ -255,7 +263,7 @@ export async function resolveExternalPlay(
       payload: { winner, method: "organiser" },
       idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
     });
-    await closeBridge(fixtureId);
+    await close();
     return { status: "finished" };
   }
 
@@ -280,7 +288,7 @@ export async function resolveExternalPlay(
       payload: event.payload,
       idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
     });
-    await closeBridge(fixtureId);
+    await close();
     endTheGame({ kind: "void" });
     return { status: "finished" };
   }
@@ -302,7 +310,7 @@ export async function resolveExternalPlay(
         payload: { by: loserSide === "home" ? b.homeEntrantId : b.awayEntrantId, reason: "walkover" },
         idempotency_key: decisionKey(fixtureId, fs.last_seq, kind),
       });
-      await closeBridge(fixtureId);
+      await close();
       endTheGame({ kind: "win", loser: loserSide });
       return { status: "finished" };
     }
@@ -333,7 +341,7 @@ export async function resolveExternalPlay(
     endTheGame(decision);
     return { status: "tiebreak_owed" };
   }
-  await closeBridge(fixtureId);
+  await close();
   endTheGame(decision);
   return { status: "finished" };
 }
