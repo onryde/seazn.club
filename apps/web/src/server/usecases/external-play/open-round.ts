@@ -245,13 +245,35 @@ export async function openRound(
         `openRound: bridge row of fixture ${foreign.fixture_id} names open ${foreign.round_open_id}, not this round's`,
       );
     }
+    // T17B fix 2, D17 (owner ruling 2026-10-14 "re-arm"; controller ruling option 1): a playable board whose row
+    // our side CLOSED with no game — the arbiter's No result (core.abandon, the row `finished`), then the
+    // organiser's void — is re-armed HERE, by the organiser's re-open, never by the void. Deleting it at the void
+    // handed the board to the sweep, whose no-show wrote a double walkover over it on the next pass (measured): the
+    // closed row is the only thing keeping it out. Game-less is the one evidence rule a re-pair spares a meeting by
+    // (gameEvidenceOn: a recorded challenge, a create marker) plus no move on file; a row with any of it is a game,
+    // and stays the organiser's. Read under the division lock and locked FOR UPDATE, so the decision below and the
+    // reset after it see the same row. Only `ids` (the round's PLAYABLE boards) are looked at.
+    const rearmed = new Set(
+      (
+        await tx<{ fixture_id: string }[]>`
+          select ep.fixture_id from fixture_external_play ep
+           where ep.fixture_id in ${tx(ids)}
+             and ep.status = 'finished' and ep.move_count = 0
+             and not ${gameEvidenceOn(now)}
+           order by ep.fixture_id
+           for update`
+      ).map((r) => r.fixture_id),
+    );
+    /** The bridge facts this open reads for a board: none at all for one it re-arms (it is reset before any invite). */
+    const factsOf = (fixtureId: string): BridgeFactsRow | null =>
+      rearmed.has(fixtureId) ? null : (bridgeOf.get(fixtureId) ?? null);
     const invitedFor = (fixtureId: string, colour: Colour): boolean => {
-      const b = bridgeOf.get(fixtureId);
+      const b = factsOf(fixtureId);
       if (!existing || !b) return false;
       return (colour === "white" ? b.white_emailed_at : b.black_emailed_at) !== null;
     };
 
-    const takes = boards.filter((b) => bridgeTakesInvites(bridgeOf.get(b.f.fixtureId) ?? null));
+    const takes = boards.filter((b) => bridgeTakesInvites(factsOf(b.f.fixtureId)));
     const pending: { board: Board; seats: InviteSeat[] }[] = [];
     for (const board of takes) {
       const open = board.seats.filter((s) => !invitedFor(board.f.fixtureId, s.colour));
@@ -280,6 +302,20 @@ export async function openRound(
             ) as any`
         )[0]!.any
       : false;
+    // D17's narrow exception to I1: a re-open that re-arms a board re-stamps the window when every OTHER board bound
+    // to this open is decided — nobody still playing was invited into the window that would move. A neighbour still
+    // playable keeps the window (the board is then `window_closed` once it has closed, exactly as before), and a
+    // round re-arming nothing never takes this branch, so a late or rescheduled board still cannot re-open it. Its
+    // decided neighbours' links survive the move: a room token is bound to the open's id, which a re-stamp keeps.
+    const otherBoundStillPlayable =
+      existing && rearmed.size > 0
+        ? (
+            await tx<{ fixture_id: string; status: string }[]>`
+              select ep.fixture_id, fx.status from fixture_external_play ep
+                join fixtures fx on fx.id = ep.fixture_id
+               where ep.round_open_id = ${existing.id}`
+          ).some((r) => !rearmed.has(r.fixture_id) && isPlayableFixtureStatus(r.status))
+        : true;
 
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
@@ -293,9 +329,10 @@ export async function openRound(
       kind = "opened";
     } else if (pending.length === 0) {
       return { kind: "nothing", skipped: [] };
-    } else if (!anyInvited) {
+    } else if (!anyInvited || !otherBoundStillPlayable) {
       // Nobody this round was invited (a re-pair deleted the rows, or every
-      // send failed): the window starts now, for everyone.
+      // send failed), or — D17 — the only boards still playable are the ones
+      // this open re-arms: the window starts now, for everyone.
       const [row] = await tx<RoundOpenRow[]>`
         update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}
          where id = ${existing.id}
@@ -328,6 +365,25 @@ export async function openRound(
           skipped: pending.map((p) => ({ fixtureId: p.board.f.fixtureId, reason: "window_closed" as const })),
         };
       }
+    }
+
+    // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
+    // sweep's no-show). As a re-pair resets a board (stages.ts clearSwissFixtureSeats, M-10): its row goes, and with
+    // it the closed pairing's stamps, so the attach below mints it afresh for this open. Its video meeting goes too —
+    // it holds no game's evidence, and a meeting the sweep ended at the No result would refuse the replay's check-in
+    // (VIDEO_MEETING_ENDED) — ended at RealtimeKit after the commit, as N-2's are.
+    if (rearmed.size > 0) {
+      const rearmedIds = [...rearmed];
+      staleMeetings.push(
+        ...(
+          await tx<{ meeting_id: string; ended_at: Date | null }[]>`
+            delete from fixture_video_meetings where fixture_id in ${tx(rearmedIds)}
+            returning meeting_id, ended_at`
+        )
+          .filter((r) => r.ended_at === null)
+          .map((r) => r.meeting_id),
+      );
+      await tx`delete from fixture_external_play where fixture_id in ${tx(rearmedIds)}`;
     }
 
     const claims: Claim[] = [];
