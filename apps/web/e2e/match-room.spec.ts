@@ -1243,48 +1243,52 @@ test("T17B fix 1: the room's document may use the camera — served Permissions-
   // Its fake device makes the request real, so "granted" vs "NotAllowedError" is the POLICY's answer alone — a
   // browser of this test's own, since launch flags are per browser (the project's is shared).
   const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
-  const ctx = await cold(camBrowser);
-  await ctx.grantPermissions(["camera"]);
-  const p = await openRoom(ctx, room, room.white.token);
-  /** What this DOCUMENT may use (Chromium: document.featurePolicy) and what a camera request answers. */
-  const probe = () =>
-    p.evaluate(async () => {
-      const d = document as Document & { featurePolicy?: { allowsFeature(f: string): boolean } };
-      const allows = d.featurePolicy
-        ? { camera: d.featurePolicy.allowsFeature("camera"), microphone: d.featurePolicy.allowsFeature("microphone"), geolocation: d.featurePolicy.allowsFeature("geolocation") }
-        : null;
-      const camera = await navigator.mediaDevices.getUserMedia({ video: true }).then(
-        (stream) => {
-          for (const track of stream.getTracks()) track.stop();
-          return "granted";
-        },
-        (err: Error) => err.name,
-      );
-      return { allows, camera };
-    });
-  const policiesOf = async (res: Awaited<ReturnType<Page["reload"]>>) =>
-    (await res!.headersArray()).filter((h) => h.name.toLowerCase() === "permissions-policy").map((h) => h.value);
+  // T17B fix 2 (m2): a failed assertion must not leave this test's own browser running.
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    /** What this DOCUMENT may use (Chromium: document.featurePolicy) and what a camera request answers. */
+    const probe = () =>
+      p.evaluate(async () => {
+        const d = document as Document & { featurePolicy?: { allowsFeature(f: string): boolean } };
+        const allows = d.featurePolicy
+          ? { camera: d.featurePolicy.allowsFeature("camera"), microphone: d.featurePolicy.allowsFeature("microphone"), geolocation: d.featurePolicy.allowsFeature("geolocation") }
+          : null;
+        const camera = await navigator.mediaDevices.getUserMedia({ video: true }).then(
+          (stream) => {
+            for (const track of stream.getTracks()) track.stop();
+            return "granted";
+          },
+          (err: Error) => err.name,
+        );
+        return { allows, camera };
+      });
+    const policiesOf = async (res: Awaited<ReturnType<Page["reload"]>>) =>
+      (await res!.headersArray()).filter((h) => h.name.toLowerCase() === "permissions-policy").map((h) => h.value);
 
-  // The room: reloaded so the test holds the DOCUMENT's own response (the policy is the document's, fixed at load).
-  const roomRes = await p.reload();
-  expect(roomRes?.status(), "the room renders").toBe(200);
-  // Soft: a wrong header must not hide what the browser does with it — both are reported.
-  expect.soft(await policiesOf(roomRes), "one header, the room's").toEqual(["camera=(self), microphone=(), geolocation=()"]);
-  const inRoom = await probe();
-  expect(inRoom.allows, "the browser lets the room use the camera — and nothing else").toEqual({ camera: true, microphone: false, geolocation: false });
-  expect(inRoom.camera, "the room's camera request starts").toBe("granted");
+    // The room: reloaded so the test holds the DOCUMENT's own response (the policy is the document's, fixed at load).
+    const roomRes = await p.reload();
+    expect(roomRes?.status(), "the room renders").toBe(200);
+    // Soft: a wrong header must not hide what the browser does with it — both are reported.
+    expect.soft(await policiesOf(roomRes), "one header, the room's").toEqual(["camera=(self), microphone=(), geolocation=()"]);
+    const inRoom = await probe();
+    expect(inRoom.allows, "the browser lets the room use the camera — and nothing else").toEqual({ camera: true, microphone: false, geolocation: false });
+    expect(inRoom.camera, "the room's camera request starts").toBe("granted");
 
-  // The board's own public page — the lobby the player came from — keeps the camera off.
-  const fixtureRes = await p.goto(room.fixturePath);
-  expect(fixtureRes?.status()).toBe(200);
-  expect(await policiesOf(fixtureRes), "one header, the site's").toEqual(["camera=(), microphone=(), geolocation=()"]);
-  const onFixture = await probe();
-  expect(onFixture.allows).toEqual({ camera: false, microphone: false, geolocation: false });
-  expect(onFixture.camera, "refused by policy").toBe("NotAllowedError");
-  // Chrome reports that refusal itself, as the policy violation it is: expected here, and only here.
-  consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/Permissions policy violation: camera is not allowed/.test(e)));
-  await ctx.close();
-  await camBrowser.close();
+    // The board's own public page — the lobby the player came from — keeps the camera off.
+    const fixtureRes = await p.goto(room.fixturePath);
+    expect(fixtureRes?.status()).toBe(200);
+    expect(await policiesOf(fixtureRes), "one header, the site's").toEqual(["camera=(), microphone=(), geolocation=()"]);
+    const onFixture = await probe();
+    expect(onFixture.allows).toEqual({ camera: false, microphone: false, geolocation: false });
+    expect(onFixture.camera, "refused by policy").toBe("NotAllowedError");
+    // Chrome reports that refusal itself, as the policy violation it is: expected here, and only here.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/Permissions policy violation: camera is not allowed/.test(e)));
+    await ctx.close();
+  } finally {
+    await camBrowser.close();
+  }
 });
 
 test("T17B fix 2: the seat's camera verdicts in the browser — a camera still starting keeps the check-in, its button waiting and the room re-asking each second; a browser that refused it gets the blocked card, whose Reload reloads — at every width", async ({
