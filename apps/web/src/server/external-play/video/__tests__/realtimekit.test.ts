@@ -13,7 +13,6 @@ import {
   hasLiveVideoPublisher,
   listMeetingSessions,
   listPeerIds,
-  realtimeKitConfigured,
   refreshParticipantToken,
   removeParticipant,
 } from "../realtimekit";
@@ -41,8 +40,23 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("realtimeKitConfigured", () => {
-  it("sweeps every combination of the five required variables and reports the count", () => {
+/** Whether this process is configured, as a PRODUCTION call finds out (`realtimeKitConfigured` had no runtime caller and
+ *  was removed, final review M-4): every RealtimeKit call refuses `unconfigured` before any request, or makes its one
+ *  request. */
+async function configuredByAProductionCall(): Promise<boolean> {
+  const stub = stubFetch([{ status: 200, body: { success: true, data: { token: "jwt-probe" } } }]);
+  try {
+    await refreshParticipantToken({ meetingId: "mtg-probe", participantId: "p-probe" }, { fetch: stub.fetch });
+  } catch (e) {
+    if ((e as RealtimeKitError).code === "unconfigured" && stub.calls.length === 0) return false;
+    throw e;
+  }
+  expect(stub.calls.length, "a configured call makes its request").toBe(1);
+  return true;
+}
+
+describe("the five required variables", () => {
+  it("sweeps every combination of the five required variables and reports the count", async () => {
     let checked = 0;
     let configured = 0;
     // 2^5 — each variable present or empty. There is NO default for any of
@@ -55,7 +69,7 @@ describe("realtimeKitConfigured", () => {
         if ((mask & (1 << i)) !== 0) overrides[k] = "";
       });
       configure(overrides as Partial<Record<(typeof ENV_KEYS)[number], string>>);
-      const got = realtimeKitConfigured();
+      const got = await configuredByAProductionCall();
       expect(got, `mask ${mask}`).toBe(mask === 0);
       if (got) configured += 1;
       checked += 1;
@@ -67,16 +81,16 @@ describe("realtimeKitConfigured", () => {
 });
 
 describe("the API token's name", () => {
-  it("is REALTIMEKIT_API_TOKEN: the wrangler deploy secret CLOUDFLARE_API_TOKEN never configures RealtimeKit", () => {
+  it("is REALTIMEKIT_API_TOKEN: the wrangler deploy secret CLOUDFLARE_API_TOKEN never configures RealtimeKit", async () => {
     // CLOUDFLARE_API_TOKEN is the GitHub Actions secret that deploys the cron
     // worker (prod.yml / stg.yml), with different scopes. One name per
     // credential, so a deploy token can never be pasted into runtime here.
     configure({ REALTIMEKIT_API_TOKEN: "" });
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "wrangler-deploy-token-0123456789");
-    expect(realtimeKitConfigured(), "the old name alone must not configure it").toBe(false);
+    expect(await configuredByAProductionCall(), "the old name alone must not configure it").toBe(false);
     // Positive control: the right name, everything else equal, does.
     configure();
-    expect(realtimeKitConfigured()).toBe(true);
+    expect(await configuredByAProductionCall()).toBe(true);
   });
 });
 

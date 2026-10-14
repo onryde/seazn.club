@@ -67,10 +67,6 @@ function readConfig(): Config | null {
   return { accountId, apiToken, appId, presets: { player, arbiter } };
 }
 
-export function realtimeKitConfigured(): boolean {
-  return readConfig() !== null;
-}
-
 function requireConfig(): Config {
   const cfg = readConfig();
   if (!cfg) {

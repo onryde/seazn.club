@@ -38,17 +38,10 @@ import { mapBoardgameClockToLichess, type BoardgameClockInput } from "./clock";
 
 export type TimeControl = { key: string; limitSeconds: number; incrementSeconds: number };
 
-/** M13's cutoff: blitz or slower. */
-export const BOARD_API_MIN_ESTIMATED_SECONDS = 180;
-
 /** Lichess's own estimate of a game's duration, which is what picks the speed
  *  bucket: the base clock plus 40 moves' worth of increment. */
 export function estimatedSeconds(tc: TimeControl): number {
   return tc.limitSeconds + 40 * tc.incrementSeconds;
-}
-
-export function isBoardApiPlayable(tc: TimeControl): boolean {
-  return estimatedSeconds(tc) >= BOARD_API_MIN_ESTIMATED_SECONDS;
 }
 
 /** The speeds Lichess names a game by (scalachess `Speed.scala`). */

@@ -248,12 +248,6 @@ function watchLinkRows(of: { divisionId: string } | { fixtureId: string }) {
      where ${"divisionId" in of ? sql`v.division_id = ${of.divisionId}` : sql`v.id = ${of.fixtureId}`}`;
 }
 
-/** Has this fixture's round been opened (D12)? Opening (T19's openRound)
- *  stamps `stage_round_opens` with the moment it happened. */
-export async function loadPublicRoundOpened(fixtureId: string): Promise<boolean> {
-  return (await loadPublicRoundOpenedAt(fixtureId)) !== null;
-}
-
 /** When this fixture's round was opened (D12), as the stamp says, or null. */
 export async function loadPublicRoundOpenedAt(fixtureId: string): Promise<string | null> {
   return (await roundOpenFor(sql, fixtureId))?.roundOpenedAt.toISOString() ?? null;
