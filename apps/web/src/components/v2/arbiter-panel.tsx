@@ -190,7 +190,7 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
 
   return (
     <div className={`min-w-0 bg-[#fdfcf8] ${INK}`}>
-      <header className="flex h-[52px] min-w-0 items-center gap-1 border-b border-[#e7e3f3] pr-4 pl-1 lg:h-16 lg:gap-4 lg:px-8">
+      <header className="flex h-[52px] min-w-0 items-center gap-1 border-b border-[#e7e3f3] pr-4 pl-1 lg:h-auto lg:min-h-16 lg:gap-4 lg:px-8 lg:py-2.5">
         <Link
           href={back}
           className="flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 text-sm text-[#2e1065] no-underline lg:justify-start lg:text-[#5b21b6]"
@@ -201,11 +201,15 @@ export function ArbiterScreen(p: ArbiterScreenProps) {
           <span className="max-lg:sr-only">{f.t("arbiter.back")}</span>
         </Link>
         <span aria-hidden="true" className="hidden h-6 w-px bg-[#e7e3f3] lg:block" />
-        <div className="flex min-w-0 flex-col lg:flex-row lg:items-center lg:gap-4">
-          {roundLine && <span className={`truncate text-xs lg:text-sm ${MUTED}`}>{roundLine}</span>}
-          <h1 className="m-0 text-[15px] font-semibold lg:text-base">{f.t("arbiter.title")}</h1>
+        {/* T17B fix 2 (D4): on a desktop the watch-only line is the title's second row, never a third column beside
+            it — beside it, it fought the round line for the row's width (and could run off the edge). */}
+        <div className="flex min-w-0 flex-col lg:gap-0.5">
+          <div className="flex min-w-0 flex-col lg:flex-row lg:items-center lg:gap-4">
+            {roundLine && <span className={`truncate text-xs lg:text-sm ${MUTED}`}>{roundLine}</span>}
+            <h1 className="m-0 text-[15px] font-semibold lg:text-base">{f.t("arbiter.title")}</h1>
+          </div>
+          {p.round && <p className={`m-0 hidden text-[13px] leading-[1.45] lg:block ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>}
         </div>
-        {p.round && <p className={`m-0 ml-auto hidden text-[13px] lg:block ${MUTED}`}>{f.t("arbiter.watchOnly")}</p>}
       </header>
 
       {p.requested === null && p.round !== null && <RoundNotes round={p.round} slugs={p.slugs} f={f} />}

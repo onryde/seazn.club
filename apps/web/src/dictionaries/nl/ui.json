@@ -6162,7 +6162,7 @@
   "arbiter.title": "Arbiter",
   "arbiter.back": "Terug naar het rondeschema",
   "arbiter.roundLine": "{stage} · Ronde {round}",
-  "arbiter.watchOnly": "Je kijkt alleen mee. De spelers kunnen je niet zien of horen, en ze zien elkaar nooit.",
+  "arbiter.watchOnly": "Je kijkt mee. De borden van de spelers zijn niet ingesteld om jou te laten zien of horen, of om elkaar te tonen.",
   "arbiter.boardsHeading": "Borden met camera",
   "arbiter.boardPicker": "Bord",
   "arbiter.boardNo": "Bord {n}",
