@@ -56,6 +56,8 @@ import { useRoom } from "./use-room";
 import { joinOwnCamera } from "./camera-loader";
 import { deliverCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
+import { HANDED } from "./camera-test";
+import { useCameraTest } from "./use-camera-test";
 import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
@@ -341,6 +343,11 @@ export function Screen({
     </>
   );
   const now = useServerNow(state.skewMs, 1_000);
+  // T17B fix 2, D15: the on-page camera test before Check in, camera "required" only. A seat answer that carried a
+  // participant token means the SDK has the camera (or is taking it): the test is then over — handed — and never asks.
+  const meetingJoined = state.seat?.participant != null;
+  const cameraTestOn = snap.cameraPolicy === "required" && !snap.you.checkedIn && !meetingJoined;
+  const camTest = useCameraTest(cameraTestOn);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
   const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
@@ -434,6 +441,7 @@ export function Screen({
             cameraOn={camera.status === "live"}
             busy={busy}
             checkingCamera={checkingCamera}
+            cameraTest={cameraDuty && !snap.you.checkedIn ? { ...camTest, view: meetingJoined ? HANDED : camTest.view } : null}
             onCheckIn={tryAgain}
             t={t}
             plural={plural}

@@ -1505,6 +1505,168 @@ test("T17B fix 1: the room's document may use the camera — served Permissions-
   }
 });
 
+test("T17B fix 2, D15: camera required — the camera is tested ON THE PAGE before Check in: before, testing, live, each refusal with Test again, a camera that stops; Check in releases the test camera BEFORE the seat is asked for — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  type W = { __tracks: MediaStreamTrack[]; __hold: Promise<void> | null; __release: (() => void) | null; __fail: string | null };
+  // Every camera track the page is handed, so the test reads their state; and, on demand, a held ask (the transient
+  // "testing" state, drawn) or a named refusal (each failure reached). Otherwise the REAL getUserMedia answers.
+  const instrument = (ctx: BrowserContext) =>
+    ctx.addInitScript(() => {
+      const w = window as unknown as W;
+      w.__tracks = [];
+      w.__hold = null;
+      w.__release = null;
+      w.__fail = null;
+      const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (c?: MediaStreamConstraints) => {
+        if (w.__hold) await w.__hold;
+        if (w.__fail) throw new DOMException("e2e", w.__fail);
+        const s = await real(c);
+        w.__tracks.push(...s.getTracks());
+        return s;
+      };
+    });
+  const tracks = (p: Page) => p.evaluate(() => (window as unknown as W).__tracks.map((t) => [t.kind, t.readyState]));
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  // A player who pressed Block: the camera permission DENIED, and no fake UI to answer for them. Measured: only the
+  // full Chromium's headless mode then answers NotAllowedError — headless-shell answers NotSupportedError to any
+  // ask without the fake UI, and the fake UI grants even a denied permission. `playwright install chromium` ships it.
+  const denyBrowser = await browser.browserType().launch({ channel: "chromium", args: ["--use-fake-device-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    await instrument(ctx);
+    const p = await openRoom(ctx, room, room.white.token);
+    expect(await screenOf(p)).toBe("checkin");
+    const cta = p.getByTestId("room-checkin-cta");
+    const testCta = p.getByTestId("room-checkin-test-cta");
+    const failure = p.getByTestId("room-checkin-test-failure");
+
+    // Before the test: Check in waits, and the page says how to open it. Nothing asked for yet.
+    await expect(cta).toBeDisabled();
+    await expect(testCta).toHaveText(uiEn["externalPlay.room.checkin.test.cta"]!);
+    await expect(p.getByText(uiEn["externalPlay.room.checkin.test.needed"]!)).toBeVisible();
+    expect(await tracks(p)).toEqual([]);
+    expect(await noSidewaysScroll(p, ALL_WIDTHS), "anti-vacuity: widths").toBe(ALL_WIDTHS.length);
+    await shoot(p, "d15-before");
+
+    // Testing: the ask held open — the test button waits and says so; Check in still waits.
+    await p.evaluate(() => {
+      const w = window as unknown as W;
+      w.__hold = new Promise<void>((r) => (w.__release = r));
+    });
+    await testCta.click();
+    await expect(testCta).toBeDisabled();
+    await expect(testCta).toHaveText(uiEn["externalPlay.room.checkin.test.starting"]!);
+    await expect(cta).toBeDisabled();
+    await shoot(p, "d15-testing");
+    await p.evaluate(() => {
+      const w = window as unknown as W;
+      w.__hold = null;
+      w.__release?.();
+    });
+
+    // Live: the preview painted a frame of the camera, and only then does Check in open.
+    await expect(cta).toBeEnabled({ timeout: 10_000 });
+    await expect(p.getByTestId("room-own-tile")).toHaveAttribute("data-stream", "on");
+    await expect(p.getByTestId("room-own-tile")).toContainText(uiEn["externalPlay.room.checkin.cameraOn"]!);
+    await expect(testCta, "a working camera needs no test button").toHaveCount(0);
+    expect(await tracks(p), "the camera only — no microphone").toEqual([["video", "live"]]);
+    expect(await noSidewaysScroll(p, ALL_WIDTHS)).toBe(ALL_WIDTHS.length);
+    await shoot(p, "d15-live");
+
+    // The camera stops before Check in (unplugged, taken by another app): Check in waits again, and says so.
+    await p.evaluate(() => (window as unknown as W).__tracks[0]!.dispatchEvent(new Event("ended")));
+    await expect(failure).toHaveAttribute("data-failure", "ended");
+    await expect(failure).toHaveText(uiEn["externalPlay.room.checkin.test.ended"]!);
+    await expect(cta).toBeDisabled();
+    await shoot(p, "d15-ended");
+
+    // Each refusal the brief names, in its own words, with Test again — and Check in waits after each (counted).
+    let refused = 0;
+    for (const [name, kind] of [["NotFoundError", "notFound"], ["NotReadableError", "inUse"], ["OverconstrainedError", "other"]] as const) {
+      await p.evaluate((n) => ((window as unknown as W).__fail = n), name);
+      await testCta.click();
+      await expect(failure, name).toHaveAttribute("data-failure", kind);
+      await expect(failure, name).toHaveText(uiEn[`externalPlay.room.checkin.test.${kind}`]!);
+      await expect(testCta, name).toHaveText(uiEn["externalPlay.room.checkin.test.again"]!);
+      await expect(cta, name).toBeDisabled();
+      expect(await noSidewaysScroll(p, ALL_WIDTHS)).toBe(ALL_WIDTHS.length);
+      await shoot(p, `d15-${kind}`);
+      refused += 1;
+    }
+    expect(refused).toBe(3);
+
+    // Test again, the camera back: live again.
+    await p.evaluate(() => ((window as unknown as W).__fail = null));
+    await testCta.click();
+    await expect(cta).toBeEnabled({ timeout: 10_000 });
+
+    // Check in: the test camera is released BEFORE the seat is asked for (read as the claim arrives). The verdict is
+    // composed at the route, as the D2 test below does (no browser here can make a RealtimeKit peer).
+    const atClaim: unknown[] = [];
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        if (atClaim.length === 0) atClaim.push(await tracks(p));
+        const read = await route.fetch({ method: "GET" });
+        const snapshot = ((await read.json()) as { data: unknown }).data;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+            requestId: "e2e",
+          }),
+        });
+      },
+    );
+    await cta.click();
+    await expect(cta, "the seat is being asked: the D2 wait").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+    expect(atClaim, "every test track had ended when the seat was asked for").toEqual([[["video", "ended"], ["video", "ended"]]]);
+    await expect(testCta, "handed over: no test to press").toHaveCount(0);
+    await ctx.close();
+    // The SDK then joins with the token composed above, and the vendor's SDK refuses it, as it refuses the kit's own
+    // tokens: expected here, and only here (the D2 test's browser has no camera, so its SDK never joins).
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+
+    // A real refusal: the browser's own answer to a camera the player blocked.
+    const dctx = await cold(denyBrowser);
+    await instrument(dctx);
+    const d = await openRoom(dctx, room, room.black.token);
+    const cdp = await dctx.newCDPSession(d);
+    const { targetInfo } = await cdp.send("Target.getTargetInfo");
+    await cdp.send("Browser.setPermission", {
+      permission: { name: "camera" },
+      setting: "denied",
+      origin: new URL(d.url()).origin,
+      browserContextId: targetInfo.browserContextId,
+    });
+    expect(await d.evaluate(() => navigator.permissions.query({ name: "camera" as PermissionName }).then((r) => r.state)), "premise: blocked").toBe("denied");
+    expect(await screenOf(d)).toBe("checkin");
+    await d.getByTestId("room-checkin-test-cta").click();
+    await expect(d.getByTestId("room-checkin-test-failure")).toHaveAttribute("data-failure", "denied");
+    await expect(d.getByTestId("room-checkin-test-failure")).toHaveText(uiEn["externalPlay.room.checkin.test.denied"]!);
+    await expect(d.getByTestId("room-checkin-test-cta")).toHaveText(uiEn["externalPlay.room.checkin.test.again"]!);
+    await expect(d.getByTestId("room-checkin-cta")).toBeDisabled();
+    expect(await noSidewaysScroll(d, ALL_WIDTHS)).toBe(ALL_WIDTHS.length);
+    await shoot(d, "d15-denied");
+    await dctx.close();
+  } finally {
+    await camBrowser.close();
+    await denyBrowser.close();
+  }
+});
+
 test("T17B fix 2: the seat's camera verdicts in the browser — a camera still starting keeps the check-in, its button waiting and the room re-asking each second; a browser that refused it gets the blocked card, whose Reload reloads — at every width", async ({
   page,
   browser,

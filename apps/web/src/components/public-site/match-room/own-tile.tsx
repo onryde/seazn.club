@@ -14,6 +14,8 @@ type Props = {
   variant?: "room" | "checkin";
   /** Check-in only: the "Camera on" chip shows only while a stream runs. */
   cameraOn?: boolean;
+  /** T17B fix 2 (D15): called once the preview has PAINTED a frame of `stream` — the camera test's proof. */
+  onFrame?: (stream: MediaStream) => void;
   t: RoomT;
 };
 
@@ -26,7 +28,7 @@ function Silhouette({ size }: { size: number }) {
   );
 }
 
-export function OwnTile({ policy, stream, variant = "room", cameraOn = false, t }: Props) {
+export function OwnTile({ policy, stream, variant = "room", cameraOn = false, onFrame, t }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const el = video.current;
@@ -34,6 +36,37 @@ export function OwnTile({ policy, stream, variant = "room", cameraOn = false, t 
     el.srcObject = stream;
     if (stream) void el.play().catch(() => {});
   }, [stream]);
+  // D15: the frame proof — a frame of THIS stream presented by the preview (requestVideoFrameCallback), or, where the
+  // browser has none, the first decoded frame (`loadeddata` with a width). Never a timer: no frame, no proof.
+  useEffect(() => {
+    const el = video.current;
+    if (!el || !stream || !onFrame) return;
+    let done = false;
+    const prove = () => {
+      if (done || el.videoWidth === 0) return;
+      done = true;
+      onFrame(stream);
+    };
+    if (typeof el.requestVideoFrameCallback === "function") {
+      // A presented frame without a size yet asks for the next one.
+      const tick = () => {
+        prove();
+        if (!done) id = el.requestVideoFrameCallback(tick);
+      };
+      let id = el.requestVideoFrameCallback(tick);
+      return () => {
+        done = true;
+        el.cancelVideoFrameCallback(id);
+      };
+    }
+    const onData = () => prove();
+    el.addEventListener("loadeddata", onData);
+    if (el.readyState >= 2) prove();
+    return () => {
+      done = true;
+      el.removeEventListener("loadeddata", onData);
+    };
+  }, [stream, onFrame]);
   if (policy === "off") return null;
   const checkin = variant === "checkin";
   return (
