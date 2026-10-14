@@ -1513,9 +1513,11 @@ describe.skipIf(!HAS_DB)("ruling D-G3, answered by W2b (spec §5.4), and the tab
     expect(await completionOrRefusal(l.auth, l.stageId), "second").toEqual({ completed: true, ranks: null });
   });
 
-  it("table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal's abandons (all recorded, outcome null) still completes — a league has no settle to wait for", async () => {
-    // single-sport: badminton — its abandon folds to outcome null, exactly the shape bracketEngineStatus would hold
-    // open; the league must not. The exclusion D-G1 rests on (competition.ts, the tableFixtures map).
+  it("table stages: a scorer's abandon HOLDS completion until the organiser settles it, a withdrawal's EXPUNGE never does (X-AB-5; ruling 105)", async () => {
+    // single-sport: badminton - its abandon folds to outcome null, exactly the shape completionEngineStatus holds
+    // open. W2a kept the league's void ("a league has no settle to wait for"); X-AB-5 gave a table stage the settle, so a
+    // plain abandon is owed one and the explicit Complete refuses until it is given - while an expunge (the match left
+    // the table) is closed for good, so a withdrawal cannot block a stage forever.
     const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "league", entrants: 4 });
     const bySeed = (await sql<{ id: string }[]>`select id from entrants where division_id = ${s.divisionId} order by seed`).map((r) => r.id);
     const leaver = bySeed[3]!;
@@ -1530,14 +1532,19 @@ describe.skipIf(!HAS_DB)("ruling D-G3, answered by W2b (spec §5.4), and the tab
         select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon'
           and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))`;
     expect(recorded.length, "four recorded abandons: the scorer's and the withdrawal's three").toBe(4);
-    expect(recorded.every((r) => r.status === "abandoned" && r.outcome === null), "every one the held-in-a-bracket shape").toBe(true);
-    await expect(post(s.auth, rained.id, "core.settle", { winner: rained.home_entrant_id, method: SETTLE_BY_ORGANISER }), "no settle outside a bracket").rejects.toMatchObject({
-      code: "SETTLE_NOT_APPLICABLE",
-    });
+    expect(recorded.every((r) => r.status === "abandoned" && r.outcome === null), "every one the same stored shape: only the payload tells them apart").toBe(true);
     const played = await playOutExcept(s.auth, s.stageId, walkoverForHome, new Set());
     expect(played, "the two remaining matches").toBe(2);
+    // The held match is the ONLY thing open: the three expunged boards do not count, and the refusal names just the one.
+    const held = await completionOrRefusal(s.auth, s.stageId);
+    expect(held, "the league does not complete around the scorer's abandon").toEqual({ refused: "STAGE_NOT_READY" });
+    const [open] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
+    expect(open!.status, "the stage is still open").toBe("active");
+    // A league takes the settle (X-AB-5), and then completes.
+    await post(s.auth, rained.id, "core.settle", { winner: rained.home_entrant_id, method: SETTLE_BY_ORGANISER });
+    expect((await fixtureRow(rained.id)).status, "the settle decided the match").toBe("decided");
     const c = await completionOrRefusal(s.auth, s.stageId);
-    expect(c.completed, "the league completes: its abandoned matches are void").toBe(true);
+    expect(c.completed, "settled, the league completes; the expunged boards never held it").toBe(true);
     const [st] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
     expect(st!.status).toBe("complete");
   });

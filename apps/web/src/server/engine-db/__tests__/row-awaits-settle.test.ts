@@ -6,7 +6,8 @@
 // nothing) and from the engine's own kind sets, never from the function under test.
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind, settleOffered } from "@seazn/engine/core";
-import { abandonAwaitsSettle, rowAwaitsSettle } from "../recorded-abandon";
+import { engineFixtureStatus } from "@/lib/fixture-engine-status";
+import { completionEngineStatus, rowAwaitsSettle } from "../recorded-abandon";
 import { fixtureAwaitsSettle } from "@/server/usecases/competition-desk";
 
 type Row = { status: string; outcome: unknown; has_active_abandon: boolean; expunged?: boolean };
@@ -78,13 +79,33 @@ describe("rowAwaitsSettle: the stored-row reading agrees with the engine's settl
     expect(checked).toBe(StageKind.options.length * ROWS.length);
   });
 
-  it("the bracket-only reader (bracketEngineStatus's) is unchanged: it ignores the stage and reads the bracket arm", () => {
+  it("completionEngineStatus (what every stage-COMPLETION read gives a fixture): a held row is in play, every other row keeps the plain engine status - bracket AND table (N2)", () => {
     let checked = 0;
-    for (const [why, row, inBracket] of ROWS) {
-      if (inBracket === null) continue; // unreachable in a bracket (above)
-      expect(abandonAwaitsSettle(row), why).toBe(inBracket);
-      checked++;
+    let held = 0;
+    for (const kind of StageKind.options)
+      for (const [why, row, inBracket, inTable] of ROWS) {
+        const want = BRACKET_KINDS.has(kind) ? inBracket : inTable;
+        if (want === null) continue; // an expunge in a bracket is unreachable (above)
+        const got = completionEngineStatus(kind, row);
+        // The expected value is the rule (held => in play) and the repo's own plain mapping, never the function under test.
+        expect(got, `${kind}: ${why}`).toBe(want ? "in_play" : engineFixtureStatus(row.status));
+        if (want) held++;
+        checked++;
+      }
+    expect(checked).toBe(StageKind.options.length * ROWS.length - BRACKET_KINDS.size);
+    expect(held, "some rows are held").toBeGreaterThan(0);
+    // The two rows a table stage must read DIFFERENTLY though they are stored alike (abandoned, no outcome): a scorer's
+    // abandon is held (in play), a withdrawal's expunge is a void (settled) - this is the completion hole of N2.
+    for (const kind of DRAW_KINDS) {
+      const plain = { status: "abandoned", outcome: null, has_active_abandon: true } satisfies Row;
+      expect(completionEngineStatus(kind, plain), `${kind}: a plain abandon is in play`).toBe("in_play");
+      expect(completionEngineStatus(kind, { ...plain, expunged: true }), `${kind}: an expunge is void`).toBe("void");
+      expect(completionEngineStatus(kind, { ...plain, has_active_abandon: false }), `${kind}: the generator's void is void`).toBe("void");
     }
-    expect(checked).toBe(ROWS.length - 1);
+  });
+
+  it("a fixture outside any stage reads as a table here too", () => {
+    expect(completionEngineStatus(null, { status: "abandoned", outcome: null, has_active_abandon: true })).toBe("in_play");
+    expect(completionEngineStatus(undefined, { status: "abandoned", outcome: null, has_active_abandon: false })).toBe("void");
   });
 });

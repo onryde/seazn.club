@@ -277,6 +277,50 @@ describe("v1 envelope", () => {
     expect(checked).toBe(cases.length);
   });
 
+  // W2c X-AB-5 (fix round 2, N2): the explicit Complete of a table stage is refused by NAME while a match is held for the
+  // settle. Same envelope as the Swiss boards, another reason: read at the wire.
+  it("N2: STAGE_NOT_READY reason=abandoned_matches forwards the held matches in order (the stage's own data stays out)", async () => {
+    const abandoned = [
+      { fixtureId: "f-2", round: 1, board: 2 },
+      { fixtureId: "f-9", round: 3, board: 1 },
+    ];
+    const res = await v1(async () => {
+      throw new EngineError("STAGE_NOT_READY", "stage has matches abandoned without a result - settle them first", {
+        stageId: "s1",
+        reason: "abandoned_matches",
+        abandoned,
+      });
+    });
+    expect(res.status).toBe(422);
+    expect((await body(res)).error).toEqual({
+      code: "STAGE_NOT_READY",
+      message: "stage has matches abandoned without a result - settle them first",
+      reason: "abandoned_matches",
+      abandoned,
+    });
+  });
+
+  it("N2 empty/negative cases: no list, an empty list, a malformed entry, or the Swiss reason's shape under the wrong reason forwards code + message only", async () => {
+    const good = { fixtureId: "f-2", round: 1, board: 2 };
+    const cases: [string, unknown][] = [
+      ["the reason with no matches", { stageId: "s1", reason: "abandoned_matches" }],
+      ["the reason with an empty list", { stageId: "s1", reason: "abandoned_matches", abandoned: [] }],
+      ["an entry without a fixture id", { reason: "abandoned_matches", abandoned: [{ round: 1, board: 2 }] }],
+      ["a fractional round", { reason: "abandoned_matches", abandoned: [{ ...good, round: 1.5 }] }],
+      ["one good entry and one malformed", { reason: "abandoned_matches", abandoned: [good, { fixtureId: "x", round: 1, board: 0 }] }],
+      ["matches under a reason nobody names", { reason: "made_up", abandoned: [good] }],
+    ];
+    let checked = 0;
+    for (const [why, data] of cases) {
+      const res = await v1(async () => {
+        throw new EngineError("STAGE_NOT_READY", "m", data);
+      });
+      expect((await body(res)).error, why).toEqual({ code: "STAGE_NOT_READY", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
   // W2c P-5 (fix round 1): CONFIG_INVALID carries the PROBLEM in `data.issues` (zod's issue list - the rule's own
   // sentence, e.g. the carrom share refinement), not in the generic message. http.ts did not forward it, so a refused
   // setting told the organiser nothing about what to change.

@@ -12,6 +12,7 @@ import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
 import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
+import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { configIssuesOf } from "@/lib/config-issue-copy";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
@@ -248,6 +249,12 @@ async function v1Inner<T>(
       if (err.code === "STAGE_NOT_READY" && (err.data as { reason?: unknown } | undefined)?.reason === SWISS_ABANDONED_BOARDS_REASON) {
         const abandoned = abandonedBoardsOf(err.data);
         if (abandoned) extra = { reason: SWISS_ABANDONED_BOARDS_REASON, abandoned };
+      }
+      // W2c X-AB-5 (fix round 2, N2): Complete stage is refused while a TABLE stage holds a match for the organiser's
+      // settle; the refusal names the matches the same way (lib/abandoned-matches-refusal.ts), under its own reason.
+      if (err.code === "STAGE_NOT_READY" && (err.data as { reason?: unknown } | undefined)?.reason === ABANDONED_MATCHES_REASON) {
+        const abandoned = heldMatchesOf(err.data);
+        if (abandoned) extra = { reason: ABANDONED_MATCHES_REASON, abandoned };
       }
       // W2c owner P-5 (fix round 1): a refused match-rules save names its PROBLEM in `data.issues` (the rule's own
       // sentence on the field's path - the share-on-abandon refusals); the generic message alone told the organiser

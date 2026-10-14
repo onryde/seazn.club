@@ -9,11 +9,11 @@ import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
 // mapping, shared with the qualification builder and the bracket rebuild in
 // usecases/stages.ts; the local name is kept so the call sites read as before.
-import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "./level-seat";
 import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
-import { bracketEngineStatus, hasActiveAbandonSql } from "./recorded-abandon";
+import { completionEngineStatus, hasActiveAbandonSql, rowAwaitsSettle } from "./recorded-abandon";
+import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
@@ -226,7 +226,7 @@ function toBracketFixture(
     round: f.round_no,
     isFinal: !thirdPlace,
     // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
-    status: bracketEngineStatus(f),
+    status: completionEngineStatus(stageKind, f),
     ...(bracket !== undefined ? { bracket } : {}),
     ...(thirdPlace ? { thirdPlace: true } : {}),
     ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -281,9 +281,14 @@ interface FixtureRow {
   /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
    *  fixture's lane and thirdPlace status. */
   ext_key: string | null;
-  /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by the bracket and ladder
-   *  completion branches through `bracketEngineStatus`. */
+  /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by every completion branch
+   *  through `completionEngineStatus`. */
   has_active_abandon: boolean;
+  /** X-AB-5: that active abandon is a withdrawal's EXPUNGE (owner ruling 105) — the match left the table, nothing is
+   *  owed on it, so it never holds a completion. */
+  expunged: boolean;
+  /** The match's number within its round - names a held match in the refusal (`completeStageIfReady`). */
+  seq_in_round: number;
   /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
   winner_to_fixture: string | null;
   winner_to_slot: number | null;
@@ -330,8 +335,9 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
            f.outcome, f.config_snapshot, f.rules_override, f.ext_key, m.state,
-           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
-           ${hasActiveAbandonSql(tx)} as has_active_abandon
+           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot, f.seq_in_round,
+           ${hasActiveAbandonSql(tx)} as has_active_abandon,
+           ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round
@@ -362,7 +368,9 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   const tableFixtures: TableFixture[] = fixtures.map((f) => {
     const base: TableFixture = {
       id: f.id,
-      status: toEngineStatus(f.status),
+      // X-AB-5: a TABLE stage's recorded abandon that decided nobody is held for the settle, not the generator's void
+      // (a withdrawal's expunge stays void: it left the table). The same predicate as a bracket's (D-G1).
+      status: completionEngineStatus(kind, f),
       ...(f.pool_id ? { poolId: f.pool_id } : {}),
       roundNo: f.round_no,
     };
@@ -645,6 +653,26 @@ export async function completeStageIfReady(
     if (isTable) {
       const tableStage = toTableStage(inputs);
       if (!isTableStageComplete(tableStage, inputs.tableFixtures)) {
+        // X-AB-5 (N2): a held match reads in play above, so it is what keeps the stage open. When it is the ONLY thing
+        // left - every other match is settled - say so BY NAME, instead of the soft "not ready" an organiser reads as
+        // "play something". Counterfactual: the same stage with the held matches counted settled would complete.
+        const held = inputs.fixtures.filter((f) => rowAwaitsSettle(inputs.kind, f));
+        if (held.length > 0) {
+          const heldIds = new Set(held.map((f) => f.id));
+          const onlyHeld = isTableStageComplete(
+            tableStage,
+            inputs.tableFixtures.map((f) => (heldIds.has(f.id) ? { ...f, status: "void" as const } : f)),
+          );
+          if (onlyHeld) {
+            const abandoned = held.map((f) => ({ fixtureId: f.id, round: f.round_no, board: f.seq_in_round }));
+            const named = abandoned.map((m) => `round ${m.round} match ${m.board}`).join(", ");
+            throw new EngineError(
+              "STAGE_NOT_READY",
+              `stage has ${abandoned.length === 1 ? "a match" : "matches"} abandoned without a result - settle ${abandoned.length === 1 ? "it" : "them"} first: ${named}`,
+              { stageId, reason: ABANDONED_MATCHES_REASON, abandoned },
+            );
+          }
+        }
         return { completed: false, events: [] };
       }
       const completed = completeTableStage(tableStage, inputs.tableFixtures);
@@ -654,7 +682,7 @@ export async function completeStageIfReady(
       }
     } else if (inputs.kind === "ladder") {
       // Jul3/08 §6 — no table/bracket shape of its own: complete once every
-      // challenge fixture is settled (SETTLED per toEngineStatus — decided,
+      // challenge fixture is settled (SETTLED per the engine status — decided,
       // walkover or void), ranked by the ladder position players fought their
       // way into (usecases/scoring.ts swaps winner/loser on each decided
       // challenge). Zero fixtures ever issued is NOT complete — same as an
@@ -663,7 +691,7 @@ export async function completeStageIfReady(
       // issueChallenge.
       const open = inputs.fixtures.some((f) => {
         // D-G1: an abandoned challenge nobody settled is still open (recorded-abandon.ts), not the void it used to read as.
-        const status = bracketEngineStatus(f);
+        const status = completionEngineStatus(inputs.kind, f);
         return status === "scheduled" || status === "in_play";
       });
       if (inputs.fixtures.length === 0 || open) {
@@ -712,7 +740,7 @@ export async function completeStageIfReady(
       // Right for a departed entrant whose line the generator voided (F14, walkoverDepartedQualifiers); wrong for
       // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided
       // nobody, and the loop G review measured exactly that: an abandoned final ranked its two finalists 3rd and
-      // 4th behind the semi-final losers. A recorded abandon now holds the stage open (bracketEngineStatus), so
+      // 4th behind the semi-final losers. A recorded abandon now holds the stage open (completionEngineStatus), so
       // that path no longer reaches here. The one PRODUCT path W2a left (loop G re-review, probe P2; ruling D-G3) —
       // a stepladder qualifier departed before the draw, her final voided with her seated in it and the climber
       // seated into the void row — is gone too: W2b's generator stamps her seat dead instead (spec §5.4 corner 3,

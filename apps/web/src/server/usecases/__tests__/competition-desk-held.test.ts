@@ -26,7 +26,7 @@ const post = async (auth: Parameters<typeof scoreEvent>[0], id: string, type: st
   scoreEvent(auth, id, { expected_seq: await seq(id), type, payload } as never);
 const status = async (id: string) => (await sql<{ status: string }[]>`select status from fixtures where id = ${id}`)[0]!.status;
 
-/** generic/score: its abandon folds to `no_result` (a LEVEL outcome), the shape `abandonAwaitsSettle` names. */
+/** generic/score: its abandon folds to `no_result` (a LEVEL outcome), the shape `rowAwaitsSettle` names. */
 async function bracket(stageKind: "knockout" | "league", entrants: number) {
   const s = await seedBracket({ sport: "generic", variant: declaredVariant("generic", "score"), stageKind, entrants });
   return { ...s, f: s.fixtureIds[0]! };

@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
+import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -694,7 +695,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         } else {
           // The stage list lets an early Generate on a waiting stage name
           // both stages (generatePreconditionMessage).
-          const classified = classifyActError(err, msg, locale, (id) => stages.find((s) => s.id === id)?.name);
+          const classified = classifyActError(
+            err,
+            msg,
+            locale,
+            (id) => stages.find((s) => s.id === id)?.name,
+            matchNamerFor(fixtures, entrantNames),
+          );
           if (classified.tone === "warning") setWarning(classified.text);
           else setError(classified.text);
           if (classified.refresh) router.refresh();
@@ -1833,6 +1840,7 @@ export function classifyActError(
   msg: Msg,
   locale: Locale,
   stageName?: StageNameLookup,
+  matchName?: MatchNameLookup,
 ): { tone: "warning" | "error"; text: string; refresh: boolean } {
   // F3 ultrareview finding 4 — the completion COMMITTED in its own
   // transaction; only the next stage's seed proposal failed afterwards
@@ -1865,7 +1873,7 @@ export function classifyActError(
   if (err instanceof ApiV1Error && err.code === "STAGE_SEAT_DEPARTED") {
     return { tone: "warning", text: scoringErrorText(err.code, err.message, msg, "schedule.error.failed", err.extra), refresh: false };
   }
-  const precondition = generatePreconditionMessage(err, msg, stageName);
+  const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
   // regardless of locale for every SEEDING_* code this panel can raise
@@ -1898,10 +1906,29 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
  *  hold that stage. */
 export type StageNameLookup = (stageId: string) => string | undefined;
 
+/** Fixture id → who plays it ("Ana – Ben"), or undefined when the board does not hold that match (or its seats are
+ *  not both filled). Names a held match in the Complete-stage refusal. */
+export type MatchNameLookup = (fixtureId: string) => string | undefined;
+
+/** The board's lookup for a held match: "Ana – Ben" from the fixture's two seats (an entrant it cannot name reads "?"),
+ *  undefined when the board does not hold the fixture or a seat is empty - the caller then says round and number. */
+export function matchNamerFor(
+  fixtures: readonly { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[],
+  entrantNames: Readonly<Record<string, string>>,
+): MatchNameLookup {
+  return (id) => {
+    const f = fixtures.find((x) => x.id === id);
+    return f?.home_entrant_id && f.away_entrant_id
+      ? `${entrantNames[f.home_entrant_id] ?? "?"} – ${entrantNames[f.away_entrant_id] ?? "?"}`
+      : undefined;
+  };
+}
+
 export function generatePreconditionMessage(
   err: unknown,
   msg: Msg,
   stageName?: StageNameLookup,
+  matchName?: MatchNameLookup,
 ): string | null {
   if (!(err instanceof ApiV1Error) || err.code !== "STAGE_NOT_READY") return null;
   // An `on_complete` progression stage pressed Generate before its source
@@ -1927,6 +1954,17 @@ export function generatePreconditionMessage(
     if (boards === null) return null;
     const named = boards.map((b) => msg("schedule.error.swissAbandonedRef", { round: b.round, board: b.board })).join(", ");
     return msg(boards.length === 1 ? "schedule.error.swissAbandonedOne" : "schedule.error.swissAbandonedMany", { boards: named });
+  }
+  // W2c X-AB-5 (fix round 2, N2): Complete stage is refused while a table stage holds a match for the organiser's settle.
+  // Named by its players where this board can (it renders every match of the division), else by round and number - in
+  // the reader's language, never the wire sentence. A shape that does not parse keeps the code's own copy (null).
+  if (err.extra.reason === ABANDONED_MATCHES_REASON) {
+    const held = heldMatchesOf(err.extra);
+    if (held === null) return null;
+    const named = held
+      .map((h) => matchName?.(h.fixtureId) ?? msg("schedule.error.heldMatchRef", { round: h.round, board: h.board }))
+      .join(", ");
+    return msg(held.length === 1 ? "schedule.error.completeHeldOne" : "schedule.error.completeHeldMany", { matches: named });
   }
   if (err.extra.reason === "group_too_few_entrants") {
     const groups = Number(err.extra.groups ?? 1);
