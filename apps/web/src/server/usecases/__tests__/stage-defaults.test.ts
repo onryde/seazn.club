@@ -684,7 +684,7 @@ describe.skipIf(!HAS_DB)("R-T12-4 replaceStages keeps an organiser's cleared pre
     const [ko] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
     await putStageRules(auth, ko!.id, { rules: { [cleared]: null } });
     const [after] = await replaceStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: { rules: { shootoutAttempts: 4 } }, progression: null });
-    const { [cleared]: _gone, ...rest } = preset;
+    const rest = Object.fromEntries(Object.entries(preset).filter(([k]) => k !== cleared));
     expect((await stageConfig(after!.id)).rules, `${cleared} stays cleared; the body's key lands`).toEqual({ ...rest, shootoutAttempts: 4 });
   });
 });

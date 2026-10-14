@@ -44,16 +44,22 @@ describe("M-4 seedBracket's `stageRules: {}` is refused where the division plays
     expect(Object.fromEntries(playing)).toEqual(PLAYS_ITS_OWN);
   });
 
-  it("refuses `{}` for the named variants by name, before any write; their held rig is decidersOffRules", async () => {
+  it("refuses `{}` for the named variants by name, before any I/O; their held rig is decidersOffRules", async () => {
     let refused = 0;
     for (const where of Object.keys(PLAYS_ITS_OWN)) {
       const [sport, variant] = where.split("/") as [string, string];
       const m = builtinModules.find((x) => x.key === sport) as AnySportModule;
-      const before = HAS_DB ? (await sql<{ n: number }[]>`select count(*)::int as n from organizations`)[0]!.n : 0;
-      await expect(seedBracket({ sport, variant, stageKind: "knockout", entrants: 2, stageRules: {} })).rejects.toThrow(
+      // Before any write: the call has already settled when the event loop first reaches I/O, so not one query ran (a
+      // global row count races the other suites' parallel writes).
+      const seeded = seedBracket({ sport, variant, stageKind: "knockout", entrants: 2, stageRules: {} });
+      const settled = await Promise.race([
+        seeded.then(() => "seeded", (e: unknown) => e),
+        new Promise((r) => setImmediate(() => r("still running when I/O was reached"))),
+      ]);
+      expect(settled, `${where}: refused before any I/O`).toBeInstanceOf(Error);
+      expect((settled as Error).message).toMatch(
         new RegExp(`stageRules \\{\\} is not every decider off for ${sport}/${variant} — its division plays ${PLAYS_ITS_OWN[where]!.join(", ")}`),
       );
-      if (HAS_DB) expect((await sql<{ n: number }[]>`select count(*)::int as n from organizations`)[0]!.n, `${where}: nothing written`).toBe(before);
       // The held rig for these variants switches every decider off explicitly: nothing left for the division to play.
       expect(Object.keys(decidersOffRules(m, variant, "knockout")).length, `${where}: a held rig exists`).toBeGreaterThan(0);
       refused++;
