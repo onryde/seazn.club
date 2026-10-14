@@ -589,7 +589,8 @@ describe("no status — stated first, each with its positive pair", () => {
     expect(view({ ...s, fixtures: [...s.fixtures, ...expunged] }, { entrantStatuses: rest })).toBeNull();
     expect(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: "confirmed" } })).toBeNull();
     // One line NOT expunged (a plain recorded abandon, or still scheduled): her points can still move — hidden.
-    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false }];
+    // (A recorded abandon says so - `has_active_abandon` - or the fixture itself would be unreadable, X-AB-5.)
+    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false, has_active_abandon: true }];
     expect(view({ ...s, fixtures: [...s.fixtures, ...plain], statuses: { E: "withdrawn" } })).toBeNull();
     expect(view({ ...s, fixtures: [...s.fixtures, expunged[0]!, eOpen[1]!], statuses: { E: "withdrawn" } })).toBeNull();
   });
@@ -1583,6 +1584,147 @@ describe("wording", () => {
     expect(v.rows.A!.ariaLabel).toBe("Posición 1, Gana y pasa, ver detalles");
     expect(v.table.label).toBe("Los 2 primeros pasan a Finals · queda 1 ronda");
     expect(v.rows.D!.ifYouLose).toBe("Si pierdes tu próximo partido, quedas eliminado.");
+  });
+});
+
+// W2c X-AB-5 / N2 (post-merge item): a recorded abandon that decided nobody is HELD for the organiser's settle - the desk
+// shows it, `POST /stages/{id}/complete` refuses around it (`completionEngineStatus`) - so the PUBLIC table must not call
+// anybody's fate while it stands. The builder reads the SAME predicate (`rowAwaitsSettle`): the stored row is `abandoned`
+// either way, and only the ledger (`has_active_abandon`, `expunged`) tells a plain abandon (held) from a withdrawal's
+// expunge or a generator's void (closed). Expected statuses come from the ENGINE on the snapshot, run with the held match
+// counted as one still to come (held) and as gone (closed) - never from the builder - and every scene proves the two
+// readings DIFFER for the entrant it is about, or the test could not tell the predicate from its absence.
+describe("a match held for settle is still open (X-AB-5; the public table reads completion's predicate)", () => {
+  const kindsFor = (rows: readonly StandingsRow[], remaining: Record<string, number>, cut: number) => {
+    const out = qualificationStatus({
+      rows: rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
+      remaining: new Map(Object.entries(remaining)),
+      perMatch: BOUNDS,
+      cut,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    return Object.fromEntries(rows.map((r) => [r.entrantId, out.get(r.entrantId)!.status.kind]));
+  };
+  const kindsOf = (v: QualificationView) => Object.fromEntries(Object.entries(v.rows).map(([id, r]) => [id, r.status]));
+  const DECIDED = ["through", "out"];
+  /** A recorded abandon as the public read carries it: stored `abandoned`, no outcome, an active ledger entry. */
+  const plain = (home: string, away: string, over: Partial<QualFixture> = {}) =>
+    fx(3, home, away, "abandoned", null, { has_active_abandon: true, expunged: false, ...over });
+
+  // League of four, cut 2: r1 A>D, C>B; r2 A>C, B>D; r3 C-D still to play and A-B `ab`. Before r3: A 6, B 3, C 3, D 0.
+  const BEFORE = open4().rows;
+  const AFTER = [row("A", 1, 3, 3, [3, 0]), row("B", 2, 1, 3, [1, 2]), row("C", 3, 1, 2, [1, 1]), row("D", 4, 0, 2, [0, 2])];
+  const league = (ab: QualFixture, rows: StandingsRow[] = BEFORE): Scene => ({
+    ...open4({}, [["C", "D"]]),
+    rows,
+    fixtures: [...open4({}, [["C", "D"]]).fixtures, ab],
+  });
+  const group = (ab: QualFixture, rows: StandingsRow[] = BEFORE): Scene => {
+    const s = league(ab, rows);
+    return { ...s, kind: "group", poolId: "P1", meta: { qualifyCount: 2, qualifyPerGroup: true }, fixtures: s.fixtures.map((f) => ({ ...f, pool_id: "P1" })) };
+  };
+  // The engine's two readings of the same table: the A-B match still to come (held), and gone (closed).
+  const HELD = kindsFor(BEFORE, { A: 1, B: 1, C: 1, D: 1 }, 2);
+  const CLOSED = kindsFor(BEFORE, { A: 0, B: 0, C: 1, D: 1 }, 2);
+  const SETTLED = kindsFor(AFTER, { A: 0, B: 0, C: 1, D: 1 }, 2);
+
+  it("premise (the differential): the engine decides A when the match is gone, and does not while it is to come", () => {
+    expect(DECIDED).toContain(CLOSED.A);
+    expect(DECIDED).not.toContain(HELD.A);
+    expect(HELD).not.toEqual(CLOSED);
+    expect(DECIDED).toContain(SETTLED.A);
+  });
+
+  for (const [name, build] of [["league", league], ["group", group]] as const) {
+    it(`${name}: a PLAIN abandon keeps both seats open - nobody whose fate hangs on it is decided`, () => {
+      const v = must(view(build(plain("A", "B"))));
+      expect(kindsOf(v)).toEqual(HELD);
+      const decided = Object.entries(v.rows).filter(([, r]) => DECIDED.includes(r.status));
+      expect(Object.keys(v.rows).length, "every entrant of the table is checked").toBe(4);
+      expect(decided.map(([id]) => id)).not.toContain("A");
+      expect(v.rows.A!.status).not.toBe(CLOSED.A);
+    });
+
+    it(`${name}: after the settle the match is a result and A is decided`, () => {
+      const v = must(view(build(won(3, "A", "B"), AFTER)));
+      expect(kindsOf(v)).toEqual(SETTLED);
+      expect(DECIDED).toContain(v.rows.A!.status);
+    });
+
+    it(`${name}: a withdrawal's EXPUNGE stays closed (the match left the table), as the void it always read as`, () => {
+      expect(kindsOf(must(view(build(plain("A", "B", { expunged: true })))))).toEqual(CLOSED);
+    });
+
+    it(`${name}: a generator's void (no ledger entry) and an abandon that RECORDED a result stay closed`, () => {
+      let checked = 0;
+      for (const closed of [
+        plain("A", "B", { has_active_abandon: false }),
+        fx(3, "A", "B", "abandoned", { kind: "no_result" }, { has_active_abandon: true, expunged: false }),
+        fx(3, "A", "B", "cancelled", null, { has_active_abandon: false, expunged: false }),
+      ]) {
+        expect(kindsOf(must(view(build(closed)))), `${closed.status} ${JSON.stringify(closed.outcome)}`).toEqual(CLOSED);
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it(`${name}: the held match is the table's LAST - the table is not complete and still shows; settled, expunged or void it is finished and shows none`, () => {
+      // C-D is played, so A-B is the only match left: the completion check (isTableStageComplete) is what reads the status.
+      const LAST = [row("A", 1, 2, 2, [2, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 2, [1, 1]), row("D", 4, 0, 3, [0, 3])];
+      const SETTLED_LAST = [row("A", 1, 3, 3, [3, 0]), row("C", 2, 2, 3, [2, 1]), row("B", 3, 1, 3, [1, 2]), row("D", 4, 0, 3, [0, 3])];
+      const lastOne = (ab: QualFixture, rows: StandingsRow[]): Scene => {
+        const s = build(ab, rows);
+        return { ...s, fixtures: s.fixtures.map((f) => (f.status === "scheduled" ? { ...won(3, "C", "D"), pool_id: f.pool_id } : f)) };
+      };
+      const shown = must(view(lastOne(plain("A", "B"), LAST)));
+      expect(kindsOf(shown)).toEqual(kindsFor(LAST, { A: 1, B: 1, C: 0, D: 0 }, 2));
+      expect(Object.keys(shown.rows).length, "every entrant of the table is checked").toBe(4);
+      let finished = 0;
+      for (const done of [plain("A", "B", { expunged: true }), plain("A", "B", { has_active_abandon: false })]) {
+        expect(view(lastOne(done, LAST)), `${done.expunged ? "expunged" : "void"}: the stage is complete`).toBeNull();
+        finished++;
+      }
+      expect(view(lastOne(won(3, "A", "B"), SETTLED_LAST)), "settled: the stage is complete").toBeNull();
+      expect(finished).toBe(2);
+    });
+
+    it(`${name}: the sequence - held, then voided back to scheduled, reads as the match to come it is`, () => {
+      const back = fx(3, "A", "B", "scheduled", null, { has_active_abandon: false, expunged: false });
+      expect(kindsOf(must(view(build(back))))).toEqual(HELD);
+    });
+
+    it(`${name}: a fixture that does not say whether its abandon is active (an older cached read) gives no status, not a guess`, () => {
+      const unsure = fx(3, "A", "B", "abandoned", null);
+      expect(unsure.has_active_abandon).toBeUndefined();
+      expect(view(build(unsure))).toBeNull();
+      // …whereas a fixture that DOES say gives a view either way, so the null is the missing fact and nothing else.
+      expect(view(build({ ...unsure, has_active_abandon: false }))).not.toBeNull();
+      expect(view(build({ ...unsure, has_active_abandon: true }))).not.toBeNull();
+      // Unsure but already answered by what it does carry (a result, or the expunge flag) stays a view.
+      expect(view(build({ ...unsure, expunged: true }))).not.toBeNull();
+      expect(view(build({ ...unsure, outcome: { kind: "no_result" } }))).not.toBeNull();
+    });
+  }
+
+  it("swiss: a held board is an unplayed round for both seats, not a settled one", () => {
+    // swiss4's round 2 C-D board is the abandon: C and D have ONE settled round (round 1) where the closed reading gives two.
+    const swiss = (over: Partial<QualFixture>): Scene => ({
+      kind: "swiss",
+      rows: [row("A", 1, 2, 2, [4, 0]), row("B", 2, 1, 2, [2, 2]), row("C", 3, 0, 1, [0, 1]), row("D", 4, 0, 1, [0, 3])],
+      fixtures: [
+        won(1, "A", "D"), won(1, "B", "C"), won(2, "A", "B"),
+        fx(2, "C", "D", "abandoned", null, { has_active_abandon: true, expunged: false, ...over }),
+        open(3, null, null), open(3, null, null),
+      ],
+    });
+    const rows = swiss({}).rows;
+    // 3 rounds declared: rounds with a SETTLED fixture seating the entrant are what is spent.
+    const held = kindsFor(rows, { A: 1, B: 1, C: 2, D: 2 }, 2);
+    const closed = kindsFor(rows, { A: 1, B: 1, C: 1, D: 1 }, 2);
+    expect(held, "premise: the two readings differ").not.toEqual(closed);
+    expect(kindsOf(must(view(swiss({}))))).toEqual(held);
+    expect(kindsOf(must(view(swiss({ expunged: true }))))).toEqual(closed);
   });
 });
 

@@ -308,6 +308,9 @@ export interface FixtureRow {
    *  run sheet's abandon tag reads it (`forfeitTag`: the ledger, never the status). Read by `listDivisionFixtures`
    *  only; the v1 list route strips it, like `expunged`. */
   abandon_reason?: string | null;
+  /** W2c X-AB-5 / N2: the row has an ACTIVE `core.abandon` (`hasActiveAbandonSql`) - read by `listDivisionFixtures`
+   *  only, for the console's qualification line (a held match is still open to it); the v1 list route strips it. */
+  has_active_abandon?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {

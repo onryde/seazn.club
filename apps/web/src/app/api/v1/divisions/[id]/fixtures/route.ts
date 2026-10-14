@@ -38,6 +38,8 @@ export async function GET(req: Request, { params }: Ctx) {
         "expunged",
         // W2b Task 13: the run sheet's abandon tag read, not part of the published `Fixture` contract either.
         "abandon_reason",
+        // W2c X-AB-5: the console's qualification read of the ledger, not part of the published `Fixture` contract.
+        "has_active_abandon",
       ),
     );
   });

@@ -177,7 +177,8 @@ export async function listDivisionFixtures(auth: AuthCtx, divisionId: string): P
              f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
              f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
              ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged,
-             ${activeAbandonReasonSql(tx, "f")} as abandon_reason
+             ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
+             ${hasActiveAbandonSql(tx, "f")} as has_active_abandon
       from fixtures f
       left join venues ven on ven.id = f.venue_id
       where f.division_id = ${divisionId}

@@ -33,9 +33,9 @@ import type { ForfeitCredit, LineupPair, MatchOutcome } from "@seazn/engine/core
 import type { AnySportModule, MatchPointsBounds, TiebreakerKey } from "@seazn/engine/sport";
 import { inTheField } from "@/lib/entrant-field";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
-import { engineFixtureStatus } from "@/lib/fixture-engine-status";
 import type { TKey } from "@/lib/i18n-runtime";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
+import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
 import { tieBreakRule } from "./standings-view";
 
@@ -84,6 +84,11 @@ export interface QualFixture {
   outcome: unknown;
   /** W2b D5: a withdrawal expunged this match (`PublicFixture.expunged`). Absent reads as not expunged. */
   expunged?: boolean;
+  /** W2c X-AB-5 / N2: the row has an ACTIVE `core.abandon` (`PublicFixture.has_active_abandon`) - the ledger fact that
+   *  tells a scorer's abandon (HELD for the organiser's settle) from the generator's void, both stored `abandoned`.
+   *  Absent (an older cached document) is UNKNOWN, not false: `buildQualificationView` shows no status while an
+   *  abandoned, result-less row could be either (`abandonUnknown`). */
+  has_active_abandon?: boolean;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
    *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
    *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
@@ -165,15 +170,32 @@ export interface QualificationViewInput {
 }
 
 const seats = (f: QualFixture, id: string) => f.home_entrant_id === id || f.away_entrant_id === id;
-const settled = (f: QualFixture) => SETTLED_FIXTURE_STATUSES.has(engineFixtureStatus(f.status));
+/** The engine status the table reads a fixture at: COMPLETION's own reading (`completionEngineStatus`, X-AB-5). A
+ *  recorded abandon that decided nobody is HELD for the organiser's settle - the desk shows it and the stage will not
+ *  complete around it - so it is still open here (`in_play`): nobody's fate is decided by a match nobody has settled. A
+ *  withdrawal's expunge and the generator's void stay `void`, as does any abandon that recorded a result. */
+function statusIn(kind: string, f: QualFixture) {
+  return completionEngineStatus(kind, {
+    status: f.status,
+    outcome: f.outcome,
+    has_active_abandon: f.has_active_abandon === true,
+    expunged: f.expunged,
+  });
+}
+const settledIn = (kind: string, f: QualFixture) => SETTLED_FIXTURE_STATUSES.has(statusIn(kind, f));
+/** An abandoned, result-less row whose ledger fact is missing: held if it has an active abandon, void if it is the
+ *  generator's - and the row cannot say. Only a row the held predicate WOULD take (were the fact true) is ambiguous. */
+const abandonUnknown = (kind: string, f: QualFixture) =>
+  f.has_active_abandon === undefined &&
+  rowAwaitsSettle(kind, { status: f.status, outcome: f.outcome, has_active_abandon: true, expunged: f.expunged });
 const outcomeKind = (f: Pick<QualFixture, "outcome">): string | undefined =>
   f.outcome && typeof f.outcome === "object" ? (f.outcome as { kind?: string }).kind : undefined;
 
 /** A fixture the standings fold counts as a match played by its entrants: a
  *  settled, non-void result between two seats, or a one-sided bye (the fold's
  *  `awardDelta` path). */
-function counted(f: QualFixture): boolean {
-  if (!settled(f) || engineFixtureStatus(f.status) === "void") return false;
+function countedIn(kind: string, f: QualFixture): boolean {
+  if (!settledIn(kind, f) || statusIn(kind, f) === "void") return false;
   if (isOneSidedAwardBye(f)) return true;
   return f.outcome !== null && f.outcome !== undefined && f.home_entrant_id !== null && f.away_entrant_id !== null;
 }
@@ -351,9 +373,13 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (perMatch === null) return null;
 
   const isSwiss = i.stage.kind === "swiss";
+  const settled = (f: QualFixture) => settledIn(i.stage.kind, f);
+  const counted = (f: QualFixture) => countedIn(i.stage.kind, f);
   if (isSwiss && (meta.swissRounds === null || meta.swissRounds < 1)) return null;
   const tableFx = i.fixtures.filter((f) => f.stage_id === i.stage.id && (f.pool_id ?? null) === i.poolId);
   if (tableFx.length === 0) return null;
+  // X-AB-5 / N2: a match that may be held for settle or may be the generator's void cannot be counted either way.
+  if (tableFx.some((f) => abandonUnknown(i.stage.kind, f))) return null;
   // Review Focus 3: a league seat still TBD cannot be counted per entrant.
   // (A Swiss round's unseated boards are shells; its remaining is round-based.)
   if (!isSwiss && tableFx.some((f) => !settled(f) && (f.home_entrant_id === null || f.away_entrant_id === null))) {
@@ -429,7 +455,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   );
   const engineFx: TableFixture[] = tableFx.map((f) => ({
     id: f.id,
-    status: engineFixtureStatus(f.status),
+    status: statusIn(i.stage.kind, f),
     roundNo: f.round_no,
     ...(f.pool_id ? { poolId: f.pool_id } : {}),
   }));
@@ -449,7 +475,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     perMatch,
     cut,
     anyPlayed: tableFx.some(
-      (f) => engineFixtureStatus(f.status) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
+      (f) => statusIn(i.stage.kind, f) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
     ),
     complete: isTableStageComplete(
       {

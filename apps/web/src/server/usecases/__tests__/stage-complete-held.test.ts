@@ -1,6 +1,6 @@
 // W2c X-AB-5 / N2 (fix round 2, ruling): a TABLE stage does not complete while a match is held for the organiser's
 // settle. A scorer's plain abandon that decided nobody is stored `abandoned` and used to read as a VOID to the
-// completion predicate (`toEngineStatus`), so the explicit `POST /stages/{id}/complete` closed the stage - seeding the
+// completion predicate (`engineFixtureStatus`), so the explicit `POST /stages/{id}/complete` closed the stage - seeding the
 // next one, or completing the division - while the desk showed the match held. Ruling 105 closed only a withdrawal's
 // EXPUNGE abandon (`expunge: true`: the match left the table); an organiser's plain abandon still holds, as before.
 // Real Postgres, real doors (scoreEvent, completeStage, withdrawEntrantCascade); the expected rows come from the engine's

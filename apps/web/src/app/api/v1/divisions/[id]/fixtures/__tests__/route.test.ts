@@ -118,8 +118,9 @@ describe.skipIf(!HAS_DB)("GET /divisions/{id}/fixtures (G3)", () => {
     const rows = body.data as Record<string, unknown>[];
     expect(rows.length).toBeGreaterThan(0); // the positive pair: rows really came back
     for (const row of rows) {
-      // W2b loop-F I-2: `expunged` (the console's qualification read) is internal too.
-      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot", "expunged"]) {
+      // W2b loop-F I-2: `expunged` (the console's qualification read) is internal too, and so is W2c X-AB-5's
+      // `has_active_abandon` (the same read of the ledger, for the held match).
+      for (const col of ["winner_to_fixture", "winner_to_slot", "loser_to_fixture", "loser_to_slot", "expunged", "has_active_abandon"]) {
         expect(row, `${col} reached the published v1 payload`).not.toHaveProperty(col);
       }
       // …and the strip did not take a declared field with it.
