@@ -160,8 +160,12 @@ export const SWEEP_PASS_BUDGET_MS = 45_000;
 export const SWEEP_SETTLING_READS_PER_PASS = 2;
 
 /** D20 (review I1; spec §6.1 (c)): reconcile's own slice of the pass budget. Reconcile stops STARTING reads once the
- *  pass has spent this much, so the jobs after it always get the rest of SWEEP_PASS_BUDGET_MS. The order stays —
- *  reconcile first is load-bearing (runPass). The capped settling reads fit inside it (tested). */
+ *  pass has spent this much, so the jobs after it get the rest of SWEEP_PASS_BUDGET_MS — except when a row that STARTED
+ *  inside the slice overruns it: with Lichess degraded one row costs up to ~30 s (the first line on two tokens plus
+ *  the export, 10 s each), which can spend the whole pass and defer those jobs to the next one (review m2). The order
+ *  stays — reconcile first is load-bearing (runPass). The capped settling reads fit inside it (tested). A flag backlog
+ *  of D boards uses about 18 s of the slice for ceil(D / 2) passes, so ordinary reads sorted behind it wait while it
+ *  drains: bounded and graceful, not a defect (review m3). */
 export const SWEEP_RECONCILE_BUDGET_MS = 20_000;
 
 /** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the

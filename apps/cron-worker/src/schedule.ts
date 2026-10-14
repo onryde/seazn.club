@@ -109,7 +109,8 @@ export const JOBS: readonly Job[] = [
   // Never retried: the next firing, 5 minutes later, IS the retry, and the sweep's pass lock answers an overlapping
   // re-send with `skipped`. Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when
   // another pass held the lock — a pass that overlaps the next firing ran for five minutes) are both failures.
-  // `deferred` is not: the pass budget ran out and the next firing reaches the rest.
+  // `deferred` is not: a budget ran out (the pass's, or reconcile's own slice of it) or the per-pass cap on settling
+  // reads was reached (D20), and the next firing reaches the rest — one counter for all three causes.
   {
     id: "external-play",
     path: "/api/cron/external-play",

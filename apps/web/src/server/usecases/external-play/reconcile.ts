@@ -380,11 +380,15 @@ export async function reconcile(
   //   (a) a board ALREADY held clock_flag_unsettled is read by the sweep with no hold — it is still at zero, and would
   //       cost ~9 s of every pass until the organiser acts. The organiser and the room's clock-zero reports carry it.
   //   (b) the caller's `settle` refuses (the per-pass cap): no settling read, and no unsettled-flag hold from this read.
+  //   (c) (D20 review I1) the settling read could not be MADE (429, 5xx, both tokens refused: `none`): Lichess was never
+  //       asked, so what it "still reported" is the first line's, not a settled-or-not answer — no hold either. Held on
+  //       that, the row would never be retried (exception (a) skips the sweep's settling read on a held row).
   let mayHoldUnsettled = true;
   if (truth.source === "stream" && flagDue(truth.game) && !(trigger === "sweep" && heldUnsettled(b))) {
     if (deps.settle === undefined || deps.settle()) {
       const again = await readTruth(game, deps, FLAG_SETTLE_HOLD_MS);
       if (again.source !== "none") truth = again;
+      mayHoldUnsettled = again.source !== "none";
     } else {
       mayHoldUnsettled = false;
     }

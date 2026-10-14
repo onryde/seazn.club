@@ -922,6 +922,49 @@ describe.runIf(HAS_DB)("reconcile — D11 (b, c): a flag Lichess has not settled
     expect(held).toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" } });
   });
 
+  // D20 review I1: a settling read that could not be MADE (a 429, a 5xx, both tokens refused: `none`) leaves Lichess
+  // un-asked. Treated as "Lichess still said started" it would place clock_flag_unsettled — and D20 (a) means the sweep
+  // never reads a held row's settle again, so a throttle during the one 9 s hold turned a self-healing board into one that
+  // waits for a human, with evidence ("Lichess still reported started") that was never gathered.
+  it("D20 (review I1): a settling read that could not be MADE (429, 503, both tokens refused) is no evidence — at the bound and far past it, on two triggers, nothing is held; the next sweep makes the held read, and a read that WAS made past the bound holds — counted", async () => {
+    const FAILS: [string, () => Reply, number][] = [
+      ["429 (stops every call: one try)", () => status(429), 1],
+      ["503 (both tokens tried)", () => status(503), 2],
+      ["401 (both tokens refused)", () => status(401), 2],
+    ];
+    let checked = 0;
+    for (const [why, fail, tries] of FAILS) {
+      for (const afterFlag of [FLAG_UNSETTLED_HOLD_MS, 5 * FLAG_UNSETTLED_HOLD_MS]) {
+        for (const trigger of ["sweep", "clock_zero"] as const) {
+          const label = `${why} @ flag+${afterFlag / 1000}s on ${trigger}`;
+          lichess.reset();
+          const { g, flagAt } = await caughtUp();
+          let n = 0;
+          lichess.onStream = () => (n++ === 0 ? ok(gameFull(g, EXPIRED_1, { moves: [...LINE] })) : fail());
+          lichess.calls.length = 0;
+          const failed = observed(new Date(flagAt + afterFlag));
+          const out = await reconcile(g.fixtureId, trigger, failed.deps);
+          expect([...failed.settles], `${label}: the settling read was tried`).toEqual(Array<number>(tries).fill(FLAG_SETTLE_HOLD_MS));
+          expect(out, label).toMatchObject({ source: "stream", result: null, finished: false });
+          const r = await bridge(g.fixtureId);
+          expect([r.status, r.needs_reason], `${label}: Lichess was never asked, so nothing is held`).toEqual(["live", null]);
+          expect(await resultsOf(g.fixtureId), `${label}: never a flag of ours`).toEqual([]);
+          // Lichess recovers: the NEXT SWEEP makes the settling read (the row is not held, so exception (a) does not
+          // skip it) — and a read that was made, still `started` past the bound, is evidence: held, with it.
+          unsettled(g);
+          lichess.calls.length = 0;
+          const next = observed(new Date(flagAt + afterFlag + 60_000));
+          const held = await reconcile(g.fixtureId, "sweep", next.deps);
+          expect([...next.settles], `${label}: the next sweep makes the held read`).toEqual([FLAG_SETTLE_HOLD_MS]);
+          expect(held, label).toMatchObject({ result: { wrote: "needs_organiser", reason: "clock_flag_unsettled" } });
+          expect((await bridge(g.fixtureId)).needs_reason, label).toBe("clock_flag_unsettled");
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: failure × time × trigger").toBe(FAILS.length * 2 * 2);
+  });
+
   it("D20 (b): `settle` is asked ONLY for a mover at zero — time on the clock, the zero on the waiting side, a flag already settled never spend a slot (counted)", async () => {
     const cases: [string, (g: Game) => string][] = [
       ["mid-game (the mid recording)", (g) => gameFull(g, MID)],

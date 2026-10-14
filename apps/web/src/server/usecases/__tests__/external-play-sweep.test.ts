@@ -2524,6 +2524,36 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
     expect((await statesOf(f.boards)).map((s) => s?.needs_reason), "all held now").toEqual(f.games.map(() => "clock_flag_unsettled"));
   });
 
+  // D20 review m1: the hand-back restores the stamp only if it is still THIS pass's claim (`and last_polled_at =
+  // pass.now`). Nothing today moves a claimed row's stamp mid-read, but D16's endpoint is specified to claim the same
+  // column, so the predicate is the one thing between a rival's claim and a silent overwrite.
+  it("the hand-back restores only THIS pass's own claim: a stamp another actor wrote during the read stands; an untouched one goes back (m1, counted)", async () => {
+    const boards: Board[] = [];
+    for (let i = 0; i < 2; i++) boards.push(await openedBoard({ checkedIn: ["home", "away"] }));
+    for (const b of boards) await liveGame(b);
+    const now = boards[0]!.at(8);
+    const rival = new Date(now.getTime() + 1_234);
+    const stampOf = async (b: Board) =>
+      (await sql<{ last_polled_at: Date | null }[]>`select last_polled_at from fixture_external_play where fixture_id = ${b.fixtureId}`)[0]!.last_polled_at;
+    for (const b of boards) expect(await stampOf(b), "premise: never polled").toBeNull();
+    let overran = 0;
+    const r = await sweep(boards, {
+      now,
+      reconcile: async ({ fixtureId, settle }) => {
+        // Ask for slots until the cap refuses: this board is deferred, so the pass owes its stamp back.
+        for (let i = 0; i <= CAP; i++) settle!();
+        overran++;
+        if (fixtureId === boards[0]!.fixtureId) {
+          await sql`update fixture_external_play set last_polled_at = ${rival} where fixture_id = ${fixtureId}`;
+        }
+        return null;
+      },
+    });
+    expect([overran, r.reconciled, r.deferred], "premise: both boards were read and deferred").toEqual([2, 2, 2]);
+    expect((await stampOf(boards[0]!))?.getTime(), "the rival's stamp stands").toBe(rival.getTime());
+    expect(await stampOf(boards[1]!), "the pair: this pass's own claim is handed back, to never-polled").toBeNull();
+  });
+
   it("a deferred board keeps its place: next pass its settling read comes FIRST, before boards that already had one (inside the bound, nobody held)", async () => {
     const f = await flagDueBoards(CAP + 1, SWEEP_CADENCE_MS - 10_000);
     const pass1 = new Date(f.caughtUpAt.getTime() + SWEEP_CADENCE_MS);
