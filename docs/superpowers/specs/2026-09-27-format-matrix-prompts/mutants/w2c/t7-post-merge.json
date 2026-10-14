@@ -1,0 +1,241 @@
+[
+  {
+    "id": "pm-1-held-never",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    has_active_abandon: f.has_active_abandon === true,\n",
+    "replace": "    has_active_abandon: false,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-2-any-abandon-held",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    has_active_abandon: f.has_active_abandon === true,\n",
+    "replace": "    has_active_abandon: true,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      }
+    ]
+  },
+  {
+    "id": "pm-3-expunge-ignored",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    expunged: f.expunged,\n  });\n}\nconst settledIn",
+    "replace": "    expunged: undefined,\n  });\n}\nconst settledIn",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      }
+    ]
+  },
+  {
+    "id": "pm-4-held-settled",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  const settled = (f: QualFixture) => settledIn(i.stage.kind, f);\n",
+    "replace": "  const settled = (f: QualFixture) => settledIn(i.stage.kind, f) || f.status === \"abandoned\";\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-5-held-counted",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  const counted = (f: QualFixture) => countedIn(i.stage.kind, f);\n",
+    "replace": "  const counted = (f: QualFixture) => countedIn(i.stage.kind, f) || (f.status === \"abandoned\" && f.has_active_abandon === true);\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      }
+    ]
+  },
+  {
+    "id": "pm-6-complete-ignores-held",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "    status: statusIn(i.stage.kind, f),\n    roundNo: f.round_no,",
+    "replace": "    status: f.status === \"abandoned\" ? \"void\" : statusIn(i.stage.kind, f),\n    roundNo: f.round_no,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "is the table's LAST"
+      }
+    ]
+  },
+  {
+    "id": "pm-7-unknown-guard-deleted",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  if (tableFx.some((f) => abandonUnknown(i.stage.kind, f))) return null;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "does not say whether its abandon is active"
+      }
+    ]
+  },
+  {
+    "id": "pm-8-unknown-any-abandoned",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  f.has_active_abandon === undefined &&\n  rowAwaitsSettle(kind, { status: f.status, outcome: f.outcome, has_active_abandon: true, expunged: f.expunged });",
+    "replace": "  f.has_active_abandon === undefined && f.status === \"abandoned\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "does not say whether its abandon is active"
+      }
+    ]
+  },
+  {
+    "id": "pm-10-unknown-not-true",
+    "file": "apps/web/src/server/public-site/qualification-view.ts",
+    "find": "  f.has_active_abandon === undefined &&\n  rowAwaitsSettle(",
+    "replace": "  f.has_active_abandon !== true &&\n  rowAwaitsSettle(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view.test.ts"
+        ],
+        "name": "match held for settle is still open"
+      }
+    ]
+  },
+  {
+    "id": "pm-11-data-select-dropped",
+    "file": "apps/web/src/server/public-site/data.ts",
+    "find": "                 e.abandon_reason, e.has_active_abandon\n",
+    "replace": "                 e.abandon_reason, null as has_active_abandon\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-12-data-expunge-only",
+    "file": "apps/web/src/server/public-site/data.ts",
+    "find": "${hasActiveAbandonSql(sql, \"x\")} as has_active_abandon",
+    "replace": "${hasActiveAbandonSql(sql, \"x\", { expunge: true })} as has_active_abandon",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-13-embed-false",
+    "file": "apps/web/src/server/embed-data.ts",
+    "find": "${hasActiveAbandonSql(sql, \"x\")} as has_active_abandon",
+    "replace": "false as has_active_abandon",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-14-embed-select-dropped",
+    "file": "apps/web/src/server/embed-data.ts",
+    "find": "             e.has_active_abandon\n",
+    "replace": "             null as has_active_abandon\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-15-console-expunge-only",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "${hasActiveAbandonSql(tx, \"f\")} as has_active_abandon",
+    "replace": "${hasActiveAbandonSql(tx, \"f\", { expunge: true })} as has_active_abandon",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/qualification-view-db.test.ts"
+        ],
+        "name": "plain abandon is HELD"
+      }
+    ]
+  },
+  {
+    "id": "pm-16-v1-leak",
+    "file": "apps/web/src/app/api/v1/divisions/[id]/fixtures/route.ts",
+    "find": "        has_active_abandon: _hasActiveAbandon,\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/api/v1/divisions/[id]/fixtures/__tests__/route.test.ts"
+        ],
+        "name": "does not leak the internal bracket feed columns"
+      }
+    ]
+  }
+]
