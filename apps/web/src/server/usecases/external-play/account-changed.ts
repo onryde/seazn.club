@@ -6,6 +6,11 @@ import "server-only";
 //
 // Final re-review P11 (1): a seat hold, like token_revoked — the hold freezes THIS player's seat (V442
 // `revoked_seat`), the opponent plays on, and reconcile keeps reading the game so its real end is recorded.
+//
+// Final re-review P11 (4): an UNLINK (`to: null`) leaves the same boards — recorded for an account no longer linked,
+// whose grant the unlink revokes — and holds them as `token_revoked`: the unlink revokes Seazn's access, which is that
+// reason's sentence, while `account_changed` would tell the organiser another account was linked. Same seat, same
+// readers (both are SEAT_HOLD_REASONS).
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { holdForOrganiser, type RevokedSeat } from "./result";
@@ -22,7 +27,8 @@ function seatOf(b: { whiteSide: "home" | "away" | null; home: boolean; away: boo
  *  `lockBoardsRefusingOnlineGames`): a create sent (T9's `create_sent_at` marker: a game MAY exist), or a recorded
  *  game no read has seen end on a bridge our side has not closed. A board whose fixture is no longer playable is
  *  refused by the hold itself, and a board already held keeps its first diagnosis (holdForOrganiser). */
-export async function holdBoardsOnAccountChange(userId: string, change: { from: string; to: string }): Promise<void> {
+export async function holdBoardsOnAccountChange(userId: string, change: { from: string; to: string | null }): Promise<void> {
+  const act = change.to === null ? "unlink" : "re-link to a different account";
   let boards: { fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[];
   try {
     boards = await sql<{ fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[]>`
@@ -40,26 +46,27 @@ export async function holdBoardsOnAccountChange(userId: string, change: { from: 
   } catch (err) {
     log.error(
       { userId, err: err instanceof Error ? err.message : String(err) },
-      "lichess: re-link to a different account could not list the player's live boards — none was held for the organiser",
+      `lichess: ${act} could not list the player's live boards — none was held for the organiser`,
     );
     return;
   }
-  const detail = `lichess account changed: ${change.from} → ${change.to}`;
+  const reason = change.to === null ? "token_revoked" : "account_changed";
+  const detail = change.to === null ? `lichess account unlinked: ${change.from}` : `lichess account changed: ${change.from} → ${change.to}`;
   const held: string[] = [];
   for (const board of boards) {
     const { fixtureId } = board;
     const seat = seatOf(board);
     try {
-      const r = await holdForOrganiser({ fixtureId, reason: "account_changed", detail, ...(seat === null ? {} : { seat }) });
-      if (r.wrote === "needs_organiser" && r.reason === "account_changed") held.push(fixtureId);
+      const r = await holdForOrganiser({ fixtureId, reason, detail, ...(seat === null ? {} : { seat }) });
+      if (r.wrote === "needs_organiser" && r.reason === reason) held.push(fixtureId);
     } catch (err) {
       log.error(
         { userId, fixtureId, err: err instanceof Error ? err.message : String(err) },
-        "lichess: re-link to a different account could not hold a live board for the organiser",
+        `lichess: ${act} could not hold a live board for the organiser`,
       );
     }
   }
   if (held.length > 0) {
-    log.info({ userId, fixtureIds: held }, "lichess: re-link to a different account held the player's live boards for the organiser");
+    log.info({ userId, fixtureIds: held }, `lichess: ${act} held the player's live boards for the organiser`);
   }
 }

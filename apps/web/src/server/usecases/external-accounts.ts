@@ -231,6 +231,16 @@ async function revokeReplacedGrant(userId: string, replaced: Uint8Array | null, 
  *  grant live, so each is reported to the error channel with the user id and
  *  a reason — never the token — and the row is deleted anyway. */
 export async function unlinkLichess(userId: string): Promise<void> {
+  // Final re-review P11 (4): a game live or mid-create on this player's account can no longer be moved from Seazn
+  // once the link goes — held for the organiser (token_revoked, their seat) BEFORE the grant is revoked, exactly as
+  // a re-link holds (upsertLichessLink). Best effort: the hold logs and never throws, so it never blocks the unlink.
+  const [linked] = await sql<{ external_user_id: string }[]>`
+    select external_user_id from user_external_accounts
+     where user_id = ${userId} and provider = 'lichess'`;
+  if (linked) {
+    const { holdBoardsOnAccountChange } = await import("./external-play/account-changed");
+    await holdBoardsOnAccountChange(userId, { from: linked.external_user_id, to: null });
+  }
   const stored = await readStoredToken(userId);
   if (stored !== null && "failure" in stored) {
     log.error(
