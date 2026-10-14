@@ -1222,21 +1222,6 @@ describe.skipIf(!HAS_DB)("RS005 review: frozen entitlements block reject and pro
     await invalidateOrgEntitlements(orgId);
   }
 
-  async function manualPendingEntry(status: "pending" | "waitlisted") {
-    const { orgId, ownerId } = await seedOrg("pro");
-    const owner = asOwner(orgId, ownerId);
-    const { competition, division } = await rig(owner);
-    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0, approval: "manual" });
-    const [reg] = await sql<{ id: string }[]>`
-      insert into registrations (org_id, division_id, group_id, display_name, status, amount_cents, answers)
-      values (
-        ${orgId}, ${division.id},
-        (insert_group_placeholder := null),
-        'Frozen Case', ${status}, 0, '{}'::jsonb
-      ) returning id`;
-    return { owner, orgId, division, reg };
-  }
-
   // Only approveRegistration carried the guard. Reject is not the harmless
   // half of the pair — it REFUNDS a paid entry through Stripe and
   // auto-promotes the waitlist — so on a frozen org Approve 402'd while Reject

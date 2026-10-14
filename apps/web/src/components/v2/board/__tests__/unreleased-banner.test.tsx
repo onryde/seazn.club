@@ -717,9 +717,8 @@ describe("the report goes stale the moment the board changes under it", () => {
   // the thing being pinned is one line in each of seven preambles — a
   // board-level test could only ever reach the two or three of those that have
   // a control the harness can find, and would leave the rest decoration.
-  function Sink(_: { actions: BoardActions }) {
-    return null;
-  }
+  // Renders nothing: the probe reads `actions` back off this element's props.
+  const Sink: (props: { actions: BoardActions }) => null = () => null;
   function ActionsProbe({ divisions, fixtures }: { divisions: BoardDivision[]; fixtures: BoardFixture[] }) {
     const actions = useBoardActions(divisions, fixtures, {}, {}, true);
     return <Sink actions={actions} />;

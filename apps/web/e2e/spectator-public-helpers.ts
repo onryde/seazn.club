@@ -331,11 +331,6 @@ export function pad(page: Page) {
   return page.locator('[data-testid="score-pad"]');
 }
 
-async function sendHeldNow(page: Page): Promise<void> {
-  const btn = pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true });
-  if (await btn.count()) await btn.click();
-}
-
 /** Soft-commit only when the dock has enrichment chips (`usesSoftCommit`).
  *  Plain cricket run tiles submit immediately — requiring the dock hangs.
  *  When a dock *does* open (wicket sheet → held ball with chips), flush via

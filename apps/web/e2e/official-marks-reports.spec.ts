@@ -21,7 +21,6 @@ test.describe.serial("official marks & match reports", () => {
   let orgSlug: string;
   let compSlug: string;
   let divSlug: string;
-  let fixtureNo: number;
   let officialName: string;
   let playerName: string;
   let playerId: string;
@@ -83,7 +82,6 @@ test.describe.serial("official marks & match reports", () => {
       "POST",
     );
     const fixture = gen.data!.fixtures[0]!;
-    fixtureNo = fixture.fixture_no;
     await apiJson(page.request, `/api/v1/divisions/${divId}/start`, "POST");
 
     // An official assigned to the fixture; invited through the shared claim rail.

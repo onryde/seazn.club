@@ -15,6 +15,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import Stripe from "stripe";
 import { buildEmbeddedCheckoutParams, buildPassCheckoutParams } from "@/lib/billing";
+import { omit } from "@/lib/omit";
 
 const LIVE = process.env.BILLING_LIVE === "1" && !!process.env.STRIPE_SECRET_KEY;
 
@@ -174,7 +175,7 @@ describe.skipIf(!LIVE)("automatic_tax on an existing customer (live Stripe, test
 
       // (A) the historic shape. If Stripe stopped refusing this, the parameter
       // would be speculation and should come back out — so assert the refusal.
-      const { customer_update: _drop, ...noUpdate } = v.withCustomer;
+      const noUpdate = omit(v.withCustomer, "customer_update");
       await expect(
         stripe.checkout.sessions.create(noUpdate),
         `${v.name}: no customer_update`,
@@ -238,7 +239,7 @@ describe.skipIf(!LIVE)("automatic_tax on an existing customer (live Stripe, test
     // rejects every existing customer without customer_update[name]. So this is
     // not a "which address" product question — it is a hard 400 on both
     // builders for every returning buyer.
-    const { customer_update: _drop, ...noUpdate } = params;
+    const noUpdate = omit(params, "customer_update");
     await expect(stripe.checkout.sessions.create(noUpdate)).rejects.toMatchObject({
       statusCode: 400,
     });

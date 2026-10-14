@@ -517,7 +517,7 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
 
   it("Unpair on knockout stage fails", async () => {
     const { auth } = await seedOrg();
-    const { divisionId, stageId } = await seedSwissStage(auth, { rounds: 3 });
+    const { divisionId } = await seedSwissStage(auth, { rounds: 3 });
     const [ko] = await createStages(auth, divisionId, {
       seq: 2,
       kind: "knockout",

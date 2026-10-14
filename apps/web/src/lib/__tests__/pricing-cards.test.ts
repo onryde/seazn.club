@@ -26,7 +26,6 @@ import {
   FALSE_PASS_PERMANENCE_PATTERNS,
   type FeatureGrants,
   EXCLUSIVE_CLAIM_VOCAB,
-  localeCreditLeadershipFaults,
   wholeNumber,
 } from "@/lib/copy-truth";
 import { sql } from "@/lib/db";

@@ -22,21 +22,17 @@ import type { RegistrationPlayerRow } from "../registrations";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** The TypeScript side, written out as a value so it can be compared.
- *  `satisfies` ties it to the union: drop a value the union still has and
- *  this array no longer covers it; add one the union lacks and tsc rejects
- *  the file. So the array cannot silently drift from the type it mirrors. */
-const TS_SOURCES = ["captain_entered", "self_joined", "organiser_assigned"] as const satisfies
-  readonly RegistrationPlayerRow["source"][];
-
-// The other direction: every union member must appear in the array above.
-// A `Record` keyed by the union is exhaustive by construction, so adding a
-// member to the union without adding it here fails to compile.
-const _EXHAUSTIVE: Record<RegistrationPlayerRow["source"], true> = {
+/** The TypeScript side, written out as a value so it can be compared. A
+ *  `Record` keyed by the union is exhaustive in BOTH directions by
+ *  construction: a member the union gains is a missing key here, and a value
+ *  the union lacks is an excess property — tsc rejects the file either way.
+ *  So the list read off it cannot silently drift from the type it mirrors. */
+const TS_SOURCE_SET: Record<RegistrationPlayerRow["source"], true> = {
   captain_entered: true,
   self_joined: true,
   organiser_assigned: true,
 };
+const TS_SOURCES = Object.keys(TS_SOURCE_SET);
 
 describe.skipIf(!HAS_DB)("registration_players.source", () => {
   it("accepts exactly the values the TypeScript union declares", async () => {

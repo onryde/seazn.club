@@ -34,7 +34,6 @@ test.afterAll(async ({ browser }) => {
 });
 
 test("a seeded settings org is Pro, reachable, and returns its slot", async ({ page }) => {
-  const before = await apiJson<{ id: string }[]>(page.request, "/api/orgs");
   const seeded = await seedSettingsOrg(page.request, { plan: "pro" });
   seededForCleanup = seeded;
   try {

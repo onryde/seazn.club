@@ -23,9 +23,8 @@ import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
-import { assertDisabledTilesExplained } from "../../tile-grid";
 import { assertScorebugSpec, type PadHostView, type ScorebugSpec, type TileSpec } from "../../types";
-import { dedicatedEventTypes, filterTilesByBand, moreActions } from "../../pad-host";
+import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import {
   EVENT_BAND,
   EXPEDITE_TYPE,

@@ -36,6 +36,11 @@ function report(overrides: Partial<CapacityReport> = {}): CapacityReport {
   };
 }
 
+/** The `fetch` shape the hook calls. Spies are typed to it so `mock.calls[n]`
+ *  is `[url, init]` for tsc — a bare `vi.fn(async () => …)` is a zero-length
+ *  tuple. */
+type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify({ ok: true, data: body }), {
     status: 200,
@@ -84,7 +89,7 @@ afterEach(() => {
 
 describe("useCapacityReport", () => {
   it("fetches after the debounce window and returns the resolved report", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     expect(hook.current.report).toBeNull(); // still debouncing — no fetch yet
@@ -102,7 +107,7 @@ describe("useCapacityReport", () => {
   });
 
   it("keeps the previous report visible and marks it stale the instant an edit lands, before any refetch resolves", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report({ slotDemand: 4 })));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report({ slotDemand: 4 })));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
@@ -123,7 +128,7 @@ describe("useCapacityReport", () => {
   });
 
   it("debounces a burst of edits into exactly one request, carrying the LAST edit's inputs", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     for (let i = 1; i <= 5; i += 1) {
@@ -208,7 +213,7 @@ describe("useCapacityReport", () => {
   });
 
   it("sends normally at EXACTLY the bound — the guard is a ceiling, not an off-by-one that silences legitimate checks", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const courts = Array.from({ length: CAPACITY_PRECHECK_MAX_COURTS }, (_, i) => `c${i}`);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig({ courts }) });
@@ -222,7 +227,7 @@ describe("useCapacityReport", () => {
   // `stale` stayed true forever with no way to tell "catching up" from
   // "broken since ten minutes ago". These three tests pin the split.
   it("a superseded abort stays silent — never marked failed, report/stale left exactly as they were (routine, not an error)", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
@@ -241,7 +246,7 @@ describe("useCapacityReport", () => {
   });
 
   it("a REAL failure — after its one retry also fails — is marked `failed`, keeps the last known report, and stays stale; never reads as fresh and never as an indefinite in-flight state", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
@@ -262,7 +267,7 @@ describe("useCapacityReport", () => {
   });
 
   it("a failure followed by a successful retry never sets `failed` — the blip stays invisible", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);
@@ -278,7 +283,7 @@ describe("useCapacityReport", () => {
   });
 
   it("re-fetches when only divisionId changes, same fixtures/config", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(report()));
+    const fetchMock = vi.fn<FetchFn>(async () => jsonResponse(report()));
     vi.stubGlobal("fetch", fetchMock);
     const hook = mount({ divisionId: "d1", fixtures: [], config: boundedConfig() });
     await vi.advanceTimersByTimeAsync(300);

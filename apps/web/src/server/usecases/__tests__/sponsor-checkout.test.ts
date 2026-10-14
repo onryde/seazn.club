@@ -44,7 +44,6 @@ import {
   listSponsorRows,
   refundSponsorOrder,
   startSponsorCheckout,
-  type SponsorPackageRow,
 } from "../sponsors";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";

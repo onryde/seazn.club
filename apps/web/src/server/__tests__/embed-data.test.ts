@@ -102,6 +102,10 @@ describe.skipIf(!HAS_DB)("embedDivisionData", () => {
     const [{ id: div2 }] = await sql<{ id: string }[]>`
       insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, config, module_version)
       values (${orgId}, ${comp2}, 'Div', ${"div-" + s2}, 'generic', 'score', '{}', '1.0.0') returning id`;
+    // The positive pair, in THIS org: without it a pass that lifted nothing
+    // at all (a failed insert, a stale entitlement cache) would leave the
+    // second competition dark for the wrong reason and still pass.
+    expect((await embedDivisionData(divId)).ok, "premise: the pass lifts its own competition").toBe(true);
     expect(await embedDivisionData(div2)).toEqual({
       ok: false,
       reason: "not_entitled",

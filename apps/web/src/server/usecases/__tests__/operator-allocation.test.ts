@@ -15,7 +15,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
-import { balance, release, reserve } from "@/lib/credits";
+import { balance, reserve } from "@/lib/credits";
 import { HttpError } from "@/lib/errors";
 import { PaymentRequiredError } from "@/lib/errors";
 import { allocationConsole, setOrgAllocation } from "../operator-allocation";
