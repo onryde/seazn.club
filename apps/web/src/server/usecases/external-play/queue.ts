@@ -25,7 +25,7 @@ export type NeedsOrganiserExternalPlayRow = {
   /** T16 — the queue names the players by colour (canvas HoldQueue), and the
    *  settle sends a SIDE: which side plays White. */
   whiteSide: Side;
-  /** V442: the seat a `token_revoked` hold froze; null otherwise. */
+  /** V442: the seat a seat hold (token_revoked, account_changed) froze; null otherwise. */
   revokedSeat: "white" | "black" | "both" | null;
   roundNo: number | null;
   /** The board number in its round (`seq_in_round`, the room's boardNo). */

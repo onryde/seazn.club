@@ -128,6 +128,8 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       ["a challenge made, no move", before({ status: "ready" }), STARTING],
       ["the game begun at Lichess, no move", before({ status: "live" }), STARTING],
       ["a seat's token revoked before a move (the game goes on)", before({ status: "needs_organiser", needs_reason: "token_revoked" }), STARTING],
+      // Final re-review P11 (1): a re-linked account is one seat's link too — the game goes on at Lichess.
+      ["a seat's account re-linked before a move (the game goes on)", before({ status: "needs_organiser", needs_reason: "account_changed" }), STARTING],
       ["the bridge closed with no move", before({ status: "finished" }), null],
       ["a bye: no away entrant", before({ status: null, challenge_id: null, away_entrant_id: null }), null],
       ["a bye: no home entrant", before({ status: null, challenge_id: null, home_entrant_id: null }), null],
@@ -136,9 +138,9 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
     ];
     // Every hold the organiser owes an answer to, before a move: the fixture page says why, so the row offers nothing.
     const HELD = ["no_show_white", "no_show_black", "no_show_both", "not_started", "aborted", "mismatch", "provider_error",
-      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play", "account_changed"] as const;
+      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play"] as const;
     for (const reason of HELD) cells.push([`held: ${reason}`, before({ status: "needs_organiser", needs_reason: reason }), null]);
-    expect([...HELD, "token_revoked"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
+    expect([...HELD, "token_revoked", "account_changed"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
     let checked = 0;
     let starting = 0;
     for (const [label, r, want] of cells) {
@@ -146,8 +148,8 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       if (want?.kind === "starting") starting += 1;
       checked += 1;
     }
-    expect(checked, "anti-vacuity").toBe(10 + HELD.length);
-    expect(starting, "anti-vacuity: the starting cells").toBe(5);
+    expect(checked, "anti-vacuity").toBe(11 + HELD.length);
+    expect(starting, "anti-vacuity: the starting cells").toBe(6);
   });
 
   it("every fixture status × bridge state × round opened or not", () => {

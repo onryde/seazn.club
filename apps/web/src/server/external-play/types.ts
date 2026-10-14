@@ -52,6 +52,17 @@ export const NEEDS_REASONS = [
 ] as const;
 export type NeedsReason = (typeof NEEDS_REASONS)[number];
 
+/** The holds that freeze ONE SEAT, not the game (controller ruling M7; final
+ *  re-review P11 (1)): the seat whose link broke — a token Lichess refused,
+ *  or an account the player re-linked away from — is V442's `revoked_seat`,
+ *  and the other player keeps playing and can still win on the clock.
+ *  Freezing the innocent side would hand them the flag. V442's
+ *  `revoked_seat` CHECK admits a seat on exactly these reasons. */
+export const SEAT_HOLD_REASONS = ["token_revoked", "account_changed"] as const satisfies readonly NeedsReason[];
+export type SeatHoldReason = (typeof SEAT_HOLD_REASONS)[number];
+export const isSeatHold = (reason: string | null): reason is SeatHoldReason =>
+  reason !== null && (SEAT_HOLD_REASONS as readonly string[]).includes(reason);
+
 /** Lichess challenge clock: `limit` is initial time in seconds. */
 export type LichessClock = { limit: number; increment: number };
 

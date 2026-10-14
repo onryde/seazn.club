@@ -26,7 +26,7 @@ import { appendEvent } from "@/server/engine-db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
-import type { BoardCall, GameSnapshot } from "@/server/external-play/types";
+import { SEAT_HOLD_REASONS, type BoardCall, type GameSnapshot } from "@/server/external-play/types";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { act } from "../external-play/play";
@@ -1321,15 +1321,51 @@ describe.runIf(HAS_DB)("M7 — a token_revoked hold records the seat it froze (c
   });
 
   it("a seat on any OTHER reason is refused by name before anything is written — counted over HOLD_REASONS", async () => {
+    // The rulings: M7 (token_revoked) and the final re-review's P11 (1) (account_changed) — the declaration is held to them.
+    const SEAT_HOLDS = ["token_revoked", "account_changed"];
+    expect([...SEAT_HOLD_REASONS].sort(), "the declared seat holds are the rulings'").toEqual([...SEAT_HOLDS].sort());
     let checked = 0;
-    for (const reason of HOLD_REASONS.filter((r) => r !== "token_revoked")) {
+    for (const reason of HOLD_REASONS.filter((r) => !SEAT_HOLDS.includes(r))) {
       const g = await liveGame();
       await expect(holdForOrganiser({ fixtureId: g.fixtureId, reason, seat: "white" }), reason)
         .rejects.toMatchObject({ code: "HOLD_SEAT_WITHOUT_REVOKE" });
       expect((await bridgeOf(g.fixtureId))!.status, reason).toBe("live");
       checked++;
     }
-    expect(checked).toBe(HOLD_REASONS.length - 1);
+    expect(checked).toBe(HOLD_REASONS.length - SEAT_HOLDS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("final re-review P11 (1): account_changed is a seat hold — it records its seat, the other seat widens it, a provider_error widens it to both, and the game's final hold replaces it and clears the seat", async () => {
+    const g = await liveGame();
+    expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "account_changed", seat: "black", detail: "lichess account changed: a → b" }))
+      .toEqual({ wrote: "needs_organiser", reason: "account_changed" });
+    expect(await seatOf(g.fixtureId)).toEqual({ needs_reason: "account_changed", revoked_seat: "black", last_error: "lichess account changed: a → b" });
+    await holdForOrganiser({ fixtureId: g.fixtureId, reason: "account_changed", seat: "white", detail: "c → d" });
+    expect(await seatOf(g.fixtureId), "the other seat widens; the first detail stands").toEqual({
+      needs_reason: "account_changed", revoked_seat: "both", last_error: "lichess account changed: a → b",
+    });
+    const h = await liveGame();
+    await holdForOrganiser({ fixtureId: h.fixtureId, reason: "account_changed", seat: "white" });
+    await holdForOrganiser({ fixtureId: h.fixtureId, reason: "provider_error", detail: "diverged" });
+    expect(await seatOf(h.fixtureId), "review N2's rule, on the new seat hold").toMatchObject({ needs_reason: "account_changed", revoked_seat: "both" });
+    const k = await liveGame();
+    await holdForOrganiser({ fixtureId: k.fixtureId, reason: "account_changed", seat: "white" });
+    expect(await writeResultFrom(snap(k, { status: "aborted", winner: null }), k.fixtureId)).toEqual({ wrote: "aborted" });
+    expect(await seatOf(k.fixtureId), "a mid-game diagnosis: the game's final hold replaces it").toMatchObject({ needs_reason: "aborted", revoked_seat: null });
+  });
+
+  it("P11 ruling 3 across the two seat holds: the FIRST reason stands and the second seat widens the freeze — both orders, counted", async () => {
+    let checked = 0;
+    for (const [first, second] of [["token_revoked", "account_changed"], ["account_changed", "token_revoked"]] as const) {
+      const g = await liveGame();
+      await holdForOrganiser({ fixtureId: g.fixtureId, reason: first, seat: "white", detail: first });
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: second, seat: "black", detail: second }), `${first} then ${second}`)
+        .toEqual({ wrote: "needs_organiser", reason: first });
+      expect(await seatOf(g.fixtureId), `${first} then ${second}`).toEqual({ needs_reason: first, revoked_seat: "both", last_error: first });
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("the game's FINAL hold replaces a token_revoked hold and clears its seat (V442: a seat belongs to token_revoked only)", async () => {

@@ -1235,6 +1235,37 @@ describe.runIf(HAS_DB)("act — M7: a revoked token freezes ITS seat only (contr
     expect(checked, "2 seats × 2 turns × 4 actions").toBe(16);
   });
 
+  it("final re-review P11 (1): an account_changed hold is a seat hold too — the innocent seat's move is recorded under it, the changed seat's acts are 404s that never reach Lichess — BOTH seats, counted", async () => {
+    let checked = 0;
+    for (const changed of ["white", "black"] as const) {
+      const innocent = other(changed);
+      const g = await readyGame();
+      // The innocent seat to move next: White at ply 2 (Black changed), Black at ply 3 (White changed).
+      await playOut(g, changed === "black" ? ["e2e4", "e7e5"] : ["e2e4", "e7e5", "g1f3"], boardStub().deps);
+      // The writer the re-link calls (account-changed.ts), on the re-linked seat.
+      expect(await holdForOrganiser({ fixtureId: g.fixtureId, reason: "account_changed", seat: changed }))
+        .toEqual({ wrote: "needs_organiser", reason: "account_changed" });
+      const before = await ledger(g.fixtureId);
+      const { calls, sent, deps, reconciles } = boardStub();
+      for (const action of [{ kind: "move", uci: NEXT[changed] }, { kind: "resign" }] as const satisfies readonly PlayAction[]) {
+        await expect(by(g, changed, action, deps), `${changed} changed: ${action.kind}`).rejects.toMatchObject(NOT_FOUND);
+      }
+      expect(await mv(g, innocent, NEXT[innocent], deps), `${changed} changed: ${innocent} moves`).toEqual(APPLIED);
+      expect(calls, "only the innocent's move reached Lichess").toEqual([{ kind: "move", token: tokenOf(g[innocent]), gameId: g.gameId, uci: NEXT[innocent] }]);
+      expect(await ledger(g.fixtureId), `${changed} changed`).toMatchObject({
+        status: "needs_organiser",
+        needs_reason: "account_changed",
+        revoked_seat: changed,
+        moves_uci: [...before.moves_uci, NEXT[innocent]],
+        move_count: before.move_count + 1,
+      });
+      expect(sent.length, "the room sees the move").toBe(1);
+      expect(reconciles).toEqual([]);
+      checked++;
+    }
+    expect(checked, "both seats").toBe(2);
+  });
+
   it("the innocent seat may decline a draw the frozen seat offered before its revoke — BOTH seats", async () => {
     let checked = 0;
     for (const revoked of ["white", "black"] as const) {

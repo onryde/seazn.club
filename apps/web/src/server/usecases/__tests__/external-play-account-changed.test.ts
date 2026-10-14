@@ -93,8 +93,8 @@ async function bridge(r: SeedOnlineChessRoundResult, b: SeedRoundBoard, state: S
 }
 
 const bridgeOf = async (fixtureId: string) => {
-  const [row] = await sql<{ status: string; needs_reason: string | null; last_error: string | null }[]>`
-    select status, needs_reason, last_error from fixture_external_play where fixture_id = ${fixtureId}`;
+  const [row] = await sql<{ status: string; needs_reason: string | null; last_error: string | null; revoked_seat: string | null }[]>`
+    select status, needs_reason, last_error, revoked_seat from fixture_external_play where fixture_id = ${fixtureId}`;
   return row ?? null;
 };
 
@@ -129,7 +129,10 @@ describe.runIf(HAS_DB)("a re-link to a different Lichess account holds the playe
         await relink(b[colour], to);
         const after = await bridgeOf(b.fixtureId);
         if (STATES[state].holds) {
-          expect(after, `${state} ${colour}`).toMatchObject({ status: "needs_organiser", needs_reason: "account_changed" });
+          // Final re-review P11 (1): a seat hold — the re-linked player's OWN seat (the bridge plays home White), or
+          // none while no colours are recorded (a create in flight: both frozen, V442).
+          const seat = STATES[state].row.challenge ? (colour === "home" ? "white" : "black") : null;
+          expect(after, `${state} ${colour}`).toMatchObject({ status: "needs_organiser", needs_reason: "account_changed", revoked_seat: seat });
           expect(after!.last_error, `${state} ${colour}: the organiser's detail names both accounts`).toContain(`${from} → ${to}`);
           held += 1;
         } else {
@@ -146,23 +149,29 @@ describe.runIf(HAS_DB)("a re-link to a different Lichess account holds the playe
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("the hold reaches its readers: the organiser's queue lists the board as account_changed, and neither player's room can act on it", async () => {
+  it("the hold reaches its readers: the organiser's queue lists the board as account_changed on the re-linked seat; that player's room is frozen, the opponent's plays on (P11 (1))", async () => {
     const r = await round(1);
     const b = r.boards[0]!;
     await bridge(r, b, "live");
     await relink(b.home, freshAccount());
     const queue = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
-    expect(queue.map((q) => [q.fixtureId, q.reason])).toEqual([[b.fixtureId, "account_changed"]]);
+    expect(queue.map((q) => [q.fixtureId, q.reason, q.revokedSeat])).toEqual([[b.fixtureId, "account_changed", "white"]]);
     const deps = {
       publish: vi.fn(async () => {}),
       create: vi.fn(async () => ({ created: false as const, reason: "not_ready" as const })),
       offered: vi.fn(async () => true),
       mintRealtime: vi.fn(async () => "rt-token"),
     } as never;
+    // The ruling: the re-linked seat cannot act (its game is on the old account); the innocent opponent keeps playing
+    // and can still win on the clock (M7's reasoning) — neither room reads "held", since the game goes on.
+    const want = new Map([
+      [b.home.userId, { label: "the re-linked player", view: [false, false, "you"] }],
+      [b.away.userId, { label: "the opponent", view: [false, true, "opponent"] }],
+    ]);
     let checked = 0;
-    for (const side of [b.home, b.away]) {
-      const room = await readRoom({ kind: "session", userId: side.userId }, b.fixtureId, deps);
-      expect([room.held, room.canAct, room.frozen], side === b.home ? "the re-linked player" : "the opponent").toEqual([true, false, null]);
+    for (const [userId, { label, view }] of want) {
+      const room = await readRoom({ kind: "session", userId }, b.fixtureId, deps);
+      expect([room.held, room.canAct, room.frozen], label).toEqual(view);
       checked += 1;
     }
     expect(checked).toBe(2);

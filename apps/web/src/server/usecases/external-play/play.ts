@@ -31,7 +31,7 @@ import {
   submitMove as realSubmitMove,
 } from "@/server/external-play/lichess/board-api";
 import { assertUci, invalidUci } from "@/server/external-play/lichess/uci";
-import type { BoardCall, BoardErrorCode } from "@/server/external-play/types";
+import { SEAT_HOLD_REASONS, isSeatHold, type BoardCall, type BoardErrorCode } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
 import { effectiveBridge, loadOnlinePlayFixture, loadSides, type OnlinePlayFixture, type Side, type SidePlayer } from "./guard";
@@ -156,8 +156,9 @@ export type Game = {
   blackLichessId: string;
   moves: string[];
   ply: number;
-  /** The seats that may not act: none on a ready/live game; on a
-   *  token_revoked hold, the revoked seat (both when it was not recorded). */
+  /** The seats that may not act: none on a ready/live game; on a seat
+   *  hold (token_revoked, account_changed), its seat (both when it was not
+   *  recorded). */
   frozen: readonly Colour[];
 };
 
@@ -168,7 +169,8 @@ export type Game = {
  *  Every other hold, 'finished' and 'pending' accept nothing. */
 function frozenSeats(b: { status: string; needs_reason: string | null; revoked_seat: Colour | "both" | null }): readonly Colour[] | null {
   if (b.status === "ready" || b.status === "live") return [];
-  if (b.status === "needs_organiser" && b.needs_reason === "token_revoked") {
+  // Final re-review P11 (1): an account_changed hold freezes its seat the same way (SEAT_HOLD_REASONS).
+  if (b.status === "needs_organiser" && isSeatHold(b.needs_reason)) {
     if (b.revoked_seat === "white" || b.revoked_seat === "black") return [b.revoked_seat];
     return ["white", "black"];
   }
@@ -223,7 +225,7 @@ export function playableGame(f: OnlinePlayFixture): Game | null {
 
 /** Why play.ts refuses a seated player's act on the game on file. */
 export type ActRefusal =
-  /** A token_revoked hold froze this seat (ruling M7). */
+  /** A seat hold (token_revoked, account_changed) froze this seat (ruling M7). */
   | "frozen"
   /** The seat's linked Lichess account is not the one T9 recorded for this
    *  game — re-linked to another account, or unlinked — or the seat has no
@@ -389,12 +391,14 @@ type LedgerRow = {
 };
 
 /** The row, AS IT STANDS at the write, still takes `colour`'s act: a running
- *  game, or a token_revoked hold that froze the OTHER seat only (ruling M7).
+ *  game, or a seat hold (token_revoked / account_changed, SEAT_HOLD_REASONS)
+ *  that froze the OTHER seat only (ruling M7, final re-review P11 (1)).
  *  Re-checked in SQL, so a hold landing between our read and our write — or
  *  widening to this seat — refuses the write. */
 const actable = (colour: Colour) =>
   sql`(status in ('ready', 'live')
-       or (status = 'needs_organiser' and needs_reason = 'token_revoked' and revoked_seat = ${otherColour(colour)}))`;
+       or (status = 'needs_organiser' and needs_reason in ${sql(SEAT_HOLD_REASONS as unknown as string[])}
+           and revoked_seat = ${otherColour(colour)}))`;
 
 async function playMove(
   game: Game,

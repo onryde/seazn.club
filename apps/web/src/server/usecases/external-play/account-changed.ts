@@ -3,27 +3,39 @@ import "server-only";
 // mid-create was made for the OLD account, and the re-link has just revoked that account's grant (M-2), so nothing of
 // theirs can move it from Seazn. Each such board goes to the organiser as `account_changed`. Called by the re-link
 // (external-accounts.ts upsertLichessLink) after its own write commits; never throws, and never silent.
+//
+// Final re-review P11 (1): a seat hold, like token_revoked — the hold freezes THIS player's seat (V442
+// `revoked_seat`), the opponent plays on, and reconcile keeps reading the game so its real end is recorded.
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { holdForOrganiser } from "./result";
+import { holdForOrganiser, type RevokedSeat } from "./result";
+
+/** The seat the player sits at on this board, by colour — null while no colours are recorded (a create in flight). */
+function seatOf(b: { whiteSide: "home" | "away" | null; home: boolean; away: boolean }): RevokedSeat | null {
+  if (b.whiteSide === null) return null;
+  if (b.home && b.away) return "both";
+  const side = b.home ? "home" : "away";
+  return side === b.whiteSide ? "white" : "black";
+}
 
 /** Hold `userId`'s live and mid-create boards for the organiser — the boards M-10's lock refuses to clear (stages.ts
  *  `lockBoardsRefusingOnlineGames`): a create sent (T9's `create_sent_at` marker: a game MAY exist), or a recorded
  *  game no read has seen end on a bridge our side has not closed. A board whose fixture is no longer playable is
  *  refused by the hold itself, and a board already held keeps its first diagnosis (holdForOrganiser). */
 export async function holdBoardsOnAccountChange(userId: string, change: { from: string; to: string }): Promise<void> {
-  let boards: { fixtureId: string }[];
+  let boards: { fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[];
   try {
-    boards = await sql<{ fixtureId: string }[]>`
-      select ep.fixture_id as "fixtureId"
+    boards = await sql<{ fixtureId: string; whiteSide: "home" | "away" | null; home: boolean; away: boolean }[]>`
+      with mine as (
+        select em.entrant_id from entrant_members em join persons p on p.id = em.person_id where p.user_id = ${userId})
+      select ep.fixture_id as "fixtureId", ep.white_side as "whiteSide",
+             f.home_entrant_id in (select entrant_id from mine) as home,
+             f.away_entrant_id in (select entrant_id from mine) as away
         from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id
        where (ep.create_sent_at is not null
               or (ep.challenge_id is not null and ep.game_over_at is null and ep.status <> 'finished'))
-         and exists (
-           select 1 from entrant_members em
-             join persons p on p.id = em.person_id
-            where p.user_id = ${userId} and em.entrant_id in (f.home_entrant_id, f.away_entrant_id))
+         and (f.home_entrant_id in (select entrant_id from mine) or f.away_entrant_id in (select entrant_id from mine))
        order by ep.fixture_id`;
   } catch (err) {
     log.error(
@@ -34,9 +46,11 @@ export async function holdBoardsOnAccountChange(userId: string, change: { from: 
   }
   const detail = `lichess account changed: ${change.from} → ${change.to}`;
   const held: string[] = [];
-  for (const { fixtureId } of boards) {
+  for (const board of boards) {
+    const { fixtureId } = board;
+    const seat = seatOf(board);
     try {
-      const r = await holdForOrganiser({ fixtureId, reason: "account_changed", detail });
+      const r = await holdForOrganiser({ fixtureId, reason: "account_changed", detail, ...(seat === null ? {} : { seat }) });
       if (r.wrote === "needs_organiser" && r.reason === "account_changed") held.push(fixtureId);
     } catch (err) {
       log.error(
