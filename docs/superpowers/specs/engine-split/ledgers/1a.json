@@ -362,11 +362,6 @@
       "reason": "1a-2 review / 1a-3: the no-shipped-file-imports-a-__tests__-helper test (engine, from 1a-2) and the scheduler's copy of the runtime-deps gate (1a-3)"
     },
     {
-      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › does not read any status other than solver_unavailable as a silent fallback",
-      "fate": "added",
-      "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
-    },
-    {
       "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › fails an empty list, deliberate or not: a test that built no board proves nothing about the seam",
       "fate": "added",
       "reason": "1a-2 review + 1a-3 review: the no-silent-greedy guard (assertNoSilentGreedy) and the solver-call recorder (recordSolver / assertSolverReached) of the live placement tests, unit-tested without a service; they live in the scheduler beside the live tests, so they are new at base-relative"
@@ -603,6 +598,216 @@
       "id": "src/seam.test.ts › the engine's real output through the real adapter, client and a socket › accepted, two courts, mirrored (the court sequence is not a function of the fixture's position): a known-good board comes back by id, as an optimised result",
       "fate": "added",
       "reason": "1a-4 review: a case whose court sequence is not a function of the fixture's position (C2, C1, C2), so a decoder keyed on fixtureIndex cannot pass by coincidence"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › a valid input is untouched by the guard: the same call with both ports still returns a board",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › does not count a refused call against the solver queue",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log is null: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log lacks debug: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log lacks error: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log lacks info: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log lacks warn: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › log omitted: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › solve not a function: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › solve omitted: rejects with a TypeError naming the port, and never resolves to solver_unavailable",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › sweeps every way a port can be missing (anti-vacuity)",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › the type says so too: omitting `log` does not compile",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › buildSchedule refuses an input without its ports, as a TypeError and not as a greedy board › the type says so too: omitting `solve` does not compile",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › a valid input still returns clean for a board that already verifies",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log is null: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log lacks debug: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log lacks error: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log lacks info: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log lacks warn: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › log omitted: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › solve not a function: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › solve omitted: rejects with a TypeError naming the port",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/scheduling/ports-required.test.ts › repairDecomposedCpsat refuses an input without its ports, even when the board would never reach a solver › the type says so too: omitting `solve` does not compile",
+      "fate": "added",
+      "reason": "1a review m1 (D29 at run time): buildSchedule and repairDecomposedCpsat reject an input without solve or log as a TypeError, before any fallback"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertLiveSeam (what the live file's afterEach runs: both guards, one call) › deliberate: a refused call and solver_unavailable are expected, but the solver must still have been asked",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertLiveSeam (what the live file's afterEach runs: both guards, one call) › fails on the board's status alone: the solver 'answered' every time, yet the board is greedy's",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertLiveSeam (what the live file's afterEach runs: both guards, one call) › fails on the solver's calls alone: the board status reads fine, but the service refused (the review's SOLVER_BUSY)",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertLiveSeam (what the live file's afterEach runs: both guards, one call) › fails when the solver was never asked, even though the board reads fine",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertLiveSeam (what the live file's afterEach runs: both guards, one call) › passes a live board that the solver answered",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › deliberate: any status is accepted (the dead-port test), but never an empty list",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › names the status in the failure, so a red live run says which fallback it was",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "src/__tests__/live-seam-guard.test.ts › assertNoSilentGreedy › reads every status that is greedy's board as a silent fallback, and only ok / already_optimal as a live answer",
+      "fate": "added",
+      "reason": "1a review MAJOR-2: the live guard rejects every greedy-board status (not only solver_unavailable), and assertLiveSeam runs both guards"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a failed suite alone: both live files passed with assertions, but the run counts one failed suite elsewhere",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a failed test",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a live file missing from the run (the filename filter matched nothing)",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a live file that failed to COLLECT (the review's MAJOR-1: vitest exits 1, totals come only from the other file)",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a live file that is `passed` with no assertions at all, with the run's totals all green",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a live file whose status is not passed, though it reports tests and the run counts no failed suite",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses a skipped test (the service was not reached)",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge refuses zero tests collected",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "test/integration-runs-elsewhere.test.ts › the scheduler's live tests run in placement-ci.yml, and are excluded from ci.yml's strict step › the executed judge: anti-vacuity — jq is present and the good report is accepted",
+      "fate": "added",
+      "reason": "1a review MAJOR-1: the placement-ci judge is executed against synthetic reports; each clause (failed suites, per-file status, per-file assertions) has its own case"
+    },
+    {
+      "id": "src/__tests__/toolchain.test.ts › toolchain: suppression policy › packages/reference/eslint.config.mjs bans @ts-ignore and keeps @ts-expect-error described",
+      "fate": "added",
+      "reason": "1a review m8: the scheduler's and reference's eslint configs join the pinned ban-ts-comment suppression policy"
+    },
+    {
+      "id": "src/__tests__/toolchain.test.ts › toolchain: suppression policy › packages/scheduler/eslint.config.mjs bans @ts-ignore and keeps @ts-expect-error described",
+      "fate": "added",
+      "reason": "1a review m8: the scheduler's and reference's eslint configs join the pinned ban-ts-comment suppression policy"
     }
   ]
 }

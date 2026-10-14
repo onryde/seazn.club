@@ -94,6 +94,10 @@ describe("toolchain: suppression policy", () => {
   for (const cfg of [
     "apps/web/eslint.config.mjs",
     "packages/engine/eslint.config.mjs",
+    // The two packages that copied the rule (engine split 1a-3 added the scheduler's; reference carried the same block).
+    // Each is as strict as the engine's, and each was unpinned: a weakened copy would have gone unseen.
+    "packages/scheduler/eslint.config.mjs",
+    "packages/reference/eslint.config.mjs",
   ]) {
     it(`${cfg} bans @ts-ignore and keeps @ts-expect-error described`, () => {
       const text = readFileSync(join(REPO_ROOT, cfg), "utf8");

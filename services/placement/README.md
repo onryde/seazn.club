@@ -1,8 +1,10 @@
 # Placement scheduling service
 
 gRPC service wrapping Google OR-Tools CP-SAT for the BUILD/POLISH scheduler.
-`packages/engine/src/scheduling/build.ts` calls it through `placement-client.ts`,
-the TS anti-corruption layer — see
+`packages/engine/src/scheduling/build.ts` asks an injected solver, which in
+production is `placementSolver` from `@seazn/scheduler` (`packages/scheduler/src/solver.ts`);
+that adapter calls the service through `placement-client.ts`, the TS
+anti-corruption layer in the same package — see
 [`docs/superpowers/specs/2026-08-07-placement-scheduler-design.md`](../../docs/superpowers/specs/2026-08-07-placement-scheduler-design.md)
 for the design and [`DEPLOY.md`](./DEPLOY.md) for the production runbook.
 [`bench/README.md`](./bench/README.md) covers the offline sweep this
