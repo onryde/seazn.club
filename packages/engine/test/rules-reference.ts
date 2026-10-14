@@ -46,7 +46,8 @@ export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
  *  every other path (apps/web, e2e, tools, packages/reference, ...) is the monorepo's (scripts/__tests__/rules-reference.test.ts). */
 export const ENGINE_ROW_PREFIX = "packages/engine/";
 export const inEngine = (p: string): boolean => p.startsWith(ENGINE_ROW_PREFIX);
-/** A row's engine path on disk, wherever the engine sits (`packages/engine/` or the repo root): resolved against ENGINE, never REPO. */
+/** A row's engine path on disk: resolved against ENGINE, never REPO, so it also holds where the engine sits at a repo root. No CI job runs
+ *  that layout yet; the simulated engine repo run of engine-split 1d-6 is its witness (a REPO-relative resolution passes in the monorepo). */
 const enginePath = (p: string): string => join(ENGINE, p.slice(ENGINE_ROW_PREFIX.length));
 /** Whether a row's engine path exists. A path that is not the engine's does not (it is not this checker's to find). */
 export const engineFileExists = (p: string): boolean => inEngine(p) && existsSync(enginePath(p));
@@ -68,7 +69,7 @@ const readOrUndefined = (file: string): string | undefined => {
   }
 };
 export const readRepoFile: ReadRepoFile = (p) => readOrUndefined(join(REPO, p));
-/** The reader of the engine half: a `packages/engine/...` path read from the engine directory in either layout; any other path is undefined. */
+/** The reader of the engine half: a `packages/engine/...` path read from the engine directory; any other path is undefined. */
 export const readEngineFile: ReadRepoFile = (p) => (inEngine(p) ? readOrUndefined(enginePath(p)) : undefined);
 
 /** Test frameworks' entry points. Every title-bearing call starts at one of these. */

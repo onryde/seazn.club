@@ -304,7 +304,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
 
   // ---- Added by engine-split 1d-5 (the split of the checker between the engine and the monorepo, and the testkit export).
 
-  it("the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths in either layout and reads nothing else (synthetic signed rows)", () => {
+  it("the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths against the engine directory (the standalone-repo layout is proven by the 1d-6 sim run, not here) and reads nothing else (synthetic signed rows)", () => {
     const seen: string[] = [];
     const spy: ReadRepoFile = (p) => { seen.push(p); return FIXTURES.get(p); };
     const mine = "packages/engine/src/no-such.test.ts";

@@ -9,7 +9,9 @@
 // Purity: dossiers.ts touches node:fs and is deliberately NOT exported from
 // testkit/index.ts — @seazn/engine ships zero runtime dependencies and the
 // barrel is a published entrypoint. golden.ts set that precedent; this follows
-// it, and the last test here holds the line.
+// it, and the last test here holds the line for these two readers. The barrel
+// has ONE disk reader, rules-reference.ts (its input, rules/, ships in the
+// tarball); test/rules-reference.test.ts pins that closure to that file alone.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -137,8 +139,9 @@ describe("every builtin sport module ships a domain dossier", () => {
     expect(dossierPath("football").endsWith("football/DOMAIN.md")).toBe(true);
   });
 
-  // Structural, not cosmetic: node:fs must never reach @seazn/engine/testkit.
-  it("keeps node:fs out of the published testkit barrel", () => {
+  // Structural, not cosmetic: these two readers (their inputs do not ship) must never reach @seazn/engine/testkit. The rules reader
+  // is the barrel's one disk reader and is pinned in test/rules-reference.test.ts ("the published testkit barrel exports the rules parser, ...").
+  it("keeps the dossier and golden readers out of the published testkit barrel", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const barrel = readFileSync(join(here, "index.ts"), "utf8");
     expect(barrel).not.toMatch(/dossiers/);

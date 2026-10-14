@@ -188,7 +188,7 @@
       "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
       "fate": "split",
       "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists (engine paths)",
-      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory in either layout), retitled ' (engine paths)'"
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory), retitled ' (engine paths)'"
     },
     {
       "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every enforced-at path exists",
@@ -200,7 +200,7 @@
       "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
       "fate": "split",
       "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)",
-      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory in either layout), retitled ' (engine paths)'"
+      "reason": "1d-5 (spec 5.4, split by where the proof lives): the engine half checks the proof / enforced-at paths under packages/engine/ (resolved against the engine directory), retitled ' (engine paths)'"
     },
     {
       "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name)",
@@ -245,9 +245,9 @@
       "reason": "1d-5 (spec 5.4): the test reads the monorepo (the whole repo, ci.yml or the W2b spec under docs/), so it moves to scripts/__tests__/rules-reference.test.ts with its title; the engine keeps the tests that need only its own files"
     },
     {
-      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths in either layout and reads nothing else (synthetic signed rows)",
+      "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the checker's scope splits a row's proofs: the engine's reader resolves packages/engine/ paths against the engine directory (the standalone-repo layout is proven by the 1d-6 sim run, not here) and reads nothing else (synthetic signed rows)",
       "fate": "added",
-      "reason": "1d-5: the split of the checker between the engine and the monorepo is new behaviour (proofProblems takes a scope, the engine reader resolves packages/engine/ paths in either layout); witnessed with synthetic rows and a spy reader, and only the sim run kills a reader resolved against the repo root"
+      "reason": "1d-5: the split of the checker between the engine and the monorepo is new behaviour (proofProblems takes a scope, the engine reader resolves packages/engine/ paths against the engine directory); witnessed with synthetic rows and a spy reader, and only the sim run kills a reader resolved against the repo root"
     },
     {
       "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference",
@@ -428,6 +428,12 @@
       "id": "scripts/__tests__/z3-retirement-drift.test.ts › z3 retirement — stage C ledger › the scheduler package is in the scan — the placement client moved out of packages/engine/src and cannot drop out unseen",
       "fate": "retired",
       "reason": "owner ruling 2026-10-14: z3 fully retired; guard tests deleted"
+    },
+    {
+      "id": "src/testkit/dossiers.test.ts › every builtin sport module ships a domain dossier › keeps node:fs out of the published testkit barrel",
+      "fate": "rewritten",
+      "to": "src/testkit/dossiers.test.ts › every builtin sport module ships a domain dossier › keeps the dossier and golden readers out of the published testkit barrel",
+      "reason": "1d-5 review: the testkit barrel now exports one disk reader (rules-reference.ts), so a title saying node:fs is kept out of it was false; the assertions are unchanged (no dossiers, no golden in the barrel) and the title now says what they pin; the barrel's one disk reader is pinned in test/rules-reference.test.ts"
     }
   ]
 }

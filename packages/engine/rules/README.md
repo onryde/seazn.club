@@ -21,8 +21,10 @@ A rule row is a line of the table whose header is exactly:
   does either: `describe.skip`, `it.skip`, `.todo` and `.fixme`. `matrix:<caseId>` entries may be added as extra
   evidence; they are never sufficient alone.
 
-`packages/engine/test/rules-reference.test.ts` checks every row, and runs on every pull request in the `gates` job of
-`.github/workflows/ci.yml` (a rule proved in `apps/web`, e2e or `tools` is checked even when no engine file changed). A
-row-shaped line the parser does not read is a failure. The wave rulebooks under
+Two files check every row, and both run on every pull request, each in a step of its own in the `gates` job of
+`.github/workflows/ci.yml` (a rule proved in `apps/web`, e2e or `tools` is checked even when no engine file changed):
+`packages/engine/test/rules-reference.test.ts` checks the proof and enforced-at paths under `packages/engine/` (engine
+paths), and `scripts/__tests__/rules-reference.test.ts` checks every other path (app, tools and reference paths), the W2b
+rows' text against the W2b spec, and the CI wiring of both steps. A row-shaped line the parser does not read is a failure. The wave rulebooks under
 `docs/superpowers/specs/2026-09-27-format-matrix-prompts/rulebook-W2-*.md` are frozen research drafts: this
 directory is the authority from W2a on.
