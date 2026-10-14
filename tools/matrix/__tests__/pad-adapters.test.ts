@@ -95,7 +95,7 @@ function requestsFor(sport: string): StreamRequest[] {
     const cfg = resolveSportCfg(sport, v);
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
-  const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout");
+  const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout", def);
   return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o))];
 }
 /** The events a request generates, or [] where the generator declares the case unsupported. */
@@ -1296,7 +1296,7 @@ describe("boardgame", () => {
     );
 
   it("W2a tie-break (BG-KO-1, ruling 82; W2c BG-KO-2): the tile and the rung; then the winner and the score skipped for rapid and blitz, or Black, the result and the read-back's Confirm for the Armageddon — every rung the engine declares, both sides, a drawn Armageddon too", () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     let driven = 0;
     let drawn = 0;
     for (const { label, outcome } of tiebreakRequests()) {
@@ -1319,7 +1319,7 @@ describe("boardgame", () => {
   });
 
   it("W2c design pass: a stage that plays ONE rung shows no rung step, so the adapter taps none — every rung the engine declares, both sides, replayed on the fake ledger — and a rung the stage does not play is refused by name", async () => {
-    const base = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const base = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     /** The bracket's cfg with the stage's rung list set (BG-KO-3). */
     const playing = (rungs: readonly string[]) => ({ ...(base as Record<string, unknown>), tiebreakRungs: rungs });
     let driven = 0;
@@ -1355,7 +1355,7 @@ describe("boardgame", () => {
   });
 
   it("route case (a value outside the generator's): the Armageddon White wins — Black, then `result-white`, then Confirm — is equal on the ledger and folds to the OTHER entrant (BG-KO-2)", async () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung: ARMAGEDDON, winner: "home" });
     // The generator cannot ask for "White won": its `winner` is Black. Rewrite the row it emits, as the resignation case does.
     const evs = generateStream(r).map((e) => (e.type === BOARDGAME_TIEBREAK ? { ...e, payload: { rung: ARMAGEDDON, black: AWAY, result: "white" } } : e));
@@ -1371,7 +1371,7 @@ describe("boardgame", () => {
   });
 
   it("W2a tie-break: a payload that is not the engine's rung with an entrant winner — or, for the Armageddon, an entrant as Black and one of the engine's results — is refused by name", () => {
-    const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout"), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame")), { kind: "tiebreak", rung: "rapid", winner: "home" });
     const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME },
       // an extra key that sorts AFTER "winner" leaves the first two sorted keys right, so only the key count refuses it
       { rung: "rapid", winner: HOME, zz: 1 },
@@ -1408,7 +1408,7 @@ describe("boardgame", () => {
   });
 
   it("W2a tie-break, replayed on the fake ledger: the drawn game and the tie-break row are equal to the generated ones for every rung, side and Armageddon result (drawn included), and the stored rows fold (under the bracket's cfg) to the requested win by that rung", async () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     let cases = 0;
     for (const { label, outcome } of tiebreakRequests()) {
       const o = outcome as Extract<RequestedOutcome, { kind: "tiebreak" }>;
@@ -1597,7 +1597,7 @@ describe("carrom", () => {
   });
 
   it("route case (a value outside the generator's old one): a BRACKET game's boards carry 7 coins, not 9 — the number step takes the generated value, the rows are equal, and the stored rows fold under the overlay (tieBoard 'extra') to the requested win", async () => {
-    const cfg = stageCfg("carrom", resolveSportCfg("carrom", offlineBuilderDefault("carrom")), "knockout");
+    const cfg = stageCfg("carrom", resolveSportCfg("carrom", offlineBuilderDefault("carrom")), "knockout", offlineBuilderDefault("carrom"));
     const c = cfg as { gameTo: number; maxBoards: number; pointsPerCoin: number; tieBoard: string };
     expect(c.tieBoard).toBe("extra"); // the overlay is on
     // The rulebook arithmetic, not the generator's: a level game plays maxBoards boards, a side wins ceil(maxBoards/2) of

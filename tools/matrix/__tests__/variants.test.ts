@@ -495,7 +495,7 @@ describe("scorability (the generatability sweep)", () => {
     // registry guard under the cfg the product folds the stage under, across every sport, variant and both kinds of stage.
     let wins = 0;
     for (const s of SPORT_KEYS) for (const v of variantKeys(s)) for (const stageKind of ["league", "knockout"] as const) {
-      const cfg = stageCfg(s, resolveSportCfg(s, v), stageKind);
+      const cfg = stageCfg(s, resolveSportCfg(s, v), stageKind, v);
       for (const winner of ["home", "away"] as const) {
         try {
           generateStream({ sportKey: s, cfg, stageKind, home: "h", away: "a", outcome: { kind: "win", winner } });

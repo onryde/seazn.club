@@ -28,7 +28,7 @@ import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from 
 import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
 import { BRACKET_OF } from "../scenarios/terminal-finals.ts";
 import { hasNoNextMatch, wireGraph } from "../scenarios/w2b-checks.ts";
-import { entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
+import { decidersOffRulesFor, entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
 export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walkover", "Void", "Correct", "Generate", "Rebuild", "Complete"] as const;
@@ -86,6 +86,8 @@ export interface ModelState {
   readonly kind: "individual" | "pair" | "team";
   readonly stageKind: string;
   readonly stageConfig: Readonly<Record<string, unknown>>;
+  /** The `config.rules` the model POSTED with its stage (R-T12-3; every decider off on a bracket), never the read-back. */
+  readonly stageRules: Readonly<Record<string, unknown>> | undefined;
   readonly divisionId: string;
   readonly stageId: string;
   readonly tag: string;
@@ -427,9 +429,14 @@ export async function readRoster(d: OrganiserDriver, m: { sport: string; cfg: un
  *  stage, built from the builder's own bodies (stagesForRow). A row the model
  *  does not drive is refused by family before any driver call (D6). */
 export async function newModelState(input: { driver: OrganiserDriver; row: RowKey; sport: string; variant: string; entrants: number; tag: string; competitionId?: string; knobs?: Knobs }): Promise<ModelState> {
-  const bodies = stagesForRow(input.row, input.knobs);
-  const refused = modelRowRefusal(input.row, bodies);
+  // R-T12-3: the model's Settle drives the HOLD path (a level result where the sport builds one, else an abandon), so its
+  // bracket stage is posted with every decider off (X-SR-6's held arm); a table stage posts none. `stageRules` keeps
+  // what was posted, which `stageCfg` layers over the preset as the product does.
+  const rowBodies = stagesForRow(input.row, input.knobs);
+  const refused = modelRowRefusal(input.row, rowBodies);
   if (refused !== null) throw refused;
+  const stageRules = rowBodies[0] === undefined ? undefined : decidersOffRulesFor(input.sport, input.variant, rowBodies[0].kind as StageKind);
+  const bodies = rowBodies.map((b, i) => (i === 0 && stageRules !== undefined ? { ...b, config: { ...b.config, rules: stageRules } } : b));
   const cfg = resolveSportCfg(input.sport, input.variant);
   const kind = entrantKindFor(input.sport, cfg);
   const who = { sport: input.sport, cfg, kind };
@@ -443,7 +450,7 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
   if (kind === "team") for (const e of added) rosters.set(e.id, await readRoster(d, who, e));
   const zero = (): CommandCounts => ({ ran: 0, accepted: 0, refused: 0, expected: 0, unexpected: 0 });
   return {
-    sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
+    sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config, stageRules,
     divisionId: division.id, stageId: stage.id, tag: input.tag,
     entrants: added.map((e) => e.id), withdrawn: new Set(), started: false, completed: false, lateEntry: false, posts: 0,
     fixtures: new Map(), generates: [], settles: [], forfeits: [],
@@ -646,7 +653,7 @@ function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
 /** The engine's fold of a known ledger, or why it refused one. */
 function engineOutcome(m: ModelState, home: string, away: string, ledger: readonly LedgerEntry[]): { out: ObservedOutcome | null; refused: string | null } {
   try {
-    return { out: toObservedOutcome(foldLedger(m.sport, stageCfg(m.sport, m.cfg, m.stageKind as StageKind), home, away, ledger)), refused: null };
+    return { out: toObservedOutcome(foldLedger(m.sport, stageCfg(m.sport, m.cfg, m.stageKind as StageKind, m.variant, m.stageRules), home, away, ledger)), refused: null };
   } catch (e) {
     return { out: null, refused: e instanceof Error ? e.message : String(e) };
   }

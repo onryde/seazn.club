@@ -95,7 +95,7 @@ describe("the cells: bracket-root rows × the sports whose rule the scenario is,
 
   it("per scenario, over the sport registry: a level settle exactly where a level result is reachable, an abandon settle everywhere a bracket abandons, a tie-break for chess alone, an extra board for carrom alone, a refused draw for generic alone", () => {
     const by = (k: W2aScenarioKey) => SPORT_KEYS.filter((s) => w2aApplies(k, s));
-    expect(by("BRACKET_SETTLE_LEVEL")).toEqual(SPORT_KEYS.filter((s) => levelReachable(s, bracketCfgOf(s), "knockout")));
+    expect(by("BRACKET_SETTLE_LEVEL")).toEqual(SPORT_KEYS.filter((s) => levelReachable(s, bracketCfgOf(s, "BRACKET_SETTLE_LEVEL"), "knockout")));
     expect(by("BRACKET_SETTLE_LEVEL")).not.toContain("generic"); // GN-KO-1
     expect(by("BRACKET_SETTLE_LEVEL")).toContain("football");
     expect(by("BRACKET_SETTLE_ABANDON")).toContain("generic");

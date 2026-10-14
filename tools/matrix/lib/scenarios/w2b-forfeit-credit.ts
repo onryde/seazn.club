@@ -26,14 +26,14 @@ import { foldStream } from "../fold.ts";
 import { isTerminal, toObservedOutcome, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
-import { sportModule, stageCfg } from "../sport-cfg.ts";
+import { sportModule } from "../sport-cfg.ts";
 import { routeTo, type Route } from "../routing.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { AWARD_POLICY, DLS_ON, abandonOverride, inMatchReasons, w2bApplies, w2bCells } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
-import { Recorder, decideFixture, ensureLineups, liveEvents, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
+import { Recorder, caseStageCfg, decideFixture, ensureLineups, liveEvents, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
 import {
   NO_PLACEMENT, ScoresheetUnread, creditExpectation, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded, hasNoNextMatch, isolatedTable, ladderUnmoved,
   partialPlayStands, pickDoubleWalkover, scoresheetOf, withRefusals, WITHDREW, type ExpectedDelta, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
@@ -102,7 +102,7 @@ async function tableRows(ctx: ScenarioContext, stage: StageRef, fixtures: readon
  *  and stage context the product folds it in. Null where the harness holds no stream or it folds no outcome. */
 function localDelta(ctx: ScenarioContext, rec: Recorder, stage: StageRef): (f: ObservedFixture) => readonly [LocalDelta, LocalDelta] | null {
   const m = sportModule(ctx.spec.sport);
-  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+  const cfg = caseStageCfg(ctx, stage.kind as StageKind);
   return (f) => {
     const events = rec.streams.get(f.id);
     if (events === undefined || f.home === null || f.away === null) return null;
@@ -115,7 +115,7 @@ function localDelta(ctx: ScenarioContext, rec: Recorder, stage: StageRef): (f: O
 }
 
 const creditCase = (ctx: ScenarioContext, stage: StageRef, reason: CreditCase["reason"], extra: Pick<CreditCase, "by" | "played"> = {}): CreditCase =>
-  ({ sport: ctx.spec.sport, cfg: stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) as Record<string, unknown>, reason, ...extra });
+  ({ sport: ctx.spec.sport, cfg: caseStageCfg(ctx, stage.kind as StageKind) as Record<string, unknown>, reason, ...extra });
 
 /** The isolated table over the drives the family credited, with each refusal a failing item beside it (withRefusals):
  *  a refused credit is judged, never skipped. */
@@ -147,7 +147,7 @@ async function walkoverCreditCheck(ctx: ScenarioContext, rec: Recorder, setup: D
 async function retirementCreditCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly ForfeitDrive[], observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-retirement-credit";
   if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table: a retirement's credit is the table's (X-WO-1)`);
-  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind) as Record<string, unknown>;
+  const cfg = caseStageCfg(ctx, setup.stage.kind as StageKind) as Record<string, unknown>;
   const judged = new Map<string, (e: string) => ExpectedDelta>();
   const refused: string[] = [];
   for (const d of drives) {
@@ -282,7 +282,7 @@ export function abandonDelta(d: AbandonDrive, p: (k: keyof PointsCfg) => number)
  *  abandon whose rule result cannot be read is a failing item beside the table's own (withRefusals). */
 async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly AbandonDrive[], observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-abandon-in-table";
-  const pts = ((stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind) as { points?: PointsCfg }).points ?? {});
+  const pts = ((caseStageCfg(ctx, setup.stage.kind as StageKind) as { points?: PointsCfg }).points ?? {});
   const p = (k: keyof PointsCfg): number => {
     const v = pts[k];
     if (typeof v !== "number") throw new Error(`scenario: AB-AWARD on ${ctx.spec.sport} — the cfg's points table has no numeric '${k}'`);
@@ -585,7 +585,7 @@ const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
   // X-RT-1's two in-match reasons, as this sport's generator builds them under the stage's cfg: ruling 113 refuses a
   // retirement where nothing is played short of the result (chess), so there the disqualification is driven alone.
   const stageKind = setup.stage.kind as StageKind;
-  const reasons: readonly ForfeitReason[] = inMatchReasons(ctx.spec.sport, stageCfg(ctx.spec.sport, ctx.cfg, stageKind), stageKind);
+  const reasons: readonly ForfeitReason[] = inMatchReasons(ctx.spec.sport, caseStageCfg(ctx, stageKind), stageKind);
   if (reasons.length === 0) throw new Error(`RT-PART: ${ctx.spec.sport} on a ${stageKind} builds neither a retirement nor a disqualification after partial play — not an RT-PART cell`);
   const hooks: RoundHooks = {
     beforeRound: async (_round, batch) => {
@@ -671,7 +671,7 @@ const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
       const events = rec.streams.get(f.id) ?? [];
       // The rule's result for this stream: the real engine's fold of what was posted (review M-3); and whether the stage
       // takes a draw: the sport's own declaration for this cfg and kind (X-AB-1).
-      const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
+      const cfg = caseStageCfg(ctx, setup.stage.kind as StageKind);
       const rule = toObservedOutcome(foldStream(sportModule(ctx.spec.sport), cfg, home, away, events).outcome);
       const drawStands = sportModule(ctx.spec.sport).supportsDraws(cfg, setup.stage.kind as StageKind);
       drives.push({ fixtureId: f.id, home, away, kind: step.kind, events, rule, drawStands });
@@ -686,7 +686,7 @@ const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
 
 const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
   const r: WdRecord = { half: wdCascFinalHalf(ctx.spec.row, ctx.spec.sport), steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
-  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
+  const cfg = caseStageCfg(ctx, setup.stage.kind as StageKind);
   const withdraw = async (entrantId: string, label: string) => {
     let answer: WithdrawOut;
     try {

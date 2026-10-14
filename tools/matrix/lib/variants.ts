@@ -287,7 +287,7 @@ export function scorable(vc: VariantCase, deps: { generate?: typeof generateStre
   // W2a: a bracket fixture is generated and folded under the cfg the product folds it under - the stage's own overlay
   // (boardgame's tie-break, carrom's extra board) on top of the resolved cfg. A bare cfg here asks a carrom knockout
   // for a plain win, which the overlay makes a different game.
-  const foldCfg = stageCfg(vc.sport, cfg, stageKind);
+  const foldCfg = stageCfg(vc.sport, cfg, stageKind, vc.preset);
   for (const winner of ["home", "away"] as const) {
     const req = { sportKey: vc.sport, cfg: foldCfg, stageKind, home: "matrix-home", away: "matrix-away", outcome: { kind: "win", winner } as const };
     try {

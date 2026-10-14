@@ -105,7 +105,7 @@ describe("W2b generator breadth (spec §5.6)", () => {
     for (const sportKey of SPORT_KEYS) {
       for (const variant of variantKeys(sportKey)) {
         for (const stageKind of ["league", "knockout"] as const) {
-          const cfg = stageCfg(sportKey, resolveSportCfg(sportKey, variant), stageKind);
+          const cfg = stageCfg(sportKey, resolveSportCfg(sportKey, variant), stageKind, variant);
           try {
             const s = generateStream({ sportKey, cfg, stageKind, home: "H", away: "A", outcome: { kind: "forfeit", by: "home", reason: "retired", at: "after_start" } });
             // The fold the product runs: START, the play, the forfeit, and only the forfeit decides (D2: an award to the other side).

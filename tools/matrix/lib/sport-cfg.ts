@@ -12,12 +12,18 @@
 //  - The product folds a fixture under `stageScopedCfg(division.config,
 //    stage.config)`, which overlays `rules`, `shootout` and `extraTime` from
 //    the stage. The builder's template stage configs (format-templates.ts)
-//    carry none of those keys, so today the overlay is the identity. A wave
-//    that adds stage rules must resolve them here too, or the in-process fold
-//    diverges from the product's.
+//    carry none of those keys, but since W2c Task 12 the product WRITES each
+//    new stage's preset rules (the engine's `stageDefaults` for its kind and
+//    the division's variant: a knockout's extra time and shoot-out, overtime,
+//    the super over) into `config.rules` at create, under any rules the
+//    create sent. `stageCfg` below layers both the same way, through the
+//    product's own mapping (fix round 1, R-T12-3): a stage the harness posts
+//    with rules (a hold-path cell's every-decider-off, `decidersOffRulesFor`)
+//    passes them, or the in-process fold diverges from the product's.
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, type AnySportModule } from "@seazn/engine/sport";
+import { effectiveEntrantModel, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { decidersOffRules, stageRulesOverlay } from "../../../apps/web/src/lib/stage-decider-off.ts";
 
 export class UnknownSport extends Error {
   readonly sportKey: string;
@@ -86,12 +92,33 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
  *  `bracketDeciders(cfg)` overlay on top of the resolved cfg (loop F Task 6 will do the same server-side; the
  *  V347 freeze then carries it), so the harness's in-process fold and its stream generation must read the
  *  overlaid cfg or they diverge from the product on every boardgame and carrom bracket. Built from the engine's
- *  own declaration, never a table typed here: a stage that is not a bracket is returned as it came, untouched.
- *  `drawsAllowed` is unchanged: it answers a different question (may this fixture end level, by stage kind). */
-export function stageCfg(sportKey: string, cfg: unknown, stageKind: StageKind): unknown {
-  if (!forbidsLevelResult(stageKind)) return cfg;
-  const overlay = sportModule(sportKey).bracketDeciders(cfg) as Record<string, unknown>;
-  return { ...(cfg as Record<string, unknown>), ...overlay };
+ *  own declaration, never a table typed here. `drawsAllowed` is unchanged: it answers a different question (may
+ *  this fixture end level, by stage kind).
+ *
+ *  W2c Task 12, fix round 1 (R-T12-3): first, the rules the PRODUCT stores on the stage and overlays, exactly as it
+ *  does. At create a stage is written with its sport's preset for its kind and the division's variant
+ *  (`stageDefaultsFor`), the `rules` the create sent winning key by key (a sent null removes a preset key); the resolver
+ *  then lays them over the division through `stageRulesOverlay` (apps/web lib/stage-decider-off.ts, the one mapping:
+ *  a null is inherit, a period sport's `false` is the engine's null), and a bracket stage gets the bracket deciders
+ *  over the parse of that (`liveCfg`). `rules` are what the harness POSTED with the stage, never the product's
+ *  read-back. A stage whose kind and variant declare no preset, that was posted no rules and is not a bracket is
+ *  returned as it came, untouched. */
+export function stageCfg(sportKey: string, cfg: unknown, stageKind: StageKind, variantKey: string, rules?: Readonly<Record<string, unknown>>): unknown {
+  const m = sportModule(sportKey);
+  const stored = { ...stageDefaultsFor(m, stageKind, variantKey), ...(rules ?? {}) };
+  const overlay = stageRulesOverlay(m, cfg, stored);
+  const scoped = Object.keys(overlay).length === 0 ? cfg : { ...(cfg as Record<string, unknown>), ...overlay };
+  if (!forbidsLevelResult(stageKind)) return scoped;
+  const parsed = m.configSchema.safeParse(scoped);
+  const deciders = m.bracketDeciders((parsed.success ? parsed.data : scoped) as never) as Record<string, unknown>;
+  return { ...(scoped as Record<string, unknown>), ...deciders };
+}
+
+/** The `config.rules` a HOLD-PATH cell posts on a stage of `stageKind` (a cell whose scenario is "a level knockout is
+ *  held"): every decider off, X-SR-6's held arm and a state an organiser reaches on purpose, from the product's own
+ *  builder (`decidersOffRules`, the e2e rigs' too). A table stage posts none: no decider plays there. */
+export function decidersOffRulesFor(sportKey: string, variantKey: string, stageKind: StageKind): Record<string, unknown> | undefined {
+  return forbidsLevelResult(stageKind) ? decidersOffRules(sportModule(sportKey), variantKey, stageKind) : undefined;
 }
 
 export function entrantKindFor(sportKey: string, cfg: unknown): "individual" | "pair" | "team" {

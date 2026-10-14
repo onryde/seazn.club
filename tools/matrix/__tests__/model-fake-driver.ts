@@ -51,7 +51,7 @@ import { stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
-import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, type FakeFixture } from "./fake-driver.ts";
+import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, rulesOfConfig, type FakeFixture } from "./fake-driver.ts";
 import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
 
@@ -318,7 +318,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
         const kind = this.stage?.kind ?? null;
         try {
           // W2a: the product folds a fixture under its STAGE's cfg (resolveFixtureCfg: a bracket's overlay on top of the division's).
-          outcome = foldLedger(this.sport, kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id, f.away_entrant_id, [...ledger, entry]);
+          outcome = foldLedger(this.sport, kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind, this.variant, rulesOfConfig(this.stage?.config)), f.home_entrant_id, f.away_entrant_id, [...ledger, entry]);
         } catch (e) {
           // As FakeLeagueDriver: only an EngineError is a product refusal.
           if (!EngineError.is(e)) throw e;

@@ -17,7 +17,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { foldStream } from "../lib/fold.ts";
 import { INVARIANTS, evaluateInvariant } from "../lib/invariants.ts";
 import type { ObservedFixture, ObservedOutcome } from "../lib/observed.ts";
-import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
+import { Recorder, caseStageCfg, setUpDivision } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { BRACKET_OF } from "../lib/scenarios/terminal-finals.ts";
 import { W2B_SCENARIO_KEYS, type CaseSpec } from "../lib/scenarios/types.ts";
@@ -30,7 +30,7 @@ import {
   wdCascFinalHalf, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
-import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { levelCoins } from "../lib/streams/carrom.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type StreamEvent } from "../lib/streams/types.ts";
@@ -485,7 +485,8 @@ describe("heldStream: what QF2 is when its side withdraws (X-WD-1, BG-WO-3, D3 R
     let checked = 0;
     const labels = new Map<string, string>();
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "knockout");
+      // WD-CASC is a hold-path scenario (R-T12-3): its knockout is posted with every decider off.
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "knockout", variantFor(sport), decidersOffRulesFor(sport, variantFor(sport), "knockout"));
       const h = heldStream(sport, cfg, "h", "a");
       labels.set(sport, h.label);
       expect(h.events[0]?.type, sport).toBe("core.start");
@@ -815,7 +816,7 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
   it("every key the family credits is a metric the sport's own standingsDelta emits for a played match — walkover and double walkover (sweep of 11, under each builder default)", () => {
     let checked = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league") as Record<string, unknown>;
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league", variantFor(sport)) as Record<string, unknown>;
       const events = generateStream({ sportKey: sport, cfg, stageKind: "league", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
       const folded = foldStream(sportModule(sport), cfg, "h", "a", events);
       const [h] = sportModule(sport).standingsDelta(folded.outcome as never, cfg as never, { kind: "league" }, folded.state as never);
@@ -856,7 +857,7 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
     let unbuilt = 0;
     for (const kind of ["league", "knockout"] as const) {
       for (const sport of SPORT_KEYS) {
-        const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), kind) as Record<string, unknown>;
+        const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), kind, variantFor(sport)) as Record<string, unknown>;
         let events: StreamEvent[];
         try {
           events = generateStream({ sportKey: sport, cfg, stageKind: kind, home: "h", away: "a", outcome: { kind: "forfeit", by: "home", reason: "retired", at: "after_start" } });
@@ -878,7 +879,7 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
   it("scoresheetOf, the empty case (ruling 112, R112 review M-3): a stream holding nothing but its START — or nothing at all — reads as an EMPTY scoresheet in every sport, never a 0-0 unit (the oracle reads a unit as play)", () => {
     let checked = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league") as Record<string, unknown>;
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league", variantFor(sport)) as Record<string, unknown>;
       for (const events of [[{ type: "core.start", payload: {} }], []] as StreamEvent[][]) {
         expect(scoresheetOf(sport, cfg, events, "h", "a"), `${sport} ${events.length === 0 ? "nothing" : "a bare START"}`).toEqual({ home: [], away: [] });
         checked++;
@@ -929,7 +930,7 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
   it("forfeitPoints: a forfeit's 'win' is the points a PLAYED win and loss earn under the same cfg — the sport's own standingsDelta of its generated win stream, every sport (sweep of 11); 'zero' is nothing; an unread table is named", () => {
     let checked = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league") as Record<string, unknown>;
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league", variantFor(sport)) as Record<string, unknown>;
       const events = generateStream({ sportKey: sport, cfg, stageKind: "league", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
       const folded = foldStream(sportModule(sport), cfg, "h", "a", events);
       const [h, a] = sportModule(sport).standingsDelta(folded.outcome as never, cfg as never, { kind: "league" }, folded.state as never);
@@ -1201,7 +1202,7 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|WD-CASC`, row: "knockout", sport, variant, scenario: "WD-CASC", canary: false };
     const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
     await setUpDivision(ctx, new Recorder(), n);
-    const cfg = stageCfg(sport, ctx.cfg, "knockout");
+    const cfg = caseStageCfg(ctx, "knockout"); // WD-CASC posts its knockout with every decider off (R-T12-3)
     const row = (id: string) => d.fixtures.find((f) => f.id === id)!;
     const r1 = d.fixtures.filter((f) => f.round_no === 1);
     const win = (id: string, winner: "home" | "away" = "home") => {
@@ -1322,7 +1323,7 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     const setup = await setUpDivision(ctx, new Recorder(), 4);
     const [top, second] = [setup.idOfSeed(1), setup.idOfSeed(2)];
     const { fixture_id: id } = await d.challenge(setup.stage.id, second, top);
-    await d.postStream(id, generateStream({ sportKey: "generic", cfg: stageCfg("generic", ctx.cfg, "ladder"), stageKind: "ladder", home: second, away: top, outcome: { kind: "abandon" } }));
+    await d.postStream(id, generateStream({ sportKey: "generic", cfg: stageCfg("generic", ctx.cfg, "ladder", ctx.spec.variant), stageKind: "ladder", home: second, away: top, outcome: { kind: "abandon" } }));
     const f = () => d.fixtures.find((x) => x.id === id)!;
     expect(f().status, "premise").toBe("abandoned");
     expect(await d.withdraw(second)).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: 1 });
@@ -1395,7 +1396,9 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
       }
       const d = new WithdrawsAHeldSide();
       const variant = variantFor("football");
-      const spec: CaseSpec = { caseId: `${row}|football|${variant}|LIFECYCLE`, row, sport: "football", variant, scenario: "LIFECYCLE", canary: false };
+      // LIFECYCLE's choreography on a case labelled WD-CASC, a hold-path scenario (R-T12-3): its later bracket stage is
+      // posted with every decider off, so a level result there is HELD (the line this test withdraws a side from).
+      const spec: CaseSpec = { caseId: `${row}|football|${variant}|WD-CASC`, row, sport: "football", variant, scenario: "WD-CASC", canary: false };
       // The harness's own settle of that line then meets a decided fixture; how the run judges that is not this test's.
       await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("football", variant), tag: "t", denied: [] }).catch((e: unknown) => {
         if (!(e instanceof RefusedCall)) throw e;
@@ -1454,7 +1457,7 @@ describe("rulings 53 + 106: a bracket-path withdrawal with nothing pending answe
     const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
     await setUpDivision(ctx, new Recorder(), fieldSizeFor(row, "LIFECYCLE"));
     const kind = d.bracketKind as StageKind;
-    return { d, cfg: stageCfg(sport, ctx.cfg, kind), kind };
+    return { d, cfg: stageCfg(sport, ctx.cfg, kind, ctx.spec.variant), kind };
   }
   const mineOf = (d: FakeLeagueDriver, id: string) => d.fixtures.filter((f) => f.home_entrant_id === id || f.away_entrant_id === id);
   const acting = (d: FakeLeagueDriver, id: string) => mineOf(d, id).filter((f) => bracketWithdrawalActs(f.status, d.abandonActive(f))).length;
@@ -1492,7 +1495,7 @@ describe("rulings 53 + 106: a bracket-path withdrawal with nothing pending answe
     const spec: CaseSpec = { caseId: "ladder|generic|x|R4", row: "ladder", sport: "generic", variant: variantFor("generic"), scenario: "R4", canary: false };
     const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variantFor("generic")), tag: "t", denied: [] };
     const setup = await setUpDivision(ctx, new Recorder(), 4);
-    const cfg = stageCfg("generic", ctx.cfg, "ladder");
+    const cfg = stageCfg("generic", ctx.cfg, "ladder", ctx.spec.variant);
     const [s1, s2, s3, s4] = [setup.idOfSeed(1), setup.idOfSeed(2), setup.idOfSeed(3), setup.idOfSeed(4)];
     const { fixture_id: first } = await d.challenge(setup.stage.id, s2, s1);
     await d.postStream(first, generateStream({ sportKey: "generic", cfg, stageKind: "ladder", home: s2, away: s1, outcome: { kind: "win", winner: "away" } }));

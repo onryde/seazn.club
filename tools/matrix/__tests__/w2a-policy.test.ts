@@ -15,7 +15,7 @@ import { Recorder, bracketPolicy, hardPath, type DivisionSetup } from "../lib/sc
 import { bracketDeciderExercised } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { levelReachable } from "../lib/streams/index.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
@@ -23,7 +23,10 @@ import { FakeKnockoutDriver } from "./fake-driver.ts";
 /** A setup that seeds by id order: "a" is seed 1, "b" seed 2. Only seedOf is read by the policy. */
 const setup = { seedOf: (id: string) => (id === "a" ? 1 : 2) } as unknown as DivisionSetup;
 const fixture = (home: string, away: string): FixtureRow => ({ home_entrant_id: home, away_entrant_id: away } as FixtureRow);
-const cfgOf = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+const cfgOf = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport));
+/** A HOLD-PATH knockout's cfg (R-T12-3): every decider off, as BRACKET_SETTLE_LEVEL's cases post it. */
+const heldCfgOf = (sport: string) =>
+  stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport), decidersOffRulesFor(sport, offlineBuilderDefault(sport), "knockout"));
 
 describe("bracketPolicy — the first of every three bracket fixtures asks for the hard path, the rest play out", () => {
   it("ordinal 0, 1, 2, 3 …: hard, win, win, hard; the win is the better seed's side, whichever side that is", () => {
@@ -70,7 +73,8 @@ describe("bracketPolicy — the first of every three bracket fixtures asks for t
     let level = 0;
     let abandon = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = cfgOf(sport);
+      // The hold-path arm: with the presets on no knockout ends level (sport-cfg-stage-presets.test.ts's positive pairs).
+      const cfg = heldCfgOf(sport);
       const reach = levelReachable(sport, cfg, "knockout");
       for (const n of [0, 1, 2, 3]) {
         const asked = hardPath(sport, cfg, n, "home");

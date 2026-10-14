@@ -17,7 +17,7 @@ import { biasFor } from "../lib/model/run-cell.ts";
 import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHECK, FORFEIT_TABLE_CHECK, NEXT_MATCH_LOCK, lastRoundReadDiverges, modelRowRefusal } from "../lib/model/state.ts";
 import { BRACKET_OF } from "../lib/scenarios/terminal-finals.ts";
 import { loadRegressions, replayFences } from "../lib/scenario-catalogue.ts";
-import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { generateStream, partialPlay } from "../lib/streams/index.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -41,13 +41,16 @@ const wOf = (side: (typeof SIDES)[number], reason: (typeof REASONS)[number]) => 
 /** The kinds a command arbitrary set draws, read off one sample of each arbitrary (its toString is `Kind(k,w)`). */
 const kindsOf = (arbs: ReturnType<typeof modelCommands>) => arbs.map((a) => String(fc.sample(a, { seed: 1, numRuns: 1 })[0]).replace(/\(.*$/, ""));
 
-/** Two semis feeding a final, the stage reading as a knockout, started — model-settle.test.ts's bracket. */
+/** Two semis feeding a final, the stage reading as a knockout, started — model-settle.test.ts's bracket, a HOLD-PATH stage
+ *  (R-T12-3): every decider off, so a level result is held. */
 async function bracket(sport: string, make: () => ModelFakeDriver = () => new ModelFakeDriver({})) {
   const d = make();
   const base = await newModelState({ driver: d, row: "league", sport, variant: offlineBuilderDefault(sport), entrants: 4, tag: "t" });
   if (d.stage === null) throw new Error("test: no stage");
+  const stageRules = decidersOffRulesFor(sport, offlineBuilderDefault(sport), "knockout");
   d.stage.kind = "knockout";
-  const m: ModelState = { ...base, stageKind: "knockout" };
+  if (stageRules !== undefined) d.stage.config = { ...d.stage.config, rules: stageRules };
+  const m: ModelState = { ...base, stageKind: "knockout", stageRules };
   const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
   const sf1 = d.seat(1, e1, e4);
   const sf2 = d.seat(1, e2, e3);
@@ -474,7 +477,7 @@ describe("rule 10 — the required sequences, every step checked", () => {
       // No command draws a drawn chess bracket game (boardgame's levelRefusal): the classical draw is posted through
       // the driver, and the model is handed the product's ledger.
       const f = row(d, sf1);
-      const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+      const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
       const pending = generateStream({ sportKey: "boardgame", cfg, stageKind: "knockout", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: { kind: "tiebreak", rung: TIEBREAK_RUNGS[0], winner: "home" } }).slice(0, -1);
       await d.postStream(sf1, pending);
       m.fixtures.get(sf1)!.ledger = [...d.ledgers.get(sf1)!];
@@ -501,7 +504,8 @@ describe("rule 10 — the required sequences, every step checked", () => {
   });
 
   /** Post-F re-checks 2–5 on the model fake: loop F's bracket cascade (withdrawal.ts), driven on the driver itself. */
-  const knockoutCfg = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+  // The cfg `bracket`'s hold-path knockout folds under: the presets with every decider off (R-T12-3).
+  const knockoutCfg = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport), decidersOffRulesFor(sport, offlineBuilderDefault(sport), "knockout"));
   const stream = (sport: string, home: string, away: string, outcome: Parameters<typeof generateStream>[0]["outcome"]) =>
     generateStream({ sportKey: sport, cfg: knockoutCfg(sport), stageKind: "knockout", home, away, outcome });
   it("rulings 53 + 106 on the model (withdrawal.ts's bracket branch, read from the product): a semi-final loser with nothing pending answers policy none; a side of an open semi-final answers walkover", async () => {

@@ -13,7 +13,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { defaultLineupPair, forEachSport } from "@seazn/engine/testkit";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { foldStream } from "../lib/fold.ts";
-import { CfgInvalid, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { CfgInvalid, decidersOffRulesFor, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable, matchesRequest, settleableOutcome } from "../lib/streams/index.ts";
 import { boardgameGenerator } from "../lib/streams/boardgame.ts";
 import { carromGenerator } from "../lib/streams/carrom.ts";
@@ -38,7 +38,12 @@ function cases(): Case[] {
 }
 
 const request = (c: Case, cfg: unknown, stageKind: StreamRequest["stageKind"], outcome: RequestedOutcome): StreamRequest => ({ sportKey: c.key, cfg, stageKind, home: c.home, away: c.away, outcome });
-const bracketCfg = (c: Case, overrides: Record<string, unknown> = {}): unknown => stageCfg(c.key, resolveSportCfg(c.key, c.variant, overrides), "knockout");
+const bracketCfg = (c: Case, overrides: Record<string, unknown> = {}): unknown => stageCfg(c.key, resolveSportCfg(c.key, c.variant, overrides), "knockout", c.variant);
+/** The cfg a HOLD-PATH knockout folds under (R-T12-3): the presets with every decider switched off, as the hold-path
+ *  cells post it (X-SR-6's held arm). Since Task 12 the bare `bracketCfg` plays the deciders, so a level result is only
+ *  reachable here. */
+const heldCfg = (c: Case, overrides: Record<string, unknown> = {}): unknown =>
+  stageCfg(c.key, resolveSportCfg(c.key, c.variant, overrides), "knockout", c.variant, decidersOffRulesFor(c.key, c.variant, "knockout"));
 const fold = (c: Case, cfg: unknown, events: readonly StreamEvent[]): Folded => foldMatchWithStoppage(c.module, cfg as never, c.lineups, envelopes(events));
 const outcomeAfter = (c: Case, cfg: unknown, events: readonly StreamEvent[]) => outcomeOf(c.module, fold(c, cfg, events));
 /** Is the organiser's settle OFFERED on a bracket match whose ledger is `events` and which was abandoned? The ENGINE's one
@@ -100,7 +105,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
       }
     }
     expect(checked + refused, "every cell is either built or refused by name").toBe(cases().length * SETTLE_METHODS.length);
-    expect(refused, "some variant\'s abandon is decided by the engine (hockey/fih-shootout, HK-AB-2), or the refusal is never reached").toBeGreaterThan(0);
+    expect(refused, "some variant's abandon is decided by the engine (hockey/fih-shootout, HK-AB-2), or the refusal is never reached").toBeGreaterThan(0);
     expect(checked, "and the rest build").toBeGreaterThan(refused);
     expect(withScore).toBeGreaterThan(0);
   });
@@ -269,7 +274,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
         // The division says tieBoard 'draw'; CA-KO-1: a bracket plays the extra board whatever it says.
         const division = resolveSportCfg(c.key, c.variant, { tieBoard: "draw" }) as { tieBoard: string };
         expect(division.tieBoard).toBe("draw");
-        const cfg = stageCfg(c.key, division, "knockout") as { tieBoard: string };
+        const cfg = stageCfg(c.key, division, "knockout", c.variant) as { tieBoard: string };
         expect(cfg.tieBoard, c.variant).toBe("extra"); // the right answer differs from the division's constant
         const events = generateStream(request(c, cfg, "knockout", { kind: "win", winner }));
         const coins = events.filter((e) => e.type === "carrom.board.summary").map((e) => (e.payload as { opponentCoinsLeft: number }).opponentCoinsLeft);
@@ -291,7 +296,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     for (const c of cases()) {
       if (c.key !== "carrom") continue; // one-line reason: CA-KO-1 is carrom's
       const division = resolveSportCfg(c.key, c.variant, { tieBoard: "draw" });
-      const events = generateStream(request(c, stageCfg(c.key, division, "knockout"), "knockout", { kind: "win", winner: "home" }));
+      const events = generateStream(request(c, stageCfg(c.key, division, "knockout", c.variant), "knockout", { kind: "win", winner: "home" }));
       const asDivision = fold(c, division, events); // the division's own rule: each level game is DRAWN
       expect((asDivision.state as { gamesDrawn: number }).gamesDrawn, c.variant).toBeGreaterThan(0);
       checked++;
@@ -326,13 +331,13 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(checked).toBe(variantKeys("carrom").length);
   });
 
-  it("level (spec §5.6.1): football, hockey, ice hockey and cricket fold a level bracket result (it will be held); no other sport can", () => {
+  it("level (spec §5.6.1): football, hockey, ice hockey and cricket fold a level bracket result (it will be held) with every decider off; no other sport can", () => {
     const LEVEL_SPORTS = new Set(["football", "hockey", "icehockey", "cricket"]); // spec §5.6.1 names these four
     let levelFolded = 0;
     let refused = 0;
     const reachedBySport = new Map<string, number>();
     for (const c of cases()) {
-      const cfg = bracketCfg(c);
+      const cfg = heldCfg(c);
       const where = `${c.key}/${c.variant}`;
       if (!LEVEL_SPORTS.has(c.key)) {
         // setbased, tennis: no draw. carrom: the extra board. boardgame: the tie-break. generic: GN-KO-1.
@@ -363,6 +368,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     // Oracles from the rulebooks, not from the generator: football.ts resolveFullTime (:999-1024) plays level FT on
     // to extra time then a shootout; cricket decideTie (:935-946) opens a super over when it is on; a period sport
     // with overtime or a shootout is declared undrawable (period/kernel.ts supportsDraws).
+    // The rows are a knockout STAGE's rules (R-T12-3): from every decider off (`{}` adds nothing to it), one switched on.
     const rows: [string, string, Record<string, unknown>, boolean][] = [
       ["football", "11-a-side", {}, true],
       ["football", "11-a-side", { extraTime: { enabled: true, halfMinutes: 15 } }, false],
@@ -373,7 +379,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     ];
     let checked = 0;
     for (const [sport, variant, overrides, want] of rows) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, variant, overrides), "knockout");
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant, { ...decidersOffRulesFor(sport, variant, "knockout"), ...overrides });
       expect(levelReachable(sport, cfg, "knockout"), `${sport}/${variant} ${JSON.stringify(overrides)}`).toBe(want);
       checked++;
     }
@@ -401,7 +407,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     for (const c of cases()) {
       const league = resolveSportCfg(c.key, c.variant, { allowDraws: true });
       if (!c.module.supportsDraws(league as never, "league")) continue; // no league draw: nothing for the bracket gate to hold back
-      const cfg = stageCfg(c.key, league, "knockout");
+      const cfg = stageCfg(c.key, league, "knockout", c.variant);
       expect(c.module.supportsDraws(cfg as never, "knockout"), `${c.key}/${c.variant}: the engine declares no bracket draw`).toBe(false);
       // the gate is generateStream's own: its message, not a generator's refusal
       expect(() => generateStream(request(c, cfg, "knockout", { kind: "draw" })), `${c.key}/${c.variant}`).toThrow(/supportsDraws/);
@@ -414,13 +420,13 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     let checked = 0;
     for (const c of cases()) {
       if (c.key === "generic") {
-        const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, { allowDraws: true }), "knockout"); // one-line reason: GN-KO-1 is generic's
+        const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, { allowDraws: true }), "knockout", c.variant); // one-line reason: GN-KO-1 is generic's
         expect(() => genericGenerator.decided({ ...request(c, cfg, "knockout", { kind: "draw" }), outcome: { kind: "draw" } }), c.variant).toThrow(/GN-KO-1/);
         // and the positive pair: the same generator builds a league draw
         expect(genericGenerator.decided({ ...request(c, resolveSportCfg(c.key, c.variant, { allowDraws: true }), "league", { kind: "draw" }), outcome: { kind: "draw" } }).length, c.variant).toBeGreaterThan(1);
         checked++;
       } else if (c.key === "carrom") {
-        const extra = stageCfg(c.key, resolveSportCfg(c.key, c.variant), "knockout") as { tieBoard?: string };
+        const extra = stageCfg(c.key, resolveSportCfg(c.key, c.variant), "knockout", c.variant) as { tieBoard?: string };
         expect(extra.tieBoard, `${c.variant}: the overlay forces the extra board`).toBe("extra"); // one-line reason: CA-KO-1 is carrom's
         expect(() => carromGenerator.decided({ ...request(c, extra, "knockout", { kind: "draw" }), outcome: { kind: "draw" } }), c.variant).toThrow(/a level game plays an extra board/);
         const table = { ...(resolveSportCfg(c.key, c.variant) as object), tieBoard: "draw" };
@@ -436,7 +442,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     let checked = 0;
     for (const c of cases()) {
       if (c.key !== "generic") continue; // one-line reason: GN-KO-1 is generic's
-      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, { allowDraws: true }), "knockout");
+      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, { allowDraws: true }), "knockout", c.variant);
       expect(unreachable(() => generateStream(request(c, cfg, "knockout", { kind: "draw" }))), c.variant).toBe(true);
       expect(unreachable(() => generateStream(request(c, cfg, "knockout", { kind: "level" }))), c.variant).toBe(true);
       // The winner-only stream still decides, and the positive pair: a league fixture ends level as before.
@@ -496,7 +502,7 @@ describe("W2a request vocabulary — labels, matching and the settle preconditio
         expect(() => resolveSportCfg(c.key, c.variant, { abandonPolicy: "award" }), `${c.key}/${c.variant}: the engine refuses an award it does not offer`).toThrow(CfgInvalid);
         engineRefused++;
       }
-      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, awardOffered ? { abandonPolicy: "award" } : {}), "knockout");
+      const cfg = stageCfg(c.key, resolveSportCfg(c.key, c.variant, awardOffered ? { abandonPolicy: "award" } : {}), "knockout", c.variant);
       const cut = generateStream(request(c, cfg, "knockout", { kind: "abandon", atScore: true }));
       const folded = outcomeAfter(c, cfg, cut);
       const settleable = settleOfferedAfterAbandon(c, cfg, cut);

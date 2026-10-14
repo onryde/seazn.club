@@ -13,7 +13,7 @@ import { referenceBracketFinish } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { ForfeitPlayUnread, LevelKindUnread, bracketCaseOf, forfeitPlayOf, judgeDrive, levelKindOf, loserSeatOf, nextLineOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
-import { drawsAllowed, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, drawsAllowed, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable } from "../lib/streams/index.ts";
 import { RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder } from "@seazn/engine/scheduling";
@@ -202,7 +202,10 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
     let ties = 0;
     const kindOf = new Map<string, string | null>();
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+      // The held arm (R-T12-3): a level result is reachable in a knockout only with every decider off, as a hold-path
+      // cell posts it.
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant, decidersOffRulesFor(sport, variant, "knockout"));
       if (!levelReachable(sport, cfg, "knockout")) continue;
       const events = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "level" } });
       const got = levelKindOf(sport, cfg, "h", "a", { kind: "level" }, events);
@@ -231,7 +234,7 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
   });
 
   it("levelKindOf reads a chess tie-break as a DRAWN game, from the stream's own result; a stream that folds to a win is refused by name", () => {
-    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     const tb = generateStream({ sportKey: "boardgame", cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "tiebreak", rung: "rapid", winner: "home" } });
     expect(levelKindOf("boardgame", cfg, "h", "a", { kind: "tiebreak", rung: "rapid", winner: "home" }, tb)).toBe("draw");
     const win = generateStream({ sportKey: "football", cfg: resolveSportCfg("football", offlineBuilderDefault("football")), stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
@@ -477,7 +480,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     let retirements = 0;
     let unbuilt = 0;
     for (const sport of SPORT_KEYS) {
-      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport));
       const gen = (outcome: RequestedOutcome) => generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome });
       expect(forfeitPlayOf(sport, cfg, "h", "a", gen(fw("away", "walkover", "before_start"))), sport).toEqual({ kind: "none" });
       expect(forfeitPlayOf(sport, cfg, "h", "a", gen({ kind: "double_walkover" })), sport).toEqual({ kind: "none" });
@@ -503,7 +506,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     const won = generateStream({ sportKey: "football", cfg: fcfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
     expect(() => forfeitPlayOf("football", fcfg, "h", "a", won)).toThrow(/not its core\.forfeit/);
     expect(() => forfeitPlayOf("football", fcfg, "h", "a", [...won, { type: "core.forfeit", payload: { by: "a", reason: "retired" } }])).toThrow(ForfeitPlayUnread);
-    const ccfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const ccfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout", offlineBuilderDefault("boardgame"));
     const drawn = generateStream({ sportKey: "boardgame", cfg: ccfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "tiebreak", rung: "rapid", winner: "home" } }).slice(0, 2);
     expect(() => forfeitPlayOf("boardgame", ccfg, "h", "a", [...drawn, { type: "core.forfeit", payload: { by: "a", reason: "walkover" } }])).toThrow(/drawn chess game/);
   });

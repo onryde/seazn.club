@@ -37,7 +37,12 @@ const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
 const FORFEIT_PHASE_REFUSAL = "apps/web/src/lib/forfeit-phase-refusal.ts";
 // W2c Task 1: the match-rules table is a DIRECTORY (one file per sport); its registry is the only entry the matrix names.
 const MATCH_RULES_DIR = "apps/web/src/lib/match-rules";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL]);
+// W2c Task 12 fix round 1 (R-T12-3): stage-decider-off.ts holds the PRODUCT's one mapping of a stage's stored rules onto
+// its division (stageRulesOverlay: a null is inherit, a period sport's `false` the engine's null) and its every-decider-off
+// builder; sport-cfg.ts's stageCfg layers through them rather than keep a copy. Its one value import is the engine's
+// sport barrel, a bare package @seazn/matrix depends on (pinned below), so plain node loads it with no alias.
+const STAGE_DECIDER_OFF = "apps/web/src/lib/stage-decider-off.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -151,6 +156,18 @@ describe("tools/matrix import boundary", () => {
     expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === FORFEIT_PHASE_REFUSAL)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
+  });
+
+  it("the product's stage-rules mapping is a file plain node can load: it exists, loads only the engine's sport barrel (a package the matrix depends on), and only sport-cfg.ts names it", () => {
+    const file = join(REPO, STAGE_DECIDER_OFF);
+    expect(existsSync(file), STAGE_DECIDER_OFF).toBe(true);
+    const imports = importsOf(file);
+    expect(imports.filter((i) => !i.typeOnly).map((i) => i.spec), `${STAGE_DECIDER_OFF} must load nothing but @seazn/engine/sport`).toEqual(["@seazn/engine/sport"]);
+    expect(imports.filter((i) => !i.spec.startsWith("@seazn/engine/")).map((i) => i.spec), `${STAGE_DECIDER_OFF} names nothing outside the engine, not even as a type`).toEqual([]);
+    const deps = (JSON.parse(readFileSync(join(MATRIX, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
+    expect(Object.keys(deps), "@seazn/matrix depends on the engine the file imports").toContain("@seazn/engine");
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === STAGE_DECIDER_OFF)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/sport-cfg.ts"]);
   });
 
   // W2c Task 1: lib/match-rules/ became a directory, and the matrix CLIs (`matrix:*`) load it under plain

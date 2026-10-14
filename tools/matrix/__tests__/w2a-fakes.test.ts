@@ -2,10 +2,11 @@
 // (needs_decision) and seats nobody; an organiser settle closes it, and only then does its winner advance; a second
 // settle is refused by name. Expected statuses and seats come from the rule rows, and the outcome from the engine's own
 // fold — never from the fake's text. Folds through loop D's kernel (merged into this lane).
+import type { StageKind } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { commandOf, newModelState, type ModelState } from "../lib/model/commands.ts";
-import { drawsAllowed, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { decidersOffRulesFor, drawsAllowed, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import type { RequestedOutcome, StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -19,13 +20,19 @@ const SPORT = "football"; // single-sport: a level result is reachable here, and
 const variant = offlineBuilderDefault(SPORT);
 const variantOf = offlineBuilderDefault;
 
-/** Two semis feeding a final (sf1 -> home seat, sf2 -> away seat), the stage reading as `kind`, started. */
+/** The rules a HOLD-PATH stage of `kind` is posted with (R-T12-3): every decider off on a bracket, none on a table. */
+const holdRules = (sport: string, kind: string) => decidersOffRulesFor(sport, variantOf(sport), kind as StageKind);
+
+/** Two semis feeding a final (sf1 -> home seat, sf2 -> away seat), the stage reading as `kind`, started. A bracket is a
+ *  hold-path stage (`holdRules`): these tests are about the level result it holds. */
 async function bracket(kind: string, sport = SPORT): Promise<{ m: ModelState; d: ModelFakeDriver; sf1: string; sf2: string; fin: string; e: string[] }> {
   const d = new ModelFakeDriver({});
   const base = await newModelState({ driver: d, row: "league", sport, variant: variantOf(sport), entrants: 4, tag: "t" });
   if (d.stage === null) throw new Error("test: no stage");
+  const stageRules = holdRules(sport, kind);
   d.stage.kind = kind;
-  const m: ModelState = { ...base, stageKind: kind };
+  if (stageRules !== undefined) d.stage.config = { ...d.stage.config, rules: stageRules };
+  const m: ModelState = { ...base, stageKind: kind, stageRules };
   const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
   const sf1 = d.seat(1, e1, e4);
   const sf2 = d.seat(1, e2, e3);
@@ -40,7 +47,7 @@ async function bracket(kind: string, sport = SPORT): Promise<{ m: ModelState; d:
 const row = (d: ModelFakeDriver, id: string) => d.fixtures.find((f) => f.id === id)!;
 function stream(d: ModelFakeDriver, id: string, kind: string, outcome: RequestedOutcome, sport = SPORT) {
   const f = row(d, id);
-  return generateStream({ sportKey: sport, cfg: stageCfg(sport, resolveSportCfg(sport, variantOf(sport)), kind as never), stageKind: kind as never, home: f.home_entrant_id!, away: f.away_entrant_id!, outcome });
+  return generateStream({ sportKey: sport, cfg: stageCfg(sport, resolveSportCfg(sport, variantOf(sport)), kind as never, variantOf(sport), holdRules(sport, kind)), stageKind: kind as never, home: f.home_entrant_id!, away: f.away_entrant_id!, outcome });
 }
 
 describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1)", () => {
@@ -165,7 +172,8 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
 
   it("the scenario fakes (FakeKnockoutDriver) hold a level knockout result the same way: needs_decision, the next round unseated, then the settle seats", async () => {
     const driver = new FakeKnockoutDriver();
-    const spec: CaseSpec = { caseId: "knockout|football|LIFECYCLE", row: "knockout", sport: SPORT, variant, scenario: "LIFECYCLE", canary: false };
+    // A hold-path scenario (R-T12-3): setUpDivision posts the knockout with every decider off, and the fake folds under it.
+    const spec: CaseSpec = { caseId: "knockout|football|BRACKET_SETTLE_LEVEL", row: "knockout", sport: SPORT, variant, scenario: "BRACKET_SETTLE_LEVEL", canary: false };
     const ctx = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(SPORT, variant), tag: "t", denied: [] };
     await setUpDivision(ctx, new Recorder(), 4);
     await driver.start();

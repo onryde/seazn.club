@@ -82,6 +82,17 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
     items.push({ ok: s?.kind === body.kind, note: `stage ${body.seq}: built ${s?.kind ?? "nothing"}, posted ${body.kind}` });
     for (const [k, v] of Object.entries(body.config)) {
       const got = s === undefined ? undefined : s.config[k];
+      // W2c Task 12 fix round 1 (R-T12-3): a stage's `rules` are stored OVER its sport's preset (the create merges the
+      // two, a sent key winning), so the stored object may hold preset keys nobody posted. Judged per POSTED key
+      // instead: a value is stored as sent, and a null (remove the key, inherit) is stored as no value.
+      if (k === "rules" && v !== null && typeof v === "object" && !Array.isArray(v)) {
+        const stored = got !== null && typeof got === "object" && !Array.isArray(got) ? (got as Record<string, unknown>) : {};
+        for (const [rk, rv] of Object.entries(v as Record<string, unknown>)) {
+          const ok = s !== undefined && (rv === null ? stored[rk] === undefined || stored[rk] === null : canonical(stored[rk]) === canonical(rv));
+          items.push({ ok, note: `stage ${body.seq} config.rules.${rk}: built ${canonical(stored[rk])}, posted ${canonical(rv)}` });
+        }
+        continue;
+      }
       items.push({ ok: s !== undefined && canonical(got) === canonical(v), note: `stage ${body.seq} config.${k}: built ${canonical(got)}, posted ${canonical(v)}` });
     }
     // T3 review G1: the stored config.thirdPlace (judged just above) says
