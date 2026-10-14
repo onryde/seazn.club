@@ -110,6 +110,8 @@ describe("publish manifest", () => {
     expect(o.outDir).toBe("dist");
     expect(o.noEmit).toBe(false);
     expect(o.declaration).toBe(true);
+    // a declaration map points at ../../src, which does not ship, and inlineSources does not reach it: it would be 118 dead files
+    expect(o.declarationMap, "declarationMap").not.toBe(true);
     // .ts specifiers in the source become .js in both the emit and the .d.ts, or a consumer cannot resolve a relative import
     expect(o.rewriteRelativeImportExtensions).toBe(true);
     expect(buildConfig.include).toEqual(["src"]);
