@@ -55,17 +55,38 @@ describe("R-T12-3 stageCfg layers the stage's rules the product stores: its pres
   // decider off it is a level RESULT (held for the organiser); with the presets on the engine plays on into the decider
   // the preset switched on: no result, the match in another phase, the decider keys at the preset's values.
   const RULING_SPORTS = ["football", "hockey", "icehockey", "cricket"]; // the ruling names these four
+  /** Review M-2: a preset knockout whose held cfg cannot end level is skipped ONLY by name, with its reason, and every
+   *  named skip must be met. None today: every one of the 12 preset variants reaches a level regulation when held. */
+  const NOT_LEVEL_WHEN_HELD: Readonly<Record<string, string>> = {};
+  /** Review M-2: the engine-derived pairs, pinned per variant so a preset gained or lost moves this list on purpose.
+   *  The positive pairs below must be exactly these (12): football x4, cricket x3, ice hockey x2, hockey x3. */
+  const PAIRED_VARIANTS = [
+    "cricket/hundred", "cricket/odi", "cricket/t20",
+    "football/11-a-side", "football/mini-soccer", "football/small-sided", "football/youth",
+    "hockey/fih-outdoor", "hockey/fih-shootout", "hockey/youth",
+    "icehockey/iihf", "icehockey/recreational",
+  ];
   it("positive pairs: with the presets ON a level knockout goes to its decider; with every decider off the same level regulation is a held result (every affected sport and variant, counted)", () => {
     const pairs = new Map<string, number>();
+    const paired: string[] = [];
+    const skipped: string[] = [];
+    let noPreset = 0;
     for (const m of MODULES) {
       for (const variant of Object.keys(m.variants)) {
+        const where = `${m.key}/${variant}`;
         const preset = stageDefaultsFor(m, "knockout", variant);
-        if (Object.keys(preset).length === 0) continue;
+        if (Object.keys(preset).length === 0) {
+          noPreset++; // no preset, no pair: the engine declares nothing to switch on
+          continue;
+        }
         const division = resolveSportCfg(m.key, variant);
         const held = stageCfg(m.key, division, "knockout", variant, decidersOffRulesFor(m.key, variant, "knockout"));
-        if (!levelReachable(m.key, held, "knockout")) continue; // a sport whose preset is no level decider
+        if (!levelReachable(m.key, held, "knockout")) {
+          expect(Object.hasOwn(NOT_LEVEL_WHEN_HELD, where), `${where}: a preset knockout skipped without a named reason`).toBe(true);
+          skipped.push(where);
+          continue;
+        }
         const on = stageCfg(m.key, division, "knockout", variant) as Record<string, unknown>;
-        const where = `${m.key}/${variant}`;
         const level = generateStream({ sportKey: m.key, cfg: held, stageKind: "knockout", home: "H", away: "A", outcome: { kind: "level" } });
         const heldFold = foldStream(m, held, "H", "A", level);
         expect(heldFold.outcome !== null && isLevelOutcome(heldFold.outcome), `${where}: every decider off, a level result (held)`).toBe(true);
@@ -78,11 +99,15 @@ describe("R-T12-3 stageCfg layers the stage's rules the product stores: its pres
         expect(onFold.outcome, `${where}: level regulation decides nothing, the decider is owed`).toBeNull();
         expect(phaseOf(onFold.state), `${where}: the match moved on into the decider`).not.toEqual(phaseOf(heldFold.state));
         pairs.set(m.key, (pairs.get(m.key) ?? 0) + 1);
+        paired.push(where);
       }
     }
     expect([...pairs.keys()].sort(), "the sports a preset decider plays on are exactly the ruling's").toEqual([...RULING_SPORTS].sort());
     for (const sport of RULING_SPORTS) expect(pairs.get(sport) ?? 0, `${sport}: no pair`).toBeGreaterThan(0);
-    expect([...pairs.values()].reduce((a, b) => a + b, 0), "anti-vacuity").toBeGreaterThan(0);
+    expect(paired.sort(), "the pairs, per variant").toEqual(PAIRED_VARIANTS);
+    expect(paired.length, "the pinned total").toBe(12);
+    expect(skipped.sort(), "every named skip was met, and no other").toEqual(Object.keys(NOT_LEVEL_WHEN_HELD).sort());
+    expect(noPreset, "anti-vacuity: the sweep also met variants with no knockout preset").toBeGreaterThan(0);
   });
 
   it("the held arm goes through the product's ONE mapping: a period sport's `false` reaches the engine as its off, never as `false`; every held cfg is one the sport's schema takes (counted)", () => {
