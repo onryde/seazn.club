@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript 7 (`typescript-native` 7.0.2), Node 26 `--experimental-strip-types`, pnpm 10.34.5 workspaces, turbo 2.10.8, vitest 4, Playwright, Next 16, GitHub Actions + GitHub Packages, Metro + Hermes (React Native 0.86.3, `hermes-compiler`).
 
-**Spec:** `docs/superpowers/specs/2026-10-13-engine-split-design.md` (owner-approved; ledger D1–D30 OWNER, D31–D32 REC — D32 lists every plan-level deviation from the spec [R39]). Fact sheet: `.superpowers/handoff/2026-10-13-engine-split/phase1-plan-facts.md` (gitignored, main checkout). Plan review: `docs/superpowers/specs/engine-split/reviews/plan-phase1.md`. Line numbers are against `origin/main` `5871c748e`. **Re-pin every one before editing** (AGENTS.md class 5).
+**Spec:** `docs/superpowers/specs/2026-10-13-engine-split-design.md` (owner-approved; ledger D1–D33 OWNER; D31–D33 ruled "approve" 2026-10-14, plan rev 2 approved for execution — D32 lists every plan-level deviation from the spec [R39]). Fact sheet: `.superpowers/handoff/2026-10-13-engine-split/phase1-plan-facts.md` (gitignored, main checkout). Plan review: `docs/superpowers/specs/engine-split/reviews/plan-phase1.md`. Line numbers are against `origin/main` `5871c748e`. **Re-pin every one before editing** (AGENTS.md class 5).
 
 ## Execution topology (D30, owner ruling)
 
@@ -1214,7 +1214,7 @@ describe("fold-epoch guard", () => {
 
 Worktree `engine-split-1f`.
 
-**D31 (a REC, put to the owner before this batch is dispatched).** `engine_epoch` is optional, and there is no `engine_epoch_missing` refusal, because the server cannot tell a capture phone from the web pad. The error code is `ENGINE_OUTDATED`. Only the `events` route is gated:
+**D31 (OWNER, "approve" 2026-10-14).** `engine_epoch` is optional, and there is no `engine_epoch_missing` refusal, because the server cannot tell a capture phone from the web pad. The error code is `ENGINE_OUTDATED`. Only the `events` route is gated:
 
 - **lineups** (`lineups/[entrantId]/route.ts:28`) are inputs to the fold, not a fold;
 - **finalize** (`finalize/route.ts:15`) asks the server to fold with its own engine;
