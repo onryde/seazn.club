@@ -23,6 +23,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { SOUND_SIGNATURE } from "../src/components/public-site/match-room/room-sound-synth";
+import { HANDOVER_COVER_MS } from "../src/components/public-site/match-room/camera-handover";
 import { apiJson, loginUi, withDb } from "./helpers";
 import {
   bridgeRow,
@@ -1665,6 +1666,183 @@ test("T17B fix 2, D15: camera required — the camera is tested ON THE PAGE befo
   } finally {
     await camBrowser.close();
     await denyBrowser.close();
+  }
+});
+
+test("T17B fix 2, D23: Check in under camera required — the tile is NEVER blank between the test camera's stop and the SDK's video: the preview's last frame, mirrored as the live one, labelled, laid over the tile and gone at the bound — at every width", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const room = await seedMatchRoom(page.request, {
+    names: [`Bo Lind ${Date.now() % 1e5}`, `Ada Okonkwo ${Date.now() % 1e5}`],
+    cameraPolicy: "required",
+  });
+  type Sample = { t: number; video: boolean; frozen: boolean };
+  type W = { __tile: { log: Sample[]; mark: number; stop: boolean } };
+  const camBrowser = await browser.browserType().launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+  try {
+    const ctx = await cold(camBrowser);
+    await ctx.grantPermissions(["camera"]);
+    const p = await openRoom(ctx, room, room.white.token);
+    expect(await screenOf(p)).toBe("checkin");
+    const cta = p.getByTestId("room-checkin-cta");
+    const tile = p.getByTestId("room-own-tile");
+    await p.getByTestId("room-checkin-test-cta").click();
+    await expect(cta, "the preview painted a frame: Check in opens").toBeEnabled({ timeout: 10_000 });
+    await expect(tile).toHaveAttribute("data-stream", "on");
+    await expect(p.getByTestId("room-own-tile-frozen"), "no cover while the test camera is on show").toHaveCount(0);
+
+    // The preview, read BEFORE Check in: how the live video is mirrored, how bright it is, how big the tile is.
+    const before = await p.evaluate(() => {
+      const v = document.querySelector<HTMLVideoElement>('[data-testid="room-own-tile"] video')!;
+      const c = document.createElement("canvas");
+      c.width = 64;
+      c.height = 48;
+      const g = c.getContext("2d")!;
+      g.drawImage(v, 0, 0, 64, 48);
+      const px = g.getImageData(0, 0, 64, 48).data;
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i]! + 0.7152 * px[i + 1]! + 0.0722 * px[i + 2]!;
+      // Tailwind v4's -scale-x-100 is the `scale` property, not `transform`: read both, so any mirroring counts.
+      const cs = getComputedStyle(v);
+      return { transform: `${cs.transform}|${cs.scale}`, luma: sum / (px.length / 4), size: [v.videoWidth, v.videoHeight] };
+    });
+    expect(before.luma, "premise: the fake camera's picture is not black").toBeGreaterThan(20);
+    expect(before.transform, "premise: the preview is mirrored").not.toBe("none|none");
+
+    // The same seat verdict the D15 test composes: the SDK cannot join offline, so its video never comes — the bound
+    // is what ends the cover here. (The SDK's own frame removing it is proven at the seam, room-camera-test-wiring.)
+    await p.route(
+      (u) => /\/external-play\/room$/.test(u.pathname),
+      async (route: Route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        const read = await route.fetch({ method: "GET" });
+        const snapshot = ((await read.json()) as { data: unknown }).data;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { snapshot, seat: { seated: false, reason: "camera_starting", participant: { participantId: "e2e-part", authToken: "e2e-rtk" } }, create: null },
+            requestId: "e2e",
+          }),
+        });
+      },
+    );
+    // One sample per painted frame, from before the click: is the tile showing a playing video, or the cover?
+    await p.evaluate(() => {
+      const w = window as unknown as W;
+      w.__tile = { log: [], mark: 0, stop: false };
+      document.addEventListener(
+        "click",
+        (e) => {
+          if ((e.target as Element).closest('[data-testid="room-checkin-cta"]')) w.__tile.mark = performance.now();
+        },
+        true,
+      );
+      const tick = () => {
+        const t = document.querySelector('[data-testid="room-own-tile"]');
+        const v = t?.querySelector("video");
+        const video = !!v && getComputedStyle(v).display !== "none" && v.videoWidth > 0 && v.srcObject !== null;
+        const frozen = !!t?.querySelector('[data-testid="room-own-tile-frozen"] canvas');
+        w.__tile.log.push({ t: performance.now(), video, frozen });
+        if (!w.__tile.stop) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    await cta.click();
+    const frozen = p.getByTestId("room-own-tile-frozen");
+    await expect(frozen, "the cover is up the moment the test camera stops").toBeVisible({ timeout: 2_000 });
+    await expect(tile).toHaveAttribute("data-stream", "off");
+    await expect(frozen.getByRole("status")).toHaveText(uiEn["externalPlay.room.checkin.connecting"]!);
+    await expect(cta, "the D2 wait is the SDK's, untouched").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+
+    // The cover is the preview's last frame: a picture (not black), as bright as the preview was, drawn at the
+    // preview's proportions, mirrored exactly as the live video was, and filling the tile.
+    const cover = await p.evaluate(() => {
+      const c = document.querySelector<HTMLCanvasElement>('[data-testid="room-own-tile-frozen"] canvas')!;
+      const g = c.getContext("2d")!;
+      const px = g.getImageData(0, 0, c.width, c.height).data;
+      let sum = 0;
+      const seen = new Set<number>();
+      for (let i = 0; i < px.length; i += 4) {
+        sum += 0.2126 * px[i]! + 0.7152 * px[i + 1]! + 0.0722 * px[i + 2]!;
+        seen.add(((px[i]! >> 4) << 8) | ((px[i + 1]! >> 4) << 4) | (px[i + 2]! >> 4));
+      }
+      const r = c.getBoundingClientRect();
+      const tr = document.querySelector('[data-testid="room-own-tile"]')!.getBoundingClientRect();
+      const cs = getComputedStyle(c);
+      return {
+        transform: `${cs.transform}|${cs.scale}`,
+        luma: sum / (px.length / 4),
+        colours: seen.size,
+        size: [c.width, c.height],
+        fills: Math.abs(r.width - tr.width) < 1 && Math.abs(r.height - tr.height) < 1 && Math.abs(r.left - tr.left) < 1 && Math.abs(r.top - tr.top) < 1,
+      };
+    });
+    expect(cover.transform, "mirrored exactly as the live preview was").toBe(before.transform);
+    expect(cover.colours, "a picture, not a flat fill").toBeGreaterThan(4);
+    expect(Math.abs(cover.luma - before.luma), `as bright as the preview (${cover.luma.toFixed(0)} vs ${before.luma.toFixed(0)})`).toBeLessThan(before.luma * 0.35);
+    expect(cover.size, "the preview's proportions").toEqual(before.size.map((n) => Math.min(n, (n * 640) / Math.max(...before.size))));
+    expect(cover.fills, "it fills the tile").toBe(true);
+    // The words are READ, not just present: hit-tested at their centre, they are what is on top there — never the
+    // picture painted over them — and they lie inside the tile, at every width.
+    let widthsRead = 0;
+    for (const width of [320, 768, 1280]) {
+      await p.setViewportSize({ width, height: 900 });
+      await p.waitForTimeout(100);
+      const label = await p.evaluate(() => {
+        const l = document.querySelector('[data-testid="room-own-tile-frozen"] [role="status"]')!.getBoundingClientRect();
+        const t = document.querySelector('[data-testid="room-own-tile"]')!.getBoundingClientRect();
+        const top = document.elementFromPoint(l.left + l.width / 2, l.top + l.height / 2);
+        return {
+          onTop: !!top?.closest('[data-testid="room-own-tile-frozen"] [role="status"]'),
+          inside: l.left >= t.left - 0.5 && l.right <= t.right + 0.5 && l.top >= t.top - 0.5 && l.bottom <= t.bottom + 0.5,
+          width: l.width,
+        };
+      });
+      expect(label.onTop, `the words are on top of the picture at ${width}px`).toBe(true);
+      expect(label.inside, `the words lie inside the tile at ${width}px`).toBe(true);
+      expect(label.width, `the words have a box at ${width}px`).toBeGreaterThan(40);
+      widthsRead += 1;
+    }
+    expect(widthsRead, "anti-vacuity: widths").toBe(3);
+    // Layout: nothing past an edge and no sideways scroll, with the cover up (the bound is eight seconds: be quick).
+    expect(await noSidewaysScroll(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+    expect(await nothingPastTheEdge(p, [320, 768, 1280]), "anti-vacuity: widths").toBe(3);
+    await shoot(p, "d23-covering");
+
+    // The bound: the cover goes (nothing came from the SDK), not before eight seconds and not long after.
+    await expect(frozen).toHaveCount(0, { timeout: 15_000 });
+    await expect(cta, "the camera_starting state is what is left").toHaveText(uiEn["externalPlay.room.checkin.cameraStarting"]!);
+    await p.waitForTimeout(300);
+    const { log, mark } = await p.evaluate(() => {
+      const w = window as unknown as W;
+      w.__tile.stop = true;
+      return { log: w.__tile.log, mark: w.__tile.mark };
+    });
+    expect(mark, "premise: the click was seen").toBeGreaterThan(0);
+    const after = log.filter((f) => f.t >= mark);
+    const lastCover = after.filter((f) => f.frozen).at(-1)!;
+    const lived = after.filter((f) => f.t <= lastCover.t);
+    expect(lived.filter((f) => f.frozen).length, "anti-vacuity: painted frames under the cover (counted)").toBeGreaterThan(30);
+    expect(
+      lived.filter((f) => !f.video && !f.frozen).length,
+      `no painted frame between the click and the cover's end showed a blank tile (${lived.length} frames checked)`,
+    ).toBe(0);
+    // Positive pair: the sampler CAN see a blank tile — once the cover has gone the tile is the silhouette.
+    const afterCover = after.filter((f) => f.t > lastCover.t);
+    expect(afterCover.filter((f) => !f.video && !f.frozen).length, "the sampler sees the blank that follows the bound").toBeGreaterThan(0);
+    const heldFor = lastCover.t - mark;
+    expect(heldFor, "held for the bound, no less").toBeGreaterThanOrEqual(HANDOVER_COVER_MS - 100);
+    expect(heldFor, "and let go soon after it").toBeLessThanOrEqual(HANDOVER_COVER_MS + 3_000);
+    await ctx.close();
+    // The SDK then refuses the opaque token composed above, as in the D15 test: expected here, and only here.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((e) => !/^Invalid auth token provided\. /.test(e)));
+  } finally {
+    await camBrowser.close();
   }
 });
 

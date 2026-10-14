@@ -4,7 +4,7 @@
 // comes from `use-own-camera` — this file never sees a participant token, and
 // there is no subscription to any other participant anywhere in it. Policy
 // `off` creates no meeting at all, so the tile is not drawn (spec §5.1).
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { CameraPolicyWire } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
@@ -16,6 +16,10 @@ type Props = {
   cameraOn?: boolean;
   /** T17B fix 2 (D15): called once the preview has PAINTED a frame of `stream` — the camera test's proof. */
   onFrame?: (stream: MediaStream) => void;
+  /** T17B fix 2 (D23): the tile's <video>, handed up so Check in can keep its last frame before the camera stops. */
+  videoRef?: (el: HTMLVideoElement | null) => void;
+  /** T17B fix 2 (D23): the frame kept at Check in, laid over the tile until the SDK's own video is playing. */
+  frozen?: HTMLCanvasElement | null;
   t: RoomT;
 };
 
@@ -28,8 +32,39 @@ function Silhouette({ size }: { size: number }) {
   );
 }
 
-export function OwnTile({ policy, stream, variant = "room", cameraOn = false, onFrame, t }: Props) {
+/** D23: the kept frame, mirrored and cropped exactly as the live <video> is, with the words for what is happening.
+ *  The picture is drawn in a LAYOUT effect, so it is on the page in the same paint that takes the video away; it is
+ *  the first child, so the words (a later sibling) paint over it. */
+function Frozen({ frame, variant, t }: { frame: HTMLCanvasElement; variant: "room" | "checkin"; t: RoomT }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    const el = canvas.current;
+    const g = el?.getContext("2d");
+    if (!el || !g) return;
+    el.width = frame.width;
+    el.height = frame.height;
+    g.drawImage(frame, 0, 0);
+  }, [frame]);
+  return (
+    <div data-testid="room-own-tile-frozen" className="absolute inset-0">
+      <canvas ref={canvas} aria-hidden className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
+      {/* The small phone tile has no room for a sentence: it is still announced. */}
+      <span
+        role="status"
+        className={`absolute inset-x-1.5 bottom-2 mx-auto w-fit max-w-[calc(100%-12px)] rounded-full bg-[rgba(27,18,48,0.75)] px-2.5 py-1 text-center text-xs text-white ${variant === "room" ? "max-md:sr-only" : ""}`}
+      >
+        {t("externalPlay.room.checkin.connecting")}
+      </span>
+    </div>
+  );
+}
+
+export function OwnTile({ policy, stream, variant = "room", cameraOn = false, onFrame, videoRef, frozen = null, t }: Props) {
   const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    videoRef?.(video.current);
+    return () => videoRef?.(null);
+  }, [videoRef]);
   useEffect(() => {
     const el = video.current;
     if (!el) return;
@@ -89,6 +124,7 @@ export function OwnTile({ policy, stream, variant = "room", cameraOn = false, on
         aria-hidden
         className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${stream ? "" : "hidden"}`}
       />
+      {frozen !== null ? <Frozen frame={frozen} variant={variant} t={t} /> : null}
       {checkin ? (
         <>
           {cameraOn ? (

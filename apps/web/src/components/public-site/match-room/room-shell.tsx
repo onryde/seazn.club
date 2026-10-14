@@ -59,6 +59,7 @@ import { deliverCameraFault } from "./room-api";
 import { useOpponentPresence, useOwnCamera } from "./use-own-camera";
 import { HANDED } from "./camera-test";
 import { useCameraTest } from "./use-camera-test";
+import { useCameraHandover } from "./use-camera-handover";
 import { CAMERA_EVIDENCE_MAX_POLLS, CAMERA_EVIDENCE_POLL_MS, type RoomGame, type RoomSnapshot } from "./room-snapshot";
 import type { RoomT } from "./room-copy";
 
@@ -267,16 +268,27 @@ function TileStrip({
   snap,
   camera,
   presence,
+  handover,
   t,
 }: {
   snap: RoomSnapshot;
   camera: ReturnType<typeof useOwnCamera>;
   presence: boolean | null;
+  /** D23: a quick check-in can reach the board before the SDK's video does — the cover follows the tile. */
+  handover: ReturnType<typeof useCameraHandover>;
   t: RoomT;
 }) {
+  const covering = handover.view.status === "covering" ? handover.view : null;
   return (
     <div data-testid="room-tile-strip" className="order-5 flex min-w-0 items-center gap-2.5 md:flex-col md:items-stretch md:gap-3">
-      <OwnTile policy={snap.cameraPolicy} stream={camera.stream} t={t} />
+      <OwnTile
+        policy={snap.cameraPolicy}
+        stream={camera.stream}
+        onFrame={covering !== null ? handover.onSdkFrame : undefined}
+        videoRef={handover.register}
+        frozen={covering?.frame ?? null}
+        t={t}
+      />
       {/* null is "unknown" — not joined, not settled, connection down: no
           pill rather than a "camera off" (review I4). */}
       {presence !== null ? <PresencePill name={snap.opponent.name} cameraLive={presence} t={t} /> : null}
@@ -352,6 +364,17 @@ export function Screen({
   const meetingJoined = state.seat?.participant != null;
   const cameraTestOn = snap.cameraPolicy === "required" && !snap.you.checkedIn && !meetingJoined;
   const camTest = useCameraTest(cameraTestOn);
+  // T17B fix 2, D23: Check in stops the test camera before the seat is asked for; the tile shows the preview's last
+  // frame (kept BEFORE the stop — a stopped track draws black) until the SDK's own video has painted.
+  const handover = useCameraHandover();
+  const { begin: keepFrame } = handover;
+  const testView = camTest.view;
+  const testHandOver = camTest.onHandOver;
+  const handOver = useCallback(() => {
+    // Only a PROVEN preview is on show to keep: a retried Check in (already handed) has the SDK's camera there.
+    if (testView.status === "live") keepFrame();
+    testHandOver();
+  }, [testView.status, keepFrame, testHandOver]);
   // T17B fix 2, D13: the side to move's clock at zero, the game not over — the board and every action lock.
   const flagged = useFlagFallen(snap.game === null ? null : moverFlagAt(snap.game), state.skewMs);
   const timeOf = (iso: string | null) => (iso !== null && now !== null ? formatTimeOfDay(iso, locale) : null);
@@ -405,7 +428,7 @@ export function Screen({
             <div className="order-2 min-w-0">
               {mine ? <RevokedNotice relinkHref={relinkHref} otherAccount={snap.otherAccount} t={t} /> : <SeatHeldNotice t={t} />}
             </div>
-            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
             <BackToFixture href={snap.links.fixture} className="order-6" t={t} />
             {cameraDuty ? (
               <div className="order-7">
@@ -445,7 +468,8 @@ export function Screen({
             cameraOn={camera.status === "live"}
             busy={busy}
             checkingCamera={checkingCamera}
-            cameraTest={cameraDuty && !snap.you.checkedIn ? { ...camTest, view: meetingJoined ? HANDED : camTest.view } : null}
+            cameraTest={cameraDuty && !snap.you.checkedIn ? { ...camTest, view: meetingJoined ? HANDED : camTest.view, onHandOver: handOver } : null}
+            handover={handover}
             onCheckIn={tryAgain}
             t={t}
             plural={plural}
@@ -530,7 +554,7 @@ export function Screen({
             ) : notice !== null ? (
               <MoveNoticeView kind={notice} className={notice === "invalid" ? "order-4" : "order-2"} t={t} />
             ) : null}
-            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} t={t} /> : null}
+            {policyOn ? <TileStrip snap={snap} camera={camera} presence={presence} handover={handover} t={t} /> : null}
             <div data-testid="room-controls" className="order-6">
               <RoomControls
                 ply={plyOf(g)}

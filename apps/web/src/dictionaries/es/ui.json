@@ -6110,6 +6110,7 @@
   "externalPlay.room.checkin.closesAt": "a las {time}",
   "externalPlay.room.checkin.cameraOn": "Cámara encendida",
   "externalPlay.room.checkin.cameraStarting": "Comprobando tu cámara…",
+  "externalPlay.room.checkin.connecting": "Conectando tu cámara…",
   "externalPlay.room.checkin.micOff": "Micro apagado",
   "externalPlay.room.checkin.privacy": "El tablero de tu rival no está configurado para mostrar tu cámara. Tu organizador puede verla en directo; no se graba.",
   "externalPlay.room.checkin.opponentIn": "{name} se ha registrado",

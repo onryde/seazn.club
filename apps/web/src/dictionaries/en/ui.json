@@ -6110,6 +6110,7 @@
   "externalPlay.room.checkin.closesAt": "at {time}",
   "externalPlay.room.checkin.cameraOn": "Camera on",
   "externalPlay.room.checkin.cameraStarting": "Checking your camera…",
+  "externalPlay.room.checkin.connecting": "Connecting your camera…",
   "externalPlay.room.checkin.micOff": "Mic off",
   "externalPlay.room.checkin.privacy": "Your opponent's room isn't set up to show your camera. Your organiser can watch it live; it isn't recorded.",
   "externalPlay.room.checkin.opponentIn": "{name} has checked in",

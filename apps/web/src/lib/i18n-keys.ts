@@ -2503,6 +2503,7 @@ export type DictionaryKey =
   | "externalPlay.room.checkin.cameraStarting"
   | "externalPlay.room.checkin.closesAt"
   | "externalPlay.room.checkin.closesIn"
+  | "externalPlay.room.checkin.connecting"
   | "externalPlay.room.checkin.cta"
   | "externalPlay.room.checkin.done"
   | "externalPlay.room.checkin.micOff"

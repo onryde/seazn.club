@@ -10,6 +10,7 @@
 import { OwnTile } from "./own-tile";
 import { CameraNotice } from "./camera-notice";
 import { canCheckIn, type CameraTestView } from "./camera-test";
+import type { HandoverView } from "./camera-handover";
 import { spokenClock, type RoomPlural, type RoomT } from "./room-copy";
 import type { RoomSnapshot } from "./room-snapshot";
 
@@ -31,6 +32,12 @@ type Props = {
     onFrame: (stream: MediaStream) => void;
     onHandOver: () => void;
   } | null;
+  /** T17B fix 2 (D23): the frozen frame between Check in's stop of the test camera and the SDK's first video frame. */
+  handover?: {
+    view: HandoverView;
+    register: (el: HTMLVideoElement | null) => void;
+    onSdkFrame: (stream: MediaStream) => void;
+  } | null;
   onCheckIn: () => void;
   t: RoomT;
   plural: RoomPlural;
@@ -45,6 +52,7 @@ export function Checkin({
   busy,
   checkingCamera = false,
   cameraTest = null,
+  handover = null,
   onCheckIn,
   t,
   plural,
@@ -56,6 +64,8 @@ export function Checkin({
   const test = required && !done ? cameraTest : null;
   const untested = required && !done && (test === null || !canCheckIn(test.view));
   const testStream = test !== null && (test.view.status === "testing" || test.view.status === "live") ? test.view.stream : null;
+  // D23: after the test camera is stopped, the tile is covered until the SDK's own video proves a frame in it.
+  const covered = handover !== null && handover.view.status === "covering" ? handover : null;
   const tileOn = test === null ? cameraOn : test.view.status === "live" || (test.view.status === "handed" && cameraOn);
   return (
     <div data-testid="room-checkin" className="flex min-w-0 flex-1 flex-col gap-3.5 md:mx-auto md:w-full md:max-w-md">
@@ -85,7 +95,9 @@ export function Checkin({
             stream={testStream ?? stream}
             variant="checkin"
             cameraOn={tileOn}
-            onFrame={testStream !== null ? test?.onFrame : undefined}
+            onFrame={testStream !== null ? test?.onFrame : covered?.onSdkFrame}
+            videoRef={handover?.register}
+            frozen={covered?.view.frame ?? null}
             t={t}
           />
           {test !== null ? <CameraTestRow view={test.view} onTest={test.onTest} t={t} /> : null}

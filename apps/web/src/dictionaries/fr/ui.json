@@ -6110,6 +6110,7 @@
   "externalPlay.room.checkin.closesAt": "à {time}",
   "externalPlay.room.checkin.cameraOn": "Caméra allumée",
   "externalPlay.room.checkin.cameraStarting": "Vérification de votre caméra…",
+  "externalPlay.room.checkin.connecting": "Connexion de votre caméra…",
   "externalPlay.room.checkin.micOff": "Micro coupé",
   "externalPlay.room.checkin.privacy": "L'échiquier de votre adversaire n'est pas configuré pour afficher votre caméra. Votre organisateur peut la regarder en direct ; elle n'est pas enregistrée.",
   "externalPlay.room.checkin.opponentIn": "{name} s'est enregistré",
