@@ -1,6 +1,7 @@
 import type { RegistrationWithGroupRow } from "@/server/usecases/registrations";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { mayHoldBearerCredential } from "@/lib/types";
+import { omit } from "@/lib/omit";
 
 /**
  * The organiser-facing wire shape of one registration.
@@ -24,7 +25,7 @@ export function organiserRegistration<T extends RegistrationWithGroupRow>(
   row: T,
   auth: AuthCtx,
 ): Omit<T, "access_token_hash"> {
-  const { access_token_hash: _accessTokenHash, ...rest } = row;
+  const rest = omit(row, "access_token_hash");
   // `join_code` is the OTHER credential on this row, and stripping it only on
   // the list surface left the nine action routes handing it straight back:
   // `regGroupCols` selects `r.join_code`, `v1()` strips nothing against the

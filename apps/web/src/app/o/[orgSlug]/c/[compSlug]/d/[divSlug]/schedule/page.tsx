@@ -19,6 +19,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // MovePanel's court-id -> name lookup — see ScheduleBoard's own
 // `courtNamesById` comment.
 import { listVenues } from "@/server/usecases/venues";
+import { omit } from "@/lib/omit";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { preferredCurrency } from "@/lib/currency-server";
@@ -162,7 +163,7 @@ export default async function DivisionSchedulePage({
   // quietly start depending on a calendar that is not sent.
   const boardVenues = venues.map((v) => ({
     ...v,
-    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+    courts: v.courts.map((court) => omit(court, "hours", "exceptions")),
   }));
 
   // Feed wiring for TBD card labels ("Winner of R1·2" — doc 12 §2).

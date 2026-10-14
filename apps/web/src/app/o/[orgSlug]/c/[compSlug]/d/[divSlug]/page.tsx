@@ -31,6 +31,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
+import { omit } from "@/lib/omit";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
@@ -262,7 +263,7 @@ export default async function DivisionPage({
   // test, so this would have grown silently.
   const panelVenues = venues.map((v) => ({
     ...v,
-    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+    courts: v.courts.map((court) => omit(court, "hours", "exceptions")),
   }));
   // Moved up from just before the JSX return (still THE canonical
   // frozen/editable derivation, unchanged) — the P6/D4b task B proposal

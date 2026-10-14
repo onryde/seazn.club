@@ -17,6 +17,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // headers, the swap button, MovePanel's court select, the settings card's
 // picker). Same call the division board makes — see its own comment.
 import { listVenues } from "@/server/usecases/venues";
+import { omit } from "@/lib/omit";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { preferredCurrency } from "@/lib/currency-server";
@@ -115,7 +116,7 @@ export default async function CompetitionSchedulePage({
   // joint board can span more divisions than a single-division one.
   const boardVenues = venues.map((v) => ({
     ...v,
-    courts: v.courts.map(({ hours: _hours, exceptions: _exceptions, ...court }) => court),
+    courts: v.courts.map((court) => omit(court, "hours", "exceptions")),
   }));
   const perDivision = await Promise.all(
     divisions.map(async (d) => ({

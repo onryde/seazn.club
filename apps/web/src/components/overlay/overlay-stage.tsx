@@ -152,7 +152,7 @@ export function OverlayStage(props: OverlayStageProps) {
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
   const [closedOverBaseline] = useState(() => closedOverBaselineOf(props.initial.lastClosedOver));
-  const placement = slabPlacementFor(props.style, props.sportKey);
+  const placement = slabPlacementFor(props.style);
   const reducedMotion = usePrefersReducedMotion();
 
   const model: OverlayModel = overlayModel({

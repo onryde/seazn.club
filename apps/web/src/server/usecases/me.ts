@@ -34,6 +34,7 @@ import { playerLinkId } from "@/lib/name-display";
 // single-org tenant tx this file never opens); see that helper's own doc
 // comment.
 import { courtLabelsByOrg } from "./cross-org-court-labels";
+import { omit } from "@/lib/omit";
 import { activeAbandonReasonSql } from "@/server/engine-db/recorded-abandon";
 
 export type AvailabilityStatus = "in" | "out" | "maybe";
@@ -156,7 +157,7 @@ export async function listMyFixtures(userId: string): Promise<{
   // happen; FK-restricted).
   const courtNames = await courtLabelsByOrg(upcomingRaw);
   const upcoming: MyFixture[] = upcomingRaw.map((r) => {
-    const { org_id: _orgId, ...rest } = r;
+    const rest = omit(r, "org_id");
     return {
       ...rest,
       court_name: rest.court_id !== null ? (courtNames.get(rest.court_id) ?? rest.court_id) : null,

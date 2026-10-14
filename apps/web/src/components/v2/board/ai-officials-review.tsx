@@ -35,7 +35,7 @@ import {
   type OfficialsSlot,
   type OfficialsSlotTone,
 } from "./ai-officials-grid";
-import { compileOfficialsWishes, type OfficialsWish, type OfficialsWishKind } from "./officials-wish-compile";
+import type { OfficialsWish, OfficialsWishKind } from "./officials-wish-compile";
 
 // Re-export the grid shapes so the console imports the officials types from the
 // review, the same way it re-exports AiConsoleFixture via ai-console.

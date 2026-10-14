@@ -1066,7 +1066,7 @@ function serveAnchorSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     [SET_SCORE_TILE_ID]: setScoreSheet(view),
     [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view),
@@ -1314,7 +1314,7 @@ export function tabletennisSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: (view) => buildSheets(view, t),
+    sheets: buildSheets,
     refusedEventTypes,
     activityDetail: tabletennisDetail,
     // No swap()/contextSelect() — see this file's header.

@@ -12,7 +12,7 @@ import {
   type MatrixData,
   type PricingPlanKey,
 } from "@/lib/pricing-matrix";
-import { lowestPricedRung, PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
+import { lowestPricedRung } from "@/lib/pass-ladder";
 import { PRICING_RAIL_SPORTS, pricingRailKey, PRICING_RAIL_FOOTER_KEY } from "@/lib/pricing-rail";
 import {
   FREE_CARD_BULLETS,

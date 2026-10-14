@@ -78,9 +78,10 @@ export function defaultThemeFor(sportKey: string): ThemeId {
 
 /**
  * Which SCOREBUG the moment slab attaches to (W2 Task 4).
- * Style is only bar|bug after the 2026-09-12 match-card layer change.
+ * Style is only bar|bug after the 2026-09-12 match-card layer change, so the
+ * sport no longer enters into it.
  */
-export function slabPlacementFor(style: ThemeId, _sportKey: string): "bar" | "bug" {
+export function slabPlacementFor(style: ThemeId): "bar" | "bug" {
   return style === "bug" ? "bug" : "bar";
 }
 

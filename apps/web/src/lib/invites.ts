@@ -105,7 +105,7 @@ export async function acceptInvite(invite: InviteRow, userId: string): Promise<A
 }
 
 /** Post-accept landing: everyone goes to the dashboard. */
-export function inviteLanding(_role: OrgRole, _outcome: AcceptOutcome): string {
+export function inviteLanding(): string {
   return "/dashboard";
 }
 

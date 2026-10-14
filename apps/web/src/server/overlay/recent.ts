@@ -52,6 +52,7 @@ import {
 import { servingSide, setBreakdown } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import { readPublicLineups } from "@/server/public-site/public-lineups";
+import { omit } from "@/lib/omit";
 import {
   OVERLAY_RECENT_WINDOW,
   type RecentDerived,
@@ -677,9 +678,8 @@ function nameClosedOver(
     { batters: closed.batters, bowler: closed.bowler, thisOver: closed.glyphs },
     personOf,
   );
-  const { bowler: _omit, ...rest } = closed;
   return {
-    ...rest,
+    ...omit(closed, "bowler"),
     batters: liveNamed.batters,
     ...(liveNamed.bowler === undefined ? {} : { bowler: liveNamed.bowler }),
   };

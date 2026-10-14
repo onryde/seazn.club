@@ -22,7 +22,7 @@
 // own comment below). Both existing call sites already build fixtures in
 // this exact shape for their own (now-removed) local computation, so no
 // second mapping step is needed on the client side of the wire either.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import type { CapacityFixtureInput, CapacityConfigInput } from "@/lib/capacity-input";
 import { CAPACITY_PRECHECK_MAX_COURTS, CAPACITY_PRECHECK_MAX_FIXTURES } from "@/lib/capacity-bounds";

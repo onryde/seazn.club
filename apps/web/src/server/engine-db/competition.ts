@@ -96,7 +96,6 @@ function awardByeDelta(
   ctx: StageCtx,
   pointsRule: ReturnType<typeof PointsRule.parse> | null,
   homeId: string | null,
-  awayId: string | null,
 ): StandingsDelta {
   const winnerId = (outcome as Extract<MatchOutcome, { kind: "award" }>).winner;
   // W2b C-5: the module is handed the TYPED bye (`reason: "bye"`, no loser), whatever the stored row carries — a bye
@@ -412,7 +411,6 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         ctx,
         pointsRule,
         f.home_entrant_id,
-        f.away_entrant_id,
       );
     }
     return base;

@@ -72,7 +72,6 @@ import {
   offeredRungName,
   PASS_CLOSED_REASON_KEY,
   PASS_LOCK_REASON_KEY,
-  PASS_RUNG_NAME_KEY,
   passLadderOptions,
   type PassRungOption,
 } from "@/lib/pass-ladder";

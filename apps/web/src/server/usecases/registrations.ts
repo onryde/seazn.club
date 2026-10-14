@@ -45,6 +45,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { icsText, foldLine } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { omit } from "@/lib/omit";
 import { log } from "@/server/logger";
 import type { PutRegistrationSettings, RegistrationFormField } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -5813,9 +5814,10 @@ export async function listRegistrations(
     // If an integration ever needs join codes, that is a deliberate decision
     // with its own scope check — not a default.
     const mayHoldJoinCode = mayHoldBearerCredential(auth.role);
-    return rows.map(({ access_token_hash: _accessTokenHash, ...rest }) =>
-      mayHoldJoinCode ? rest : { ...rest, join_code: null },
-    );
+    return rows.map((row) => {
+      const rest = omit(row, "access_token_hash");
+      return mayHoldJoinCode ? rest : { ...rest, join_code: null };
+    });
   });
 }
 

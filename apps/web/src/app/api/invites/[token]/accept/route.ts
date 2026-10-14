@@ -29,7 +29,7 @@ export async function POST(
     // Scorer post-login landing (doc 13 §4): straight to My matches — and a
     // member who just gained an umpire assignment lands there too, on the
     // matches the invite was about.
-    const landing = inviteLanding(role, outcome);
+    const landing = inviteLanding();
     return {
       org_id: invite.org_id,
       org_name: invite.org_name,

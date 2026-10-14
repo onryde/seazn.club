@@ -10,7 +10,6 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { publicStorageUrl } from "@/lib/supabase-storage";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { z } from "zod";
 import type { EntrantMemberInput } from "@/server/api-v1/schemas";

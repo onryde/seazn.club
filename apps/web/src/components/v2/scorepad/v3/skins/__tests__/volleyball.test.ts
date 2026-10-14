@@ -615,7 +615,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
 
   it("the sheet it opens asks ONE question and posts the tapped rally anchored", () => {
     const fresh = view({ events: stream() });
-    const sheet = buildSheets(fresh, t)[openerSheetKey("away")]!;
+    const sheet = buildSheets(fresh)[openerSheetKey("away")]!;
     expect(sheet.event).toBe(RALLY_TYPE);
     expect(sheet.steps.length, "the half already knows the winner — only the server is missing").toBe(1);
     const payload = sheet.buildPayload({ serving: "home" }) as { wonBy: unknown; serving: unknown };
@@ -766,7 +766,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
   });
 
   it("the sheet posts a real RALLY_TYPE event with `serving` — TWO independent choice steps, both sides offered", () => {
-    const sheet = buildSheets(view(), t)[SERVE_ANCHOR_TILE_ID]!;
+    const sheet = buildSheets(view())[SERVE_ANCHOR_TILE_ID]!;
     expect(sheet.event).toBe(RALLY_TYPE);
     expect(sheet.steps).toHaveLength(2);
     expect(sheet.buildPayload({ serving: "away", wonBy: "home" })).toEqual({
@@ -776,7 +776,7 @@ describe("the serve anchor — offered while a declaration could still resolve E
   });
 
   it("stamps neither `server` nor `scorer` — unlike table tennis, this sport has no singles case to have named one, and the ordinary dock asks afterward", () => {
-    const sheet = buildSheets(view(), t)[SERVE_ANCHOR_TILE_ID]!;
+    const sheet = buildSheets(view())[SERVE_ANCHOR_TILE_ID]!;
     const payload = sheet.buildPayload({ serving: "home", wonBy: "home" });
     expect(payload).not.toHaveProperty("server");
     expect(payload).not.toHaveProperty("scorer");
@@ -901,7 +901,7 @@ describe("refusedEventTypes()", () => {
     // either dedicated or refused.
     const v = view({ events: stream(rally("H")) });
     const tiles = buildTiles(v);
-    const sheets = buildSheets(v, t);
+    const sheets = buildSheets(v);
     const swaps = buildSwap(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, swaps, scorebug);
@@ -918,7 +918,7 @@ describe("refusedEventTypes()", () => {
   it("...and once this fixture does NOT record substitutions (beach), even that one dead end closes", () => {
     const v = view({ cfg: BEACH_CFG, lineups: PAIR, events: stream(rally("H")) });
     const tiles = buildTiles(v);
-    const sheets = buildSheets(v, t);
+    const sheets = buildSheets(v);
     const swaps = buildSwap(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, swaps, scorebug);
@@ -939,7 +939,7 @@ describe("refusedEventTypes()", () => {
 describe("sheets()", () => {
   it("prefills the Set score sheet from the CURRENT set, and clamps to the cap", () => {
     const v = view({ events: stream(summary(25, 15)) });
-    const sheet = buildSheets(v, t)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(v)[SET_SCORE_TILE_ID]!;
     expect(sheet.event).toBe(SUMMARY_TYPE);
     const [home, away] = sheet.steps;
     expect((home as { initial: number }).initial).toBe(0);
@@ -950,13 +950,13 @@ describe("sheets()", () => {
 
   it("prefills from the live score once the set is under way", () => {
     const v = view({ events: stream(rally("H"), rally("H"), rally("A")) });
-    const sheet = buildSheets(v, t)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(v)[SET_SCORE_TILE_ID]!;
     expect((sheet.steps[0] as { initial: number }).initial).toBe(2);
     expect((sheet.steps[1] as { initial: number }).initial).toBe(1);
   });
 
   it("the sanction ladder is FIVB's own four steps, warning toned caution, everything else dismissal", () => {
-    const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
+    const sheet = buildSheets(view())[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { kind: "choice"; options: { id: string; tone?: readonly string[] }[] };
     expect(level.options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
     expect(level.options.find((o) => o.id === "warning")!.tone).toEqual(["caution"]);
@@ -966,13 +966,13 @@ describe("sheets()", () => {
   });
 
   it("asks WHO only when the side has more than one on-field player — a pair auto-stamps its sole member", () => {
-    const teamSheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
+    const teamSheet = buildSheets(view())[sanctionSheetKey("home")]!;
     expect(teamSheet.steps.length).toBe(2);
     const singleton: LineupPair = {
       home: { entrantId: "H", slots: [{ personId: "H-solo", slot: "starting", orderNo: 1 }] },
       away: teamSide("A"),
     };
-    const soleSheet = buildSheets(view({ lineups: singleton }), t)[sanctionSheetKey("home")]!;
+    const soleSheet = buildSheets(view({ lineups: singleton }))[sanctionSheetKey("home")]!;
     expect(soleSheet.steps.length).toBe(1);
     expect(soleSheet.buildPayload({ level: "warning" })).toMatchObject({ person: "H-solo" });
   });
@@ -1486,7 +1486,7 @@ describe("copy truth", () => {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
-      for (const sheet of Object.values(buildSheets(v, t))) {
+      for (const sheet of Object.values(buildSheets(v))) {
         for (const step of sheet.steps) {
           keys.add(step.title);
           if (step.kind === "choice") for (const option of step.options) keys.add(option.label);

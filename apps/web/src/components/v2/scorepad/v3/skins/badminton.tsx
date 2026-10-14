@@ -1119,7 +1119,7 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     [SET_SCORE_TILE_ID]: setScoreSheet(view),
   };
@@ -1312,7 +1312,7 @@ export function badmintonSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: (view) => buildSheets(view, t),
+    sheets: buildSheets,
     refusedEventTypes,
     activityDetail: badmintonDetail,
     // No swap()/contextSelect() — see this file's header.
