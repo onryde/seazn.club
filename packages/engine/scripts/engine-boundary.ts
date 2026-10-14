@@ -130,18 +130,16 @@ const REGEX_PRECEDERS = new Set(Array.from("(,=:[!&|?{;+-*%<>~^"));
 const REGEX_KEYWORDS = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
 const WORD_CHAR = /[\w$]/;
 
-/** The code skeleton of `source`: same length and same line breaks, so an index here is an index in the source, with the comments, the
- *  contents of every string, template text and regular expression blanked to spaces (their quotes stay). A scan of the skeleton cannot
- *  mistake text for code: a `process.env` or an `import "node:fs"` inside a string or a comment is not a read or an import. A specifier is
- *  a string, so its text is read from the source at the span the skeleton's quotes mark. Unlike a regex replace this knows that a `//` or
- *  `/*` inside a string starts no comment and that a quote inside a comment or a regular expression starts no string - each of those hides
- *  the code after it from a regex-based scan. */
+/** The code skeleton of `source`: same length, so an index here is an index in the source, with the comments and the contents of every
+ *  string, template text and regular expression blanked to spaces (their quotes stay). A scan of the skeleton cannot mistake text for
+ *  code: a `process.env` or an `import "node:fs"` inside a string or a comment is not a read or an import. A specifier is a string, so its
+ *  text is read from the source at the span the skeleton's quotes mark. Unlike a regex replace this knows that a `//` or `/*` inside a
+ *  string starts no comment and that a quote inside a comment or a regular expression starts no string - each of those hides the code
+ *  after it from a regex-based scan. */
 function codeSkeleton(source: string): string {
   const n = source.length;
   const bare = source.split("");
-  const blank = (from: number, to: number) => {
-    for (let k = from; k < Math.min(to, n); k++) if (bare[k] !== "\n") bare[k] = " ";
-  };
+  const blank = (from: number, to: number) => bare.fill(" ", from, to);
   let i = 0;
   let last = -1; // the last character of code that was not whitespace, to tell a regex `/` from a division `/`
 
@@ -178,7 +176,7 @@ function codeSkeleton(source: string): string {
         const from = ++i;
         while (i < n && source[i] !== c && source[i] !== "\n") i += source[i] === "\\" ? 2 : 1;
         blank(from, i);
-        if (source[i] === c) i++; // an unterminated string stops at its line's end
+        i++; // the closing quote (an unterminated string stops at its line's end, and this steps over that)
         last = i - 1;
         continue;
       }
@@ -239,12 +237,12 @@ function codeSkeleton(source: string): string {
 }
 
 // Every way a module is loaded by value, matched against the skeleton, where group 1 is the blanked specifier: its span (the `d` flag)
-// is where to read the real one in the source. `import type ...` and `export type ...` are skipped by the lookahead. `import { type A } from`
+// is where to read the real one in the source. `import type ...` is skipped by the lookahead (and `export type ...` never matches). `import { type A } from`
 // IS followed: whether the build keeps that import depends on a compiler flag, and a walk too wide is loud (the Metro proof names the module
 // it walked but the bundle lacks) where a walk too narrow is silent.
 const VALUE_IMPORTS: RegExp[] = [
   /\bimport(?!\s+type\s)\s+[^;"'`]*?\bfrom\s*["']([^"']+)["']/dg, // import a, { b } as c, * as d from "x" (any number of lines)
-  /\bexport(?!\s+type\s)\s*(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*["']([^"']+)["']/dg, // export * [as n] / { a } from "x"
+  /\bexport\s*(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*["']([^"']+)["']/dg, // export * [as n] / { a } from "x" (`export type` has a word before the * or {)
   /(?<![\w$.])import\s*["']([^"']+)["']/dg, // import "x"
   /(?<![\w$.])import\s*\(\s*["']([^"']+)["']/dg, // import("x")
   /(?<![\w$.])require\s*\(\s*["']([^"']+)["']/dg, // require("x")
@@ -358,8 +356,8 @@ export function checkPhoneSafety(engineDir: string): PhoneReport {
           externals.add(packageNameOf(specifier));
         } else {
           const base = posix.normalize(posix.join(posix.dirname(file), specifier));
-          if (base === ".." || base.startsWith("../")) {
-            violate("outside-engine", m.index, `imports ${JSON.stringify(specifier)}, which leaves the package`);
+          if (!base.startsWith("src/")) {
+            violate("outside-src", m.index, `imports ${JSON.stringify(specifier)}, which leaves src/ (dist/ is built from src/ alone)`);
           } else if (underScheduling(base)) {
             violate("scheduling", m.index, `imports ${JSON.stringify(specifier)}, which is under ${SCHEDULING_DIR}`);
           } else {
@@ -371,9 +369,9 @@ export function checkPhoneSafety(engineDir: string): PhoneReport {
       }
     }
     for (const m of bare.matchAll(DYNAMIC_IMPORT_OF_A_VALUE)) violate("unresolved-import", m.index, "a dynamic import() of something that is not a string literal");
-    for (const m of bare.matchAll(PROCESS_READ)) violate("process", m.index, `reads \`process\` (${m[0].trim()})`);
+    for (const m of bare.matchAll(PROCESS_READ)) violate("process", m.index, "reads `process`");
     for (const m of bare.matchAll(GLOBAL_PROCESS_BY_NAME)) {
-      if (textOf(m.indices![1]!) === "process") violate("process", m.index, `reads \`process\` (globalThis["process"])`);
+      if (textOf(m.indices![1]!) === "process") violate("process", m.index, "reads `process`");
     }
   }
   return { walked: [...walked].sort(), entries: entries.sort(), externals: [...externals].sort(), violations };

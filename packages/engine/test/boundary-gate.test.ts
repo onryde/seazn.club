@@ -250,7 +250,9 @@ describe("phone-safe subpaths: what the walk refuses", () => {
     ["scheduling through a directory import", 'export * from "../scheduling";', "scheduling"],
     ["a dynamic import it cannot resolve", "export const load = (n: string) => import(n);", "unresolved-import"],
     ["a relative import of a file that is not there", 'import { a } from "./nope.ts"; export const b = a;', "unresolved-import"],
-    ["an import that leaves the package", 'import "../../../elsewhere.ts";', "outside-engine"],
+    ["an import that leaves the package", 'import "../../../elsewhere.ts";', "outside-src"],
+    ["an import that leaves the package by exactly the root", 'import "../../..";', "outside-src"],
+    ["an import of a package file outside src/", 'import "../../package.json";', "outside-src"],
   ])("refuses %s reached from a phone subpath", (_label, line, kind) => {
     const dir = seedEngine({ "src/core/index.ts": 'export * from "./leak.ts";', "src/core/leak.ts": line, "src/scheduling/build.ts": "export const buildSchedule = 1;", "src/scheduling/index.ts": "export {};" });
     const r = checkPhoneSafety(dir);
@@ -400,6 +402,8 @@ describe("phone-safe subpaths: what the walk reads", () => {
         "export const g = subprocess.env;",
         'export const h = globalThis["fetch"];',
         "export const i = globalThis.fetch;",
+        "export const j = e.process.env;", // some other object's `process` member
+        "/*/ process.env */ export const k = 1;", // `/*/` opens a comment, it does not close one
       ].join("\n"),
     });
     const r = checkPhoneSafety(dir);
@@ -428,6 +432,7 @@ describe("phone-safe subpaths: what the walk reads", () => {
     ["after a division by an object", 'export const q = {} / 2; export const s = "/"; export const e = process.env;'],
     ["after a division by a name", 'export const q = a / 2; export const s = "/"; export const e = process.env;'],
     ["inside a placeholder that holds braces", "export const t = `${ ({ a: 1 }).a + process.env.X }`;"],
+    ["after a placeholder that held braces", "export const t = `${ ({ a: 1 }).a }`; export const e = process.env;"],
   ])("still sees process %s", (_label, code) => {
     const r = checkPhoneSafety(seedEngine({ "src/core/index.ts": code }));
     expect(r.violations.map((v) => v.kind)).toEqual(["process"]);
