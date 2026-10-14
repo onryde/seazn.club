@@ -60,7 +60,8 @@ describe("isMainModule — the entry-script check the matrix CLIs and the repo g
     // It takes no input to refuse: on a clean engine it passes, so the witness
     // is its PASS line (the old idiom loaded, printed nothing and exited 0).
     const via = join(dir, "link-engine-boundary.ts");
-    symlinkSync(resolve(REPO, "scripts/engine-boundary.ts"), via);
+    // The gate moved into the engine package (engine-split 1d-2): the title names it package-relative, which is still true there.
+    symlinkSync(resolve(REPO, "packages/engine/scripts/engine-boundary.ts"), via);
     const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "" } });
     expect(r.stdout, `engine-boundary: no PASS line — main never ran (stderr: ${r.stderr})`).toContain("PASS  engine boundary clean");
     expect(r.status, r.stderr).toBe(0);

@@ -1,6 +1,7 @@
 // Engine import-boundary gate (engine/03-engine-architecture.md §1, PROMPT-01 §4).
 // packages/engine/src must stay pure: no effectful imports, no ambient time or
-// randomness. Run with: node --experimental-strip-types scripts/engine-boundary.ts
+// randomness. Run with: node --experimental-strip-types scripts/engine-boundary.ts (from the engine package; `pnpm boundary` there,
+// `pnpm engine:boundary` from the repo root). It scans the src/ beside it, so it holds with the engine at packages/engine or at a repo root.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { isMainModule } from "./lib/main-module.ts";
@@ -86,7 +87,7 @@ export function checkEngineBoundary(srcDir: string): Violation[] {
 }
 
 if (isMainModule(import.meta.url)) {
-  const srcDir = new URL("../packages/engine/src", import.meta.url).pathname;
+  const srcDir = new URL("../src", import.meta.url).pathname;
   const violations = checkEngineBoundary(srcDir);
   for (const v of violations) {
     console.error(`FAIL  packages/engine/src/${v.file}:${v.line}  ${v.rule}`);
