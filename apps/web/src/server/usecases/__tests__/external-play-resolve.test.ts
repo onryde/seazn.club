@@ -17,7 +17,7 @@
 // online play exists only for `boardgame` (guard.ts).
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { BRACKET_KINDS, DRAW_KINDS, foldMatch, foldMatchWithStoppage, outcomeOf, playRecorded, StageKind } from "@seazn/engine/core";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { boardgame } from "@seazn/engine/sports/boardgame";
@@ -53,6 +53,14 @@ import { completeStage, createStages, generateStageFixtures } from "../stages";
 import { scoreEvent } from "../scoring";
 import { makeUser } from "./_seed";
 import { seedOnlineChessRound, seedOnlineSwiss, seedOwner, seedPlayer, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+
+// M-9: a settle on a game on file ends the game at Lichess, after the response. That is proven against the Lichess
+// fixture in external-play-settle-ends-game.test.ts; here it would reach lichess.org itself with a seed token, so the
+// ending is stubbed (the read of the game to end stays real).
+vi.mock("../external-play/end-game", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../external-play/end-game")>()),
+  endLichessGame: vi.fn(async () => true),
+}));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 

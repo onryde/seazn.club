@@ -110,7 +110,7 @@ const NOT_FOUND = () => new HttpError(404, "This match room could not be found",
 // the row): a "yes" on a threefold repetition (a draw claim) and a "yes" by a
 // side that cannot lose (InsufficientMaterialClaim, Drawer.scala:55).
 const DRAW_MIN_PLY = 2;
-const DRAW_REOFFER_PLIES = 20;
+export const DRAW_REOFFER_PLIES = 20;
 
 // lila source, not measured — live measurement owed (T17). Two well-formed
 // strings lila PLAYS that chess.js (and lila's own move stream) write
