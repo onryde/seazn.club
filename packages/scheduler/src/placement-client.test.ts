@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SolveBuildCall } from "./placement-client.ts";
 import { PlacementError, solveBuild } from "./placement-client.ts";
-import { fixedClock } from "../core/clock.ts";
+import { fixedClock } from "@seazn/engine/core";
 import { SolveBuildRequest, SolveStatus } from "./generated/scheduler.ts";
 
 /**

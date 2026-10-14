@@ -44,7 +44,7 @@
 // `repairCourts()`'s lexicographic sort (repair-domain.ts) purely as
 // internal bookkeeping — `byCourt` has ZERO readers anywhere outside
 // build-grid.ts/build.ts itself (grep-verified repo-wide) — while the
-// WIRE-VISIBLE court identity (`placement-client.ts`'s `buildIndexSpace`/
+// WIRE-VISIBLE court identity (`@seazn/scheduler`'s `placement-client.ts`, `buildIndexSpace`/
 // `courtIndexOf`/`courtNames`, and `toRequest`'s
 // `courtIndex: indices.courtIndexOf(court)`) resolves ENTIRELY by STRING
 // VALUE against the caller's DECLARED `config.courts` array and never once

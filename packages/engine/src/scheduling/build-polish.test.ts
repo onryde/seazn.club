@@ -33,15 +33,14 @@
 // nothing else. The predicate above is therefore not merely unused but
 // unspellable, which is the strongest form of the guard this file was written
 // to provide.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSchedule, TIER_COUNT, TIER_NAMES } from "./build.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
-import type { SolveBuildOutcome } from "./placement-client.ts";
+import type { SolveBuildOutcome } from "./solver-port.ts";
+import { resolvingSolver, silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 
 /** Shorthand for a resolved, fully-proved placement reply — the shape every case
- *  below builds on. `isolate: false` (vitest.config.ts) plus no global
- *  mock-restore config means a `vi.spyOn` left standing leaks into later
- *  tests, hence `afterEach` below. */
+ *  below builds on. */
 /** The six `(name, value)` rows a FULLY PROVED placement reply carries, in the
  *  ladder's order. Values are placeholders — nothing here reads them — but the
  *  NAMES are load-bearing: `solveBuild` will only call a board
@@ -124,20 +123,16 @@ const row = (fixtureId: string, court: string, startAt: number): Assignment => (
 /** The organiser's board: just `a`, wherever they published it. */
 const currentWithAAt = (startAt: number): Assignment[] => [row("a", "C1", startAt)];
 
-// UN-SKIPPED (fix round 1), all six: each now drives `vi.spyOn(await
-// import("./placement-client.ts"))` directly rather than a real solve.
+// UN-SKIPPED (fix round 1), all six: each now hands `buildSchedule` an injected
+// solver (`resolvingSolver`) directly rather than reaching a real solve.
 describe("buildSchedule — polish", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("returns already_optimal and moves nothing on an optimal board", async () => {
     // Both fixtures are `locked`, so BOTH are pins — `freeFixtures` is empty
     // and placement is asked to place nothing at all. The mock exists only to
     // supply `tiersCompleted`/`wallExhausted`; the board itself comes
     // entirely from the pins either way.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
-    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"] });
+    const solve = resolvingSolver(okOutcome([]));
+    const out = await buildSchedule({ fixtures: optimal, config, frozen: ["a", "b"], solve, log: silentLogger });
     expect(out.status).toBe("already_optimal");
     expect(out.moved).toBe(0);
     // The half the brief's predicate omits, and the half that carries the
@@ -152,7 +147,7 @@ describe("buildSchedule — polish", () => {
       { id: "pub", roundNo: 1, home: "E1", away: "E2", locked: { court: "C1", startAt: T0 } },
       { id: "draft", roundNo: 1, home: "E3", away: "E4" },
     ];
-    const out = await buildSchedule({ fixtures, config, frozen: ["pub"] });
+    const out = await buildSchedule({ fixtures, config, frozen: ["pub"], solve: unavailableSolver, log: silentLogger });
     const pub = out.assignments.find((a) => a.fixtureId === "pub")!;
     expect({ court: pub.court, startAt: pub.startAt }).toEqual({ court: "C1", startAt: T0 });
     // The draft joins it rather than trailing behind it.
@@ -198,7 +193,7 @@ describe("buildSchedule — polish", () => {
     // "a" is frozen (no `locked`) so it pins at `current`'s 09:30, excluded
     // from `fixtures` — only "b" is free, and the mock places it at 09:00,
     // the one slot left in `current`'s shadow.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([{ fixtureId: "b", court: "C1", startAtMs: T0 }]),
     );
     const out = await buildSchedule({
@@ -206,6 +201,8 @@ describe("buildSchedule — polish", () => {
       config: cornerConfig,
       frozen: ["a"],
       current: currentWithAAt(T0 + 30 * MIN),
+      solve,
+      log: silentLogger,
     });
     const a = out.assignments.find((x) => x.fixtureId === "a")!;
     expect({ court: a.court, startAt: a.startAt }).toEqual({ court: "C1", startAt: T0 + 30 * MIN });
@@ -223,7 +220,7 @@ describe("buildSchedule — polish", () => {
     // so against THEIR board `a` did not move and only `b` is new: 1. Against
     // the greedy seed both look changed: 2. The two baselines disagree by
     // construction here, which is the only way to prove which one is being read.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
@@ -233,6 +230,8 @@ describe("buildSchedule — polish", () => {
       fixtures: cornerFixtures,
       config: cornerConfig,
       current: currentWithAAt(T0 + 30 * MIN),
+      solve,
+      log: silentLogger,
     });
     expect(out.metrics.placed).toBe(2);
     expect(out.assignments.find((x) => x.fixtureId === "a")?.startAt).toBe(T0 + 30 * MIN);
@@ -244,16 +243,16 @@ describe("buildSchedule — polish", () => {
     // does its job, which is to prove the `1` above was read off the caller's
     // board: the two baselines disagree by construction here (1 against 0), so
     // a `moved` that had quietly gone back to the seed would answer 2 in the
-    // first arm and fail it. Mocked again (`vi.spyOn` set once) since the
-    // previous call already consumed no state, but re-set for clarity and in
-    // case a future edit makes the two calls' mocks diverge.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    // first arm and fail it. A second solver (`solve2`) since the previous
+    // call already consumed no state, but re-set for clarity and in case a
+    // future edit makes the two calls' solvers diverge.
+    const solve2 = resolvingSolver(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "a", court: "C1", startAtMs: T0 + 30 * MIN },
       ]),
     );
-    const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig });
+    const seedBaseline = await buildSchedule({ fixtures: cornerFixtures, config: cornerConfig, solve: solve2, log: silentLogger });
     expect(seedBaseline.moved).toBe(0);
   }, 120_000);
 
@@ -270,8 +269,8 @@ describe("buildSchedule — polish", () => {
     // Measured, and rewritten. On a board the solver does not touch the seed
     // baseline answers 0 and an empty-array baseline answers 2, so the two are
     // finally distinguishable.
-    const empty = await buildSchedule({ fixtures: optimal, config, current: [] });
-    const omitted = await buildSchedule({ fixtures: optimal, config });
+    const empty = await buildSchedule({ fixtures: optimal, config, current: [], solve: unavailableSolver, log: silentLogger });
+    const omitted = await buildSchedule({ fixtures: optimal, config, solve: unavailableSolver, log: silentLogger });
     expect(empty.moved).toBe(omitted.moved);
     // Pinned absolutely as well as relatively: equality alone would hold if both
     // arms drifted to the same wrong number.
@@ -306,6 +305,8 @@ describe("buildSchedule — polish", () => {
         // reaches, which is exactly how a card gets lost in practice.
         row("b", "C1", T0 + 30 * MIN),
       ],
+      solve: unavailableSolver,
+      log: silentLogger,
     });
     expect(out.metrics.placed).toBe(1);
     // The survivor really did keep its slot, so `moved` has nothing to count...
@@ -352,13 +353,13 @@ describe("buildSchedule — polish", () => {
     ];
     // No `current`: the seed is the baseline, which is what every caller gets
     // today and what this case exists to protect.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve = resolvingSolver(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "c", court: "C2", startAtMs: T0 },
       ]),
     );
-    const out = await buildSchedule({ fixtures, config: oneEach });
+    const out = await buildSchedule({ fixtures, config: oneEach, solve, log: silentLogger });
     expect(out.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
 
     // `a` fell out of the answer, and against a baseline that never existed
@@ -372,7 +373,7 @@ describe("buildSchedule — polish", () => {
     // it: scoped counts the two rows ON the answer and reports the drop on its
     // own channel; the unscoped rule this test was written for walks the
     // BASELINE instead and reports `moved: 3` about a two-row board.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(
+    const solve2 = resolvingSolver(
       okOutcome([
         { fixtureId: "b", court: "C1", startAtMs: T0 },
         { fixtureId: "c", court: "C2", startAtMs: T0 },
@@ -382,6 +383,8 @@ describe("buildSchedule — polish", () => {
       fixtures,
       config: oneEach,
       current: [row("a", "C1", T0)],
+      solve: solve2,
+      log: silentLogger,
     });
     expect(held.assignments.map((a) => a.fixtureId).sort()).toEqual(["b", "c"]);
     expect(held.moved).toBe(2);
@@ -404,7 +407,7 @@ describe("buildSchedule — polish", () => {
     // with nothing placed and zero tiers proved, the placement analogue of
     // "never got to look" (`status: "UNKNOWN"`, the wire's own vocabulary
     // for the absence of a verdict).
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue({
+    const solve = resolvingSolver({
       assignments: [],
       status: "UNKNOWN",
       tiersCompleted: 0,
@@ -417,6 +420,8 @@ describe("buildSchedule — polish", () => {
       config,
       frozen: ["a", "b"],
       rlimit: 1,
+      solve,
+      log: silentLogger,
     });
     // The trigger the brief's version would have fired on.
     expect(out.moved).toBe(0);
@@ -449,13 +454,15 @@ describe("buildSchedule — polish", () => {
     // Both fixtures are `locked`, so `frozen` changes nothing about which
     // are pins — the SAME mock (nothing free to place, everything already
     // pinned) is honest for both calls.
-    vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(okOutcome([]));
+    const solve = resolvingSolver(okOutcome([]));
     const polished = await buildSchedule({
       fixtures: optimal,
       config,
       frozen: ["a", "b"],
+      solve,
+      log: silentLogger,
     });
-    const built = await buildSchedule({ fixtures: optimal, config });
+    const built = await buildSchedule({ fixtures: optimal, config, solve, log: silentLogger });
     expect({ status: built.status, tiers: built.tiersCompleted }).toEqual({
       status: polished.status,
       tiers: polished.tiersCompleted,

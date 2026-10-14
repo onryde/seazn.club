@@ -50,6 +50,7 @@ import {
   type SlotConfig,
   type VerifyConfig,
 } from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "@seazn/scheduler";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { captureServer } from "@/lib/posthog-server";
 import { competitionLifecycleEvent } from "./competitions";
@@ -1928,6 +1929,8 @@ export async function autoSchedule(
         existing: board,
         dependencies,
         wallMs: autoSolverWallMs(),
+        solve: placementSolver,
+        log: schedulerLog,
         ...(body.mode === "polish"
           ? {
               frozen: plan.frozen,
@@ -2490,6 +2493,8 @@ async function reflowExisting(args: {
     existing: args.board,
     dependencies: args.dependencies,
     wallMs: autoSolverWallMs(),
+    solve: placementSolver,
+    log: schedulerLog,
     frozen,
     // Empty means "no board" to `buildSchedule` (an empty array is NOT sent
     // as one) — mirrors the BUILD/POLISH call site's identical guard on

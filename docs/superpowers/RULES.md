@@ -53,6 +53,14 @@ backwards-compatible one; don't contort a design to dodge a migration.
   remaining waves". Implementer and Reviewer stay Opus-minimum (frontmatter
   `model: opus`); plan-writing agents for the remaining spectator waves run
   on Fable. Recorded because the misread was committed for eleven minutes.
+- **2026-10-14: engine-split exception (owner, D30 and D33 in
+  `docs/superpowers/specs/2026-10-13-engine-split-design.md`).** The owner's
+  Sonnet exception for the Implementer and Reviewer roles, first granted for
+  format-matrix W2c on 2026-10-13, also covers the engine-split programme.
+  Its plans run in batches: each task is implemented by `implementer-sonnet`
+  and reviewed by `reviewer-sonnet`, and each batch is reviewed whole by the
+  Opus `reviewer`. The `*-sonnet` agents stay until the engine split's Phase 1
+  closes.
   Reviews the implementer's diff, reports gaps as a list, not prose.
 
 **Loop**: Implementer → Reviewer → gap list → Implementer → Reviewer → …

@@ -57,6 +57,35 @@ const imageExempt = workspaces.filter((w) => ignoredBy(w) !== undefined);
 
 type Manifest = { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string> };
 
+/**
+ * Spawns turbo's own dry-run task graph for `pkg`'s lint and typecheck, and asserts each depends on an `@seazn/engine#` task
+ * whose hashed inputs hold every file in `engineFiles`. Returns how many tasks it judged (anti-vacuity: callers pin it).
+ */
+function engineInputsHashedBy(pkg: string, engineFiles: string[]): number {
+  const r = spawnSync(resolve(REPO, "node_modules", ".bin", "turbo"), ["run", "lint", "typecheck", `--filter=${pkg}`, "--dry=json"], {
+    cwd: REPO, encoding: "utf8", timeout: SPAWN_MS,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TURBO_TELEMETRY_DISABLED: "1" },
+  });
+  expect(r.status, r.stderr).toBe(0);
+  const out = r.stdout;
+  type Task = { taskId: string; dependencies: string[]; inputs: Record<string, string> };
+  const tasks = (JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1)) as { tasks: Task[] }).tasks;
+  const byId = new Map(tasks.map((t) => [t.taskId, t]));
+  let judged = 0;
+  for (const id of [`${pkg}#lint`, `${pkg}#typecheck`]) {
+    const t = byId.get(id);
+    expect(t, `${id} missing from the turbo graph`).toBeDefined();
+    const engineDeps = (t?.dependencies ?? []).filter((d) => d.startsWith("@seazn/engine#"));
+    expect(engineDeps, `${id} does not depend on any @seazn/engine task`).not.toEqual([]);
+    for (const d of engineDeps) {
+      const inputs = Object.keys(byId.get(d)?.inputs ?? {});
+      for (const file of engineFiles) expect(inputs, `${d} does not hash ${file}`).toContain(file);
+    }
+    judged++;
+  }
+  return judged;
+}
+
 describe("workspace wiring (trap 2: a new package is invisible to the root chains)", () => {
   it("the workspace list comes from pnpm-workspace.yaml's globs, is non-empty and includes packages/reference", () => {
     // Every glob is the `<dir>/*` shape the enumeration expands; a new shape
@@ -159,28 +188,12 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     // The real consumer, spawned: turbo's own dry-run task graph. Both tasks
     // read @seazn/engine/core types (tsc, and the type-aware lint), so each
     // must depend on a task whose inputs hold the engine core sources.
-    const r = spawnSync(resolve(REPO, "node_modules", ".bin", "turbo"), ["run", "lint", "typecheck", "--filter=@seazn/reference", "--dry=json"], {
-      cwd: REPO, encoding: "utf8", timeout: SPAWN_MS,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TURBO_TELEMETRY_DISABLED: "1" },
-    });
-    expect(r.status, r.stderr).toBe(0);
-    const out = r.stdout;
-    type Task = { taskId: string; dependencies: string[]; inputs: Record<string, string> };
-    const tasks = (JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1)) as { tasks: Task[] }).tasks;
-    const byId = new Map(tasks.map((t) => [t.taskId, t]));
-    let judged = 0;
-    for (const id of ["@seazn/reference#lint", "@seazn/reference#typecheck"]) {
-      const t = byId.get(id);
-      expect(t, `${id} missing from the turbo graph`).toBeDefined();
-      const engineDeps = (t?.dependencies ?? []).filter((d) => d.startsWith("@seazn/engine#"));
-      expect(engineDeps, `${id} does not depend on any @seazn/engine task`).not.toEqual([]);
-      for (const d of engineDeps) {
-        const inputs = Object.keys(byId.get(d)?.inputs ?? {});
-        expect(inputs, `${d} does not hash the engine core types`).toContain("src/core/types.ts");
-        expect(inputs).toContain("src/core/index.ts");
-      }
-      judged++;
-    }
-    expect(judged).toBe(2);
+    expect(engineInputsHashedBy("@seazn/reference", ["src/core/types.ts", "src/core/index.ts"])).toBe(2);
+  }, spawnBudget(1));
+  it("packages/scheduler: turbo keys its lint AND typecheck on the engine's solver port, so an engine port change is a cache miss", () => {
+    // Engine split 1a-3/1a-4. The scheduler's type-aware lint and its tsc both read the port types the engine declares
+    // (`PlacementSolver`, `EngineLogger`, `SolveBuildInput` in `scheduling/solver-port.ts`, re-exported by the barrel). Without
+    // `packages/scheduler/turbo.json`'s `lint.dependsOn ["^build"]` an engine port change restores a stale green lint.
+    expect(engineInputsHashedBy("@seazn/scheduler", ["src/scheduling/solver-port.ts", "src/scheduling/index.ts"])).toBe(2);
   }, spawnBudget(1));
 });

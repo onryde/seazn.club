@@ -8,11 +8,14 @@
 //
 // LEAF IMPORT, NOT THE BARREL (Task 11 fix — this broke `next build` outright:
 // `Module not found: Can't resolve 'dns'/'fs'/'http2'/'net'/'tls'`). The
-// cutover's `build.ts` now imports `placement-client.ts` (`@grpc/grpc-js`,
+// cutover's `build.ts` imported `placement-client.ts` (`@grpc/grpc-js`,
 // Node-only) into `@seazn/engine/scheduling`'s barrel (`index.ts`), and this
 // component is a client component — the barrel's whole module graph, grpc-js
 // included, was getting pulled into the browser bundle even though only
-// `bracket-layout.ts`'s pure geometry functions are used here. `grid-step.ts`
+// `bracket-layout.ts`'s pure geometry functions are used here. (Since the
+// solver port, engine split D11, the client lives in `@seazn/scheduler` and
+// the barrel no longer reaches gRPC; the leaf stays the right import, as it
+// ships the geometry and not the whole solver.) `grid-step.ts`
 // and `rest-floor.ts` already carry this same leaf-export pattern for exactly
 // this reason ("so the schedule page does not ship the solvers");
 // `bracket-layout.ts` has zero imports of its own, so it is safe the same way.

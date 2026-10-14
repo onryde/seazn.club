@@ -26,13 +26,17 @@
 // `.failure`-keyed switch. This file follows the brief where the two
 // disagree.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSchedule, type BuildInput } from "../build.ts";
 import {
+  buildSchedule,
   slotFixtures,
   validateAssignments,
+  type BuildProblem,
+  type BuildResult,
   type SchedulableFixture,
   type SlotConfig,
-} from "../calendar.ts";
+} from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "../index.ts";
+import { assertLiveSeam, recordSolver, type SolverCall } from "./live-seam-guard.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 7, 8, 9, 0);
@@ -47,6 +51,22 @@ const fx = (id: string, home: string, away: string): SchedulableFixture => ({
   home,
   away,
 });
+
+// This file reaches the REAL service through the REAL adapter and the REAL logger (`placementSolver`, `schedulerLog`): the
+// production seam, not a stand-in. Host and secret come from the environment exactly as they do in production.
+
+/** Every board built in the current test, so `afterEach` can tell a live solve from a silent greedy fallback. */
+const built: BuildResult[] = [];
+/** Every question the engine put to the real adapter in the current test, and how each was answered (`recordSolver`). */
+const asked: SolverCall[] = [];
+/** `buildSchedule` over the live seam. Records the board AND the adapter's calls for the guards in `afterEach` below. */
+const buildLive = async (problem: BuildProblem): Promise<BuildResult> => {
+  const recorded = recordSolver(placementSolver);
+  const result = await buildSchedule({ ...problem, solve: recorded.solve, log: schedulerLog });
+  built.push(result);
+  asked.push(...recorded.calls);
+  return result;
+};
 
 /**
  * FIX ROUND 1 (coordinator finding, `23fb5756` review): the PREVIOUS version
@@ -118,12 +138,12 @@ const fx = (id: string, home: string, away: string): SchedulableFixture => ({
  * constraint placement was actually given, not a coincidence about one it was
  * not.
  */
-function nonAlignedBoard(): BuildInput {
-  // `BuildInput["config"]`, not the narrower `SlotConfig & { courts:
+function nonAlignedBoard(): BuildProblem {
+  // `BuildProblem["config"]`, not the narrower `SlotConfig & { courts:
   // string[] }` used by `scaleBoard` below — `restByDivision` lives only on
   // the `Pick<VerifyConfig, "hard" | "restByDivision" | "tz">` half of that
   // intersection.
-  const config: BuildInput["config"] = {
+  const config: BuildProblem["config"] = {
     startAt: T0,
     matchMinutes: 30,
     gapMinutes: 0,
@@ -185,7 +205,7 @@ function nonAlignedBoard(): BuildInput {
  * `engine === "optimized"` is still deliberately NOT asserted here, for the
  * same reason as before: this board legitimately may not need it.
  */
-function scaleBoard(): BuildInput {
+function scaleBoard(): BuildProblem {
   const courts = ["C1", "C2", "C3", "C4", "C5"];
   const matchMinutes = 40;
   const n = 32;
@@ -212,8 +232,19 @@ function scaleBoard(): BuildInput {
 }
 
 describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running service)", () => {
+  /** Set by the one test that DELIBERATELY points at a dead port and so is meant to read `solver_unavailable`. */
+  let expectUnavailable = false;
+
   afterEach(() => {
     vi.unstubAllEnvs();
+    const results = built.splice(0);
+    const calls = asked.splice(0);
+    const deliberate = expectUnavailable;
+    expectUnavailable = false;
+    // Anti-vacuity and the no-silent-greedy guards (plan Review Focus 2), in a helper so a unit test can kill them without a
+    // service: a non-deliberate board must END on a real answer (`ok` / `already_optimal`), and the real adapter must have been
+    // asked and answered every time. The first review's gap: a SOLVER_BUSY or verifier-rejected board used to pass here.
+    assertLiveSeam(results, calls, deliberate);
   });
 
   it("reaches Placement on a multi-court board whose greedy seed is off the grid — the shape that regressed", async () => {
@@ -242,7 +273,7 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
       "m:order:true",
     ]);
 
-    const result = await buildSchedule(input);
+    const result = await buildLive(input);
 
     // THE assertion — see `nonAlignedBoard`'s comment and `_INDEX.md`'s "The
     // cutover nearly shipped INERT". Reachable only via `build.ts`'s D6 gate
@@ -272,7 +303,7 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
 
   it("solves a 32-fixture/5-court board end to end with zero verifier conflicts", async () => {
     const input = scaleBoard();
-    const result = await buildSchedule(input);
+    const result = await buildLive(input);
 
     // FIX ROUND 2: the load-bearing assertion for THIS board. Greedy alone
     // places all 32 legally (see `scaleBoard`'s comment), so neither
@@ -314,13 +345,14 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
   // is the only lever from a caller, and a leaked one would silently
   // redirect every later test in this worker to `localhost:1`.
   it("falls back to greedy with the service unreachable", async () => {
+    expectUnavailable = true;
     vi.stubEnv("PLACEMENT_SERVICE_HOST", "localhost:1");
     // A short `wallMs` bounds the transport deadline
     // (`(wallSeconds + 2) * 1000` in `placement-client.ts`) well under this
     // test's own timeout, in case the unreachable port does not fail as
     // fast as a loopback connection refusal usually does.
     const input = { ...nonAlignedBoard(), wallMs: 2_000 };
-    const result = await buildSchedule(input);
+    const result = await buildLive(input);
     expect(result.engine).toBe("greedy");
     expect(result.status).toBe("solver_unavailable");
     expect(result.assignments.length).toBeGreaterThan(0);
@@ -345,8 +377,8 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
    * real-wire proof of the identical claim — the encode, the RPC, the
    * decode, and the real TS verifier re-checking the real service's output.
    */
-  function undecidedBracketBoard(): BuildInput {
-    const config: BuildInput["config"] = {
+  function undecidedBracketBoard(): BuildProblem {
+    const config: BuildProblem["config"] = {
       startAt: T0,
       matchMinutes: 30,
       gapMinutes: 0,
@@ -367,7 +399,7 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
 
   it("accepts, rather than refuses, two undecided bracket fixtures sharing every possible finalist", async () => {
     const input = undecidedBracketBoard();
-    const result = await buildSchedule(input);
+    const result = await buildLive(input);
 
     // THE deploy-order claim made concrete: a board this shape used to be
     // refused outright (empty `entrant_indices` on both fixtures), which is

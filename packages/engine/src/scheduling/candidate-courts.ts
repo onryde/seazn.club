@@ -58,7 +58,7 @@ export interface CandidateCourts {
   readonly ids: readonly string[];
   /** `id -> position in {@link ids}` — the wire index once `ids` becomes
    *  `config.courts` (array position IS the solver's court index,
-   *  `placement-client.ts`'s own `IndexSpace.courtIndexOf`). Provided so a
+   *  `@seazn/scheduler`'s `placement-client.ts`, `IndexSpace.courtIndexOf`). Provided so a
    *  caller never has to re-derive this from `ids` by hand. */
   readonly indexOf: ReadonlyMap<string, number>;
 }

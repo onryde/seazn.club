@@ -7,10 +7,11 @@
 // this codebase keeps naming as its recurring defect.
 //
 // Deliberately does NOT import `@seazn/engine/scheduling` (the barrel):
-// that barrel is server-only (see scheduling/index.ts's header) and a `"use
-// client"` file that reaches it ships the whole @grpc stack into the browser
-// bundle — `bracket-panel.tsx`/`slideshow.tsx` did exactly this and broke
-// the production build until Task 11 found it. Every engine import here is
+// that barrel re-exports the whole solver (see scheduling/index.ts's header;
+// before engine split D11 it also reached the @grpc stack, which now lives in
+// `@seazn/scheduler`) — `bracket-panel.tsx`/`slideshow.tsx` once shipped that
+// stack into the browser bundle and broke the production build until Task 11
+// found it. Every engine import here is
 // a LEAF declared in package.json: `./scheduling/capacity` (this feature's
 // own pure lib), `./scheduling/tz` (zero dependencies), and
 // `./scheduling/calendar` — added for `resolveSelector` alone (forced-
@@ -18,8 +19,9 @@
 // type-only plus the same two already-approved leaves (`rest-floor.ts`,
 // `tz.ts`), verified before wiring this up. It stays a DEEP import
 // (`.../calendar`, never the barrel) for exactly that reason — the barrel's
-// `export *` chain is what drags in build.ts/placement-client.ts/grpc, not
-// calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
+// `export *` chain is what dragged in build.ts/placement-client.ts/grpc (the
+// client has since moved to `@seazn/scheduler`) and still drags in the whole
+// solver, not calendar.ts itself. `HardConstraint`/`RuleFixture` are TYPE-ONLY imports,
 // erased at build time — they cost the bundle nothing regardless of source.
 import { dayKeyInTz, weekdayOfYmd, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
 import { usableWindows } from "@seazn/engine/scheduling/court-windows";

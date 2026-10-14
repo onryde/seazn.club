@@ -77,7 +77,7 @@
 // bracket slot (`SchedulableFixture` with neither `home` nor `away`) carries
 // its POSSIBLE participants only in `people`; C10 threads that field onto
 // the wire for every MOVABLE fixture (`build.ts`'s `solveBuild` →
-// `placement-client.ts`'s `personIndices`, a namespace separate from
+// `@seazn/scheduler`'s `placement-client.ts` `personIndices`, a namespace separate from
 // `entrantIds`), and narrowed `services/placement/src/placement/schema.py`'s
 // refusal to "neither `entrant_indices` nor `person_indices`" rather than
 // "no `entrant_indices`" alone. Two TBD siblings that share `people`, both
@@ -109,7 +109,7 @@
 // STILL OPEN, narrower than either of the above and NOT touched by this
 // pass: `existing` (a caller-frozen fold, or the caller's own `existing`
 // param) carries no `people`/`person_indices` on the wire — C10 scoped that
-// addition to `fixtures` only (see `placement-client.ts`'s own comment on
+// addition to `fixtures` only (see `@seazn/scheduler`'s `placement-client.ts`, its own comment on
 // `IndexSpace.personIndexOf`). A TBD sibling that is itself CALLER-FROZEN
 // (never a violator, folded into `existing` rather than `fixtures`) still
 // loses its participant set the moment it crosses that fold, so a
@@ -145,6 +145,8 @@ import {
   type RepairComponentReport,
 } from "./repair-decompose.ts";
 import { buildSchedule, type BuildInput } from "./build.ts";
+import { assertEnginePorts } from "./solver-port.ts";
+import type { EngineLogger, PlacementSolver } from "./solver-port.ts";
 
 /**
  * The largest component this driver will attempt, in fixtures (violators and
@@ -209,6 +211,10 @@ export interface DecomposedCpsatRepairInput {
   componentLimit?: number;
   /** Fires once per component, in solve order. */
   onComponent?: (report: RepairComponentReport) => void;
+  /** The solver every component's `buildSchedule` call asks (engine-split D11). REQUIRED, as on `BuildInput`. */
+  solve: PlacementSolver;
+  /** Where every component's `buildSchedule` call logs (engine-split D25). REQUIRED, as on `BuildInput`. */
+  log: EngineLogger;
 }
 
 const hasDayCap = (config: VerifyConfig): boolean =>
@@ -328,16 +334,19 @@ function nudgeForward(
  * coupling to `repair.ts`).
  *
  * SEQUENTIAL, one component at a time, one `buildSchedule` call per component
- * — never parallel. `build.ts:1196` still wraps every `buildSchedule` call in
- * the process-wide `withZ3LockAndReset` mutex (its own comment: the lock
- * "buys this call NOTHING correctness-wise" on the placement path but stays
- * because removing it is REFLOW's call too and the throughput cost is
- * unmeasured); parallel dispatch is a separate, benched task that has to
- * settle that question first.
+ * — never parallel. `buildSchedule` has no process-wide lock any more (the
+ * z3 mutex went with the solver); what bounds concurrent requests to the
+ * service is its per-process queue cap (`MAX_SOLVER_QUEUE` and the `queued`
+ * counter in `build.ts`, ahead of `buildSchedule`). Parallel dispatch is a
+ * separate, benched task that has to settle how that cap and the service's
+ * own admission control interact first.
  */
 export async function repairDecomposedCpsat(
   input: DecomposedCpsatRepairInput,
 ): Promise<DecomposedRepairResult> {
+  // Before the "already verifies" early return below, which never touches either port: a caller that forgot one would not find
+  // out until the first real violation arrived.
+  assertEnginePorts(input, "repairDecomposedCpsat");
   // `performance.now()`: ambient wall-clock reads are banned engine-wide
   // (scripts/engine-boundary.ts).
   const t0 = performance.now();
@@ -475,6 +484,8 @@ export async function repairDecomposedCpsat(
         dependencies,
         current: currentForComponent,
         wallMs: thisBudget,
+        solve: input.solve,
+        log: input.log,
       });
     } catch {
       // `buildSchedule` itself never throws in production use (every path

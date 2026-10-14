@@ -13,6 +13,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assignment, SchedulableFixture, VerifyConfig } from "./calendar.ts";
 import { isBlockingConflict, validateAssignments } from "./calendar.ts";
 import type { BuildInput, BuildResult } from "./build.ts";
+import { fakeSolver, recordingLogger } from "./__tests__/solver-fakes.ts";
+
+// The ports the driver is handed. `buildSchedule` is mocked in this file, so neither is ever called. They are distinct
+// instances (not `unavailableSolver` / `silentLogger`) so the threading assertion below can tell "passed down" from
+// "replaced by a default".
+const solve = fakeSolver(() => Promise.reject(new Error("the mocked buildSchedule never asks a solver")));
+const { log } = recordingLogger();
 
 // `vi.doMock` + per-test `vi.resetModules()` + a fresh dynamic import, NOT a
 // hoisted top-level `vi.mock` — this engine suite runs `isolate: false`
@@ -119,6 +126,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(),
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("clean");
     expect(r.k).toBe(0);
@@ -145,6 +154,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(["f1", "f2"]),
       config: cfg(),
+      solve,
+      log,
     });
     expect(buildSchedule).toHaveBeenCalledTimes(1);
     expect(r.components).toHaveLength(3);
@@ -167,6 +178,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(["f1", "f2"]),
       config: cfg(),
+      solve,
+      log,
     });
     expect(buildSchedule).not.toHaveBeenCalled();
     expect(r.components).toHaveLength(1);
@@ -187,6 +200,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(),
       config: cfg(),
+      solve,
+      log,
     });
     expect(buildSchedule).toHaveBeenCalledTimes(1);
     expect(r.status).toBe("repaired");
@@ -208,9 +223,14 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(["f1"]),
       dependencies: [{ fixtureId: "f2", dependsOn: "f1", direct: true }],
       config: cfg(),
+      solve,
+      log,
     });
     expect(buildSchedule).toHaveBeenCalledTimes(1);
     const call = buildSchedule.mock.calls[0]![0];
+    // The ports ride down to the component solve (D11, D25): the very instances the caller handed in, not a default.
+    expect(call.solve, "the driver passes its solver down to buildSchedule").toBe(solve);
+    expect(call.log, "the driver passes its logger down to buildSchedule").toBe(log);
     expect((call.fixtures as SchedulableFixture[]).map((f) => f.id)).toEqual(["f2"]);
     expect(call.frozen).toBeUndefined();
     expect((call.existing as Assignment[]).map((a) => a.fixtureId)).toContain("f1");
@@ -230,6 +250,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(["f1"]),
       dependencies: [{ fixtureId: "f2", dependsOn: "f1", direct: true }],
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("repaired");
     const f1After = r.assignments.find((a) => a.fixtureId === "f1")!;
@@ -280,6 +302,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(["f1"]),
       dependencies,
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("repaired");
     const f1After = r.assignments.find((a) => a.fixtureId === "f1")!;
@@ -316,6 +340,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
         { fixtureId: "f3", dependsOn: "f1", direct: true },
       ],
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("unrepaired");
     expect(r.assignments).toEqual(proposal);
@@ -335,6 +361,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(["f1"]),
       dependencies: [{ fixtureId: "f2", dependsOn: "f1", direct: true }],
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("unrepaired");
     expect(r.moved).toEqual([]);
@@ -357,6 +385,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(),
       config: cfg(),
+      solve,
+      log,
     });
     expect(r.status).toBe("unrepaired");
     expect(r.components[0]!.outcome).not.toBe("repaired");
@@ -372,6 +402,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(),
       config: cfg(),
       componentLimit: 1,
+      solve,
+      log,
     });
     expect(buildSchedule).not.toHaveBeenCalled();
     expect(r.status).toBe("unrepaired");
@@ -402,6 +434,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       callerFrozen: new Set(),
       config: cfg(),
       budgetMs: 5,
+      solve,
+      log,
     });
     expect(buildSchedule).toHaveBeenCalledTimes(1);
     expect(r.status).toBe("partial");
@@ -423,6 +457,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(),
       config: cfg(),
+      solve,
+      log,
     });
     // One court clash, one movable fixture actually moved: k=1 meets the
     // lower bound (a single disjoint conflict needs at least one move).
@@ -443,6 +479,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
       proposal,
       callerFrozen: new Set(),
       config: cfg(),
+      solve,
+      log,
     });
     expect(mutated.k).toBe(2);
     expect(mutated.minimality.verdict).toBe("upper_bound");
@@ -461,6 +499,8 @@ describe("repairDecomposedCpsat — driver logic (buildSchedule mocked)", () => 
         hard: [{ type: "max_fixtures_per_day", count: 1, scope: { kind: "competition" } }],
         ruleFixtures: [],
       }),
+      solve,
+      log,
     });
     expect(r.mode).toBe("whole_board");
     expect(r.modeReason).toBe("day_cap_unindexed_fixtures");

@@ -703,6 +703,8 @@ const CONFIGS: [cwd: string, file: string][] = [
   ["apps/web", "src/lib/format-templates.ts"],
   ["packages/engine", "src/competition/index.ts"],
   ["packages/reference", "src/index.ts"],
+  // Engine split 1a-3/1a-4: the scheduler package spreads the same rule set, so it joins the proof it is spread there.
+  ["packages/scheduler", "src/index.ts"],
   [".", "scripts/seed-demo-templates.ts"],
 ];
 

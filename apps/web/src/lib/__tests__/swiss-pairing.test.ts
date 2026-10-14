@@ -65,10 +65,10 @@ describe("roundOnePairs mirrors the engine", () => {
 
 describe("swiss-pairing.ts stays client-safe", () => {
   // A "use client" component (the desk's stages-panel.tsx) imports this module.
-  // The bare `@seazn/engine/scheduling` barrel is SERVER-ONLY (its header,
-  // packages/engine/src/scheduling/index.ts): it reaches placement-client.ts →
-  // @grpc/grpc-js, and a browser bundle then dies on `Module not found: dns`.
-  // tsc, vitest and eslint are all blind to that, so read the source.
+  // The bare `@seazn/engine/scheduling` barrel is no longer SERVER-ONLY (engine split D11/D32h: the gRPC client left it for
+  // `@seazn/scheduler`, packages/engine/src/scheduling/index.ts says so), but it still re-exports the whole solver, so this
+  // module keeps to the engine's swiss LEAF. A client chain reaching `@seazn/scheduler` dies on `Module not found: dns`;
+  // client-graph-no-server-barrel.test.ts owns that. tsc, vitest and eslint are all blind to both, so read the source.
   const source = readFileSync(join(__dirname, "..", "swiss-pairing.ts"), "utf8");
   // Every module specifier: `from "x"`, `import "x"`, `import("x")`, `require("x")`.
   const specifiers = [

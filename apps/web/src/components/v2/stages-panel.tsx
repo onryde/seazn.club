@@ -81,7 +81,7 @@ import {
 import { swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
-// `@seazn/engine/scheduling` barrel, which is server-only (grpc).
+// `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
 import {
   SWISS_PAIRING_NOT_SWISS_CODE,
   SWISS_PAIRING_ROUND_ONE_ONLY_CODE,

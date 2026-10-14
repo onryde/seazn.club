@@ -15,6 +15,7 @@
 // never fired and the comparison is not two truncated runs agreeing by luck.
 import { describe, expect, it } from "vitest";
 import { buildSchedule, TIER_COUNT } from "./build.ts";
+import { silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
 
 const MIN = 60_000;
@@ -53,8 +54,8 @@ const fixtures: SchedulableFixture[] = [
 // a question for whichever task exercises a live/mocked service.
 describe.skip("buildSchedule determinism", () => {
   it("returns the same board twice", async () => {
-    const a = await buildSchedule({ fixtures, config });
-    const b = await buildSchedule({ fixtures, config });
+    const a = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
+    const b = await buildSchedule({ fixtures, config, solve: unavailableSolver, log: silentLogger });
     expect(a.assignments).toEqual(b.assignments);
     expect(a.metrics).toEqual(b.metrics);
     // Not vacuous: a run that stopped before T0 would also match itself.
@@ -63,8 +64,8 @@ describe.skip("buildSchedule determinism", () => {
   }, 180_000);
 
   it("returns the same board under two different wall-clock caps", async () => {
-    const a = await buildSchedule({ fixtures, config, wallMs: 30_000 });
-    const b = await buildSchedule({ fixtures, config, wallMs: 120_000 });
+    const a = await buildSchedule({ fixtures, config, wallMs: 30_000, solve: unavailableSolver, log: silentLogger });
+    const b = await buildSchedule({ fixtures, config, wallMs: 120_000, solve: unavailableSolver, log: silentLogger });
     expect(a.assignments).toEqual(b.assignments);
     expect(a.metrics).toEqual(b.metrics);
     expect(a.tiersCompleted).toBe(b.tiersCompleted);
@@ -94,8 +95,8 @@ describe.skip("buildSchedule determinism", () => {
   // in the outcome altogether and the property under test — two caps four times
   // apart agreeing — holds for any such pair.
   it("returns the same board under two wall caps on the window path", async () => {
-    const a = await buildSchedule({ fixtures, config, rlimit: LNS_LEVER_RLIMIT, wallMs: 300_000 });
-    const b = await buildSchedule({ fixtures, config, rlimit: LNS_LEVER_RLIMIT, wallMs: 600_000 });
+    const a = await buildSchedule({ fixtures, config, rlimit: LNS_LEVER_RLIMIT, wallMs: 300_000, solve: unavailableSolver, log: silentLogger });
+    const b = await buildSchedule({ fixtures, config, rlimit: LNS_LEVER_RLIMIT, wallMs: 600_000, solve: unavailableSolver, log: silentLogger });
     expect(a.assignments).toEqual(b.assignments);
     expect(a.metrics).toEqual(b.metrics);
     expect(a.engine).toBe(b.engine);

@@ -11,8 +11,8 @@
 //
 // Pure: no JSX, no hooks, no dict. The panel does the localizing.
 import type { RuleCode } from "@/server/api-v1/schemas";
-// Type-only — erased at build, never pulls the (server-only) scheduling
-// barrel's runtime into this client module. Same pattern
+// Type-only — erased at build, never pulls the scheduling barrel's runtime
+// (the whole solver) into this client module. Same pattern
 // ai-instruction-describe.ts and lib/schedule-board.ts already use for
 // `HardConstraint`/`Conflict`.
 import type { ConflictDetail } from "@seazn/engine/scheduling";

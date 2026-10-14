@@ -1,6 +1,7 @@
 // W2b Task 13 — each bracket card's and schedule row's forfeit tag and sentence. Its own module (fix round 1): the
 // client `schedule.tsx` needs it, and it lived in the Server Component `bracket.tsx`, whose value import of the
-// SERVER-ONLY `@seazn/engine/scheduling` barrel then reached the browser bundle (`next build`: Module not found: dns).
+// `@seazn/engine/scheduling` barrel (server-only THEN: it reached the gRPC client; the client now lives in `@seazn/scheduler`)
+// then reached the browser bundle (`next build`: Module not found: dns).
 // Keep this module's imports client-safe — client-graph-no-server-barrel.test.ts sweeps every client root.
 import type { PublicFixture } from "@/server/public-site/data";
 import { feedsNextMatch } from "@/lib/bracket-next-match";

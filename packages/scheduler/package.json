@@ -1,0 +1,33 @@
+{
+  "name": "@seazn/scheduler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./placement-client": "./src/placement-client.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
+    "lint": "eslint",
+    "gen:proto": "node --experimental-strip-types scripts/gen-proto.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.13.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "@seazn/engine": "workspace:*",
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/node": "^26",
+    "eslint": "^9",
+    "protoc": "35.1.0",
+    "ts-proto": "2.12.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8",
+    "typescript-native": "npm:typescript@7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

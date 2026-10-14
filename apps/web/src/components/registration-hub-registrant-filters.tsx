@@ -145,13 +145,14 @@ export function RegistrationHubRegistrantFilters({
   /** RegistrationStatus.options, read by the SERVER parent
    *  (registration-hub-registrants-panel.tsx) and passed down as plain
    *  strings — never imported here directly. `@/server/api-v1/schemas`
-   *  transitively reaches the engine's gRPC scheduling client
-   *  (placement-client.ts), which dials real Node built-ins (dns/net/
-   *  http2); a SERVER component importing it is fine (never bundled for
-   *  the browser), but this component became a CLIENT one the moment it
-   *  needed onChange handlers, and a client bundle pulling that import in
-   *  fails `next build` outright — vitest and tsc both stay green, since
-   *  neither one bundles for a browser. One source (the zod enum), read
+   *  once reached the engine's gRPC scheduling client (placement-client.ts,
+   *  since moved to `@seazn/scheduler`), which dials real Node built-ins
+   *  (dns/net/http2); a SERVER component importing it was fine (never
+   *  bundled for the browser), but this component became a CLIENT one the
+   *  moment it needed onChange handlers, and a client bundle pulling that
+   *  import in failed `next build` outright — vitest and tsc both stayed
+   *  green, since neither one bundles for a browser. schemas.ts is a server
+   *  module regardless (zod, the whole API surface). One source (the zod enum), read
    *  server-side once, never duplicated here. */
   statusOptions: readonly string[];
   kindOptions: readonly string[];

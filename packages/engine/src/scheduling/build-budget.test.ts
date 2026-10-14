@@ -44,6 +44,7 @@
 // move if a check got cheaper.
 import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
+import { silentLogger, unavailableSolver } from "./__tests__/solver-fakes.ts";
 import { boardMetrics, isStrictlyBetter } from "./build-objectives.ts";
 import { isBlockingConflict, slotFixtures, validateAssignments } from "./calendar.ts";
 import type { Assignment, SchedulableFixture, SlotConfig } from "./calendar.ts";
@@ -103,14 +104,14 @@ describe("buildSchedule run budget", () => {
     // establishes that this model really does solve to a verdict on all four
     // tiers, and what the run costs when nothing stops it. Without it `capped`
     // would pass against a solver that never got anywhere at all.
-    const generous = await buildSchedule({ fixtures, config, rlimit: 40_000_000 });
+    const generous = await buildSchedule({ fixtures, config, rlimit: 40_000_000, solve: unavailableSolver, log: silentLogger });
     expect({ tiers: generous.tiersCompleted, expired: generous.budgetExpired }).toEqual({
       tiers: 4,
       expired: false,
     });
     expect(generous.rlimitSpent).toBeGreaterThan(150_000);
 
-    const capped = await buildSchedule({ fixtures, config, rlimit: 100_000 });
+    const capped = await buildSchedule({ fixtures, config, rlimit: 100_000, solve: unavailableSolver, log: silentLogger });
     // Each of these three a per-check limit gets wrong. Measured under the
     // mutant that arms `rlimit` once per check at the nominal value: tiers 4,
     // `budgetExpired` false, spent 201_900.
@@ -138,7 +139,7 @@ describe("buildSchedule run budget", () => {
     // Running out is a NORMAL outcome — the incumbent stands, `status` is
     // ordinary. What must not happen is the run handing back something worse
     // than today's board.
-    const capped = await buildSchedule({ fixtures, config, rlimit: 100_000 });
+    const capped = await buildSchedule({ fixtures, config, rlimit: 100_000, solve: unavailableSolver, log: silentLogger });
     const floor = boardMetrics(legalSeed(), config.courts, fixtures.length);
     expect(isStrictlyBetter(floor, capped.metrics)).toBe(false);
     expect(capped.status).toBe("ok");
@@ -148,14 +149,14 @@ describe("buildSchedule run budget", () => {
     // `rlimit` is a resource counter rather than a clock (D9), so WHERE a run
     // stops is a property of the search and not of the machine. Two runs at one
     // budget must stop identically; a larger budget must not buy a worse board.
-    const a = await buildSchedule({ fixtures, config, rlimit: 100_000 });
-    const b = await buildSchedule({ fixtures, config, rlimit: 100_000 });
+    const a = await buildSchedule({ fixtures, config, rlimit: 100_000, solve: unavailableSolver, log: silentLogger });
+    const b = await buildSchedule({ fixtures, config, rlimit: 100_000, solve: unavailableSolver, log: silentLogger });
     expect({ tiers: a.tiersCompleted, rows: a.assignments, metrics: a.metrics }).toEqual({
       tiers: b.tiersCompleted,
       rows: b.assignments,
       metrics: b.metrics,
     });
-    const richer = await buildSchedule({ fixtures, config, rlimit: 40_000_000 });
+    const richer = await buildSchedule({ fixtures, config, rlimit: 40_000_000, solve: unavailableSolver, log: silentLogger });
     expect(a.tiersCompleted).toBeLessThanOrEqual(richer.tiersCompleted);
     expect(isStrictlyBetter(a.metrics, richer.metrics)).toBe(false);
   }, 300_000);

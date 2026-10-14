@@ -9,7 +9,7 @@
 // organiser uses. The rail renders these; the tests pin them.
 //
 // Client-safe: imports only the client-safe leaves (`swiss-pairing.ts` is
-// guarded against the server-only scheduling barrel by its own test).
+// guarded against the whole scheduling barrel by its own test).
 import {
   effectiveSwissPairing,
   roundOnePairs,

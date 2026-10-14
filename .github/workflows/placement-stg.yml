@@ -43,7 +43,7 @@ on:
       - "services/placement/**"
       - "proto/**"
       - "packages/engine/src/scheduling/**"
-      - "packages/engine/scripts/gen-proto.ts"
+      - "packages/scheduler/**"
       - ".github/workflows/placement-stg.yml"
 
 # Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).

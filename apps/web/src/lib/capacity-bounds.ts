@@ -15,7 +15,8 @@
 // the outcome resting on tree-shaking. capacity-input.ts's own header
 // records what that class of accident already cost here once (a `"use
 // client"` file reaching the scheduling barrel shipped the whole @grpc stack
-// into the browser and broke the production build). A leaf with no imports
+// into the browser and broke the production build; the client has since moved
+// to `@seazn/scheduler`, but the barrel is still the whole solver). A leaf with no imports
 // cannot drag anything in, whatever the bundler decides.
 //
 // Why shared constants rather than three literals: two of the three copies

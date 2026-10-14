@@ -49,7 +49,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       # The app name is read from fly.toml and ASSERTED, not hardcoded and not
-      # trusted. Fly's private DNS derives from it and `placement-client.ts`'s
+      # trusted. Fly's private DNS derives from it and `packages/scheduler/src/placement-client.ts`'s
       # DEFAULT_HOST is the literal "placement.flycast:50051" — if the two ever
       # drift, every solve dials a host that does not exist, `build.ts` falls
       # back to greedy, and the symptom is "the optimiser got worse" rather
@@ -63,7 +63,7 @@ jobs:
             exit 1
           fi
           if [ "$app" != "placement" ]; then
-            echo "::error::fly.toml app is '$app', expected 'placement' — placement-client.ts's DEFAULT_HOST is placement.flycast:50051 and would no longer resolve"
+            echo "::error::fly.toml app is '$app', expected 'placement' — packages/scheduler/src/placement-client.ts's DEFAULT_HOST is placement.flycast:50051 and would no longer resolve"
             exit 1
           fi
           echo "app=$app" >> "$GITHUB_OUTPUT"

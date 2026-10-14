@@ -1,27 +1,20 @@
 // @seazn/engine/scheduling — fixture generation algorithms (spec 03 §1).
 //
-// *** THIS BARREL IS SERVER-ONLY. A `"use client"` FILE MUST NEVER IMPORT IT. ***
+// This barrel is NO LONGER server-only (engine-split D11; recorded decision D32h). It used to carry the warning
+// "A `use client` FILE MUST NEVER IMPORT IT", because it re-exported `build.ts`, which reached `placement-client.ts`,
+// which imports `@grpc/grpc-js`, which needs `net`/`tls`/`http2`/`dns`/`fs`. None of those exist in a browser, so `next build`
+// died with `Module not found: dns` — an error that names nothing near the real cause. Since the solver port, `build.ts` asks
+// an injected solver and imports no client: the gRPC client lives in `@seazn/scheduler`, and THAT is what a `"use client"`
+// file must never import (`apps/web/src/lib/__tests__/client-graph-no-server-barrel.test.ts` derives the forbidden list from
+// both packages' `exports` and fails on a chain that reaches it). This barrel is no longer on that list.
 //
-// It re-exports `build.ts` (below), which reaches `placement-client.ts`, which
-// imports `@grpc/grpc-js`, which needs `net`/`tls`/`http2`/`dns`/`fs`. None of
-// those exist in a browser, so `next build` dies with
-// `Module not found: dns` — an error that names nothing near the real cause.
+// **A dynamic import did NOT protect you** (the old arrangement, kept as the lesson). `build.ts` used to import the client via
+// `await import(...)`, and that looked like it kept it out of the bundle. It did not: a bundler still resolves and compiles a
+// dynamic import, it merely puts the result in a separate chunk, and the chunk still has to build. (That dynamic import
+// existed for TEST MOCKING, not for bundle safety — and `@seazn/scheduler`'s adapter keeps the same one for the same reason.)
 //
-// **A dynamic import does NOT protect you.** `build.ts` imports
-// `placement-client.ts` via `await import(...)`, and that looks like it keeps
-// it out of the bundle. It does not: a bundler still resolves and compiles a
-// dynamic import, it merely puts the result in a separate chunk. The chunk
-// still has to build. (That dynamic import exists for TEST MOCKING — see the
-// comment at its call site — not for bundle safety. It never provided any.)
-//
-// This is not hypothetical. It shipped: `bracket-panel.tsx` and `slideshow.tsx`
-// imported this barrel purely for bracket GEOMETRY helpers and dragged a gRPC
-// client into the browser bundle with them. The production build was broken
-// from the cutover until Task 11 found it — and it was found only because E2E
-// needs a prod build, which nothing in the programme had ever run.
-//
-// SO: client components import a LEAF, never this file. The leaves exist for
-// exactly this reason and are declared in `packages/engine/package.json`:
+// STILL PREFER A LEAF in client code. The barrel is safe to import now, but it re-exports the whole solver, and the leaves
+// ship only what a page needs; they are declared in `packages/engine/package.json`:
 //
 //     @seazn/engine/scheduling/bracket-layout   geometry, zero imports
 //     @seazn/engine/scheduling/capacity         D2 precheck; imports only rest-floor
@@ -30,14 +23,8 @@
 //     @seazn/engine/scheduling/rest-floor
 //     @seazn/engine/scheduling/tz
 //
-// Need something client-side that has no leaf yet? ADD ONE — a module with no
-// server-only imports of its own — and export it from `package.json`. Do not
-// widen a client component's reach to this barrel.
-//
-// Nothing enforces this mechanically today. `tsc`, `vitest`, `eslint` and the
-// drift gates are all blind to it; only a full `next build` catches it, and
-// that runs on PULL REQUESTS only, so a local merge pushed straight to `main`
-// skips it entirely.
+// Need something client-side that has no leaf yet? ADD ONE — a module with no heavy imports of its own — and export it from
+// `package.json`.
 
 export * from "./roundrobin.ts";
 export * from "./swiss.ts";
@@ -73,15 +60,18 @@ export * from "./build-grid.ts";
 // model it used to drive, and the LNS fallback over that model, went with the
 // solver in C8.
 export * from "./build.ts";
+// The solver and logger ports `buildSchedule` and `repairDecomposedCpsat` take
+// (engine-split D11, D25): the request/outcome types, `PlacementSolver`,
+// `EngineLogger`, and `silentLogger`. Nothing here opens a socket or reads env.
+export * from "./solver-port.ts";
 // The repair domain and the component graph beneath the decomposed driver.
 // Both solver-agnostic; the z3 encoder they used to feed is gone.
 export * from "./repair-domain.ts";
 export * from "./repair-decompose.ts";
 export * from "./repair-minimality.ts";
 // The decomposed CP-SAT driver (C9). Free to name here for the same reason
-// `repair-decompose.ts` is: it names no z3 at all, and `build.ts`'s own
-// dynamic import already keeps `placement-client.ts`'s gRPC dependency out of
-// a client bundle.
+// `repair-decompose.ts` is: it names no z3 at all, and, since D11, it reaches a
+// solver only through the injected `PlacementSolver` port.
 export * from "./repair-decompose-cpsat.ts";
 // P9 pass 2: candidate courts for a stage (tags ⊇ required, archived
 // excluded, id order preserved) — the ONE function both the build-input

@@ -1,8 +1,8 @@
 // Regenerate the TypeScript gRPC stubs from the shared `proto/scheduler.proto`.
 //
-//   npm run gen:proto --workspace packages/engine
+//   pnpm --filter @seazn/scheduler gen:proto
 //
-// Output lands in src/scheduling/generated/ and is COMMITTED. It is mechanically
+// Output lands in src/generated/ and is COMMITTED. It is mechanically
 // produced — never hand-edit it; change the .proto or this script's ts_proto
 // options and regenerate. Committing it is what keeps `protoc` off CI's critical
 // path: typechecking and testing the client needs the stubs, not the compiler.
@@ -20,7 +20,7 @@
 //  2. The plugin is NOT at the repo-root node_modules/.bin. pnpm's default linker
 //     only hoists what pnpm-workspace.yaml's `publicHoistPattern` names (three
 //     packages, none of them these), so a workspace package's devDependency bins
-//     live in packages/engine/node_modules/.bin. Root is checked as a fallback in
+//     live in packages/scheduler/node_modules/.bin. Root is checked as a fallback in
 //     case the hoisting policy ever changes, and a missing bin is a hard error
 //     naming `pnpm install` rather than a fetch from the network.
 import { execFileSync } from "node:child_process";
@@ -28,15 +28,15 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const engineRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
-const repoRoot = path.resolve(engineRoot, "../..");
-const outDir = path.join(engineRoot, "src/scheduling/generated");
+const pkgRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
+const repoRoot = path.resolve(pkgRoot, "../..");
+const outDir = path.join(pkgRoot, "src/generated");
 const protoDir = path.join(repoRoot, "proto");
 
 /** Locate a devDependency binary, preferring the package-local pnpm bin dir. */
 function resolveBin(name: string): string {
   const candidates = [
-    path.join(engineRoot, "node_modules/.bin", name),
+    path.join(pkgRoot, "node_modules/.bin", name),
     path.join(repoRoot, "node_modules/.bin", name),
   ];
   const found = candidates.find((candidate) => existsSync(candidate));

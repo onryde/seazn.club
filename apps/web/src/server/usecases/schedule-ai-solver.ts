@@ -76,6 +76,7 @@ import {
   type OrderDependency,
   type SchedulableFixture,
 } from "@seazn/engine/scheduling";
+import { placementSolver, schedulerLog } from "@seazn/scheduler";
 
 /**
  * Wall-clock ceiling on ONE solver attempt, measured from the moment this
@@ -353,6 +354,8 @@ export async function solveBoard(input: SolveBoardInput): Promise<SolveBoardOutc
       dependencies: input.dependencies,
       config: input.config,
       budgetMs: input.budgetMs ?? solverBudgetMs(),
+      solve: placementSolver,
+      log: schedulerLog,
     });
   } catch {
     // Every throw lands here — the driver's own "I produced a schedule my

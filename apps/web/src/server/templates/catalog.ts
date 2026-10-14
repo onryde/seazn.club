@@ -7,9 +7,9 @@
 // gallery.tsx" design (e2e caught it, not tsc/vitest): this module
 // VALUE-imports schema.ts's CompetitionTemplate, which VALUE-imports
 // StageKind from api-v1/schemas.ts, which imports HardConstraint from
-// @seazn/engine/scheduling — a barrel that also reaches the gRPC placement
-// client (@grpc/grpc-js, Node-only). A Server Component can still import
-// this fine (it never ships to the browser); the wizard's gallery client
+// @seazn/engine/scheduling — a barrel that then also reached the gRPC placement
+// client (@grpc/grpc-js, Node-only; now in `@seazn/scheduler`). A Server Component
+// can still import this fine (it never ships to the browser); the wizard's gallery client
 // island receives the parsed catalog as a PROP from the page instead — see
 // components/v2/template-gallery.tsx's header.
 import "server-only";

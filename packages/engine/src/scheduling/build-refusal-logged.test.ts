@@ -17,11 +17,11 @@
 // 30 s control run later falsified it: the build was handing back a board in
 // 849 ms against a 30_000 ms wall, so it had never been a timeout at all. The
 // refusal's own message would have said so on the first run.
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSchedule } from "./build.ts";
-import { log } from "./logger.ts";
 import type { SchedulableFixture, SlotConfig } from "./calendar.ts";
-import type { SolveBuildOutcome } from "./placement-client.ts";
+import type { PlacementSolver, SolveBuildOutcome } from "./solver-port.ts";
+import { recordingLogger, resolvingSolver } from "./__tests__/solver-fakes.ts";
 
 const MIN = 60_000;
 const T0 = Date.UTC(2026, 0, 5, 9, 0, 0);
@@ -55,7 +55,7 @@ const fixtures: SchedulableFixture[] = [
  *  mocking something the caller can no longer receive. That matters more here
  *  than usual: the whole defect under test was a field on this object being
  *  dropped. */
-async function mockRefusal(code: string, message: string): Promise<void> {
+function refusal(code: string, message: string): PlacementSolver {
   const outcome: SolveBuildOutcome = {
     assignments: [],
     status: "ERROR",
@@ -65,40 +65,38 @@ async function mockRefusal(code: string, message: string): Promise<void> {
     wallExhausted: false,
     error: { code, message },
   };
-  vi.spyOn(await import("./placement-client.ts"), "solveBuild").mockResolvedValue(outcome);
+  return resolvingSolver(outcome);
 }
 
 describe("a refused placement request explains itself", () => {
-  afterEach(() => {
-    // vitest.config.ts runs `isolate: false` and this repo sets no global
-    // restoreMocks, so a spy left standing here would still be active in the
-    // next file. Same reason build.test.ts does this.
-    vi.restoreAllMocks();
-  });
-
   it("logs the service's own code AND message when it refuses", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    await mockRefusal(
-      "INVALID_REQUEST",
-      "slots[0].day_index must be >= 0, got -1.",
-    );
+    const { lines, log } = recordingLogger();
 
-    await buildSchedule({ fixtures, config });
+    await buildSchedule({
+      fixtures,
+      config,
+      solve: refusal("INVALID_REQUEST", "slots[0].day_index must be >= 0, got -1."),
+      log,
+    });
 
-    const payloads = warn.mock.calls.map(([first]) => first as Record<string, unknown>);
-    const refusal = payloads.find((p) => p?.["code"] === "INVALID_REQUEST");
-    expect(refusal, "no warn carried the refusal code").toBeDefined();
+    const payloads = lines.filter((l) => l.level === "warn").map((l) => l.fields);
+    const refused = payloads.find((p) => p["code"] === "INVALID_REQUEST");
+    expect(refused, "no warn carried the refusal code").toBeDefined();
     // The MESSAGE is the half that was being dropped, and the half that
     // actually names the fault. Asserting only the code would pass against a
     // fix that still threw the diagnosis away.
-    expect(refusal?.["message"]).toBe("slots[0].day_index must be >= 0, got -1.");
+    expect(refused?.["message"]).toBe("slots[0].day_index must be >= 0, got -1.");
   });
 
   it("still falls back to greedy, and still names the status it always did", async () => {
-    vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    await mockRefusal("INVALID_REQUEST", "fixtures must not be empty");
+    const { log } = recordingLogger();
 
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({
+      fixtures,
+      config,
+      solve: refusal("INVALID_REQUEST", "fixtures must not be empty"),
+      log,
+    });
 
     // Behaviour is UNCHANGED — this wave adds observability, not a new policy.
     // Pinned so a later edit cannot quietly turn a logged refusal into a
@@ -107,16 +105,20 @@ describe("a refused placement request explains itself", () => {
   });
 
   it("keeps SOLVER_BUSY on its own status, and logs that too", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
-    await mockRefusal("SOLVER_BUSY", "all 1 solve slots are in use.");
+    const { lines, log } = recordingLogger();
 
-    const built = await buildSchedule({ fixtures, config });
+    const built = await buildSchedule({
+      fixtures,
+      config,
+      solve: refusal("SOLVER_BUSY", "all 1 solve slots are in use."),
+      log,
+    });
 
     // The two codes take different branches, so they are mutated separately:
     // a fix that logged only the `solver_unavailable` branch would pass the
     // first test above and fail this one.
     expect(built.status).toBe("solver_busy");
-    const codes = warn.mock.calls.map(([first]) => (first as Record<string, unknown>)?.["code"]);
+    const codes = lines.filter((l) => l.level === "warn").map((l) => l.fields["code"]);
     expect(codes).toContain("SOLVER_BUSY");
   });
 });
