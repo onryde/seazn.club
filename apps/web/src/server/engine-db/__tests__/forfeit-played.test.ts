@@ -28,6 +28,8 @@ function fakeDb(rows: readonly Row[]) {
 
 const award = (reason: string) => ({ kind: "award", winner: "h", loser: reason === "bye" ? null : "a", reason });
 const fx = (id: string, outcome: unknown) => ({ id, outcome });
+/** A pre-W2b chess forfeit as a stored stream still folds it: the method is retired on write (X-RS-1), read on replay. */
+const LEGACY_CHESS_FORFEIT_WIN = { kind: "win", winner: "h", loser: "a", method: "forfeit" }; // legacy replay row
 
 describe("forfeitPlayedFacts — one read of the forfeit-shaped fixtures' ledgers", () => {
   it("empty case first: no forfeit-shaped fixture (none at all, an open one, a played win, a draw) reads nothing", async () => {
@@ -66,7 +68,7 @@ describe("forfeitPlayedFacts — one read of the forfeit-shaped fixtures' ledger
 
   it("the module decides what is play (ruling 118): a chess Start is play, a badminton Start is not", async () => {
     const rows: Row[] = [{ fixture_id: "f", id: "1", type: "core.start", voids: null }];
-    const fixtures = [fx("f", { kind: "win", winner: "h", loser: "a", method: "forfeit" })];
+    const fixtures = [fx("f", LEGACY_CHESS_FORFEIT_WIN)];
     expect((await forfeitPlayedFacts(fakeDb(rows).db, fixtures, CHESS)).get("f")).toBe(true);
     expect((await forfeitPlayedFacts(fakeDb(rows).db, fixtures, BADMINTON)).get("f")).toBe(false);
   });
@@ -83,7 +85,7 @@ describe("playedFor — the fact `applyPointsRule` is handed for one fixture", (
 
   it("a forfeit-shaped fixture whose fact was never read is refused, never guessed", () => {
     expect(() => playedFor(fx("missing", award("walkover")), new Map())).toThrowError(expect.objectContaining({ code: "CONFIG_INVALID" }));
-    expect(() => playedFor(fx("missing", { kind: "win", winner: "h", loser: "a", method: "forfeit" }), new Map())).toThrowError(
+    expect(() => playedFor(fx("missing", LEGACY_CHESS_FORFEIT_WIN), new Map())).toThrowError(
       expect.objectContaining({ code: "CONFIG_INVALID" }),
     );
   });
