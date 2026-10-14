@@ -150,6 +150,12 @@ describe.skipIf(!HAS_DB)("I-A one layer up: a division save never makes an unsta
     const err = await patchDivision(b.auth, b.divisionId, { config: outgrown }).catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 422, code: "CONFIG_INVALID", extra: { fixture_id: id } });
     expect(String((err as Error).message)).toContain(`Match ${await fixtureNo(id)} has its own format`);
+    // Batch-3 M2: ONE wire shape for CONFIG_INVALID's issues — `{path, message}`, as v1 forwards the engine's
+    // (http.ts `configIssuesOf`); never the raw zod issue with its `input` and `code`. The engine's own issues, read
+    // off its schema over the mix the match would resolve.
+    const engine = badminton.configSchema.safeParse({ ...outgrown, cap: capOwn });
+    expect(engine.success, "the premise: the engine refuses the mix").toBe(false);
+    expect((err as { extra: { issues?: unknown } }).extra.issues).toEqual(engine.success ? [] : engine.error.issues.map((i) => ({ path: i.path, message: i.message })));
     expect((await sql<{ config: unknown }[]>`select config from divisions where id = ${b.divisionId}`)[0]!.config).toEqual(before);
   });
 

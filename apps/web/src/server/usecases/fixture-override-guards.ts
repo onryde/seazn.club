@@ -2,6 +2,7 @@ import "server-only";
 import type postgres from "postgres";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
+import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db/append-event";
@@ -92,7 +93,8 @@ export async function refuseInvalidatedOverrides(
       422,
       `${matchName(r.fixture_no)} has its own format, which this change would make invalid — ${first?.message ?? "the sport's rules refuse it"}. Set it back to its stage's format first.`,
       "CONFIG_INVALID",
-      { fixture_id: r.id, field: typeof first?.path[0] === "string" ? first.path[0] : undefined, issues: parsed.error.issues },
+      // Batch-3 M2: the one wire shape for CONFIG_INVALID's issues, `{path, message}` (http.ts forwards the engine's so).
+      { fixture_id: r.id, field: typeof first?.path[0] === "string" ? first.path[0] : undefined, issues: configIssuesOf(parsed.error) ?? undefined },
     );
   }
 }

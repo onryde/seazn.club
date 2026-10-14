@@ -3,6 +3,7 @@ import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/co
 import { checkFixtureOverride, sportTopKeys, type AnySportModule } from "@seazn/engine/sport";
 import { canonicalJson } from "@/lib/canonical-json";
 import { withTenant, type Tx } from "@/lib/db";
+import { configIssuesOf } from "@/lib/config-issue-copy";
 import { HttpError } from "@/lib/errors";
 import { FORMAT_FIT_REASONS, RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -113,7 +114,9 @@ function configInvalid(row: LockedRow, issues: readonly { path: readonly Propert
     422,
     `${matchName(row.fixture_no)}'s format is invalid — ${first?.message ?? "the sport's rules refuse it"}`,
     "CONFIG_INVALID",
-    { fixture_id: row.id, field, issues },
+    // Batch-3 M2: the one wire shape for CONFIG_INVALID's issues, `{path, message}` — as v1 forwards the engine's
+    // (http.ts), never the raw zod issue with its `input`.
+    { fixture_id: row.id, field, issues: configIssuesOf({ issues }) ?? undefined },
   );
 }
 

@@ -318,6 +318,8 @@ describe.skipIf(!HAS_DB)("X-SR-2 every sport family through the one writer", () 
     const engine = mod("cricket").configSchema.safeParse({ ...mod("cricket").variants.t20, ballsPerInnings: tooShort });
     expect(engine.success).toBe(false);
     expect(String((err as Error).message)).toContain(engine.success ? "" : engine.error.issues[0]!.message);
+    // Batch-3 M2: ONE wire shape for CONFIG_INVALID's issues — `{path, message}`, as v1 forwards the engine's.
+    expect((err as { extra: { issues?: unknown } }).extra.issues).toEqual(engine.success ? [] : engine.error.issues.map((i) => ({ path: i.path, message: i.message })));
     expect((await row(id)).rules_override).toBeNull();
     const shorter = t20.ballsPerInnings / 2;
     await writeFixtureRulesOverride(b.auth, [id], { ballsPerInnings: shorter });

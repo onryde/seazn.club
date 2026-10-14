@@ -34,7 +34,10 @@ describe("P3 resolveFixtureCfg order", () => {
       {}, { kind: "knockout", config: { rules: { extraTime: { enabled: true, halfMinutes: 15 } } } }, mod("football")) as { extraTime: { enabled: boolean } };
     expect(r.extraTime.enabled).toBe(false);
   });
-  it("X-SR-2: the override lands after a NON-EMPTY decider overlay (boardgame KO: the declared tie-break switched off for one match)", () => {
+  it("resolver precedence: a stored override lands after a NON-EMPTY decider overlay (boardgame KO: tiebreak false over the declared tie-break)", () => {
+    // Resolver mechanics only, not X-SR-2 (batch-3 M3): boardgame's bare `tiebreak` is no organiser rule key (its
+    // `ruleKeys`; the writer answers UNKNOWN_RULE_KEY), so no organiser stores this override; the case pins the
+    // resolver's ORDER over a stored value.
     // Boardgame rather than football: football declares no decider today (`bracketDeciders` → {}), so the case above
     // cannot tell "override after deciders" from "override before deciders". Boardgame declares one, so the right
     // answer (the override's value) differs from the wrong one (the decider's).
@@ -138,7 +141,9 @@ describe("BG-KO-3 (G1): the stage's tie-break rungs survive the bracket overlay"
     }
     expect(played).toBe(3);
   });
-  it("X-SR-2: a match's own override lands after the stage's list (an empty list restored to a rung, and a list emptied)", () => {
+  it("resolver precedence: a stored override lands after the stage's list (an empty list restored to a rung, and a list emptied)", () => {
+    // Resolver mechanics only, not X-SR-2 (batch-3 M3): `tiebreakRungs` is a stage-scoped key the writer refuses per
+    // match (RULE_NOT_SETTABLE); the case pins the resolver's ORDER over a stored value.
     expect(resolved({ config_snapshot: null, rules_override: { tiebreakRungs: ["rapid"] } }, []).tiebreakRungs).toEqual(["rapid"]);
     expect(resolved({ config_snapshot: null, rules_override: { tiebreakRungs: [] } }, ["blitz", "rapid"]).tiebreakRungs).toEqual([]);
   });
