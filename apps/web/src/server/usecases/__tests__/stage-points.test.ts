@@ -37,7 +37,7 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { putStageRules } from "../stage-rules";
-import { createStages, generateStageFixtures, getStandings } from "../stages";
+import { createStages, generateStageFixtures, getStandings, replaceStages } from "../stages";
 import { formatLockedStageIds } from "../stage-rules";
 import { makeUser } from "./_seed";
 import { movingFragment } from "./_stage-probe";
@@ -294,6 +294,22 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect((await stageConfig(s2)).points).toMatchObject({ forfeit: withForfeit.forfeit });
   });
 
+  it("a stage that is not there answers 404 before the gate's 402 — another org's stage too (fix round 1)", async () => {
+    const denied = await seedOrg("community");
+    await denyFeature(denied.orgId, "standings.custom_points");
+    // The gate is asked of a body that WOULD 402 (a forfeit row, the feature denied): the missing stage must win.
+    await expect(putStageRules(denied, randomUUID(), { points: withForfeit })).rejects.toMatchObject({ status: 404 });
+    const other = await seedOrg("pro");
+    const { divisionId } = await seedDivision(other, "badminton", "short");
+    const theirs = await seedStage(other, divisionId, 1, "league");
+    await expect(putStageRules(denied, theirs, { points: withForfeit })).rejects.toMatchObject({ status: 404 });
+    expect(Object.hasOwn(await stageConfig(theirs), "points"), "nothing written on the other org's stage").toBe(false);
+    // The positive pair: the denied org's OWN stage still answers the gate's 402.
+    const own = await seedDivision(denied, "badminton", "short");
+    const mine = await seedStage(denied, own.divisionId, 1, "league");
+    await expect(putStageRules(denied, mine, { points: withForfeit })).rejects.toMatchObject({ status: 402 });
+  });
+
   it("after the stage starts, points lock (STAGE_FORMAT_LOCKED), and stay locked after a void", async () => {
     const auth = await seedOrg("pro");
     const { divisionId } = await seedDivision(auth, "badminton", "short", 2);
@@ -413,6 +429,98 @@ describe.skipIf(!HAS_DB)("ST-G8 the create door asks the same questions, writing
     const [ok] = await createStages(auth, bd.divisionId, { seq: 1, kind: "league", name: "L", config: { points: base }, progression: null });
     expect((await stageConfig(ok!.id)).points).toMatchObject(base);
   });
+
+  it("replaceStages asks the same questions of a body's points BEFORE its delete: refused, the original stages untouched", async () => {
+    const auth = await seedOrg("pro");
+    const bd = await seedDivision(auth, "badminton", "short");
+    await seedStage(auth, bd.divisionId, 1, "league");
+    const before = await stageIds(bd.divisionId);
+    expect(before.length, "premise: a stage to lose").toBe(1);
+    await expect(
+      replaceStages(auth, bd.divisionId, { seq: 1, kind: "knockout", name: "KO", config: { points: base }, progression: null }),
+    ).rejects.toMatchObject({ code: "RULE_NOT_SETTABLE", extra: { field: "points" } });
+    await expect(
+      replaceStages(auth, bd.divisionId, {
+        seq: 1, kind: "league", name: "L", progression: null,
+        config: { points: { ...base, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } },
+      }),
+    ).rejects.toMatchObject({ code: "RULE_NOT_SETTABLE", extra: { field: "points.forfeit.awardScore" } });
+    expect(await stageIds(bd.divisionId), "both refusals left the original stage, same id").toEqual(before);
+    const ih = await seedDivision(auth, "icehockey", "iihf");
+    await seedStage(auth, ih.divisionId, 1, "league");
+    const ihBefore = await stageIds(ih.divisionId);
+    await expect(
+      replaceStages(auth, ih.divisionId, { seq: 1, kind: "league", name: "L", config: { points: base }, progression: null }),
+    ).rejects.toMatchObject({ status: 422, code: "POINTS_RULE_INEXPRESSIBLE" });
+    expect(await stageIds(ih.divisionId)).toEqual(ihBefore);
+  });
+});
+
+/** The division's stage ids in board order (the "untouched" witness: same count AND the same rows). */
+const stageIds = async (divisionId: string): Promise<string[]> =>
+  (await sql<{ id: string }[]>`select id from stages where division_id = ${divisionId} order by seq`).map((r) => r.id);
+const pointsBySeq = async (divisionId: string): Promise<Map<number, unknown>> =>
+  new Map(
+    (await sql<{ seq: number; points: unknown }[]>`select seq, config -> 'points' as points from stages where division_id = ${divisionId}`)
+      .map((r) => [r.seq, r.points]),
+  );
+
+describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own points, as it carries its rules", () => {
+  const league = (seq: number, name: string, config: Record<string, unknown> = {}) =>
+    ({ seq, kind: "league" as const, name, config, progression: null });
+
+  it("Apply keeps a matched slot's points; a new slot has none; a second Apply keeps them; a kind change drops them", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    await putStageRules(auth, s, { points: withForfeit });
+    // The empty case first: a slot that never had points comes back with none.
+    await replaceStages(auth, divisionId, [league(1, "Pool"), league(2, "New")]);
+    let pts = await pointsBySeq(divisionId);
+    expect(pts.get(1), "the matched slot kept its own points").toMatchObject(withForfeit);
+    expect(pts.get(2) ?? null, "a new slot starts with none").toBeNull();
+    // A second Apply (the carried rule is carried again, not lost on the second delete).
+    await replaceStages(auth, divisionId, [league(1, "Pool"), league(2, "New")]);
+    pts = await pointsBySeq(divisionId);
+    expect(pts.get(1)).toMatchObject(withForfeit);
+    expect(pts.get(2) ?? null).toBeNull();
+    // A body's own points win over the carry (the rule is one sentence: replaced whole).
+    const other = { base: { win: 2, draw: 1, loss: 0 } };
+    await replaceStages(auth, divisionId, [league(1, "Pool", { points: other }), league(2, "New")]);
+    const replaced = (await pointsBySeq(divisionId)).get(1) as { base?: unknown; forfeit?: unknown } | null;
+    expect(replaced).toMatchObject(other);
+    expect(replaced?.forfeit, "replaced whole: the carried forfeit row is gone").toBeUndefined();
+    // A kind change is a different slot: seq 1 as a swiss table stage starts with no points.
+    await replaceStages(auth, divisionId, [{ seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null }]);
+    expect((await pointsBySeq(divisionId)).get(1) ?? null, "a kind change dropped them").toBeNull();
+  });
+
+  it("a carried rule the division can no longer express is refused BEFORE the delete, the stages untouched; cleared, Apply lands", async () => {
+    const auth = await seedOrg("pro");
+    const ih = mod("icehockey");
+    expect(pointsRuleExpressible(variantCfg(ih, "recreational")).ok, "premise").toBe(true);
+    const want = pointsRuleExpressible(variantCfg(ih, "iihf"));
+    expect(want.ok, "premise").toBe(false);
+    const { divisionId } = await seedDivision(auth, "icehockey", "recreational");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    await putStageRules(auth, s, { points: base });
+    // A row the division save would now refuse (Q1), as a legacy row holds it: the division plays iihf's split points.
+    const moved = await sql`update divisions set variant_key = 'iihf', config = ${sql.json(variantCfg(ih, "iihf") as never)} where id = ${divisionId}`;
+    expect(moved.count).toBe(1);
+    const before = await stageIds(divisionId);
+    await expect(replaceStages(auth, divisionId, league(1, "Pool"))).rejects.toMatchObject({
+      status: 422,
+      code: "POINTS_RULE_INEXPRESSIBLE",
+      extra: { keys: want.ok ? [] : want.keys },
+    });
+    expect(await stageIds(divisionId), "refused before the delete: the same stage row").toEqual(before);
+    expect((await stageConfig(s)).points).toMatchObject(base);
+    // Sequence: the organiser clears the stage's points, and the same Apply lands.
+    await putStageRules(auth, s, { points: null });
+    await replaceStages(auth, divisionId, league(1, "Pool"));
+    expect((await stageIds(divisionId)).length).toBe(1);
+    expect((await pointsBySeq(divisionId)).get(1) ?? null).toBeNull();
+  });
 });
 
 describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted stage with its own points", () => {
@@ -477,6 +585,31 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
     const out = await patchDivision(auth, started.divisionId, { config: split });
     expect((out.config as { points: Record<string, number> }).points.shootoutWin).toBe(2);
   }, 60_000);
+
+  it("a save that did not cause the split is not blamed for it: an unrelated edit passes over a legacy stage; a NEW split key still refuses (fix round 1)", async () => {
+    const auth = await seedOrg("pro");
+    const ih = mod("icehockey");
+    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number>; periods: { count: number; minutes: number } };
+    const already = pointsRuleExpressible(iihf);
+    expect(already.ok, "premise: iihf already splits its points").toBe(false);
+    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    // A legacy stage: points stored over a division that already splits (no door writes this now; a row from before can).
+    const legacy = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
+    expect(legacy.count).toBe(1);
+    // The unrelated edit: the period length. The split keys are exactly the ones already there.
+    const longer = { ...iihf, periods: { ...iihf.periods, minutes: iihf.periods.minutes + 5 } };
+    expect(pointsRuleExpressible(longer), "premise: the same split, the same keys").toEqual(already);
+    const out = await patchDivision(auth, divisionId, { config: longer });
+    expect((out.config as typeof iihf).periods.minutes).toBe(iihf.periods.minutes + 5);
+    // The positive pair, same stage: a save that ADDS a split key the division did not have is refused, naming the stage.
+    const wider = { ...longer, points: { ...longer.points, shootoutWin: 2 } };
+    const next = pointsRuleExpressible(wider);
+    expect(next.ok === false && !already.ok && next.keys.some((k) => !already.keys.includes(k)), "premise: a new split key").toBe(true);
+    await expect(patchDivision(auth, divisionId, { config: wider })).rejects.toMatchObject({
+      status: 422, code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

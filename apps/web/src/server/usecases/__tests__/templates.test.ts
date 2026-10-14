@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { stageDefaultsFor } from "@seazn/engine/sport";
+import { pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
@@ -209,6 +210,41 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     const [stage] = await sql<{ config: { points?: { base?: { win?: number } } } }[]>`
       select config from stages where id = ${result.divisions[0]!.stages[0]!.id}`;
     expect(stage!.config.points?.base?.win).toBe(3);
+  });
+
+  it("the template door asks a stage's points the stage PUT's questions (W2c Task 13): a bracket stage's points and an unreached walkover score are refused, writing nothing", async () => {
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    const before = await competitionCount(auth.orgId);
+    // SLAM_STAGE_TEMPLATE's own stage is a KNOCKOUT: it ranks no table, so it takes no points.
+    await expect(
+      instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } }), {
+        name: `KO points ${randomUUID().slice(0, 6)}`,
+        ends_on: "2030-12-31",
+      }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { divisionIndex: 0, stageIndex: 0, cause: expect.stringContaining("points") },
+    });
+    // Tennis is a set sport: a walkover's score never reaches its table (pointsRuleAwardReachesTable is false).
+    const tennis = builtinModules.find((m) => m.key === "tennis")!;
+    expect(pointsRuleAwardReachesTable(tennis), "premise: tennis's table never reads a walkover score").toBe(false);
+    await expect(
+      instantiateTemplate(
+        auth,
+        SLAM_STAGE_TEMPLATE({
+          kind: "league",
+          points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
+        }),
+        { name: `Award ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" },
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: TEMPLATE_INSTANTIATION_FAILED_CODE,
+      extra: { stageIndex: 0, cause: expect.stringContaining("points.forfeit.awardScore") },
+    });
+    expect(await competitionCount(auth.orgId), "both refusals rolled the competition back").toBe(before);
   });
 
   it("unknown template key is refused 404 TEMPLATE_UNKNOWN_KEY", async () => {
