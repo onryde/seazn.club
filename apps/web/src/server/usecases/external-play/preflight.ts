@@ -286,7 +286,19 @@ async function issuePlayerToken(
 
   const minted = await video.addParticipant({ meetingId, subject: a.personId, preset: "player" });
   const kept = await sql.begin(async (tx) => {
-    await tx`select fixture_id from fixture_video_meetings where fixture_id = ${a.fixtureId} for update`;
+    // R2-2: the mint ran outside any transaction, so the board may have been re-paired, or its meeting retired,
+    // while it did. A participant is stored only on the meeting it was minted on, made for the pairing the board
+    // has NOW, for a person still in that pairing — never an earlier pairing's player in a new pairing's room, and
+    // never a participant id of a retired meeting under its successor's row.
+    const [m] = await tx<{ meeting_id: string; samePair: boolean; onBoard: boolean }[]>`
+      select m.meeting_id,
+             (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
+             exists (select 1 from entrant_members em
+                      where em.person_id = ${a.personId} and em.entrant_id in (f.home_entrant_id, f.away_entrant_id)) as "onBoard"
+        from fixture_video_meetings m join fixtures f on f.id = m.fixture_id
+       where m.fixture_id = ${a.fixtureId}
+         for update of m`;
+    if (!m || m.meeting_id !== meetingId || !m.samePair || !m.onBoard) throw meetingReplaced(a.fixtureId);
     const winner = await storedPlayerParticipant(tx, a);
     if (winner) return winner;
     await tx`
@@ -296,6 +308,12 @@ async function issuePlayerToken(
   });
   if (kept === minted.participantId) return minted;
   return video.refreshParticipantToken({ meetingId, participantId: kept });
+}
+
+/** R2-2: the board was re-paired, or its meeting replaced, while this seat minted a participant. Nothing was stored;
+ *  the seat is asked again (a player no longer on the board is then refused as not_a_player). */
+function meetingReplaced(fixtureId: string): HttpError {
+  return new HttpError(409, `the video meeting for fixture ${fixtureId} changed while seating — try again`, "VIDEO_MEETING_REPLACED");
 }
 
 // The privileged client or one of its transactions (the round-open.ts shape).

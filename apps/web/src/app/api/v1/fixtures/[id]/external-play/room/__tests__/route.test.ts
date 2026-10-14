@@ -184,7 +184,7 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/room/camera-fault (I
   /** A camera-required board's meeting, both players seated in it. */
   async function cameraSeats() {
     const s = await seed();
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`})`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
     const part = { home: `pt-h-${randomUUID().slice(0, 8)}`, away: `pt-a-${randomUUID().slice(0, 8)}` };
     await sql`
       insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)

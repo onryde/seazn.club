@@ -106,8 +106,8 @@ async function liveBoard(policy: "required" | "optional" = "required", fixtures 
         white_lichess_id, black_lichess_id, moves_uci, move_count, started_at, last_move_at, white_ms, black_ms, clock_increment_s)
       values (${b.fixtureId}, ${r.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home',
         ${b.home.lichessId}, ${b.away.lichessId}, ${sql.json(["e2e4", "e7e5"])}, 2, now(), now(), 600000, 600000, 10)`;
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id)
-              values (${b.fixtureId}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id)
+              values (${b.fixtureId}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${b.fixtureId}), (select away_entrant_id from fixtures where id = ${b.fixtureId}))`;
     await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values
       (${b.fixtureId}, ${b.home.personId}, 'player', ${`pw-${b.fixtureId.slice(0, 6)}`}),
       (${b.fixtureId}, ${b.away.personId}, 'player', ${`pb-${b.fixtureId.slice(0, 6)}`})`;

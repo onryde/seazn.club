@@ -805,7 +805,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
     const s = await seed({ cameraPolicy: policy });
     if (bridge) await gameOnFile(s, bridge);
     const meetingId = `mtg-${randomUUID()}`;
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${s.fixtureId}, ${s.orgId}, ${meetingId})`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${meetingId}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
     const part = { home: `pt-home-${randomUUID().slice(0, 8)}`, away: `pt-away-${randomUUID().slice(0, 8)}` };
     await sql`
       insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
@@ -880,7 +880,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
     // The away player never reached the meeting; an arbiter did.
     const s = await seed({ cameraPolicy: "required" });
     await gameOnFile(s, { status: "live", moves });
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`})`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${s.fixtureId}, ${s.orgId}, ${`mtg-${randomUUID()}`}, (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
     await sql`
       insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
       values (${s.fixtureId}, ${s.home.personId}, 'player', ${`ph-${randomUUID()}`}),
@@ -975,7 +975,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room — the opponent's presen
       // The away player never reached the meeting (no participant row).
       const lone = await seed({ cameraPolicy: "required" });
       await gameOnFile(lone, { status: "live", moves });
-      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${lone.fixtureId}, ${lone.orgId}, ${`mtg-${randomUUID()}`})`;
+      await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${lone.fixtureId}, ${lone.orgId}, ${`mtg-${randomUUID()}`}, (select home_entrant_id from fixtures where id = ${lone.fixtureId}), (select away_entrant_id from fixtures where id = ${lone.fixtureId}))`;
       const ph = `ph-${randomUUID()}`;
       await sql`insert into fixture_video_participants (fixture_id, person_id, preset, participant_id) values (${lone.fixtureId}, ${lone.home.personId}, 'player', ${ph})`;
       await expectRefused(

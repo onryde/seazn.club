@@ -49,8 +49,8 @@ import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
-import { endMeeting } from "@/server/external-play/video/realtimekit";
-import { liveMintClaimSince, roomPhase } from "@/server/external-play/window";
+import { endMeeting, gameEvidenceOn } from "@/server/external-play/video/realtimekit";
+import { roomPhase } from "@/server/external-play/window";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
@@ -304,7 +304,7 @@ export async function openRound(
       kind = "reopened";
       // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
       // meeting — the camera evidence of that game: a recorded challenge, a sent create (T9's marker), or a LIVE mint
-      // claim (T9 in flight, before its marker; R2-3 — the liveness bound is the sweep's, liveMintClaimSince). Every
+      // claim (T9 in flight, before its marker; R2-3) — gameEvidenceOn, the one rule ensureMeeting keeps too. Every
       // other board's meeting goes, with its participants: players who checked in through the lobby inside the old
       // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
       // at RealtimeKit, after the commit.
@@ -314,9 +314,7 @@ export async function openRound(
            where m.fixture_id in ${tx(ids)}
              and not exists (
                select 1 from fixture_external_play ep
-                where ep.fixture_id = m.fixture_id
-                  and (ep.challenge_id is not null or ep.create_sent_at is not null
-                       or (ep.status = 'pending' and ep.mint_claimed_at >= ${liveMintClaimSince(now)})))
+                where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
           returning m.meeting_id, m.ended_at`
       )
         .filter((r) => r.ended_at === null)

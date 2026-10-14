@@ -97,9 +97,9 @@ async function bridge(
 
 async function meeting(fixtureId: string, orgId: string, opts: { ended?: boolean; evidence?: boolean } = {}) {
   await sql`
-    insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, camera_evidence_at)
+    insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, camera_evidence_at, home_entrant_id, away_entrant_id)
     values (${fixtureId}, ${orgId}, ${`m-${randomUUID().slice(0, 8)}`},
-            ${opts.ended || opts.evidence ? new Date() : null}, ${opts.evidence ? new Date() : null})`;
+            ${opts.ended || opts.evidence ? new Date() : null}, ${opts.evidence ? new Date() : null}, (select home_entrant_id from fixtures where id = ${fixtureId}), (select away_entrant_id from fixtures where id = ${fixtureId}))`;
 }
 
 async function playerParticipant(fixtureId: string, personId: string): Promise<string> {
@@ -405,7 +405,7 @@ describe.runIf(HAS_DB)("loadArbiterRound — flags, as evidence", () => {
       (${fid}, ${r.orgId}, 'camera_connection_problems', ${r.boards[0]!.away.personId}, '999 s stamped')`;
     // A stamp on file — but the board has no first move, so there is no match
     // window to read it over (match-window.ts): no number, never the note's.
-    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id) values (${fid}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`})`;
+    await sql`insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id) values (${fid}, ${r.orgId}, ${`m-${randomUUID().slice(0, 8)}`}, (select home_entrant_id from fixtures where id = ${fid}), (select away_entrant_id from fixtures where id = ${fid}))`;
     await sql`insert into fixture_video_guard_faults (fixture_id, person_id, started_at, ended_at)
               values (${fid}, ${r.boards[0]!.away.personId}, '2026-10-12T19:20:00Z', '2026-10-12T19:22:00Z')`;
     const flags = (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.flags;

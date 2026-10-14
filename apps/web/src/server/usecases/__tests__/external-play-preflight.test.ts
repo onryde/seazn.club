@@ -736,8 +736,8 @@ describe.skipIf(!process.env.DATABASE_URL)("a RealtimeKit outage is video_unavai
     for (const policy of ["required", "optional"] as const) {
       const s = await seed({ cameraPolicy: policy });
       await sql`
-        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at)
-        values (${s.fixtureId}, ${s.orgId}, ${`mtg-ended-${randomUUID()}`}, now())`;
+        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at, home_entrant_id, away_entrant_id)
+        values (${s.fixtureId}, ${s.orgId}, ${`mtg-ended-${randomUUID()}`}, now(), (select home_entrant_id from fixtures where id = ${s.fixtureId}), (select away_entrant_id from fixtures where id = ${s.fixtureId}))`;
       const rtk = fakeRealtimeKit();
       await expect(claim(s, "home", rtk), policy).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_ENDED" });
       expect(rtk.http, `${policy}: refused before any request`).toEqual([]);
