@@ -7238,6 +7238,76 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cFixtureRulesChecks(owner, fixtureId, unstartedId);
   await w2cStageRulesEverySportChecks(owner);
   await w2cStagePresetChecks(owner);
+  await w2cStageOffAndReseedChecks(owner);
+}
+
+/**
+ * W2c Task 12 fix round 1 — over real HTTP. R-T12-1: an iihf knockout created with `{overtime: false, shootout: false}`
+ * is 201 and stored as sent (a stage's `false` is OFF for a period sport's deciders), while `{periods: false}` is refused
+ * 422 CONFIG_INVALID (`false` is not off for a key that is no decider). R-T12-2: a cricket t20 knockout stores its preset
+ * super over; `PATCH` the division's variant to `test` lands 200 and re-seeds the stage to the test match's knockout
+ * preset (none), and the change back writes it again. Every expected preset is the engine's (`stageDefaultsFor`).
+ */
+async function w2cStageOffAndReseedChecks(owner: Session): Promise<void> {
+  const ih = builtinModules.find((m) => m.key === "icehockey") as AnySportModule;
+  const ck = builtinModules.find((m) => m.key === "cricket") as AnySportModule;
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2c Deciders Off ${tag}` }),
+  );
+  const ihDiv = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c IH KO", sport_key: "icehockey", variant_key: "iihf" }),
+  );
+  const off = await v1(owner, `/api/v1/divisions/${ihDiv?.id}/stages`, "POST", {
+    seq: 1, kind: "knockout", name: "Off", config: { rules: { overtime: false, shootout: false } },
+  });
+  const offRules = (v1data<{ config?: { rules?: Record<string, unknown> } } | undefined>(off))?.config?.rules;
+  const offWanted = { ...stageDefaultsFor(ih, "knockout", "iihf"), overtime: false, shootout: false };
+  const offStored = off.status === 201 && isDeepStrictEqual(offRules, offWanted);
+  check(
+    "w2c: an ice-hockey knockout switches its overtime and shoot-out off with false" +
+      (offStored ? "" : ` — got ${off.status} ${JSON.stringify(offRules ?? off.json.error)}`),
+    offStored,
+  );
+  const periods = await v1(owner, `/api/v1/divisions/${ihDiv?.id}/stages`, "POST", {
+    seq: 2, kind: "knockout", name: "Periods", config: { rules: { periods: false } },
+  });
+  const periodsRefused = periods.status === 422 && periods.json.error?.code === "CONFIG_INVALID";
+  check(
+    "w2c: false on a key that is no decider (ice-hockey periods) is refused CONFIG_INVALID" +
+      (periodsRefused ? "" : ` — got ${periods.status} ${JSON.stringify(periods.json.error ?? periods.json.data)}`),
+    periodsRefused,
+  );
+
+  const ckDiv = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2c CK KO", sport_key: "cricket", variant_key: "t20" }),
+  );
+  const ko = await v1(owner, `/api/v1/divisions/${ckDiv?.id}/stages`, "POST", { seq: 1, kind: "knockout", name: "Cup" });
+  const rulesNow = async () =>
+    (v1data<{ seq: number; config: { rules?: Record<string, unknown> } }[] | undefined>(await v1(owner, `/api/v1/divisions/${ckDiv?.id}/stages`)) ?? [])
+      .find((s) => s.seq === 1)?.config.rules;
+  const t20Preset = stageDefaultsFor(ck, "knockout", "t20");
+  const testPreset = stageDefaultsFor(ck, "knockout", "test");
+  const seeded = await rulesNow();
+  const toTest = await v1(owner, `/api/v1/divisions/${ckDiv?.id}`, "PATCH", { variant_key: "test" });
+  const afterTest = await rulesNow();
+  // An empty preset is stored as no rules at all (the stage inherits everything).
+  const asStored = (p: Record<string, unknown>) => (Object.keys(p).length === 0 ? undefined : p);
+  const reseeded =
+    ko.status === 201 && t20Preset.superOver === true && isDeepStrictEqual(seeded, t20Preset) &&
+    toTest.status === 200 && isDeepStrictEqual(afterTest, asStored(testPreset));
+  check(
+    "w2c: a division variant change re-seeds an unstarted knockout's preset (t20 -> test drops the super over)" +
+      (reseeded ? "" : ` — got ${ko.status}/${toTest.status} ${JSON.stringify({ seeded, afterTest, error: toTest.json.error })}`),
+    reseeded,
+  );
+  const back = await v1(owner, `/api/v1/divisions/${ckDiv?.id}`, "PATCH", { variant_key: "t20" });
+  const afterBack = await rulesNow();
+  const rewritten = back.status === 200 && isDeepStrictEqual(afterBack, t20Preset);
+  check(
+    "w2c: the change back (test -> t20) writes the super over again" +
+      (rewritten ? "" : ` — got ${back.status} ${JSON.stringify({ afterBack, error: back.json.error })}`),
+    rewritten,
+  );
 }
 
 /**
