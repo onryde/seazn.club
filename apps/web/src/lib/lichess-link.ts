@@ -27,6 +27,9 @@ export const LICHESS_FLASH_CODES = [
   "not_configured",
   "already_linked",
   "unavailable",
+  // T17B fix 2 (D6): the server cannot seal the token (LICHESS_TOKEN_KEK unset or malformed) — external-accounts.ts's
+  // own name for that failure. Nothing was linked; the grant is revoked.
+  "key_unavailable",
 ] as const;
 export type LichessFlashCode = (typeof LICHESS_FLASH_CODES)[number];
 

@@ -15,6 +15,8 @@ import { lichessLanding, type LichessFlashCode } from "@/lib/lichess-link";
 import { HttpError } from "@/lib/errors";
 import { PLAY_SCOPES, upsertLichessLink } from "@/server/usecases/external-accounts";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
+import { playerTokenKeyUsable } from "@/server/external-play/secrets";
+import { log } from "@/server/logger";
 
 /** A failed flow lands where the start came from (lib/lichess-link.ts `lichessLanding`, shared with the start route's
  *  own refusal), carrying why. */
@@ -118,6 +120,13 @@ export async function GET(req: Request) {
       // is still revoked below, because this exit stored nothing.
       if (err instanceof HttpError && err.code === "LICHESS_ALREADY_LINKED") {
         return fail(next, "already_linked");
+      }
+      // T17B fix 2 (D6): the token cannot be sealed — LICHESS_TOKEN_KEK unset or malformed (the seal throws a plain
+      // configuration Error). The same landing as every other exit, never a raw 500; the grant is revoked below.
+      // Logged without the token or the error's text: the classification is what an operator acts on.
+      if (!playerTokenKeyUsable()) {
+        log.error({ userId: user.id, failure: "key_unavailable" }, "lichess callback: LICHESS_TOKEN_KEK unusable — the token cannot be sealed; nothing linked");
+        return fail(next, "key_unavailable");
       }
       throw err;
     }
