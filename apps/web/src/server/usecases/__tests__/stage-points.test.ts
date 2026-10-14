@@ -478,10 +478,14 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     await replaceStages(auth, divisionId, [league(1, "Pool"), league(2, "New")]);
     let pts = await pointsBySeq(divisionId);
     expect(pts.get(1), "the matched slot kept its own points").toMatchObject(withForfeit);
+    // Row-count first: `?? null` alone would also pass on a slot that was never written at all.
+    expect(pts.size, "both slots exist").toBe(2);
+    expect(pts.has(2), "the new slot's row is there").toBe(true);
     expect(pts.get(2) ?? null, "a new slot starts with none").toBeNull();
     // A second Apply (the carried rule is carried again, not lost on the second delete).
     await replaceStages(auth, divisionId, [league(1, "Pool"), league(2, "New")]);
     pts = await pointsBySeq(divisionId);
+    expect(pts.size).toBe(2);
     expect(pts.get(1)).toMatchObject(withForfeit);
     expect(pts.get(2) ?? null).toBeNull();
     // A body's own points win over the carry (the rule is one sentence: replaced whole).
@@ -493,6 +497,26 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     // A kind change is a different slot: seq 1 as a swiss table stage starts with no points.
     await replaceStages(auth, divisionId, [{ seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null }]);
     expect((await pointsBySeq(divisionId)).get(1) ?? null, "a kind change dropped them").toBeNull();
+  });
+
+  it("grandfathered: a carried forfeit row survives Apply for an org that has since lost standings.custom_points; the same rule SENT is 402 (fix round 2)", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    await putStageRules(auth, s, { points: withForfeit }); // saved while the plan granted it
+    await denyFeature(auth.orgId, "standings.custom_points"); // the plan no longer does
+    // The organiser's stored setting rides the Apply (R-T12-4's meaning): not re-gated, as the rules carry is not.
+    await replaceStages(auth, divisionId, league(1, "Pool"));
+    const carried = await pointsBySeq(divisionId);
+    expect(carried.size).toBe(1);
+    expect(carried.get(1), "the carried forfeit row survived").toMatchObject(withForfeit);
+    // The same rule SENT in the body is a new choice, and asks the gate.
+    const before = await stageIds(divisionId);
+    await expect(replaceStages(auth, divisionId, league(1, "Pool", { points: withForfeit }))).rejects.toMatchObject({
+      status: 402,
+      featureKey: "standings.custom_points",
+    });
+    expect(await stageIds(divisionId), "the 402 left the stage as it was").toEqual(before);
   });
 
   it("a carried rule the division can no longer express is refused BEFORE the delete, the stages untouched; cleared, Apply lands", async () => {
@@ -607,6 +631,35 @@ describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted
     const next = pointsRuleExpressible(wider);
     expect(next.ok === false && !already.ok && next.keys.some((k) => !already.keys.includes(k)), "premise: a new split key").toBe(true);
     await expect(patchDivision(auth, divisionId, { config: wider })).rejects.toMatchObject({
+      status: 422, code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s },
+    });
+  });
+
+  it("the removal arm: a save whose split keys are a strict subset of the standing ones passes; a new key from there still refuses (fix round 2)", async () => {
+    const auth = await seedOrg("pro");
+    const ih = mod("icehockey");
+    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number> };
+    const three = { ...iihf, points: { ...iihf.points, shootoutWin: 2 } };
+    const standing = pointsRuleExpressible(three);
+    const fewer = pointsRuleExpressible(iihf);
+    expect(
+      !standing.ok && !fewer.ok && fewer.keys.length < standing.keys.length && fewer.keys.every((k) => standing.keys.includes(k)),
+      "premise: iihf's split keys are a strict subset of the standing ones",
+    ).toBe(true);
+    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    // Legacy rows, as a pre-Task-13 division and stage hold them: three split keys, and the stage's own points over them.
+    const div = await sql`update divisions set config = ${sql.json(three as never)} where id = ${divisionId}`;
+    const st = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
+    expect([div.count, st.count]).toEqual([1, 1]);
+    // The removal: the save drops `shootoutWin`, splitting LESS than the division already does.
+    const out = await patchDivision(auth, divisionId, { config: iihf });
+    expect(Object.hasOwn((out.config as typeof iihf).points, "shootoutWin"), "the key is gone").toBe(false);
+    // The pair, from there: adding a key the division does not split now (`shootoutLoss`) is refused, naming the stage.
+    const added = { ...iihf, points: { ...iihf.points, shootoutLoss: 1 } };
+    const next = pointsRuleExpressible(added);
+    expect(!next.ok && !fewer.ok && next.keys.some((k) => !fewer.keys.includes(k)), "premise: a new split key").toBe(true);
+    await expect(patchDivision(auth, divisionId, { config: added })).rejects.toMatchObject({
       status: 422, code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s },
     });
   });

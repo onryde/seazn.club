@@ -15,7 +15,8 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createStages, replaceStages } from "../stages";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { makeUser } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -72,7 +73,7 @@ const league = (seq: number, config: Record<string, unknown> = {}) =>
 const stageIds = async (divisionId: string): Promise<string[]> =>
   (await sql<{ id: string }[]>`select id from stages where division_id = ${divisionId} order by seq`).map((r) => r.id);
 
-/** Two stages to lose: the premise every "untouched" assertion below rests on. */
+/** One stage to lose (its id is the witness): the premise every "untouched" assertion below rests on. */
 async function seededGraph(auth: AuthCtx): Promise<{ divisionId: string; competitionId: string; before: string[] }> {
   const d = await seedDivision(auth);
   await createStages(auth, d.divisionId, [league(1)]);
@@ -150,5 +151,71 @@ describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its
     // The positive pair: the same body on the denied org's OWN division answers the gate's 402.
     const own = await seededGraph(auth);
     await expect(replaceStages(auth, own.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("R-T13-3 replaceStages deletes and inserts in ONE transaction: any later refusal rolls the delete back", () => {
+  // A stage at seq 1 that names "previous" as its source: nothing in the batch gates reads progression sources, so
+  // the refusal comes from `validateStageProgression`, AFTER the inserts (stage-seeding.ts, SEEDING_RULES_MISSING).
+  const fromPrevious = {
+    sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: 2 }] }],
+    placement: "rank_order" as const,
+    timing: "on_complete" as const,
+  };
+
+  it("a progression refused after the inserts (SEEDING_RULES_MISSING) leaves the original stages untouched", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId, before } = await seededGraph(auth);
+    await expect(
+      replaceStages(auth, divisionId, [{ seq: 1, kind: "league", name: "First", config: {}, progression: fromPrevious }]),
+    ).rejects.toMatchObject({ status: 422, code: "SEEDING_RULES_MISSING" });
+    expect(await stageIds(divisionId)).toEqual(before);
+  });
+
+  it("a refusal from inside the insert loop (the database's progression shape check) leaves the original stages untouched", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId, before } = await seededGraph(auth);
+    // No schema stands in front of the usecase: a placement the column's CHECK refuses reaches the INSERT itself.
+    const badShape = { ...fromPrevious, placement: "not-a-placement" } as unknown as typeof fromPrevious;
+    await expect(
+      replaceStages(auth, divisionId, [league(1), { seq: 2, kind: "league", name: "Bad", config: {}, progression: badShape }]),
+    ).rejects.toMatchObject({ code: "23514" });
+    expect(await stageIds(divisionId)).toEqual(before);
+  });
+
+  it("the positive pair: a valid graph with a progression from the previous stage commits", async () => {
+    const auth = await seedOrg("pro");
+    const { divisionId, before } = await seededGraph(auth);
+    const out = await replaceStages(auth, divisionId, [league(1), { seq: 2, kind: "knockout", name: "Cup", config: {}, progression: fromPrevious }]);
+    expect(out.map((r) => r.seq)).toEqual([1, 2]);
+    const after = await stageIds(divisionId);
+    expect(after.length).toBe(2);
+    expect(after).not.toContain(before[0]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FORMAT_LOCKED before any gate", () => {
+  it("fixtures exist + a gated body = 409 FORMAT_LOCKED, never the 402; nothing changes", async () => {
+    const auth = await seedOrg("pro");
+    await denyFeature(auth.orgId, "standings.custom_points");
+    const { divisionId } = await seedDivision(auth);
+    await createEntrants(
+      auth,
+      divisionId,
+      ["A", "B"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(auth, divisionId, [league(1)]);
+    await generateStageFixtures(auth, stage!.id);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
+    expect(n, "premise: fixtures exist, so the format is locked").toBeGreaterThan(0);
+    const before = await stageIds(divisionId);
+    await expect(replaceStages(auth, divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({
+      status: 409,
+      code: "FORMAT_LOCKED",
+    });
+    expect(await stageIds(divisionId)).toEqual(before);
+    // The positive pair: the same gated body on an UNLOCKED division of the same org still answers the gate's 402.
+    const open = await seededGraph(auth);
+    await expect(replaceStages(auth, open.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
   });
 });
