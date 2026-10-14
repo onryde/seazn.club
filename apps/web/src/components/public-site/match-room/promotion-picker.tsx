@@ -61,7 +61,7 @@ export function PromotionPicker({
               data-testid={`room-promote-${p}`}
               autoFocus={p === "q"}
               onClick={() => onPick(p)}
-              className={`flex min-h-[72px] flex-col items-center justify-center gap-0.5 rounded-xl ${
+              className={`flex min-h-[72px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-xl ${
                 p === "q" ? "border-2 border-[#7c3aed] bg-[#f3effc]" : "border border-[#e7e3f3] bg-white"
               }`}
             >
@@ -78,7 +78,7 @@ export function PromotionPicker({
           type="button"
           data-testid="room-promote-cancel"
           onClick={onCancel}
-          className="min-h-11 rounded-[10px] border-0 bg-transparent text-[15px] font-semibold text-[#5b21b6]"
+          className="min-h-11 cursor-pointer rounded-[10px] border-0 bg-transparent text-[15px] font-semibold text-[#5b21b6]"
         >
           {t("externalPlay.room.promote.cancel")}
         </button>

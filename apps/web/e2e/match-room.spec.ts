@@ -316,9 +316,14 @@ test("check in through the UI: the seat is stamped, the opponent sees it, and no
 
   const ctx = await cold(browser);
   const p = await openRoom(ctx, room, room.white.token);
+  // T17B fix 2 (D7): the cascade, not the class list — Tailwind v4's preflight gives <button> the arrow; the hand
+  // must win while it can be pressed, and must NOT show once it is disabled.
+  const cursor = () => p.getByTestId("room-checkin-cta").evaluate((el) => getComputedStyle(el).cursor);
+  expect(await cursor(), "a pressable button shows the hand").toBe("pointer");
   await p.getByTestId("room-checkin-cta").click();
   await expect(p.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
   await expect(p.getByTestId("room-checkin-cta")).toBeDisabled();
+  expect(await cursor(), "a disabled one does not").toBe("not-allowed");
   expect(await checkedInAt(room.fixtureId, room.white.personId), "the server stamped the check-in").not.toBeNull();
   // One player in asks for nothing: no create was sent, no game recorded.
   expect(await bridgeRow(room.fixtureId)).toMatchObject({ status: "pending", challenge_id: null, create_sent_at: null, last_error: null });

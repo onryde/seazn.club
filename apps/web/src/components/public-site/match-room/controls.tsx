@@ -33,11 +33,12 @@ type Props = {
   t: RoomT;
 };
 
-const BTN = "min-h-11 rounded-[10px] text-[15px] font-semibold disabled:cursor-not-allowed";
+// T17B fix 2 (D7): the hand on every button (Tailwind v4 preflight gives <button> the arrow); never on a disabled one.
+const BTN = "min-h-11 cursor-pointer rounded-[10px] text-[15px] font-semibold disabled:cursor-not-allowed";
 const SECONDARY = `${BTN} border border-[#c9bdf0] bg-white text-[#2e1065]`;
 const DANGER = `${BTN} border border-[#f1c4c0] bg-white text-[#b42318]`;
 const PRIMARY = `${BTN} border-0 bg-[#7c3aed] text-white`;
-const PARKED = "min-h-11 rounded-[10px] border border-dashed border-[#d8d0ee] bg-[#f6f3ee] text-[13px] font-semibold text-[#6b5b8a]";
+const PARKED = "min-h-11 cursor-pointer rounded-[10px] border border-dashed border-[#d8d0ee] bg-[#f6f3ee] text-[13px] font-semibold text-[#6b5b8a]";
 
 type Confirming = null | "resign" | "abort";
 

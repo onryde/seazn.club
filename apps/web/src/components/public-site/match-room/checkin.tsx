@@ -86,7 +86,7 @@ export function Checkin({ snap, closesIn, closesAt, stream, cameraOn, busy, chec
         data-testid="room-checkin-cta"
         disabled={done || busy || checkingCamera}
         onClick={onCheckIn}
-        className="min-h-12 rounded-xl border-0 bg-[#7c3aed] text-base font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#c9bdf0]"
+        className="min-h-12 cursor-pointer rounded-xl border-0 bg-[#7c3aed] text-base font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#c9bdf0]"
       >
         {t(done ? "externalPlay.room.checkin.done" : checkingCamera ? "externalPlay.room.checkin.cameraStarting" : "externalPlay.room.checkin.cta")}
       </button>
