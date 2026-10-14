@@ -2121,3 +2121,264 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(rtk.http.filter((c) => c === "POST /meetings")).toHaveLength(1);
   });
 });
+
+// T17B fix 2, D17 (owner ruling 2026-10-14 "re-arm"; controller ruling option 1). A league board the organiser
+// closed with No result (core.abandon; the bridge `finished`, no game) and then VOIDED is playable again, and its
+// room says "If it's replayed, it opens here again" (D10). The void leaves the row: deleting it there handed the
+// board to the sweep, whose no-show then wrote a double walkover over it at once (measured). The re-arm is the
+// organiser's re-open: under the division lock, in the open's transaction, a playable board's finished, GAME-LESS
+// row (no recorded challenge, no create marker, no move on file) is reset, and the board invited afresh. The window:
+// the narrow exception to review I1 — the round is re-stamped only when every OTHER bound board is decided; with a
+// neighbour still playable the board is `window_closed` exactly as today, and its row is left alone.
+describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-armed by the RE-OPEN, never by the void (T17B fix 2, D17)", () => {
+  const lastEvent = async (fixtureId: string) =>
+    (await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${fixtureId} order by seq desc limit 1`)[0]!;
+  /** The arbiter's No result (the real resolve), then the organiser's undo on the match page (the real void). */
+  async function noResultThenVoid(r: SeedOnlineChessRoundResult, fixtureId: string) {
+    expect(await resolveExternalPlay(r.owner, fixtureId, "no_result")).toEqual({ status: "finished" });
+    const last = await lastEvent(fixtureId);
+    await scoreEvent(r.owner, fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtureId}`;
+    expect(["scheduled", "in_play"], "premise: the void made the board playable again").toContain(fx!.status);
+    const b = await bridgeOf(fixtureId);
+    expect([b?.status, b?.challenge_id, b?.create_sent_at], "premise: closed, no game").toEqual(["finished", null, null]);
+  }
+  /** The neighbour DECIDED on the pad (the real scoring usecase): a Start, then a result. */
+  async function decide(r: SeedOnlineChessRoundResult, b: SeedOnlineChessRoundResult["boards"][number]) {
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.owner, b.fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home.entrantId, method: "resign" } });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${b.fixtureId}`;
+    expect(["scheduled", "in_play"], "premise: the neighbour is decided").not.toContain(fx!.status);
+  }
+  const sweep = (r: SeedOnlineChessRoundResult) =>
+    sweepExternalPlay({ orgIds: [r.orgId], serialise: false, endMeeting: async () => undefined });
+  const noShowEvents = async (fixtureId: string) =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId} and idempotency_key like 'extplay-noshow:%'`)[0]!.n;
+  /** A round of two boards opened long enough ago that its window has closed. */
+  async function closedRound() {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, skipped: [] });
+    const [a, b] = r.boards as [SeedOnlineChessRoundResult["boards"][number], SeedOnlineChessRoundResult["boards"][number]];
+    return { r, t0, a, b };
+  }
+
+  it("the measured sequence: No result → void → a sweep pass forfeits NOTHING — the closed row keeps the board out of the no-show", async () => {
+    const { r, a, b } = await closedRound();
+    await decide(r, b);
+    await noResultThenVoid(r, a.fixtureId);
+    const report = await sweep(r);
+    expect(report.noShows, "no walkover over a voided No result").toBe(0);
+    expect(await noShowEvents(a.fixtureId)).toBe(0);
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${a.fixtureId}`;
+    expect(["scheduled", "in_play"]).toContain(fx!.status);
+    expect((await bridgeOf(a.fixtureId))?.status, "the void left the row").toBe("finished");
+  });
+
+  it("void → re-open, every neighbour decided: the round is re-stamped, the board reset and invited, and a NEW game is made", async () => {
+    const { r, t0, a, b } = await closedRound();
+    await decide(r, b);
+    await noResultThenVoid(r, a.fixtureId);
+    mail.sent.length = 0;
+    const now = new Date();
+
+    expect(await open(r, 1, now)).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect(sentTo(), "only the re-armed board's players").toEqual([a.home.email, a.away.email].sort());
+    const [stamp] = await stampRows(r.stageId);
+    expect(stamp!.opened_at.getTime(), "a fresh window").toBe(now.getTime());
+    expect(stamp!.opened_at.getTime()).not.toBe(t0.getTime());
+    expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened", "external_play.round_reopened"]);
+    const fresh = await bridgeOf(a.fixtureId);
+    expect(fresh).toMatchObject({ status: "pending", challenge_id: null, create_sent_at: null, round_open_id: stamp!.id });
+    expect(fresh!.white_emailed_at !== null && fresh!.black_emailed_at !== null, "both seats invited").toBe(true);
+    // The room follows the new bridge: not closed any more, and open in the new window.
+    const room = await readRoom({ kind: "session", userId: a.home.userId }, a.fixtureId);
+    expect([room.boardClosed, room.phase, room.deadline]).toEqual([false, "open", new Date(now.getTime() + DEADLINE_AFTER_MS).toISOString()]);
+    // The real T9 create makes the replay's game.
+    const made = await createGameIfReady(a.fixtureId, { publish: async () => undefined, now: new Date(now.getTime() + MIN) });
+    expect(made.created, "a new game for the replay").toBe(true);
+    expect((await bridgeOf(a.fixtureId))!.challenge_id).not.toBeNull();
+    // ONCE: the next open finds nothing to re-arm, mails nobody, moves no window.
+    mail.sent.length = 0;
+    expect(await open(r, 1, new Date(now.getTime() + 2 * MIN))).toEqual({ opened: false, reason: "already_open", skipped: [] });
+    expect(mail.sent).toHaveLength(0);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(now.getTime());
+  });
+
+  it("I1's direction: a neighbour still PLAYABLE ⇒ window_closed, the window does not move, the closed row is left alone, and the sweep forfeits only the real no-show", async () => {
+    const { r, t0, a, b } = await closedRound();
+    await noResultThenVoid(r, a.fixtureId);
+    const before = await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`;
+    mail.sent.length = 0;
+
+    expect(await open(r, 1, new Date())).toEqual({
+      opened: false,
+      reason: "already_open",
+      skipped: [{ fixtureId: a.fixtureId, reason: "window_closed" }],
+    });
+    expect(mail.sent).toHaveLength(0);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(t0.getTime());
+    expect(await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`, "not reset: it would be forfeited").toEqual(before);
+    // The pass reaches this round: the neighbour, invited and absent past the deadline, IS the no-show it walks over.
+    expect((await sweep(r)).noShows, "the neighbour only").toBe(1);
+    expect(await noShowEvents(b.fixtureId), "anti-vacuity: the no-show job ran here").toBe(1);
+    expect(await noShowEvents(a.fixtureId), "never the closed board").toBe(0);
+  });
+
+  it("the positive pair inside the window: a neighbour still playable, the window still open ⇒ the board is reset and re-invited, and the window does not move", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    const t0 = new Date(Date.now() - 5 * MIN);
+    await open(r, 1, t0);
+    const a = r.boards[0]!;
+    await noResultThenVoid(r, a.fixtureId);
+    mail.sent.length = 0;
+
+    expect(await open(r, 1, new Date())).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect(sentTo()).toEqual([a.home.email, a.away.email].sort());
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "the window did not move").toBe(t0.getTime());
+    expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
+    expect((await bridgeOf(a.fixtureId))?.status).toBe("pending");
+  });
+
+  it("a board whose game IS or MAY BE on file is never reset by a re-open — a recorded challenge, a create marker, a move (counted)", async () => {
+    const played: [string, (r: SeedOnlineChessRoundResult, fixtureId: string) => Promise<void>][] = [
+      [
+        "a recorded challenge (the real T9 create, then the arbiter's No result)",
+        async (r, f) => {
+          const made = await createGameIfReady(f, { publish: async () => undefined, now: new Date(Date.now() - DEADLINE_AFTER_MS - 9 * MIN) });
+          expect(made.created, "premise: the game was made").toBe(true);
+          expect(await resolveExternalPlay(r.owner, f, "no_result")).toEqual({ status: "finished" });
+        },
+      ],
+      [
+        "a create marker with no challenge (an outcome unknown, closed by the arbiter)",
+        async (r, f) => {
+          expect(await resolveExternalPlay(r.owner, f, "no_result")).toEqual({ status: "finished" });
+          await sql`update fixture_external_play set create_sent_at = now() - interval '30 minutes' where fixture_id = ${f}`;
+        },
+      ],
+      [
+        "a move on file with no challenge (the guard's own case: a row no writer leaves, refused all the same)",
+        async (r, f) => {
+          expect(await resolveExternalPlay(r.owner, f, "no_result")).toEqual({ status: "finished" });
+          await sql`update fixture_external_play set moves_uci = '["e2e4"]'::jsonb, move_count = 1 where fixture_id = ${f}`;
+        },
+      ],
+    ];
+    let checked = 0;
+    for (const [why, become] of played) {
+      const { r, t0, a, b } = await closedRound();
+      await decide(r, b);
+      await become(r, a.fixtureId);
+      const last = await lastEvent(a.fixtureId);
+      await scoreEvent(r.owner, a.fixtureId, { expected_seq: last.seq, type: "core.void", payload: { event_id: last.id } });
+      const before = await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`;
+      expect(before[0]!.status, `${why}: premise — closed`).toBe("finished");
+      mail.sent.length = 0;
+      expect(await open(r, 1, new Date()), why).toEqual({ opened: false, reason: "already_open", skipped: [] });
+      expect(await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`, `${why}: untouched`).toEqual(before);
+      expect(mail.sent, why).toHaveLength(0);
+      expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), `${why}: no window moved`).toBe(t0.getTime());
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every kind of game evidence").toBe(played.length);
+  });
+
+  it("a decided neighbour's player link still resolves after the re-stamp — and still shows its result", async () => {
+    const { r, t0, a, b } = await closedRound();
+    await decide(r, b);
+    const [row] = await stampRows(r.stageId);
+    const token = await mintMatchRoomToken({ fixtureId: b.fixtureId, personId: b.away.personId, roundOpenId: row!.id, roundOpenedAt: t0.toISOString() });
+    const shown = await readRoom({ kind: "token", token }, b.fixtureId);
+    expect(shown.result, "premise: the neighbour's room shows its result").not.toBeNull();
+    await noResultThenVoid(r, a.fixtureId);
+    expect((await open(r, 1, new Date())).opened, "premise: re-stamped").toBe(true);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).not.toBe(t0.getTime());
+
+    const after = await readRoom({ kind: "token", token }, b.fixtureId);
+    expect(after.result, "the link minted for the first window still opens the decided room").toEqual(shown.result);
+  });
+
+  it("a board HELD for the organiser is never re-armed — the hold is theirs to settle", async () => {
+    const { r, t0, a, b } = await closedRound();
+    await decide(r, b);
+    const held = await holdForOrganiser({ fixtureId: a.fixtureId, reason: "not_started" });
+    expect(held.wrote, "premise: held").toBe("needs_organiser");
+    const before = await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`;
+    mail.sent.length = 0;
+    expect(await open(r, 1, new Date())).toEqual({ opened: false, reason: "already_open", skipped: [] });
+    expect(await sql`select * from fixture_external_play where fixture_id = ${a.fixtureId}`).toEqual(before);
+    expect(mail.sent).toHaveLength(0);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(t0.getTime());
+  });
+
+  it("the re-arm is decided UNDER the division lock: a re-open committed while this one waited is seen, and nobody is mailed twice", async () => {
+    // Staged, not raced: another session holds the division lock FIRST and commits what a first re-open writes — the
+    // board's row reset onto the open with both seats stamped, the window re-stamped. This open must be seen WAITING
+    // on the lock, and then find nothing to re-arm.
+    const { r, a, b } = await closedRound();
+    await decide(r, b);
+    await noResultThenVoid(r, a.fixtureId);
+    const [stamp] = await stampRows(r.stageId);
+    const holder = await sql.reserve();
+    const holderPid = await backendPid(holder);
+    const firstAt = new Date();
+    try {
+      await holder`begin`;
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
+      await holder`delete from fixture_external_play where fixture_id = ${a.fixtureId}`;
+      await holder`
+        insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, round_open_id, white_emailed_at, black_emailed_at)
+        select id, org_id, scheduled_at, ${stamp!.id}, ${firstAt}, ${firstAt} from fixtures where id = ${a.fixtureId}`;
+      await holder`update stage_round_opens set opened_at = ${firstAt} where id = ${stamp!.id}`;
+      mail.sent.length = 0;
+      const pending = open(r, 1, new Date(firstAt.getTime() + MIN)).then(
+        (v) => ({ ok: true as const, v }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      const waited = (await pollWaitersBehind(holderPid, { queryLike: "%pg_advisory_xact_lock%" })) > 0;
+      expect(waited, "the re-open never waited on the division lock").toBe(true);
+      await holder`commit`;
+      const out = await pending;
+      expect(out).toEqual({ ok: true, v: { opened: false, reason: "already_open", skipped: [] } });
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
+    expect(mail.sent, "nobody mailed twice").toHaveLength(0);
+    const row = await bridgeOf(a.fixtureId);
+    expect([row?.status, row?.white_emailed_at?.getTime(), row?.black_emailed_at?.getTime()], "the first re-open's row stands").toEqual([
+      "pending",
+      firstAt.getTime(),
+      firstAt.getTime(),
+    ]);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "the first re-open's window stands").toBe(firstAt.getTime());
+  });
+
+  it("the re-armed board's meeting from the closed pairing goes — one still active is ended at RealtimeKit after the commit, an ended one is not asked again (counted)", async () => {
+    let checked = 0;
+    for (const endedAt of [null, new Date(Date.now() - MIN)] as const) {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+      const t0 = new Date(Date.now() - 5 * MIN);
+      await open(r, 1, t0);
+      const a = r.boards[0]!;
+      const meetingId = `mtg-${randomUUID().slice(0, 12)}`;
+      await sql`
+        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+        values (${a.fixtureId}, ${r.orgId}, ${meetingId}, ${a.home.entrantId}, ${a.away.entrantId}, ${endedAt})`;
+      await noResultThenVoid(r, a.fixtureId);
+      const ended: string[] = [];
+      expect(
+        await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: async (id) => void ended.push(id) }),
+        "premise: re-invited inside the window",
+      ).toEqual({ opened: true, invited: 2, skipped: [] });
+      const rows = await sql`select meeting_id from fixture_video_meetings where fixture_id = ${a.fixtureId}`;
+      expect(rows, "the closed pairing's meeting is gone").toEqual([]);
+      expect(ended, endedAt === null ? "active: ended at the vendor" : "already ended: not asked again").toEqual(endedAt === null ? [meetingId] : []);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
