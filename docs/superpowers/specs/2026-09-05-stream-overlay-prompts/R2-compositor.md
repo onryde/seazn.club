@@ -1,3 +1,8 @@
+> **SUPERSEDED 2026-10-14. Do not build from this file.** The owner ruled for Rust + GStreamer, with
+> `cefsrc` rendering the overlay page, which replaces the B2/B3 design described below. R2's spec,
+> ADRs, plan and briefs live in `onryde/seazn.club.compositor` `docs/`; start at its `docs/_INDEX.md`.
+> The `seazn.club` changes R2 needs are briefs R2001–R2006 there. This file is kept as history.
+
 # R2 — the compositor: relay page, slate, delayMs, the Machine image, the soak
 
 **Wave:** R2 · **PR:** PR-R2 · **Gate to start (HARD):** the R0 memo

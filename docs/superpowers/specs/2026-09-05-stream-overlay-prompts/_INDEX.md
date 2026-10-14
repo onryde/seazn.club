@@ -2,6 +2,15 @@
 
 Decision log and session status. Read `_RULES.md` beside this file first.
 
+> **R2 moved, 2026-10-14.** Relay R2 (the compositor) is now designed, planned and tracked in the
+> separate repo `onryde/seazn.club.compositor`. Start at its `docs/_INDEX.md`: spec, ADRs 0001–0006,
+> plan, and the task briefs C00–C17 (compositor) and R2001–R2006 (the changes that land here, in
+> `seazn.club`). The owner ruled 2026-10-14 for Rust + GStreamer, with `cefsrc` rendering
+> `/overlay/fixtures/[id]` (ADR 0001). That **supersedes the September B2/B3 rulings** in this
+> folder (ffmpeg x11grab + Chromium + colorkey, a TS supervisor). `R2-compositor.md` here is
+> historical; do not build from it. The remaining compositor phases are R4 (R3 is the native
+> capture apps).
+
 - **Design of record:** `../2026-09-05-stream-overlay-design.md` (owner-approved
   in chat 2026-09-05: design "I am ok with design", spec "approve"; committed
   `0781ba76d`, motion section `9ad0b9902`).
