@@ -1,6 +1,12 @@
 // scripts/__tests__/test-parity.test.ts
-import { describe, expect, it } from "vitest";
-import { diffIds, testIds } from "../test-parity.mjs";
+// Single-sport reason: no sport is involved — this compares lists of test ids.
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+import { diffIds, testIds, type LedgerEntry } from "../test-parity.mjs";
 
 type T = { path: string[]; status?: string };
 const report = (root: string, files: Record<string, T[]>) => ({
@@ -50,4 +56,252 @@ describe("test-parity", () => {
   it("refuses an empty report rather than passing it", () => {
     expect(() => testIds({ numTotalTests: 0, testResults: [] }, "/x")).toThrow(/zero tests/);
   });
+});
+
+// The ledger is checked against BOTH sides: a before-only id may be accounted by an entry that names an
+// after-only target, once per target. Anything weaker lets a deleted test pass as "moved" (review M-2).
+describe("diffIds — what a ledger entry may account for", () => {
+  const entry = (id: string, fate: LedgerEntry["fate"], to?: string, reason = "why"): LedgerEntry => ({ id, fate, to, reason });
+
+  it.each(["moved", "rehomed", "rewritten"] as const)("`%s` accounts one before-only id and its after-only target, and the three sets are reported", (fate) => {
+    const d = diffIds(["f › a", "f › b"], ["f › a", "g › b"], { entries: [entry("f › b", fate, "g › b")] });
+    expect(d.unaccounted).toEqual([]);
+    expect(d.onlyBefore).toEqual(["f › b"]);
+    expect(d.onlyAfter).toEqual(["g › b"]);
+    expect(d.both).toEqual(["f › a"]);
+  });
+
+  it("`split` fans one before-only id out to several after-only targets, one entry per target", () => {
+    const ledger = { entries: [entry("f › b", "split", "g › b1"), entry("f › b", "split", "g › b2")] };
+    expect(diffIds(["f › b"], ["g › b1", "g › b2"], ledger).unaccounted).toEqual([]);
+    // Only one half ledgered: the other target is an unexplained new test.
+    expect(diffIds(["f › b"], ["g › b1", "g › b2"], { entries: [entry("f › b", "split", "g › b1")] }).unaccounted).toEqual(["g › b2"]);
+  });
+
+  it("refuses a rehome whose id is still present after: a deleted test cannot hide behind a target that already existed", () => {
+    // before has f › b AND g › b; after keeps only g › b. f › b was deleted; the entry claims it moved onto g › b.
+    expect(diffIds(["f › b", "g › b"], ["g › b"], { entries: [entry("f › b", "rehomed", "g › b")] }).unaccounted).toEqual([
+      "f › b",
+      "LEDGER-INVALID f › b -> g › b",
+    ]);
+  });
+
+  it("refuses an entry whose own id is not before-only (it is still there after, so nothing moved)", () => {
+    expect(diffIds(["f › a"], ["f › a", "g › a"], { entries: [entry("f › a", "moved", "g › a")] }).unaccounted).toEqual([
+      "g › a",
+      "LEDGER-INVALID f › a -> g › a",
+    ]);
+  });
+
+  it("refuses an entry whose id is in neither set", () => {
+    expect(diffIds(["f › a"], ["f › a", "g › x"], { entries: [entry("f › ghost", "moved", "g › x")] }).unaccounted).toEqual([
+      "g › x",
+      "LEDGER-INVALID f › ghost -> g › x",
+    ]);
+  });
+
+  it("lets one target be claimed by only one entry: the second id is still unaccounted", () => {
+    const ledger = { entries: [entry("f › a", "moved", "g › t"), entry("f › b", "moved", "g › t")] };
+    expect(diffIds(["f › a", "f › b"], ["g › t"], ledger).unaccounted).toEqual(["f › b", "LEDGER-INVALID f › b -> g › t"]);
+  });
+
+  it("names a missing target as such, and a rehome with no target at all", () => {
+    expect(diffIds(["f › a"], [], { entries: [entry("f › a", "moved", "g › a")] }).unaccounted).toEqual(["f › a", "LEDGER-TARGET-MISSING g › a"]);
+    expect(diffIds(["f › a"], [], { entries: [entry("f › a", "moved")] }).unaccounted).toEqual(["f › a", "LEDGER-TARGET-MISSING (none)"]);
+  });
+
+  it("`retired` accounts a before-only id when it carries a reason", () => {
+    const d = diffIds(["f › a", "f › b"], ["f › a"], { entries: [entry("f › b", "retired", undefined, "obsolete since X")] });
+    expect(d.unaccounted).toEqual([]);
+    expect(d.onlyBefore).toEqual(["f › b"]);
+  });
+
+  it("refuses `retired` without a reason, and the id stays unaccounted", () => {
+    expect(diffIds(["f › a", "f › b"], ["f › a"], { entries: [entry("f › b", "retired", undefined, "")] }).unaccounted).toEqual([
+      "f › b",
+      "LEDGER-UNUSED f › b",
+    ]);
+  });
+
+  it("refuses `retired` for an id that is still present after", () => {
+    expect(diffIds(["f › a"], ["f › a"], { entries: [entry("f › a", "retired", undefined, "obsolete")] }).unaccounted).toEqual(["LEDGER-UNUSED f › a"]);
+  });
+
+  it("refuses `added` for an id that was already there before, or that is nowhere", () => {
+    expect(diffIds(["f › a"], ["f › a"], { entries: [entry("f › a", "added")] }).unaccounted).toEqual(["LEDGER-UNUSED f › a"]);
+    expect(diffIds(["f › a"], ["f › a"], { entries: [entry("f › ghost", "added")] }).unaccounted).toEqual(["LEDGER-UNUSED f › ghost"]);
+  });
+
+  it("fails an entry for an id the ledger has already accounted: a second `added`/`retired`, or `added` on a move target", () => {
+    const added = entry("f › new", "added");
+    expect(diffIds(["f › a"], ["f › a", "f › new"], { entries: [added, added] }).unaccounted).toEqual(["LEDGER-UNUSED f › new"]);
+    const retired = entry("f › b", "retired", undefined, "obsolete");
+    expect(diffIds(["f › a", "f › b"], ["f › a"], { entries: [retired, retired] }).unaccounted).toEqual(["LEDGER-UNUSED f › b"]);
+    // g › b is already accounted as the target of the move, so calling it `added` too accounts nothing.
+    const moved = entry("f › b", "moved", "g › b");
+    expect(diffIds(["f › b"], ["g › b"], { entries: [moved, entry("g › b", "added")] }).unaccounted).toEqual(["LEDGER-UNUSED g › b"]);
+    // ... and in the other order the move's target is already claimed, so the move is the entry refused.
+    expect(diffIds(["f › b"], ["g › b"], { entries: [entry("g › b", "added"), moved] }).unaccounted).toEqual(["f › b", "LEDGER-INVALID f › b -> g › b"]);
+  });
+
+  it("fails a stale ledger entry that accounts nothing, even alongside entries that do", () => {
+    const ledger = { entries: [entry("f › b", "moved", "g › b"), entry("f › gone", "retired", undefined, "removed in an earlier PR")] };
+    expect(diffIds(["f › a", "f › b"], ["f › a", "g › b"], ledger).unaccounted).toEqual(["LEDGER-UNUSED f › gone"]);
+    // An unknown fate accounts nothing either.
+    expect(diffIds(["f › a"], ["f › a"], { entries: [{ id: "f › a", fate: "bogus", reason: "x" } as unknown as LedgerEntry] }).unaccounted).toEqual(["LEDGER-UNUSED f › a"]);
+  });
+
+  it("refuses a duplicate id within one side, naming it", () => {
+    expect(() => diffIds(["f › a", "f › a"], ["f › a"], { entries: [] })).toThrow(/duplicate.*before.*f › a/);
+    expect(() => diffIds(["f › a"], ["f › a", "f › a"], { entries: [] })).toThrow(/duplicate.*after.*f › a/);
+  });
+});
+
+describe("testIds — a collection that did not collect is not a collection", () => {
+  const healthy = { numFailedTestSuites: 0, numTotalTests: 1, testResults: [{ name: "/x/ok.test.ts", status: "passed", assertionResults: [{ ancestorTitles: ["A"], title: "t", status: "skipped" }] }] };
+
+  it("returns the ids of a healthy report (the positive pair of the two refusals below)", () => {
+    expect(testIds(healthy, "/x")).toEqual(["ok.test.ts › A › t"]);
+  });
+
+  it("throws, naming the file, when a file failed to collect even though other files listed tests", () => {
+    const broken = { ...healthy, testResults: [...healthy.testResults, { name: "/x/broken.test.ts", status: "failed", assertionResults: [] }] };
+    expect(() => testIds(broken, "/x")).toThrow(/broken\.test\.ts/);
+  });
+
+  it("throws, naming the file, when a file failed AFTER registering some of its tests (a partial collect lists only part)", () => {
+    const partial = { ...healthy, testResults: [{ name: "/x/partial.test.ts", status: "failed", assertionResults: [{ ancestorTitles: ["A"], title: "t", status: "skipped" }] }] };
+    expect(() => testIds(partial, "/x")).toThrow(/partial\.test\.ts/);
+  });
+
+  it("throws when the report counts a failed suite, whichever file it was", () => {
+    expect(() => testIds({ ...healthy, numFailedTestSuites: 1 }, "/x")).toThrow(/failed/);
+  });
+
+  it("throws on a duplicate id within one report, naming it", () => {
+    const dup = { testResults: [{ name: "/x/d.test.ts", assertionResults: [{ ancestorTitles: ["A"], title: "t" }, { ancestorTitles: ["A"], title: "t" }] }] };
+    expect(() => testIds(dup, "/x")).toThrow(/duplicate.*d\.test\.ts › A › t/);
+  });
+});
+
+// The CLI is the product: the library functions are exercised above, but exit codes, the `--ledger` plumbing, the
+// argument grammar and the entry-script check are only real when the script is spawned.
+describe("test-parity CLI (spawned)", () => {
+  const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "test-parity.mjs");
+  // One spawn's cap, and the budget derived from it (AGENTS.md class 20): a flat test timeout beside a derived cost is a latent red.
+  const SPAWN_MS = 25_000;
+  const SLACK_MS = 5_000;
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "test-parity-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const ROOT = "/r";
+  let n = 0;
+  const write = (obj: unknown, sub = ""): string => {
+    const d = join(dir, sub);
+    mkdirSync(d, { recursive: true });
+    const f = join(d, `f${n++}.json`);
+    writeFileSync(f, JSON.stringify(obj));
+    return f;
+  };
+  const rep = (files: Record<string, T[]>) => write(report(ROOT, files));
+  const run = (args: string[], script = SCRIPT) =>
+    spawnSync(process.execPath, [script, ...args], { encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "" } });
+  const two = { "a.test.ts": [{ path: ["A", "one"] }, { path: ["A", "two"] }] };
+  const lessOne = { "a.test.ts": [{ path: ["A", "one"] }] };
+
+  it("exit 0 and a non-vacuous count when nothing changed", () => {
+    const f = rep(two);
+    const r = run(["--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/both ([1-9]\d*) · unaccounted 0/);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("exit 1, naming the id, when a test vanished without a ledger entry", () => {
+    const r = run(["--before", `${rep(two)}=${ROOT}`, "--after", `${rep(lessOne)}=${ROOT}`]);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stdout).toContain("UNACCOUNTED a.test.ts › A › two");
+  }, SPAWN_MS + SLACK_MS);
+
+  it("`--ledger` is read: the same difference exits 0 once a valid entry accounts it, 1 once the entry is invalid", () => {
+    const before = rep(two);
+    const after = rep({ "a.test.ts": [{ path: ["A", "one"] }], "b.test.ts": [{ path: ["A", "two"] }] });
+    const ok = write({ entries: [{ id: "a.test.ts › A › two", fate: "rehomed", to: "b.test.ts › A › two", reason: "moved file" }] });
+    const bad = write({ entries: [{ id: "a.test.ts › A › two", fate: "rehomed", to: "b.test.ts › A › nope", reason: "moved file" }] });
+    const args = ["--before", `${before}=${ROOT}`, "--after", `${after}=${ROOT}`];
+    const withOk = run([...args, "--ledger", ok]);
+    expect(withOk.status, withOk.stdout + withOk.stderr).toBe(0);
+    expect(withOk.stdout).toMatch(/both 1 /);
+    expect(run(args).status).toBe(1);
+    const withBad = run([...args, "--ledger", bad]);
+    expect(withBad.status).toBe(1);
+    expect(withBad.stdout).toContain("LEDGER-TARGET-MISSING b.test.ts › A › nope");
+  }, SPAWN_MS + SLACK_MS);
+
+  it("sums several `--before` reports into one side", () => {
+    const x = rep({ "x.test.ts": [{ path: ["x"] }] });
+    const y = rep({ "y.test.ts": [{ path: ["y"] }] });
+    const r = run(["--before", `${x}=${ROOT}`, "--before", `${y}=${ROOT}`, "--after", `${y}=${ROOT}`, "--after", `${x}=${ROOT}`]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/both 2 /);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("exit 2 on an empty report (zero tests is vacuous, not a pass)", () => {
+    const empty = write({ numTotalTests: 0, testResults: [] });
+    const r = run(["--before", `${empty}=${ROOT}`, "--after", `${rep(two)}=${ROOT}`]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/zero tests/);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("exit 2 on a report with a file that failed to collect", () => {
+    const broken = write({ numFailedTestSuites: 1, testResults: [...report(ROOT, two).testResults, { name: `${ROOT}/broken.test.ts`, status: "failed", assertionResults: [] }] });
+    const r = run(["--before", `${broken}=${ROOT}`, "--after", `${rep(two)}=${ROOT}`]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/broken\.test\.ts/);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("exit 2 on a duplicate id across the reports of one side", () => {
+    const f = rep(two);
+    const r = run(["--before", `${f}=${ROOT}`, "--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/duplicate/);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("exit 2 on a missing flag", () => {
+    const r = run(["--before", `${rep(two)}=${ROOT}`]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/missing --after/);
+  }, SPAWN_MS + SLACK_MS);
+
+  it.each([
+    ["a pair with no root (`<file>` alone)", (f: string) => ["--before", f, "--after", `${f}=${ROOT}`], /--before wants <report\.json>=<root>/],
+    ["a pair with an empty root (`<file>=`)", (f: string) => ["--before", `${f}=`, "--after", `${f}=${ROOT}`], /--before wants <report\.json>=<root>/],
+    ["a pair with an empty file (`=<root>`)", (f: string) => ["--before", `=${ROOT}`, "--after", `${f}=${ROOT}`], /--before wants <report\.json>=<root>/],
+    ["a flag with no value at the end of the line", (f: string) => ["--after", `${f}=${ROOT}`, "--before"], /--before needs a value/],
+    ["a flag whose value is the next flag", (f: string) => ["--before", "--after", `${f}=${ROOT}`], /--before needs a value/],
+    ["`--ledger` with no value", (f: string) => ["--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`, "--ledger"], /--ledger needs a value/],
+  ])("exit 2 on %s, with a message that says what is wrong", (_name, args, message) => {
+    const r = run(args(rep(two)));
+    expect(r.status, r.stdout).toBe(2);
+    expect(r.stderr).toMatch(message);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("splits `<file>=<root>` at the LAST `=`: a report path may contain one", () => {
+    const f = write(report(ROOT, two), "has=equals");
+    const r = run(["--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/both 2 /);
+  }, SPAWN_MS + SLACK_MS);
+
+  it("runs when started through a symlink: the entry-script check must not fail open (a silent exit 0)", () => {
+    const via = join(dir, "link-test-parity.mjs");
+    symlinkSync(SCRIPT, via);
+    const f = rep(two);
+    const ok = run(["--before", `${f}=${ROOT}`, "--after", `${f}=${ROOT}`], via);
+    expect(ok.stdout, `no output through a symlink: main never ran (stderr: ${ok.stderr})`).toMatch(/both 2 /);
+    expect(ok.status, ok.stderr).toBe(0);
+    // And it still refuses through the symlink: a silent 0 would also have passed a failing comparison.
+    const bad = run(["--before", `${f}=${ROOT}`, "--after", `${rep(lessOne)}=${ROOT}`], via);
+    expect(bad.status, bad.stderr).toBe(1);
+    expect(bad.stdout).toContain("UNACCOUNTED");
+  }, SPAWN_MS + SLACK_MS);
 });
