@@ -47,6 +47,7 @@ const ABANDON_REASON_KEY = {
   create_outcome_unknown: "externalPlay.resolve.abandonReason.create_outcome_unknown",
   tiebreak_owed: "externalPlay.resolve.abandonReason.tiebreak_owed",
   fair_play: "externalPlay.resolve.abandonReason.fair_play",
+  account_changed: "externalPlay.resolve.abandonReason.account_changed",
   none: "externalPlay.resolve.abandonReason.none",
 } as const satisfies Record<Exclude<NeedsReason, BothAbsent> | "none", MessageKey>;
 

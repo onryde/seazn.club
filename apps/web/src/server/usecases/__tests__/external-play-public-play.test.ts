@@ -136,7 +136,7 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
     ];
     // Every hold the organiser owes an answer to, before a move: the fixture page says why, so the row offers nothing.
     const HELD = ["no_show_white", "no_show_black", "no_show_both", "not_started", "aborted", "mismatch", "provider_error",
-      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play"] as const;
+      "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play", "account_changed"] as const;
     for (const reason of HELD) cells.push([`held: ${reason}`, before({ status: "needs_organiser", needs_reason: reason }), null]);
     expect([...HELD, "token_revoked"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
     let checked = 0;

@@ -25,6 +25,7 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
   create_outcome_unknown: "externalPlay.held.createOutcomeUnknown",
   tiebreak_owed: "externalPlay.held.tiebreakOwed",
   fair_play: "externalPlay.held.fairPlay",
+  account_changed: "externalPlay.held.accountChanged",
 };
 
 export type HeldCopyInput = {
@@ -74,6 +75,8 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
       return { key: "externalPlay.reason.tiebreakOwed" };
     case "fair_play":
       return { key: "externalPlay.reason.fairPlay" };
+    case "account_changed":
+      return { key: "externalPlay.reason.accountChanged" };
   }
 }
 

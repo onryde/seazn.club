@@ -50,6 +50,8 @@ export const PUBLIC_HOLD: Record<NeedsReason, PublicHold | null> = {
   create_outcome_unknown: "confirm",
   tiebreak_owed: "tiebreak",
   fair_play: "confirm",
+  // P11: the organiser's to settle — reconcile no longer reads the game, so the board is not shown live.
+  account_changed: "confirm",
 };
 
 /** The fixture's recorded result, for the finished board's header ("X won · Checkmate · move 30 · 1–0"). Read

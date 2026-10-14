@@ -45,6 +45,10 @@ export const NEEDS_REASONS = [
   // V441 (T12 fix round 1, I2): Lichess ended the game for a fair-play
   // violation (status `cheat`) — the organiser's fair-play queue.
   "fair_play",
+  // V441 (final review P11): a player re-linked a DIFFERENT Lichess account
+  // while their game was live or mid-create — the recorded account is no
+  // longer theirs, and its grant was revoked by the re-link (M-2).
+  "account_changed",
 ] as const;
 export type NeedsReason = (typeof NEEDS_REASONS)[number];
 
